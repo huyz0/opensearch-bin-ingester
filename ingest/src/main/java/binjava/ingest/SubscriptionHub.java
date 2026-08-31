@@ -33,12 +33,21 @@ import java.util.function.Consumer;
  */
 public final class SubscriptionHub {
 
-    /** What a subscriber is handed when its stream advances. */
-    public record Push(RunKey key, String segmentKey, int recordCount, long firstOffset) {
+    /**
+     * What a subscriber is handed when its stream advances.
+     *
+     * <p>⚠️ INLINE: the segment bytes travel WITH the push (ADR-0004 — M1 ships
+     * `inline` only). The consumer therefore issues NO object-store request to
+     * read what it was just told about, which is what makes criterion 3's zero
+     * hold under load and not merely at rest. `proxy` and `direct` are M5.
+     */
+    public record Push(RunKey key, String segmentKey, int recordCount, long firstOffset,
+            byte[] segment) {
 
         public Push {
             Objects.requireNonNull(key, "key");
             Objects.requireNonNull(segmentKey, "segmentKey");
+            Objects.requireNonNull(segment, "segment");
         }
 
         public long lastOffset() {
@@ -98,13 +107,18 @@ public final class SubscriptionHub {
      * crash would then have handed out an offset that never existed.
      */
     public void publish(CommitDelta delta) {
+        publish(delta, new byte[0]);
+    }
+
+    /** Delivers a commit together with the segment bytes it committed. */
+    public void publish(CommitDelta delta, byte[] segment) {
         for (RunCommit run : delta.runs()) {
             var list = subscribers.get(run.key());
             if (list == null) {
                 continue;
             }
             Push push = new Push(run.key(), delta.segmentKey(), run.recordCount(),
-                    run.firstOffset());
+                    run.firstOffset(), segment);
             for (Subscription s : list) {
                 try {
                     s.sink.accept(push);

@@ -87,7 +87,7 @@ the harness gates that already exist, not the ones still queued.
 | M1.10 | Ingester: commit log v0 + offset assignment + ack after durable | FR-3, FR-4 | done (offsets + commit log; the ack path lands with M1.7/M1.11) |
 | M1.10b | `CommitLog.commit` retries an unbounded number of times. ⚠️ Found by a mutation that HUNG the audit rather than failing it: with `apply()` not advancing `nextSequence`, the loop re-reads a taken slot forever. The shipped code cannot livelock — `apply` always advances past the winner — but nothing bounds the loop, so any future condition that stops it advancing becomes a spin rather than an error. Add a retry ceiling that fails loudly, and a test that asserts the ceiling fires | FR-3 | todo |
 | M1.11 | Ingester: `/v1/subscribe`, inline delivery | FR-5 | done (in-process hub; the HTTP surface is M1.7) |
-| M1.12 | Consumer: subscription client, blocking queue, decode, **`DEFAULT`-envelope assembly** | FR-7 | todo |
+| M1.12 | Consumer: subscription client, blocking queue, decode, **`DEFAULT`-envelope assembly** | FR-7 | done |
 | M1.13 | Plugin: `BinStorePlugin`, factory, `BinStoreOffset`, `BinStoreMessage` | FR-7 | todo |
 | M1.14 | Plugin: blocking `readNext` + node-level singleton | FR-7, NFR-2 | todo |
 | M1.15 | T4 end-to-end: documents searchable in a single-node cluster | FR-7 | todo |
