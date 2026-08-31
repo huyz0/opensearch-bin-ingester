@@ -78,7 +78,7 @@ the harness gates that already exist, not the ones still queued.
 | M1.2 | `LocalFsBinStore`, `putIfAbsent` via `O_CREAT`/`O_EXCL` | FR-8 | done |
 | M1.3 | `CountingBinStore` + the cost-assertion test fixture | FR-8, R9 | done |
 | M1.3b | `GoverningBinStore`: ratio-to-expected, LIST ceiling, priority classes; writes never refused | FR-21 | todo |
-| M1.4 | Segment v0 writer: preamble, directory, runs, footer; record framing carries `_id`/`_op_type`/`_version` ([ADR-0020](decisions/0020-record-envelope-and-mapper.md)) | FR-2 | todo |
+| M1.4 | Segment v0 writer: preamble, directory, runs, footer; record framing carries `_id`/`_op_type`/`_version` ([ADR-0020](decisions/0020-record-envelope-and-mapper.md)) | FR-2 | done |
 | M1.5 | Segment v0 reader + round-trip + golden file | FR-2 | todo |
 | M1.6 | **In-process `Ingest` API** + config; no HTTP on the classpath | FR-1 | todo |
 | M1.7 | HTTP adapter: Helidon, streaming `_bulk` parse, delegates to `Ingest` | FR-1 | todo |
