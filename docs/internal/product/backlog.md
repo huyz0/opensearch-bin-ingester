@@ -83,7 +83,7 @@ the harness gates that already exist, not the ones still queued.
 | M1.6 | **In-process `Ingest` API** + config; no HTTP on the classpath | FR-1 | done |
 | M1.7 | HTTP adapter: Helidon, streaming `_bulk` parse, delegates to `Ingest` | FR-1 | todo |
 | M1.8 | Ingester: per-stream accumulator + 250 ms/8 MiB flush trigger | FR-2 | done |
-| M1.9 | Ingester: segment build + PUT | FR-2 | todo |
+| M1.9 | Ingester: segment build + PUT | FR-2 | done |
 | M1.10 | Ingester: commit log v0 + offset assignment + ack after durable | FR-3, FR-4 | todo |
 | M1.11 | Ingester: `/v1/subscribe`, inline delivery | FR-5 | todo |
 | M1.12 | Consumer: subscription client, blocking queue, decode, **`DEFAULT`-envelope assembly** | FR-7 | todo |
