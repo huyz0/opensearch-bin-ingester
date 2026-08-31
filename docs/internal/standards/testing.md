@@ -1,0 +1,102 @@
+# Testing
+
+**Family:** Quality
+**Read when:** Writing any test, choosing a tier, setting or reading a coverage gate, or when a test is slow, flaky, or passes without constraining anything.
+
+## Tiers
+
+| Tier | What | Backing store | Runs in |
+|---|---|---|---|
+| T0 | pure logic — formats, filters, offsets, coalescing | none | every commit |
+| T1 | component with fakes | `MemoryBinStore` | every commit |
+| T2 | end-to-end, single JVM | `LocalFsBinStore` | every commit |
+| T3 | real object-store semantics | MinIO/LocalStack | CI |
+| T4 | inside OpenSearch | Testcontainers | `clusterTest`, on demand + CI |
+
+⚠️ **Tiers map to Gradle tasks and the default starts no container** — see
+[build.md](build.md). And **scale at T1, realism at T4**: a test needing 1,600
+consumers and a test needing a real cluster are different tests, and buying both
+at once makes the valuable one unrunnable.
+
+1. **Default to T0.** A test that seems to need a socket, a clock or an object
+   store is a signal the logic is in the wrong layer — inject the seam.
+
+## Test-first is the rule, and it is enforced
+
+2. **The test is written first and observed to fail.** Not "expected to fail" —
+   **run it and watch it fail.** A test never observed failing has not been shown
+   to test anything; it may pass for reasons unrelated to the code.
+   → `scripts/tdd-red.sh` records the red run; `scripts/check-tdd.sh` refuses a
+   commit whose new tests have no red record.
+3. ⚠️ **The gate raises the cost of skipping; it does not prove virtue.** A
+   determined author can satisfy it without meaning it, exactly as with
+   non-negotiable 3. It exists so that skipping is a decision rather than a drift.
+4. **Production code changes to satisfy the test. Never the reverse.**
+   → `scripts/check-test-integrity.sh` flags a commit that weakens an existing
+   assertion while changing production code; it must be justified in the commit
+   body or the change split.
+5. **Never weaken a threshold, delete a test, or loosen an assertion to make a
+   check pass.** A removed test names its own removal in the commit body.
+
+## Coverage
+
+6. **Floors, per module: 95% line, 90% branch.** → `scripts/check-coverage.sh`
+   (JaCoCo). ⚠️ **Lands in M0.13.** Saying "when the build exists" went stale the
+   moment the build landed in `de66330` and this gate did not, so the honest form
+   is a task ID. AGENTS.md § Gates is generated and is true on the day you read it.
+7. **Exclusions are named and justified, never blanket.** Generated sources and
+   `record` accessors may be excluded by pattern; anything else needs a line in
+   `baselines/coverage.txt` with a reason. A growing file is a signal.
+8. ⚠️ **Line coverage is a floor, not a measure of test quality.** A line can be
+   executed without being constrained — which is the characteristic failure of
+   generated tests, and precisely what "the tests are green" hides.
+9. **Mutation score is the metric that measures whether tests constrain
+   anything.** Floor: **80% killed** on changed code, scoped to the diff.
+   → `scripts/check-mutants.sh`. **A surviving mutant is killed or argued** in
+   `baselines/mutants.txt`. ⚠️ **Lands in M0.14**, as rule 6 lands in M0.13 — see
+   AGENTS.md § Gates, which is generated and true on the day you read it. Both floors are aspirations until
+   their scripts are in `scripts/`, and saying so is the same discipline as rule 3.
+10. ⚠️ **95% line coverage with a 40% mutation score is worse than 70% coverage
+    with a 90% mutation score**, because the first number buys false confidence.
+    Report both; treat mutation score as the one that matters.
+
+## What a test must do
+
+11. **Assert behaviour, never implementation.** A test that breaks on refactor and
+    passes when behaviour breaks is worse than none.
+12. **Name the test for the behaviour**, not `testX2`.
+13. **Every acceptance criterion in the task has a test that would fail without
+    the change.**
+14. **Test the failure path, not only the happy one.**
+15. **No `Thread.sleep`.** Inject a clock. `Awaitility` only where a real external
+    system is involved.
+16. **No fixed ports.** Bind `0`.
+17. **Scratch under `build/tmp`**, never the system temp directory.
+18. **Prefer a fake over a mock.**
+
+## Suites that carry disproportionate weight
+
+19. **The store conformance suite runs against every *supported* backend, and
+    probes rather than assumes.** CAS semantics differ per provider and that is
+    where a silent divergence breaks ordering. Establish `Capabilities` by writing
+    and asserting rejection, never from a version string.
+19a. ⚠️ **MinIO is a test fixture, not a supported backend** — a local Docker
+    stand-in for S3's wire protocol, so tests need not hit AWS
+    ([store SPI §2b](../../research/30-design-space/07-pluggable-store-abstraction.md)).
+    Use it for signing, ranges, multipart, list pagination and error mapping.
+    **Do not run the commit-protocol simulation against it**: its conditional
+    writes are not stable enough to distinguish our bug from theirs.
+19b. ⚠️ **Request counts are backend-independent; latency and dollars are not.**
+    The cost gates (requests/MiB, zero LIST, **zero idle requests**) are fully
+    meaningful against MinIO. Every latency figure measured there is **modelled,
+    not measured**, and must be labelled so (performance.md rule 7).
+20. **The commit protocol is tested by deterministic simulation** — injectable
+    clock, faulty store, partitioned leaders, duplicated in-flight PUTs — asserting
+    invariants I1–I5 ([architecture.md](../product/architecture.md) defines exactly
+    those five). ⚠️ ADR-0013 adds a WAL invariant numbered there; it joins this
+    list only when fast mode lands in M11. Failing seeds become regression tests.
+21. **Memory flatness soak:** fixed small heap, 10× request sizes, unchanged
+    throughput. The acceptance criterion for strict streaming.
+22. **Cost assertions are tests**, not dashboards: requests-per-MiB, zero LIST on
+    hot paths, and **zero requests from an idle cluster** — the last being the one
+    failure invisible to every functional test.
