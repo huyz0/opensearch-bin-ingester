@@ -1,0 +1,157 @@
+// SPDX-License-Identifier: Apache-2.0
+package binjava.binstore.backend;
+
+import binjava.binstore.BinStore;
+import binjava.binstore.Body;
+import binjava.binstore.Capabilities;
+import binjava.binstore.CostTable;
+import binjava.binstore.ListPage;
+import binjava.binstore.ObjectStat;
+import binjava.binstore.Version;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.atomic.AtomicLong;
+
+/**
+ * An in-memory {@link BinStore}, for tests and for the conformance suite's own
+ * baseline. // SKELETON: never a production backend
+ *
+ * <p>⚠️ A {@link ConcurrentSkipListMap}, not a HashMap, because {@code list} must
+ * return keys in lexicographic order and resume strictly after a given key —
+ * recovery walks that listing in order, and an unordered map would pass a
+ * count-based test while breaking resumption.
+ */
+public final class MemoryBinStore implements BinStore {
+
+    private record Entry(byte[] data, Version version) {}
+
+    private final ConcurrentSkipListMap<String, Entry> objects = new ConcurrentSkipListMap<>();
+    private final AtomicLong versions = new AtomicLong();
+
+    private Version nextVersion() {
+        // ⚠️ Monotonic, so a version CHANGES on every write. A constant token
+        // would let every compare-and-set succeed against stale data.
+        return new Version(Long.toString(versions.incrementAndGet()));
+    }
+
+    private Entry require(String key) throws IOException {
+        Entry e = objects.get(key);
+        if (e == null) {
+            // ⚠️ Not empty bytes: a zero-length object and a missing one must be
+            // distinguishable, or a segment reader parses absence as a valid
+            // empty segment.
+            throw new IOException("no such key: " + key);
+        }
+        return e;
+    }
+
+    @Override
+    public InputStream get(String key) throws IOException {
+        return new ByteArrayInputStream(require(key).data());
+    }
+
+    @Override
+    public InputStream getRange(String key, long start, long endIncl) throws IOException {
+        byte[] data = require(key).data();
+        if (start < 0 || endIncl < start) {
+            throw new IOException("range [" + start + "," + endIncl + "] is not a range");
+        }
+        if (start >= data.length) {
+            throw new IOException(
+                    "range starts at " + start + " but " + key + " is " + data.length + " bytes");
+        }
+        // ⚠️ CLAMP past the end, as S3, GCS and Azure all do. Throwing instead
+        // would force every caller into stat-then-getRange, doubling the request
+        // count per segment read (R7) to learn something the read itself knows.
+        long last = Math.min(endIncl, data.length - 1);
+        // ⚠️ endIncl is INCLUSIVE, hence the +1. Off by one here truncates the
+        // last byte of every run read through a segment directory.
+        return new ByteArrayInputStream(data, (int) start, (int) (last - start + 1));
+    }
+
+    @Override
+    public Optional<ObjectStat> stat(String key) {
+        Entry e = objects.get(key);
+        return e == null ? Optional.empty()
+                         : Optional.of(new ObjectStat(key, e.data().length, e.version()));
+    }
+
+    private static final long MAX_KEY_BYTES = 1024;
+
+    private void checkKey(String key) throws IOException {
+        // ⚠️ ENFORCED, so the conformance suite can PROBE the advertised limit
+        // rather than take it on advertisement. A backend that claims 1024 and
+        // rejects at 255 passes an isPositive() assertion.
+        if (key.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > MAX_KEY_BYTES) {
+            throw new IOException("key longer than " + MAX_KEY_BYTES + " bytes: " + key.length());
+        }
+    }
+
+    @Override
+    public Version put(String key, Body body) throws IOException {
+        checkKey(key);
+        Version v = nextVersion();
+        objects.put(key, new Entry(body.readFully(), v));
+        return v;
+    }
+
+    @Override
+    public Optional<Version> putIfAbsent(String key, Body body) throws IOException {
+        checkKey(key);
+        byte[] data = body.readFully();
+        Version v = nextVersion();
+        // ⚠️ ATOMIC. The whole coordination substrate rests on this (ADR-0002);
+        // a get-then-put would let two writers both observe absence and the
+        // loser would overwrite the winner's record with no error.
+        Entry existing = objects.putIfAbsent(key, new Entry(data, v));
+        return existing == null ? Optional.of(v) : Optional.empty();
+    }
+
+    @Override
+    public ListPage list(String prefix, String startAfter, int maxKeys) {
+        // ⚠️ Seek from the LATER of prefix and startAfter. Seeking from
+        // startAfter alone returned NOTHING whenever it sorted before the
+        // prefix -- takeWhile stopped at the first non-matching key -- so
+        // list("p/", "") reported an empty store while p/a..p/c existed, and
+        // recovery would conclude "nothing to recover" with no error. S3 ignores
+        // a below-prefix start-after; so does this.
+        var from = startAfter == null || startAfter.compareTo(prefix) < 0
+                ? objects.tailMap(prefix, true)
+                : objects.tailMap(startAfter, false);
+        List<ObjectStat> page = new java.util.ArrayList<>();
+        String next = null;
+        for (var e : from.entrySet()) {
+            if (!e.getKey().startsWith(prefix)) {
+                break;
+            }
+            if (page.size() == maxKeys) {
+                next = page.get(page.size() - 1).key();
+                break;
+            }
+            page.add(new ObjectStat(e.getKey(), e.getValue().data().length, e.getValue().version()));
+        }
+        return new ListPage(page, Optional.ofNullable(next));
+    }
+
+    @Override
+    public void delete(List<String> keys) {
+        // ⚠️ An absent key is not an error: GC re-runs after a crash and would
+        // otherwise fail permanently on its own completed work.
+        keys.forEach(objects::remove);
+    }
+
+    @Override
+    public Capabilities capabilities() {
+        return new Capabilities(true, true, MAX_KEY_BYTES, 5L * 1024 * 1024, CostTable.free());
+    }
+
+    @Override
+    public void close() {
+        objects.clear();
+    }
+}

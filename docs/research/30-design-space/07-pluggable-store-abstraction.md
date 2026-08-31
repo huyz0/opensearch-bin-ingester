@@ -12,6 +12,13 @@ the two things they did not need and we cannot live without: **conditional write
 
 ## 1. The interface
 
+> ⚠️ **REVISED by [ADR-0022](../../internal/product/decisions/0022-store-spi-pages-explicitly.md).**
+> Two signatures below are superseded: `list` returns a `ListPage` with an
+> explicit `maxKeys`, not a lazy `Stream` — a stream hides paging inside the
+> backend and makes LIST requests invisible to the cost meter (R9) — and
+> `ObjectStat` carries **no** `lastModifiedMillis`, because no decision here may
+> depend on a store's clock. When this section and the ADR disagree, the ADR wins.
+
 ```java
 public interface BinStore extends Closeable {
     // --- reads -------------------------------------------------------------
@@ -114,6 +121,7 @@ silently breaks the ordering protocol.
 - Read-after-write is visible immediately (S3 has been strongly consistent since Dec 2020; assert it
   rather than assume it, especially for S3-compatible stores).
 - `list` is lexicographic, honours `startAfter`, and pages lazily without buffering all keys.
+  > ⚠️ **WITHDRAWN by [ADR-0022](../../internal/product/decisions/0022-store-spi-pages-explicitly.md)** — it demanded the very laziness that hid LIST requests from the meter. Replaced by "one call is one page is one request".
 - Keys of exactly 1,024 bytes, and every character our key generator can emit, round-trip
   ([bloom-in-key](02-partition-bloom-in-key.md) §7).
 - Range reads: zero-length, past-EOF, and last-byte ranges behave identically everywhere.
