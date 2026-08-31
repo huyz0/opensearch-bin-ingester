@@ -7,6 +7,11 @@ import java.util.OptionalLong;
 /**
  * One mutation, as the segment frames it (ADR-0020).
  *
+ * <p>⚠️ Named {@code SegmentRecord}, not {@code Record}: the latter collides with
+ * {@code java.lang.Record} under a wildcard import, so every module that imports
+ * this package — ingest, client, plugin — would have had to disambiguate or
+ * silently pick the wrong one.
+ *
  * <p>⚠️ The envelope carries {@code _id}, {@code _op_type} and {@code _version}
  * NATIVELY rather than inside the payload. Producers send a monotonic external
  * version in the bulk ACTION line, not in the document, so a mapper that lifts
@@ -21,9 +26,9 @@ import java.util.OptionalLong;
  * @param version the source's external version, or empty when it sent none
  * @param payload the document bytes; empty for a delete
  */
-public record Record(String id, OpType opType, OptionalLong version, byte[] payload) {
+public record SegmentRecord(String id, OpType opType, OptionalLong version, byte[] payload) {
 
-    public Record {
+    public SegmentRecord {
         Objects.requireNonNull(id, "id");
         Objects.requireNonNull(opType, "opType");
         Objects.requireNonNull(version, "version");

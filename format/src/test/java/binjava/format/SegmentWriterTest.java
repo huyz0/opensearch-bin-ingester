@@ -31,8 +31,8 @@ class SegmentWriterTest {
         return s.getBytes(StandardCharsets.UTF_8);
     }
 
-    private static Record index(String id, long version, String body) {
-        return new Record(id, OpType.INDEX, OptionalLong.of(version), bytes(body));
+    private static SegmentRecord index(String id, long version, String body) {
+        return new SegmentRecord(id, OpType.INDEX, OptionalLong.of(version), bytes(body));
     }
 
     private static ByteBuffer segment(SegmentWriter w) throws Exception {
@@ -144,7 +144,7 @@ class SegmentWriterTest {
     void aDeleteCarriesNoPayloadAndSaysSoInItsFlags() throws Exception {
         SegmentWriter w = new SegmentWriter();
         w.add(new RunKey(INDEX_A, 0),
-                new Record("gone", OpType.DELETE, OptionalLong.of(4), new byte[0]), 1L);
+                new SegmentRecord("gone", OpType.DELETE, OptionalLong.of(4), new byte[0]), 1L);
         ByteBuffer b = segment(w);
         int dataStart = (int) b.getLong(SegmentFormat.PREAMBLE_BYTES + 24);
         byte[] body = new byte[b.getInt(dataStart)];
@@ -160,7 +160,7 @@ class SegmentWriterTest {
     void aRecordWithNoVersionOmitsTheFieldRatherThanWritingZero() throws Exception {
         SegmentWriter w = new SegmentWriter();
         w.add(new RunKey(INDEX_A, 0),
-                new Record("d", OpType.INDEX, OptionalLong.empty(), bytes("{}")), 1L);
+                new SegmentRecord("d", OpType.INDEX, OptionalLong.empty(), bytes("{}")), 1L);
         ByteBuffer b = segment(w);
         int dataStart = (int) b.getLong(SegmentFormat.PREAMBLE_BYTES + 24);
         byte[] body = new byte[b.getInt(dataStart)];
@@ -192,7 +192,7 @@ class SegmentWriterTest {
         SegmentWriter w = new SegmentWriter();
         String longId = "x".repeat(300);
         w.add(new RunKey(INDEX_A, 0),
-                new Record(longId, OpType.INDEX, OptionalLong.of(1), bytes("{}")), 1L);
+                new SegmentRecord(longId, OpType.INDEX, OptionalLong.of(1), bytes("{}")), 1L);
         ByteBuffer b = segment(w);
         int dataStart = (int) b.getLong(SegmentFormat.PREAMBLE_BYTES + 24);
         byte[] body = new byte[b.getInt(dataStart)];
@@ -209,16 +209,16 @@ class SegmentWriterTest {
     @Test
     void aDeleteWithAPayloadIsRefusedAtConstruction() {
         assertThatThrownBy(
-                () -> new Record("d", OpType.DELETE, OptionalLong.of(1), bytes("{\"a\":1}")))
+                () -> new SegmentRecord("d", OpType.DELETE, OptionalLong.of(1), bytes("{\"a\":1}")))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new Record("", OpType.INDEX, OptionalLong.empty(), new byte[0]))
+        assertThatThrownBy(() -> new SegmentRecord("", OpType.INDEX, OptionalLong.empty(), new byte[0]))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
     void theRecordPayloadIsCopiedInAndOut() {
         byte[] source = bytes("{\"a\":1}");
-        Record r = new Record("d", OpType.INDEX, OptionalLong.empty(), source);
+        SegmentRecord r = new SegmentRecord("d", OpType.INDEX, OptionalLong.empty(), source);
         java.util.Arrays.fill(source, (byte) 0);
         assertThat(r.payload()).as("the caller's later mutation must not reach it")
                 .isEqualTo(bytes("{\"a\":1}"));

@@ -28,11 +28,11 @@ import java.util.zip.CRC32C;
  */
 public final class SegmentWriter {
 
-    private final Map<RunKey, List<Record>> runs = new TreeMap<>();
+    private final Map<RunKey, List<SegmentRecord>> runs = new TreeMap<>();
     private final Map<RunKey, Long> minTimestamps = new TreeMap<>();
 
     /** Adds one record to a run, creating the run on first use. */
-    public void add(RunKey key, Record record, long timestampMillis) {
+    public void add(RunKey key, SegmentRecord record, long timestampMillis) {
         runs.computeIfAbsent(key, k -> new ArrayList<>()).add(record);
         minTimestamps.merge(key, timestampMillis, Math::min);
     }
@@ -51,9 +51,9 @@ public final class SegmentWriter {
         out.write((int) v);
     }
 
-    private static byte[] encodeRun(List<Record> records) {
+    private static byte[] encodeRun(List<SegmentRecord> records) {
         ByteArrayOutputStream body = new ByteArrayOutputStream();
-        for (Record r : records) {
+        for (SegmentRecord r : records) {
             byte[] id = r.id().getBytes(StandardCharsets.UTF_8);
             byte[] payload = r.payload();
             boolean hasVersion = r.version().isPresent();
