@@ -68,6 +68,47 @@ public abstract class BinStoreConformance {
     }
 
     @Test
+    void anOverwriteWithAShorterBodyLeavesNoTail() throws Exception {
+        try (BinStore s = newStore()) {
+            put(s, "k", "0123456789");
+            put(s, "k", "hi");
+            // ⚠️ Both existing overwrite cases used a new body no SHORTER than
+            // the old, so a backend opening the final path without O_TRUNC
+            // passed them and then served "hi23456789" forever. Size is asserted
+            // too: a reader that trusts stat() would fetch ten bytes.
+            assertThat(read(s.get("k"))).isEqualTo("hi");
+            assertThat(s.stat("k").orElseThrow().size()).isEqualTo(2);
+        }
+    }
+
+    @Test
+    void aRefusedWriteLeavesThePreviousObjectIntact() throws Exception {
+        try (BinStore s = newStore()) {
+            put(s, "k", "good");
+            Body lying = new Body(999, () -> new java.io.ByteArrayInputStream(bytes("short")));
+            assertThatThrownBy(() -> s.put("k", lying)).isInstanceOf(IOException.class);
+            // ⚠️ The length case only asserted nothing was CREATED. A backend that
+            // streams into the final path and checks length at EOF has already
+            // destroyed the previous good object by the time it refuses -- so the
+            // caller loses data on a write it was told failed.
+            assertThat(read(s.get("k"))).as("the previous object must survive").isEqualTo("good");
+        }
+    }
+
+    @Test
+    void listingAPrefixWithNoMatchesIsEmptyRatherThanAnError() throws Exception {
+        try (BinStore s = newStore()) {
+            put(s, "p/a", "1");
+            // ⚠️ No case listed zero matches. Files.list of a directory that does
+            // not exist throws NoSuchFileException, so recovery over a FRESH
+            // bucket -- the first thing that ever happens -- would die at startup.
+            ListPage page = s.list("nothing-here/", null, 100);
+            assertThat(page.objects()).isEmpty();
+            assertThat(page.nextStartAfter()).isEmpty();
+        }
+    }
+
+    @Test
     void putIfAbsentWritesOnlyWhenTheKeyIsFree() throws Exception {
         try (BinStore s = newStore()) {
             Optional<Version> first = s.putIfAbsent("k", Body.ofBytes(bytes("first")));
@@ -355,6 +396,13 @@ public abstract class BinStoreConformance {
             // written to catch.
             s.put("k".repeat((int) max), Body.ofBytes(bytes("x")));
             assertThat(s.stat("k".repeat((int) max))).as("a key AT the limit is accepted").isPresent();
+            // ⚠️ BYTES, not chars. The probe was all-ASCII, so counting
+            // key.length() survived -- and NAME_MAX, which M1.2's filesystem
+            // backend answers to, is a byte limit. "é" is two bytes in UTF-8.
+            String multiByte = "é".repeat((int) max);
+            assertThatThrownBy(() -> s.put(multiByte, Body.ofBytes(bytes("x"))))
+                    .as("a key of max chars but 2x max bytes must be refused")
+                    .isInstanceOf(IOException.class);
             assertThatThrownBy(() -> s.put("k".repeat((int) max + 1), Body.ofBytes(bytes("x"))))
                     .isInstanceOf(IOException.class);
         }
