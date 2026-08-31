@@ -2,6 +2,8 @@
 package binjava.plugin;
 
 import binjava.format.RunKey;
+import java.nio.ByteBuffer;
+import java.util.Base64;
 import java.util.Objects;
 import java.util.UUID;
 import org.opensearch.cluster.metadata.IndexMetadata;
@@ -28,6 +30,23 @@ public final class BinStoreConsumerFactory
         this.subscriptions = Objects.requireNonNull(subscriptions, "subscriptions");
     }
 
+    /**
+     * WARNING: an OpenSearch index UUID is BASE64URL, not the hyphenated form.
+     * {@code UUID.fromString} throws on every real index -- "Invalid UUID
+     * string: nVzgup36TLqWp7VBBREj1w" -- and no in-process test could catch it,
+     * because they all build a RunKey directly from a java.util.UUID. Only a
+     * booting node hands over a real one.
+     */
+    static UUID indexUuidOf(String openSearchIndexUuid) {
+        byte[] raw = Base64.getUrlDecoder().decode(openSearchIndexUuid);
+        if (raw.length != 16) {
+            throw new IllegalArgumentException(
+                    "an index UUID decodes to 16 bytes, not " + raw.length);
+        }
+        ByteBuffer b = ByteBuffer.wrap(raw);
+        return new UUID(b.getLong(), b.getLong());
+    }
+
     @Override
     public BinStoreOffset parsePointerFromString(String pointer) {
         return BinStoreOffset.fromString(pointer);
@@ -40,8 +59,7 @@ public final class BinStoreConsumerFactory
         // An index deleted and recreated with the same name is a DIFFERENT
         // stream, and reusing the name would resume the new index from the old
         // one's offsets.
-        UUID indexId = UUID.fromString(indexMetadata.getIndexUUID());
-        RunKey key = new RunKey(indexId, shardId);
+        RunKey key = new RunKey(indexUuidOf(indexMetadata.getIndexUUID()), shardId);
         return new BinStoreShardConsumer(shardId, subscriptions.clientFor(key));
     }
 }
