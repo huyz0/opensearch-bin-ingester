@@ -147,7 +147,12 @@ public record Body(long length, Supplier<InputStream> open) {
             }
 
             /**
-             * ⚠️ A no-op, because FilterInputStream forwards mark() to the
+             * ⚠️ EQUIVALENT MUTANT, disclosed: {@code super.mark(readlimit)}
+             * survives, because reset() refuses unconditionally so nothing
+             * observable separates a no-op from a forwarding override. Kept
+             * because forwarding leaves the delegate marked for no reason.
+             *
+             * <p>A no-op, because FilterInputStream forwards mark() to the
              * delegate — a client could mark successfully and only discover the
              * refusal at reset(), which is worse than being told up front.
              */

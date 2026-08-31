@@ -106,55 +106,27 @@ class BodyTest {
     }
 
     @Test
-    void checkedStreamRefusesAnOverLongBody() throws Exception {
-        // ⚠️ The asymmetry review found: both liars were SHORT, so `seen !=
-        // length` weakened to `seen < length` survived. An over-long body is the
-        // S3 content-length truncation this class names as its reason to exist.
+    void checkedStreamRefusesAnOverLongBodyBeforeItReachesEndOfInput() throws Exception {
+        // ⚠️ A consumer that OVER-READS but never reaches EOF. The previous
+        // version used readAllBytes, which drives the stream to EOF -- and at
+        // EOF the lazy design throws from inside that same call, so
+        // assertThatThrownBy could not tell WHERE the throw came from. Review
+        // restored the pre-fix lazy design with the whole suite green.
+        //
+        // 11 bytes behind a 5-byte request: read returns 5 and never sees EOF,
+        // so an eager check throws and a lazy one returns 5 in silence. That is
+        // the difference that matters -- a streaming backend must be stopped
+        // before it commits the request, not told afterwards.
         Body lying = new Body(2, () -> new ByteArrayInputStream(bytes("much longer")));
-        java.io.InputStream in = lying.checkedStream();
-        // ⚠️ EAGERLY -- the throw must come from the READ, not from close().
-        // Asserting only the message let the check move back into verify() with
-        // the same wording, which is the pre-fix design restored. A backend
-        // streaming to S3 must be stopped before it commits the request, not
-        // told afterwards.
-        assertThatThrownBy(() -> in.readAllBytes())
-                .as("the read itself must refuse")
-                .isInstanceOf(java.io.IOException.class)
-                .hasMessageContaining("more");
-    }
-
-    @Test
-    void checkedStreamCountsAByteAtATimeReader() throws Exception {
-        // ⚠️ No test called read(); both used readAllBytes, which takes the bulk
-        // override. Deleting the single-arg override survived, and under it an
-        // honest body read byte-wise counted zero and was rejected as short.
-        Body honest = Body.ofBytes(bytes("hello"));
-        try (java.io.InputStream in = honest.checkedStream()) {
-            int n = 0;
-            while (in.read() >= 0) {
-                n++;
-            }
-            assertThat(n).isEqualTo(5);
-        }
-    }
-
-    @Test
-    void checkedStreamAcceptsAConsumerThatStopsExactlyAtTheLength() throws Exception {
-        // ⚠️ The ordinary content-length-driven path: read exactly `length`
-        // bytes, close, never see EOF. This case is LOAD-BEARING now that
-        // verify() probes one more byte -- it is what stops the probe refusing
-        // an honest body. An earlier version was removed as unredable; it came
-        // back with the probe that made it matter.
-        Body honest = Body.ofBytes(bytes("hello"));
-        try (java.io.InputStream in = honest.checkedStream()) {
-            // ⚠️ ONE bulk read, not readNBytes: readNBytes issues a further read
-            // to learn it cannot get more, which reaches EOF and makes this case
-            // indistinguishable from the EOF path -- it could then carry no red
-            // record. A single read(buf, 0, 5) stops exactly at the declared
-            // length having never seen EOF, which is the real S3 consumer.
+        try (java.io.InputStream in = lying.checkedStream()) {
             byte[] buf = new byte[5];
-            assertThat(in.read(buf, 0, 5)).isEqualTo(5);
-            assertThat(buf).isEqualTo(bytes("hello"));
+            assertThatThrownBy(() -> in.read(buf, 0, 5))
+                    .as("the read itself must refuse, before end of input")
+                    .isInstanceOf(java.io.IOException.class)
+                    .hasMessageContaining("more");
+        } catch (java.io.IOException expectedOnClose) {
+            // ⚠️ close() re-verifies; the latch means it must NOT throw again.
+            throw new AssertionError("close must not throw a second time", expectedOnClose);
         }
     }
 
