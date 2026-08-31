@@ -48,4 +48,24 @@ class IngestConfigTest {
         assertThatThrownBy(() -> new IngestConfig(Duration.ofMillis(250), 1024, null))
                 .isInstanceOf(NullPointerException.class);
     }
+    @Test
+    void aNonPositiveQueuedPushBudgetIsRefused() {
+        // ⚠️ The sibling guards each have a case; this one shipped without.
+        // Deleting it left the whole suite green.
+        assertThatThrownBy(() -> new IngestConfig(Duration.ofMillis(250), 8L << 20, "d", 0L))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("maxQueuedPushBytes");
+        assertThatThrownBy(() -> new IngestConfig(Duration.ofMillis(250), 8L << 20, "d", -1L))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void theDefaultQueuedPushBudgetIs64MiB() {
+        // ⚠️ Pinned because it is a HEAP bound: a quarter of the 256 MB
+        // criterion 8 budgets. Raising it silently is how the ingester starts
+        // dying of an OutOfMemoryError under a slow subscriber.
+        assertThat(IngestConfig.DEFAULT_MAX_QUEUED_PUSH_BYTES).isEqualTo(64L * 1024 * 1024);
+        assertThat(IngestConfig.defaults("d").maxQueuedPushBytes())
+                .isEqualTo(IngestConfig.DEFAULT_MAX_QUEUED_PUSH_BYTES);
+    }
 }

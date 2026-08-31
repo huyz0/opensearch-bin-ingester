@@ -5,8 +5,12 @@ import binjava.binstore.BinStore;
 import binjava.binstore.Body;
 import binjava.format.SegmentFormat;
 import binjava.format.SegmentKey;
+import binjava.format.RunKey;
+import binjava.format.SegmentReader;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.Objects;
@@ -43,11 +47,30 @@ public final class SegmentPublisher {
     }
 
     /**
+     * What one flush produced: the key it was stored under, the bytes, and how
+     * many records each stream contributed.
+     *
+     * <p>⚠️ All three, because the caller needs all three and deriving them
+     * twice is how they diverge. The commit log needs the counts to assign
+     * offsets, the subscription hub needs the bytes to push inline, and neither
+     * can be recovered from the key alone without a GET — a request the write
+     * path must not spend.
+     */
+    public record Published(String key, byte[] segment, Map<RunKey, Integer> recordCounts) {
+
+        public Published {
+            Objects.requireNonNull(key, "key");
+            Objects.requireNonNull(segment, "segment");
+            recordCounts = Map.copyOf(recordCounts);
+        }
+    }
+
+    /**
      * Publishes one segment.
      *
-     * @return the key it was written under, or empty if there was nothing to write
+     * @return what was written, or empty if there was nothing to write
      */
-    public Optional<String> publish(Accumulator accumulator) throws IOException {
+    public Optional<Published> publish(Accumulator accumulator) throws IOException {
         Optional<byte[]> drained = accumulator.drain();
         if (drained.isEmpty()) {
             // ⚠️ Nothing buffered means NO REQUEST. An idle stream that still
@@ -69,7 +92,15 @@ public final class SegmentPublisher {
         // write-once matters (M1.10), because that is where two writers can
         // legitimately race for the same slot.
         store.put(key, new Body(segment.length, () -> new ByteArrayInputStream(segment)));
-        return Optional.of(key);
+
+        // ⚠️ Read back out of the SEGMENT rather than counted on the way in.
+        // The directory is what a consumer will read, so counting the bytes that
+        // were actually written is the only count that cannot disagree with it.
+        Map<RunKey, Integer> counts = new LinkedHashMap<>();
+        for (var entry : SegmentReader.open(segment).directory()) {
+            counts.put(entry.key(), entry.recordCount());
+        }
+        return Optional.of(new Published(key, segment, counts));
     }
 
     /** The exact byte range a reader needs for preamble plus directory. */

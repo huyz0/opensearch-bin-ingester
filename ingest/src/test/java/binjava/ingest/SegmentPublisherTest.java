@@ -59,7 +59,7 @@ class SegmentPublisherTest {
             acc.add(new RunKey(B, 0), record("c" + i));
         }
         clock.advance(Duration.ofMillis(250));
-        String key = publisher.publish(acc).orElseThrow();
+        String key = publisher.publish(acc).orElseThrow().key();
 
         // ⚠️ THE number. 150 records across 3 streams and 2 indices cost exactly
         // one request; a design that scaled with records, partitions or indices
@@ -96,7 +96,7 @@ class SegmentPublisherTest {
         acc.add(new RunKey(B, 3), record("2"));
         clock.advance(Duration.ofMillis(250));
 
-        String key = publisher.publish(acc).orElseThrow();
+        String key = publisher.publish(acc).orElseThrow().key();
         // ⚠️ Read back OUT of the bytes, not recomputed, so the key cannot
         // disagree with the object. Two runs is two 48-byte entries.
         assertThat(SegmentKey.headerLenOf(key)).isEqualTo(96);
@@ -120,7 +120,7 @@ class SegmentPublisherTest {
         long firstAppend = clock.millis();
         clock.advance(Duration.ofMillis(250));
 
-        String key = publisher.publish(acc).orElseThrow();
+        String key = publisher.publish(acc).orElseThrow().key();
         // ⚠️ The time PATH must match the segment's own createdAt, or a recovery
         // walk bounded to an hour looks in the wrong hour and finds nothing.
         assertThat(key).startsWith(SegmentKey.hourPrefix("bins/c", firstAppend));
@@ -136,10 +136,10 @@ class SegmentPublisherTest {
 
         acc.add(new RunKey(A, 0), record("1"));
         clock.advance(Duration.ofMillis(250));
-        String first = publisher.publish(acc).orElseThrow();
+        String first = publisher.publish(acc).orElseThrow().key();
         acc.add(new RunKey(A, 0), record("2"));
         clock.advance(Duration.ofMillis(250));
-        String second = publisher.publish(acc).orElseThrow();
+        String second = publisher.publish(acc).orElseThrow().key();
 
         // ⚠️ A collision would silently overwrite a segment the commit log has
         // already pointed at. The per-pod sequence is what prevents it inside
@@ -161,8 +161,8 @@ class SegmentPublisherTest {
         Accumulator two = accumulator(clock);
         two.add(new RunKey(A, 0), record("2"));
         // ⚠️ The clock does NOT advance: same millisecond, same pod.
-        String a = publisher.publish(one).orElseThrow();
-        String b = publisher.publish(two).orElseThrow();
+        String a = publisher.publish(one).orElseThrow().key();
+        String b = publisher.publish(two).orElseThrow().key();
         assertThat(a).isNotEqualTo(b);
         assertThat(store.list("bins/c/data/", null, 100).objects()).hasSize(2);
     }
