@@ -90,6 +90,7 @@ the harness gates that already exist, not the ones still queued.
 | M1.12 | Consumer: subscription client, blocking queue, decode, **`DEFAULT`-envelope assembly** | FR-7 | done |
 | M1.13 | Plugin: `BinStorePlugin`, factory, `BinStoreOffset`, `BinStoreMessage` | FR-7 | done (pointer, message, shard consumer; BinStorePlugin registration is M1.14) |
 | M1.14 | Plugin: blocking `readNext` + node-level singleton | FR-7, NFR-2 | done |
+| M1.15b | ⚠️ **T4 tier is now RUNNABLE** — `./gradlew :plugin:clusterTest` boots a real single-node OpenSearch 3.8.0 node with the plugin loaded. Six environment fixes were needed, each revealed only by the previous failure: the agent-bootstrap artifact is missing from the framework's own dependencies; the agent must arrive via `-javaagent`; its bootstrap must be on `-Xbootclasspath/a:` because the agent runs before the app classloader; a Gradle `Configuration` cannot be serialised into a task; a Kotlin script lambda captures the script and cannot either; and declaring JUnit 4 alongside the framework's copy is rejected as "jar hell". Recorded so the next person does not rediscover them | FR-7 | done |
 | M1.15 | T4 end-to-end: documents searchable in a single-node cluster | FR-7 | todo |
 | M1.16 | Zero-idle-cost: **T1** at 1,600 consumers, **T4** at 20 shards | **NFR-2** | todo |
 | M1.18 | ~~Gradle memory caps, per-tier test tasks~~ — **delivered by `de66330`**. What remains: a test task with `-Xmx256m` for acceptance criterion 8, and container memory limits | — | todo |

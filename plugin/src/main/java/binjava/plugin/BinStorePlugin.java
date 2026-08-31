@@ -25,11 +25,51 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
     /** The value of {@code index.ingestion_source.type}. */
     public static final String TYPE = "BINSTORE";
 
+    /**
+     * WARNING: a NODE INSTANTIATES THIS REFLECTIVELY, so it must have a no-arg
+     * constructor. An earlier version took NodeSubscriptions directly, which
+     * made the class test-friendly and UNLOADABLE by a real OpenSearch node --
+     * a gap that only a booting node reveals, because every in-process test
+     * constructs the plugin by hand.
+     *
+     * <p>WARNING: the node-level state is therefore installed rather than
+     * injected. In a real node {@code createComponents} builds it; in a test the
+     * harness installs one before the node starts. It stays a per-node singleton
+     * either way, which is what criterion 6 requires.
+     */
+    private static volatile NodeSubscriptions installed;
+
     private final NodeSubscriptions subscriptions;
 
-    /** Used by tests and by createComponents; the node owns the lifetime. */
-    public BinStorePlugin(NodeSubscriptions subscriptions) {
+    /** The only public constructor: the node calls this one reflectively. */
+    public BinStorePlugin() {
+        this.subscriptions = installed;
+    }
+
+    /**
+     * Used by in-process tests that own the lifetime themselves.
+     *
+     * <p>WARNING: PACKAGE-PRIVATE, not public. OpenSearch requires exactly ONE
+     * public constructor and refuses to load a plugin otherwise -- "no unique
+     * public constructor". A second public one leaves every in-process test
+     * green while making the plugin unloadable by a real node; only booting one
+     * finds it.
+     */
+    BinStorePlugin(NodeSubscriptions subscriptions) {
         this.subscriptions = subscriptions;
+    }
+
+    /**
+     * Installs the node-level subscriptions a reflectively-constructed plugin
+     * will pick up.
+     *
+     * <p>WARNING: static, and that is a real cost. A node hosts ONE of these, so
+     * it is correct per JVM in production and a shared fixture in tests. It is
+     * the price of a plugin the node constructs itself, and it is recorded here
+     * rather than hidden.
+     */
+    public static void install(NodeSubscriptions subscriptions) {
+        installed = subscriptions;
     }
 
     /**

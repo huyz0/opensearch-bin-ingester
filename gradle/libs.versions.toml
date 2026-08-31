@@ -10,6 +10,11 @@ assertj = "3.27.3"
 
 [libraries]
 opensearch = { module = "org.opensearch:opensearch", version.ref = "opensearch" }
+opensearch-testframework = { module = "org.opensearch.test:framework", version.ref = "opensearch" }
+# OpenSearch 3.x replaced the SecurityManager with a java agent; the test
+# framework will not even class-load without its bootstrap on the classpath.
+opensearch-agent-bootstrap = { module = "org.opensearch:opensearch-agent-bootstrap", version.ref = "opensearch" }
+opensearch-agent = { module = "org.opensearch:opensearch-agent", version.ref = "opensearch" }
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
 junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
