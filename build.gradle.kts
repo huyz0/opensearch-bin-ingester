@@ -51,6 +51,11 @@ val licenceMappings = mapOf(
     "^apiguardian-api$" to "apiguardian",
     "^assertj-.*" to "assertj",
     "^byte-buddy.*" to "byte-buddy",
+    // ⚠️ One prefix for ~36 artifacts. Helidon ships the runtime as many small
+    // jars (helidon-common-*, helidon-http-*, helidon-webserver-*) all under the
+    // same Apache-2.0 licence from the same project, so a per-jar licence file
+    // would be 36 identical copies -- and 36 places for one of them to drift.
+    "^helidon.*" to "helidon",
 )
 
 tasks.register<DependencyLicensesTask>("dependencyLicenses") {

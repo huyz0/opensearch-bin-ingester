@@ -5,6 +5,7 @@
 # ingestion SPI is not stable API; a floating version would silently change the
 # interface this plugin implements.
 opensearch = "3.8.0"
+helidon = "4.3.0"
 junit = "5.14.0"
 assertj = "3.27.3"
 
@@ -15,6 +16,8 @@ opensearch-testframework = { module = "org.opensearch.test:framework", version.r
 # framework will not even class-load without its bootstrap on the classpath.
 opensearch-agent-bootstrap = { module = "org.opensearch:opensearch-agent-bootstrap", version.ref = "opensearch" }
 opensearch-agent = { module = "org.opensearch:opensearch-agent", version.ref = "opensearch" }
+helidon-webserver = { module = "io.helidon.webserver:helidon-webserver", version.ref = "helidon" }
+helidon-webclient = { module = "io.helidon.webclient:helidon-webclient", version.ref = "helidon" }
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
 junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }

@@ -11,3 +11,4 @@ junit        EPL-2.0
 assertj      Apache-2.0
 byte-buddy   Apache-2.0
 opentest4j   Apache-2.0
+helidon      Apache-2.0

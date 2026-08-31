@@ -31,7 +31,18 @@ public interface Ingest extends AutoCloseable {
      * partition is EXPLICIT in M1: aliases and {@code os_routing} are ADR-0015
      * and land in M6.
      *
-     * @throws IllegalArgumentException if the principal may not write to the index
+     * <p>⚠️ IllegalArgumentException is the WRONG signal for an authorization
+     * denial and is retained only until M1.7f gives this seam its own exception
+     * type. IAE is also how the append path reports its own invariant failures
+     * (see {@link AppendResult} and the commit log), so a caller cannot tell
+     * "you may not write here" — permanent, do not retry — from "this
+     * implementation has a bug" — retryable, and a lost batch if it is not.
+     * The HTTP adapter therefore checks {@link Principal#canWriteTo} itself
+     * rather than catching IAE, and an implementer of this interface should not
+     * read the tag below as an instruction to keep the collision.
+     *
+     * @throws IllegalArgumentException if the principal may not write to the
+     *     index — ⚠️ ambiguous, see above; M1.7f replaces it
      */
     AppendResult append(Principal principal, String index, int partition,
             List<SegmentRecord> records) throws IOException;
