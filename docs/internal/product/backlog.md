@@ -59,6 +59,38 @@ so the build goes first.
 | M0.20 | `scripts/check-cross-refs.sh` — every `M<n>` and `R<n>` cited anywhere resolves to a roadmap row / a `cost.md` rule, and no row under `## Completed` contradicts its own State cell. Review found all three by hand | — | todo |
 | M0.19 | `scripts/check-catalog-only.sh` — a module may not declare a literal dependency coordinate, only a catalogue alias or `project(...)`; the licence gate's completeness rests on it | — | todo |
 
+## M1 — walking skeleton
+
+Decomposed in [milestones/M1/SPEC.md](milestones/M1/SPEC.md). ⚠️ The M0 rows
+above are NOT all done: 25 remain todo. M1 proceeds because its blockers are
+the harness gates that already exist, not the ones still queued.
+
+| ID | Task | Serves | State |
+|---|---|---|---|
+| M1.0 | ⚠️ **SPI ONLY — the trust domain is NOT yet threaded through the write path**, because no write path exists before M1.6; that clause is carried by M1.6/M1.8. `CredentialSource` SPI + `StaticCredentialSource` + `Principal`; trust domain threaded through the write path ([ADR-0021](decisions/0021-credential-source-spi.md)) | FR-20 | done |
+| M1.1 | `BinStore` SPI + `MemoryBinStore` + conformance harness | FR-8 | todo |
+| M1.2 | `LocalFsBinStore`, `putIfAbsent` via `O_CREAT`/`O_EXCL` | FR-8 | todo |
+| M1.3 | `CountingBinStore` + the cost-assertion test fixture | FR-8, R9 | todo |
+| M1.3b | `GoverningBinStore`: ratio-to-expected, LIST ceiling, priority classes; writes never refused | FR-21 | todo |
+| M1.4 | Segment v0 writer: preamble, directory, runs, footer; record framing carries `_id`/`_op_type`/`_version` ([ADR-0020](decisions/0020-record-envelope-and-mapper.md)) | FR-2 | todo |
+| M1.5 | Segment v0 reader + round-trip + golden file | FR-2 | todo |
+| M1.6 | **In-process `Ingest` API** + config; no HTTP on the classpath | FR-1 | todo |
+| M1.7 | HTTP adapter: Helidon, streaming `_bulk` parse, delegates to `Ingest` | FR-1 | todo |
+| M1.8 | Ingester: per-stream accumulator + 250 ms/8 MiB flush trigger | FR-2 | todo |
+| M1.9 | Ingester: segment build + PUT | FR-2 | todo |
+| M1.10 | Ingester: commit log v0 + offset assignment + ack after durable | FR-3, FR-4 | todo |
+| M1.11 | Ingester: `/v1/subscribe`, inline delivery | FR-5 | todo |
+| M1.12 | Consumer: subscription client, blocking queue, decode, **`DEFAULT`-envelope assembly** | FR-7 | todo |
+| M1.13 | Plugin: `BinStorePlugin`, factory, `BinStoreOffset`, `BinStoreMessage` | FR-7 | todo |
+| M1.14 | Plugin: blocking `readNext` + node-level singleton | FR-7, NFR-2 | todo |
+| M1.15 | T4 end-to-end: documents searchable in a single-node cluster | FR-7 | todo |
+| M1.16 | Zero-idle-cost: **T1** at 1,600 consumers, **T4** at 20 shards | **NFR-2** | todo |
+| M1.18 | ~~Gradle memory caps, per-tier test tasks~~ — **delivered by `de66330`**. What remains: a test task with `-Xmx256m` for acceptance criterion 8, and container memory limits | — | todo |
+| M1.19b | Metrics with the allow-list labels; in-memory per-index counters; `/admin/cost` top-K | NFR-16 | todo |
+| M1.19 | Gate benchmarks: JMH `-prof gc`, allocation-per-record bounds, inside L1's budget | NFR-1 | todo |
+| M1.20 | GH Actions: L1 always; L2/L3 by path filter, label and nightly | — | todo |
+| M1.17 | Restart resumes from `batch_start` | NFR-11 | todo |
+
 ## Completed
 
 | ID | Task | State |

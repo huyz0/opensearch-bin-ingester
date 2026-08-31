@@ -183,7 +183,7 @@ Each is one commit, cites a requirement, and leaves the tree green.
 
 | ID | Task | Serves |
 |---|---|---|
-| M1.0 | `CredentialSource` SPI + `StaticCredentialSource` + `Principal`; trust domain threaded through the write path ([ADR-0021](../../decisions/0021-credential-source-spi.md)) | FR-20 |
+| M1.0 | `CredentialSource` SPI + `StaticCredentialSource` + `Principal` ([ADR-0021](../../decisions/0021-credential-source-spi.md)). ⚠️ **SPI only.** The trust domain is NOT threaded through the write path here — no write path exists before M1.6 — so that clause is carried by M1.6/M1.8. `Credential`/`Principal` live in `format` because the plugin presents a credential and `plugin → client → format`; the RESOLVER lives in `ingest` because resolving is I/O and `format` admits none | FR-20 |
 | M1.1 | `BinStore` SPI + `MemoryBinStore` + conformance harness | FR-8 |
 | M1.2 | `LocalFsBinStore`, `putIfAbsent` via `O_CREAT\|O_EXCL` | FR-8 |
 | M1.3 | `CountingBinStore` + the cost-assertion test fixture | FR-8, R9 |
