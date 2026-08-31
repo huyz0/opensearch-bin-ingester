@@ -129,45 +129,53 @@ public abstract class BinStoreConformance {
     @Test
     void putIfAbsentSucceedsExactlyOnceUnderConcurrentWriters() throws Exception {
         // ⚠️ THE reason this suite exists (design doc 07 §3, ADR-0002). Every
-        // sequential case above passes against a check-then-put:
-        //     if (containsKey(key)) return empty; put(key, v); return present;
-        // which loses a record whenever two writers interleave. M1.2's
-        // O_CREAT|O_EXCL and a backend's If-None-Match would each ship a green
-        // run with a broken race, and the commit log's invariant I1 -- no seq is
-        // ever written twice -- would be violated with no error to notice.
-        final int writers = 16;
-        List<String> candidates;
+        // sequential case passes against a check-then-put:
+        //     if (exists(key)) return empty; write(key); return present;
+        // which loses a record whenever two writers interleave -- exactly the
+        // choice a filesystem backend faces, O_CREAT|O_EXCL versus Files.exists()
+        // then write. Invariant I1, "no seq is ever written twice", would be
+        // violated with no error to notice.
+        //
+        // ⚠️ MANY KEYS, not one. Against an in-memory map a single contended key
+        // caught check-then-put 5 times out of 5; on a real filesystem the window
+        // between exists() and create is narrow enough that it caught it only 4
+        // times in 6. A gate that reports green on a broken backend one run in
+        // three is worse than no gate. Contending many keys makes a miss require
+        // every one of them to go the wrong way.
+        final int writers = 8;
+        final int keys = 24;
         try (BinStore s = newStore()) {
             ExecutorService pool = Executors.newFixedThreadPool(writers);
             try {
-                CyclicBarrier start = new CyclicBarrier(writers);
-                List<Callable<Optional<Version>>> tasks = new java.util.ArrayList<>();
-                for (int i = 0; i < writers; i++) {
-                    final String body = "writer-" + i;
-                    tasks.add(() -> {
-                        start.await();   // maximise the overlap
-                        return s.putIfAbsent("contended", Body.ofBytes(bytes(body)));
-                    });
-                }
-                long winners = 0;
-                for (Future<Optional<Version>> f : pool.invokeAll(tasks)) {
-                    if (f.get().isPresent()) {
-                        winners++;
+                for (int k = 0; k < keys; k++) {
+                    final String key = "contended-" + k;
+                    CyclicBarrier start = new CyclicBarrier(writers);
+                    List<Callable<Optional<Version>>> tasks = new java.util.ArrayList<>();
+                    List<String> candidates = new java.util.ArrayList<>();
+                    for (int i = 0; i < writers; i++) {
+                        final String body = "writer-" + i;
+                        candidates.add(body);
+                        tasks.add(() -> {
+                            start.await();   // maximise the overlap
+                            return s.putIfAbsent(key, Body.ofBytes(bytes(body)));
+                        });
                     }
-                }
-                assertThat(winners).as("exactly one writer may win").isEqualTo(1);
-                candidates = new java.util.ArrayList<>();
-                for (int i = 0; i < writers; i++) {
-                    candidates.add("writer-" + i);
+                    long winners = 0;
+                    for (Future<Optional<Version>> f : pool.invokeAll(tasks)) {
+                        if (f.get().isPresent()) {
+                            winners++;
+                        }
+                    }
+                    assertThat(winners).as("exactly one writer may win %s", key).isEqualTo(1);
+                    // ⚠️ EXACTLY one writer's body, not merely one that starts
+                    // like it: startsWith("writer-") accepted a body truncated to
+                    // "writer-", the torn-write shape a backend that creates the
+                    // final path and streams into it produces.
+                    assertThat(read(s.get(key))).isIn(candidates);
                 }
             } finally {
                 pool.shutdownNow();
             }
-            // ⚠️ EXACTLY one writer's body, not merely one that starts like it.
-            // startsWith("writer-") accepted a body TRUNCATED to "writer-",
-            // which is the torn-write shape a backend that creates the final
-            // path with O_CREAT|O_EXCL and then streams into it produces.
-            assertThat(read(s.get("contended"))).isIn(candidates);
         }
     }
 
