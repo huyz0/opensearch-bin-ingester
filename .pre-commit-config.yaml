@@ -1,0 +1,164 @@
+# Wires every gate in scripts/ as a local hook, so a fresh clone runs
+# `pre-commit install` once and inherits the same enforcement.
+#
+# `default_install_hook_types` covers both stages with the one command --
+# without it, `pre-commit install` wires `pre-commit` only, and a contributor
+# who never separately runs `pre-commit install --hook-type commit-msg` gets
+# half the enforcement with no indication the other half is missing.
+default_install_hook_types: [pre-commit, commit-msg]
+
+# CI runs `pre-commit run --all-files` against this exact file, so a check
+# written once here is never reimplemented in CI -- otherwise the version that
+# matters is whichever one nobody ran.
+#
+# ...with three exceptions that are stated rather than papered over:
+#
+#   1. `pre-commit run --all-files` runs the PRE-COMMIT stage only. The
+#      commit-msg hooks (check-commit-msg, check-test-integrity) are NOT
+#      invoked by it. CI runs them explicitly, once per commit in the range.
+#   2. check-test-integrity reads the STAGED diff, which is empty in a fresh
+#      checkout. CI sets CHECK_RANGE=<base-ref> so it compares against the base
+#      of the push or pull request instead. Without it it prints ok having
+#      examined nothing.
+#      ⚠️ CHECK_RANGE does NOT rescue check-tdd: it finds the new tests, but the
+#      red records live in .harness/tdd/red.json, which .gitignore excludes, so
+#      in CI it fails with "no red record" for every new test whatever the range.
+#      check-tdd is local-only, like check-reviewed.
+#   3. check-reviewed CANNOT run in CI at all: its evidence lives in
+#      .harness/review/, which is gitignored and local to the machine that ran the
+#      review. It is a pre-commit-stage hook, so `--all-files` DOES invoke it
+#      and with nothing staged it prints "ok nothing staged" and PASSES
+#      VACUOUSLY -- it does not fail, which is worse. CI runs
+#      SKIP=check-reviewed so the skip is visible in the log rather than a
+#      green line that means nothing.
+#      ⚠️ Non-negotiable 5 is therefore enforced LOCALLY ONLY. A commit
+#      pushed with --no-verify carries no reviewer verdict and nothing
+#      downstream will notice. That is a real hole, and naming it is the point
+#      of AGENTS.md section Gates.
+repos:
+  - repo: local
+    hooks:
+      - id: check-portability
+        name: "skills/README.md rules 2,3,5: skills are vendor-neutral and adapters are thin"
+        entry: scripts/check-portability.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
+      # First, because every other gate's answer depends on it looking at the
+      # right files. A gate that walks the disk reports on whatever else happens
+      # to be checked out next to this repo.
+      - id: check-gate-scope
+        name: "every gate judges this repository only, never .tmp/ or a sibling checkout"
+        entry: scripts/check-gate-scope.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
+      - id: check-harness-tests
+        name: "the harness's own tests run -- buildSrc tests are NOT run by ./gradlew build"
+        entry: scripts/check-harness-tests.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
+      # Delta-routed: builds only the modules a change touches, and all of them
+      # when the shared build moves. ⚠️ A docs-only commit pays NO Gradle startup
+      # -- the delta branch exits at "no module changed" before any gradlew call.
+      # ⚠️ Cost, and what is NOT measured, live in ONE place:
+      # docs/internal/standards/build.md § Gate scope. Restating a number
+      # here is how the two copies drift apart.
+      - id: check-module
+        name: "architecture.md rules 2/4/5: each module stays inside its dependency surface"
+        entry: scripts/check-module.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
+      - id: check-links
+        name: "every relative markdown link resolves"
+        entry: scripts/check-links.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
+      - id: build-index-check
+        name: "the generated index regions in AGENTS.md and skills/README.md are current"
+        entry: scripts/build-index.sh --check
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
+      - id: check-terminology
+        name: "glossary.md: one name per concept -- producer/ingester/writer/reader/consumer/plugin"
+        entry: scripts/check-terminology.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
+      - id: check-license-headers
+        name: "build.md: every source file carries the SPDX Apache-2.0 header"
+        entry: scripts/check-license-headers.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
+      - id: check-dependency-licenses
+        name: "build.md: no GPL/AGPL/SSPL dependencies in an Apache-2.0 project"
+        entry: scripts/check-dependency-licenses.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
+      - id: check-metric-cardinality
+        name: "observability.md rule 1: no high-cardinality metric or span labels"
+        entry: scripts/check-metric-cardinality.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
+      - id: check-test-budget
+        name: "build.md: memory caps declared; a runaway dies as a JVM/Docker OOM, not a lost WSL2 session"
+        entry: scripts/check-test-budget.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
+      - id: check-file-size
+        name: "code-structure.md rule 1: no source file over 500 lines"
+        entry: scripts/check-file-size.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
+      - id: check-tdd
+        name: "testing.md rule 2: every new test was observed to fail before the code existed"
+        entry: scripts/check-tdd.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
+      # Last of the pre-commit stage: it is the gate a fresh clone is most
+      # likely to trip, and its message is the longest.
+      - id: check-reviewed
+        name: "non-negotiable 5: the staged bytes were reviewed by both reviewers"
+        entry: scripts/check-reviewed.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
+
+      # commit-msg stage: reads the message file, passed as the one argument.
+      - id: check-commit-msg
+        name: "non-negotiable 1: the commit subject names a real backlog task"
+        entry: scripts/check-commit-msg.sh
+        language: system
+        stages: [commit-msg]
+      # Also commit-msg, and not by preference: testing.md rule 5 puts the
+      # justification for a weakened or removed test in the commit body, and the
+      # commit body does not exist at the pre-commit stage.
+      - id: check-test-integrity
+        name: "testing.md rules 4-5: no assertion weakened alongside a production change"
+        entry: scripts/check-test-integrity.sh
+        language: system
+        stages: [commit-msg]

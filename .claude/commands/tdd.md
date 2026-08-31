@@ -1,0 +1,9 @@
+---
+description: Implement a task test-first in Java. Use when writing any code. Covers the red-green cycle, what to 
+---
+
+Follow the procedure in `.agents/skills/tdd/SKILL.md`. Read that file now and
+do what it says.
+
+This file is an adapter. The procedure lives in the skill so that it works in
+any tool, and duplicating it here would create a fork that drifts.

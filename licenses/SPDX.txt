@@ -1,0 +1,13 @@
+# The declared SPDX identifier of each licence in this directory.
+#
+# This file, not the licence prose, is what the deny-list is matched against.
+# EPL-2.0's text names "GNU General Public License" in its Secondary License
+# clause, so a prose scan rejects JUnit; and a substring scan for "GPL-2.0"
+# also rejects LGPL-2.0, which is a different licence. The identifier is the
+# claim, the text is the attribution.
+#
+#   <licence-file-prefix>  <SPDX-ID>
+junit        EPL-2.0
+assertj      Apache-2.0
+byte-buddy   Apache-2.0
+opentest4j   Apache-2.0

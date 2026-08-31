@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# T3 fixture. MinIO is a TEST FIXTURE, not a supported backend
+# (testing.md rule 19a): a local stand-in for S3's wire protocol so tests need
+# not hit AWS. Use it for signing, ranges, multipart, list pagination and error
+# mapping.
+#
+# ⚠️ Do NOT run the commit-protocol simulation against it. Its conditional
+# writes are not stable enough to distinguish our bug from theirs, and a flaky
+# CAS test teaches people to re-run rather than to read.
+#
+# Every service declares mem_limit. build.md: WSL2 does not kill the offending
+# process, it kills whatever it likes, so a runaway must die as a Docker
+# OOM-kill. scripts/check-test-budget.sh asserts these are present and that
+# they sum below the ceiling.
+services:
+
+  minio:
+    # ⚠️ PINNED BY DIGEST, not a tag. This repository commits a sha1 for every
+    # dependency jar (licenses/*.jar.sha1) and refuses a build whose artefacts
+    # drift; a fixture image on `:latest` would be the one supply-chain input
+    # nobody pins, and a MinIO release that changes error mapping or signing
+    # behaviour would turn a green suite red with no diff to explain it.
+    #
+    # ⚠️ Digest OBTAINED BY PULLING, not copied from documentation:
+    #   docker pull minio/minio:latest
+    #   docker inspect --format='{{index .RepoDigests 0}}' minio/minio:latest
+    # A placeholder was written here first and removed -- a zeros digest would
+    # have committed a file that cannot start a container, which is worse than
+    # the floating tag it replaced.
+    image: minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+      # Quieter startup; the fixture is not a dashboard.
+      MINIO_UPDATE: "off"
+    ports:
+      # testing.md rule 16: no fixed ports. 0 lets the kernel choose and the
+      # test reads it back, so two concurrent sessions cannot collide.
+      - "0:9000"
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 3s

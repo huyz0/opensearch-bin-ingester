@@ -1,0 +1,12 @@
+.tmp/
+build/
+.gradle/
+*.class
+__pycache__/
+
+# Harness state: review verdicts, TDD red records, suite timings.
+# ⚠️ Deliberately NOT under build/. `plugins { base }` gives the root project a
+# `clean` task that deletes build/, and it took the hash-bound review verdicts
+# and red records with it -- so `./gradlew clean` silently made a reviewed commit
+# unreviewable. build/ is Gradle's to delete; harness state is not Gradle's.
+.harness/

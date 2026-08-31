@@ -1,0 +1,10 @@
+# Review findings argued as non-defects. One per line:
+#   <role>:<finding-id>  <why it is not a defect>
+#
+# The key carries the role -- `reviewer:R3` or `test-reviewer:R3` -- because
+# the two reviewers number their findings independently, and a bare id staged
+# for one of them used to silence the other's finding of the same number.
+#
+# An entry must be STAGED to count: an unstaged one suppresses a finding while
+# leaving no trace of it. A growing list is itself a signal.
+reviewer:M0.31-R3-1  Rule 12's remedy is 'split it'. The diff is check-gate-scope.sh, its test, the backlog row and this entry; splitting would put the negation test in a different commit from the two lines it constrains. The round count came from the subtlety of git's ignore semantics -- five wrong forms, each found by a reviewer running the gate rather than reading it -- not from commit size, which is what the rule's own M-1.1 precedent measures. Rounds 1-2 each found a real defect; round 3 found none, so the cap's purpose was served rather than evaded. Argued, not fixed, because the finding is about process rather than the change.

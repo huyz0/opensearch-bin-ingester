@@ -1,0 +1,105 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# L0 of docs/internal/standards/build.md § Execution layers. ⚠️ NOT L1: all eight
+# product modules have zero test sources, so a `gradlew test` job recorded a
+# green "L1 0s within 300s" having executed nothing. It lands with the first
+# product test -- M0.27.
+#
+# The gates are not reimplemented here: this runs `pre-commit run --all-files`
+# against the same .pre-commit-config.yaml the local hook uses, so a check
+# written once is enforced in both places.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # ⚠️ The honest reason: the full-tree gates catch what a delta cannot --
+    # a rename or deletion elsewhere invalidating something this diff did not
+    # touch. It is NOT the L2/L3 safety net build.md describes; there are no
+    # L2/L3 jobs here to be safe about.
+    - cron: '17 3 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # ⚠️ PRs only. Cancelling on main means the superseded commit gets no gate
+  # verdict ever, and check-reviewed/check-tdd are local-only, so nothing
+  # downstream would notice. One task, one commit means pushes land in bursts.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  gates:
+    name: "L0 — gates"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # check-tdd, check-test-integrity and check-reviewed compare against a
+          # base ref. Without history there is nothing to compare to.
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pre-commit
+      - name: Dependency licences (authoritative; the shell gate is the fast half)
+        run: ./gradlew dependencyLicenses --no-daemon
+      # ⚠️ `github.event.before` exists ONLY on `push`. On `schedule` it is
+      # undefined; on branch CREATION it is all-zeros; and on a force-push it is
+      # a real but orphaned SHA this checkout may not have -- which is why the
+      # existence check below is a cat-file rather than a zeros comparison.
+      # lib.sh then falls back to `git diff --cached`, which in a fresh checkout
+      # is EMPTY -- so check-tdd, check-test-integrity and check-reviewed would
+      # examine nothing and print `ok`. The nightly run is the one that exists to
+      # catch what the path filter missed, and it is the run where that happens.
+      #
+      # So: fail when a range cannot be determined, rather than defaulting to a
+      # value that silently means "check nothing".
+      - name: Resolve the base ref
+        id: range
+        run: |
+          set -euo pipefail
+          case "${{ github.event_name }}" in
+            pull_request) base='${{ github.event.pull_request.base.sha }}' ;;
+            push)         base='${{ github.event.before }}' ;;
+            *)            base=$(git rev-parse HEAD~1 2>/dev/null || true) ;;
+          esac
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+            # ⚠️ `|| true` so a root commit reaches the message below rather than
+            # aborting on git's own "unknown revision" under set -e.
+            base=$(git rev-parse HEAD~1 2>/dev/null || true)
+          fi
+          { [ -n "$base" ] && git cat-file -e "$base^{commit}" 2>/dev/null; } \
+            || { echo "::error::cannot resolve a base ref (event=${{ github.event_name }}); range gates would examine nothing, so failing instead"; exit 1; }
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+
+      - name: Gates
+        env:
+          # ⚠️ GATE_SCOPE=full is what makes these gates examine anything: the
+          # delta path selects from a staged diff, and a fresh checkout has
+          # nothing staged, so every one would print `ok` over an empty set.
+          GATE_SCOPE: full
+          # ⚠️ CHECK_RANGE is carried but currently drives NOTHING that runs
+          # here: under GATE_SCOPE=full the gates resolve through
+          # workspace_files, and its only other consumers are check-tdd and
+          # check-reviewed, both skipped below, plus check-test-integrity, whose
+          # invocation is M0.25. It is set, and fails closed, so it is correct
+          # the day M0.25 lands -- not because it guards something today.
+          CHECK_RANGE: ${{ steps.range.outputs.base }}
+        # ⚠️ Both skips are REQUIRED, and check-reviewed's reason is stronger
+        # than "it would pass vacuously". That vacuous branch is taken only when
+        # CHECK_RANGE is UNSET; this step exports it, so check-reviewed instead
+        # hard-FAILS -- .harness/review/ is gitignored and absent in a fresh
+        # checkout, so no verdict can be found for the staged bytes. Removing
+        # this skip breaks EVERY run, not just some. Measured, not assumed.
+        # check-tdd cannot run at all for the same reason: red records live in
+        # gitignored .harness/. AGENTS.md § Gates.
+        run: SKIP=check-reviewed,check-tdd pre-commit run --all-files --show-diff-on-failure
