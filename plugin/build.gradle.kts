@@ -10,4 +10,11 @@ dependencies {
     // break on any version skew (build.md § version skew).
     compileOnly(libs.opensearch)
     testImplementation(libs.opensearch)
+
+    // ⚠️ TEST ONLY, and only for the end-to-end test: it drives the real
+    // ingester and a real filesystem store through the whole path. The
+    // production surface stays `client`, so the plugin cannot reach the
+    // ingester at runtime -- check-module holds that line.
+    testImplementation(project(":ingest"))
+    testImplementation(project(":binstore-backends"))
 }

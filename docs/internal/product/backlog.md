@@ -89,7 +89,7 @@ the harness gates that already exist, not the ones still queued.
 | M1.11 | Ingester: `/v1/subscribe`, inline delivery | FR-5 | done (in-process hub; the HTTP surface is M1.7) |
 | M1.12 | Consumer: subscription client, blocking queue, decode, **`DEFAULT`-envelope assembly** | FR-7 | done |
 | M1.13 | Plugin: `BinStorePlugin`, factory, `BinStoreOffset`, `BinStoreMessage` | FR-7 | done (pointer, message, shard consumer; BinStorePlugin registration is M1.14) |
-| M1.14 | Plugin: blocking `readNext` + node-level singleton | FR-7, NFR-2 | todo |
+| M1.14 | Plugin: blocking `readNext` + node-level singleton | FR-7, NFR-2 | done |
 | M1.15 | T4 end-to-end: documents searchable in a single-node cluster | FR-7 | todo |
 | M1.16 | Zero-idle-cost: **T1** at 1,600 consumers, **T4** at 20 shards | **NFR-2** | todo |
 | M1.18 | ~~Gradle memory caps, per-tier test tasks~~ — **delivered by `de66330`**. What remains: a test task with `-Xmx256m` for acceptance criterion 8, and container memory limits | — | todo |
