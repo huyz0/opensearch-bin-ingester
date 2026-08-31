@@ -117,20 +117,50 @@ def source_of(fq_id):
     return None
 
 
+def task_for(src):
+    """The Gradle task that runs a test source, or None. PURE -- no filesystem.
+
+    ⚠️ Extracted from plan() because the rule is a string transform reachable
+    only through source_of(), which globs the live working tree. That made the
+    rule untestable without first committing a .java file into a module that had
+    none -- and the first attempt at a test did exactly that badly: it named a
+    class that was not in the tree, so plan() took its `bad` path and the test
+    asserted against an ERROR message. Both the pre-fix and post-fix versions
+    printed it, so the red record proved nothing and reverting the fix survived.
+    Testing.md rule 1, non-negotiable 7: if it needs I/O to test, it is in the
+    wrong layer.
+    """
+    m = re.search(r'/src/([^/]+)/java/', src)
+    task = SOURCE_SET_TASK.get(m.group(1) if m else '', None)
+    if task is None:
+        return None
+    # buildSrc is a separate build: `./gradlew test` never descends into it, so
+    # a red record for a harness test would otherwise be unobtainable.
+    if src.startswith('buildSrc/'):
+        return 'buildSrc:' + task
+    # ⚠️ SCOPED TO THE OWNING MODULE. This emitted the bare root task, and
+    # `./gradlew test --tests <one class>` runs `test` in all eight modules at
+    # org.gradle.parallel=true.
+    #
+    # ⚠️ A module with NO test source is NO-SOURCE and is skipped, not failed --
+    # an earlier version of this comment said the seven siblings "fail on no
+    # tests found", and review disproved it by running the command. What does
+    # fail is a module that HAS test sources and no match, and whether the
+    # owning module wrote its JUnit XML before the build died is then a
+    # SCHEDULING RACE. So the defect is unreliability, not impossibility:
+    # tdd-red.sh recorded 2 of 7 M1.0 ids, then 7 of 7 once scoped. Scoping
+    # turns the race into a certainty, and matters more with every module that
+    # gains tests. Invisible until now because buildSrc, the only place with
+    # tests, is special-cased just above.
+    return ':%s:%s' % (src.split('/', 1)[0], task)
+
+
 def plan(ids):
     """`<gradle-task> <gradle-selector>` per id, on stdout."""
     out, bad = [], []
     for i in ids:
         src = source_of(i)
-        if src is None:
-            bad.append(i)
-            continue
-        m = re.search(r'/src/([^/]+)/java/', src)
-        task = SOURCE_SET_TASK.get(m.group(1) if m else '', None)
-        # buildSrc is a separate build: `./gradlew test` never descends into it,
-        # so a red record for a harness test would otherwise be unobtainable.
-        if task and src.startswith('buildSrc/'):
-            task = 'buildSrc:' + task
+        task = task_for(src) if src is not None else None
         if task is None:
             bad.append(i)
             continue
@@ -218,6 +248,13 @@ if __name__ == '__main__':
     if cmd == 'ids':
         for i in sorted(test_ids(open(sys.argv[2]).read())):
             print(i)
+        sys.exit(0)
+    if cmd == 'task-for':
+        # ⚠️ A seam for testing task_for as the pure transform it is, over path
+        # STRINGS -- including paths no on-disk tree can express. Prints the
+        # task, or 'none' when the source set is not a test one.
+        for src in sys.argv[2:]:
+            print(task_for(src) or 'none')
         sys.exit(0)
     if cmd == 'plan':
         sys.exit(plan(sys.argv[2:]))
