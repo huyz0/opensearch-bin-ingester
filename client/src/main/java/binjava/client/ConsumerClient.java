@@ -80,12 +80,13 @@ public final class ConsumerClient implements AutoCloseable {
                     () -> new IOException("segment " + delivery.segmentKey()
                             + " carries no run for " + key));
             List<SegmentRecord> records = reader.read(entry);
+            long createdAt = reader.createdAtMillis();
             long offset = delivery.firstOffset();
             for (SegmentRecord r : records) {
                 // WARNING: the offset comes from the COMMIT LOG's assignment,
                 // advanced per record. Deriving it from the segment position
                 // instead coincides within one flush and diverges across them.
-                out.add(new ConsumerRecord(offset++, r));
+                out.add(new ConsumerRecord(offset++, r, createdAt));
             }
         } catch (IOException e) {
             throw new UncheckedIOException(e);

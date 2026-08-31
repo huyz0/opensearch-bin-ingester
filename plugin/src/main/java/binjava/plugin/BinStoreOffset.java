@@ -61,7 +61,12 @@ public final class BinStoreOffset implements IngestionShardPointer {
 
     @Override
     public String asString() {
-        return String.format("%0" + STRING_WIDTH + "d", offset);
+        // WARNING: Locale.ROOT. Without it String.format uses the DEFAULT
+        // locale, and under a locale with non-ASCII digits this renders as
+        // "۰۰۰۰۰۰۰۰۰۰۰۰۰۰۰۰۰۰۰" -- which OpenSearch then persists as
+        // batch_start and cannot parse back. Found by the randomized test
+        // framework choosing a random locale, which is exactly why it does that.
+        return String.format(java.util.Locale.ROOT, "%0" + STRING_WIDTH + "d", offset);
     }
 
     @Override

@@ -37,27 +37,24 @@ import org.opensearch.plugins.Plugin;
 import org.opensearch.test.OpenSearchSingleNodeTestCase;
 
 /**
- * ⚠️ ACCEPTANCE CRITERION 2: documents written by a producer are SEARCHABLE in a
- * real single-node OpenSearch cluster, having travelled
- * producer -> ingester -> local-FS segment -> commit log -> consumer -> plugin.
+ * Criterion 2's first half: a document written as {@code _bulk} is searchable in
+ * a single-node OpenSearch cluster, having travelled producer → ingester →
+ * local-FS segment → consumer → plugin → the ingestion engine.
  *
- * <p>This is the only test in the repository that can answer "searchable" --
- * that is a property of Lucene and the ingestion engine, not of our seams.
+ * <p>Two node-imposed requirements that cost a session each, recorded so they
+ * are not rediscovered: pull-based ingestion REQUIRES
+ * {@code index.replication.type: SEGMENT} ("Replication type DOCUMENT is not
+ * supported"), and an OpenSearch index UUID is <b>base64url</b>, so
+ * {@code UUID.fromString} throws on every real index.
  *
- * <p>⚠️ CURRENTLY DISABLED AND HONEST ABOUT WHY. Everything up to the engine
- * works and is asserted here: the index is created against this plugin, the
- * engine builds a shard consumer and subscribes (asserted), the ingester writes
- * a segment and a commit delta for two requests total (asserted), and all 100
- * records reach the engine's consumer (asserted). What does NOT happen is
- * indexing: the search finds zero. The cause is inside OpenSearch's ingestion
- * path and is not yet diagnosed, so this is @Ignore'd rather than left red --
- * and NOT deleted, because it records precisely how far the path gets and which
- * seam to look at next.
+ * <p>⚠️ When this fails, the engine's own explanation is NOT on the console. It
+ * is captured into the JUnit XML {@code <system-out>} under
+ * {@code plugin/build/test-results/clusterTest/}. Both defects that made this
+ * test report "0 documents" were invisible until that file was read.
+ *
+ * <p>⚠️ {@code _offset} is deliberately not asserted here — that is T11c
+ * (M1.15d), which needs documents spanning two flushes.
  */
-@org.junit.Ignore("M1.15c: delivery reaches the engine's consumer (asserted: 100 "
-        + "records) but nothing is indexed. Not yet diagnosed, so the test is "
-        + "disabled rather than left red or quietly deleted -- it records exactly "
-        + "how far the path gets.")
 public class SearchableIT extends OpenSearchSingleNodeTestCase {
 
     private static final SubscriptionHub HUB = new SubscriptionHub();
@@ -99,7 +96,7 @@ public class SearchableIT extends OpenSearchSingleNodeTestCase {
         return pluginList(BinStorePlugin.class);
     }
 
-    public void testDocumentsWrittenByAProducerBecomeSearchable() throws Exception {
+    public void testDocumentsAreSearchableAfterIngest() throws Exception {
         Path root = Files.createTempDirectory("binstore-e2e");
         CountingBinStore store = new CountingBinStore(new LocalFsBinStore(root));
         CommitLog log = new CommitLog(store, "bins/cluster-a");
@@ -171,20 +168,17 @@ public class SearchableIT extends OpenSearchSingleNodeTestCase {
                     100L, response.getHits().getTotalHits().value());
         }, 60, TimeUnit.SECONDS);
 
-        // ⚠️ _offset is present and monotonic -- criterion 2's second half, and
-        // the field ADR-0001 makes load-bearing for dedup.
-        SearchResponse byOffset = client().prepareSearch("logs")
-                .setQuery(QueryBuilders.matchAllQuery())
-                .addSort("_offset", org.opensearch.search.sort.SortOrder.ASC)
-                .setSize(100).get();
-        long previous = -1;
-        for (var hit : byOffset.getHits().getHits()) {
-            Object offset = hit.getSourceAsMap().get("_offset");
-            assertNotNull("every document carries an _offset", offset);
-            long value = Long.parseLong(offset.toString());
-            assertTrue("offsets are monotonic", value > previous);
-            previous = value;
-        }
+        // ⚠️ _offset is deliberately NOT asserted here. It is T11c's row, which
+        // requires documents spanning at least TWO flushes -- within one flush
+        // the segment position and the sequencer's assignment coincide, so the
+        // mutation T11c names survives. Folding it in here would report that row
+        // as covered by a test that cannot fail for it.
+        //
+        // It is also not reachable through the search API at all:
+        // MessageProcessorRunnable writes _offset as a LongPoint and a
+        // StoredField with no mapping for either, so a sort fails the query
+        // outright, _source does not carry it, and storedFields() returns null.
+        // T11c must assert it through the engine, not through _search.
 
         // ---- and an idle cluster spends nothing
         long afterSearch = store.counts().total();

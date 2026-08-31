@@ -49,11 +49,14 @@ public final class CommitLog {
      * object so that M4's leases and epochs are not a key-grammar change.
      */
     String keyFor(long sequence) {
-        return "%s/ctl/log/0/0/%016x.delta".formatted(prefix, sequence);
+        // ⚠️ Locale.ROOT: an object key is a wire value and must not depend on
+        // the process's locale.
+        return String.format(java.util.Locale.ROOT, "%s/ctl/log/0/0/%016x.delta",
+                prefix, sequence);
     }
 
     String logPrefix() {
-        return "%s/ctl/log/0/0/".formatted(prefix);
+        return String.format(java.util.Locale.ROOT, "%s/ctl/log/0/0/", prefix);
     }
 
     /**

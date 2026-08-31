@@ -34,7 +34,22 @@ public record SegmentKey(
         String prefix, long timestampMillis, String podShortId, long sequence, int headerLen) {
 
     private static final DateTimeFormatter PATH =
-            DateTimeFormatter.ofPattern("yyyy/MM/dd/HH").withZone(ZoneOffset.UTC);
+            // ⚠️ withLocale(ROOT) is BELT-AND-BRACES here, not a fixed defect.
+            // A first version of this comment claimed ofPattern() takes its
+            // DecimalStyle from the default locale; that is FALSE and was
+            // measured false on JDK 25 -- toFormatter() hardcodes
+            // DecimalStyle.STANDARD, so under ar-EG-u-nu-arab this pattern still
+            // renders 2021/01/01/00. The locale selects TEXT (month names, era),
+            // never digits, so ROOT only starts mattering if the pattern ever
+            // gains a text field such as MMM. The real digit sinks in this file
+            // are the %019d and h%d conversions below, which String.format DOES
+            // localize. Recording the difference because the mirror-image error
+            // -- auditing DateTimeFormatter and missing a decimal
+            // String.format -- is exactly the bug this file just paid for.
+            // ZoneOffset.UTC is pre-existing and unrelated to locale.
+            DateTimeFormatter.ofPattern("yyyy/MM/dd/HH")
+                    .withZone(ZoneOffset.UTC)
+                    .withLocale(java.util.Locale.ROOT);
 
     /** ⚠️ S3, GCS and Azure all cap a key at 1024 bytes. */
     public static final int MAX_KEY_BYTES = 1024;
@@ -64,9 +79,13 @@ public record SegmentKey(
         // (from 2286) is not padded at all and sorts before every key written
         // before it. Six extra bytes against a 1024-byte budget whose fixed part
         // is ~90.
-        String rendered = "%s/data/%s/%019d-%s-%016x-h%d-N.bseg"
-                .formatted(prefix, PATH.format(Instant.ofEpochMilli(timestampMillis)),
-                        timestampMillis, podShortId, sequence, headerLen);
+        // ⚠️ Locale.ROOT: String.formatted() uses the default locale, so under
+        // a locale with non-ASCII digits every key would render with digits no
+        // other process could parse -- and object keys outlive the process.
+        String rendered = String.format(java.util.Locale.ROOT,
+                "%s/data/%s/%019d-%s-%016x-h%d-N.bseg",
+                prefix, PATH.format(Instant.ofEpochMilli(timestampMillis)),
+                timestampMillis, podShortId, sequence, headerLen);
         if (rendered.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > MAX_KEY_BYTES) {
             throw new IllegalStateException("segment key exceeds " + MAX_KEY_BYTES + " bytes");
         }
@@ -75,7 +94,8 @@ public record SegmentKey(
 
     /** The prefix a recovery LIST walks for one hour. */
     public static String hourPrefix(String prefix, long timestampMillis) {
-        return "%s/data/%s/".formatted(prefix, PATH.format(Instant.ofEpochMilli(timestampMillis)));
+        return String.format(java.util.Locale.ROOT, "%s/data/%s/", prefix,
+                PATH.format(Instant.ofEpochMilli(timestampMillis)));
     }
 
     /**

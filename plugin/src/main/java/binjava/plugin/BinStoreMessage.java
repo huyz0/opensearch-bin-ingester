@@ -22,6 +22,7 @@ public record BinStoreMessage(byte[] payload, Long timestamp) implements Message
 
     public BinStoreMessage {
         Objects.requireNonNull(payload, "payload");
+        Objects.requireNonNull(timestamp, "timestamp");
     }
 
     @Override
@@ -29,11 +30,18 @@ public record BinStoreMessage(byte[] payload, Long timestamp) implements Message
         return payload;
     }
 
+    /**
+     * WARNING: NEVER NULL. OpenSearch reads this on every record and a null is
+     * an unboxing hazard in the ingestion processor -- and under
+     * {@code error_strategy: BLOCK} a single failure there stops the shard, which
+     * presents as "zero documents indexed" with no other symptom.
+     *
+     * <p>It is the SEGMENT's creation time -- when the producer's oldest record
+     * in it arrived -- never this node's clock: an ingestion-time stamp would
+     * make a replay produce different documents than the original run.
+     */
     @Override
     public Long getTimestamp() {
-        // WARNING: may be null, and OpenSearch tolerates that. It is the
-        // producer's timestamp when there is one, never this node's clock --
-        // an ingestion-time stamp would make replay non-deterministic.
         return timestamp;
     }
 }

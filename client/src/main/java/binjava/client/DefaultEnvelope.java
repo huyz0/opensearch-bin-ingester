@@ -38,8 +38,14 @@ public final class DefaultEnvelope {
             // WARNING: OMITTED when absent, not written as 0. Zero is a version
             // OpenSearch compares against, so "the producer sent none" and "the
             // producer sent 0" must not become the same document.
-            write(out, ",\"_version\":");
+            // WARNING: a JSON STRING, not a number. OpenSearch's DEFAULT
+            // mapper casts this field to String, so a numeric literal fails the
+            // whole batch with
+            // "ClassCastException: Integer cannot be cast to String" -- which
+            // surfaces only as "0 documents indexed".
+            write(out, ",\"_version\":\"");
             write(out, Long.toString(record.version().getAsLong()));
+            write(out, "\"");
         }
         if (record.opType() != OpType.DELETE) {
             // WARNING: a delete carries no _source. Emitting an empty object

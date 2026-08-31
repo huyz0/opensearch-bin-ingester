@@ -59,6 +59,13 @@ class BinStoreShardConsumerTest {
             assertThat(new String(results.get(0).getMessage().getPayload(), StandardCharsets.UTF_8))
                     .startsWith("{\"_id\":\"a\"");
             assertThat(results.get(1).getPointer()).isEqualTo(new BinStoreOffset(101));
+            // ⚠️ The SEGMENT's creation time, never this node's clock: the value
+            // came from `toByteArray(1L)` above. A replay must produce the same
+            // documents as the original run, so an ingestion-time stamp is a
+            // defect. Asserting a constant is what kills BOTH mutations -- a
+            // hardcoded 0L and a substituted System.currentTimeMillis().
+            assertThat(results.get(0).getMessage().getTimestamp()).isEqualTo(1L);
+            assertThat(results.get(1).getMessage().getTimestamp()).isEqualTo(1L);
             assertThat(consumer.getShardId()).isEqualTo(3);
         }
     }

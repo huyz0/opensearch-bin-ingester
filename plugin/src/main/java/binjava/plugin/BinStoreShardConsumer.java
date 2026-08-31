@@ -78,7 +78,7 @@ public final class BinStoreShardConsumer
             tailOffset = Math.max(tailOffset, record.offset());
             if (wanted.test(record)) {
                 out.add(new ReadResult<>(new BinStoreOffset(record.offset()),
-                        new BinStoreMessage(record.payload(), null)));
+                        new BinStoreMessage(record.payload(), record.timestampMillis())));
             }
             budget = Duration.ZERO;
         }

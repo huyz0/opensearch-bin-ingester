@@ -24,8 +24,12 @@ class DefaultEnvelopeTest {
     void anIndexCarriesIdOpTypeVersionAndSource() {
         String json = assemble(new SegmentRecord("doc-1", OpType.INDEX, OptionalLong.of(7),
                 bytes("{\"n\":1}")));
+        // WARNING: _version is a JSON STRING. Not a stylistic choice -- the
+        // OpenSearch DEFAULT mapper casts the field to String, so the numeric
+        // literal 7 fails the batch with a ClassCastException that surfaces only
+        // as "0 documents indexed". Observed in SearchableIT before the fix.
         assertThat(json).isEqualTo(
-                "{\"_id\":\"doc-1\",\"_op_type\":\"index\",\"_version\":7,\"_source\":{\"n\":1}}");
+                "{\"_id\":\"doc-1\",\"_op_type\":\"index\",\"_version\":\"7\",\"_source\":{\"n\":1}}");
     }
 
     @Test
@@ -45,7 +49,8 @@ class DefaultEnvelopeTest {
                 new byte[0]));
         // WARNING: an empty _source would make this an index of {} -- the silent
         // resurrection acceptance criterion 0 exists to refuse.
-        assertThat(json).isEqualTo("{\"_id\":\"gone\",\"_op_type\":\"delete\",\"_version\":4}");
+        assertThat(json).isEqualTo(
+                "{\"_id\":\"gone\",\"_op_type\":\"delete\",\"_version\":\"4\"}");
         assertThat(json).doesNotContain("_source");
     }
 

@@ -24,6 +24,15 @@ three shapes.
   every document.
 - `DEFAULT` expects `{"_id":…, "_op_type":…, "_version":…, "_source":{…}}`.
 
+  ⚠️ **`_version` is a JSON *string*, not a number.** OpenSearch's `DEFAULT`
+  mapper casts the field to `String`, so a numeric literal fails the batch with
+  `ClassCastException: Integer cannot be cast to String`. The exception is
+  logged and swallowed inside `MessageProcessorRunnable`, so the **only**
+  user-visible symptom is that zero documents are indexed — no error surfaces on
+  the write path, the index, or the search. Verified against OpenSearch 3.8.0
+  and cost most of a session to find; anyone re-deriving this envelope from the
+  ADR would pay it again.
+
 ## Decision
 
 **Store compactly; assemble the mapper's JSON in the consumer.**

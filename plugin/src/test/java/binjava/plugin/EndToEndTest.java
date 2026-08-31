@@ -130,7 +130,17 @@ class EndToEndTest {
                     // ⚠️ The DEFAULT envelope OpenSearch's mapper expects, with the
                     // producer's opaque body copied through byte for byte.
                     assertThat(json).isEqualTo("{\"_id\":\"doc-" + i + "\",\"_op_type\":\"index\","
-                            + "\"_version\":" + (i + 1) + ",\"_source\":{\"n\":" + i + "}}");
+                            + "\"_version\":\"" + (i + 1) + "\",\"_source\":{\"n\":" + i + "}}");
+                    // ⚠️ The TestClock's value at the FIRST APPEND -- 1.7e12, not
+                    // 1.7e12+250. The clock advances 250 ms before the drain, so
+                    // this constant also pins WHICH instant the segment records:
+                    // when the batch opened, not when it was written out.
+                    // The clock never advances again, so `System.currentTimeMillis()`
+                    // substituted in ConsumerClient -- the defect ConsumerRecord's
+                    // javadoc forbids -- fails here, and so does a hardcoded 0L.
+                    assertThat(results.get(i).getMessage().getTimestamp())
+                            .as("the segment's creation time, not the reader's clock")
+                            .isEqualTo(1_700_000_000_000L);
                 }
 
                 // ⚠️ And now IDLE: nothing more is produced, so nothing is spent.
@@ -174,7 +184,7 @@ class EndToEndTest {
             // after the round trip, with no _source. An index of {} here would
             // resurrect the document instead of removing it.
             assertThat(deleteJson)
-                    .isEqualTo("{\"_id\":\"gone\",\"_op_type\":\"delete\",\"_version\":2}");
+                    .isEqualTo("{\"_id\":\"gone\",\"_op_type\":\"delete\",\"_version\":\"2\"}");
         }
     }
 
