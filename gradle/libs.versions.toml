@@ -1,10 +1,15 @@
 # Version catalogue. One place a version is written, so an upgrade is one edit
 # and a divergence between modules is impossible rather than merely unlikely.
 [versions]
+# ⚠️ Pinned to the version the research corpus was read from. The pull-based
+# ingestion SPI is not stable API; a floating version would silently change the
+# interface this plugin implements.
+opensearch = "3.8.0"
 junit = "5.14.0"
 assertj = "3.27.3"
 
 [libraries]
+opensearch = { module = "org.opensearch:opensearch", version.ref = "opensearch" }
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
 junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
