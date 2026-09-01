@@ -7,6 +7,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.BitSet;
+import java.util.OptionalLong;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -215,11 +217,113 @@ class MembershipFilterTest {
 
     @Test
     void decodeRefusesAnUnrecognisedTag() {
-        // ⚠️ Reader-side "treat like N" policy is M2.7's job, not this one's --
-        // this codec's contract is to fail loudly on a tag it does not know.
+        // ⚠️ This codec's OWN contract (decode) is to fail loudly on a tag it
+        // does not know -- that stays true. Reader-side "treat like N" policy
+        // (M2.7) lives on decodeOrMustRead, exercised below, never here.
         assertThatThrownBy(() -> MembershipFilter.decode("Q")).isInstanceOf(IOException.class);
         assertThatThrownBy(() -> MembershipFilter.decode("")).isInstanceOf(IOException.class);
     }
+
+    @Test
+    void decodeOrMustReadTreatsAnUnrecognisedTagExactlyLikeN() throws IOException {
+        // ⚠️ M2.7; ADR-0003: "an unknown tag and N both mean must read the
+        // header, never no match." "Q" simulates a tag this reader has never
+        // seen -- a future writer's format -- not a malformed one.
+        assertThat(MembershipFilter.decodeOrMustRead("Q")).isEqualTo(new MembershipFilter.None());
+        assertThat(MembershipFilter.decodeOrMustRead("Qwhatever-a-future-writer-put-here"))
+                .isEqualTo(new MembershipFilter.None());
+        assertThat(MembershipFilter.decodeOrMustRead("N")).isEqualTo(new MembershipFilter.None());
+    }
+
+    @Test
+    void decodeOrMustReadStillRefusesAMalformedPayloadOfAKnownTag() {
+        // ⚠️ Only the TAG is forward-compatible. A malformed payload for a
+        // tag this class DOES recognise is real corruption of an
+        // understood format, not a future one -- swallowing it into "must
+        // read" would hide the corruption instead of surfacing it. All FIVE
+        // known tags are exercised here, not just A/N/B: test-reviewer
+        // (M2.7, round 1) found Z and R untested, so a mutation dropping
+        // either from the recognised-tag guard (silently turning a REAL Z or
+        // R filter into "must read" on every access, defeating the whole
+        // cost point of that filter) survived every test in this file.
+        assertThatThrownBy(() -> MembershipFilter.decodeOrMustRead("Ax")).isInstanceOf(IOException.class);
+        assertThatThrownBy(() -> MembershipFilter.decodeOrMustRead("Nx")).isInstanceOf(IOException.class);
+        assertThatThrownBy(() -> MembershipFilter.decodeOrMustRead("Z***")).isInstanceOf(IOException.class);
+        assertThatThrownBy(() -> MembershipFilter.decodeOrMustRead("R***")).isInstanceOf(IOException.class);
+        assertThatThrownBy(() -> MembershipFilter.decodeOrMustRead("B")).isInstanceOf(IOException.class);
+        assertThatThrownBy(() -> MembershipFilter.decodeOrMustRead("")).isInstanceOf(IOException.class);
+    }
+
+    @Test
+    void decodeOrMustReadRoundTripsEveryKnownTagUnchanged() throws IOException {
+        // ⚠️ test-reviewer (M2.7, round 1): the OTHER new tests here only
+        // ever pass decodeOrMustRead a Q, N, A or B string -- never a real Z
+        // or R -- so a mutation that silently added 'Z' or 'R' to the
+        // "unrecognised" branch (returning None for a filter this class
+        // actually knows how to parse) would survive undetected. Each of the
+        // five known tags must decode to ITS OWN real variant, never None.
+        BitSet bits = new BitSet();
+        bits.set(1);
+        bits.set(9);
+        MembershipFilter.ExactBitmap z = new MembershipFilter.ExactBitmap(bits);
+        MembershipFilter.RunLength r = new MembershipFilter.RunLength(bits);
+        MembershipFilter.Bloom b = MembershipFilter.Bloom.of(java.util.List.of(3, 7), 32, 2);
+        MembershipFilter.All a = new MembershipFilter.All();
+
+        assertThat(MembershipFilter.decodeOrMustRead(a.encode())).isEqualTo(a);
+        assertThat(MembershipFilter.decodeOrMustRead(z.encode())).isEqualTo(z);
+        assertThat(MembershipFilter.decodeOrMustRead(r.encode())).isEqualTo(r);
+        assertThat(MembershipFilter.decodeOrMustRead(b.encode())).isEqualTo(b);
+    }
+
+    /**
+     * ⚠️ Acceptance criterion 9 / test-plan row T0 (M2 SPEC): "asserting the
+     * reader still finds the data," not merely that some function returns a
+     * particular enum value. Builds a REAL segment (independent of the
+     * ingest module) carrying one record for an index, simulates a reader
+     * that received a key whose filter component uses a tag byte outside
+     * {@code {A,N,Z,R,B}} -- a future writer's format -- and proves the
+     * record is still found: the reader-decision helper below never treats
+     * "must read" as a reason to skip a segment, so it always falls through
+     * to actually reading it.
+     */
+    @Test
+    void aReaderTreatingAnUnknownTagAsMustReadStillFindsTheRecord() throws Exception {
+        UUID indexId = UUID.fromString("00000000-0000-0000-0000-0000000000ee");
+        RunKey key = new RunKey(indexId, 0);
+        SegmentRecord record = new SegmentRecord("doc-1", OpType.INDEX, OptionalLong.of(1),
+                "{\"future\":true}".getBytes(StandardCharsets.UTF_8));
+        SegmentWriter writer = new SegmentWriter();
+        writer.add(key, record, 1_700_000_000_000L);
+        byte[] segment = writer.toByteArray(1_700_000_000_000L);
+
+        // A future writer's key embeds a tag this reader has never seen.
+        MembershipFilter filter = MembershipFilter.decodeOrMustRead("Qsome-future-payload");
+
+        // ⚠️ The decision a recovery/GC-path reader would make BEFORE paying
+        // for a GET: skip fetching only on POSITIVE proof of absence. None
+        // (what an unknown tag decodes to here) carries no such proof, by
+        // design -- it exposes no mightContain at all, forcing this decision
+        // to be made explicitly rather than by an always-true default that is
+        // easy to forget the reason for.
+        boolean wouldSkip = switch (filter) {
+            case MembershipFilter.All ignored -> false;
+            case MembershipFilter.ExactBitmap f -> !f.mightContain(0);
+            case MembershipFilter.RunLength f -> !f.mightContain(0);
+            case MembershipFilter.Bloom f -> !f.mightContain(0);
+            case MembershipFilter.None ignored -> false; // must read -- never skip
+        };
+        assertThat(wouldSkip).as("an unknown tag must never be treated as proof of absence").isFalse();
+
+        // Not skipped -- so the reader actually reads it, and finds the record.
+        SegmentReader reader = SegmentReader.open(segment);
+        assertThat(reader.find(key)).isPresent();
+        assertThat(reader.read(reader.find(key).orElseThrow()))
+                .as("the record a wrongly-skipped fetch would have silently lost")
+                .hasSize(1);
+    }
+
+
 
     @Test
     void decodeRefusesAPayloadOnATagThatCarriesNone() {

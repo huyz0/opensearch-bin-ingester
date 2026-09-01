@@ -23,9 +23,14 @@ import java.util.Objects;
  * membership set. {@link Bloom} exposes its raw bits and {@code k} but not yet
  * a hash-based query; M2.5 adds that on top of this same wire format.
  *
- * <p>⚠️ An unrecognised tag byte throws here. Treating it the same as {@code
- * N} ("must read the header", never "no match") is READER-side policy, wired
- * in M2.7 -- this class's job is only to parse the five tags it knows.
+ * <p>⚠️ {@link #decode} throws on an unrecognised tag byte -- that method's
+ * job is only to parse the five tags this class knows, on the WRITER path
+ * (M2.6's {@code SegmentKey} constructor validates a filter it is ABOUT TO
+ * EMIT, and a writer only ever emits a tag it itself knows). {@link
+ * #decodeOrMustRead} is the READER-side policy (M2.7; ADR-0003): a tag byte
+ * this class does not recognise -- a future writer's format this reader has
+ * not seen yet -- means "must read the header," exactly like {@code N}, never
+ * "no match."
  */
 public sealed interface MembershipFilter {
 
@@ -51,6 +56,31 @@ public sealed interface MembershipFilter {
             case 'B' -> Bloom.decode(payload);
             default -> throw new IOException("unrecognised membership filter tag: " + tag);
         };
+    }
+
+    /**
+     * Reader-side policy (M2.7; ADR-0003): an unrecognised TAG byte -- a
+     * future writer's format this reader has not seen yet -- is treated
+     * exactly like {@code N}, "must read the header," never "no match."
+     *
+     * <p>⚠️ Only the TAG is forward-compatible, never a malformed PAYLOAD for
+     * a tag this class DOES recognise: {@code decode("B")} (a {@code B} with
+     * no {@code k} digit) or {@code decode("Ax")} ({@code A} carrying a
+     * payload it must not) are real corruption of a format this reader
+     * understands, not a future format it doesn't -- those still throw, same
+     * as {@link #decode}. Conflating the two would turn a corrupted key into
+     * a silent "read everything," hiding the corruption instead of surfacing
+     * it.
+     */
+    static MembershipFilter decodeOrMustRead(String s) throws IOException {
+        Objects.requireNonNull(s, "s");
+        if (!s.isEmpty()) {
+            char tag = s.charAt(0);
+            if (tag != 'A' && tag != 'N' && tag != 'Z' && tag != 'R' && tag != 'B') {
+                return new None();
+            }
+        }
+        return decode(s);
     }
 
     /** Every registered index in scope is present. */
