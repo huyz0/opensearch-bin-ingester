@@ -121,6 +121,17 @@ Each is checkable by something other than an opinion.
    only after the segment and its commit delta are both durable in the store.
 2. A single-node OpenSearch test with `ingestion_source.type: BINSTORE` makes all
    100 documents **searchable**, with `_offset` present and monotonic.
+   ✅ **MET, at both halves.** `SearchableIT` proves the FIRST half: 100
+   documents travel producer → ingester → local-FS segment → consumer →
+   plugin → engine and come back from `_search`. `OffsetMonotonicityIT`
+   (T11c, M1.15d) proves the SECOND: `_offset` is present on every document
+   and monotonic across two separate flushes, read directly off the shard's
+   Lucene stored fields — unreachable through `_search` itself, since
+   `MessageProcessorRunnable` writes `_offset` as a `LongPoint`/`StoredField`
+   with no OpenSearch mapping for either. Mutation verified killed: stamping
+   `_offset` from `0` on every delivery instead of `delivery.firstOffset()`
+   (the segment-position bug `ConsumerRecord.offset()`'s own javadoc names)
+   produces `[0, 1, 0, 1]` across the two flushes instead of `[0, 1, 2, 3]`.
 3. Idle consumers issue zero object-store requests.
    ⚠️ **RESOLVED by construction, not by test — see ADR-0023.** No class under
    `plugin/src/main` or `client/src/main` imports `binjava.binstore`, so no
@@ -202,7 +213,7 @@ transport, and only its 20-shard variant is T4.
 | T9b | `segmentCacheIsOnePerNode` | T1 | give each shard its own cache, so 100 shards on a node fetch one segment 100 times — criterion 6's cache half, and the half that carries R5 |
 | T10 | `pointerResumesFromCommitData` | T2 | resume from `earliest` instead of `batch_start` |
 | T11 | `documentsAreSearchableAfterIngest` | **T4** | drop a run from the segment directory, so fewer than 100 documents arrive. ⚠️ This does **not** catch wrong-shard placement: a `_search` queries every shard of the index and still returns all 100 |
-| T11c | `searchableDocumentsCarryMonotonicOffsetAcrossFlushes` | **T4** | stamp `_offset` from the segment's position instead of the sequencer's assignment. ⚠️ The documents must span **at least two flushes** — within a single flush the two coincide and the mutation survives — criterion 2's second half, and the field ADR-0001 makes load-bearing for dedup |
+| T11c | `OffsetMonotonicityIT#testOffsetIsPresentAndMonotonicAcrossTwoFlushes` | **T4** | stamp `_offset` from the segment's position instead of the sequencer's assignment. ⚠️ The documents must span **at least two flushes** — within a single flush the two coincide and the mutation survives — criterion 2's second half, and the field ADR-0001 makes load-bearing for dedup |
 | T11b | `documentLandsInTheShardForItsPartition` | **T4** | index into the wrong shard — asserted with `preference=_shards:3`, which is the only form that fails when placement is wrong |
 | T12 | `memoryFlatUnderTenXBodySize` | T2 | unbounded accumulator growth. ⚠️ A **ratio** is satisfied by a copy with a constant factor, so the row must also assert an **absolute** ceiling: peak heap under a 256 MB cap while ingesting 200 MB (criterion 8) |
 | T7b | `readNextBlocksForTheFullPollTimeoutWhenNothingArrives` | T1 | return empty after one poll interval instead of blocking — criterion 5's second half, and the half the zero-idle-cost property actually rests on |
