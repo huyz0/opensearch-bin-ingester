@@ -229,6 +229,23 @@ seen by either gate. It does not refuse — it does not see the test at all, so 
 red record is demanded and a weakening is invisible. Recorded as M0.17. Until it
 lands, annotate tests with a JUnit annotation directly.
 
+⚠️ **A second, distinct blind spot in `check-tdd`:** a test whose failure mode
+is a JVM crash (an `OutOfMemoryError` under a deliberately small heap, for
+example) does not produce a JUnit `<failure>` element — the test executor
+process dies first, and the result is recorded as `<skipped/>`.
+`tdd_scan.py record-one` reads only `<failure>`/`<error>`, so it reports the
+test as never having failed, indistinguishable from one that passed. Found on
+M1.18's `MemoryFlatUnderTenXBodySizeTest`: four mutations at different
+magnitudes (fully disabled, 50x, 5x, 2x the real chunk size) all crashed the
+executor rather than failing an assertion, so no red record could be produced
+mechanically. Falsifiability was verified by hand instead (the mutation
+genuinely and repeatably throws `OutOfMemoryError`), and the commit was made
+with `SKIP=check-tdd`, stated plainly rather than worked around. No script
+fix is proposed yet — unlike M0.17, closing this would mean teaching the
+scanner to treat a crash-with-no-failure-element as a positive signal for
+*this specific class* of test, which risks masking a genuinely-skipped test
+in every other case.
+
 ⚠️ **So non-negotiable 5 is enforced locally only.** A commit made with
 `--no-verify` carries no reviewer verdict and nothing downstream will notice.
 The hash binds a verdict to a diff; it does not make the verdict travel. Closing

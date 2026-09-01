@@ -34,19 +34,24 @@ import java.util.Objects;
 public final class BulkService implements HttpService {
 
     /**
-     * ⚠️ Not the 200 MB of criterion 8, still — this cap outlived the reason it
-     * was set (M1.7b let the ingest seam accept a stream, so a request no
-     * longer retains its whole body), but raising it is T12/M1.18's job: it is
-     * what PROVES 200 MB is safe under a 256 MB heap, and this commit's job is
-     * only to make raising it possible.
+     * ⚠️ 256 MiB, headroom over criterion 8's 200 MB rather than a bare
+     * minimum -- M1.7b let the ingest seam accept a stream, so a request no
+     * longer retains its whole body, and {@code MemoryFlatUnderTenXBodySizeIT}
+     * (T12) proves 200 MB is safe under a 256 MB HEAP with this cap in place.
+     * Raising this further than criterion 8 itself needs would outrun what has
+     * actually been proven.
      */
-    static final long MAX_BODY_BYTES = 32L << 20;
+    static final long MAX_BODY_BYTES = 256L << 20;
 
     /**
-     * ⚠️ Same story as {@link #MAX_BODY_BYTES}: a defensive ceiling from before
-     * M1.7b, kept as-is here because raising it is what T12 exists to justify.
+     * ⚠️ 2,000,000 -- headroom over what a 256 MiB body of realistic
+     * documents needs, sized the same way {@link #MAX_BODY_BYTES} is. Chunking
+     * (M1.7b) already bounds retained heap independent of the TOTAL record
+     * count, so unlike before M1.7b this ceiling is mostly a REQUEST-DURATION
+     * guard against a pathological number of minimal actions, not the primary
+     * memory-safety mechanism the byte cap alone used to be.
      */
-    static final int MAX_RECORDS = 200_000;
+    static final int MAX_RECORDS = 2_000_000;
 
     /**
      * ⚠️ BOUNDS BOTH THE RETAINED MEMORY AND THE ACCUMULATOR LOCK's HOLD TIME

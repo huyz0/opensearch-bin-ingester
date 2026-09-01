@@ -71,6 +71,35 @@ class BulkEndpointTest {
         }
     }
 
+    /**
+     * Counts appended records without retaining any of them.
+     *
+     * <p>⚠️ {@code RecordingIngest} above is right for the small bodies most
+     * tests here send, but the two oversized-body tests below generate up to
+     * {@code MAX_RECORDS} (2,000,000, M1.18) records specifically to breach a
+     * cap -- retaining all of them in a {@code List}, as {@code RecordingIngest}
+     * does, costs this TEST hundreds of MB of its own heap, unrelated to the
+     * property under test (that BulkService itself never retains the whole
+     * body). A count is all those two tests need.
+     */
+    private static final class CountingIngest implements Ingest {
+        final java.util.concurrent.atomic.AtomicInteger appended =
+                new java.util.concurrent.atomic.AtomicInteger();
+
+        @Override
+        public AppendResult append(Principal principal, String index, int partition,
+                RecordSource source) throws IOException {
+            int[] count = {0};
+            source.forEachRecord(r -> count[0]++);
+            appended.addAndGet(count[0]);
+            return new AppendResult(count[0], 0L, count[0] - 1L);
+        }
+
+        @Override
+        public void close() {
+        }
+    }
+
     private WebClient start(Ingest ingest) {
         server = WebServer.builder()
                 .port(0)
@@ -173,22 +202,38 @@ class BulkEndpointTest {
 
     @Test
     void aBodyOverTheCapIsFourThirteenRatherThanAnOutOfMemoryError() {
-        RecordingIngest ingest = new RecordingIngest();
+        CountingIngest ingest = new CountingIngest();
         WebClient client = start(ingest);
 
         // ⚠️ Just over the cap. An unbounded accumulate ends in an
         // OutOfMemoryError, which is an Error: it reaches neither the 400 nor
         // the 503 path and takes the connection down with it. A 413 is a
         // refusal the producer can see and act on.
-        StringBuilder body = new StringBuilder();
+        //
+        // ⚠️ STREAMED, not a StringBuilder: MAX_BODY_BYTES is 256 MiB (M1.18),
+        // so building the body as one String/byte[] here would cost this TEST
+        // several hundred MB of its OWN heap, unrelated to the property being
+        // tested. Generated record by record straight to the request's output
+        // stream instead -- the same reason BulkParser and BulkService
+        // themselves never hold the whole body either.
         String pad = "z".repeat(1000);
-        int records = 0;
-        for (int i = 0; body.length() <= BulkService.MAX_BODY_BYTES; i++, records++) {
-            body.append("{\"index\":{\"_id\":\"d").append(i).append("\"}}\n")
-                    .append("{\"p\":\"").append(pad).append("\"}\n");
-        }
+        int[] recordsHolder = {0};
         var response = client.post("/logs/_bulk").queryParam("partition", "0")
-                .submit(body.toString());
+                .outputStream(out -> {
+                    long written = 0;
+                    int i = 0;
+                    while (written <= BulkService.MAX_BODY_BYTES) {
+                        String action = "{\"index\":{\"_id\":\"d" + i + "\"}}\n";
+                        String doc = "{\"p\":\"" + pad + "\"}\n";
+                        out.write(action.getBytes(StandardCharsets.UTF_8));
+                        out.write(doc.getBytes(StandardCharsets.UTF_8));
+                        written += action.length() + doc.length();
+                        i++;
+                    }
+                    recordsHolder[0] = i;
+                    out.close();
+                });
+        int records = recordsHolder[0];
 
         assertThat(response.status().code()).isEqualTo(413);
         // ⚠️ NOT necessarily empty (M1.7b): appendBulkBody appends in bounded
@@ -198,9 +243,9 @@ class BulkEndpointTest {
         // Ingest.append's javadoc). The property that matters is BOUNDED, not
         // zero: only whole chunks land, and nowhere near the whole oversized
         // body's worth of records.
-        assertThat(ingest.records.size() % BulkService.APPEND_CHUNK_RECORDS)
+        assertThat(ingest.appended.get() % BulkService.APPEND_CHUNK_RECORDS)
                 .as("only whole chunks are ever durable").isZero();
-        assertThat(ingest.records.size())
+        assertThat(ingest.appended.get())
                 // ⚠️ isPositive(), not just bounded: BodyTooLargeException aborts
                 // BulkParser.parse before the trailing-chunk flush runs, so a
                 // build where chunking is silently disabled (one giant chunk
@@ -216,34 +261,56 @@ class BulkEndpointTest {
 
     @Test
     void aRequestOverTheRecordCeilingIsFourThirteenEvenWhenItIsSmallInBytes() {
-        RecordingIngest ingest = new RecordingIngest();
+        // ⚠️ CountingIngest, not RecordingIngest: MAX_RECORDS is 2,000,000
+        // (M1.18), and retaining that many SegmentRecords -- as RecordingIngest
+        // does -- costs this test itself hundreds of MB, unrelated to what it
+        // is proving.
+        CountingIngest ingest = new CountingIngest();
         WebClient client = start(ingest);
 
         // ⚠️ The adversarial shape the BYTE cap does not catch. The smallest
-        // legal record is 24 bytes, so a body far under 32 MiB still retains
-        // ~108 B per record and can outweigh the heap. This body is ~5 MB and
-        // carries well over MAX_RECORDS.
-        StringBuilder body = new StringBuilder();
-        for (int i = 0; i <= BulkService.MAX_RECORDS; i++) {
-            body.append("{\"index\":{\"_id\":\"a\"}}\n1\n");
-        }
-        assertThat(body.length())
-                .as("well inside the byte cap, so only the record ceiling can refuse it")
-                .isLessThan((int) BulkService.MAX_BODY_BYTES);
-
+        // legal record is 24 bytes, so a body far under 256 MiB still retains
+        // ~108 B per record and can outweigh the heap. This body is
+        // (MAX_RECORDS + 1) x 24 bytes -- ~46 MiB (M1.18 raised MAX_RECORDS to
+        // 2,000,000), well under the 256 MiB byte cap, so only the record
+        // ceiling can refuse it.
+        //
+        // ⚠️ STREAMED, same reason as the byte-cap test above: at the M1.18
+        // record ceiling this body is tens of MB, and building it as one
+        // String/byte[] here costs this TEST heap unrelated to what it proves.
+        String record = "{\"index\":{\"_id\":\"a\"}}\n1\n";
+        long[] bodyBytesHolder = {0};
         var response = client.post("/logs/_bulk").queryParam("partition", "0")
-                .submit(body.toString());
+                .outputStream(out -> {
+                    byte[] bytes = record.getBytes(StandardCharsets.UTF_8);
+                    long total = 0;
+                    for (int i = 0; i <= BulkService.MAX_RECORDS; i++) {
+                        out.write(bytes);
+                        total += bytes.length;
+                    }
+                    bodyBytesHolder[0] = total;
+                    out.close();
+                });
+
+        // ⚠️ Proves this test's own name: the body that just streamed is
+        // "small in bytes" -- well under the byte cap -- so the 413 above is
+        // known to come from the RECORD ceiling, not the byte one, rather than
+        // relying on arithmetic a future MAX_RECORDS change could silently
+        // invalidate with no test noticing.
+        assertThat(bodyBytesHolder[0])
+                .as("well inside the byte cap, so only the record ceiling can refuse it")
+                .isLessThan(BulkService.MAX_BODY_BYTES);
 
         assertThat(response.status().code()).isEqualTo(413);
         // ⚠️ See the byte-cap test above: NOT necessarily empty (M1.7b), but
-        // still bounded to whole completed chunks. MAX_RECORDS (200,000) is
+        // still bounded to whole completed chunks. MAX_RECORDS (2,000,000) is
         // an exact multiple of APPEND_CHUNK_RECORDS here, so every chunk up
         // to the ceiling completes and the count lands AT it, not under it --
         // the load-bearing bound is against the (MAX_RECORDS + 1) records
         // this body actually carries, not an arbitrary smaller number.
-        assertThat(ingest.records.size() % BulkService.APPEND_CHUNK_RECORDS)
+        assertThat(ingest.appended.get() % BulkService.APPEND_CHUNK_RECORDS)
                 .as("only whole chunks are ever durable").isZero();
-        assertThat(ingest.records.size())
+        assertThat(ingest.appended.get())
                 // ⚠️ isPositive() -- see the byte-cap test above for why zero
                 // would otherwise satisfy both this and the modulus check.
                 .as("bounded, not the whole oversized body, but NOT zero")

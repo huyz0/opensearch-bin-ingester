@@ -176,24 +176,22 @@ Each is checkable by something other than an opinion.
 7. Segment encode → decode → equals round-trips, and a committed golden file still
    parses.
 8. A `_bulk` body of 200 MB is ingested with a **256 MB heap** and no OOM.
-   ⚠️ **UNBLOCKED, not yet proven.** `M1.7b` let `Ingest.append` accept a
-   `RecordSource` instead of a `List`, and `BulkService` now appends in
-   bounded chunks of 1,000 records as it parses — no `List<SegmentRecord>` is
-   ever built for the whole request, which is what made this criterion
-   unreachable at all. ⚠️ Chunking is load-bearing, not decorative: a first
-   draft pushed the whole request into ONE `Ingest.append` call, which review
-   found holds the pod's single accumulator lock for the duration of that
-   call — correct for an in-memory source, but for `BulkParser` reading a
-   request's own socket that meant one slow producer serialising every other
-   producer on the pod, defeating the very concurrency this milestone's cost
-   model depends on. What remains is T12 itself (`memoryFlatUnderTenXBodySize`,
-   still unwritten) and M1.18's `-Xmx256m` test task — the conventions plugin
-   sets `maxHeapSize = "512m"` on every suite, so this criterion is unrunnable
-   until its own test task overrides it, or it would silently pass at twice
-   the heap it names. `BulkService`'s own `MAX_BODY_BYTES`/`MAX_RECORDS` caps
-   are also unchanged (still 32 MiB / 200,000): raising them to 200 MB is
-   exactly what T12 exists to justify, not something to do ahead of proving it
-   safe.
+   ✅ **MET (M1.18).** `MemoryFlatUnderTenXBodySizeTest#memoryFlatUnderTenXBodySize`
+   (T12) sends a genuinely 200 MB `_bulk` body — streamed from the client,
+   never held as one `String`/`byte[]` either — through the real HTTP
+   adapter, `Ingest`, and a `LocalFsBinStore`, run via the dedicated
+   `./gradlew :http:memoryBoundTest` task under a REAL `-Xmx256m` (the default
+   `test` task's 512 MB would have proven nothing about this criterion's own
+   number). Two proofs, not one: the request completes without the JVM's own
+   `OutOfMemoryError` under that real constraint, and a periodic
+   GC-then-sample of live heap stays under both an absolute ceiling (220 MB)
+   and a ratio (10x the body bytes written so far, with a floor absorbing
+   ordinary JVM/Helidon baseline variance). Mutation verified killed:
+   disabling chunking (`APPEND_CHUNK_RECORDS` set absurdly high, collapsing
+   every request into one giant append) produces a real
+   `OutOfMemoryError: Java heap space`. `MAX_BODY_BYTES`/`MAX_RECORDS` are
+   raised to 256 MiB / 2,000,000 — headroom over 200 MB, not further, since
+   this test is what justifies raising them at all.
 
 ## Test plan
 
@@ -229,7 +227,7 @@ transport, and only its 20-shard variant is T4.
 | T11 | `documentsAreSearchableAfterIngest` | **T4** | drop a run from the segment directory, so fewer than 100 documents arrive. ⚠️ This does **not** catch wrong-shard placement: a `_search` queries every shard of the index and still returns all 100 |
 | T11c | `OffsetMonotonicityIT#testOffsetIsPresentAndMonotonicAcrossTwoFlushes` | **T4** | stamp `_offset` from the segment's position instead of the sequencer's assignment. ⚠️ The documents must span **at least two flushes** — within a single flush the two coincide and the mutation survives — criterion 2's second half, and the field ADR-0001 makes load-bearing for dedup |
 | T11b | `documentLandsInTheShardForItsPartition` | **T4** | index into the wrong shard — asserted with `preference=_shards:3`, which is the only form that fails when placement is wrong |
-| T12 | `memoryFlatUnderTenXBodySize` | T2 | unbounded accumulator growth. ⚠️ A **ratio** is satisfied by a copy with a constant factor, so the row must also assert an **absolute** ceiling: peak heap under a 256 MB cap while ingesting 200 MB (criterion 8) |
+| T12 | `MemoryFlatUnderTenXBodySizeTest#memoryFlatUnderTenXBodySize` | **T2, own task** | unbounded accumulator growth. ⚠️ A **ratio** is satisfied by a copy with a constant factor, so the row must also assert an **absolute** ceiling: peak heap under a 256 MB cap while ingesting 200 MB (criterion 8). Runs via `./gradlew :http:memoryBoundTest` (`-Xmx256m`, JaCoCo disabled), excluded from the default `test` task -- the shared convention's 512 MB would prove nothing about this row's own number |
 | T7b | `readNextBlocksForTheFullPollTimeoutWhenNothingArrives` | T1 | return empty after one poll interval instead of blocking — criterion 5's second half, and the half the zero-idle-cost property actually rests on |
 | T8b | ~~`idleShardsIssueNoStoreRequestsInACluster`~~ — ⚠️ **NOT DELIVERABLE AS WRITTEN.** No class on the consumer path holds a `BinStore`: neither `plugin/src/main` nor `client/src/main` imports `binjava.binstore`, because inline delivery carries the bytes (ADR-0004). A store wired into a T4 test can only observe an ingester the test itself constructed, so the shard count changes nothing the counter can see and the assertion cannot fail for anything the shards do. Delivered instead: `ShardFanOutIT.testEveryShardPollsDecodesAndIndexes`, which proves twenty shards poll, decode and index. The idle-cost mutation this row names becomes testable only when a consumer can reach a store — M1.16c | **T4** | give BinStoreShardConsumer a store and GET once per empty poll |
 | T10b | `restartDuplicatesOnlyWithinOneCommitBatch` | T2 | resume from the batch *end* pointer, which loses records, or from `earliest`, which duplicates without bound — criterion 4's duplicate bound |

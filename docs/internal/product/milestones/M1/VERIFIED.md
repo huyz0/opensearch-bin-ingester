@@ -43,21 +43,17 @@ naming something not actually run would violate non-negotiable 4.
 7. `SegmentReaderTest#everyRunRoundTripsWithItsRecordsIntact` (T0) and
    `GoldenSegmentTest#theCommittedGoldenSegmentStillParses` (T0),
    `./gradlew :format:test`.
-8. **NOT-RUN, but UNBLOCKED (M1.7b).** No test exists under any name still
-   (checked: no reference to a memory/heap-measurement test anywhere in
-   `http`, `ingest`, `client` or `plugin`). What WAS genuinely blocking it is
-   fixed: `Ingest.append` no longer takes a `List<SegmentRecord>` — it takes
-   a `RecordSource` (`ingest/src/main/java/binjava/ingest/Ingest.java`), and
-   `BulkService` appends in bounded chunks of 1,000 records as it parses
-   (`BulkServiceTest#bulkServiceNeverBuffersTheWholeBodyBeforeAppending`,
-   `./gradlew :http:test`, proves the first record reaches `Ingest.append`
-   after only a small prefix of a 4+ MiB body is read). Chunking, not a
-   single streamed call, because review found a first draft held the pod's
-   one accumulator lock for the duration of the request's own socket read,
-   serialising every other producer behind it — bounding the chunk size
-   bounds the lock's hold time independently of body size or network speed.
-   `MAX_BODY_BYTES`/`MAX_RECORDS` are deliberately left at their pre-existing
-   caps (32 MiB / 200,000): M1.18 (the `-Xmx256m` test task) and T12
-   (`memoryFlatUnderTenXBodySize`) remain `todo` — they are what would PROVE
-   200 MB is safe under a 256 MB heap and justify raising those caps, which
-   this change makes possible rather than attempts itself.
+8. `MemoryFlatUnderTenXBodySizeTest#memoryFlatUnderTenXBodySize` (T12),
+   `./gradlew :http:memoryBoundTest` (M1.18) — a real, dedicated task under
+   `-Xmx256m` with JaCoCo disabled; the default `test` task's 512 MB, or
+   `test` with JaCoCo attached, would prove nothing about this criterion's
+   own number (measured: JaCoCo instrumentation alone added ~200 MB before a
+   single body byte was sent). Sends a genuinely 200 MB `_bulk` body,
+   streamed from the client and never held whole, through the real HTTP
+   adapter and a `LocalFsBinStore`. Two proofs: the request completes without
+   a real JVM `OutOfMemoryError` under the actual 256 MB constraint, and a
+   periodic GC-then-sample of live heap stays under both an absolute ceiling
+   and a 10x-body-bytes-written ratio. Mutation verified killed: disabling
+   chunking produces a genuine `OutOfMemoryError: Java heap space`.
+   `MAX_BODY_BYTES`/`MAX_RECORDS` raised to 256 MiB / 2,000,000 to let the
+   test's body through at all.
