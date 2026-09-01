@@ -238,10 +238,14 @@ public abstract class ConditionalWriteConformance {
     @Test
     void conditionalWritesAreAdvertisedBecauseTheCommitLogRequiresThem() throws Exception {
         try (BinStore s = newStore()) {
-            // ⚠️ Checked at startup so a backend lacking atomic putIfAbsent fails
-            // loudly instead of silently corrupting the commit log (ADR-0002).
+            // ⚠️ Checked at startup so a backend lacking atomic putIfAbsent AND
+            // putIfMatch fails loudly instead of silently corrupting the commit
+            // log, the lease or the ordinal registry (ADR-0002, ADR-0008).
             assertThat(s.capabilities().conditionalWrites()).isTrue();
             assertThat(s.capabilities().maxKeyBytes()).isPositive();
+            // ⚠️ M2.1: the ACTUAL startup check, not just the flag it reads --
+            // every real backend must pass this without throwing.
+            s.capabilities().requireConditionalWrites();
         }
     }
 }
