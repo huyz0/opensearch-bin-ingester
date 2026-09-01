@@ -118,10 +118,17 @@ class SubscriptionHubTest {
 
     @Test
     void manyIdleSubscribersIssueNoStoreRequestsAtAll() throws Exception {
-        // ⚠️ Criterion 3's shape, at T1 scale. 1,600 registered consumers, a
-        // commit log that has been written and read, and then NOTHING happens --
-        // no timer, no poll, no refresh. A polling design cannot produce a zero
-        // here at any interval.
+        // ⚠️ NOT criterion 3, and an earlier comment here said it was. This loop
+        // calls only hub.subscriberCount() -- a map lookup -- between the two
+        // counter reads below; no ConsumerClient exists in this test and
+        // SubscriptionHub holds no BinStore at all. The .isZero() a few lines
+        // down is therefore held by CONSTRUCTION, the same reason row T8 is
+        // struck in the M1 SPEC: nothing here can reach a store, so the
+        // assertion cannot fail. What IS real, and load-bearing: the LIVENESS
+        // half. 1,600 registered consumers, a commit log written and read, and
+        // subscriberCount() staying 1 for every one of 3,000 iterations proves
+        // they are still subscribed -- "all 1,600 were alive, not merely
+        // silent" -- which a dead or never-started consumer would not show.
         CountingBinStore store = new CountingBinStore(new MemoryBinStore());
         CommitLog log = new CommitLog(store, "p");
         SubscriptionHub hub = new SubscriptionHub();
@@ -143,8 +150,10 @@ class SubscriptionHubTest {
             // nothing happens: no commit, no poll, no timer
             assertThat(hub.subscriberCount(new RunKey(A, i % 1600))).isEqualTo(1);
         }
+        // ⚠️ Kept, and still true, but NOT EVIDENCE: nothing above could have
+        // made this nonzero. See the comment on this method.
         assertThat(store.counts().total() - requestsBefore)
-                .as("1,600 idle consumers, 3,000 idle iterations, zero requests").isZero();
+                .as("held by construction, not asserted -- see the method comment").isZero();
 
         // and a control push at the end must reach every one of them
         for (int i = 0; i < 1600; i++) {

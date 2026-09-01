@@ -7,6 +7,14 @@
 producer → ingester → local-FS segment → consumer → plugin — and an idle cluster
 issues **zero** object-store requests.
 
+⚠️ **The second half of that sentence is NOT PROVABLE as written, and the
+milestone cannot be declared done on it.** The zero holds by CONSTRUCTION — no
+class on the consumer path holds a `BinStore`, because inline delivery carries
+the bytes (ADR-0004) — so no consumer test can make it fail, and an assertion
+that cannot fail is not evidence. Criterion 3, rows T8 and T8b, and the R3 cost
+row all say so; this sentence is what a milestone review reads first, so it says
+so too. Tracked as M1.16.
+
 ---
 
 ## Requirements
@@ -72,7 +80,7 @@ M1 establishes the meter rather than optimising against it. Rules touched:
 
 | Rule | M1 obligation |
 |---|---|
-| **R3** — idle consumers issue zero requests | **The headline acceptance criterion.** Asserted, not hoped |
+| **R3** — idle consumers issue zero requests | ⚠️ **NOT ASSERTED, and structurally hard to assert.** Held by CONSTRUCTION, not by a test: no class on the consumer path holds a `BinStore` (inline delivery, ADR-0004), so a request-count assertion in a consumer test can only observe an ingester the test itself built. See criterion 3 and rows T8/T8b. ⚠️ **A THIRD review pass found what the first two missed.** `SearchableIT` and `SubscriptionHubTest.manyIdleSubscribersIssueNoStoreRequestsAtAll` both carried an unfalsifiable idle-zero assertion and are now labelled honestly in place: their LIVENESS half remains real, their `.isZero()` does not, and both say why in their own comments. A THIRD site, `EndToEndTest`, carried the identical defect with no liveness half worth keeping, so its assertion was REMOVED rather than relabelled — `BinStoreShardConsumer` holds only a `ConsumerClient`, which imports no `binjava.binstore` type, so nothing on that path could ever have moved the counter it checked. ⚠️ This cell has now been wrong about its own completeness twice. Treat `"one"`, `"two"` or `"named here"` in this cell as a claim to re-verify, not to trust — grep `store.counts()` / `totalRequests` / `isZero` across every consumer-side test before believing this is the last one. This cell previously read "Asserted, not hoped" |
 | R2 — no LIST on hot paths | `listRequests() == 0` asserted |
 | R9 — every store op counted | `CountingBinStore` exists and is wired |
 | R1, **R1b** | Bundling works, but the interval is **fixed at 250 ms**, which R1b names as the rejected operating point ($311/mo against $15.55/mo). M1 accepts that cost knowingly; the adaptive loop is [M3](../../roadmap.md) |
@@ -93,7 +101,7 @@ Each is checkable by something other than an opinion.
    only after the segment and its commit delta are both durable in the store.
 2. A single-node OpenSearch test with `ingestion_source.type: BINSTORE` makes all
    100 documents **searchable**, with `_offset` present and monotonic.
-3. **1,600 idle consumers produce `store.totalRequests() == 0` across 5 minutes of
+3. ⚠️ **UNPROVEN — see M1.16.** **1,600 idle consumers produce `store.totalRequests() == 0` across 5 minutes of
    *injected* clock time** — the `Clock` seam is advanced, not slept on, so the T1
    test fits L0's 90 s budget. ⚠️ The window must span **at least 3,000 poll
    intervals** at the configured `pollTimeout`, or a zero proves only that nothing
@@ -103,8 +111,12 @@ Each is checkable by something other than an opinion.
    record at the end of the window and require all 1,600 to receive it. "The
    transport delivered nothing" is *also* what 1,600 consumers that never started
    produce, so on its own it proves the opposite of what it claims —
-   at **T1**, against a fake transport, in ~200 MiB. A **T4** variant with 20 real
-   shards proves it holds in OpenSearch. ⚠️ Scale at the cheap tier, realism at the
+   at **T1**, against a fake transport, in ~200 MiB. ⚠️ **The T4 variant named
+   here is NOT DELIVERABLE as written — see row T8b.** A store wired into a
+   consumer test observes only an ingester that test constructed, so the shard
+   count changes nothing it can see. What was delivered instead is
+   `ShardFanOutIT`, which proves 20 shards poll, decode and index — the fan-out,
+   not the cost. ⚠️ Scale at the cheap tier, realism at the
    expensive one ([build.md](../../../standards/build.md)); 1,600 real shards would
    need 6+ GiB and could not run on every commit.
 4. Killing and restarting the OpenSearch node resumes from the persisted
@@ -129,7 +141,8 @@ Each is checkable by something other than an opinion.
 **7 times**, and each occurrence names why a fake cannot answer the question:
 T5c, T5d and T5b2 need OpenSearch's own versioning and Lucene state; T8b, T11,
 T11b and T11c need real shards and a real Lucene commit.
-⚠️ Scale still lives at T1 — criterion 3's 1,600 consumers run against a fake
+⚠️ **Both halves of this split are open — see M1.16.** Scale still lives at
+T1 — criterion 3's 1,600 consumers run against a fake
 transport, and only its 20-shard variant is T4.
 
 | # | Test that must fail first | Tier | The mutation it must catch |
@@ -147,7 +160,7 @@ transport, and only its 20-shard variant is T4.
 | T6b | `httpAdapterPassesTheRequestThroughUnaltered` | T1 | the handler recomputes the partition, rewrites `_id`, or acks before delegating. ⚠️ Pure *duplication* of a decision that yields the same answer is not observable from outside and is not claimed here — rule 4 is held by `check-module.sh`, not by this test |
 | T6c | *(not a test)* `check-module.sh` asserts no module below `http` resolves an HTTP dependency | gate | add an HTTP import below the adapter. ⚠️ Listed here for completeness only: a classpath constraint has no red run in the sense of testing.md rule 2, so it is a **gate**, not a row in this table |
 | T7 | `readNextBlocksUntilPushArrives` | T1 | make `readNext` return empty immediately |
-| T8 | `idleShardsIssueNoStoreRequests` | T1 | poll the store on an empty queue **once per `pollTimeout`** — the test advances the injected clock 3,000 intervals, so a single leaked poll per interval shows up as 3,000 requests, not as a rounding error |
+| T8 | ~~`idleShardsIssueNoStoreRequests`~~ — ⚠️ **NOT DELIVERABLE AS WRITTEN, same blocker as T8b.** `ConsumerClient` holds no `BinStore` (`client/src/main` imports none), so a T1 fake transport cannot reach a store either: the mutation "poll the store on an empty queue" has nothing to poll. Struck for the same reason as T8b rather than left standing prescribing a test that cannot catch its own mutation | T1 | — |
 | T9 | `tailSubscriberIsOnePerNode` | T1 | construct the subscriber in the factory per shard |
 | T9b | `segmentCacheIsOnePerNode` | T1 | give each shard its own cache, so 100 shards on a node fetch one segment 100 times — criterion 6's cache half, and the half that carries R5 |
 | T10 | `pointerResumesFromCommitData` | T2 | resume from `earliest` instead of `batch_start` |
@@ -156,7 +169,7 @@ transport, and only its 20-shard variant is T4.
 | T11b | `documentLandsInTheShardForItsPartition` | **T4** | index into the wrong shard — asserted with `preference=_shards:3`, which is the only form that fails when placement is wrong |
 | T12 | `memoryFlatUnderTenXBodySize` | T2 | unbounded accumulator growth. ⚠️ A **ratio** is satisfied by a copy with a constant factor, so the row must also assert an **absolute** ceiling: peak heap under a 256 MB cap while ingesting 200 MB (criterion 8) |
 | T7b | `readNextBlocksForTheFullPollTimeoutWhenNothingArrives` | T1 | return empty after one poll interval instead of blocking — criterion 5's second half, and the half the zero-idle-cost property actually rests on |
-| T8b | `idleShardsIssueNoStoreRequestsInACluster` | **T4** | poll the store on an empty queue, at 20 real shards — criterion 3's T4 half |
+| T8b | ~~`idleShardsIssueNoStoreRequestsInACluster`~~ — ⚠️ **NOT DELIVERABLE AS WRITTEN.** No class on the consumer path holds a `BinStore`: neither `plugin/src/main` nor `client/src/main` imports `binjava.binstore`, because inline delivery carries the bytes (ADR-0004). A store wired into a T4 test can only observe an ingester the test itself constructed, so the shard count changes nothing the counter can see and the assertion cannot fail for anything the shards do. Delivered instead: `ShardFanOutIT.testEveryShardPollsDecodesAndIndexes`, which proves twenty shards poll, decode and index. The idle-cost mutation this row names becomes testable only when a consumer can reach a store — M1.16c | **T4** | give BinStoreShardConsumer a store and GET once per empty poll |
 | T10b | `restartDuplicatesOnlyWithinOneCommitBatch` | T2 | resume from the batch *end* pointer, which loses records, or from `earliest`, which duplicates without bound — criterion 4's duplicate bound |
 | T1b | `committedGoldenSegmentStillParses` | T0 | change a field width in the preamble or directory — criterion 7's golden file, which the round-trip test cannot catch because it encodes and decodes with the same code |
 
@@ -200,7 +213,9 @@ Each is one commit, cites a requirement, and leaves the tree green.
 | M1.13 | Plugin: `BinStorePlugin`, factory, `BinStoreOffset`, `BinStoreMessage` | FR-7 |
 | M1.14 | Plugin: blocking `readNext` + node-level singleton | FR-7, NFR-2 |
 | M1.15 | T4 end-to-end: documents searchable in a single-node cluster | FR-7 |
-| M1.16 | Zero-idle-cost: **T1** at 1,600 consumers, **T4** at 20 shards | **NFR-2** |
+| M1.16 | Zero-idle-cost — ⚠️ **open at every tier**; the zero is held by construction rather than by a test (see R3 above and rows T8/T8b) | **NFR-2** |
+| M1.16b | ~~`tick()` seam + deterministic idle test~~ — withdrawn: the test was a tautology | NFR-2 |
+| M1.16c | `Clock` seam for `ConsumerClient` — buys a liveness/memory proof at 1,600 consumers, NOT a falsifiable request count | NFR-2 |
 | ~~M1.17b~~ | ~~SPDX headers, licence gates, `LICENSE`/`NOTICE` wired into the build~~ — **delivered by `de66330` (M0.4)** | — |
 | M1.18 | ~~Gradle memory caps, per-tier test tasks~~ — **delivered by `de66330`**. What remains: a test task with `-Xmx256m` for acceptance criterion 8, and container memory limits | — |
 | M1.19b | Metrics with the allow-list labels; in-memory per-index counters; `/admin/cost` top-K | NFR-16 |

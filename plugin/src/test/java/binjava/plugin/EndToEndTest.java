@@ -143,14 +143,18 @@ class EndToEndTest {
                             .isEqualTo(1_700_000_000_000L);
                 }
 
-                // ⚠️ And now IDLE: nothing more is produced, so nothing is spent.
-                long afterIngest = store.counts().total();
+                // ⚠️ And now IDLE. This loop exercises readNext returning empty and
+                // getPointerBasedLag under load, which is real coverage -- but the
+                // store-count check that used to follow it was held by CONSTRUCTION,
+                // not evidence, for the same reason SPEC row T8 is struck:
+                // BinStoreShardConsumer holds only a ConsumerClient, and neither it
+                // nor ConsumerClient imports binjava.binstore, so no mutation of this
+                // path could have moved the counter. Removed rather than left as a
+                // fourth site the SPEC amendment would have had to enumerate.
                 for (int i = 0; i < 50; i++) {
                     assertThat(shardConsumer.readNext(10, 1)).isEmpty();
                     shardConsumer.getPointerBasedLag(new BinStoreOffset(0));
                 }
-                assertThat(store.counts().total() - afterIngest)
-                        .as("an idle consumer, and a lag poll, cost nothing").isZero();
             }
         }
     }
