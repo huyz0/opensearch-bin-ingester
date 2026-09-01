@@ -80,7 +80,7 @@ M1 establishes the meter rather than optimising against it. Rules touched:
 
 | Rule | M1 obligation |
 |---|---|
-| **R3** — idle consumers issue zero requests | ⚠️ **NOT ASSERTED, and structurally hard to assert.** Held by CONSTRUCTION, not by a test: no class on the consumer path holds a `BinStore` (inline delivery, ADR-0004), so a request-count assertion in a consumer test can only observe an ingester the test itself built. See criterion 3 and rows T8/T8b. ⚠️ **A THIRD review pass found what the first two missed.** `SearchableIT` and `SubscriptionHubTest.manyIdleSubscribersIssueNoStoreRequestsAtAll` both carried an unfalsifiable idle-zero assertion and are now labelled honestly in place: their LIVENESS half remains real, their `.isZero()` does not, and both say why in their own comments. A THIRD site, `EndToEndTest`, carried the identical defect with no liveness half worth keeping, so its assertion was REMOVED rather than relabelled — `BinStoreShardConsumer` holds only a `ConsumerClient`, which imports no `binjava.binstore` type, so nothing on that path could ever have moved the counter it checked. ⚠️ This cell has now been wrong about its own completeness twice. Treat `"one"`, `"two"` or `"named here"` in this cell as a claim to re-verify, not to trust — grep `store.counts()` / `totalRequests` / `isZero` across every consumer-side test before believing this is the last one. This cell previously read "Asserted, not hoped" |
+| **R3** — idle consumers issue zero requests | ⚠️ **RESOLVED by ADR-0023**: verified by construction, not by a runtime assertion. No class on the consumer path holds a `BinStore` (inline delivery, ADR-0004), so a request-count assertion in a consumer test can only observe an ingester the test itself built — the property is unconditionally true given ADR-0004, so no test can conditionally fail it. THREE test attempts across two tiers were withdrawn after review (a 1,600-consumer T1 test, a `tick()`-driven variant, and a 20-shard T4 variant), and THREE more unfalsifiable `.isZero()` sites already in the tree (`SearchableIT`, `SubscriptionHubTest`, `EndToEndTest`) were found one at a time across three review passes and are now relabelled or removed. Six occurrences of the same defect in total. ADR-0023 is where that history lives; treat any count in this cell as worth re-verifying before trusting, since this cell has already been wrong about its own completeness twice. This cell previously read "Asserted, not hoped" |
 | R2 — no LIST on hot paths | `listRequests() == 0` asserted |
 | R9 — every store op counted | `CountingBinStore` exists and is wired |
 | R1, **R1b** | Bundling works, but the interval is **fixed at 250 ms**, which R1b names as the rejected operating point ($311/mo against $15.55/mo). M1 accepts that cost knowingly; the adaptive loop is [M3](../../roadmap.md) |
@@ -101,24 +101,23 @@ Each is checkable by something other than an opinion.
    only after the segment and its commit delta are both durable in the store.
 2. A single-node OpenSearch test with `ingestion_source.type: BINSTORE` makes all
    100 documents **searchable**, with `_offset` present and monotonic.
-3. ⚠️ **UNPROVEN — see M1.16.** **1,600 idle consumers produce `store.totalRequests() == 0` across 5 minutes of
-   *injected* clock time** — the `Clock` seam is advanced, not slept on, so the T1
-   test fits L0's 90 s budget. ⚠️ The window must span **at least 3,000 poll
-   intervals** at the configured `pollTimeout`, or a zero proves only that nothing
-   was scheduled yet.
-   ⚠️ **A zero needs a positive liveness signal, not the absence of one.** Assert
-   that all 1,600 subscriptions are registered at the start, and push one control
-   record at the end of the window and require all 1,600 to receive it. "The
-   transport delivered nothing" is *also* what 1,600 consumers that never started
-   produce, so on its own it proves the opposite of what it claims —
-   at **T1**, against a fake transport, in ~200 MiB. ⚠️ **The T4 variant named
-   here is NOT DELIVERABLE as written — see row T8b.** A store wired into a
-   consumer test observes only an ingester that test constructed, so the shard
-   count changes nothing it can see. What was delivered instead is
-   `ShardFanOutIT`, which proves 20 shards poll, decode and index — the fan-out,
-   not the cost. ⚠️ Scale at the cheap tier, realism at the
-   expensive one ([build.md](../../../standards/build.md)); 1,600 real shards would
-   need 6+ GiB and could not run on every commit.
+3. Idle consumers issue zero object-store requests.
+   ⚠️ **RESOLVED by construction, not by test — see ADR-0023.** No class under
+   `plugin/src/main` or `client/src/main` imports `binjava.binstore`, so no
+   consumer-side test can ever observe a request the consumer path did not make;
+   the property is unconditionally true given ADR-0004, and a runtime assertion
+   of it cannot fail. `M1.16e` is the (not yet written) gate that gives that
+   fact a script instead of a hand-run grep.
+   ⚠️ **History, not a live spec.** A 1,600-consumer T1 test against a fake
+   transport, injecting five minutes of `Clock` time across at least 3,000 poll
+   intervals with a liveness signal at both ends, and a 20-shard T4 variant, were
+   both ATTEMPTED and WITHDRAWN — the T1 test was a tautology once built (its
+   `tick()` seam never reached the clock), and the T4 variant could not be built
+   at all, for the same structural reason ADR-0023 names. What the T4 attempt
+   delivered instead is `ShardFanOutIT`, proving twenty shards poll, decode and
+   index — real fan-out coverage, kept, but not a cost assertion. Scale at the
+   cheap tier, realism at the expensive one ([build.md](../../../standards/build.md))
+   no longer applies here: there is no cheap-tier cost test to scale down from.
 4. Killing and restarting the OpenSearch node resumes from the persisted
    `batch_start`, loses nothing, and duplicates only within one commit batch.
    ⚠️ **Proven at T2, not at the node level.** Rows T10/T10b prove the POINTER
@@ -223,7 +222,7 @@ Each is one commit, cites a requirement, and leaves the tree green.
 | M1.13 | Plugin: `BinStorePlugin`, factory, `BinStoreOffset`, `BinStoreMessage` | FR-7 |
 | M1.14 | Plugin: blocking `readNext` + node-level singleton | FR-7, NFR-2 |
 | M1.15 | T4 end-to-end: documents searchable in a single-node cluster | FR-7 |
-| M1.16 | Zero-idle-cost — ⚠️ **open at every tier**; the zero is held by construction rather than by a test (see R3 above and rows T8/T8b) | **NFR-2** |
+| M1.16 | Zero-idle-cost — ⚠️ **RESOLVED by ADR-0023**: verified by construction, not by a test (see R3 above and rows T8/T8b) | **NFR-2** |
 | M1.16b | ~~`tick()` seam + deterministic idle test~~ — withdrawn: the test was a tautology | NFR-2 |
 | M1.16c | `Clock` seam for `ConsumerClient` — buys a liveness/memory proof at 1,600 consumers, NOT a falsifiable request count | NFR-2 |
 | ~~M1.17b~~ | ~~SPDX headers, licence gates, `LICENSE`/`NOTICE` wired into the build~~ — **delivered by `de66330` (M0.4)** | — |
