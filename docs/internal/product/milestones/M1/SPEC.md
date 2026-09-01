@@ -121,6 +121,16 @@ Each is checkable by something other than an opinion.
    need 6+ GiB and could not run on every commit.
 4. Killing and restarting the OpenSearch node resumes from the persisted
    `batch_start`, loses nothing, and duplicates only within one commit batch.
+   ⚠️ **Proven at T2, not at the node level.** Rows T10/T10b prove the POINTER
+   CONTRACT: `BinStoreOffset` round-trips through its string form (the only form
+   it exists in inside Lucene's commit data), and `readNext` resumes from a
+   persisted pointer rather than from `earliest`, refusing both the
+   loses-records and the duplicates-without-bound failure in one assertion. What
+   is NOT proven: an actual OpenSearch node killed and restarted, `batch_start`
+   read back out of real Lucene commit data, and this factory wired to a real
+   node the way `SearchableIT` wires the read path. That is T4 work and is not
+   in M1.17's three T2 tests -- said here rather than left to a `done` row that
+   would otherwise be read as covering the whole sentence.
 5. `readNext` returns within 10 ms of a push arriving, and blocks for the full
    `pollTimeout` when nothing arrives — proving the blocking contract.
 6. One `TailSubscriber` and one cache exist **per node**, not per shard, with 100
