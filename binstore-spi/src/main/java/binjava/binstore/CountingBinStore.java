@@ -85,6 +85,80 @@ public final class CountingBinStore implements BinStore {
     }
 
     @Override
+    public MultipartWriter multipart(String key) throws IOException {
+        // ⚠️ CreateMultipartUpload is a real request too, same as every other
+        // write here -- and the returned writer's own operations (UploadPart,
+        // CompleteMultipartUpload, AbortMultipartUpload) are each billed calls
+        // in their own right, so the writer itself must be decorated, not just
+        // this one call.
+        puts.increment();
+        return new CountingMultipartWriter(delegate.multipart(key));
+    }
+
+    /**
+     * ⚠️ Tracks {@code done} itself, rather than trusting the delegate's own
+     * internal state, so {@link #close()} counts an IMPLICIT abort (a caller
+     * that never called {@link #complete()} or {@link #abort()} explicitly)
+     * exactly once -- a real AbortMultipartUpload request -- without double
+     * counting when {@code close()} follows a {@code complete()} or {@code
+     * abort()} that already ran and was already counted.
+     */
+    private final class CountingMultipartWriter implements MultipartWriter {
+        private final MultipartWriter delegate;
+        private volatile boolean done;
+
+        CountingMultipartWriter(MultipartWriter delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public void uploadPart(int partNumber, Body body) throws IOException {
+            puts.increment();
+            delegate.uploadPart(partNumber, body);
+        }
+
+        @Override
+        public Version complete() throws IOException {
+            puts.increment();
+            // ⚠️ `done` is set only on the SUCCESS path. Round-1 review found
+            // this set unconditionally, before delegating: when complete()
+            // THROWS (e.g. a minPartSize violation, which by design is only
+            // catchable at complete()-time), the underlying upload is still
+            // open, and a caller's ordinary try-with-resources unwind then
+            // calls close() -- which performs a REAL implicit abort (real
+            // cleanup work in LocalFsBinStore's case) that must still be
+            // counted. Marking `done` before the delegate call let that second,
+            // genuinely separate request go uncounted.
+            Version v = delegate.complete();
+            done = true;
+            return v;
+        }
+
+        @Override
+        public void abort() throws IOException {
+            puts.increment();
+            // ⚠️ Same reasoning as complete(): only mark done on success, so a
+            // failing abort() does not silently swallow a subsequent close()'s
+            // own cleanup attempt.
+            delegate.abort();
+            done = true;
+        }
+
+        @Override
+        public void close() throws IOException {
+            if (!done) {
+                // ⚠️ A close() that never saw complete()/abort() still issues a
+                // real AbortMultipartUpload -- MultipartWriter's own contract
+                // ("close() behaves exactly like abort()") makes this a real
+                // request, not free cleanup.
+                puts.increment();
+                done = true;
+            }
+            delegate.close();
+        }
+    }
+
+    @Override
     public ListPage list(String prefix, String startAfter, int maxKeys) throws IOException {
         // ⚠️ ONE PER PAGE, which is what makes this meter honest. When `list`
         // returned a lazy Stream the decorator saw one invocation whether the

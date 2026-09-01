@@ -5,8 +5,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.IOException;
-import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.Callable;
@@ -22,29 +20,18 @@ import org.junit.jupiter.api.Test;
  *
  * <p>⚠️ Split out of {@link BinStoreConformance} when that file passed the
  * 500-line limit (code-structure.md rule 1: split it, never raise the limit).
- * {@link BinStoreConformance} extends this rather than the other way round so
- * every existing backend test class (which extends {@code BinStoreConformance}
- * alone) keeps compiling unchanged.
+ * Extends {@link MultipartConformance} (its own split, for the same reason)
+ * rather than declaring {@code newStore()}/{@code bytes}/{@code read} again,
+ * and {@link BinStoreConformance} extends this -- so every existing backend
+ * test class (which extends {@code BinStoreConformance} alone) keeps
+ * compiling unchanged, whichever of the three families grows next.
  *
  * <p>⚠️ CAS semantics are where object-store providers actually differ and
  * where a subtle divergence silently breaks the commit protocol or the lease
  * (design doc 07 §3, ADR-0008) — this is the highest-leverage test class in
  * the project, not a formality.
  */
-public abstract class ConditionalWriteConformance {
-
-    /** A fresh, empty store. Closed by the test. */
-    protected abstract BinStore newStore() throws Exception;
-
-    protected static byte[] bytes(String s) {
-        return s.getBytes(StandardCharsets.UTF_8);
-    }
-
-    protected static String read(InputStream in) throws Exception {
-        try (in) {
-            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
-        }
-    }
+public abstract class ConditionalWriteConformance extends MultipartConformance {
 
     @Test
     void putIfAbsentWritesOnlyWhenTheKeyIsFree() throws Exception {

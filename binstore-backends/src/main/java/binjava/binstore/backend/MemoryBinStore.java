@@ -6,6 +6,7 @@ import binjava.binstore.Body;
 import binjava.binstore.Capabilities;
 import binjava.binstore.CostTable;
 import binjava.binstore.ListPage;
+import binjava.binstore.MultipartWriter;
 import binjava.binstore.ObjectStat;
 import binjava.binstore.Version;
 import java.io.ByteArrayInputStream;
@@ -149,6 +150,82 @@ public final class MemoryBinStore implements BinStore {
         // already known to be stale.
         boolean replaced = objects.replace(key, current, new Entry(data, next));
         return replaced ? Optional.of(next) : Optional.empty();
+    }
+
+    @Override
+    public MultipartWriter multipart(String key) throws IOException {
+        checkKey(key);
+        return new MemoryMultipartWriter(key);
+    }
+
+    /**
+     * ⚠️ Parts keyed by number in a {@link java.util.concurrent.ConcurrentSkipListMap},
+     * not a list, for the same reason {@link #objects} is one: {@link #complete}
+     * must assemble in PART-NUMBER order, never arrival order, and re-uploading a
+     * part number must replace it rather than append a duplicate.
+     */
+    private final class MemoryMultipartWriter implements MultipartWriter {
+        private final String key;
+        private final ConcurrentSkipListMap<Integer, byte[]> parts = new ConcurrentSkipListMap<>();
+        private volatile boolean done;
+
+        MemoryMultipartWriter(String key) {
+            this.key = key;
+        }
+
+        @Override
+        public void uploadPart(int partNumber, Body body) throws IOException {
+            if (partNumber < 1) {
+                throw new IOException("part numbers start at 1: " + partNumber);
+            }
+            parts.put(partNumber, body.readFully());
+        }
+
+        @Override
+        public Version complete() throws IOException {
+            if (parts.isEmpty()) {
+                throw new IOException("multipart upload of " + key + " has no parts to assemble");
+            }
+            // ⚠️ ONLY the highest-numbered part is exempt from minPartSize --
+            // which part is last is not knowable until complete(), since a
+            // caller may still be about to upload a higher-numbered one when an
+            // earlier part arrives.
+            int lastPartNumber = parts.lastKey();
+            long minPartSize = capabilities().minPartSize();
+            for (var e : parts.entrySet()) {
+                if (e.getKey() != lastPartNumber && e.getValue().length < minPartSize) {
+                    throw new IOException("part " + e.getKey() + " of " + key + " is "
+                            + e.getValue().length + " bytes, below the minimum non-final part size "
+                            + minPartSize + " bytes");
+                }
+            }
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            for (byte[] part : parts.values()) {
+                out.write(part, 0, part.length);
+            }
+            Version v = put(key, Body.ofBytes(out.toByteArray()));
+            done = true;
+            parts.clear();
+            return v;
+        }
+
+        @Override
+        public void abort() {
+            done = true;
+            parts.clear();
+        }
+
+        @Override
+        public void close() {
+            // ⚠️ close() alone is NOT an implicit complete() -- MultipartWriter's
+            // own contract. `done` guards against re-clearing after an explicit
+            // complete()/abort() already ran, though clearing twice is itself
+            // harmless here; kept for symmetry with LocalFsBinStore, where it
+            // is NOT harmless (see there).
+            if (!done) {
+                parts.clear();
+            }
+        }
     }
 
     @Override

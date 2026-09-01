@@ -21,12 +21,12 @@ import java.util.Optional;
  * partitions or indices (AGENTS.md non-negotiable 6). A new method that a caller
  * could invoke per record is a design defect, not an optimisation problem.
  *
- * <p>⚠️ M1 SUBSET, since narrowed. {@code putIfMatch} arrives in M2 (ADR-0008,
- * M2.0): the sequencer lease and the ordinal registry both mutate rather than
- * append, and M1 never needed a CAS primitive expressing that. Multipart is
- * still not here — a segment large enough to need it arrives with M2's later
- * tasks. Both are additions, not changes — no M1 signature moved to
- * accommodate either.
+ * <p>⚠️ M1 SUBSET, since narrowed. {@code putIfMatch} arrived in M2.0
+ * (ADR-0008): the sequencer lease and the ordinal registry both mutate rather
+ * than append, and M1 never needed a CAS primitive expressing that. {@code
+ * multipart} arrived in M2.2, for a segment too large for one {@link Body}.
+ * Both are additions, not changes — no M1 signature moved to accommodate
+ * either.
  */
 public interface BinStore extends Closeable {
     // ⚠️ Every I/O method declares IOException. An object store that cannot
@@ -71,6 +71,14 @@ public interface BinStore extends Closeable {
      * safe because contention is not at rate (ADR-0008).
      */
     Optional<Version> putIfMatch(String key, Body body, Version expected) throws IOException;
+
+    /**
+     * Begins a multipart upload for {@code key}, for an object too large to
+     * hand to {@link #put} as one {@link Body} (M2.2; research doc 01 §7).
+     * The key is not occupied until {@link MultipartWriter#complete()}
+     * succeeds — {@code stat(key)} sees nothing while parts are staged.
+     */
+    MultipartWriter multipart(String key) throws IOException;
 
     /**
      * ONE page of keys under {@code prefix}, in lexicographic order.

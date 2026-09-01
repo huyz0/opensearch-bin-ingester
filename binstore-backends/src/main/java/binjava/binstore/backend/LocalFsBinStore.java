@@ -6,6 +6,7 @@ import binjava.binstore.Body;
 import binjava.binstore.Capabilities;
 import binjava.binstore.CostTable;
 import binjava.binstore.ListPage;
+import binjava.binstore.MultipartWriter;
 import binjava.binstore.ObjectStat;
 import binjava.binstore.Version;
 import java.io.IOException;
@@ -20,6 +21,7 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -261,6 +263,113 @@ public final class LocalFsBinStore implements BinStore {
 
     private Object lockFor(String key) {
         return keyLocks.computeIfAbsent(key, k -> new Object());
+    }
+
+    @Override
+    public MultipartWriter multipart(String key) throws IOException {
+        checkKey(key);
+        return new LocalFsMultipartWriter(key);
+    }
+
+    /**
+     * ⚠️ Each part is its own temp file, written by STREAMING the part's
+     * {@link Body} straight to disk -- never materialised in heap (constraint
+     * C8, same as {@link #put}). {@link #complete} assembles by streaming each
+     * part file into the final target in turn, so the assembled object is
+     * never fully in memory either, however many parts or however large.
+     */
+    private final class LocalFsMultipartWriter implements MultipartWriter {
+        private final String key;
+        private final TreeMap<Integer, Path> parts = new TreeMap<>();
+        private final Map<Integer, Long> partSizes = new java.util.HashMap<>();
+        private boolean done;
+
+        LocalFsMultipartWriter(String key) {
+            this.key = key;
+        }
+
+        @Override
+        public synchronized void uploadPart(int partNumber, Body body) throws IOException {
+            if (partNumber < 1) {
+                throw new IOException("part numbers start at 1: " + partNumber);
+            }
+            Path partFile = Files.createTempFile(root, "part", ".tmp");
+            try (InputStream in = body.checkedStream()) {
+                Files.copy(in, partFile, StandardCopyOption.REPLACE_EXISTING);
+            } catch (IOException badBody) {
+                Files.deleteIfExists(partFile);
+                throw badBody;
+            }
+            // ⚠️ Re-uploading a part number replaces it -- the old temp file is
+            // deleted, or every re-upload of a large part leaks a file on disk.
+            Path old = parts.put(partNumber, partFile);
+            if (old != null) {
+                Files.deleteIfExists(old);
+            }
+            partSizes.put(partNumber, Files.size(partFile));
+        }
+
+        @Override
+        public synchronized Version complete() throws IOException {
+            if (parts.isEmpty()) {
+                throw new IOException("multipart upload of " + key + " has no parts to assemble");
+            }
+            int lastPartNumber = parts.lastKey();
+            long minPartSize = capabilities().minPartSize();
+            for (var e : parts.entrySet()) {
+                if (e.getKey() != lastPartNumber && partSizes.get(e.getKey()) < minPartSize) {
+                    throw new IOException("part " + e.getKey() + " of " + key + " is "
+                            + partSizes.get(e.getKey()) + " bytes, below the minimum non-final part "
+                            + "size " + minPartSize + " bytes");
+                }
+            }
+            Path target = pathFor(key);
+            Path tmp = Files.createTempFile(root, "put", ".tmp");
+            try {
+                try (var out = Files.newOutputStream(tmp, StandardOpenOption.WRITE)) {
+                    for (Path part : parts.values()) {
+                        try (InputStream in = Files.newInputStream(part)) {
+                            in.transferTo(out);
+                        }
+                    }
+                }
+                moveAtomically(tmp, target);
+                Version v = writeMeta(target, key);
+                done = true;
+                cleanupParts();
+                return v;
+            } finally {
+                Files.deleteIfExists(tmp);
+            }
+        }
+
+        @Override
+        public synchronized void abort() throws IOException {
+            done = true;
+            cleanupParts();
+        }
+
+        @Override
+        public synchronized void close() throws IOException {
+            // ⚠️ close() alone is NOT an implicit complete() -- MultipartWriter's
+            // own contract. `done` matters here, unlike in MemoryBinStore's
+            // writer: cleanupParts() deletes files, and calling it again after
+            // complete() already cleared `parts` is harmless (an empty loop),
+            // but skipping it once `done` is set avoids a redundant filesystem
+            // pass on the common close()-after-complete() path every
+            // try-with-resources takes.
+            if (!done) {
+                cleanupParts();
+            }
+        }
+
+        private void cleanupParts() throws IOException {
+            for (Path p : parts.values()) {
+                Files.deleteIfExists(p);
+            }
+            parts.clear();
+            partSizes.clear();
+        }
     }
 
     private static void moveAtomically(Path from, Path to) throws IOException {

@@ -5,6 +5,7 @@ import binjava.binstore.BinStore;
 import binjava.binstore.Body;
 import binjava.binstore.Capabilities;
 import binjava.binstore.ListPage;
+import binjava.binstore.MultipartWriter;
 import binjava.binstore.ObjectStat;
 import binjava.binstore.Version;
 import binjava.binstore.backend.MemoryBinStore;
@@ -75,6 +76,10 @@ final class StoreFakes {
             return delegate.putIfMatch(k, b, v);
         }
 
+        @Override public MultipartWriter multipart(String k) throws IOException {
+            return delegate.multipart(k);
+        }
+
         @Override public void close() throws IOException { delegate.close(); }
     }
 
@@ -112,6 +117,11 @@ final class StoreFakes {
         @Override
         public Optional<Version> putIfMatch(String key, Body body, Version expected) throws IOException {
             return delegate.putIfMatch(key, body, expected);
+        }
+
+        @Override
+        public MultipartWriter multipart(String key) throws IOException {
+            return delegate.multipart(key);
         }
 
         @Override

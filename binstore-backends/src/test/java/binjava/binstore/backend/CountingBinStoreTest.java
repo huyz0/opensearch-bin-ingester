@@ -95,6 +95,78 @@ class CountingBinStoreTest {
     }
 
     @Test
+    void aCompletedMultipartUploadCountsCreateEachPartAndComplete() throws Exception {
+        try (CountingBinStore s = store()) {
+            long min = s.capabilities().minPartSize();
+            byte[] part = new byte[(int) min];
+            try (var w = s.multipart("k")) {
+                w.uploadPart(1, Body.ofBytes(part));
+                w.uploadPart(2, Body.ofBytes(bytes("tail")));
+                w.complete();
+            }
+            // ⚠️ CreateMultipartUpload (the multipart() call itself) + 2
+            // UploadPart + 1 CompleteMultipartUpload = 4 real, billed requests
+            // -- undercounting any one of them under-reports exactly the
+            // workload a large segment's multipart upload actually costs.
+            assertThat(s.counts().puts()).as("create + 2 uploadPart + complete").isEqualTo(4);
+        }
+    }
+
+    @Test
+    void anAbortedMultipartUploadCountsCreateEachPartAndAbort() throws Exception {
+        try (CountingBinStore s = store()) {
+            long min = s.capabilities().minPartSize();
+            try (var w = s.multipart("k")) {
+                w.uploadPart(1, Body.ofBytes(new byte[(int) min]));
+                w.abort();
+            }
+            // create + 1 uploadPart + abort = 3, same "billed even when it
+            // fails/aborts" reasoning as every other case in this class.
+            assertThat(s.counts().puts()).as("create + uploadPart + abort").isEqualTo(3);
+        }
+    }
+
+    @Test
+    void closingWithoutCompletingCountsAsOneImplicitAbort() throws Exception {
+        try (CountingBinStore s = store()) {
+            long min = s.capabilities().minPartSize();
+            var w = s.multipart("k");
+            w.uploadPart(1, Body.ofBytes(new byte[(int) min]));
+            w.close(); // no explicit complete()/abort()
+            // create + uploadPart + (the implicit abort close() performs) = 3,
+            // counted exactly once -- not zero (an uncounted free cleanup) and
+            // not twice (double-counting a close() that follows an explicit
+            // complete()/abort(), checked next).
+            assertThat(s.counts().puts()).as("create + uploadPart + implicit abort").isEqualTo(3);
+
+            w.close(); // idempotent: a second close() must not count again
+            assertThat(s.counts().puts()).as("a second close() counts nothing new").isEqualTo(3);
+        }
+    }
+
+    @Test
+    void closingAfterAFailedCompleteStillCountsTheRealImplicitAbort() throws Exception {
+        // ⚠️ round-1 review (M2.2): a caller's ordinary try-with-resources
+        // unwind on complete()'s exception path calls close() next, and that
+        // close() performs a REAL implicit abort (LocalFsBinStore, say,
+        // actually deletes the staged part files) -- a genuinely separate
+        // billed request from the failed complete() itself, which the
+        // decorator must count too, not silently swallow.
+        try (CountingBinStore s = store()) {
+            long min = s.capabilities().minPartSize();
+            var w = s.multipart("k");
+            w.uploadPart(1, Body.ofBytes(bytes("short"))); // undersized, non-final
+            w.uploadPart(2, Body.ofBytes(new byte[(int) min]));
+            assertThatThrownBy(w::complete).isInstanceOf(java.io.IOException.class);
+            w.close();
+            // create + 2 uploadPart + failed complete + the implicit abort
+            // close() actually performs = 5.
+            assertThat(s.counts().puts())
+                    .as("create + 2 uploadPart + failed complete + implicit abort").isEqualTo(5);
+        }
+    }
+
+    @Test
     void aFailedRequestIsStillCounted() throws Exception {
         try (CountingBinStore s = store()) {
             assertThatThrownBy(() -> s.get("missing").close()).isInstanceOf(java.io.IOException.class);
@@ -232,6 +304,11 @@ class CountingBinStoreTest {
         public java.util.Optional<binjava.binstore.Version> putIfMatch(
                 String key, Body body, binjava.binstore.Version expected) throws java.io.IOException {
             return INNER.putIfMatch(key, body, expected);
+        }
+
+        @Override
+        public binjava.binstore.MultipartWriter multipart(String key) throws java.io.IOException {
+            return INNER.multipart(key);
         }
 
         @Override
