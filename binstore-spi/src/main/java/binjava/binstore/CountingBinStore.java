@@ -77,6 +77,14 @@ public final class CountingBinStore implements BinStore {
     }
 
     @Override
+    public Optional<Version> putIfMatch(String key, Body body, Version expected) throws IOException {
+        // ⚠️ A LOST match is still a request, same reasoning as putIfAbsent: a
+        // lease renewal or registry update that lost the race was still billed.
+        puts.increment();
+        return delegate.putIfMatch(key, body, expected);
+    }
+
+    @Override
     public ListPage list(String prefix, String startAfter, int maxKeys) throws IOException {
         // ⚠️ ONE PER PAGE, which is what makes this meter honest. When `list`
         // returned a lazy Stream the decorator saw one invocation whether the

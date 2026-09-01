@@ -218,6 +218,51 @@ public final class LocalFsBinStore implements BinStore {
         return Optional.of(writeMeta(target, key));
     }
 
+    @Override
+    public Optional<Version> putIfMatch(String key, Body body, Version expected) throws IOException {
+        checkKey(key);
+        java.util.Objects.requireNonNull(expected, "expected");
+        Path target = pathFor(key);
+        // ⚠️ SERIALIZED per key. A filesystem has no native compare-and-swap the
+        // way S3's If-Match or GCS's generation-match do, so within this one JVM
+        // -- which is all this dev/test backend ever runs as (ADR-0008's
+        // addendum: this is a fixture, not a production backend) -- a monitor
+        // per key gives the read-check-write the same atomicity putIfAbsent gets
+        // for free from O_CREAT|O_EXCL.
+        synchronized (lockFor(key)) {
+            if (!Files.exists(target)) {
+                // ⚠️ NOT empty: see MemoryBinStore's identical case. A lease
+                // renewal or registry update against a key that was never
+                // written is a different failure than one that lost a race.
+                throw new IOException("no such key: " + key + " (nothing to match version against)");
+            }
+            Meta current = readMeta(target);
+            if (!current.version().equals(expected)) {
+                // ⚠️ The body is not read at all on this path -- the write was
+                // already known stale before a byte of it mattered, matching
+                // putIfAbsent's own "empty means already occupied" cost shape.
+                return Optional.empty();
+            }
+            Path tmp = Files.createTempFile(root, "put", ".tmp");
+            try {
+                try (InputStream in = body.checkedStream()) {
+                    Files.copy(in, tmp, StandardCopyOption.REPLACE_EXISTING);
+                }
+                moveAtomically(tmp, target);
+                return Optional.of(writeMeta(target, key));
+            } finally {
+                Files.deleteIfExists(tmp);
+            }
+        }
+    }
+
+    private final java.util.concurrent.ConcurrentHashMap<String, Object> keyLocks =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    private Object lockFor(String key) {
+        return keyLocks.computeIfAbsent(key, k -> new Object());
+    }
+
     private static void moveAtomically(Path from, Path to) throws IOException {
         try {
             Files.move(from, to, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);

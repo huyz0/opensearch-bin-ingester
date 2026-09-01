@@ -79,6 +79,22 @@ class CountingBinStoreTest {
     }
 
     @Test
+    void aLostPutIfMatchRaceIsStillABilledRequest() throws Exception {
+        try (CountingBinStore s = store()) {
+            var v1 = s.put("k", Body.ofBytes(bytes("first")));
+            s.put("k", Body.ofBytes(bytes("second"))); // moves the version away from v1
+            // ⚠️ round-1 review (M2.0): the sibling putIfAbsent case above was
+            // the only CAS primitive this meter's own test file actually
+            // exercised. A lease renewal or registry update (ADR-0008) that
+            // loses a putIfMatch race is still a request S3 bills, same
+            // reasoning as a lost putIfAbsent -- and nothing caught the
+            // decorator's increment line going missing until this was added.
+            assertThat(s.putIfMatch("k", Body.ofBytes(bytes("third")), v1)).isEmpty();
+            assertThat(s.counts().puts()).as("put + moving put + lost putIfMatch").isEqualTo(3);
+        }
+    }
+
+    @Test
     void aFailedRequestIsStillCounted() throws Exception {
         try (CountingBinStore s = store()) {
             assertThatThrownBy(() -> s.get("missing").close()).isInstanceOf(java.io.IOException.class);
@@ -210,6 +226,12 @@ class CountingBinStoreTest {
         public java.util.Optional<binjava.binstore.Version> putIfAbsent(String key, Body body)
                 throws java.io.IOException {
             return INNER.putIfAbsent(key, body);
+        }
+
+        @Override
+        public java.util.Optional<binjava.binstore.Version> putIfMatch(
+                String key, Body body, binjava.binstore.Version expected) throws java.io.IOException {
+            return INNER.putIfMatch(key, body, expected);
         }
 
         @Override

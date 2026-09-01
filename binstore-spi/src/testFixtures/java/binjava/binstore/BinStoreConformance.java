@@ -5,20 +5,18 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.IOException;
-import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.Callable;
-import java.util.concurrent.CyclicBarrier;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
 
 /**
- * The contract EVERY backend must satisfy, run against each one.
+ * The NON-CAS half of the contract every backend must satisfy, run against
+ * each one. The conditional-write half ({@code putIfAbsent}, {@code
+ * putIfMatch}) lives in the parent, {@link ConditionalWriteConformance} —
+ * split out when this file passed the 500-line limit (code-structure.md rule
+ * 1) — so every case, from both halves, still runs from one {@code extends}
+ * per backend test class.
  *
  * <p>⚠️ It lives in testFixtures because a conformance suite that only ever runs
  * against the in-memory fake proves nothing about S3. Each backend subclasses
@@ -28,20 +26,7 @@ import org.junit.jupiter.api.Test;
  * <p>⚠️ M1 runs the NON-CAS half. Lease, epoch and seal semantics arrive with
  * ADR-0002 in M4 and extend this class rather than replacing it.
  */
-public abstract class BinStoreConformance {
-
-    /** A fresh, empty store. Closed by the test. */
-    protected abstract BinStore newStore() throws Exception;
-
-    private static byte[] bytes(String s) {
-        return s.getBytes(StandardCharsets.UTF_8);
-    }
-
-    private static String read(InputStream in) throws Exception {
-        try (in) {
-            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
-        }
-    }
+public abstract class BinStoreConformance extends ConditionalWriteConformance {
 
     private static void put(BinStore s, String key, String body) throws Exception {
         s.put(key, Body.ofBytes(bytes(body)));
@@ -105,77 +90,6 @@ public abstract class BinStoreConformance {
             ListPage page = s.list("nothing-here/", null, 100);
             assertThat(page.objects()).isEmpty();
             assertThat(page.nextStartAfter()).isEmpty();
-        }
-    }
-
-    @Test
-    void putIfAbsentWritesOnlyWhenTheKeyIsFree() throws Exception {
-        try (BinStore s = newStore()) {
-            Optional<Version> first = s.putIfAbsent("k", Body.ofBytes(bytes("first")));
-            assertThat(first).as("a free key must be written").isPresent();
-
-            Optional<Version> second = s.putIfAbsent("k", Body.ofBytes(bytes("second")));
-            // ⚠️ EMPTY, not an exception. The commit log is a chain of these
-            // (ADR-0002); a loser re-reads and retries at the next sequence
-            // number, so a throw here would turn a normal race into an outage.
-            assertThat(second).as("an occupied key yields empty").isEmpty();
-            // ⚠️ And the body must be UNTOUCHED. An implementation that returns
-            // empty but writes anyway loses the winner's record — invariant I1,
-            // "no seq is ever written twice", with no error to notice.
-            assertThat(read(s.get("k"))).isEqualTo("first");
-        }
-    }
-
-    @Test
-    void putIfAbsentSucceedsExactlyOnceUnderConcurrentWriters() throws Exception {
-        // ⚠️ THE reason this suite exists (design doc 07 §3, ADR-0002). Every
-        // sequential case passes against a check-then-put:
-        //     if (exists(key)) return empty; write(key); return present;
-        // which loses a record whenever two writers interleave -- exactly the
-        // choice a filesystem backend faces, O_CREAT|O_EXCL versus Files.exists()
-        // then write. Invariant I1, "no seq is ever written twice", would be
-        // violated with no error to notice.
-        //
-        // ⚠️ MANY KEYS, not one. Against an in-memory map a single contended key
-        // caught check-then-put 5 times out of 5; on a real filesystem the window
-        // between exists() and create is narrow enough that it caught it only 4
-        // times in 6. A gate that reports green on a broken backend one run in
-        // three is worse than no gate. Contending many keys makes a miss require
-        // every one of them to go the wrong way.
-        final int writers = 8;
-        final int keys = 24;
-        try (BinStore s = newStore()) {
-            ExecutorService pool = Executors.newFixedThreadPool(writers);
-            try {
-                for (int k = 0; k < keys; k++) {
-                    final String key = "contended-" + k;
-                    CyclicBarrier start = new CyclicBarrier(writers);
-                    List<Callable<Optional<Version>>> tasks = new java.util.ArrayList<>();
-                    List<String> candidates = new java.util.ArrayList<>();
-                    for (int i = 0; i < writers; i++) {
-                        final String body = "writer-" + i;
-                        candidates.add(body);
-                        tasks.add(() -> {
-                            start.await();   // maximise the overlap
-                            return s.putIfAbsent(key, Body.ofBytes(bytes(body)));
-                        });
-                    }
-                    long winners = 0;
-                    for (Future<Optional<Version>> f : pool.invokeAll(tasks)) {
-                        if (f.get().isPresent()) {
-                            winners++;
-                        }
-                    }
-                    assertThat(winners).as("exactly one writer may win %s", key).isEqualTo(1);
-                    // ⚠️ EXACTLY one writer's body, not merely one that starts
-                    // like it: startsWith("writer-") accepted a body truncated to
-                    // "writer-", the torn-write shape a backend that creates the
-                    // final path and streams into it produces.
-                    assertThat(read(s.get(key))).isIn(candidates);
-                }
-            } finally {
-                pool.shutdownNow();
-            }
         }
     }
 
@@ -262,6 +176,11 @@ public abstract class BinStoreConformance {
                     () -> s.putIfAbsent("k".repeat((int) s.capabilities().maxKeyBytes() + 1),
                             Body.ofBytes(bytes("x"))))
                     .isInstanceOf(IOException.class);
+            // ⚠️ putIfMatch TOO: a truncated lease renewal or registry update is
+            // the same "bad commit record" risk putIfAbsent's own case guards.
+            Version v = s.put("m", Body.ofBytes(bytes("good")));
+            assertThatThrownBy(() -> s.putIfMatch("m", lying, v)).isInstanceOf(IOException.class);
+            assertThat(read(s.get("m"))).as("the previous object must survive").isEqualTo("good");
         }
     }
 
@@ -416,13 +335,4 @@ public abstract class BinStoreConformance {
         }
     }
 
-    @Test
-    void conditionalWritesAreAdvertisedBecauseTheCommitLogRequiresThem() throws Exception {
-        try (BinStore s = newStore()) {
-            // ⚠️ Checked at startup so a backend lacking atomic putIfAbsent fails
-            // loudly instead of silently corrupting the commit log (ADR-0002).
-            assertThat(s.capabilities().conditionalWrites()).isTrue();
-            assertThat(s.capabilities().maxKeyBytes()).isPositive();
-        }
-    }
 }

@@ -71,6 +71,10 @@ final class StoreFakes {
             return delegate.stat(k);
         }
 
+        @Override public Optional<Version> putIfMatch(String k, Body b, Version v) throws IOException {
+            return delegate.putIfMatch(k, b, v);
+        }
+
         @Override public void close() throws IOException { delegate.close(); }
     }
 
@@ -103,6 +107,11 @@ final class StoreFakes {
         @Override
         public Optional<Version> putIfAbsent(String key, Body body) throws IOException {
             return delegate.putIfAbsent(key, body);
+        }
+
+        @Override
+        public Optional<Version> putIfMatch(String key, Body body, Version expected) throws IOException {
+            return delegate.putIfMatch(key, body, expected);
         }
 
         @Override

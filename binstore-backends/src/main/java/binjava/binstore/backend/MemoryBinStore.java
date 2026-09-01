@@ -113,6 +113,45 @@ public final class MemoryBinStore implements BinStore {
     }
 
     @Override
+    public Optional<Version> putIfMatch(String key, Body body, Version expected) throws IOException {
+        checkKey(key);
+        java.util.Objects.requireNonNull(expected, "expected");
+        Entry current = objects.get(key);
+        if (current == null) {
+            // ⚠️ NOT empty. There is no version to have moved from -- an empty
+            // Optional is reserved for a genuine lost race against a real prior
+            // write, and folding the two together would make a lease renewal
+            // unable to tell "someone beat me to it" from "this was never
+            // written" (ADR-0008).
+            throw new IOException("no such key: " + key + " (nothing to match version against)");
+        }
+        if (!current.version().equals(expected)) {
+            // ⚠️ CHECKED BEFORE the body is touched. round-1 review (M2.0) found
+            // this reading body.readFully() first, so a version-mismatch against
+            // a body whose declared length disagreed with its stream threw
+            // IOException instead of returning empty -- contradicting this
+            // method's own contract ("never an exception" on a moved version) and
+            // diverging from LocalFsBinStore, which already checked the version
+            // first. A write already known to be stale must not pay for reading a
+            // body it is about to discard, and must not let that body's own
+            // defects surface as the wrong kind of failure.
+            return Optional.empty();
+        }
+        byte[] data = body.readFully();
+        Version next = nextVersion();
+        // ⚠️ ATOMIC, same reasoning as putIfAbsent: replace(key, oldValue,
+        // newValue) succeeds only if the map's CURRENT mapping is reference-equal
+        // to the Entry this call just read. A writer that races in between the
+        // version check above and this call changes that mapping, so a second
+        // writer computing the SAME expected version cannot also win --
+        // ConcurrentSkipListMap.replace(K,V,V) is the compare-and-set, not the
+        // version-equality check above, which only short-circuits a write
+        // already known to be stale.
+        boolean replaced = objects.replace(key, current, new Entry(data, next));
+        return replaced ? Optional.of(next) : Optional.empty();
+    }
+
+    @Override
     public ListPage list(String prefix, String startAfter, int maxKeys) {
         // ⚠️ Seek from the LATER of prefix and startAfter. Seeking from
         // startAfter alone returned NOTHING whenever it sorted before the

@@ -21,10 +21,12 @@ import java.util.Optional;
  * partitions or indices (AGENTS.md non-negotiable 6). A new method that a caller
  * could invoke per record is a design defect, not an optimisation problem.
  *
- * <p>⚠️ M1 SUBSET. {@code putIfMatch} and multipart are not here: M1 excludes
- * leases, epochs and seal (ADR-0002 is M4), and a segment large enough to need
- * multipart arrives with the real segment format in M2. They are additions, not
- * changes — no M1 signature moves to accommodate them.
+ * <p>⚠️ M1 SUBSET, since narrowed. {@code putIfMatch} arrives in M2 (ADR-0008,
+ * M2.0): the sequencer lease and the ordinal registry both mutate rather than
+ * append, and M1 never needed a CAS primitive expressing that. Multipart is
+ * still not here — a segment large enough to need it arrives with M2's later
+ * tasks. Both are additions, not changes — no M1 signature moved to
+ * accommodate either.
  */
 public interface BinStore extends Closeable {
     // ⚠️ Every I/O method declares IOException. An object store that cannot
@@ -54,6 +56,21 @@ public interface BinStore extends Closeable {
      * the next sequence number, so this must never throw for a lost race.
      */
     Optional<Version> putIfAbsent(String key, Body body) throws IOException;
+
+    /**
+     * Write only if the object's current version equals {@code expected}.
+     *
+     * <p>⚠️ Empty means VERSION MOVED — a normal outcome for the losing side of
+     * a lease renewal or an ordinal-registry update (ADR-0008), never an
+     * exception: the caller re-reads and decides whether to retry. An ABSENT
+     * key is a different failure and is NOT folded into that empty case — there
+     * is no version to have moved from, so this throws instead. Both primitives
+     * this store offers are write-based: {@link #putIfAbsent} for a sequence
+     * that is never rewritten, this for the small set of objects that mutate
+     * (the sequencer lease, the ordinal registry) where read-modify-write is
+     * safe because contention is not at rate (ADR-0008).
+     */
+    Optional<Version> putIfMatch(String key, Body body, Version expected) throws IOException;
 
     /**
      * ONE page of keys under {@code prefix}, in lexicographic order.
