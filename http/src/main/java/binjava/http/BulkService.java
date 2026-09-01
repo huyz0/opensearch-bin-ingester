@@ -2,6 +2,7 @@
 package binjava.http;
 
 import binjava.format.SegmentRecord;
+import binjava.ingest.AppendResult;
 import binjava.ingest.Ingest;
 import binjava.security.Principal;
 import io.helidon.http.Status;
@@ -10,6 +11,7 @@ import io.helidon.webserver.http.HttpService;
 import io.helidon.webserver.http.ServerRequest;
 import io.helidon.webserver.http.ServerResponse;
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -32,33 +34,57 @@ import java.util.Objects;
 public final class BulkService implements HttpService {
 
     /**
-     * ⚠️ 32 MiB, not the 200 MB of criterion 8. This handler accumulates records
-     * before appending (see {@code bulk}), and a SegmentRecord copies its
-     * payload, so the retained set exceeds the body.
-     *
-     * <p>⚠️ A byte cap ALONE does not bound the retained heap, and an earlier
-     * version of this note claimed "2-3x the body", which is true only for
-     * realistic documents. The shape this cap exists to resist is the smallest
-     * legal record: {@code {"index":{"_id":"a"}}\n1\n} is 24 bytes, so 32 MiB
-     * is ~1.4M records, and each retains a SegmentRecord (~32 B) + the id String
-     * (~48 B) + a byte[1] (~24 B) + a list slot (4 B) ≈ 108 B — about 150 MB,
-     * some 6x. Three such requests at once exceed the 512 MiB the conventions
-     * plugin sets. Hence {@link #MAX_RECORDS} as well: the count is what
-     * dominates, and the byte cap does not bound it.
+     * ⚠️ Not the 200 MB of criterion 8, still — this cap outlived the reason it
+     * was set (M1.7b let the ingest seam accept a stream, so a request no
+     * longer retains its whole body), but raising it is T12/M1.18's job: it is
+     * what PROVES 200 MB is safe under a 256 MB heap, and this commit's job is
+     * only to make raising it possible.
      */
     static final long MAX_BODY_BYTES = 32L << 20;
 
     /**
-     * ⚠️ The companion ceiling. 200,000 records × ~108 B of per-record overhead
-     * is ~22 MB retained, which keeps several concurrent requests inside a
-     * modest heap even at the adversarial shape above. Raising either constant
-     * without first letting the ingest seam accept a stream (M1.7b) just moves
-     * where the OutOfMemoryError happens.
+     * ⚠️ Same story as {@link #MAX_BODY_BYTES}: a defensive ceiling from before
+     * M1.7b, kept as-is here because raising it is what T12 exists to justify.
      */
     static final int MAX_RECORDS = 200_000;
 
+    /**
+     * ⚠️ BOUNDS BOTH THE RETAINED MEMORY AND THE ACCUMULATOR LOCK's HOLD TIME
+     * (M1.7b review finding, round 1). {@code Ingest.append} holds
+     * {@code DefaultIngest}'s single per-pod lock for as long as its
+     * {@code RecordSource} takes to run -- correct for a caller whose source
+     * is a fast in-memory iteration, but this handler's source is
+     * {@code BulkParser} reading off the REQUEST'S OWN SOCKET. Handing the
+     * whole body to ONE {@code append} call would hold that lock, shared by
+     * EVERY producer on the pod, for as long as this one connection takes to
+     * deliver its bytes -- exactly the "many producers share one segment,
+     * concurrently" property {@link binjava.ingest.DefaultIngest}'s own
+     * javadoc describes, defeated by one slow client. Chunking bounds it to
+     * "however long it takes to add {@value} already-parsed records to an
+     * in-memory accumulator", independent of network speed or body size.
+     */
+    static final int APPEND_CHUNK_RECORDS = 1_000;
+
     private final Ingest ingest;
     private final Principal principal;
+
+    /** A body IOException, distinguished from a STORE IOException (M1.7b). */
+    private static final class BulkBodyReadException extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+
+        BulkBodyReadException(IOException cause) {
+            super(cause);
+        }
+    }
+
+    /** A STORE IOException from appending one chunk, escaping BulkParser's sink. */
+    private static final class ChunkAppendException extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+
+        ChunkAppendException(IOException cause) {
+            super(cause);
+        }
+    }
 
     /**
      * ⚠️ M1 takes a FIXED principal and does not authenticate per request.
@@ -100,47 +126,6 @@ public final class BulkService implements HttpService {
             return;
         }
 
-        List<SegmentRecord> records = new ArrayList<>();
-        try {
-            // ⚠️ BulkParser streams; THIS HANDLER DOES NOT. `Ingest.append` takes
-            // a List, so every record of the request is retained here until the
-            // append -- one byte[] and one String per action, at full body size.
-            // Do not read the line below as "the adapter streams end to end": it
-            // does not, and SPEC criterion 8 (200 MB body under a 256 MB heap) is
-            // NOT reachable through this path. Closing that means letting the
-            // ingest seam accept a stream, which is an API change and M1.7b.
-            //
-            // ⚠️ Until then the body is CAPPED, because an unbounded accumulate
-            // ends in an OutOfMemoryError -- an Error, which reaches neither the
-            // 400 nor the 503 path and takes the connection with it. A refusal
-            // the producer can see and retry is strictly better than a heap dump.
-            BulkParser.parse(new BoundedStream(request.content().inputStream(), MAX_BODY_BYTES),
-                    r -> {
-                        if (records.size() >= MAX_RECORDS) {
-                            throw new BodyTooLargeException(
-                                    "the request exceeds " + MAX_RECORDS + " records");
-                        }
-                        records.add(r);
-                    });
-        } catch (BodyTooLargeException e) {
-            response.status(Status.REQUEST_ENTITY_TOO_LARGE_413).send(e.getMessage());
-            return;
-        } catch (BulkParseException e) {
-            // ⚠️ Nothing has been appended: parsing completes before the append.
-            // A partial append behind a 400 would leave the producer's retry
-            // duplicating exactly the records that did land.
-            response.status(Status.BAD_REQUEST_400).send(e.getMessage());
-            return;
-        } catch (IOException e) {
-            response.status(Status.BAD_REQUEST_400).send("could not read the request body");
-            return;
-        }
-
-        if (records.isEmpty()) {
-            response.status(Status.BAD_REQUEST_400).send("an empty bulk body has nothing to append");
-            return;
-        }
-
         // ⚠️ Authorization is checked HERE, from the Principal, and NOT by
         // catching IllegalArgumentException out of append(). IAE is also how the
         // append path reports its own invariant failures (AppendResult and
@@ -162,16 +147,40 @@ public final class BulkService implements HttpService {
         //
         // ⚠️ 403 with NO body: naming the index tells an unauthorised caller
         // which indices exist.
+        //
+        // ⚠️ MOVED BEFORE THE BODY IS READ (M1.7b): parsing and appending are now
+        // one streamed call rather than "parse fully, then append", so there is
+        // no longer a natural point between them to check this. Checking first
+        // is strictly better: an unauthorised caller's body -- however large --
+        // is never even opened.
         if (!principal.canWriteTo(index)) {
             response.status(Status.FORBIDDEN_403).send();
             return;
         }
 
         try {
-            // ⚠️ BLOCKING, on a virtual thread. append() returns when the segment
-            // and its commit delta are BOTH durable (criterion 1), so the 202
-            // below means durable rather than accepted-into-a-buffer.
-            ingest.append(principal, index, partition, records);
+            // ⚠️ Each CHUNK's append blocks until ITS segment and commit delta
+            // are durable (criterion 1); the 202 below means every chunk landed
+            // durably, not that any one of them was merely accepted into a
+            // buffer.
+            appendBulkBody(request.content().inputStream(), index, partition);
+        } catch (BodyTooLargeException e) {
+            response.status(Status.REQUEST_ENTITY_TOO_LARGE_413).send(e.getMessage());
+            return;
+        } catch (BulkParseException e) {
+            // ⚠️ Some prefix of the body may already be durable-bound (M1.7b):
+            // this handler appends in CHUNKS as it parses, rather than parsing
+            // the whole body before appending any of it. Safe for a record
+            // that carries an external `_version` (ADR-0020) -- a producer's
+            // retry of the same corrected body lands the already-applied
+            // prefix as a rejected stale version, not a duplicate; a missing
+            // version is not covered by that guarantee. See Ingest.append's
+            // javadoc.
+            response.status(Status.BAD_REQUEST_400).send(e.getMessage());
+            return;
+        } catch (BulkBodyReadException e) {
+            response.status(Status.BAD_REQUEST_400).send("could not read the request body");
+            return;
         } catch (IOException e) {
             // ⚠️ 503, not 500. The store is unavailable; the producer should
             // retry the same batch, and an external version makes that safe.
@@ -179,6 +188,85 @@ public final class BulkService implements HttpService {
             return;
         }
         response.status(Status.ACCEPTED_202).send();
+    }
+
+    /**
+     * Parses {@code body} and appends it in bounded chunks of
+     * {@value #APPEND_CHUNK_RECORDS} records — never the whole body as one
+     * {@code List}, and never the whole body as one {@code Ingest.append} call
+     * either (see {@link #APPEND_CHUNK_RECORDS}'s javadoc for why the second
+     * half matters as much as the first).
+     *
+     * <p>Package-private so a test can drive it directly, without the real
+     * HTTP stack, to prove the first record reaches {@link Ingest#append} after
+     * only a small prefix of a large body has been read — the same shape
+     * {@code BulkParserTest#bulkBodyIsNeverFullyBuffered} already proves for
+     * {@link BulkParser} alone.
+     *
+     * @return the LAST chunk's result; a caller wanting every chunk's own
+     *     offsets does not exist yet — {@link Ingest#append}'s contiguous-range
+     *     contract does not extend across chunks, only within one
+     */
+    AppendResult appendBulkBody(InputStream body, String index, int partition) throws IOException {
+        List<SegmentRecord> chunk = new ArrayList<>(APPEND_CHUNK_RECORDS);
+        int[] seen = {0};
+        AppendResult[] last = {null};
+        try {
+            BulkParser.parse(new BoundedStream(body, MAX_BODY_BYTES), r -> {
+                if (++seen[0] > MAX_RECORDS) {
+                    throw new BodyTooLargeException(
+                            "the request exceeds " + MAX_RECORDS + " records");
+                }
+                chunk.add(r);
+                if (chunk.size() >= APPEND_CHUNK_RECORDS) {
+                    last[0] = appendChunk(index, partition, chunk);
+                    chunk.clear();
+                }
+            });
+            // ⚠️ INSIDE the same try: the trailing partial chunk (fewer than
+            // APPEND_CHUNK_RECORDS records at end of body) is appended here,
+            // and it can throw ChunkAppendException exactly like an in-loop
+            // chunk does. An earlier draft appended it AFTER this try/catch,
+            // where nothing caught that exception -- it escaped as a bare
+            // RuntimeException past every catch in bulk() and surfaced as a
+            // 500, found by BulkEndpointTest#theTwoOhTwoIsSentOnlyAfterAppendSucceeds
+            // going 500 instead of 503.
+            if (!chunk.isEmpty()) {
+                last[0] = appendChunk(index, partition, chunk);
+            }
+        } catch (IOException e) {
+            throw new BulkBodyReadException(e);
+        } catch (ChunkAppendException e) {
+            // ⚠️ Unwrapped back to a checked IOException here, OUTSIDE
+            // BulkParser's sink (which cannot declare one) -- distinct from
+            // BulkBodyReadException so bulk()'s own catches still tell "could
+            // not read the body" (400) apart from "the store rejected an
+            // already-parsed chunk" (503, via the plain IOException below).
+            throw (IOException) e.getCause();
+        }
+        if (seen[0] == 0) {
+            // ⚠️ Known only once the body has been read to its end -- there is
+            // no chunk, let alone a whole body, whose size is known up front.
+            // Thrown from HERE, not left to Ingest.append's own empty-check,
+            // so the message stays this adapter's own rather than the
+            // library's generic one.
+            throw new BulkParseException("an empty bulk body has nothing to append");
+        }
+        return last[0];
+    }
+
+    /**
+     * ⚠️ {@code chunk} is consumed SYNCHRONOUSLY and fully by the time this
+     * returns -- {@code Ingest.append} is blocking (its own javadoc) and calls
+     * {@code chunk::forEach} to completion before this method's caller reuses
+     * {@code chunk} via {@code clear()} -- so no defensive copy is needed.
+     */
+    private AppendResult appendChunk(String index, int partition, List<SegmentRecord> chunk) {
+        try {
+            return ingest.append(principal, index, partition, chunk::forEach);
+        } catch (IOException e) {
+            throw new ChunkAppendException(e);
+        }
     }
 
     private static int partitionOf(ServerRequest request) {

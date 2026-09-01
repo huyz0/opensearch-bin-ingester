@@ -43,17 +43,21 @@ naming something not actually run would violate non-negotiable 4.
 7. `SegmentReaderTest#everyRunRoundTripsWithItsRecordsIntact` (T0) and
    `GoldenSegmentTest#theCommittedGoldenSegmentStillParses` (T0),
    `./gradlew :format:test`.
-8. **NOT-RUN.** No test exists under any name (checked: no reference to a
-   memory/heap-measurement test anywhere in `http`, `ingest`, `client` or
-   `plugin`). **Genuinely blocked, not merely unwritten**: `Ingest.append`
-   takes a `List<SegmentRecord>`, so every record is retained until the
-   append call returns — one `byte[]` and one `String` per action, at full
-   body size — which M1.7b's own backlog row already states makes "criterion
-   8 (200 MB body under a 256 MB heap) ... NOT reachable ... until this
-   lands." M1.7 caps the HTTP body at 32 MiB with a `413` as an interim
-   safety valve, which is why no producer has hit this in practice. M1.18
-   (the `-Xmx256m` test task) and T12
-   (`memoryFlatUnderTenXBodySize`) are both correctly still `todo`: writing
-   T12 before M1.7b lands would either not compile against a streaming API
-   that does not exist yet, or pass vacuously against a `List`-based one that
-   cannot honestly bound peak heap to less than the body size.
+8. **NOT-RUN, but UNBLOCKED (M1.7b).** No test exists under any name still
+   (checked: no reference to a memory/heap-measurement test anywhere in
+   `http`, `ingest`, `client` or `plugin`). What WAS genuinely blocking it is
+   fixed: `Ingest.append` no longer takes a `List<SegmentRecord>` — it takes
+   a `RecordSource` (`ingest/src/main/java/binjava/ingest/Ingest.java`), and
+   `BulkService` appends in bounded chunks of 1,000 records as it parses
+   (`BulkServiceTest#bulkServiceNeverBuffersTheWholeBodyBeforeAppending`,
+   `./gradlew :http:test`, proves the first record reaches `Ingest.append`
+   after only a small prefix of a 4+ MiB body is read). Chunking, not a
+   single streamed call, because review found a first draft held the pod's
+   one accumulator lock for the duration of the request's own socket read,
+   serialising every other producer behind it — bounding the chunk size
+   bounds the lock's hold time independently of body size or network speed.
+   `MAX_BODY_BYTES`/`MAX_RECORDS` are deliberately left at their pre-existing
+   caps (32 MiB / 200,000): M1.18 (the `-Xmx256m` test task) and T12
+   (`memoryFlatUnderTenXBodySize`) remain `todo` — they are what would PROVE
+   200 MB is safe under a 256 MB heap and justify raising those caps, which
+   this change makes possible rather than attempts itself.

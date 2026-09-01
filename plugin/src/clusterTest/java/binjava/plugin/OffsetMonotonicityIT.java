@@ -107,14 +107,14 @@ public class OffsetMonotonicityIT extends OpenSearchSingleNodeTestCase {
                 store, "bins/cluster-a", "pod1", HUB, Clock.systemUTC(), index -> stream)) {
 
             // ---- flush 1: two documents
-            ingest.append(PRINCIPAL, "logs", 0, docs("a", 2));
+            ingest.append(PRINCIPAL, "logs", 0, docs("a", 2)::forEach);
             assertBusy(() -> assertEquals(2L, totalHits()), 60, TimeUnit.SECONDS);
 
             // ---- flush 2, through a SEPARATE append -- the real system clock
             // has had well over 250 ms to elapse since flush 1's assertBusy
             // returned, so this lands in a distinct flush rather than being
             // folded into the first one.
-            ingest.append(PRINCIPAL, "logs", 0, docs("b", 2));
+            ingest.append(PRINCIPAL, "logs", 0, docs("b", 2)::forEach);
             assertBusy(() -> assertEquals(4L, totalHits()), 60, TimeUnit.SECONDS);
 
             List<Long> offsets = readOffsetsInDocOrder();

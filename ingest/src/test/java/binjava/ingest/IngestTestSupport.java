@@ -63,7 +63,7 @@ final class IngestTestSupport {
             String index, int partition, int count) {
         return CompletableFuture.supplyAsync(() -> {
             try {
-                return ingest.append(PRINCIPAL, index, partition, docs(count));
+                return ingest.append(PRINCIPAL, index, partition, docs(count)::forEach);
             } catch (IOException e) {
                 throw new CompletionException(e);
             }

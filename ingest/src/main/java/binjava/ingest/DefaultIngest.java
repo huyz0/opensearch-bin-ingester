@@ -156,17 +156,12 @@ public final class DefaultIngest implements Ingest {
 
     @Override
     public AppendResult append(Principal principal, String index, int partition,
-            List<SegmentRecord> records) throws IOException {
+            RecordSource records) throws IOException {
         Objects.requireNonNull(principal, "principal");
         Objects.requireNonNull(index, "index");
         Objects.requireNonNull(records, "records");
         if (closed) {
             throw new IOException("this ingester is closed");
-        }
-        if (records.isEmpty()) {
-            // ⚠️ Refused rather than flushed: an empty append that still wrote a
-            // segment would spend two requests on nothing.
-            throw new IllegalArgumentException("an append of no records has nothing to make durable");
         }
         // ⚠️ THE TRUST DOMAIN, not just the index. Both halves are in hand only
         // here, and ADR-0021 makes the domain the boundary: segments are never
@@ -195,11 +190,38 @@ public final class DefaultIngest implements Ingest {
                 throw new IOException("this ingester is closed");
             }
             int before = bufferedPerStream.getOrDefault(stream, 0);
-            for (SegmentRecord record : records) {
+            // ⚠️ A one-element array, not a local: a lambda captures effectively
+            // final variables only, and this is mutated once per record as
+            // `records` is consumed -- which is the whole point (java-style.md
+            // rule 8): nothing here requires `records` to have a known size, or
+            // any backing collection at all, before this loop starts.
+            int[] count = {0};
+            // ⚠️ If `records` throws partway through (a producer's body turns
+            // out malformed after some valid records -- see Ingest.append's
+            // javadoc), whatever this lambda already handed to `accumulator`
+            // must stay reflected in `bufferedPerStream` -- updated PER RECORD
+            // below, not once after `forEachRecord` returns -- or the NEXT
+            // append to this same stream computes `before` from a stale count
+            // and hands out a Pending whose offset slice does not match what
+            // the eventual RunCommit assigns. No Pending is registered for
+            // THIS append when that happens: it has already failed, so nothing
+            // should be waiting on a future for it.
+            records.forEachRecord(record -> {
                 accumulator.add(stream, record);
+                count[0]++;
+                bufferedPerStream.put(stream, before + count[0]);
+            });
+            if (count[0] == 0) {
+                // ⚠️ Refused rather than flushed: an empty append that still
+                // wrote a segment would spend two requests on nothing. Detected
+                // HERE rather than up front -- a RecordSource does not know its
+                // own size before it has been run -- but nothing has been
+                // buffered for THIS append (count is 0), so there is nothing to
+                // leak into the next flush.
+                throw new IllegalArgumentException(
+                        "an append of no records has nothing to make durable");
             }
-            bufferedPerStream.put(stream, before + records.size());
-            mine = new Pending(stream, before, records.size(), new CompletableFuture<>());
+            mine = new Pending(stream, before, count[0], new CompletableFuture<>());
             pending.add(mine);
             if (accumulator.isFlushDue()) {
                 flushLocked();

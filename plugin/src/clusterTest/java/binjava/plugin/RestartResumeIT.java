@@ -118,7 +118,7 @@ public class RestartResumeIT extends OpenSearchSingleNodeTestCase {
                 index -> stream)) {
 
             // ---- batch 1: 20 documents, then wait for them to be searchable
-            ingest.append(PRINCIPAL, "logs", 0, docs(0, 20));
+            ingest.append(PRINCIPAL, "logs", 0, docs(0, 20)::forEach);
             assertBusy(() -> {
                 client().admin().indices().prepareRefresh("logs").get();
                 assertEquals(20L, client().prepareSearch("logs")
@@ -161,7 +161,7 @@ public class RestartResumeIT extends OpenSearchSingleNodeTestCase {
             // ---- batch 2, through the SAME ingester: proves the poller
             // resumed and kept working after the reopen, rather than dying or
             // sticking on the persisted pointer.
-            ingest.append(PRINCIPAL, "logs", 0, docs(20, 10));
+            ingest.append(PRINCIPAL, "logs", 0, docs(20, 10)::forEach);
             assertBusy(() -> {
                 client().admin().indices().prepareRefresh("logs").get();
                 assertEquals(30L, client().prepareSearch("logs")

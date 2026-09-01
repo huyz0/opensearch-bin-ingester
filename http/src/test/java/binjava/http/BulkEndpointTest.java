@@ -50,13 +50,15 @@ class BulkEndpointTest {
 
         @Override
         public AppendResult append(Principal principal, String index, int partition,
-                List<SegmentRecord> batch) throws IOException {
+                RecordSource source) throws IOException {
             if (reject != null) {
                 throw reject;
             }
             if (unavailable != null) {
                 throw unavailable;
             }
+            List<SegmentRecord> batch = new ArrayList<>();
+            source.forEachRecord(batch::add);
             indices.add(index);
             partitions.add(partition);
             records.addAll(batch);
@@ -180,7 +182,8 @@ class BulkEndpointTest {
         // refusal the producer can see and act on.
         StringBuilder body = new StringBuilder();
         String pad = "z".repeat(1000);
-        for (int i = 0; body.length() <= BulkService.MAX_BODY_BYTES; i++) {
+        int records = 0;
+        for (int i = 0; body.length() <= BulkService.MAX_BODY_BYTES; i++, records++) {
             body.append("{\"index\":{\"_id\":\"d").append(i).append("\"}}\n")
                     .append("{\"p\":\"").append(pad).append("\"}\n");
         }
@@ -188,7 +191,27 @@ class BulkEndpointTest {
                 .submit(body.toString());
 
         assertThat(response.status().code()).isEqualTo(413);
-        assertThat(ingest.records).isEmpty();
+        // ⚠️ NOT necessarily empty (M1.7b): appendBulkBody appends in bounded
+        // CHUNKS as it parses, so whichever whole chunks completed before the
+        // byte cap fired are already durable -- safe by design (a producer's
+        // retry lands them as rejected stale versions, not duplicates; see
+        // Ingest.append's javadoc). The property that matters is BOUNDED, not
+        // zero: only whole chunks land, and nowhere near the whole oversized
+        // body's worth of records.
+        assertThat(ingest.records.size() % BulkService.APPEND_CHUNK_RECORDS)
+                .as("only whole chunks are ever durable").isZero();
+        assertThat(ingest.records.size())
+                // ⚠️ isPositive(), not just bounded: BodyTooLargeException aborts
+                // BulkParser.parse before the trailing-chunk flush runs, so a
+                // build where chunking is silently disabled (one giant chunk
+                // that never completes) also lands ZERO records here -- which
+                // trivially satisfies "% chunk == 0" and "< records" alike.
+                // Found by review: without this, both assertions passed
+                // vacuously against that exact regression.
+                .as("bounded, not the whole oversized body, but NOT zero -- whole"
+                        + " chunks genuinely completed before the cap fired")
+                .isPositive()
+                .isLessThan(records);
     }
 
     @Test
@@ -212,7 +235,20 @@ class BulkEndpointTest {
                 .submit(body.toString());
 
         assertThat(response.status().code()).isEqualTo(413);
-        assertThat(ingest.records).isEmpty();
+        // ⚠️ See the byte-cap test above: NOT necessarily empty (M1.7b), but
+        // still bounded to whole completed chunks. MAX_RECORDS (200,000) is
+        // an exact multiple of APPEND_CHUNK_RECORDS here, so every chunk up
+        // to the ceiling completes and the count lands AT it, not under it --
+        // the load-bearing bound is against the (MAX_RECORDS + 1) records
+        // this body actually carries, not an arbitrary smaller number.
+        assertThat(ingest.records.size() % BulkService.APPEND_CHUNK_RECORDS)
+                .as("only whole chunks are ever durable").isZero();
+        assertThat(ingest.records.size())
+                // ⚠️ isPositive() -- see the byte-cap test above for why zero
+                // would otherwise satisfy both this and the modulus check.
+                .as("bounded, not the whole oversized body, but NOT zero")
+                .isPositive()
+                .isLessThan(BulkService.MAX_RECORDS + 1);
     }
 
     @Test

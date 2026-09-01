@@ -106,7 +106,7 @@ public class DeleteAndVersionIT extends OpenSearchSingleNodeTestCase {
 
     private void append(String id, OpType op, long version, String body) throws Exception {
         ingest.append(PRINCIPAL, "logs", 0, List.of(new SegmentRecord(id, op,
-                OptionalLong.of(version), body.getBytes(StandardCharsets.UTF_8))));
+                OptionalLong.of(version), body.getBytes(StandardCharsets.UTF_8)))::forEach);
     }
 
     private long totalHits() {

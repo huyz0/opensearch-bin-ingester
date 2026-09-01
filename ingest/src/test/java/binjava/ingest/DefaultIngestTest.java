@@ -305,7 +305,7 @@ class DefaultIngestTest {
         try (DefaultIngest ingest = ingest(store, new SubscriptionHub(),
                 Duration.ofMillis(30))) {
             long base = store.counts().total();
-            AppendResult result = ingest.append(IngestTestSupport.PRINCIPAL, "logs", 0, docs(3));
+            AppendResult result = ingest.append(IngestTestSupport.PRINCIPAL, "logs", 0, docs(3)::forEach);
 
             assertThat(result.recordCount()).isEqualTo(3);
             assertThat(store.counts().total() - base)
@@ -324,7 +324,7 @@ class DefaultIngestTest {
                 new IngestConfig(IngestTestSupport.NEVER, 4096L, "cluster-a"), store, IngestTestSupport.PREFIX, "pod1",
                 new SubscriptionHub(), Clock.systemUTC(), index -> IngestTestSupport.LOGS)) {
             long base = store.counts().total();
-            AppendResult result = ingest.append(IngestTestSupport.PRINCIPAL, "logs", 0, docs(400));
+            AppendResult result = ingest.append(IngestTestSupport.PRINCIPAL, "logs", 0, docs(400)::forEach);
 
             assertThat(result.recordCount()).isEqualTo(400);
             assertThat(store.counts().total() - base).isEqualTo(2);
@@ -409,7 +409,7 @@ class DefaultIngestTest {
         Principal other = new Principal("cluster-b", "producer-9", Set.of("logs"));
         try (DefaultIngest ingest = ingest(store)) {
             long base = store.counts().total();
-            assertThatThrownBy(() -> ingest.append(other, "logs", 0, docs(1)))
+            assertThatThrownBy(() -> ingest.append(other, "logs", 0, docs(1)::forEach))
                     .isInstanceOf(IllegalArgumentException.class);
             assertThat(store.counts().total() - base).isZero();
         }
@@ -420,16 +420,16 @@ class DefaultIngestTest {
         CountingBinStore store = new CountingBinStore(new MemoryBinStore());
         try (DefaultIngest ingest = ingest(store)) {
             long base = store.counts().total();
-            assertThatThrownBy(() -> ingest.append(IngestTestSupport.PRINCIPAL, "logs", 0, List.of()))
+            assertThatThrownBy(() -> ingest.append(IngestTestSupport.PRINCIPAL, "logs", 0, List.<SegmentRecord>of()::forEach))
                     .isInstanceOf(IllegalArgumentException.class);
-            assertThatThrownBy(() -> ingest.append(IngestTestSupport.PRINCIPAL, "nope", 0, docs(1)))
+            assertThatThrownBy(() -> ingest.append(IngestTestSupport.PRINCIPAL, "nope", 0, docs(1)::forEach))
                     .isInstanceOf(IllegalArgumentException.class);
             // ⚠️ The negative partition is refused by RunKey's own constructor,
             // not by a guard here. A duplicate check in DefaultIngest survived
             // every mutation -- no test could tell the two apart -- so it was
             // removed rather than given a test that proves nothing. This
             // assertion still pins the BEHAVIOUR, wherever it is enforced.
-            assertThatThrownBy(() -> ingest.append(IngestTestSupport.PRINCIPAL, "logs", -1, docs(1)))
+            assertThatThrownBy(() -> ingest.append(IngestTestSupport.PRINCIPAL, "logs", -1, docs(1)::forEach))
                     .isInstanceOf(IllegalArgumentException.class);
 
             assertThat(store.counts().total() - base).isZero();
@@ -468,7 +468,7 @@ class DefaultIngestTest {
         CountingBinStore store = new CountingBinStore(new MemoryBinStore());
         DefaultIngest ingest = ingest(store);
         ingest.close();
-        assertThatThrownBy(() -> ingest.append(IngestTestSupport.PRINCIPAL, "logs", 0, docs(1)))
+        assertThatThrownBy(() -> ingest.append(IngestTestSupport.PRINCIPAL, "logs", 0, docs(1)::forEach))
                 .isInstanceOf(IOException.class);
     }
 

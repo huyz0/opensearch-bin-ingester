@@ -176,10 +176,24 @@ Each is checkable by something other than an opinion.
 7. Segment encode → decode → equals round-trips, and a committed golden file still
    parses.
 8. A `_bulk` body of 200 MB is ingested with a **256 MB heap** and no OOM.
-   ⚠️ The conventions plugin sets `maxHeapSize = "512m"` on every suite, so this
-   criterion is unrunnable until its test task overrides it — **M1.18 must add a
-   task with `-Xmx256m`**, or the criterion silently passes at twice the heap it
-   names.
+   ⚠️ **UNBLOCKED, not yet proven.** `M1.7b` let `Ingest.append` accept a
+   `RecordSource` instead of a `List`, and `BulkService` now appends in
+   bounded chunks of 1,000 records as it parses — no `List<SegmentRecord>` is
+   ever built for the whole request, which is what made this criterion
+   unreachable at all. ⚠️ Chunking is load-bearing, not decorative: a first
+   draft pushed the whole request into ONE `Ingest.append` call, which review
+   found holds the pod's single accumulator lock for the duration of that
+   call — correct for an in-memory source, but for `BulkParser` reading a
+   request's own socket that meant one slow producer serialising every other
+   producer on the pod, defeating the very concurrency this milestone's cost
+   model depends on. What remains is T12 itself (`memoryFlatUnderTenXBodySize`,
+   still unwritten) and M1.18's `-Xmx256m` test task — the conventions plugin
+   sets `maxHeapSize = "512m"` on every suite, so this criterion is unrunnable
+   until its own test task overrides it, or it would silently pass at twice
+   the heap it names. `BulkService`'s own `MAX_BODY_BYTES`/`MAX_RECORDS` caps
+   are also unchanged (still 32 MiB / 200,000): raising them to 200 MB is
+   exactly what T12 exists to justify, not something to do ahead of proving it
+   safe.
 
 ## Test plan
 
