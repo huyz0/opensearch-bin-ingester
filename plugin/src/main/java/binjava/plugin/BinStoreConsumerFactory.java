@@ -60,6 +60,6 @@ public final class BinStoreConsumerFactory
         // stream, and reusing the name would resume the new index from the old
         // one's offsets.
         RunKey key = new RunKey(indexUuidOf(indexMetadata.getIndexUUID()), shardId);
-        return new BinStoreShardConsumer(shardId, subscriptions.clientFor(key));
+        return new BinStoreShardConsumer(shardId, key, subscriptions);
     }
 }

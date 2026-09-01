@@ -48,6 +48,35 @@ class BinStoreShardConsumerTest {
     }
 
     @Test
+    void closingAConsumerBuiltViaTheSharedConstructorReleasesRatherThanCloses() throws Exception {
+        // ⚠️ THE T1 regression for M1.17b's real bug, which until now only the
+        // expensive T4 RestartResumeIT caught -- both reviewers confirmed
+        // reverting the fix left the entire T0-T2 `./gradlew test` suite green.
+        // BinStoreConsumerFactory.createShardConsumer wires production through
+        // the 3-arg (RunKey, NodeSubscriptions) constructor specifically so
+        // close() RELEASES the shared client instead of closing it directly --
+        // this constructs that exact path, not NodeSubscriptions in isolation.
+        FakeTransport transport = new FakeTransport();
+        try (NodeSubscriptions node = new NodeSubscriptions(transport, 16)) {
+            BinStoreShardConsumer consumer = new BinStoreShardConsumer(0, KEY, node);
+            consumer.close();
+
+            assertThat(transport.listeners)
+                    .as("closing the consumer released the shared client's subscription")
+                    .isEmpty();
+
+            // ⚠️ THE assertion that catches `onClose = client::close` reverted:
+            // under that mutation the entry is never removed from
+            // NodeSubscriptions, so this call hands back the SAME dead client
+            // instead of opening a fresh one.
+            node.clientFor(KEY);
+            assertThat(node.clientsCreated())
+                    .as("a NEW client was constructed for the reused key, not the dead one")
+                    .isEqualTo(2);
+        }
+    }
+
+    @Test
     void readNextReturnsMessagesWithTheirPointers() throws Exception {
         FakeTransport t = new FakeTransport();
         try (ConsumerClient c = new ConsumerClient(t, KEY, 16);

@@ -3,6 +3,7 @@ package binjava.plugin;
 
 import binjava.client.ConsumerClient;
 import binjava.client.ConsumerRecord;
+import binjava.format.RunKey;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -33,11 +34,29 @@ public final class BinStoreShardConsumer
 
     private final int shardId;
     private final ConsumerClient client;
+    private final Runnable onClose;
     private volatile long tailOffset = -1;
 
+    /**
+     * A consumer over a client it OWNS exclusively: closing this consumer
+     * closes the client, because nothing else could be sharing it.
+     */
     public BinStoreShardConsumer(int shardId, ConsumerClient client) {
         this.shardId = shardId;
         this.client = Objects.requireNonNull(client, "client");
+        this.onClose = client::close;
+    }
+
+    /**
+     * A consumer over the node's SHARED client for {@code key}. Closing this
+     * consumer RELEASES that share rather than closing the client directly --
+     * other shards of the same stream on this node may still hold it. This is
+     * the constructor {@link BinStoreConsumerFactory} uses in production.
+     */
+    public BinStoreShardConsumer(int shardId, RunKey key, NodeSubscriptions subscriptions) {
+        this.shardId = shardId;
+        this.client = subscriptions.clientFor(key);
+        this.onClose = () -> subscriptions.release(key);
     }
 
     @Override
@@ -126,6 +145,6 @@ public final class BinStoreShardConsumer
 
     @Override
     public void close() throws IOException {
-        client.close();
+        onClose.run();
     }
 }

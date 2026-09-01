@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import binjava.client.Delivery;
+import binjava.client.ConsumerClient;
 import binjava.client.SubscriptionTransport;
 import binjava.format.RunKey;
 import java.util.List;
@@ -88,6 +89,76 @@ class NodeSubscriptionsTest {
         // ingester pushing into dead consumers for the life of the cluster.
         assertThat(transport.listeners).isEmpty();
         assertThat(node.openClients()).isZero();
+    }
+
+    @Test
+    void releasingTheLastShardClosesAndForgetsTheSharedClient() {
+        // ⚠️ Found by a real node-restart test (M1.17b): closing one shard's
+        // consumer closed the SHARED client, but nothing removed it from the
+        // map -- so the next clientFor(key) call for the SAME stream (e.g. the
+        // same shard, recreated when its index reopens) got the identical,
+        // already-unsubscribed client back and never received another
+        // delivery. Ever.
+        CountingTransport transport = new CountingTransport();
+        try (NodeSubscriptions node = new NodeSubscriptions(transport, 16)) {
+            RunKey key = new RunKey(A, 0);
+            node.clientFor(key);
+            node.release(key);
+
+            assertThat(transport.listeners)
+                    .as("the subscription is torn down once the last holder releases it")
+                    .isEmpty();
+            assertThat(node.openClients())
+                    .as("the entry is FORGOTTEN, not left dangling").isZero();
+
+            // ⚠️ THE assertion. Without removing the entry, this call would
+            // return the SAME dead Entry and its refCount would go negative on
+            // the next release() -- both silently, since nothing here throws.
+            node.clientFor(key);
+            assertThat(transport.subscribeCalls.get())
+                    .as("a FRESH subscription was opened, not the dead one reused")
+                    .isEqualTo(2);
+            assertThat(node.clientsCreated())
+                    .as("a second ConsumerClient was actually constructed").isEqualTo(2);
+        }
+    }
+
+    @Test
+    void releasingOneOfTwoSharersLeavesTheClientOpenForTheOther() {
+        // ⚠️ The other direction: releasing must NOT close the client while
+        // another shard on this node still holds it, or that shard silently
+        // stops receiving deliveries -- criterion 6's sharing exists precisely
+        // so two shards of one stream get ONE subscription, and a release from
+        // either one alone must not break it for the survivor.
+        CountingTransport transport = new CountingTransport();
+        try (NodeSubscriptions node = new NodeSubscriptions(transport, 16)) {
+            RunKey key = new RunKey(A, 0);
+            ConsumerClient first = node.clientFor(key);
+            ConsumerClient second = node.clientFor(key);
+            assertThat(first).isSameAs(second);
+
+            node.release(key);
+
+            assertThat(transport.listeners)
+                    .as("still subscribed: the second holder has not released yet").hasSize(1);
+            assertThat(node.openClients()).isEqualTo(1);
+            assertThat(node.clientFor(key))
+                    .as("the survivor still gets the SAME client, not a new one")
+                    .isSameAs(first);
+        }
+    }
+
+    @Test
+    void releasingAKeyNeverObtainedIsASafeNoOp() {
+        // ⚠️ A review-found gap: `release()`'s current form (computeIfPresent)
+        // happens to be safe here, but a plausible alternative --
+        // `clients.get(key)` then unconditionally decrementing -- NPEs on a key
+        // that was never clientFor'd, and nothing before this pinned that.
+        CountingTransport transport = new CountingTransport();
+        try (NodeSubscriptions node = new NodeSubscriptions(transport, 16)) {
+            node.release(new RunKey(A, 99));
+            assertThat(node.openClients()).isZero();
+        }
     }
 
     @Test

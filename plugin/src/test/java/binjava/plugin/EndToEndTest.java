@@ -89,8 +89,14 @@ class EndToEndTest {
             BinStorePlugin plugin = new BinStorePlugin(node);
             assertThat(plugin.getIngestionConsumerFactories()).containsKey("BINSTORE");
 
+            // ⚠️ THE 3-ARG constructor, not `new BinStoreShardConsumer(3,
+            // node.clientFor(stream))`. That paired the EXCLUSIVE-owning 2-arg
+            // constructor with a client obtained from the SHARED, ref-counted
+            // `clientFor` -- a review caught it as the same mis-pairing that
+            // caused M1.17b's production bug, dormant here only because this
+            // test's NodeSubscriptions has a single sharer.
             try (BinStoreShardConsumer shardConsumer =
-                    new BinStoreShardConsumer(3, node.clientFor(stream))) {
+                    new BinStoreShardConsumer(3, stream, node)) {
 
                 // ---- producer: 100 documents, as a _bulk request would deliver them
                 for (int i = 0; i < 100; i++) {
@@ -171,8 +177,11 @@ class EndToEndTest {
         RunKey stream = new RunKey(INDEX, 0);
 
         try (NodeSubscriptions node = new NodeSubscriptions(new HubTransport(hub), 16);
+                // ⚠️ Same correction: the 3-arg constructor, so close() releases
+                // through NodeSubscriptions rather than closing the shared
+                // client directly.
                 BinStoreShardConsumer consumer =
-                        new BinStoreShardConsumer(0, node.clientFor(stream))) {
+                        new BinStoreShardConsumer(0, stream, node)) {
             accumulator.add(stream, new SegmentRecord("gone", OpType.INDEX, OptionalLong.of(1),
                     "{\"a\":1}".getBytes(StandardCharsets.UTF_8)));
             accumulator.add(stream, new SegmentRecord("gone", OpType.DELETE, OptionalLong.of(2),
