@@ -94,9 +94,29 @@ Each is checkable by something other than an opinion.
 
 -1. A lane `-1` replay carrying **older source versions** does **not** overwrite
    newer live writes for the same `_id`, with both running concurrently.
+   ✅ **MET — `DeleteAndVersionIT#testAnOlderReplayDoesNotOverwriteANewerLiveWrite`, T4.**
+   ⚠️ "Lane `-1`" is descriptive, not a wire mechanism — lanes are explicitly
+   OUT of M1's scope (ADR-0014; the wire format's `u8 lane` field does not
+   exist until M3). What the criterion actually demands is version safety
+   independent of arrival order, the same external-versioning guarantee
+   criterion 0 proved, exercised here as two INDEX writes with the losing
+   interleaving forced explicitly (the older write appended strictly after the
+   newer one is already searchable). ⚠️ Also had ZERO coverage until this test:
+   T5d named a test that was never written, the same gap as criterion 0, found
+   the same way — checking the SPEC's test table against the tree.
 0. A `_bulk` request mixing **index and delete** actions with external versions
    round-trips: the delete removes the document, and a **replayed stale version is
    rejected rather than resurrecting it**.
+   ✅ **MET — `DeleteAndVersionIT`, T4.** ⚠️ Until this test existed, criterion 0
+   had ZERO coverage anywhere in the tree — rows T5b2/T5c named tests that were
+   never written, found by checking the SPEC's test table against the tree
+   rather than assuming a milestone with green gates has no gaps left. Neither
+   half is our code's job: `MessageProcessorRunnable` catches
+   `VersionConflictEngineException` and drops the message, which does NOT trip
+   `error_strategy: BLOCK` — OpenSearch's own external-versioning machinery,
+   triggered simply by `DefaultEnvelope` carrying `_version` faithfully. Both
+   mutations verified killed: omitting `_version` lets a stale replay resurrect
+   the document; encoding a delete as an index acks it without applying it.
 1. A `_bulk` request of 100 documents to index `logs` partition 3 returns `202`
    only after the segment and its commit delta are both durable in the store.
 2. A single-node OpenSearch test with `ingestion_source.type: BINSTORE` makes all
@@ -170,9 +190,9 @@ transport, and only its 20-shard variant is T4.
 | T4 | `ackOnlyAfterSegmentAndCommitDurable` | T1 | ack before the commit delta is written |
 | T5 | `offsetsAreMonotonicPerStreamAcrossFlushes` | T1 | reset the per-stream counter on flush |
 | T5b | `deleteRoundTripsWithVersionAndNoPayload` | T0 | drop `_op_type` so a delete becomes an index |
-| T5b2 | `deleteRemovesTheDocumentFromTheIndex` | **T4** | ack the delete without applying it — criterion 0's middle clause, which no round-trip test can reach because it is about Lucene state, not framing |
-| T5c | `staleVersionIsRejectedOnReplay` | **T4** | assemble the envelope without `_version` |
-| T5d | `backfillWithOlderVersionDoesNotOverwriteLive` | **T4** | stamp a replay-time version instead of the source's. ⚠️ Concurrency alone is not enough: the test must force the **losing interleaving** (replay applied after the live write), or a last-writer-wins bug escapes whenever the replay happens to land first |
+| T5b2 | `DeleteAndVersionIT#testDeleteRemovesTheDocumentFromTheIndex` | **T4** | ack the delete without applying it — criterion 0's middle clause, which no round-trip test can reach because it is about Lucene state, not framing |
+| T5c | `DeleteAndVersionIT#testStaleVersionIsRejectedOnReplayRatherThanResurrectingTheDocument` | **T4** | assemble the envelope without `_version` |
+| T5d | `DeleteAndVersionIT#testAnOlderReplayDoesNotOverwriteANewerLiveWrite` | **T4** | stamp a replay-time version instead of the source's. ⚠️ Concurrency alone is not enough: the test must force the **losing interleaving** (replay applied after the live write, verified killed by omitting `_version` entirely — the replay then overwrites), or a last-writer-wins bug escapes whenever the replay happens to land first |
 | T6 | `bulkBodyIsNeverFullyBuffered` | T1 | replace the streaming read with `readAllBytes` |
 | T6b | `httpAdapterPassesTheRequestThroughUnaltered` | T1 | the handler recomputes the partition, rewrites `_id`, or acks before delegating. ⚠️ Pure *duplication* of a decision that yields the same answer is not observable from outside and is not claimed here — rule 4 is held by `check-module.sh`, not by this test |
 | T6c | *(not a test)* `check-module.sh` asserts no module below `http` resolves an HTTP dependency | gate | add an HTTP import below the adapter. ⚠️ Listed here for completeness only: a classpath constraint has no red run in the sense of testing.md rule 2, so it is a **gate**, not a row in this table |
