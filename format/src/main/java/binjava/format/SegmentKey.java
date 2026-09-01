@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 package binjava.format;
 
+import java.io.IOException;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.Objects;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Where a segment lives, and what a reader can learn before reading it
@@ -26,12 +29,16 @@ import java.util.Objects;
  * millisecond timestamp makes the key lexicographically ≈ chronological within
  * the hour, so that walk is ordered without sorting.
  *
- * <p>⚠️ M1 writes tag {@code N} for the filter. The membership filter is ADR-0003
- * and lands in M2; the SLOT is here from the first key so that adding it later
- * is not a key-grammar change. // SKELETON: filter is N until M2
+ * <p>⚠️ M1 wrote the literal tag {@code N} for the filter; M2.6 fills the slot
+ * with {@link MembershipFilter#encode()} of whatever the writer actually
+ * computed (ADR-0003) — the canonical constructor takes it explicitly, and the
+ * legacy 5-arg constructor defaults to {@code N} for every existing call site
+ * that predates the filter (record IDs, timestamps, header lengths) and does
+ * not care what it is.
  */
 public record SegmentKey(
-        String prefix, long timestampMillis, String podShortId, long sequence, int headerLen) {
+        String prefix, long timestampMillis, String podShortId, long sequence, int headerLen,
+        String filterEncoded) {
 
     private static final DateTimeFormatter PATH =
             // ⚠️ withLocale(ROOT) is BELT-AND-BRACES here, not a fixed defect.
@@ -57,8 +64,22 @@ public record SegmentKey(
     public SegmentKey {
         Objects.requireNonNull(prefix, "prefix");
         Objects.requireNonNull(podShortId, "podShortId");
+        Objects.requireNonNull(filterEncoded, "filterEncoded");
         if (podShortId.isBlank()) {
             throw new IllegalArgumentException("podShortId is never blank");
+        }
+        // ⚠️ round-1 review (M2.6): without this, a podShortId that happens to
+        // contain a hyphen could itself produce a spurious match of
+        // HEADER_LEN_MARKER (e.g. "pod-0123456789abcdef-h5" reproduces the
+        // exact hazard this task exists to close, just through a different
+        // field than the filter). Excluding '-' and '/' from podShortId is
+        // what makes "the leftmost match in the tail is always the real one"
+        // (see headerLenOf's own javadoc) actually true, not merely assumed.
+        // ULIDs (Crockford base32) and most pod-id schemes already satisfy
+        // this; it costs nothing a real caller was relying on.
+        if (podShortId.indexOf('-') >= 0 || podShortId.indexOf('/') >= 0) {
+            throw new IllegalArgumentException(
+                    "podShortId may not contain '-' or '/': " + podShortId);
         }
         if (headerLen < 0) {
             throw new IllegalArgumentException("headerLen is never negative: " + headerLen);
@@ -66,6 +87,25 @@ public record SegmentKey(
         if (timestampMillis < 0) {
             throw new IllegalArgumentException("timestampMillis is never negative");
         }
+        // ⚠️ Refused HERE, at construction, rather than only discovered later at
+        // key() or by a reader: an unparsable filter string would otherwise
+        // become part of a segment's key with no reader ever able to say why.
+        try {
+            MembershipFilter.decode(filterEncoded);
+        } catch (IOException e) {
+            throw new IllegalArgumentException("not a valid membership filter: " + filterEncoded, e);
+        }
+    }
+
+    /**
+     * ⚠️ Every pre-M2.6 call site names timestamps, pods, sequences and header
+     * lengths, and does not care what the filter is -- this defaults it to
+     * {@code N}, matching M1's own hardcoded behaviour, so none of them needed
+     * to change for the filter to stop being a literal.
+     */
+    public SegmentKey(String prefix, long timestampMillis, String podShortId, long sequence,
+            int headerLen) {
+        this(prefix, timestampMillis, podShortId, sequence, headerLen, new MembershipFilter.None().encode());
     }
 
     /** The full object key. */
@@ -83,9 +123,9 @@ public record SegmentKey(
         // a locale with non-ASCII digits every key would render with digits no
         // other process could parse -- and object keys outlive the process.
         String rendered = String.format(java.util.Locale.ROOT,
-                "%s/data/%s/%019d-%s-%016x-h%d-N.bseg",
+                "%s/data/%s/%019d-%s-%016x-h%d-%s.bseg",
                 prefix, PATH.format(Instant.ofEpochMilli(timestampMillis)),
-                timestampMillis, podShortId, sequence, headerLen);
+                timestampMillis, podShortId, sequence, headerLen, filterEncoded);
         if (rendered.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > MAX_KEY_BYTES) {
             throw new IllegalStateException("segment key exceeds " + MAX_KEY_BYTES + " bytes");
         }
@@ -99,15 +139,46 @@ public record SegmentKey(
     }
 
     /**
+     * ⚠️ MATCHED FROM A BOUNDED WINDOW, not {@code lastIndexOf("-h")} over the
+     * whole key. Base64url's alphabet legally contains {@code -} (design doc
+     * 02 §7), so once the filter component can be anything other than the
+     * literal {@code N}, a filter payload containing the two characters
+     * {@code -h} would make a naive last-match search find THAT occurrence
+     * instead of the real header-length marker.
+     *
+     * <p>⚠️ TWO GUARDS, not one, are what make "the leftmost match in the
+     * TAIL is always the real one" true rather than merely likely:
+     * <ol>
+     *   <li>{@link #headerLenOf} searches only the substring AFTER the key's
+     *       LAST {@code /} — this excludes {@code prefix} and the date-path
+     *       digits entirely. None of {@code timestampMillis}, {@code
+     *       podShortId} (once restricted, below), {@code sequence}, {@code
+     *       headerLen} or {@link MembershipFilter#encode()}'s base64url
+     *       payload can ever contain {@code /}, so the tail is exactly
+     *       {@code <ts>-<podShortId>-<seq>-h<headerLen>-<filter>};
+     *   <li>the canonical constructor refuses a {@code podShortId} containing
+     *       {@code -}. Round-1 review (M2.6) found that WITHOUT this, a
+     *       podShortId could itself produce a spurious match inside the tail
+     *       (e.g. {@code "pod-0123456789abcdef-h5"} reproduces the exact
+     *       hazard this task exists to close, through a different field than
+     *       the filter) — the marker being anchored on the 16-hex-digit
+     *       {@code sequence} field alone was not sufficient by itself.
+     * </ol>
+     * With both, the tail's only unconstrained content is the filter
+     * payload itself, which comes AFTER the real marker, never before it.
+     */
+    private static final Pattern HEADER_LEN_MARKER = Pattern.compile("-[0-9a-f]{16}-h(\\d+)-");
+
+    /**
      * The header length a reader can extract from a key without reading the
      * object, so its first GET covers preamble and directory exactly.
      */
     public static int headerLenOf(String key) {
-        int h = key.lastIndexOf("-h");
-        int dash = key.indexOf('-', h + 2);
-        if (h < 0 || dash < 0) {
+        int tailStart = key.lastIndexOf('/') + 1;
+        Matcher m = HEADER_LEN_MARKER.matcher(key).region(tailStart, key.length());
+        if (!m.find()) {
             throw new IllegalArgumentException("not a segment key: " + key);
         }
-        return Integer.parseInt(key, h + 2, dash, 10);
+        return Integer.parseInt(m.group(1));
     }
 }

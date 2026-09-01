@@ -75,7 +75,11 @@ class DefaultIngestTest {
             AppendResult result = appendOnce(ingest, "logs", 3, 10);
 
             assertThat(result.recordCount()).isEqualTo(10);
-            assertThat(store.counts().total() - base).isEqualTo(2);
+            // ⚠️ M2.6: 2 (segment + commit delta, M1's own count) + 2 (the
+            // filter's one-time registration of this genuinely new index --
+            // one stat, one CAS put; ADR-0008, "~0/s, only on index creation").
+            // A SECOND append of an already-known index costs 2 again, not 4.
+            assertThat(store.counts().total() - base).isEqualTo(4);
 
             // ⚠️ READ BOTH OBJECTS BACK, do not merely count the PUTs. Counting
             // proves neither which key was committed nor that it exists: a
@@ -239,9 +243,12 @@ class DefaultIngestTest {
                 f.get(10, TimeUnit.SECONDS);
             }
 
+            // ⚠️ M2.6: 2 (segment + commit) + 2 (one genuinely new index,
+            // "logs" -- both streams are partitions of the SAME index).
             assertThat(store.counts().total() - base)
-                    .as("50 records, 5 appends, 2 streams -- still one segment and one commit")
-                    .isEqualTo(2);
+                    .as("50 records, 5 appends, 2 streams, ONE index -- one segment, one "
+                            + "commit, one new-index registration")
+                    .isEqualTo(4);
 
             // ⚠️ And the OFFSETS, which this test previously threw away. With
             // two streams in one flush, a single global counter instead of a
@@ -308,9 +315,12 @@ class DefaultIngestTest {
             AppendResult result = ingest.append(IngestTestSupport.PRINCIPAL, "logs", 0, docs(3)::forEach);
 
             assertThat(result.recordCount()).isEqualTo(3);
+            // ⚠️ M2.6: 2 (segment + commit, M1's own count) + 2 (this flush's
+            // one genuinely new index, registered once -- ADR-0008).
             assertThat(store.counts().total() - base)
-                    .as("the interval trigger produced exactly one segment and one commit")
-                    .isEqualTo(2);
+                    .as("the interval trigger produced exactly one segment, one commit, "
+                            + "and one new-index registration")
+                    .isEqualTo(4);
         }
     }
 
@@ -327,7 +337,8 @@ class DefaultIngestTest {
             AppendResult result = ingest.append(IngestTestSupport.PRINCIPAL, "logs", 0, docs(400)::forEach);
 
             assertThat(result.recordCount()).isEqualTo(400);
-            assertThat(store.counts().total() - base).isEqualTo(2);
+            // ⚠️ M2.6: 2 (segment + commit) + 2 (one genuinely new index).
+            assertThat(store.counts().total() - base).isEqualTo(4);
         }
     }
 
@@ -391,9 +402,18 @@ class DefaultIngestTest {
             long afterRecovery = store.counts().total();
             AppendResult resumed = appendOnce(second, "logs", 0, 3);
 
+            // ⚠️ M2.6: 2 (segment + commit) + 2 more -- NOT a new-index
+            // registration ("logs" is already registered from the prior
+            // instance's flushes), but a fresh LOOKUP: `second`'s own
+            // IndexOrdinalRegistry starts with an empty cache, so its first
+            // ordinalFor("logs") costs one stat + one get, same shape as the
+            // recovery walk this test's own docstring is about -- a real cost,
+            // paid once per pod restart, never growing with commit-log
+            // history.
             assertThat(store.counts().total() - afterRecovery)
-                    .as("two requests, whatever the log already holds")
-                    .isEqualTo(2);
+                    .as("two requests plus one fresh ordinal lookup, whatever the log "
+                            + "already holds")
+                    .isEqualTo(4);
             // ⚠️ And the offsets still continue -- 6 flushes x 2 records.
             assertThat(resumed.firstOffset()).isEqualTo(priorFlushes * 2L);
         }
@@ -458,7 +478,8 @@ class DefaultIngestTest {
         ingest.close();
 
         assertThat(inflight.get(10, TimeUnit.SECONDS).recordCount()).isEqualTo(7);
-        assertThat(store.counts().total() - base).isEqualTo(2);
+        // ⚠️ M2.6: 2 (segment + commit) + 2 (one genuinely new index).
+        assertThat(store.counts().total() - base).isEqualTo(4);
         assertThat(seen).hasSize(1);
         sub.close();
     }

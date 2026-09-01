@@ -71,6 +71,27 @@ public final class IndexOrdinalRegistry {
     }
 
     /**
+     * How many indices this instance currently knows are registered -- ZERO
+     * further requests, answered straight from the local cache.
+     *
+     * <p>⚠️ DELIBERATELY not revalidated against the store: the one caller
+     * ({@code FilterCandidates}'s {@code A} candidate, "every registered index
+     * is present") can only be made WRONG in the safe direction by a stale,
+     * too-low count here. A count lower than the true total can make a
+     * segment falsely claim {@code A} for an index it does not actually carry
+     * — but {@code A}'s own contract is "might be present" for every query,
+     * which is exactly what a Bloom filter's own already-accepted false
+     * positive rate (research doc 02 §3) already tolerates. It can NEVER
+     * produce a false NEGATIVE for a real member, because {@code A} answers
+     * true unconditionally. Forcing a revalidating {@code stat()} here would
+     * cost one extra request on every flush, forever, to guard against an
+     * error class this filter already tolerates by design.
+     */
+    public synchronized int registeredCount() {
+        return cached.ordinals().size();
+    }
+
+    /**
      * Re-reads the registry if the store's copy has moved since this instance
      * last saw it — one {@code stat()}, and a {@code get()} only when the
      * version actually differs.

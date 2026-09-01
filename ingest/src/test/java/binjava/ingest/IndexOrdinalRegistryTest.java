@@ -38,6 +38,45 @@ class IndexOrdinalRegistryTest {
     }
 
     @Test
+    void registeredCountReflectsWhatThisInstanceHasRegisteredWithNoFurtherRequest() throws Exception {
+        CountingBinStore store = new CountingBinStore(new MemoryBinStore());
+        IndexOrdinalRegistry r = new IndexOrdinalRegistry(store, "p");
+        assertThat(r.registeredCount()).isZero();
+        r.ordinalFor(A);
+        long before = store.counts().total();
+        // ⚠️ M2.6: registeredCount() answers from the local cache, never
+        // revalidating -- ordinalFor(A) just wrote the CAS itself, so the
+        // cache is already exactly as fresh as it can be, at zero extra cost.
+        assertThat(r.registeredCount()).isEqualTo(1);
+        assertThat(store.counts().total()).as("no request for the count itself").isEqualTo(before);
+        r.ordinalFor(B);
+        assertThat(r.registeredCount()).isEqualTo(2);
+    }
+
+    @Test
+    void registeredCountOnAFreshInstanceIsZeroUntilItLooksSomethingUp() throws Exception {
+        CountingBinStore store = new CountingBinStore(new MemoryBinStore());
+        // ⚠️ Register A and B through ONE instance...
+        IndexOrdinalRegistry writer = new IndexOrdinalRegistry(store, "p");
+        writer.ordinalFor(A);
+        writer.ordinalFor(B);
+
+        // ⚠️ ...a SEPARATE, fresh instance (a different pod) does not know
+        // this yet -- registeredCount() never revalidates, so it answers 0
+        // until this instance's own ordinalFor() calls populate its cache.
+        // This is the DELIBERATE tradeoff the class javadoc explains: the
+        // filter's A candidate can only be made wrong in the SAFE direction
+        // (a false positive, never a false negative) by this staleness.
+        IndexOrdinalRegistry fresh = new IndexOrdinalRegistry(store, "p");
+        assertThat(fresh.registeredCount()).isZero();
+        // ⚠️ refresh() (inside ordinalFor) fetches the WHOLE registry object,
+        // not just A's entry -- so this one lookup populates B's ordinal too.
+        fresh.ordinalFor(A);
+        assertThat(fresh.registeredCount())
+                .as("one full read brought back both A and B, not just A").isEqualTo(2);
+    }
+
+    @Test
     void anAlreadyKnownIndexIssuesNoFurtherStoreRequest() throws Exception {
         CountingBinStore store = new CountingBinStore(new MemoryBinStore());
         IndexOrdinalRegistry r = new IndexOrdinalRegistry(store, "p");

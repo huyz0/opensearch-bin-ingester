@@ -109,4 +109,82 @@ class SegmentKeyTest {
             assertThat(SegmentKey.headerLenOf(key)).isEqualTo(headerLen);
         }
     }
+
+    @Test
+    void headerLenOfParsesCorrectlyEvenWhenTheFilterPayloadContainsDashH() {
+        // ⚠️ M2.6, THE hazard ADR-0003/the M2 SPEC's own risk section names:
+        // base64url's alphabet legally contains '-', so once the filter
+        // component can be anything other than the literal "N", a payload
+        // containing the two characters "-h" is a real, reachable input --
+        // this exact string was found by search, not hand-crafted, and
+        // genuinely contains "-h" partway through a Z (exact bitmap) payload.
+        // lastIndexOf("-h") over the whole key would find THIS occurrence
+        // instead of the real header-length marker and misparse 96 as
+        // whatever digits happen to follow it.
+        String filterWithEmbeddedDashH = "Z8_5Z-hCEZLc";
+        assertThat(filterWithEmbeddedDashH).contains("-h");
+        String key = new SegmentKey("bins/cluster-a", T, "pod7", 42, 96, filterWithEmbeddedDashH).key();
+        assertThat(SegmentKey.headerLenOf(key)).isEqualTo(96);
+    }
+
+    @Test
+    void theFilterIsEmbeddedInTheKeyAndRoundTripsThroughDecode() throws Exception {
+        MembershipFilter filter = new MembershipFilter.All();
+        String key = new SegmentKey("p", T, "pod", 1, 48, filter.encode()).key();
+        assertThat(key).contains("-A.bseg");
+        // ⚠️ The embedded string is not just present in the key -- it must
+        // still be a filter MembershipFilter.decode() can parse back out.
+        String embedded = key.substring(key.lastIndexOf('-') + 1, key.length() - ".bseg".length());
+        assertThat(MembershipFilter.decode(embedded)).isEqualTo(filter);
+    }
+
+    @Test
+    void theLegacyConstructorDefaultsTheFilterToN() {
+        // ⚠️ Every pre-M2.6 call site (record IDs, timestamps, header
+        // lengths) uses the 5-arg constructor and does not know the filter
+        // exists -- it must keep meaning exactly what M1 hardcoded.
+        String key = new SegmentKey("p", T, "pod", 1, 48).key();
+        assertThat(key).endsWith("-N.bseg");
+    }
+
+    @Test
+    void aPodShortIdContainingDashOrSlashIsRefused() {
+        // ⚠️ round-1 review (M2.6): headerLenOf's tail-anchoring alone is
+        // not sufficient if podShortId can itself smuggle in a "-h<digits>-"
+        // marker, e.g. "pod-0123456789abcdef-h5" reproduces the exact hazard
+        // this task exists to close, through a different field than the
+        // filter. Refusing '-' and '/' here is what makes "the leftmost match
+        // in the tail is always the real one" actually true.
+        assertThatThrownBy(() -> new SegmentKey("p", T, "pod-0123456789abcdef-h5", 1, 48))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new SegmentKey("p", T, "pod/7", 1, 48))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void headerLenOfIgnoresASpuriousMarkerInsidePrefix() {
+        // ⚠️ test-reviewer (M2.6, round 1): the tail-anchoring guard's OWN
+        // commentary claimed this route was "closed... found analytically
+        // rather than by the reviewer" but was never actually reproduced by
+        // a test -- this is that reproduction. `prefix` carries no character
+        // restriction (only podShortId does), so a prefix shaped like a
+        // header-length marker is a real, reachable input; the tail-anchoring
+        // guard (searching only after the key's LAST '/') is what must keep
+        // it from being mistaken for the real one.
+        String prefix = "bins-0123456789abcdef-h7-x";
+        String key = new SegmentKey(prefix, T, "pod", 1, 96).key();
+        assertThat(key).as("the marker-shaped text is in the prefix, not the tail")
+                .startsWith(prefix + "/data/");
+        assertThat(SegmentKey.headerLenOf(key))
+                .as("must read the REAL header length (96), not the 7 embedded in prefix")
+                .isEqualTo(96);
+    }
+
+    @Test
+    void anUnparsableFilterIsRefusedAtConstruction() {
+        // ⚠️ Refused HERE, not discovered later by a reader with no way to
+        // say why its own key will not parse.
+        assertThatThrownBy(() -> new SegmentKey("p", T, "pod", 1, 48, "not-a-filter"))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
 }
