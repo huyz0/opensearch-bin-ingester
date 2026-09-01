@@ -120,16 +120,24 @@ Each is checkable by something other than an opinion.
    no longer applies here: there is no cheap-tier cost test to scale down from.
 4. Killing and restarting the OpenSearch node resumes from the persisted
    `batch_start`, loses nothing, and duplicates only within one commit batch.
-   ⚠️ **Proven at T2, not at the node level.** Rows T10/T10b prove the POINTER
-   CONTRACT: `BinStoreOffset` round-trips through its string form (the only form
-   it exists in inside Lucene's commit data), and `readNext` resumes from a
+   ✅ **MET, at both tiers.** Rows T10/T10b prove the POINTER CONTRACT at T2:
+   `BinStoreOffset` round-trips through its string form (the only form it
+   exists in inside Lucene's commit data), and `readNext` resumes from a
    persisted pointer rather than from `earliest`, refusing both the
-   loses-records and the duplicates-without-bound failure in one assertion. What
-   is NOT proven: an actual OpenSearch node killed and restarted, `batch_start`
-   read back out of real Lucene commit data, and this factory wired to a real
-   node the way `SearchableIT` wires the read path. That is T4 work and is not
-   in M1.17's three T2 tests -- said here rather than left to a `done` row that
-   would otherwise be read as covering the whole sentence.
+   loses-records and the duplicates-without-bound failure in one assertion.
+   `M1.17b`'s `RestartResumeIT` proves the node level: a real OpenSearch node,
+   `batch_start` read back out of real Lucene commit data (not inferred), and
+   a real engine close+reopen — via the close/open index API, which
+   `IngestionEngine`'s `NoOpTranslogManager` makes a genuine exercise of
+   commit-data recovery rather than translog replay — after which the poller
+   resumes and keeps ingesting. ⚠️ Not a killed JVM process; that needs
+   `internalCluster().restartNode(...)`, which needs the
+   `OpenSearchIntegTestCase` multi-node harness this project does not have
+   wired up. Writing `RestartResumeIT` also found and fixed a real production
+   bug: `NodeSubscriptions` shared one client per stream across shards, but
+   closing a shard closed it directly with no reference counting, so a closed
+   shard's stream never received another delivery even after the shard
+   reopened. See `M1.17b`.
 5. `readNext` returns within 10 ms of a push arriving, and blocks for the full
    `pollTimeout` when nothing arrives — proving the blocking contract.
 6. One `TailSubscriber` and one cache exist **per node**, not per shard, with 100
