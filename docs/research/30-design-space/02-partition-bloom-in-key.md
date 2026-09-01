@@ -152,6 +152,13 @@ upside.
 
 ## 7. Proposed encoding: an adaptive tagged filter (unchanged, now scoped to indices)
 
+> ⚠️ **REVISED by [ADR-0024](../../internal/product/decisions/0024-bloom-hash-is-sha-256-not-xxh3-murmur3.md).**
+> The Bloom implementation below names xxh3-128/murmur3-128; M2.5 built it with
+> SHA-256 instead, since those two are named for hot-path throughput this
+> once-per-flush construction does not need, and neither ships in the JDK. Not
+> yet a durable commitment — see the ADR. When this section and the ADR
+> disagree, the ADR wins.
+
 ```
 <filter> ::= <tag><payload>
 

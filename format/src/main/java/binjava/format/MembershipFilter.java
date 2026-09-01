@@ -198,9 +198,25 @@ public sealed interface MembershipFilter {
 
     /**
      * A Bloom filter over index ordinals, {@code k} probes into an
-     * {@code m}-bit array (Kirsch-Mitzenmacher construction and hash-based
-     * {@code mightContain} arrive in M2.5 -- this is the raw bits and {@code
-     * k} only).
+     * {@code m}-bit array. {@link #of} constructs one from a set of ordinals
+     * via Kirsch-Mitzenmacher (M2.5; research doc 02 §7): one 128-bit hash
+     * per ordinal, split into {@code h1, h2}, then {@code h_i = h1 + i·h2
+     * (mod m)} for {@code i} in {@code 0..k-1} -- one hash computation
+     * standing in for {@code k} independent ones. {@link #mightContain}
+     * probes the same {@code k} positions and requires all of them set.
+     *
+     * <p>⚠️ HASH ALGORITHM: SHA-256, not xxh3-128/murmur3-128 as research doc
+     * 02 §7 names -- those are named for HOT-PATH hashing throughput
+     * (benchmarked against a blocked Bloom, doc 40-implementation/03 §3), and
+     * this filter is built once per segment flush (hundreds of ordinals, not
+     * per-record), where SHA-256's cost is immaterial and its uniformity is
+     * well-established rather than newly implemented and unverified. This is
+     * a real, wire-format-relevant choice (a reader must use the SAME
+     * algorithm the writer used, or {@code mightContain} silently answers a
+     * different question) but is still REVISABLE without breaking anything
+     * already durable: M2.6, which wires this into {@code SegmentKey} and
+     * therefore into segments actually persisted to the store, has not
+     * landed yet.
      *
      * <p>⚠️ {@code k} is a SINGLE decimal digit (1-9): the wire grammar
      * {@code B<k><base64url bits>} has no delimiter between {@code k} and the
@@ -256,6 +272,80 @@ public sealed interface MembershipFilter {
                 throw new IOException("tag B carries no bit payload: " + payload);
             }
             return new Bloom(k, BitSet.valueOf(raw), raw.length * 8);
+        }
+
+        /**
+         * Builds a Bloom filter over {@code ordinals}, sized to {@code m}
+         * bits (rounded UP to the next multiple of 8, since that is all this
+         * wire format can express -- see the class javadoc) with {@code k}
+         * probes per ordinal.
+         */
+        static Bloom of(java.util.Collection<Integer> ordinals, int m, int k) {
+            Objects.requireNonNull(ordinals, "ordinals");
+            // ⚠️ round-1 review (M2.5): validated HERE, before probePositions
+            // ever allocates `new int[k]` -- a negative k reaching that
+            // allocation first threw a raw NegativeArraySizeException instead
+            // of this exact, documented message, bypassing the canonical
+            // constructor's own "single source of truth" for this check.
+            if (k < 1 || k > 9) {
+                throw new IllegalArgumentException("k is a single decimal digit, 1-9: " + k);
+            }
+            int paddedM = ((m + 7) / 8) * 8;
+            BitSet bits = new BitSet();
+            for (int ordinal : ordinals) {
+                for (int position : probePositions(ordinal, k, paddedM)) {
+                    bits.set(position);
+                }
+            }
+            return new Bloom(k, bits, paddedM);
+        }
+
+        /**
+         * Might this ordinal be a member? {@code false} is certain; {@code
+         * true} may be a false positive (never a false negative -- every
+         * probe position {@link #of} set for a real member is set here too,
+         * by construction).
+         */
+        public boolean mightContain(int ordinal) {
+            // ⚠️ round-1 test-review (M2.5): ExactBitmap and RunLength both
+            // reject a negative ordinal explicitly; Bloom had silently hashed
+            // and answered one instead. An ordinal is never negative in this
+            // system (it is a dense index INTO the registry), so silently
+            // answering is the wrong failure mode for a caller's bug.
+            if (ordinal < 0) {
+                throw new IllegalArgumentException("ordinal is never negative: " + ordinal);
+            }
+            for (int position : probePositions(ordinal, k, m)) {
+                if (!bits.get(position)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        /** The {@code k} Kirsch-Mitzenmacher probe positions for one ordinal. */
+        private static int[] probePositions(int ordinal, int k, int m) {
+            long[] h = hash128(ordinal);
+            int[] positions = new int[k];
+            for (int i = 0; i < k; i++) {
+                long combined = h[0] + (long) i * h[1];
+                positions[i] = (int) Math.floorMod(combined, (long) m);
+            }
+            return positions;
+        }
+
+        /** One 128-bit hash of {@code ordinal}, as two independent 64-bit halves. */
+        private static long[] hash128(int ordinal) {
+            byte[] digest;
+            try {
+                digest = java.security.MessageDigest.getInstance("SHA-256")
+                        .digest(java.nio.ByteBuffer.allocate(4).putInt(ordinal).array());
+            } catch (java.security.NoSuchAlgorithmException e) {
+                throw new IllegalStateException("SHA-256 is required by the JDK", e);
+            }
+            long h1 = java.nio.ByteBuffer.wrap(digest, 0, 8).getLong();
+            long h2 = java.nio.ByteBuffer.wrap(digest, 8, 8).getLong();
+            return new long[] {h1, h2};
         }
     }
 
