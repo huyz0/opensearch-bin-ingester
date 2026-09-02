@@ -29,8 +29,14 @@ dependencies {
 // ⚠️ EXCLUDED from `test` (below) AND from `check` (not listed there, same as
 // `integrationTest`/`clusterTest`): a heavier tier is explicit, on demand plus
 // CI, matching build.md's fast-default-loop philosophy.
+//
+// ⚠️ M3.5 adds MemoryFlatAtIntervalCeilingTest as the SAME tier, excluded and
+// wired the same way: the reasoning above applies unchanged to a sibling
+// proving NFR-6 at the adaptive interval's ceiling instead of at M1's fixed
+// operating point.
 tasks.named<Test>("test") {
     exclude("**/MemoryFlatUnderTenXBodySizeTest.class")
+    exclude("**/MemoryFlatAtIntervalCeilingTest.class")
 }
 
 val memoryBoundTest = tasks.register<Test>("memoryBoundTest") {
@@ -62,5 +68,47 @@ val memoryBoundTest = tasks.register<Test>("memoryBoundTest") {
     // test's subject. `clusterTest` disables JaCoCo for the identical reason
     // (a coverage agent's own footprint is not what a memory-budget floor
     // measures).
+    extensions.configure<JacocoTaskExtension> { isEnabled = false }
+}
+
+// ⚠️ M3.5; AC5 as amended by ADR-0026: the SAME 256 MB / no-OOM proof, once
+// the interval has grown to its 5 s ceiling instead of sitting at the 250 ms
+// floor, and under 24 CONCURRENT producers rather than M1.18's single one.
+//
+// ⚠️ A SEPARATE task, not bundled into `memoryBoundTest` above, because the
+// two have genuinely different real costs and one shared budget would let the
+// slower silently ride on the faster's headroom. Measured (ADR-0026): a lone
+// producer at the ceiling moves ~44 KB/s, because `BulkService` appends in
+// blocking 1000-record chunks and so advances one chunk per flush -- which is
+// why the first attempt at this test, a single-producer copy of M1.18, timed
+// out twice (at 8 and 20 minutes) still short of 200 MB. The concurrent shape
+// this task now runs restores ~1 MiB/s aggregate.
+val memoryBoundCeilingTest = tasks.register<Test>("memoryBoundCeilingTest") {
+    group = "verification"
+    description = "Criterion 8 (SPEC T12) at the interval's ceiling (M3.5): 200 MB body, 256 MB heap, no OOM."
+    testClassesDirs = sourceSets.test.get().output.classesDirs
+    classpath = sourceSets.test.get().runtimeClasspath
+    useJUnitPlatform()
+    filter {
+        includeTestsMatching("binjava.http.MemoryFlatAtIntervalCeilingTest")
+        isFailOnNoMatchingTests = true
+    }
+    maxHeapSize = "256m"
+    jvmArgs("-XX:+HeapDumpOnOutOfMemoryError",
+            "-XX:HeapDumpPath=" + layout.buildDirectory.dir("tmp").get().asFile.absolutePath)
+    // ⚠️ testing.md rule 17: scratch under build/tmp, never the system temp
+    // directory. The java-conventions plugin sets this for every registered
+    // JvmTestSuite target, but this is a standalone `tasks.register<Test>`
+    // (like `memoryBoundTest`) and so inherits none of it -- measured: this
+    // test streams 200 MB through LocalFsBinStore and left ~175 MB per run in
+    // /tmp, never cleaned. Set explicitly here, for the same reason the
+    // convention sets it there.
+    systemProperty("java.io.tmpdir",
+            layout.buildDirectory.dir("tmp").get().asFile.absolutePath)
+    // ⚠️ 20 minutes against the test's own 900s JUnit @Timeout, so the JUnit
+    // timeout fires first and names the test rather than the task. ADR-0026
+    // estimates ~192s of streaming; the rest is margin for the warm-up, GC
+    // variance under a deliberately tight heap, and a slower machine.
+    timeout.set(Duration.ofMinutes(20))
     extensions.configure<JacocoTaskExtension> { isEnabled = false }
 }
