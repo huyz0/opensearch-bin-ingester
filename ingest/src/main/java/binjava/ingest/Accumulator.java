@@ -82,7 +82,10 @@ public final class Accumulator {
         // ⚠️ `>= 0` on the comparison: at EXACTLY the interval the flush is due.
         // Strictly-greater delays every flush by one clock tick, which at 250 ms
         // is a latency floor nobody would find by reading the code.
-        return waited.compareTo(config.flushInterval()) >= 0;
+        // ⚠️ M3.1 renames the field (flushInterval -> intervalFloor); M3.2/M3.3
+        // are where this actually becomes an adaptive, per-instance interval
+        // instead of always reading the floor straight from config.
+        return waited.compareTo(config.intervalFloor()) >= 0;
     }
 
     public boolean isEmpty() {

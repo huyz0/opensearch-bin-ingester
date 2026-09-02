@@ -149,8 +149,8 @@ class DefaultIngestTest {
         int segmentBytes;
         try (var sub = sizerHub.subscribe(new RunKey(IngestTestSupport.LOGS, 0), measured::add);
                 DefaultIngest probe = new DefaultIngest(
-                        new IngestConfig(IngestTestSupport.NEVER, 8L << 20, "cluster-a",
-                                Long.MAX_VALUE / 4),
+                        IngestTestSupport.pinnedIntervalConfig(IngestTestSupport.NEVER,
+                                8L << 20, Long.MAX_VALUE / 4),
                         sizer, IngestTestSupport.PREFIX, "pod1", sizerHub, Clock.systemUTC(),
                         index -> IngestTestSupport.LOGS)) {
             appendOnce(probe, "logs", 0, 2);
@@ -167,7 +167,7 @@ class DefaultIngestTest {
         BlockingSink sink = new BlockingSink();
         try (var sub = hub.subscribe(new RunKey(IngestTestSupport.LOGS, 0), sink);
                 DefaultIngest ingest = new DefaultIngest(
-                        new IngestConfig(IngestTestSupport.NEVER, 8L << 20, "cluster-a", budget),
+                        IngestTestSupport.pinnedIntervalConfig(IngestTestSupport.NEVER, 8L << 20, budget),
                         store, IngestTestSupport.PREFIX, "pod1", hub, Clock.systemUTC(),
                         index -> IngestTestSupport.LOGS)) {
             appendOnce(ingest, "logs", 0, 2);
@@ -331,7 +331,7 @@ class DefaultIngestTest {
         // the clock when the buffer is already full.
         CountingBinStore store = new CountingBinStore(new MemoryBinStore());
         try (DefaultIngest ingest = new DefaultIngest(
-                new IngestConfig(IngestTestSupport.NEVER, 4096L, "cluster-a"), store, IngestTestSupport.PREFIX, "pod1",
+                IngestTestSupport.pinnedIntervalConfig(IngestTestSupport.NEVER, 4096L), store, IngestTestSupport.PREFIX, "pod1",
                 new SubscriptionHub(), Clock.systemUTC(), index -> IngestTestSupport.LOGS)) {
             long base = store.counts().total();
             AppendResult result = ingest.append(IngestTestSupport.PRINCIPAL, "logs", 0, docs(400)::forEach);

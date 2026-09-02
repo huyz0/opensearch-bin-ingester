@@ -292,7 +292,7 @@ public final class DefaultIngest implements Ingest {
                     // ⚠️ A quarter of the interval, so the trigger is noticed
                     // promptly without polling; an append signals this condition
                     // as well, so the wait is an upper bound rather than a poll.
-                    work.awaitNanos(Math.max(1_000_000L, config.flushInterval().toNanos() / 4));
+                    work.awaitNanos(Math.max(1_000_000L, config.intervalFloor().toNanos() / 4));
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     return;

@@ -50,8 +50,30 @@ final class IngestTestSupport {
 
     static DefaultIngest ingest(CountingBinStore store, SubscriptionHub hub,
             Duration flushInterval) throws IOException {
-        return new DefaultIngest(new IngestConfig(flushInterval, 8L << 20, "cluster-a"),
+        return new DefaultIngest(pinnedIntervalConfig(flushInterval, 8L << 20),
                 store, PREFIX, "pod1", hub, Clock.systemUTC(), index -> LOGS);
+    }
+
+    /**
+     * ⚠️ M3: {@code IngestConfig} now validates {@code intervalCeiling >=
+     * intervalFloor}, and the default ceiling (5 s) is smaller than {@link
+     * #NEVER} (1 hour) -- this project's own tests still don't wire any
+     * adaptive behaviour (M3.2/M3.3's job), so every fixture here PINS the
+     * range at a single value rather than picking an arbitrary ceiling that
+     * happens to satisfy the constructor.
+     */
+    static IngestConfig pinnedIntervalConfig(Duration interval, long maxSegmentBytes) {
+        return pinnedIntervalConfig(interval, maxSegmentBytes,
+                IngestConfig.DEFAULT_MAX_QUEUED_PUSH_BYTES);
+    }
+
+    static IngestConfig pinnedIntervalConfig(Duration interval, long maxSegmentBytes,
+            long maxQueuedPushBytes) {
+        return new IngestConfig(interval, maxSegmentBytes, "cluster-a", maxQueuedPushBytes,
+                interval, IngestConfig.DEFAULT_FILL_RATIO_LOW_THRESHOLD,
+                IngestConfig.DEFAULT_FILL_RATIO_HIGH_THRESHOLD,
+                IngestConfig.DEFAULT_INTERVAL_LENGTHEN_DELAY,
+                IngestConfig.DEFAULT_INTERVAL_SHORTEN_DELAY);
     }
 
     static DefaultIngest ingest(CountingBinStore store) throws IOException {

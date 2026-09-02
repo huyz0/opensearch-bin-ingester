@@ -57,7 +57,10 @@ class AccumulatorTest {
     }
 
     private static IngestConfig config(Duration flush, long maxBytes) {
-        return new IngestConfig(flush, maxBytes, "cluster-a");
+        // ⚠️ M3: pins intervalCeiling to intervalFloor -- this suite doesn't
+        // (yet) test any adaptive behaviour, and some fixtures pass an hour
+        // to disable the timer, which the default 5 s ceiling would reject.
+        return IngestTestSupport.pinnedIntervalConfig(flush, maxBytes);
     }
 
     @Test
