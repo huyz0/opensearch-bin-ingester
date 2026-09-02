@@ -14,7 +14,8 @@ import java.util.TreeMap;
 import java.util.zip.CRC32C;
 
 /**
- * Builds one v0 segment (M1.4).
+ * Builds one segment (M1.4). Always emits {@link SegmentFormat#VERSION} (M3;
+ * ADR-0025) -- v0 is a read-only shape {@link SegmentReader} still parses.
  *
  * <p>⚠️ Runs are emitted sorted by {@code (indexId, partitionId)}, so one
  * consumer's records are CONTIGUOUS and its fetch is a single coalesced range —
@@ -106,6 +107,10 @@ public final class SegmentWriter {
             dir.putInt(block.length);
             dir.putLong(minTimestamps.get(k));
             dir.putInt(SegmentFormat.CODEC_NONE);
+            // ⚠️ M3; ADR-0025: reserved, always 0 -- no caller has a real
+            // lane to pass yet (RunKey itself gains no lane component until
+            // M10 wires the concept in above this layer).
+            dir.put((byte) 0);
             byteStart += block.length;
         }
         byte[] directory = dir.array();

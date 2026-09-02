@@ -136,8 +136,10 @@ class SegmentPublisherTest {
 
         String key = publisher.publish(acc).orElseThrow().key();
         // ⚠️ Read back OUT of the bytes, not recomputed, so the key cannot
-        // disagree with the object. Two runs is two 48-byte entries.
-        assertThat(SegmentKey.headerLenOf(key)).isEqualTo(96);
+        // disagree with the object. Two runs is two directory entries (M3;
+        // ADR-0025: 49 bytes each, the reserved lane byte).
+        assertThat(SegmentKey.headerLenOf(key))
+                .isEqualTo(2 * binjava.format.SegmentFormat.DIRECTORY_ENTRY_BYTES);
 
         // and the promised range covers preamble + directory exactly
         long end = SegmentPublisher.headerRangeEndInclusive(key);

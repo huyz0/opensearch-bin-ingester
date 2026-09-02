@@ -71,6 +71,17 @@ a footer duplicate of the directory offsets guards against truncation.
 +=====================================================================+
 ```
 
+⚠️ **REVISED 2026-09-02 (M3; ADR-0025).** The `RunEntry` above is
+`formatVersion` 0. `formatVersion` 1 appends one more field, `i8 lane` (1 B,
+always `0` until M10 wires a real value — see [ADR-0014](../../internal/product/decisions/0014-priority-lanes.md)
+for what the field will eventually mean) — 49 B per entry, not 48. A reader
+accepts BOTH versions; a v0 segment an earlier build already wrote has no
+lane byte at all and is never rewritten. This diagram predates the field and
+is left describing v0's shape as originally designed; the current wire
+format lives in `format.SegmentFormat`'s own javadoc, which is the
+authoritative source once code exists (this doc is upstream of it, not a
+substitute for it).
+
 Design notes:
 
 - **Fixed-width directory entries** ⇒ binary search over the header with no parsing, exactly like

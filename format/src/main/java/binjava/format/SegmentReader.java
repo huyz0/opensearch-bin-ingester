@@ -13,7 +13,10 @@ import java.util.UUID;
 import java.util.zip.CRC32C;
 
 /**
- * Reads a v0 segment (M1.5).
+ * Reads a segment (M1.5) -- both {@link SegmentFormat#VERSION_0} (the
+ * original shape) and {@link SegmentFormat#VERSION} (M3; ADR-0025, the
+ * reserved lane byte), since a segment written by an earlier build must
+ * still parse.
  *
  * <p>⚠️ EVERY FIELD IS VALIDATED BEFORE IT IS TRUSTED. A segment arrives from an
  * object store and may be truncated, torn or written by an older build; a reader
@@ -42,14 +45,17 @@ public final class SegmentReader {
             throw new IOException("not a segment: bad magic");
         }
         int version = b.getShort(4) & 0xFFFF;
-        if (version != SegmentFormat.VERSION) {
-            // ⚠️ Refuse, never best-effort. A future version may reuse a field,
-            // so "read what I recognise" silently misinterprets it.
-            throw new IOException("unsupported segment version: " + version);
-        }
+        // ⚠️ M3; ADR-0025; wire-format-change skill: "a reader must handle the
+        // old shape until every possible writer of it has aged out" -- both
+        // VERSION_0 (no lane byte, 48-byte entries) and VERSION (49 bytes,
+        // reserved lane byte) are accepted. directoryEntryBytesFor() is what
+        // throws on anything else -- refuse, never best-effort, since a
+        // future version may reuse a field and "read what I recognise" would
+        // silently misinterpret it.
+        int entryBytes = SegmentFormat.directoryEntryBytesFor(version);
         int headerLen = b.getInt(8);
         int runCount = b.getInt(24);
-        if (headerLen != runCount * SegmentFormat.DIRECTORY_ENTRY_BYTES) {
+        if (headerLen != runCount * entryBytes) {
             throw new IOException("headerLen " + headerLen + " disagrees with runCount " + runCount);
         }
         if (SegmentFormat.PREAMBLE_BYTES + (long) headerLen + SegmentFormat.FOOTER_BYTES
@@ -76,15 +82,20 @@ public final class SegmentReader {
 
         List<RunEntry> dir = new ArrayList<>(runCount);
         for (int i = 0; i < runCount; i++) {
-            int e = SegmentFormat.PREAMBLE_BYTES + i * SegmentFormat.DIRECTORY_ENTRY_BYTES;
+            int e = SegmentFormat.PREAMBLE_BYTES + i * entryBytes;
             UUID indexId = new UUID(b.getLong(e), b.getLong(e + 8));
             long byteStart = b.getLong(e + 24);
             int byteLen = b.getInt(e + 32);
             if (byteStart < 0 || byteLen < 0 || byteStart + byteLen > f) {
                 throw new IOException("run " + i + " points outside the segment");
             }
+            // ⚠️ A VERSION_0 entry has no lane byte at all -- synthesise 0
+            // rather than leave the field's meaning depend on which version
+            // was actually read (both mean "no lane" today; only VERSION's
+            // own byte will ever hold a real value, from M10).
+            byte lane = version == SegmentFormat.VERSION ? b.get(e + 48) : 0;
             dir.add(new RunEntry(new RunKey(indexId, b.getInt(e + 16)), b.getInt(e + 20),
-                    byteStart, byteLen, b.getLong(e + 36), b.getInt(e + 44)));
+                    byteStart, byteLen, b.getLong(e + 36), b.getInt(e + 44), lane));
         }
         return new SegmentReader(b, List.copyOf(dir), b.getLong(16));
     }

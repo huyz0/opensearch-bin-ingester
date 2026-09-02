@@ -46,8 +46,12 @@ class SegmentWriterTest {
         ByteBuffer b = segment(w);
 
         assertThat(b.getInt(0)).as("magic 'BSEG'").isEqualTo(SegmentFormat.MAGIC);
-        assertThat(b.getShort(4)).as("format version").isEqualTo((short) 0);
-        assertThat(b.getInt(8)).as("headerLen is one 48-byte entry").isEqualTo(48);
+        // ⚠️ M3; ADR-0025: version 1 now (the reserved lane byte widens the
+        // directory entry) -- SegmentReader still accepts version 0 for
+        // segments an earlier build already wrote (GoldenSegmentTest).
+        assertThat(b.getShort(4)).as("format version").isEqualTo((short) SegmentFormat.VERSION);
+        assertThat(b.getInt(8)).as("headerLen is one 49-byte (v1) entry")
+                .isEqualTo(SegmentFormat.DIRECTORY_ENTRY_BYTES);
         assertThat(b.getLong(16)).as("createdAtMillis is the value passed in, not a clock")
                 .isEqualTo(1_700_000_000_000L);
         assertThat(b.getInt(24)).as("runCount").isEqualTo(1);
@@ -69,8 +73,10 @@ class SegmentWriterTest {
         assertThat(b.getLong(e)).isEqualTo(INDEX_A.getMostSignificantBits());
         assertThat(b.getLong(e + 8)).isEqualTo(INDEX_A.getLeastSignificantBits());
         assertThat(b.getInt(e + 16)).as("lowest partition of index A first").isEqualTo(2);
-        assertThat(b.getInt(e + 48 + 16)).as("then partition 7").isEqualTo(7);
-        assertThat(b.getLong(e + 96)).as("index B last").isEqualTo(INDEX_B.getMostSignificantBits());
+        assertThat(b.getInt(e + SegmentFormat.DIRECTORY_ENTRY_BYTES + 16)).as("then partition 7")
+                .isEqualTo(7);
+        assertThat(b.getLong(e + 2 * SegmentFormat.DIRECTORY_ENTRY_BYTES)).as("index B last")
+                .isEqualTo(INDEX_B.getMostSignificantBits());
     }
 
     @Test
@@ -81,7 +87,8 @@ class SegmentWriterTest {
         ByteBuffer b = segment(w);
 
         int headerLen = b.getInt(8);
-        assertThat(headerLen).as("two fixed-width entries").isEqualTo(96);
+        assertThat(headerLen).as("two fixed-width entries")
+                .isEqualTo(2 * SegmentFormat.DIRECTORY_ENTRY_BYTES);
 
         int e0 = SegmentFormat.PREAMBLE_BYTES;
         int e1 = e0 + SegmentFormat.DIRECTORY_ENTRY_BYTES;

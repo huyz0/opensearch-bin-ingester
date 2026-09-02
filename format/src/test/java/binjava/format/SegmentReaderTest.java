@@ -11,7 +11,7 @@ import java.util.OptionalLong;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
-/** The v0 reader: round trip, directory lookup, and what it must refuse. */
+/** The reader: round trip, directory lookup, and what it must refuse. */
 class SegmentReaderTest {
 
     private static final UUID A = UUID.fromString("00000000-0000-0000-0000-0000000000aa");
