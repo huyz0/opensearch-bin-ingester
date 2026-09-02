@@ -96,7 +96,7 @@ Each is checkable by something other than an opinion.
    newer live writes for the same `_id`, with both running concurrently.
    ✅ **MET — `DeleteAndVersionIT#testAnOlderReplayDoesNotOverwriteANewerLiveWrite`, T4.**
    ⚠️ "Lane `-1`" is descriptive, not a wire mechanism — lanes are explicitly
-   OUT of M1's scope (ADR-0014; the wire format's `u8 lane` field does not
+   OUT of M1's scope (ADR-0014; the wire format's `i8 lane` field does not
    exist until M3). What the criterion actually demands is version safety
    independent of arrival order, the same external-versioning guarantee
    criterion 0 proved, exercised here as two INDEX writes with the losing

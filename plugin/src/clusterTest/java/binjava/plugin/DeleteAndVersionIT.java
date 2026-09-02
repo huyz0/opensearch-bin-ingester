@@ -173,7 +173,7 @@ public class DeleteAndVersionIT extends OpenSearchSingleNodeTestCase {
 
     public void testAnOlderReplayDoesNotOverwriteANewerLiveWrite() throws Exception {
         // ⚠️ Criterion -1. "Lane -1" is descriptive, not a wire mechanism: lanes
-        // are explicitly OUT of M1's scope (ADR-0014; the wire format's `u8
+        // are explicitly OUT of M1's scope (ADR-0014; the wire format's `i8
         // lane` field does not exist until M3). What the criterion actually
         // demands is version safety independent of arrival order, which is the
         // SAME external-versioning guarantee criterion 0 proved -- exercised

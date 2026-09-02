@@ -23,7 +23,7 @@ client certificate.
 ### 1. The producer sends the routing value; the ingester computes the partition
 
 ```
-frame: [u8 type][u8 lane][u16 routingLen][routing bytes][u32 payloadLen][payload]
+frame: [u8 type][i8 lane][u16 routingLen][routing bytes][u32 payloadLen][payload]
 ```
 
 The producer never learns the shard count, never contacts OpenSearch, needs no

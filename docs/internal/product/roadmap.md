@@ -23,7 +23,7 @@ Only the current milestone is decomposed in `backlog.md`.
 |---|---|
 | Compaction (FR-14) | after M9 — deliberately deferred, see `docs/research/30-design-space/06-compaction-and-retention.md` §1 |
 | Fast mode (FR-17) | **M11, after the default path is measured.** A second write path with its own failure modes should not be built alongside the first |
-| Priority lanes (FR-18) | M10 — but the `u8 lane` field lands in the wire format at M3, since adding it later is a format change |
+| Priority lanes (FR-18) | M10 — but the `i8 lane` field lands in the wire format at M3, since adding it later is a format change |
 | ~~Multi-tenant isolation and quotas (Q9)~~ | **Closed** by [ADR-0010](decisions/0010-multi-tenancy-and-security-model.md) and `docs/research/30-design-space/11-multi-tenancy-and-security.md`, both in this commit. Promotion to a dedicated prefix stays deferred with a stated threshold |
 | ~~Complete security model (Q10)~~ | **Closed** by the same ADR. What remains deferred is *enforcement*: quotas land with the governor, and the trust-domain seam ships in M1.0 |
 | GCS and Azure backends | M1 ships the SPI and two backends; the cloud ones follow once the conformance suite exists |
