@@ -59,6 +59,19 @@ M10, and this SPEC does not move that date.
    250 ms/8 MiB operating point. This milestone extends or adds a sibling
    proving the same property once the interval can grow toward its ceiling
    (more wall-clock time between flushes is more opportunity to accumulate).
+   ⚠️ **AMENDED 2026-09-02, see ADR-0026.** The sibling uses **concurrent
+   producers**, not M1.18's single one. Measured, not assumed:
+   `BulkService` appends in blocking 1000-record chunks, so ONE producer
+   advances exactly one chunk per flush and never holds more than ~223 KB
+   in the accumulator — at the ceiling *and* at the floor. The single-
+   producer shape therefore cannot reach the state this criterion is about,
+   and would have passed while exercising nothing. The sibling instead uses
+   enough concurrent producers to land `fillRatio` in the **middle band**
+   (0.4 < r < 0.9), which is the one regime that *holds* the interval at
+   its ceiling while the timer flushes a 3.2–7.2 MiB accumulator. ⚠️ NOT
+   "enough to exceed the 8 MiB target" — that is `fillRatio >= 1.0`, the
+   high band, and with `intervalShortenDelay = 0` it drops the interval
+   back to the floor on that very drain, destroying the state under test.
 3. **One reserved byte in the on-disk directory entry**, for the `i8 lane`
    field ADR-0014 places in "the segment run entry" — written as `0`
    (meaning "no lane," M10's own default) on every segment this milestone
@@ -240,12 +253,22 @@ never with bytes-per-entry).
    ("approaches the ceiling-driven rate") unchecable — no stated tolerance,
    contra sdd.md rule 6 ("a number inside a bound"). Measured via
    `CountingBinStore`, not assumed from the interval value alone.
-5. **NFR-6 holds under the adaptive interval**: memory stays flat and
-   bounded as request size grows 10×, including the case where the interval
-   has grown to its ceiling (segments held open for up to 5 s, potentially
-   accumulating more before a flush than the fixed-250ms path ever did).
-   Proven with a real, bounded heap (`-Xmx`), not inferred from the interval
-   logic's own correctness.
+5. **NFR-6 holds under the adaptive interval**: with the interval warmed to
+   its 5 s ceiling and **24 concurrent producers** — enough that one
+   interval's arrivals land `fillRatio` in the middle band at ≈0.65, so the
+   interval *stays* at its ceiling and the accumulator holds ~5.2 MiB
+   between timer-driven flushes (against ~223 KB for a lone producer) —
+   peak sampled heap stays under 220 MiB and never exceeds
+   `max(128 MiB, 10 × bytes written so far)`. The same two bounds M1.18
+   asserts at the floor, now with genuinely 23× more data resident per
+   flush. Proven with a real, bounded heap (`-Xmx256m`), not inferred from
+   the interval logic's own correctness. ⚠️ **AMENDED 2026-09-02, see
+   ADR-0026**: the original wording said "as request size grows 10×…
+   segments held open for up to 5 s, potentially accumulating more before a
+   flush than the fixed-250ms path ever did", which a single-producer test
+   cannot reach — blocking 1000-record chunks cap a lone producer's
+   outstanding data at ~223 KB whatever the interval. Concurrency, not body
+   size, is what puts the accumulator in the state this criterion names.
 6. The reserved lane byte round-trips: every segment produced by this
    milestone decodes with `RunEntry.lane() == 0`; the golden segment
    fixtures are regenerated and re-pinned, not hand-edited; every existing
@@ -263,7 +286,7 @@ never with bytes-per-entry).
 | T0 | Adversarial oscillation: `fillRatio` alternating 0.4/0.9 every flush never drives the interval outside [floor, ceiling], and never flaps faster than the hysteresis windows allow | an implementation with no debounce, or one that clamps only at the edges and overshoots between them |
 | T1 | `Accumulator` + `CountingBinStore` at a modeled 1 MiB/s: measured PUT rate over a sustained run, once the interval settles at its 5 s ceiling, is within +/-20% of 0.2 PUT/s, not the fixed-250ms rate's 4 PUT/s | an interval that never actually lengthens past its initial value under real (not hand-fed) traffic |
 | T0 | Directory-entry round-trip with the reserved lane byte: `SegmentWriter` always emits 0, `SegmentReader` always decodes 0, for every existing segment-shape test in the suite | a writer that emits a stray value, or a reader that reads the wrong offset once the entry widens |
-| T12 (`-Xmx` bound) | Memory flatness under the adaptive interval, at the ceiling | an accumulation path that grows unbounded once flushes are less frequent |
+| T12 (`-Xmx` bound) | Memory flatness under the adaptive interval, at the ceiling, under 24 CONCURRENT producers (ADR-0026) -- `fillRatio` in the middle band (~0.65), the one regime that HOLDS the ceiling while the timer flushes a ~5.2 MiB accumulator | an accumulation path that grows unbounded once flushes are less frequent -- e.g. a per-producer rather than per-accumulator buffer, which a single-producer test cannot distinguish because a lone blocking producer holds only ~223 KB at any interval |
 
 Each new test named above must have a red record (`scripts/tdd-red.sh`)
 before the code it tests exists, same as every prior milestone.
