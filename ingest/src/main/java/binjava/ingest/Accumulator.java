@@ -35,6 +35,7 @@ public final class Accumulator {
     private SegmentWriter writer = new SegmentWriter();
     private long bufferedBytes;
     private long firstAppendMillis = -1;
+    private double lastFillRatio;
 
     public Accumulator(IngestConfig config, Clock clock) {
         this.config = Objects.requireNonNull(config, "config");
@@ -106,9 +107,28 @@ public final class Accumulator {
             return java.util.Optional.empty();
         }
         byte[] segment = writer.toByteArray(firstAppendMillis);
+        // ⚠️ M3.2; ADR-0016 §2/§2b, carried forward by ADR-0017: measured
+        // against the segment's REAL serialised length, not `bufferedBytes`'s
+        // pre-flush estimate -- framing (preamble, directory, footer) is real
+        // bytes in the object that the estimate never counted, so fillRatio
+        // can genuinely exceed 1.0 when the size trigger fires right at the
+        // boundary. No interval adjustment reads this yet (M3.3's job); this
+        // task only computes and exposes it.
+        lastFillRatio = (double) segment.length / config.maxSegmentBytes();
         writer = new SegmentWriter();
         bufferedBytes = 0;
         firstAppendMillis = -1;
         return java.util.Optional.of(segment);
+    }
+
+    /**
+     * {@code fillRatio = actualSegmentBytes ÷ targetSegmentSize} from the
+     * most recent {@link #drain()} -- {@code 0.0} before any segment has ever
+     * been drained. The control signal ADR-0016 §2b names, measured locally
+     * with no coordination (ADR-0017 point 2): this instance's own flushes,
+     * nothing gossiped, nothing summed across pods.
+     */
+    public double lastFillRatio() {
+        return lastFillRatio;
     }
 }

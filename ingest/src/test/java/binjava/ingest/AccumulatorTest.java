@@ -186,4 +186,95 @@ class AccumulatorTest {
         assertThat(a.isFlushDue()).isTrue();
         assertThat(SegmentReader.open(a.drain().orElseThrow()).directory()).hasSize(1);
     }
+
+    @Test
+    void lastFillRatioIsZeroBeforeAnyDrain() {
+        // ⚠️ M3.2; ADR-0016 §2b: "nothing measured yet" must not look like a
+        // real, low-fillRatio flush -- 0.0 is only ever produced here, never
+        // by a genuine drain (a real segment always has SOME bytes).
+        Accumulator a = new Accumulator(config(Duration.ofMillis(250), 1 << 20), new TestClock());
+        assertThat(a.lastFillRatio()).isZero();
+    }
+
+    @Test
+    void lastFillRatioSurvivesAnEmptyDrainAfterARealOne() throws Exception {
+        // ⚠️ test-reviewer round 1 (M3.2): `drain()` returns empty BEFORE
+        // touching `lastFillRatio` when nothing is buffered -- this proves
+        // that path genuinely leaves a PRIOR real measurement in place
+        // rather than resetting it, which the javadoc's own "0.0 before any
+        // segment has ever been drained" wording implies but no test
+        // previously exercised (every other test's first drain follows an
+        // empty accumulator, never a drain call AFTER a real one).
+        TestClock clock = new TestClock();
+        Accumulator a = new Accumulator(config(Duration.ofMillis(250), 1 << 20), clock);
+        a.add(new RunKey(A, 0), record("1", "{}"));
+        clock.advance(Duration.ofMillis(250));
+        byte[] segment = a.drain().orElseThrow();
+        double realRatio = a.lastFillRatio();
+        assertThat(realRatio).as("fixture must produce a genuine, non-zero measurement")
+                .isNotZero();
+
+        // ⚠️ Nothing buffered now -- drain() takes the early-return path.
+        assertThat(a.drain()).as("nothing to write").isEmpty();
+        assertThat(a.lastFillRatio()).as("the prior real measurement, not reset to 0")
+                .isEqualTo(realRatio);
+    }
+
+    @Test
+    void drainComputesFillRatioFromTheRealSegmentBytesNotTheEstimate() throws Exception {
+        // ⚠️ M3.2; ADR-0016 §2/§2b: fillRatio = actualSegmentBytes /
+        // targetSegmentSize, measured against the segment SegmentWriter
+        // actually produced -- not `bufferedBytes()`'s pre-flush framing
+        // estimate, which never counts the preamble/directory/footer that
+        // are real bytes in the object too.
+        TestClock clock = new TestClock();
+        long targetSize = 1 << 20;
+        Accumulator a = new Accumulator(config(Duration.ofMillis(250), targetSize), clock);
+        a.add(new RunKey(A, 0), record("1", "{\"n\":1}"));
+        clock.advance(Duration.ofMillis(250));
+
+        byte[] segment = a.drain().orElseThrow();
+        assertThat(a.lastFillRatio()).isEqualTo((double) segment.length / targetSize);
+    }
+
+    @Test
+    void fillRatioCanExceedOneAtTheSizeTriggerBoundary() throws Exception {
+        // ⚠️ The size trigger fires on the ESTIMATE reaching the target; the
+        // REAL segment (preamble + directory + footer + framing) is always
+        // at least as large, so fillRatio at that exact boundary is >= 1.0,
+        // never artificially capped at exactly 1.0.
+        TestClock clock = new TestClock();
+        Accumulator a = new Accumulator(config(Duration.ofHours(1), 32), clock);
+        a.add(new RunKey(A, 0), record("1", "abc"));
+        assertThat(a.add(new RunKey(A, 0), record("2", "0123456789012345"))).as("size trigger fires")
+                .isTrue();
+
+        byte[] segment = a.drain().orElseThrow();
+        assertThat(a.lastFillRatio()).as("real bytes exceed the 32-byte target once framed")
+                .isGreaterThan(1.0)
+                .isEqualTo((double) segment.length / 32);
+    }
+
+    @Test
+    void lastFillRatioUpdatesOnEachDrainIndependently() throws Exception {
+        TestClock clock = new TestClock();
+        Accumulator a = new Accumulator(config(Duration.ofMillis(250), 1 << 20), clock);
+        a.add(new RunKey(A, 0), record("1", "{}"));
+        clock.advance(Duration.ofMillis(250));
+        byte[] first = a.drain().orElseThrow();
+        double firstRatio = a.lastFillRatio();
+        assertThat(firstRatio).isEqualTo((double) first.length / (1 << 20));
+
+        // ⚠️ A second, LARGER segment must overwrite the first ratio, not
+        // average with it or get stuck at the first drain's value.
+        a.add(new RunKey(A, 0), record("2", "a longer body than the first one, by design"));
+        a.add(new RunKey(B, 0), record("3", "another record so this segment is genuinely bigger"));
+        clock.advance(Duration.ofMillis(250));
+        byte[] second = a.drain().orElseThrow();
+        assertThat(second.length).as("fixture must actually differ in size").isNotEqualTo(first.length);
+        assertThat(a.lastFillRatio())
+                .as("reflects the SECOND drain, not stuck at the first")
+                .isEqualTo((double) second.length / (1 << 20))
+                .isNotEqualTo(firstRatio);
+    }
 }
