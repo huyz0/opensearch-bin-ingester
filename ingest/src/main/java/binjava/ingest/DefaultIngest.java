@@ -7,6 +7,7 @@ import binjava.format.RunCommit;
 import binjava.format.RunKey;
 import binjava.format.SegmentRecord;
 import binjava.security.Principal;
+import binjava.sequencer.CommitLog;
 import java.io.IOException;
 import java.time.Clock;
 import java.time.Duration;

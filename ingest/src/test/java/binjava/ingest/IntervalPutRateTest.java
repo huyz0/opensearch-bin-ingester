@@ -32,7 +32,7 @@ import org.junit.jupiter.api.Timeout;
  * the SPEC gives for why 8 MiB at 1 MiB/s (8 s) would be slower than the
  * ceiling if the size trigger ever got there first.
  *
- * <p>⚠️ ONLY {@link SegmentPublisher}, no {@link CommitLog}: "one flush is one
+ * <p>⚠️ ONLY {@link SegmentPublisher}, no {@link binjava.sequencer.CommitLog}: "one flush is one
  * PUT" (SegmentPublisher's own javadoc) is exactly the quantity ADR-0016's
  * PUT/s table counts and this test measures -- a commit-log append is a
  * SEPARATE request the cost table does not fold into that figure, and

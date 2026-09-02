@@ -8,6 +8,7 @@ import binjava.binstore.backend.MemoryBinStore;
 import binjava.format.CommitDelta;
 import binjava.format.RunCommit;
 import binjava.format.RunKey;
+import binjava.sequencer.CommitLog;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
