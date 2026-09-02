@@ -37,9 +37,23 @@ public final class Accumulator {
     private long firstAppendMillis = -1;
     private double lastFillRatio;
 
+    // ⚠️ M3.3; ADR-0016 §2/§2b, carried forward by ADR-0017 -- see the M3
+    // SPEC's own Design section for why "lengthen when sustained LOW,
+    // shorten when HIGH" is the correct direction, not the reverse a naive
+    // reading of ADR-0016's own (withdrawn, writer-count) "scale up"/"scale
+    // down" table would suggest.
+    private Duration currentInterval;
+    private long lowStreakStartMillis = -1;
+    private long highStreakStartMillis = -1;
+
     public Accumulator(IngestConfig config, Clock clock) {
         this.config = Objects.requireNonNull(config, "config");
         this.clock = Objects.requireNonNull(clock, "clock");
+        // ⚠️ Every pod starts at the floor -- the cheapest-latency, safest
+        // point -- and earns the right to lengthen only once its OWN
+        // fillRatio proves it sustains a low load (ADR-0017 point 2: no
+        // coordination, no shared starting signal).
+        this.currentInterval = config.intervalFloor();
     }
 
     /**
@@ -83,10 +97,14 @@ public final class Accumulator {
         // ⚠️ `>= 0` on the comparison: at EXACTLY the interval the flush is due.
         // Strictly-greater delays every flush by one clock tick, which at 250 ms
         // is a latency floor nobody would find by reading the code.
-        // ⚠️ M3.1 renames the field (flushInterval -> intervalFloor); M3.2/M3.3
-        // are where this actually becomes an adaptive, per-instance interval
-        // instead of always reading the floor straight from config.
-        return waited.compareTo(config.intervalFloor()) >= 0;
+        // ⚠️ M3.3: this instance's OWN adapted interval, not the config's
+        // floor straight -- starts at the floor and moves per `adaptInterval`.
+        return waited.compareTo(currentInterval) >= 0;
+    }
+
+    /** This instance's own current flush interval -- the floor until fillRatio earns otherwise. */
+    public Duration currentInterval() {
+        return currentInterval;
     }
 
     public boolean isEmpty() {
@@ -112,13 +130,51 @@ public final class Accumulator {
         // pre-flush estimate -- framing (preamble, directory, footer) is real
         // bytes in the object that the estimate never counted, so fillRatio
         // can genuinely exceed 1.0 when the size trigger fires right at the
-        // boundary. No interval adjustment reads this yet (M3.3's job); this
-        // task only computes and exposes it.
+        // boundary.
         lastFillRatio = (double) segment.length / config.maxSegmentBytes();
+        adaptInterval(clock.millis());
         writer = new SegmentWriter();
         bufferedBytes = 0;
         firstAppendMillis = -1;
         return java.util.Optional.of(segment);
+    }
+
+    /**
+     * M3.3; ADR-0016 §2/§2b, carried forward by ADR-0017. Per pod, no
+     * coordination: {@code lastFillRatio} sustained at or below {@code
+     * fillRatioLowThreshold} for {@code intervalLengthenDelay} lengthens the
+     * interval to the ceiling; sustained at or above {@code
+     * fillRatioHighThreshold} for {@code intervalShortenDelay} shortens it
+     * to the floor. A binary jump, not a multi-step ramp -- ADR-0016/17
+     * describe a RANGE and a direction, never an intermediate stepping
+     * function, and the sustained-delay requirement is what already makes
+     * lengthening the slow half of the asymmetry; a ramp on top of that
+     * would be an invented detail the corpus never specifies. A `fillRatio`
+     * strictly between the two thresholds resets BOTH streaks -- neither
+     * condition has been continuously true, so neither should fire once the
+     * OTHER band is reached again later.
+     */
+    private void adaptInterval(long nowMillis) {
+        if (lastFillRatio >= config.fillRatioHighThreshold()) {
+            lowStreakStartMillis = -1;
+            if (highStreakStartMillis < 0) {
+                highStreakStartMillis = nowMillis;
+            }
+            if (nowMillis - highStreakStartMillis >= config.intervalShortenDelay().toMillis()) {
+                currentInterval = config.intervalFloor();
+            }
+        } else if (lastFillRatio <= config.fillRatioLowThreshold()) {
+            highStreakStartMillis = -1;
+            if (lowStreakStartMillis < 0) {
+                lowStreakStartMillis = nowMillis;
+            }
+            if (nowMillis - lowStreakStartMillis >= config.intervalLengthenDelay().toMillis()) {
+                currentInterval = config.intervalCeiling();
+            }
+        } else {
+            lowStreakStartMillis = -1;
+            highStreakStartMillis = -1;
+        }
     }
 
     /**

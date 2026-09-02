@@ -277,4 +277,180 @@ class AccumulatorTest {
                 .isEqualTo((double) second.length / (1 << 20))
                 .isNotEqualTo(firstRatio);
     }
+
+    // -- M3.3: the adaptive interval itself (ADR-0016 §2/§2b; ADR-0017) --
+
+    private static IngestConfig adaptiveConfig(long maxBytes, Duration floor, Duration ceiling,
+            double lowThreshold, double highThreshold, Duration lengthenDelay,
+            Duration shortenDelay) {
+        return new IngestConfig(floor, maxBytes, "cluster-a",
+                IngestConfig.DEFAULT_MAX_QUEUED_PUSH_BYTES, ceiling, lowThreshold, highThreshold,
+                lengthenDelay, shortenDelay);
+    }
+
+    @Test
+    void theIntervalStartsAtTheFloor() {
+        // ⚠️ ADR-0017 point 2: every pod starts at the cheapest-latency,
+        // safest point and earns the right to lengthen, rather than starting
+        // anywhere else or requiring a coordinated initial value.
+        IngestConfig cfg = adaptiveConfig(1 << 20, Duration.ofMillis(250), Duration.ofSeconds(5),
+                0.4, 0.9, Duration.ofMinutes(2), Duration.ZERO);
+        Accumulator a = new Accumulator(cfg, new TestClock());
+        assertThat(a.currentInterval()).isEqualTo(Duration.ofMillis(250));
+    }
+
+    @Test
+    void theIntervalDoesNotLengthenBeforeTheSustainedDelayElapses() throws Exception {
+        TestClock clock = new TestClock();
+        IngestConfig cfg = adaptiveConfig(1 << 20, Duration.ofMillis(250), Duration.ofSeconds(5),
+                0.4, 0.9, Duration.ofMinutes(2), Duration.ZERO);
+        Accumulator a = new Accumulator(cfg, clock);
+
+        a.add(new RunKey(A, 0), record("1", "{}"));
+        clock.advance(Duration.ofMillis(250));
+        a.drain();
+        assertThat(a.lastFillRatio()).as("fixture must genuinely be low").isLessThan(0.4);
+        assertThat(a.currentInterval()).as("streak just started, not yet 2 minutes")
+                .isEqualTo(Duration.ofMillis(250));
+
+        clock.advance(Duration.ofMinutes(2).minusMillis(1));
+        a.add(new RunKey(A, 0), record("2", "{}"));
+        a.drain();
+        assertThat(a.currentInterval()).as("one millisecond short of the sustained delay")
+                .isEqualTo(Duration.ofMillis(250));
+    }
+
+    @Test
+    void theIntervalLengthensToTheCeilingOnceFillRatioSustainsLowForTheFullDelay() throws Exception {
+        TestClock clock = new TestClock();
+        IngestConfig cfg = adaptiveConfig(1 << 20, Duration.ofMillis(250), Duration.ofSeconds(5),
+                0.4, 0.9, Duration.ofMinutes(2), Duration.ZERO);
+        Accumulator a = new Accumulator(cfg, clock);
+
+        a.add(new RunKey(A, 0), record("1", "{}"));
+        clock.advance(Duration.ofMillis(250));
+        a.drain(); // the streak starts here
+
+        clock.advance(Duration.ofMinutes(2)); // exactly the sustained delay, cumulative
+        a.add(new RunKey(A, 0), record("2", "{}"));
+        a.drain();
+        assertThat(a.lastFillRatio()).as("still genuinely low").isLessThan(0.4);
+        assertThat(a.currentInterval()).as("sustained for the full delay -- lengthens")
+                .isEqualTo(Duration.ofSeconds(5));
+    }
+
+    @Test
+    void theIntervalShortensToTheFloorImmediatelyOnceFillRatioReachesTheHighThreshold()
+            throws Exception {
+        // ⚠️ ADR-0016's own asymmetry: shortening reacts FAST (the M3 SPEC's
+        // default shortenDelay is ZERO -- react on the very next flush,
+        // protecting latency the moment volume rises, no debounce). A
+        // target of 1000 bytes keeps both a tiny record (low fillRatio) and
+        // an ~850-byte one (high fillRatio) trivially constructible against
+        // the same config, on the same accumulator.
+        TestClock clock = new TestClock();
+        IngestConfig cfg = adaptiveConfig(1000, Duration.ofMillis(250), Duration.ofSeconds(5),
+                0.4, 0.9, Duration.ofMinutes(2), Duration.ZERO);
+        Accumulator a = new Accumulator(cfg, clock);
+
+        // First, earn a lengthened interval, so shortening has something
+        // real to undo rather than trivially staying at the floor.
+        a.add(new RunKey(A, 0), record("1", "{}"));
+        clock.advance(Duration.ofMillis(250));
+        a.drain();
+        assertThat(a.lastFillRatio()).as("setup fixture must genuinely be low").isLessThan(0.4);
+        clock.advance(Duration.ofMinutes(2));
+        a.add(new RunKey(A, 0), record("2", "{}"));
+        a.drain();
+        assertThat(a.currentInterval()).as("setup: lengthened").isEqualTo(Duration.ofSeconds(5));
+
+        // Now a single high-fillRatio flush must shorten back to the floor
+        // immediately -- no sustained delay required, unlike lengthening.
+        a.add(new RunKey(A, 0), record("3", "x".repeat(850)));
+        clock.advance(Duration.ofSeconds(5));
+        a.drain();
+        assertThat(a.lastFillRatio()).as("this flush is genuinely high").isGreaterThanOrEqualTo(0.9);
+        assertThat(a.currentInterval()).as("shortened back to the floor immediately, no delay")
+                .isEqualTo(Duration.ofMillis(250));
+    }
+
+    @Test
+    void aMiddleBandFillRatioResetsTheLengthenStreakWithoutChangingTheInterval() throws Exception {
+        // ⚠️ Neither threshold condition has been CONTINUOUSLY true if a
+        // middle-band observation lands in between -- the streak must
+        // restart, not merely pause, or a fillRatio that dips low, drifts to
+        // the middle for a while, then dips low again would lengthen based
+        // on ACCUMULATED (not sustained) low time.
+        TestClock clock = new TestClock();
+        IngestConfig cfg = adaptiveConfig(1 << 20, Duration.ofMillis(250), Duration.ofSeconds(5),
+                0.4, 0.9, Duration.ofMinutes(2), Duration.ZERO);
+        Accumulator a = new Accumulator(cfg, clock);
+
+        a.add(new RunKey(A, 0), record("1", "{}"));
+        clock.advance(Duration.ofMillis(250));
+        a.drain(); // low streak starts
+        assertThat(a.lastFillRatio()).isLessThan(0.4);
+
+        clock.advance(Duration.ofMinutes(1)); // half the sustained delay
+        // ⚠️ A record sized to land in the middle band (neither <=0.4 nor >=0.9
+        // of the 1 MiB target) -- resets the streak this drain observes.
+        a.add(new RunKey(A, 0), record("2", "x".repeat(600_000)));
+        a.drain();
+        assertThat(a.lastFillRatio()).as("genuinely in the middle band")
+                .isGreaterThan(0.4).isLessThan(0.9);
+        assertThat(a.currentInterval()).isEqualTo(Duration.ofMillis(250));
+
+        // Only 1 minute has passed since the RESET (the middle-band drain),
+        // not the 2 minutes required -- must NOT have lengthened even though
+        // 2+ minutes have passed since the very first (pre-reset) low drain.
+        clock.advance(Duration.ofMinutes(1).plusMillis(1));
+        a.add(new RunKey(A, 0), record("3", "{}"));
+        a.drain();
+        assertThat(a.lastFillRatio()).isLessThan(0.4);
+        assertThat(a.currentInterval()).as("the streak restarted at the middle-band drain, not before")
+                .isEqualTo(Duration.ofMillis(250));
+    }
+
+    @Test
+    void theIntervalNeverExceedsTheCeilingNorDropsBelowTheFloorUnderOscillation() throws Exception {
+        // ⚠️ Adversarial: fillRatio alternating low/high every flush must
+        // never push the interval outside [floor, ceiling], and (since
+        // shortenDelay is zero but lengthenDelay is 2 minutes) an
+        // oscillation faster than 2 minutes per cycle should never actually
+        // lengthen at all -- only shorten-or-stay-at-floor.
+        TestClock clock = new TestClock();
+        IngestConfig cfg = adaptiveConfig(1 << 20, Duration.ofMillis(250), Duration.ofSeconds(5),
+                0.4, 0.9, Duration.ofMinutes(2), Duration.ZERO);
+        Accumulator a = new Accumulator(cfg, clock);
+
+        for (int i = 0; i < 10; i++) {
+            boolean high = i % 2 == 0;
+            // ⚠️ Genuinely >= 0.9 of the 1 MiB target once real segment
+            // overhead is added -- 900,000 bytes measures only ~0.86, which
+            // would silently never reach the high branch at all and make
+            // this loop's own "high" half a no-op. Verify, don't guess.
+            SegmentRecord r = high
+                    ? record("h" + i, "x".repeat(1_000_000))
+                    : record("l" + i, "{}");
+            a.add(new RunKey(A, 0), r);
+            clock.advance(Duration.ofSeconds(1));
+            a.drain();
+            if (high) {
+                assertThat(a.lastFillRatio()).as("iteration %d must genuinely be high", i)
+                        .isGreaterThanOrEqualTo(0.9);
+            } else {
+                assertThat(a.lastFillRatio()).as("iteration %d must genuinely be low", i)
+                        .isLessThanOrEqualTo(0.4);
+            }
+            assertThat(a.currentInterval())
+                    .as("iteration %d, fillRatio=%f", i, a.lastFillRatio())
+                    .isGreaterThanOrEqualTo(Duration.ofMillis(250))
+                    .isLessThanOrEqualTo(Duration.ofSeconds(5));
+        }
+        // ⚠️ Every low observation's streak was reset by the very next
+        // (high) observation before 2 minutes could ever elapse -- the
+        // interval must have stayed at the floor throughout, never earning
+        // a lengthen it was never continuously entitled to.
+        assertThat(a.currentInterval()).isEqualTo(Duration.ofMillis(250));
+    }
 }
