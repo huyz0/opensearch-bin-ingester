@@ -502,7 +502,8 @@ One commit each, decomposed in [backlog.md](../../backlog.md).
 | M4.0 | This spec; the roadmap's stale `I1–I4` corrected to `I1–I5`; M5's row named as commit forwarding's owner |
 | M4.1 | `Sequencer` seam interface and its fake, with the contract stated — the commit request carries `(podId, flushSeq, …)` so it is meaningful from another pod |
 | M4.2 | Move `CommitLog` from `ingest` to `sequencer` — **pure move, no behaviour change** |
-| M4.3 | `Lease` record and key grammar; acquire/renew/release — ⚠️ `putIfAbsent` for FIRST acquisition (`putIfMatch` throws on an absent key), `putIfMatch` to take over or renew; TTL and renew interval as configuration |
+| M4.3 | `Lease` — the record, its validation and its JSON codec, in `format`, mirroring the `IndexRegistry`/`IndexOrdinalRegistry` split |
+| M4.3b | `LeaseManager` in `sequencer`: the key grammar and acquire/renew/release — ⚠️ `putIfAbsent` for FIRST acquisition (`putIfMatch` throws on an absent key), `putIfMatch` to take over or renew; TTL and renew interval as configuration. ⚠️ Split out of M4.3, which was two changes in two modules; M1's own table carries `M1.3b`/`M1.16b`/`M1.19b`, so the convention is established |
 | M4.4 | Epoch fencing: epoch in the path; a fenced writer's PUT is unreadable |
 | M4.5 | ADR + wire-format change for `SEAL` **and `CONTINUE`**, and the empty-runs guard they collide with; golden files for **every** shape — v0, `SEAL`, `CONTINUE` |
 | M4.6 | The seal protocol, **both losing branches**, with the termination argument |
