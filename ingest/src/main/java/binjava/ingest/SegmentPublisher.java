@@ -123,10 +123,15 @@ public final class SegmentPublisher {
             distinctIndices.add(entry.key().indexId());
         }
 
-        MembershipFilter filter = chooseFilter(distinctIndices);
+        // ⚠️ Read ONCE, before the filter is chosen: the budget the filter is
+        // judged against depends on this SAME sequence number (M2.8, round-1
+        // test review), so it must be the one that ends up in the key, not a
+        // second draw that would desynchronize the two.
+        long thisSequence = sequence.getAndIncrement();
+        MembershipFilter filter = chooseFilter(distinctIndices, createdAt, thisSequence, headerLen);
 
         String key = new SegmentKey(prefix, createdAt, podShortId,
-                sequence.getAndIncrement(), headerLen, filter.encode()).key();
+                thisSequence, headerLen, filter.encode()).key();
 
         // ⚠️ put, not putIfAbsent: the key already contains a pod id and a
         // per-pod sequence, so it is unique WITHOUT coordination. Paying for a
@@ -145,14 +150,21 @@ public final class SegmentPublisher {
 
     /**
      * Resolves each distinct index's ordinal (typically free -- see the class
-     * javadoc) and picks the shortest-fitting filter (M2.6; ADR-0003).
+     * javadoc) and picks the shortest-fitting filter (M2.6; ADR-0003) against
+     * the REAL remaining key budget for THIS key's own fields, not a fixed
+     * guess (M2.8, round-1 test review: a fixed 900-byte budget let a filter
+     * that "fit" its own assumption still overflow the whole key once
+     * combined with a real prefix and pod id).
      */
-    private MembershipFilter chooseFilter(Set<UUID> distinctIndices) throws IOException {
+    private MembershipFilter chooseFilter(Set<UUID> distinctIndices, long timestampMillis,
+            long sequenceValue, int headerLen) throws IOException {
         Set<Integer> memberOrdinals = new HashSet<>();
         for (UUID indexId : distinctIndices) {
             memberOrdinals.add(ordinals.ordinalFor(indexId.toString()));
         }
         int totalRegistered = ordinals.registeredCount();
-        return FilterCandidates.chooseShortestFitting(memberOrdinals, totalRegistered);
+        int budgetBytes = SegmentKey.filterBudgetBytes(
+                prefix, timestampMillis, podShortId, sequenceValue, headerLen);
+        return FilterCandidates.chooseShortestFitting(memberOrdinals, totalRegistered, budgetBytes);
     }
 }

@@ -110,26 +110,62 @@ public record SegmentKey(
 
     /** The full object key. */
     public String key() {
-        // ⚠️ Zero-padded to 19 digits -- the width of Long.MAX_VALUE -- so the
-        // millisecond stamp sorts lexicographically for ANY value a long can
-        // hold. Unpadded, "9999" sorts after "10000" and a recovery walk visits
-        // the hour out of order, silently skipping objects on a start-after
-        // resume. ⚠️ 13 was tried first and is WRONG: it pads today's 13-digit
-        // values, so every realistic fixture passes, while a 14-digit timestamp
-        // (from 2286) is not padded at all and sorts before every key written
-        // before it. Six extra bytes against a 1024-byte budget whose fixed part
-        // is ~90.
-        // ⚠️ Locale.ROOT: String.formatted() uses the default locale, so under
-        // a locale with non-ASCII digits every key would render with digits no
-        // other process could parse -- and object keys outlive the process.
-        String rendered = String.format(java.util.Locale.ROOT,
-                "%s/data/%s/%019d-%s-%016x-h%d-%s.bseg",
-                prefix, PATH.format(Instant.ofEpochMilli(timestampMillis)),
-                timestampMillis, podShortId, sequence, headerLen, filterEncoded);
+        String rendered = render(prefix, timestampMillis, podShortId, sequence, headerLen, filterEncoded);
         if (rendered.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > MAX_KEY_BYTES) {
             throw new IllegalStateException("segment key exceeds " + MAX_KEY_BYTES + " bytes");
         }
         return rendered;
+    }
+
+    /**
+     * How many bytes are left for the FILTER component of a key built from
+     * these other fields, before {@link #MAX_KEY_BYTES} is reached.
+     *
+     * <p>⚠️ {@code FilterCandidates} must budget against THIS, computed per
+     * call from the fields a real key will actually use, never a fixed
+     * guess: prefix and podShortId length vary by deployment, and a filter
+     * that individually fits some assumed-fixed budget can still leave the
+     * WHOLE key over the cap once combined with a longer-than-assumed
+     * prefix or pod id. Found at M2.8 (round-1 test review): reproduced
+     * with the real, unmodified pre-fix code at a plain ~1,120-distinct-index
+     * segment -- nowhere near this project's 10,000-index pathological
+     * scale -- where a Bloom filter correctly measured at 897 bytes against
+     * a hardcoded 900-byte assumption left {@link #key()} throwing once
+     * combined with a realistic prefix and pod id.
+     *
+     * @return bytes free for {@code filterEncoded}; a non-positive result
+     *     means nothing fits and the caller must degrade to {@code N}
+     */
+    public static int filterBudgetBytes(String prefix, long timestampMillis, String podShortId,
+            long sequence, int headerLen) {
+        // ⚠️ Renders the SAME template key() renders, with an empty filter
+        // slot, so this can never drift from what key() will actually do --
+        // a second, hand-derived formula for "the fixed part's length"
+        // would be exactly the kind of assumption this method exists to
+        // replace.
+        String withoutFilter = render(prefix, timestampMillis, podShortId, sequence, headerLen, "");
+        int fixedBytes = withoutFilter.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+        return MAX_KEY_BYTES - fixedBytes;
+    }
+
+    // ⚠️ Zero-padded to 19 digits -- the width of Long.MAX_VALUE -- so the
+    // millisecond stamp sorts lexicographically for ANY value a long can
+    // hold. Unpadded, "9999" sorts after "10000" and a recovery walk visits
+    // the hour out of order, silently skipping objects on a start-after
+    // resume. ⚠️ 13 was tried first and is WRONG: it pads today's 13-digit
+    // values, so every realistic fixture passes, while a 14-digit timestamp
+    // (from 2286) is not padded at all and sorts before every key written
+    // before it. Six extra bytes against a 1024-byte budget whose fixed part
+    // is ~90.
+    // ⚠️ Locale.ROOT: String.formatted() uses the default locale, so under
+    // a locale with non-ASCII digits every key would render with digits no
+    // other process could parse -- and object keys outlive the process.
+    private static String render(String prefix, long timestampMillis, String podShortId,
+            long sequence, int headerLen, String filterEncoded) {
+        return String.format(java.util.Locale.ROOT,
+                "%s/data/%s/%019d-%s-%016x-h%d-%s.bseg",
+                prefix, PATH.format(Instant.ofEpochMilli(timestampMillis)),
+                timestampMillis, podShortId, sequence, headerLen, filterEncoded);
     }
 
     /** The prefix a recovery LIST walks for one hour. */

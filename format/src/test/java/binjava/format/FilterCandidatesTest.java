@@ -13,13 +13,21 @@ import org.junit.jupiter.api.Test;
  * doc 02 §7): {@code A} if literally every registered index is present,
  * {@code Z}/{@code R} if the exact bitmap fits, {@code B} (Bloom) as the
  * default at scale, {@code N} if nothing fits.
+ *
+ * <p>⚠️ Every call here passes {@code 900} as the budget explicitly -- that
+ * is a TEST fixture's choice, illustrating "a real budget a caller might
+ * compute," not a hidden default this class ever assumes on its own (M2.8,
+ * round-1 test review: a fixed internal 900-byte constant let a filter that
+ * "fit" it still overflow the whole key once a real prefix and pod id were
+ * added; see {@link SegmentKey#filterBudgetBytes}, the actual production
+ * source of this number now).
  */
 class FilterCandidatesTest {
 
     @Test
     void allWhenEveryRegisteredIndexIsPresent() {
         Set<Integer> members = Set.of(0, 1, 2);
-        MembershipFilter chosen = FilterCandidates.chooseShortestFitting(members, 3);
+        MembershipFilter chosen = FilterCandidates.chooseShortestFitting(members, 3, 900);
         assertThat(chosen).isInstanceOf(MembershipFilter.All.class);
     }
 
@@ -28,7 +36,7 @@ class FilterCandidatesTest {
         // ⚠️ 3 members, but 4 are registered in total -- one registered index
         // is genuinely absent from this segment, so A would be a lie.
         Set<Integer> members = Set.of(0, 1, 2);
-        MembershipFilter chosen = FilterCandidates.chooseShortestFitting(members, 4);
+        MembershipFilter chosen = FilterCandidates.chooseShortestFitting(members, 4, 900);
         assertThat(chosen).isNotInstanceOf(MembershipFilter.All.class);
     }
 
@@ -37,7 +45,7 @@ class FilterCandidatesTest {
         // ⚠️ A handful of ordinals in a small space -- Z fits easily and is
         // tried before R/B (cheapest-first, per the design).
         Set<Integer> members = Set.of(0, 5, 9);
-        MembershipFilter chosen = FilterCandidates.chooseShortestFitting(members, 1000);
+        MembershipFilter chosen = FilterCandidates.chooseShortestFitting(members, 1000, 900);
         assertThat(chosen).isInstanceOf(MembershipFilter.ExactBitmap.class);
         for (int m : members) {
             assertThat(((MembershipFilter.ExactBitmap) chosen).mightContain(m)).isTrue();
@@ -51,7 +59,7 @@ class FilterCandidatesTest {
         // to fit the budget, but the same set, RLE-encoded, collapses to a
         // handful of run lengths and DOES fit.
         Set<Integer> members = Set.of(0, 1, 2, 7_000, 7_001, 7_002);
-        MembershipFilter chosen = FilterCandidates.chooseShortestFitting(members, 8_000);
+        MembershipFilter chosen = FilterCandidates.chooseShortestFitting(members, 8_000, 900);
         assertThat(chosen).isInstanceOf(MembershipFilter.RunLength.class);
         for (int m : members) {
             assertThat(((MembershipFilter.RunLength) chosen).mightContain(m)).isTrue();
@@ -68,7 +76,7 @@ class FilterCandidatesTest {
         for (int i = 0; i < 500; i++) {
             members.add(i * 17); // sparse: spread across a 8,500-wide ordinal space
         }
-        MembershipFilter chosen = FilterCandidates.chooseShortestFitting(members, 10_000);
+        MembershipFilter chosen = FilterCandidates.chooseShortestFitting(members, 10_000, 900);
         assertThat(chosen).isInstanceOf(MembershipFilter.Bloom.class);
         for (int m : members) {
             assertThat(((MembershipFilter.Bloom) chosen).mightContain(m))
@@ -91,13 +99,13 @@ class FilterCandidatesTest {
         for (int i = 0; i < 10_000; i += 2) {
             members.add(i);
         }
-        MembershipFilter chosen = FilterCandidates.chooseShortestFitting(members, 10_000);
+        MembershipFilter chosen = FilterCandidates.chooseShortestFitting(members, 10_000, 900);
         assertThat(chosen).isInstanceOf(MembershipFilter.None.class);
     }
 
     @Test
     void anEmptyMemberSetDegradesToNRatherThanThrowing() {
-        MembershipFilter chosen = FilterCandidates.chooseShortestFitting(Set.of(), 5);
+        MembershipFilter chosen = FilterCandidates.chooseShortestFitting(Set.of(), 5, 900);
         assertThat(chosen).isInstanceOf(MembershipFilter.None.class);
     }
 }
