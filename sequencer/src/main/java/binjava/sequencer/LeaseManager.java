@@ -150,8 +150,15 @@ public final class LeaseManager {
     /**
      * Takes the lease if it is unheld or expired.
      *
-     * @return the lease now held, or empty if someone else holds an unexpired
-     *     one or won the race for it
+     * @return the lease now held, or empty — ⚠️ WHICH IS NOT THE SAME AS "not
+     *     the leader". Empty means there was nothing to acquire, and that
+     *     covers three cases: someone else holds an unexpired lease, someone
+     *     else won the race for it, and THIS INSTANCE ALREADY HOLDS IT. A
+     *     caller that reads empty as "stand down" makes a healthy leader
+     *     abandon a live term for the sole offence of asking twice — a
+     *     supervisor tick or a restarted election loop is enough. Gate on
+     *     {@link #held()}, which after M4.3e no longer reports a term this
+     *     instance does not hold
      * @throws IOException the store was unreachable, or the lease object could
      *     not be parsed — ⚠️ NOT treated as unheld, see below
      */
@@ -176,6 +183,19 @@ public final class LeaseManager {
         // nodes end up sequencing at once.
         Lease current = read();
         if (!current.isExpiredAt(clock.millis())) {
+            // ⚠️ CONDITIONAL, never blanket (M4.3e). Every other path clears
+            // the belief when it learns it is fenced, and `adopt`'s comment
+            // says why: leaving a superseded lease in `held` would make
+            // `held()` report a term this instance does not hold. But this
+            // instance may legitimately be looking at its OWN unexpired lease,
+            // and clearing there would make a healthy leader forget its term
+            // for the sole offence of having asked. Same (epoch, podId)
+            // identity `refreshVersion` uses, and for the same reason.
+            if (held != null && !isOwnTerm(held, current)) {
+                held = null;
+                heldVersion = null;
+                ambiguous = false;
+            }
             return Optional.empty();
         }
         Lease taken = current.takenOverBy(podId, endpoint, clock.millis() + ttl.toMillis());
@@ -230,6 +250,29 @@ public final class LeaseManager {
     }
 
     /**
+     * Whether {@code current} is the term this instance believes it holds.
+     *
+     * <p>⚠️ BOTH HALVES, and the epoch is the load-bearing one: a StatefulSet
+     * reuses pod names, so the realistic successor to a dead {@code podA} is a
+     * restarted {@code podA}, and matching on the holder alone would let a
+     * fenced process claim its successor's term. The podId half guards an
+     * out-of-protocol lease at a matching epoch under another holder — no
+     * in-protocol path mints one, because {@code takenOverBy} advances the
+     * epoch and restamps the holder together, but {@link Lease} deliberately
+     * keeps foreign objects parseable.
+     *
+     * <p>⚠️ The belief is a PARAMETER rather than a read of {@code held},
+     * which is deliberate: {@code held} is mutable and nullable, so a
+     * precondition stated in prose would be checked by nobody. Passing it
+     * makes each call site state which belief it means, and a site that has
+     * not established one cannot reach here by forgetting to look — the
+     * difference between rung 1 and rung 7 of the {@code gate-design} ladder.
+     */
+    private boolean isOwnTerm(Lease mine, Lease current) {
+        return current.epoch() == mine.epoch() && current.holderPodId().equals(podId);
+    }
+
+    /**
      * Re-reads the lease after an ambiguous write and re-establishes the
      * version, if this instance's term still stands.
      *
@@ -248,7 +291,7 @@ public final class LeaseManager {
         Optional<ObjectStat> stat = store.stat(key);
         if (stat.isPresent()) {
             Lease current = read();
-            if (current.epoch() == held.epoch() && current.holderPodId().equals(podId)) {
+            if (isOwnTerm(held, current)) {
                 held = current;
                 heldVersion = stat.get().version();
                 ambiguous = false;
