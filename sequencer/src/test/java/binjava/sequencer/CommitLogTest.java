@@ -6,7 +6,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import binjava.binstore.CountingBinStore;
 import binjava.binstore.backend.MemoryBinStore;
+import binjava.binstore.Body;
 import binjava.format.CommitDelta;
+import binjava.format.Continue;
+import binjava.format.Seal;
 import binjava.format.RunKey;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -15,8 +18,15 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.Executors;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 /** ⚠️ The store is the only coordinator (ADR-0002); offsets are assigned here (ADR-0001). */
+// ⚠️ A CLASS-LEVEL TIMEOUT because `commit`'s retry loop is unbounded by
+// design: a mutation that stops `nextSequence` advancing past an inert entry
+// makes a writer re-race the same slot forever, so the test HANGS instead of
+// failing and Gradle writes no XML. That is the JVM-crash blind spot AGENTS.md
+// records, wearing a different hat -- and a hung task cannot be red-recorded.
+@Timeout(value = 60, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
 class CommitLogTest {
 
     private static final UUID A = UUID.fromString("00000000-0000-0000-0000-0000000000aa");
@@ -303,5 +313,140 @@ class CommitLogTest {
         assertThat(reader.nextOffset(new RunKey(A, 0)))
                 .as("the zombie's 99 records are not in this epoch's chain")
                 .isEqualTo(2);
+    }
+
+    @Test
+    void recoveryAdvancesPastAContinueThatOpensItsChain() throws Exception {
+        // ⚠️ EVERY READER UPDATED IN THE SAME COMMIT (M4.5). A CONTINUE carries
+        // no runs, so it moves no offsets -- but it DOES consume a sequence
+        // number on purpose, and a reader that folds only deltas leaves
+        // `nextSequence` pointing at a slot that is already taken. The next
+        // commit then races for it, loses, re-reads, and races for the same
+        // slot again: a spin, not an error, which is the failure mode that does
+        // not announce itself.
+        // ⚠️ A REPRESENTABLE CHAIN: epoch 2's own chain, opened by a CONTINUE
+        // at seq 0 linking back to epoch 1. Written directly, because WRITING
+        // these is M4.6's job and this commit only teaches readers.
+        MemoryBinStore store = new MemoryBinStore();
+        CommitLog epoch2 = new CommitLog(store, "bins", 2);
+        byte[] cont = new Continue(0, 1, 5).encode();
+        store.putIfAbsent(epoch2.keyFor(0), new Body(cont.length,
+                () -> new java.io.ByteArrayInputStream(cont)));
+
+        CommitLog reader = new CommitLog(store, "bins", 2);
+        reader.recover();
+        // ⚠️ The chain is the CONTINUE and NOTHING ELSE -- a leader that opened
+        // its chain and has not committed yet. With a delta after it the test
+        // would not discriminate: the delta's own sequence carries
+        // `nextSequence` to the same place, so the mutation would survive.
+        // ⚠️ NO commit afterwards, deliberately. Under that mutation a commit
+        // would race for a taken slot, lose, re-read, and race again: the test
+        // would HANG rather than fail, which is the JVM-crash blind spot in
+        // `check-tdd` wearing a different hat.
+        assertThat(reader.nextSequence())
+                .as("the CONTINUE consumed slot 0, so the next free slot is 1")
+                .isEqualTo(1);
+        assertThat(reader.nextOffset(new RunKey(A, 0)))
+                .as("and it moved no offsets, because it commits no runs")
+                .isZero();
+    }
+
+    @Test
+    void recoveryAdvancesPastASealWithoutApplyingIt() throws Exception {
+        // ⚠️ Deliberately asserts NOTHING about committing afterwards. A writer
+        // whose recovered state sits beyond a SEAL wins its slot outright and
+        // never reaches `commit`'s fenced check -- that is I5 by a second
+        // route, it is real, and M4.6 owns it. Asserting a commit succeeds here
+        // would SPECIFY the unsafe path, and M4.6's own containment would then
+        // have to invert this test alongside a production change.
+        MemoryBinStore store = new MemoryBinStore();
+        CommitLog log = new CommitLog(store, "bins", 1);
+        log.commit("seg/0", counts(new RunKey(A, 0), 3));
+        byte[] seal = new Seal(1, 2).encode();
+        store.putIfAbsent(log.keyFor(1), new Body(seal.length,
+                () -> new java.io.ByteArrayInputStream(seal)));
+
+        CommitLog reader = new CommitLog(store, "bins", 1);
+        reader.recover();
+        assertThat(reader.nextSequence())
+                .as("the seal consumed a sequence number, so recovery counts it")
+                .isEqualTo(2);
+        assertThat(reader.nextOffset(new RunKey(A, 0)))
+                .as("and applied none of its own, because it commits no runs")
+                .isEqualTo(3);
+    }
+
+    @Test
+    void recoveryStopsOnAnEntryItCannotUnderstandRatherThanSkippingIt() throws Exception {
+        // ⚠️ THE RULE ADR-0028 LEADS WITH, tested where it can actually be
+        // broken. That an unknown kind makes `decode` THROW is proved in the
+        // codec's own tests -- but `decode` returns a ChainEntry, so skipping
+        // is structurally impossible there. The only place a chain can lose a
+        // SEAL is this loop, and a `catch (IOException) { continue; }` here
+        // would leave a reader applying a discarded suffix, which is I3.
+        MemoryBinStore store = new MemoryBinStore();
+        CommitLog log = new CommitLog(store, "bins", 1);
+        log.commit("seg/0", counts(new RunKey(A, 0), 3));
+        byte[] alien = new Seal(1, 2).encode();
+        alien[8] = (byte) 0x63;
+        store.putIfAbsent(log.keyFor(1), new Body(alien.length,
+                () -> new java.io.ByteArrayInputStream(alien)));
+
+        assertThatThrownBy(() -> new CommitLog(store, "bins", 1).recover())
+                .as("an entry this build cannot read stops recovery; it is never skipped")
+                .isInstanceOf(java.io.IOException.class)
+                .hasMessageContaining("kind");
+    }
+
+    @Test
+    void losingASlotToASealStopsRatherThanWritingPastTheBarrier() throws Exception {
+        // ⚠️ INVARIANT I5, which the corpus singles out as "the one a plausible
+        // implementation violates by accident" -- no acknowledged commit exists
+        // beyond a SEAL in its own chain.
+        // ⚠️ This is a regression M4.5 CREATED and had to close in the same
+        // commit. Before it, a seal was an unreadable version and the writer
+        // failed closed by accident; teaching the reader to understand one made
+        // `apply` fold it in and retry at the next slot -- writing past the
+        // barrier and ACKING it, with recovery then applying a discarded
+        // suffix (I3). A read side that ships first must be no less safe than
+        // the one it replaces.
+        // ⚠️ Epoch 1, not 0: the unleased chain has no leader to fence, so it
+        // is never sealed. The behaviour here is epoch-independent, but a
+        // fixture that cannot arise makes a reader doubt the rest of it.
+        MemoryBinStore store = new MemoryBinStore();
+        CommitLog fenced = new CommitLog(store, "bins", 1);
+        fenced.commit("seg/0", counts(new RunKey(A, 0), 3));
+
+        // A new leader at epoch 2 seals the old chain at the slot this writer
+        // is about to want.
+        byte[] seal = new Seal(1, 2).encode();
+        store.putIfAbsent(fenced.keyFor(1), new Body(seal.length,
+                () -> new java.io.ByteArrayInputStream(seal)));
+
+        assertThatThrownBy(() -> fenced.commit("seg/1", counts(new RunKey(A, 0), 2)))
+                .as("losing to a seal is proof of being fenced, not ordinary contention")
+                .isInstanceOf(java.io.IOException.class)
+                .hasMessageContaining("sealed");
+        assertThat(store.stat(fenced.keyFor(2)))
+                .as("and nothing was written past the barrier")
+                .isEmpty();
+    }
+
+    @Test
+    void losingASlotToAContinueIsOrdinaryContentionAndRetries() throws Exception {
+        // ⚠️ THE BARRIER IS THE SEAL, AND ONLY THE SEAL. Without this, widening
+        // the fenced check to `instanceof Seal || instanceof Continue` passes
+        // every other test -- and an over-broad fail-closed is a liveness bug
+        // in the same family as the one it is guarding against: a writer would
+        // stop dead on an entry that means "carry on here".
+        MemoryBinStore store = new MemoryBinStore();
+        CommitLog log = new CommitLog(store, "bins", 2);
+        byte[] cont = new Continue(0, 1, 5).encode();
+        store.putIfAbsent(log.keyFor(0), new Body(cont.length,
+                () -> new java.io.ByteArrayInputStream(cont)));
+
+        assertThat(log.commit("seg/0", counts(new RunKey(A, 0), 3)).sequence())
+                .as("it lost slot 0 to a CONTINUE, folded it in, and took slot 1")
+                .isEqualTo(1);
     }
 }

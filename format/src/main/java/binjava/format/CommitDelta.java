@@ -23,10 +23,9 @@ import java.util.Objects;
  * SLOTS are in the key grammar from the first object so that adding them is not
  * a key-grammar change. // SKELETON: slot/epoch fixed until M4
  */
-public record CommitDelta(long sequence, String segmentKey, List<RunCommit> runs) {
+public record CommitDelta(long sequence, String segmentKey, List<RunCommit> runs)
+        implements ChainEntry {
 
-    private static final int MAGIC = 0x42444C54;   // 'BDLT'
-    private static final int VERSION = 0;
 
     public CommitDelta {
         Objects.requireNonNull(segmentKey, "segmentKey");
@@ -44,13 +43,18 @@ public record CommitDelta(long sequence, String segmentKey, List<RunCommit> runs
         }
     }
 
-    /** ⚠️ The commit log is a wire format too: non-negotiable 8 applies. */
+    /**
+     * ⚠️ The commit log is a wire format too: non-negotiable 8 applies.
+     *
+     * <p>⚠️ STILL v0. M4.5 added two more shapes at this key and a v1 header
+     * that carries a kind, but nothing about a DELTA changed — so re-encoding
+     * one would churn every byte in the bucket and both golden files to say
+     * exactly what v0 already says. See {@link ChainEntry}.
+     */
+    @Override
     public byte[] encode() {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        ByteBuffer head = ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN);
-        head.putInt(MAGIC);
-        head.putInt(VERSION);
-        out.writeBytes(head.array());
+        out.writeBytes(ChainEntry.header(ChainEntry.VERSION_DELTA));
         SegmentWriter.putUvarint(out, sequence);
         byte[] key = segmentKey.getBytes(StandardCharsets.UTF_8);
         SegmentWriter.putUvarint(out, key.length);
@@ -68,18 +72,21 @@ public record CommitDelta(long sequence, String segmentKey, List<RunCommit> runs
         return out.toByteArray();
     }
 
+    /**
+     * ⚠️ Narrows {@link ChainEntry#decode} to the delta case. A chain now
+     * carries three shapes, so a caller that can only handle one must say so
+     * and be refused rather than mis-cast.
+     */
     public static CommitDelta decode(byte[] bytes) throws IOException {
-        if (bytes.length < 8) {
-            throw new IOException("commit delta is shorter than its own header");
+        ChainEntry entry = ChainEntry.decode(bytes);
+        if (entry instanceof CommitDelta delta) {
+            return delta;
         }
-        ByteBuffer b = ByteBuffer.wrap(bytes).order(ByteOrder.BIG_ENDIAN);
-        if (b.getInt(0) != MAGIC) {
-            throw new IOException("not a commit delta: bad magic");
-        }
-        if (b.getInt(4) != VERSION) {
-            throw new IOException("unsupported commit delta version: " + b.getInt(4));
-        }
-        Cursor c = new Cursor(bytes, 8);
+        throw new IOException("expected a delta, found " + entry.getClass().getSimpleName());
+    }
+
+    /** ⚠️ Body only: {@link ChainEntry#decode} has consumed the header. */
+    static CommitDelta decodeBody(Cursor c) throws IOException {
         long sequence = c.uvarint();
         String key = new String(c.bytes((int) c.uvarint()), StandardCharsets.UTF_8);
         int runCount = (int) c.uvarint();
@@ -91,53 +98,6 @@ public record CommitDelta(long sequence, String segmentKey, List<RunCommit> runs
                     (int) c.uvarint());
             runs.add(new RunCommit(rk, (int) c.uvarint(), c.uvarint()));
         }
-        if (!c.atEnd()) {
-            throw new IOException("commit delta has bytes after its last run");
-        }
         return new CommitDelta(sequence, key, runs);
-    }
-
-    /** ⚠️ Bounds-checked before allocating: the log is untrusted input too. */
-    private static final class Cursor {
-        private final byte[] a;
-        private int i;
-
-        Cursor(byte[] a, int from) {
-            this.a = a;
-            this.i = from;
-        }
-
-        boolean atEnd() {
-            return i == a.length;
-        }
-
-        long uvarint() throws IOException {
-            long value = 0;
-            int shift = 0;
-            while (true) {
-                if (i >= a.length) {
-                    throw new IOException("commit delta ends inside a varint");
-                }
-                int b = a[i++] & 0xFF;
-                value |= (long) (b & 0x7F) << shift;
-                if ((b & 0x80) == 0) {
-                    return value;
-                }
-                shift += 7;
-                if (shift > 63) {
-                    throw new IOException("varint longer than 64 bits");
-                }
-            }
-        }
-
-        byte[] bytes(int n) throws IOException {
-            if (n < 0 || i + n > a.length) {
-                throw new IOException("commit delta ends inside a field");
-            }
-            byte[] out = new byte[n];
-            System.arraycopy(a, i, out, 0, n);
-            i += n;
-            return out;
-        }
     }
 }

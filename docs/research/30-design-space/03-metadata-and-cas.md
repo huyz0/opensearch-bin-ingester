@@ -175,6 +175,27 @@ cached.
 
 ## 7. Failover safety: sealing by racing for the next sequence number
 
+> ⚠️ **Implemented in M4.5 (ADR-0028), with ONE change to step 3.** `SEAL{
+> continuedAt }` is built exactly as written here, behind a sealed
+> `ChainEntry` interface, with the version distinguishing layouts rather than
+> releases: v0 *is* a bare delta and still parses, v1 *is* a kinded entry.
+>
+> ⚠️ **Step 3 is overturned in shape, not in content.** This section makes
+> `CONTINUE` a *header on* `new_epoch/<0>.delta`, riding on the first delta at
+> no extra object. M4's SPEC made it a THIRD standalone shape that commits no
+> runs, so it consumes seq 0 by itself and the new epoch's first delta is seq 1.
+> The price is **one extra PUT per failover** — per failover, not per record, so
+> no rate changes. The reason is that a header-on-a-delta needs a delta to ride
+> on: a leader that seals and then has nothing to commit could not write the
+> link at all, and the boundary would be unmarked until traffic arrived.
+>
+> ⚠️ `continuedAt` itself was nearly lost and is recorded because of how: a
+> first draft of ADR-0028 rejected it on the reasoning that the two links "are
+> written by different terms at different moments". They are not — step 2 has
+> the NEW leader writing the seal into the old chain, so it stamps the epoch it
+> already holds and writes the `CONTINUE` moments later itself. The design here
+> was right and the re-derivation was wrong.
+
 The dangerous window: an old leader is fenced but its in-flight write still lands.
 
 Suppose the new leader has recovered the chain through `seq = N`. The old leader may still attempt

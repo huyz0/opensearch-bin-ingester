@@ -5,7 +5,10 @@ import binjava.binstore.BinStore;
 import binjava.binstore.Body;
 import binjava.binstore.ListPage;
 import binjava.binstore.ObjectStat;
+import binjava.format.ChainEntry;
 import binjava.format.CommitDelta;
+import binjava.format.Continue;
+import binjava.format.Seal;
 import binjava.format.RunCommit;
 import binjava.format.RunKey;
 import java.io.ByteArrayInputStream;
@@ -128,8 +131,7 @@ public final class CommitLog {
         while (true) {
             ListPage page = store.list(logPrefix(), startAfter, 1000);
             for (ObjectStat stat : page.objects()) {
-                CommitDelta delta = readDelta(stat.key());
-                apply(delta);
+                apply(readEntry(stat.key()));
             }
             if (page.nextStartAfter().isEmpty()) {
                 return;
@@ -138,17 +140,37 @@ public final class CommitLog {
         }
     }
 
-    private CommitDelta readDelta(String key) throws IOException {
+    private ChainEntry readEntry(String key) throws IOException {
         try (InputStream in = store.get(key)) {
-            return CommitDelta.decode(in.readAllBytes());
+            return ChainEntry.decode(in.readAllBytes());
         }
     }
 
-    private void apply(CommitDelta delta) {
-        for (RunCommit run : delta.runs()) {
-            nextOffsets.merge(run.key(), run.lastOffset() + 1, Math::max);
+    /**
+     * Folds one chain entry into this reader's state.
+     *
+     * <p>⚠️ EXHAUSTIVE BY COMPILATION (M4.5). {@link ChainEntry} is sealed, so
+     * a fourth shape cannot be added without every switch like this one failing
+     * to compile — which is the point of the sealed interface rather than a
+     * kind byte and a default branch that silently ignores what it does not
+     * know.
+     *
+     * <p>⚠️ A {@code SEAL} and a {@code CONTINUE} carry no runs, so they move
+     * no offsets — but they DO consume a sequence number, deliberately, and
+     * {@code nextSequence} must advance past them or the next commit would race
+     * for a slot that is already taken and spin.
+     */
+    private void apply(ChainEntry entry) {
+        switch (entry) {
+            case CommitDelta delta -> {
+                for (RunCommit run : delta.runs()) {
+                    nextOffsets.merge(run.key(), run.lastOffset() + 1, Math::max);
+                }
+            }
+            case Seal ignored -> { }
+            case Continue ignored -> { }
         }
-        nextSequence = Math.max(nextSequence, delta.sequence() + 1);
+        nextSequence = Math.max(nextSequence, entry.sequence() + 1);
     }
 
     /** The offset the next record of this stream will get. */
@@ -193,7 +215,29 @@ public final class CommitLog {
             // ⚠️ Somebody else took this slot. Read what they wrote, fold their
             // offsets in, and try the next one -- which is why offsets must be
             // recomputed inside the loop rather than before it.
-            apply(readDelta(keyFor(nextSequence)));
+            ChainEntry taken = readEntry(keyFor(nextSequence));
+            if (taken instanceof Seal seal) {
+                // ⚠️ FAIL CLOSED. Losing a slot to a SEAL is not ordinary
+                // contention -- it is proof this writer is fenced. Folding the
+                // seal in and retrying at the next slot would write PAST the
+                // barrier and acknowledge it, which is invariant I5 ("no
+                // acknowledged commit exists beyond a SEAL in its own chain"),
+                // and recovery would then apply a discarded suffix, which is
+                // I3.
+                // ⚠️ Teaching this reader to UNDERSTAND a seal is what made
+                // that reachable: before M4.5 an unknown version threw here, so
+                // the writer failed closed by accident. A read side that ships
+                // first must be no less safe than the one it replaces.
+                // ⚠️ Stopping is only the FENCED branch. A new leader holding a
+                // valid lease must redrive to N+2 instead of stopping, or it
+                // surrenders sequencing cluster-wide -- that split needs the
+                // lease, so it is M4.6's. This refusal is the safe half, and
+                // the half that must not wait.
+                throw new IOException("chain sealed at seq " + seal.sequence()
+                        + ", continued at epoch " + seal.continuedAt()
+                        + "; this writer is fenced and must stop");
+            }
+            apply(taken);
         }
     }
 }
