@@ -42,6 +42,14 @@ public final class CommitLog {
     private final long epoch;
     private final Map<RunKey, Long> nextOffsets = new HashMap<>();
     private long nextSequence;
+    /**
+     * The SEAL this chain ended at, if recovery reached one.
+     *
+     * <p>⚠️ NOT reset by {@link #recover()}, unlike the two fields above, and
+     * deliberately: a chain is sealed permanently, so this only ever goes from
+     * null to set. A reset would be a line no test could ever falsify.
+     */
+    private Seal sealedAt;
 
     /**
      * The chain for epoch 0 — what M1 wrote, and what every call site that has
@@ -131,7 +139,25 @@ public final class CommitLog {
         while (true) {
             ListPage page = store.list(logPrefix(), startAfter, 1000);
             for (ObjectStat stat : page.objects()) {
-                apply(readEntry(stat.key()));
+                ChainEntry entry = readEntry(stat.key());
+                apply(entry);
+                if (entry instanceof Seal seal) {
+                    // ⚠️ A BARRIER, not an entry to count and move past. M4.5
+                    // closed this in `commit` for a writer that LOSES a slot to
+                    // a seal; it could not close it for one that never loses
+                    // one. Recovery used to advance `nextSequence` PAST the
+                    // seal, so the next commit picked a FREE slot, won it
+                    // outright, and never reached that check -- I5 with no lost
+                    // race anywhere in it. Measured before this fix: the commit
+                    // succeeded, and a recovery over [delta, SEAL, delta]
+                    // reported offset 9 where the sealed prefix ended at 3,
+                    // which is I3.
+                    // ⚠️ Returning here also STOPS the LIST. Everything beyond
+                    // a seal is a discarded suffix, so paging on would spend
+                    // requests reading bytes that must not be applied.
+                    sealedAt = seal;
+                    return;
+                }
             }
             if (page.nextStartAfter().isEmpty()) {
                 return;
@@ -197,6 +223,13 @@ public final class CommitLog {
         if (recordCounts.isEmpty()) {
             throw new IllegalArgumentException("a commit with no runs commits nothing");
         }
+        if (sealedAt != null) {
+            // ⚠️ The half `commit`'s lost-race branch below cannot reach. That
+            // branch needs a race to lose; this writer recovered a sealed chain
+            // and would win an empty slot beyond the barrier without ever
+            // racing anyone.
+            throw fenced(sealedAt);
+        }
         while (true) {
             List<RunCommit> runs = new ArrayList<>(recordCounts.size());
             // ⚠️ Sorted, so a delta's runs are in the same order the segment's
@@ -233,11 +266,20 @@ public final class CommitLog {
                 // surrenders sequencing cluster-wide -- that split needs the
                 // lease, so it is M4.6's. This refusal is the safe half, and
                 // the half that must not wait.
-                throw new IOException("chain sealed at seq " + seal.sequence()
-                        + ", continued at epoch " + seal.continuedAt()
-                        + "; this writer is fenced and must stop");
+                throw fenced(seal);
             }
             apply(taken);
         }
+    }
+
+    /**
+     * ⚠️ Stopping is only the FENCED branch. A new leader holding a valid lease
+     * must redrive to N+2 rather than stop, or it surrenders sequencing
+     * cluster-wide; that split needs the lease and is not this task's.
+     */
+    private static IOException fenced(Seal seal) {
+        return new IOException("chain sealed at seq " + seal.sequence()
+                + ", continued at epoch " + seal.continuedAt()
+                + "; this writer is fenced and must stop");
     }
 }

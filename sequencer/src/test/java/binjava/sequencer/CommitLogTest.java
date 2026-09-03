@@ -353,12 +353,15 @@ class CommitLogTest {
 
     @Test
     void recoveryAdvancesPastASealWithoutApplyingIt() throws Exception {
-        // ⚠️ Deliberately asserts NOTHING about committing afterwards. A writer
-        // whose recovered state sits beyond a SEAL wins its slot outright and
-        // never reaches `commit`'s fenced check -- that is I5 by a second
-        // route, it is real, and M4.6 owns it. Asserting a commit succeeds here
-        // would SPECIFY the unsafe path, and M4.6's own containment would then
-        // have to invert this test alongside a production change.
+        // ⚠️ Deliberately asserts NOTHING about committing afterwards, and
+        // that restraint is why it did not have to be inverted. When this was
+        // written a writer whose recovered state sat beyond a SEAL won its slot
+        // outright and never reached `commit`'s fenced check -- I5 by a second
+        // route. Asserting a commit SUCCEEDS here would have specified the
+        // unsafe path. M4.6a closed it: `recover` now stops at the seal and
+        // `commit` refuses on it, and the assertions below still hold unchanged
+        // because the seal's slot is still counted. `CommitLogSealTest` owns
+        // the refusal.
         MemoryBinStore store = new MemoryBinStore();
         CommitLog log = new CommitLog(store, "bins", 1);
         log.commit("seg/0", counts(new RunKey(A, 0), 3));
