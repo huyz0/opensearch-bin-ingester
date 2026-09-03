@@ -237,4 +237,103 @@ class LeaseManagerAmbiguityTest {
                         + "pass every per-category assertion above")
                 .isEqualTo(2);
     }
+
+    @Test
+    void aWriteThatLandsAfterTheRefreshReadStillSelfFencesOnce() throws Exception {
+        // ⚠️ THIS PINS AN ACCEPTED COST, NOT A DESIRED BEHAVIOUR (ADR-0027).
+        // One refresh attempt narrows M4.3d's self-fence; it does not close it.
+        // If the client's timeout fires while the write is still queued inside
+        // the object store, the refresh's read sees the version unmoved, adopts
+        // it, clears the ambiguity flag -- and the conditional write that
+        // follows loses to this instance's OWN earlier bytes, with nothing left
+        // to say it might have been its own.
+        // ⚠️ The node then stands down for the full TTL of a lease it never
+        // stopped holding. Safety is untouched: a lost CAS is always the safe
+        // direction, and ADR-0002 makes the lease liveness rather than safety,
+        // so the cost is one failover inside ADR-0007's accepted budget.
+        // ⚠️ If someone later implements the alternative ADR-0027 rejected,
+        // THIS TEST SHOULD FAIL and be deleted with the ADR superseded. It
+        // exists so the accepted cost is visible and measured rather than
+        // described.
+        MemoryBinStore backing = new MemoryBinStore();
+        DelayedLandingStore store = new DelayedLandingStore(backing);
+        TestClock clock = new TestClock();
+        LeaseManager m = manager(store, "podA", clock);
+        assertThat(m.tryAcquire()).isPresent();
+
+        clock.advance(RENEW);
+        long lateRenewExpiry = clock.millis() + TTL.toMillis();
+        assertThatThrownBy(m::renew)
+                .as("the write is queued, not lost -- but nothing can say which")
+                .isInstanceOf(IOException.class);
+
+        clock.advance(RENEW);
+        assertThat(m.renew())
+                .as("the refresh read the old version, then the late write landed "
+                        + "underneath it -- the CAS loses to this node's own bytes")
+                .isEmpty();
+        assertThat(m.held())
+                .as("so a healthy holder concludes it was fenced: the accepted cost")
+                .isEmpty();
+        // ⚠️ The EXACT expiry, not merely "unexpired". Asserting the latter
+        // would be satisfied by the ORIGINAL acquisition's lease too, so it
+        // could not tell the late-landing interleaving from a plain lost CAS --
+        // and that interleaving is the whole of what this test claims to show.
+        assertThat(Lease.decode(backing.get(m.key()).readAllBytes()).expiresAtMillis())
+                .as("what the store holds is the LATE RENEW, not the acquisition")
+                .isEqualTo(lateRenewExpiry);
+
+        // ⚠️ UNSHORTENABLE, which is the quantity ADR-0027 turns on and the
+        // difference between "it might come back" and "it cannot before
+        // T+TTL". The fencing branch destroyed the version, so `release` now
+        // returns at its `belief == null` guard and cannot hand back a lease
+        // this node still holds on the store. Retaining any version here --
+        // even an unverified one, which keeps `held()` empty and so preserves
+        // M4.3e -- would let `release` refresh onto the late renew and free the
+        // lease at once, making the ADR false with the suite green.
+        m.release();
+        assertThat(manager(backing, "podB", clock).tryAcquire())
+                .as("no successor can take it early: the stall is the full remainder")
+                .isEmpty();
+    }
+
+    @Test
+    void aLateWriteAlsoDefeatsReleaseAndNothingObservesTheLoss() throws Exception {
+        // ⚠️ THE SAME ACCEPTED COST, ONE METHOD OVER (ADR-0027), and worse in
+        // one respect: `release` DISCARDS its conditional write's result, so
+        // where `renew` at least learns it lost, here nothing observes the loss
+        // at all. The pod exits believing it handed the lease back, having
+        // written nothing, and the successor waits out the very TTL release
+        // exists to spare it -- the harm M4.3d widened its own scope to close,
+        // reached through the residual ADR-0027 accepts.
+        // ⚠️ Pinned because the ADR's scope claim should be executable rather
+        // than a sentence: an earlier draft of it described only the renew
+        // path, and a reader asking "does this cover release?" found no answer
+        // in the artifact whose job is to be the answer.
+        MemoryBinStore backing = new MemoryBinStore();
+        DelayedLandingStore store = new DelayedLandingStore(backing);
+        TestClock clock = new TestClock();
+        LeaseManager m = manager(store, "podA", clock);
+        assertThat(m.tryAcquire()).isPresent();
+
+        clock.advance(RENEW);
+        long lateRenewExpiry = clock.millis() + TTL.toMillis();
+        assertThatThrownBy(m::renew).isInstanceOf(IOException.class);
+
+        // ⚠️ SIGTERM arrives while the renew is still queued in the store.
+        m.release();
+        assertThat(m.held()).as("the pod believes it gave the lease back").isEmpty();
+
+        // ⚠️ NO clock advance, so this asks whether the lease was ACTUALLY
+        // freed. It was not: the release's CAS lost to the late renew.
+        assertThat(manager(backing, "podB", clock).tryAcquire())
+                .as("the successor cannot take it -- it must wait out the TTL")
+                .isEmpty();
+        // ⚠️ The EXACT expiry again: "still unexpired" alone is also true of
+        // the original acquisition's lease, so it could not distinguish the
+        // late renew landing from the release simply never happening.
+        assertThat(Lease.decode(backing.get(m.key()).readAllBytes()).expiresAtMillis())
+                .as("because what the store holds is the LATE RENEW, still live")
+                .isEqualTo(lateRenewExpiry);
+    }
 }

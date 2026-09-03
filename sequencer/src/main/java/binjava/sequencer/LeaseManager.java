@@ -73,10 +73,19 @@ import java.util.Optional;
  * <p>⚠️ Still indistinguishable: the same {@code podId} cold-starting twice
  * concurrently. Out-of-protocol, and M4.3l holds the reasoning.
  *
- * <p>⚠️ The refresh NARROWS the renew window rather than closing it — one
- * attempt, so a write still in flight when it reads lands afterwards. Safety
- * is untouched, because a lost CAS is always the safe direction. M4.3h holds
- * the reasoning.
+ * <p>⚠️ The refresh NARROWS the window rather than closing it — one attempt,
+ * so a write still queued inside the store when it reads lands afterwards, the
+ * flag is already cleared, and the next conditional write loses to this node's
+ * own bytes. Through {@code renew} it then stands down for EXACTLY the
+ * remainder of the TTL — unshortenable, because the fencing branch drops the
+ * version and {@code release} can no longer hand the lease back. Through
+ * {@code release} itself the loss is not even observed, since that write's
+ * result is discarded. ⚠️ ACCEPTED, not overlooked: ADR-0027 has the
+ * reasoning and the rejected alternatives, and
+ * {@code aWriteThatLandsAfterTheRefreshReadStillSelfFencesOnce} and
+ * {@code aLateWriteAlsoDefeatsReleaseAndNothingObservesTheLoss} pin the cost on
+ * each path.
+ * Safety is untouched, because a lost CAS is always the safe direction.
  *
  * <p>⚠️ NOT THREAD-SAFE BY ACCIDENT — a lock, for the same reason
  * {@code IndexOrdinalRegistry} needs one: the read-decide-CAS cycle must not
