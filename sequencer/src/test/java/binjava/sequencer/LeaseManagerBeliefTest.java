@@ -58,7 +58,8 @@ class LeaseManagerBeliefTest {
     }
 
     private static LeaseManager manager(MemoryBinStore store, String podId, TestClock clock) {
-        return new LeaseManager(store, "bins/cluster-a", podId, "", TTL, RENEW, clock);
+        return new LeaseManager(store, new LeaseConfig("bins/cluster-a", podId, "",
+                TTL, RENEW), clock);
     }
 
     @Test
@@ -118,7 +119,8 @@ class LeaseManagerBeliefTest {
         AmbiguousPutStore store =
                 new AmbiguousPutStore(backing, AmbiguousPutStore.Mode.LANDED);
         TestClock clock = new TestClock();
-        LeaseManager m = new LeaseManager(store, "bins/cluster-a", "podA", "", TTL, RENEW, clock);
+        LeaseManager m = new LeaseManager(store, new LeaseConfig("bins/cluster-a", "podA", "",
+                TTL, RENEW), clock);
         assertThat(m.tryAcquire()).isPresent();
 
         clock.advance(RENEW);

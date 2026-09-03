@@ -41,7 +41,8 @@ class LeaseManagerLockTest {
     private final AtomicReference<Throwable> helperFailed = new AtomicReference<>();
 
     private static LeaseManager manager(binjava.binstore.BinStore store) {
-        return new LeaseManager(store, "bins/cluster-a", "podA", "", TTL, RENEW, FIXED);
+        return new LeaseManager(store, new LeaseConfig("bins/cluster-a", "podA", "",
+                TTL, RENEW), FIXED);
     }
 
     /**

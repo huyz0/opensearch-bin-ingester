@@ -61,7 +61,8 @@ class LeaseManagerAcquireAmbiguityTest {
 
     private static LeaseManager manager(binjava.binstore.BinStore store, String podId,
             TestClock clock) {
-        return new LeaseManager(store, "bins/cluster-a", podId, "", TTL, RENEW, clock);
+        return new LeaseManager(store, new LeaseConfig("bins/cluster-a", podId, "",
+                TTL, RENEW), clock);
     }
 
     @Test

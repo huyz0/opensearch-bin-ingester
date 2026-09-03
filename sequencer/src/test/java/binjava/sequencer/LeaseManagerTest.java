@@ -55,7 +55,8 @@ class LeaseManagerTest {
 
     private static LeaseManager manager(binjava.binstore.BinStore store, String podId,
             TestClock clock) {
-        return new LeaseManager(store, "bins/cluster-a", podId, "", TTL, RENEW, clock);
+        return new LeaseManager(store, new LeaseConfig("bins/cluster-a", podId, "",
+                TTL, RENEW), clock);
     }
 
     @Test
@@ -246,8 +247,10 @@ class LeaseManagerTest {
         // real GC-pause data. This milestone must not hardcode what M8 will
         // measure, so both are constructor parameters and the accessor exists
         // for the loop that will use it.
-        LeaseManager m = new LeaseManager(new MemoryBinStore(), "p", "pod1", "",
-                Duration.ofSeconds(30), Duration.ofSeconds(7), new TestClock());
+        LeaseManager m = new LeaseManager(new MemoryBinStore(),
+                new LeaseConfig("p", "pod1", "",
+                        Duration.ofSeconds(30), Duration.ofSeconds(7)),
+                new TestClock());
         assertThat(m.renewInterval()).isEqualTo(Duration.ofSeconds(7));
     }
 
@@ -255,19 +258,19 @@ class LeaseManagerTest {
     void aRenewIntervalNotShorterThanTheTtlIsRefused() {
         // ⚠️ Renewing no more often than the lease lives guarantees losing it:
         // the corpus renews at TTL/3 precisely so a missed renew is survivable.
-        assertThatThrownBy(() -> new LeaseManager(new MemoryBinStore(), "p", "pod1", "",
-                Duration.ofSeconds(10), Duration.ofSeconds(10), new TestClock()))
+        assertThatThrownBy(() -> new LeaseConfig("p", "pod1", "",
+                Duration.ofSeconds(10), Duration.ofSeconds(10)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("renewInterval");
-        assertThatThrownBy(() -> new LeaseManager(new MemoryBinStore(), "p", "pod1", "",
-                Duration.ofSeconds(10), Duration.ofSeconds(11), new TestClock()))
+        assertThatThrownBy(() -> new LeaseConfig("p", "pod1", "",
+                Duration.ofSeconds(10), Duration.ofSeconds(11)))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
     void aNonPositiveTtlIsRefused() {
-        assertThatThrownBy(() -> new LeaseManager(new MemoryBinStore(), "p", "pod1", "",
-                Duration.ZERO, Duration.ofSeconds(1), new TestClock()))
+        assertThatThrownBy(() -> new LeaseConfig("p", "pod1", "",
+                Duration.ZERO, Duration.ofSeconds(1)))
                 .isInstanceOf(IllegalArgumentException.class)
                 // ⚠️ The FULL message. "ttl" alone is also contained in the
                 // renewInterval-vs-ttl guard's own message, so the whole ttl
@@ -378,16 +381,16 @@ class LeaseManagerTest {
     void aNegativeTtlOrRenewIntervalIsRefused() {
         // ⚠️ The ZERO case alone left `ttl.isNegative()` deletable, and the
         // whole renewInterval positivity guard with it.
-        assertThatThrownBy(() -> new LeaseManager(new MemoryBinStore(), "p", "pod1", "",
-                Duration.ofSeconds(-1), Duration.ofSeconds(1), new TestClock()))
+        assertThatThrownBy(() -> new LeaseConfig("p", "pod1", "",
+                Duration.ofSeconds(-1), Duration.ofSeconds(1)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("ttl must be positive");
-        assertThatThrownBy(() -> new LeaseManager(new MemoryBinStore(), "p", "pod1", "",
-                Duration.ofSeconds(10), Duration.ZERO, new TestClock()))
+        assertThatThrownBy(() -> new LeaseConfig("p", "pod1", "",
+                Duration.ofSeconds(10), Duration.ZERO))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("renewInterval");
-        assertThatThrownBy(() -> new LeaseManager(new MemoryBinStore(), "p", "pod1", "",
-                Duration.ofSeconds(10), Duration.ofSeconds(-1), new TestClock()))
+        assertThatThrownBy(() -> new LeaseConfig("p", "pod1", "",
+                Duration.ofSeconds(10), Duration.ofSeconds(-1)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("renewInterval");
     }
@@ -397,8 +400,8 @@ class LeaseManagerTest {
         // ⚠️ Fail EARLY. An unset POD_NAME otherwise constructs fine and fails
         // later out of `tryAcquire`, which is declared `throws IOException`, as
         // an unchecked IllegalArgumentException from Lease's constructor.
-        assertThatThrownBy(() -> new LeaseManager(new MemoryBinStore(), "p", "  ", "",
-                TTL, RENEW, new TestClock()))
+        assertThatThrownBy(() -> new LeaseConfig("p", "  ", "",
+                TTL, RENEW))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("podId");
     }
 
@@ -408,8 +411,8 @@ class LeaseManagerTest {
         // "" literal with the suite green -- and M5's commit forwarding is the
         // thing that will need to READ it.
         MemoryBinStore shared = new MemoryBinStore();
-        LeaseManager m = new LeaseManager(shared, "bins/cluster-a", "pod1", "10.0.0.4:8080",
-                TTL, RENEW, new TestClock());
+        LeaseManager m = new LeaseManager(shared, new LeaseConfig("bins/cluster-a", "pod1", "10.0.0.4:8080",
+                TTL, RENEW), new TestClock());
         assertThat(m.tryAcquire().orElseThrow().holderEndpoint()).isEqualTo("10.0.0.4:8080");
     }
 
@@ -421,11 +424,12 @@ class LeaseManagerTest {
         // in order to reach the new holder.
         MemoryBinStore shared = new MemoryBinStore();
         TestClock clock = new TestClock();
-        new LeaseManager(shared, "bins/cluster-a", "podA", "10.0.0.1:1", TTL, RENEW, clock)
+        new LeaseManager(shared, new LeaseConfig("bins/cluster-a", "podA", "10.0.0.1:1",
+                TTL, RENEW), clock)
                 .tryAcquire().orElseThrow();
         clock.advance(TTL);
-        Lease taken = new LeaseManager(shared, "bins/cluster-a", "podB", "10.0.0.2:2",
-                TTL, RENEW, clock).tryAcquire().orElseThrow();
+        Lease taken = new LeaseManager(shared, new LeaseConfig("bins/cluster-a", "podB", "10.0.0.2:2",
+                TTL, RENEW), clock).tryAcquire().orElseThrow();
         assertThat(taken.holderEndpoint()).isEqualTo("10.0.0.2:2");
     }
 

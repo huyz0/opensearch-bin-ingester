@@ -57,7 +57,8 @@ class LeaseManagerConcurrencyTest {
         // exactly the implementation this test defends.
         MemoryBinStore backing = new MemoryBinStore();
         GateFirstPutStore gate = new GateFirstPutStore(backing);
-        LeaseManager shared = new LeaseManager(gate, "bins/cluster-a", "podA", "", TTL, RENEW, FIXED);
+        LeaseManager shared = new LeaseManager(gate, new LeaseConfig("bins/cluster-a", "podA", "",
+                TTL, RENEW), FIXED);
 
         // ⚠️ CAPTURED, not thrown into the void. `tryAcquire` wraps in
         // `UncheckedIOException`, which would otherwise reach the default
