@@ -69,11 +69,20 @@ class LeaseManagerTest {
     }
 
     @Test
-    void theFirstAcquisitionStartsAtEpochZero() throws Exception {
+    void theFirstAcquisitionStartsAtEpochOneBecauseZeroMeansNoLease() throws Exception {
+        // ⚠️ ONE, not zero, and this is M4.4b: epoch 0 is RESERVED for "no
+        // lease". `CommitLog`'s 2-arg constructor writes epoch 0 for every
+        // caller that has no lease yet -- `DefaultIngest` among them -- so if
+        // the first leadership term were also 0, wiring the lease into the
+        // commit path would put a first leader's chain byte-identical to what
+        // those callers already write. `putIfAbsent` would still buy I1, but
+        // I3's "readers of the new epoch never look there" would be VOID,
+        // because it would not be a different epoch. Reserving 0 makes every
+        // leased chain provably disjoint from the unleased one.
         TestClock clock = new TestClock();
         LeaseManager m = manager(new MemoryBinStore(), "pod1", clock);
         Lease got = m.tryAcquire().orElseThrow();
-        assertThat(got.epoch()).isZero();
+        assertThat(got.epoch()).isEqualTo(1);
         assertThat(got.holderPodId()).isEqualTo("pod1");
         assertThat(got.expiresAtMillis()).isEqualTo(clock.millis() + TTL.toMillis());
     }
@@ -117,12 +126,12 @@ class LeaseManagerTest {
         Lease first = manager(shared, "podA", clock).tryAcquire().orElseThrow();
         clock.advance(TTL);
         Lease second = manager(shared, "podB", clock).tryAcquire().orElseThrow();
-        assertThat(first.epoch()).isZero();
+        assertThat(first.epoch()).as("the first term is 1; 0 is reserved for no-lease").isEqualTo(1);
         // ⚠️ EXACTLY one. The epoch is in the object path, so a skipped epoch
         // leaves a chain a reader cannot distinguish from one it failed to
         // read, and a reused epoch lets a fenced writer's objects pass for the
         // new term's.
-        assertThat(second.epoch()).isEqualTo(1);
+        assertThat(second.epoch()).isEqualTo(2);
         assertThat(second.holderPodId()).isEqualTo("podB");
     }
 
@@ -136,7 +145,7 @@ class LeaseManagerTest {
         Lease renewed = m.renew().orElseThrow();
         // ⚠️ Renewal must NOT bump the epoch: it identifies a term, and a new
         // term every few seconds would start a new chain and orphan the last.
-        assertThat(renewed.epoch()).isZero();
+        assertThat(renewed.epoch()).isEqualTo(1);
         assertThat(renewed.expiresAtMillis()).isEqualTo(clock.millis() + TTL.toMillis());
     }
 
@@ -164,7 +173,8 @@ class LeaseManagerTest {
     @Test
     void releaseKeepsTheEpochSoTheNextHolderStillAdvancesIt() throws Exception {
         // ⚠️ RELEASE MUST NOT DELETE THE OBJECT. Deleting it would lose the
-        // epoch counter, so the next acquirer would start again at 0 and REUSE
+        // epoch counter, so the next acquirer would start again at the first
+        // term (1, since 0 is reserved -- M4.4b) and REUSE
         // an epoch a previous term already wrote objects under -- which is
         // precisely what fencing exists to prevent. Release instead writes an
         // already-expired lease, keeping the counter.
@@ -174,7 +184,7 @@ class LeaseManagerTest {
         a.tryAcquire().orElseThrow();
         a.release();
         Lease next = manager(shared, "podB", clock).tryAcquire().orElseThrow();
-        assertThat(next.epoch()).as("the counter survived the release").isEqualTo(1);
+        assertThat(next.epoch()).as("the counter survived the release").isEqualTo(2);
     }
 
     @Test
@@ -289,7 +299,8 @@ class LeaseManagerTest {
         // unconditional `put` with all 18 tests green, because the only
         // multi-contender test refuses its second contender at the EXPIRY
         // check and never reaches a conditional write at all. The production
-        // consequence is two ingesters on a fresh prefix both holding epoch 0.
+        // consequence is two ingesters on a fresh prefix both holding the
+        // SAME first term (1 since M4.4b reserved epoch 0).
         MemoryBinStore shared = new MemoryBinStore();
         TestClock clock = new TestClock();
         LeaseManager a = manager(new StatBlindStore(shared), "podA", clock);
@@ -297,7 +308,7 @@ class LeaseManagerTest {
         Optional<Lease> first = a.tryAcquire();
         Optional<Lease> second = b.tryAcquire();
         assertThat(first).isPresent();
-        assertThat(second).as("the store arbitrates: the loser gets empty, not a second epoch 0")
+        assertThat(second).as("the store arbitrates: the loser gets empty, not a second first-term lease")
                 .isEmpty();
     }
 
@@ -317,7 +328,7 @@ class LeaseManagerTest {
             clock.advance(RENEW);
             Lease renewed = m.renew().orElseThrow(
                     () -> new AssertionError("a healthy holder must not fence itself"));
-            assertThat(renewed.epoch()).isZero();
+            assertThat(renewed.epoch()).isEqualTo(1);
         }
     }
 
@@ -445,5 +456,38 @@ class LeaseManagerTest {
         assertThat(m.renew()).isEmpty();
         assertThat(store.counts().total())
                 .as("a non-holder must not touch the lease object").isZero();
+    }
+
+    @Test
+    void noAcquisitionEverWritesEpochZeroBecauseItIsReservedForTheUnleasedChain() throws Exception {
+        // ⚠️ M4.4b's whole point, asserted across BOTH acquisition paths --
+        // cold start and takeover -- because a lease at epoch 0 would collide
+        // with `CommitLog`'s no-lease default and void I3 for the first term.
+        MemoryBinStore shared = new MemoryBinStore();
+        TestClock clock = new TestClock();
+        Lease cold = manager(shared, "podA", clock).tryAcquire().orElseThrow();
+        assertThat(cold.epoch()).isNotZero();
+        clock.advance(TTL);
+        Lease taken = manager(shared, "podB", clock).tryAcquire().orElseThrow();
+        assertThat(taken.epoch()).isNotZero();
+        assertThat(taken.epoch()).isGreaterThan(cold.epoch());
+
+        // ⚠️ THE INPUT THAT MAKES THIS TEST'S NAME TRUE, and round-1 test
+        // review found it missing: nothing in the tree ever handed
+        // `takenOverBy` a lease already AT epoch 0, so
+        // `epoch == 0 ? 0 : epoch + 1` -- which mints a lease at the reserved
+        // epoch, the exact state this task exists to make impossible --
+        // survived all 491 tests. The input is not hypothetical: `Lease`
+        // deliberately keeps 0 PARSEABLE so a legacy or hand-edited object
+        // does not become a liveness stall, and the pre-M4.4b build minted
+        // exactly such an object on every cold start.
+        MemoryBinStore legacy = new MemoryBinStore();
+        TestClock t2 = new TestClock();
+        LeaseManager m = manager(legacy, "podC", t2);
+        legacy.put(m.key(), Body.ofBytes(
+                new Lease(0, "old", "", t2.millis()).encode()));
+        assertThat(m.tryAcquire().orElseThrow().epoch())
+                .as("taking over a lease already at the reserved epoch still lands above it")
+                .isEqualTo(1);
     }
 }

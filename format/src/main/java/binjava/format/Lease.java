@@ -53,9 +53,15 @@ public record Lease(long epoch, String holderPodId, String holderEndpoint, long 
         Objects.requireNonNull(holderPodId, "holderPodId");
         Objects.requireNonNull(holderEndpoint, "holderEndpoint");
         if (epoch < 0) {
-            // ⚠️ Epochs only ever increase, from 0. A negative one could only
-            // come from corruption or a hand edit, and it would order BEFORE
-            // every real epoch — the one thing fencing must never allow.
+            // ⚠️ Epochs only ever increase. A negative one could only come
+            // from corruption or a hand edit, and it would order BEFORE every
+            // real epoch — the one thing fencing must never allow.
+            // ⚠️ 0 is PERMITTED here but is never a LEASE's epoch: it names the
+            // unleased chain `CommitLog`'s 2-arg constructor writes, and
+            // `LeaseManager` starts its first term at 1 (M4.4b). This record
+            // does not refuse 0, because `decode` must still parse a legacy or
+            // hand-edited object rather than turn it into a liveness stall —
+            // the reservation is enforced where leases are MINTED.
             throw new IllegalArgumentException("epoch is never negative: " + epoch);
         }
         if (holderPodId.isBlank()) {

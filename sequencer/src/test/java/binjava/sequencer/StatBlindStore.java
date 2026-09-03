@@ -13,7 +13,7 @@ import java.util.Optional;
  * refused by the expiry check long before it gets there -- which left
  * `putIfAbsent` replaceable by an unconditional `put` with the whole suite
  * green. Two ingesters starting against a fresh prefix would then both be
- * told they hold epoch 0.
+ * told they hold the same first term (1 since M4.4b reserved epoch 0).
  */
 public record StatBlindStore(BinStore delegate) implements BinStore {
     @Override public Optional<binjava.binstore.ObjectStat> stat(String key) {

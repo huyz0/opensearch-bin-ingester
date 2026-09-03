@@ -244,7 +244,7 @@ class CommitLogTest {
         // learns which term a chain is; untested, `return 0` is unconstrained.
         assertThat(new CommitLog(new MemoryBinStore(), "p", 7).epoch()).isEqualTo(7);
         assertThat(new CommitLog(new MemoryBinStore(), "p").epoch())
-                .as("the no-lease default is epoch 0 -- see M4.4b on why that collides")
+                .as("the no-lease default is epoch 0, reserved by M4.4b so no leased chain collides")
                 .isZero();
     }
 

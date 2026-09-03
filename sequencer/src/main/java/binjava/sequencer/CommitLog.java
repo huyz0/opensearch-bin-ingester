@@ -44,20 +44,26 @@ public final class CommitLog {
      * The chain for epoch 0 — what M1 wrote, and what every call site that has
      * no lease yet still writes.
      *
-     * <p>⚠️ EPOCH 0 IS NOT A FREE SLOT, and this is a real collision rather
-     * than a naming quibble. {@code LeaseManager}'s cold-start acquisition also
-     * takes epoch 0, so once the lease is wired into the commit path a FIRST
-     * leader's chain would be byte-identical to the chain every no-lease caller
-     * here already writes — and a node that never took the lease would write
-     * into the live leader's chain. {@code putIfAbsent} still gives I1, but
-     * I3's "readers of the new epoch never look there" is void, because it is
-     * not a different epoch. Term 1 onward is genuinely fenced; the hole is
-     * exactly the term a fresh cluster runs in before its first failover.
+     * <p>⚠️ THIS CHAIN IS A FORK, and the wiring commit must END it rather
+     * than leave it running. Once a leader writes at epoch 1, a reader of that
+     * epoch never lists this prefix — so records committed here are acked and
+     * never become visible, and the leader re-issues offsets this chain already
+     * assigned. Nor can this chain be SEALED: the seal depends on a losing
+     * writer treating its loss as proof it is fenced, and {@code commit} does
+     * the opposite by construction, folding the winner's offsets in and
+     * retrying at the next sequence forever. There is no leader here to fence.
+     * ⚠️ So M4.5/M4.6 must REMOVE the unleased production commit path, not
+     * merely pass an epoch to it — and {@code CONTINUE} may not use
+     * {@code prevEpoch=0} as a "no previous chain" sentinel, because 0 now
+     * names a live one.
      *
-     * <p>⚠️ It must be resolved BEFORE the lease is wired in — either reserve 0
-     * for "no lease" and start the first term at 1, or state why sharing is
-     * safe. Carried as its own backlog row rather than left here, because a
-     * comment is not an owner.
+     * <p>⚠️ EPOCH 0 IS RESERVED FOR EXACTLY THIS — "no lease" — and
+     * {@code LeaseManager} starts its FIRST term at 1 so that no leased chain
+     * can ever collide with this one (M4.4b). That reservation is what keeps
+     * I3 true for the first term: were a first leader also at epoch 0, its
+     * chain would be byte-identical to what every no-lease caller here writes,
+     * {@code putIfAbsent} would still buy I1, but "readers of the new epoch
+     * never look there" would be void — it would not be a different epoch.
      */
     public CommitLog(BinStore store, String prefix) {
         this(store, prefix, 0);

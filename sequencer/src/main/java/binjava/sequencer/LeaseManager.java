@@ -34,9 +34,10 @@ import java.util.Optional;
  * taking over an expired lease, renewing, releasing — is {@code putIfMatch}.
  *
  * <p>⚠️ RELEASE DOES NOT DELETE THE OBJECT. Deleting it would lose the epoch
- * counter, so the next acquirer would start again at 0 and REUSE an epoch a
- * previous term already wrote objects under — exactly what fencing exists to
- * prevent. Release writes an already-expired lease instead, keeping the
+ * counter, so the next acquirer would start again at the first term and REUSE an
+ * epoch a previous term already wrote objects under — exactly what fencing
+ * exists to prevent. (The first term is 1, not 0: epoch 0 is reserved for the
+ * unleased chain, M4.4b.) Release writes an already-expired lease instead, keeping the
  * counter and making the failover immediate rather than TTL-bound.
  *
  * <p>⚠️ NOT THREAD-SAFE BY ACCIDENT — {@code synchronized}, for the same
@@ -130,7 +131,16 @@ public final class LeaseManager {
         Optional<ObjectStat> stat = store.stat(key);
         if (stat.isEmpty()) {
             // ⚠️ putIfAbsent, not putIfMatch — see the class javadoc.
-            Lease fresh = new Lease(0, podId, endpoint, clock.millis() + ttl.toMillis());
+            // ⚠️ EPOCH 1, not 0 (M4.4b). Epoch 0 is RESERVED for "no lease":
+            // `CommitLog`'s 2-arg constructor writes it for every caller that
+            // has no lease yet, `DefaultIngest` among them. If the first
+            // leadership term were also 0, wiring the lease into the commit
+            // path would put a first leader's chain byte-identical to what
+            // those callers already write — `putIfAbsent` would still buy I1,
+            // but I3's "readers of the new epoch never look there" would be
+            // VOID, because it would not be a different epoch. Reserving 0
+            // makes every leased chain provably disjoint from the unleased one.
+            Lease fresh = new Lease(1, podId, endpoint, clock.millis() + ttl.toMillis());
             return adopt(fresh, store.putIfAbsent(key, Body.ofBytes(fresh.encode())));
         }
         // ⚠️ A corrupt lease propagates as IOException rather than being
