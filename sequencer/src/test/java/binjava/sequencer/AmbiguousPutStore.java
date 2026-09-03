@@ -14,8 +14,8 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * Makes the FIRST {@code putIfMatch} ambiguous — the outcome the store SPI
- * cannot report and a caller cannot infer.
+ * Makes the FIRST conditional write of the chosen {@link Target} ambiguous —
+ * the outcome the store SPI cannot report and a caller cannot infer.
  *
  * <p>⚠️ AMBIGUITY IS NOT FAILURE, and the difference is the whole task. A
  * conditional write that returns empty definitively LOST; one that throws may
@@ -29,6 +29,14 @@ import java.util.Optional;
  */
 public final class AmbiguousPutStore implements BinStore {
 
+    /** Which conditional write is made ambiguous. */
+    public enum Target {
+        /** The cold-start acquisition. */
+        PUT_IF_ABSENT,
+        /** Every later transition — takeover, renew, release. */
+        PUT_IF_MATCH
+    }
+
     /** Whether the ambiguous write took effect before the response was lost. */
     public enum Mode {
         /** ⚠️ The write LANDED and the version moved. */
@@ -39,18 +47,36 @@ public final class AmbiguousPutStore implements BinStore {
 
     private final BinStore delegate;
     private final Mode mode;
+    private final Target target;
     private boolean fired;
 
     public AmbiguousPutStore(BinStore delegate, Mode mode) {
+        this(delegate, mode, Target.PUT_IF_MATCH);
+    }
+
+    public AmbiguousPutStore(BinStore delegate, Mode mode, Target target) {
         this.delegate = delegate;
         this.mode = mode;
+        this.target = target;
+    }
+
+    /** @return true if this call is the one made ambiguous, and marks it taken. */
+    private boolean claim(Target of) {
+        if (of != target || fired) {
+            return false;
+        }
+        fired = true;
+        return true;
+    }
+
+    private IOException lostResponse() {
+        return new IOException("response lost after a " + mode + " conditional write");
     }
 
     @Override
     public Optional<Version> putIfMatch(String key, Body body, Version expected)
             throws IOException {
-        if (!fired) {
-            fired = true;
+        if (claim(Target.PUT_IF_MATCH)) {
             if (mode == Mode.LANDED) {
                 // ⚠️ SELF-CHECKING. If the delegate's write lost, this fake
                 // would report LANDED while actually running the harmless
@@ -60,7 +86,7 @@ public final class AmbiguousPutStore implements BinStore {
                             "LANDED requires the underlying write to win; it lost");
                 }
             }
-            throw new IOException("response lost after a " + mode + " conditional write");
+            throw lostResponse();
         }
         return delegate.putIfMatch(key, body, expected);
     }
@@ -87,6 +113,15 @@ public final class AmbiguousPutStore implements BinStore {
 
     @Override
     public Optional<Version> putIfAbsent(String k, Body b) throws IOException {
+        if (claim(Target.PUT_IF_ABSENT)) {
+            if (mode == Mode.LANDED) {
+                if (delegate.putIfAbsent(k, b).isEmpty()) {
+                    throw new IllegalStateException(
+                            "LANDED requires the underlying write to win; it lost");
+                }
+            }
+            throw lostResponse();
+        }
         return delegate.putIfAbsent(k, b);
     }
 

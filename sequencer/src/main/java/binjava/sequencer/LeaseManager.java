@@ -13,8 +13,6 @@ import java.time.Duration;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Acquires, renews and releases {@code <prefix>/ctl/lease/<slot>.json} — the
@@ -50,23 +48,36 @@ import java.util.concurrent.locks.ReentrantLock;
  * as neither: the belief is kept, a flag is set, and the next call re-reads
  * before trusting its version. See {@code refreshed}.
  *
- * <p>⚠️ THAT COVERS {@code renew} AND {@code release} ONLY, and the gap is
- * bigger than the one it closes rather than smaller. An ambiguous
- * <em>acquisition</em> is still treated as a flat failure: {@code tryAcquire}
- * lets the {@code IOException} escape before {@code adopt} runs, so a node
- * whose acquiring write LANDED holds the lease on the store and cannot
- * discover it — its own {@code tryAcquire} refuses because what it reads is
- * unexpired, and {@code renew} refuses because it believes it holds nothing.
- * The cluster then has no sequencer for a full TTL and that node recovers only
- * by burning an epoch, where an ambiguous renew now recovers on the very next
- * call. M4.3g owns it. ⚠️ Do not read this class as ambiguity-safe.
+ * <p>⚠️ ALL THREE WRITE PATHS, since M4.3g. An ambiguous ACQUISITION is the
+ * worse half and was the last to be covered: a node whose acquiring write
+ * landed HOLDS the lease and could not discover it — its own
+ * {@code tryAcquire} refused because what it read was unexpired, and
+ * {@code renew} refused because it believed it held nothing — so the cluster
+ * had no sequencer for a full TTL and that node recovered only by taking over
+ * from itself and burning an epoch. The candidate term is now remembered as an
+ * UNVERIFIED belief and the next {@code tryAcquire} re-reads to settle it.
  *
- * <p>⚠️ And the refresh NARROWS the renew window rather than closing it: it
- * gets one attempt, so a write still queued inside the object store when
- * {@code refreshed} does its {@code stat} lands afterwards, and the next
- * conditional write loses with the flag already cleared — the original
- * self-fence, from a rarer starting point. Safety is untouched either way,
- * because a lost CAS is always the safe direction.
+ * <p>⚠️ Unverified is NOT held, and {@link #held()} keeps saying empty for it:
+ * "my write may have landed" is not holding the term, and M4.3e's property is
+ * that {@code held()} never reports a term this instance does not hold.
+ *
+ * <p>⚠️ BOTH CONJUNCTS OF THE IDENTITY CHECK ARE LOAD-BEARING, at different
+ * sites, and it is worth knowing which before touching either. {@code renew}'s
+ * recovery leans on the EPOCH, because a takeover always advances it. So does
+ * recovery of an ambiguous TAKEOVER: a node whose own term lapsed while the
+ * store was unreachable mints a candidate at epoch E+1 under its OWN podId
+ * while the store still holds its epoch E — same holder, different epoch, and
+ * only the epoch refuses. Recovery of an ambiguous COLD START is the one that
+ * leans on the {@code podId}, because two different pods both mint epoch 1 and
+ * the epoch cannot tell them apart.
+ *
+ * <p>⚠️ Still indistinguishable: the same {@code podId} cold-starting twice
+ * concurrently. Out-of-protocol, and M4.3l holds the reasoning.
+ *
+ * <p>⚠️ The refresh NARROWS the renew window rather than closing it — one
+ * attempt, so a write still in flight when it reads lands afterwards. Safety
+ * is untouched, because a lost CAS is always the safe direction. M4.3h holds
+ * the reasoning.
  *
  * <p>⚠️ NOT THREAD-SAFE BY ACCIDENT — a lock, for the same reason
  * {@code IndexOrdinalRegistry} needs one: the read-decide-CAS cycle must not
@@ -101,28 +112,10 @@ public final class LeaseManager {
     private final Duration renewInterval;
     private final Clock clock;
 
-    /**
-     * What this instance believes, as ONE value.
-     *
-     * <p>⚠️ Three separate fields let a state exist that means nothing —
-     * ambiguity over a belief that is not held — and M4.3d had to keep the
-     * three in step by hand at six assignment sites. Here {@code null} is the
-     * whole of "holds nothing", so there is no such state to maintain.
-     *
-     * @param ambiguous the last conditional write's outcome is UNKNOWN, so
-     *     {@code version} may be stale — see {@link #renew()}
-     */
-    private record Belief(Lease lease, Version version, boolean ambiguous) {
-
-        Belief uncertain() {
-            return new Belief(lease, version, true);
-        }
-    }
-
     /** ⚠️ VOLATILE, so {@link #held()} can read it without taking the lock. */
     private volatile Belief belief;
 
-    private final ReentrantLock lock = new ReentrantLock();
+    private final BoundedLock lock = new BoundedLock();
 
     public LeaseManager(BinStore store, String prefix, String podId, String endpoint,
             Duration ttl, Duration renewInterval, Clock clock) {
@@ -180,44 +173,7 @@ public final class LeaseManager {
      */
     public Optional<Lease> held() {
         Belief b = belief;
-        return b == null ? Optional.empty() : Optional.of(b.lease());
-    }
-
-    /**
-     * Takes the lock, or reports why not.
-     *
-     * <p>⚠️ AN IOException, never a quiet {@code false}. {@code tryAcquire} and
-     * {@code renew} both have a "nothing happened" return value that means
-     * something ELSE — empty from {@code renew} means FENCED, and a caller must
-     * stop sequencing on it — so a lock timeout must not borrow that signal.
-     * Failing to take a lock held across object-store I/O is evidence of slow
-     * I/O, not of having lost the lease.
-     *
-     * <p>⚠️ THE BOUND IS THE CALLER'S, because the right one is not the same for
-     * all three. For {@code tryAcquire} and {@code renew} it is
-     * {@code renewInterval}: waiting longer than one renew interval guarantees
-     * missing the renew anyway, and giving up early costs a retry. For
-     * {@code release} that argument INVERTS — giving up early costs exactly the
-     * thing release exists to buy — so its bound is the {@code ttl}, which is
-     * what a successor pays when the release does not happen. Waiting up to
-     * that is never worse than not waiting.
-     *
-     * <p>⚠️ Nanoseconds, so a sub-millisecond bound is not truncated to a
-     * single non-blocking attempt while the message quotes the duration asked
-     * for.
-     */
-    private void lockOrFail(String what, Duration bound) throws IOException {
-        boolean taken;
-        try {
-            taken = lock.tryLock(bound.toNanos(), TimeUnit.NANOSECONDS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IOException("interrupted waiting for the lease lock to " + what, e);
-        }
-        if (!taken) {
-            throw new IOException("could not take the lease lock to " + what
-                    + " within " + bound + "; a store call is still in flight");
-        }
+        return b == null || !b.verified() ? Optional.empty() : Optional.of(b.lease());
     }
 
     /** How often the holder should renew — configuration, see the class javadoc. */
@@ -242,7 +198,7 @@ public final class LeaseManager {
      *     {@code renewInterval} — ⚠️ NONE of them treated as unheld, see below
      */
     public Optional<Lease> tryAcquire() throws IOException {
-        lockOrFail("acquire", renewInterval);
+        lock.takeOrFail("acquire", renewInterval);
         try {
             return acquireLocked();
         } finally {
@@ -251,6 +207,28 @@ public final class LeaseManager {
     }
 
     private Optional<Lease> acquireLocked() throws IOException {
+        // ⚠️ FIRST, before anything else (M4.3g). A previous acquisition whose
+        // write landed and lost its response left a candidate term here with no
+        // version. Without this the node cannot discover the lease it already
+        // holds: the branch below reads it, finds it unexpired, and returns
+        // empty -- for a full TTL, after which the node takes over from ITSELF
+        // and burns an epoch.
+        Belief pending = belief;
+        if (pending != null && !pending.verified()) {
+            Belief found = refreshed(pending);
+            if (found != null) {
+                // ⚠️ Returned AS STORED, expiry unchecked — deliberately. The
+                // term may already have lapsed if the settling call arrives a
+                // TTL late, and even in the fast case however long the store
+                // took is already spent out of it. Re-minting here would burn
+                // an epoch to buy nothing: the next renew's conditional write
+                // settles it either way, and that is the only thing that can.
+                return Optional.of(found.lease());
+            }
+            // ⚠️ Nothing of ours is there, so the write never landed. Fall
+            // through to an ordinary acquisition rather than reporting failure
+            // -- `refreshed` has already dropped the candidate.
+        }
         Optional<ObjectStat> stat = store.stat(key);
         if (stat.isEmpty()) {
             // ⚠️ putIfAbsent, not putIfMatch — see the class javadoc.
@@ -264,7 +242,8 @@ public final class LeaseManager {
             // VOID, because it would not be a different epoch. Reserving 0
             // makes every leased chain provably disjoint from the unleased one.
             Lease fresh = new Lease(1, podId, endpoint, clock.millis() + ttl.toMillis());
-            return adopt(fresh, store.putIfAbsent(key, Body.ofBytes(fresh.encode())));
+            return adopt(fresh, writeOrRemember(fresh,
+                    () -> store.putIfAbsent(key, Body.ofBytes(fresh.encode()))));
         }
         // ⚠️ A corrupt lease propagates as IOException rather than being
         // treated as unheld. Taking over bytes nobody can parse is how two
@@ -286,8 +265,8 @@ public final class LeaseManager {
             return Optional.empty();
         }
         Lease taken = current.takenOverBy(podId, endpoint, clock.millis() + ttl.toMillis());
-        return adopt(taken, store.putIfMatch(key, Body.ofBytes(taken.encode()),
-                stat.get().version()));
+        return adopt(taken, writeOrRemember(taken, () -> store.putIfMatch(key,
+                Body.ofBytes(taken.encode()), stat.get().version())));
     }
 
     /**
@@ -296,7 +275,9 @@ public final class LeaseManager {
      * @return the renewed lease, or empty if this instance does not hold one or
      *     has been fenced — ⚠️ an empty result is how a holder LEARNS it is
      *     fenced, and it must then stop sequencing immediately. It never
-     *     consults a clock to decide that
+     *     consults a clock to decide that. ⚠️ Empty is NO LONGER the same as
+     *     {@code held()} being empty: since M4.3g an unverified belief reports
+     *     nothing held, yet a renew can settle it and return a lease
      * @throws IOException the store was unreachable, or the lock could not be
      *     taken within {@code renewInterval} — ⚠️ NOT the same as empty, and
      *     the two are not the same as each other either: an IOException out of
@@ -304,7 +285,7 @@ public final class LeaseManager {
      *     the lock leaves it untouched, because nothing was written
      */
     public Optional<Lease> renew() throws IOException {
-        lockOrFail("renew", renewInterval);
+        lock.takeOrFail("renew", renewInterval);
         try {
             return renewLocked();
         } finally {
@@ -441,7 +422,7 @@ public final class LeaseManager {
         if (belief == null) {
             return;
         }
-        lockOrFail("release", ttl);
+        lock.takeOrFail("release", ttl);
         try {
             releaseLocked();
         } finally {
@@ -480,6 +461,29 @@ public final class LeaseManager {
         try (InputStream in = store.get(key)) {
             return Lease.decode(in.readAllBytes());
         }
+    }
+
+    /**
+     * Runs an acquiring conditional write, remembering the candidate term if
+     * the outcome is never observed (M4.3g).
+     *
+     * <p>⚠️ The SAME reasoning {@code renew} uses, applied to the branch that
+     * had none: a write that throws may have landed, and here there is not even
+     * a stale version to fall back on — so the candidate itself is what gets
+     * remembered, and the next {@code tryAcquire} re-reads to find out.
+     */
+    private Optional<Version> writeOrRemember(Lease candidate, ConditionalWrite write)
+            throws IOException {
+        try {
+            return write.run();
+        } catch (IOException e) {
+            belief = Belief.unverified(candidate);
+            throw e;
+        }
+    }
+
+    private interface ConditionalWrite {
+        Optional<Version> run() throws IOException;
     }
 
     private Optional<Lease> adopt(Lease candidate, Optional<Version> won) {
