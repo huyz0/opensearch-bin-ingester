@@ -40,6 +40,32 @@ import java.util.Optional;
  * unleased chain, M4.4b.) Release writes an already-expired lease instead, keeping the
  * counter and making the failover immediate rather than TTL-bound.
  *
+ * <p>⚠️ AN AMBIGUOUS CONDITIONAL WRITE IS NOT A FAILED ONE. A {@code putIfMatch}
+ * that returns empty definitively lost; one that THROWS may have landed and
+ * lost only its response, leaving the cached {@link Version} stale. Treating
+ * that as "fenced" would make a healthy leader stand down, and treating it as
+ * "renewed" would let a genuinely fenced one keep sequencing — so it is treated
+ * as neither: the belief is kept, a flag is set, and the next call re-reads
+ * before trusting its version. See {@code refreshVersion}.
+ *
+ * <p>⚠️ THAT COVERS {@code renew} AND {@code release} ONLY, and the gap is
+ * bigger than the one it closes rather than smaller. An ambiguous
+ * <em>acquisition</em> is still treated as a flat failure: {@code tryAcquire}
+ * lets the {@code IOException} escape before {@code adopt} runs, so a node
+ * whose acquiring write LANDED holds the lease on the store and cannot
+ * discover it — its own {@code tryAcquire} refuses because what it reads is
+ * unexpired, and {@code renew} refuses because it believes it holds nothing.
+ * The cluster then has no sequencer for a full TTL and that node recovers only
+ * by burning an epoch, where an ambiguous renew now recovers on the very next
+ * call. M4.3g owns it. ⚠️ Do not read this class as ambiguity-safe.
+ *
+ * <p>⚠️ And the refresh NARROWS the renew window rather than closing it: it
+ * gets one attempt, so a write still queued inside the object store when
+ * {@code refreshVersion} does its {@code stat} lands afterwards, and the next
+ * conditional write loses with the flag already cleared — the original
+ * self-fence, from a rarer starting point. Safety is untouched either way,
+ * because a lost CAS is always the safe direction.
+ *
  * <p>⚠️ NOT THREAD-SAFE BY ACCIDENT — {@code synchronized}, for the same
  * reason {@code IndexOrdinalRegistry} is: the read-decide-CAS cycle must not
  * interleave with itself.
@@ -60,6 +86,8 @@ public final class LeaseManager {
 
     private Lease held;
     private Version heldVersion;
+    /** ⚠️ Set when a conditional write's OUTCOME is unknown — see {@link #renew()}. */
+    private boolean ambiguous;
 
     public LeaseManager(BinStore store, String prefix, String podId, String endpoint,
             Duration ttl, Duration renewInterval, Clock clock) {
@@ -167,21 +195,75 @@ public final class LeaseManager {
         if (held == null) {
             return Optional.empty();
         }
+        // ⚠️ Owed only after an ambiguous write, never on the healthy path.
+        if (ambiguous && !refreshVersion()) {
+            return Optional.empty();
+        }
         Lease renewed = held.renewedUntil(clock.millis() + ttl.toMillis());
         // ⚠️ ONE conditional write, with no re-read: the holder already knows
         // its own version. A read per renew would double the lease's request
         // rate for nothing.
-        Optional<Version> won = store.putIfMatch(key, Body.ofBytes(renewed.encode()), heldVersion);
+        Optional<Version> won;
+        try {
+            won = store.putIfMatch(key, Body.ofBytes(renewed.encode()), heldVersion);
+        } catch (IOException e) {
+            // ⚠️ AMBIGUOUS, NOT FAILED. The write may have landed and lost only
+            // its response, in which case `heldVersion` is now stale and the
+            // next renew would lose to THIS INSTANCE'S OWN bytes. Belief is
+            // kept -- being unable to reach the store is not evidence of being
+            // fenced -- but the next renew must re-read before trusting the
+            // version it cached.
+            ambiguous = true;
+            throw e;
+        }
         if (won.isEmpty()) {
             // ⚠️ Fenced. Drop the local belief too, so a caller that ignores
             // the empty result cannot keep renewing against a stale version.
             held = null;
             heldVersion = null;
+            ambiguous = false;
             return Optional.empty();
         }
         held = renewed;
         heldVersion = won.get();
         return Optional.of(renewed);
+    }
+
+    /**
+     * Re-reads the lease after an ambiguous write and re-establishes the
+     * version, if this instance's term still stands.
+     *
+     * <p>⚠️ KEYED ON (epoch, podId), NOT merely on the version being readable.
+     * Adopting whatever is there would hand a genuinely fenced holder a live
+     * version and let two nodes sequence at once — the one thing the lease
+     * exists to make unlikely. {@code takenOverBy} advances the epoch by
+     * exactly one and stamps the new holder, so a successor's term can never
+     * be mistaken for this one's.
+     *
+     * @return true if the term still stands, with the version refreshed; false
+     *     if this instance was genuinely superseded, in which case the belief
+     *     is dropped exactly as a lost conditional write drops it
+     */
+    private boolean refreshVersion() throws IOException {
+        Optional<ObjectStat> stat = store.stat(key);
+        if (stat.isPresent()) {
+            Lease current = read();
+            if (current.epoch() == held.epoch() && current.holderPodId().equals(podId)) {
+                held = current;
+                heldVersion = stat.get().version();
+                ambiguous = false;
+                return true;
+            }
+        }
+        // ⚠️ An ABSENT lease also lands here. Nothing legitimately deletes the
+        // object -- `release` writes an expired lease precisely so the epoch
+        // counter survives -- so its absence means someone did something this
+        // protocol does not model, and continuing to sequence on that basis is
+        // the failure mode worth avoiding.
+        held = null;
+        heldVersion = null;
+        ambiguous = false;
+        return false;
     }
 
     /**
@@ -191,16 +273,33 @@ public final class LeaseManager {
      * class javadoc for why deleting would break fencing. A no-op when nothing
      * is held (a {@code SIGTERM} on a non-holder is entirely normal), and
      * harmless when already fenced, because the conditional write simply loses.
+     *
+     * <p>⚠️ Refreshes first after an ambiguous write, because a release that
+     * writes nothing is indistinguishable from no release at all: the successor
+     * waits out a TTL this method exists to spare it.
      */
     public synchronized void release() throws IOException {
         if (held == null) {
             return;
         }
         // ⚠️ Expiry is INCLUSIVE, so `now` is already expired.
+        // ⚠️ Same refresh as `renew`, and for the same harm rather than for
+        // symmetry: releasing with a stale version writes NOTHING, so the
+        // still-unexpired lease has to be waited out -- the exact TTL-long
+        // gap release exists to avoid.
+        // ⚠️ This method CONSUMES the flag without ever producing it, and the
+        // asymmetry with `renew` is deliberate rather than an omission: an
+        // ambiguous release is idempotent in effect. If its write landed, the
+        // expired lease is already on the store and a retry's lost CAS changes
+        // nothing; if it was lost, the version never moved and the retry wins.
+        if (ambiguous && !refreshVersion()) {
+            return;
+        }
         Lease expired = held.renewedUntil(clock.millis());
         store.putIfMatch(key, Body.ofBytes(expired.encode()), heldVersion);
         held = null;
         heldVersion = null;
+        ambiguous = false;
     }
 
     private Lease read() throws IOException {
@@ -216,10 +315,12 @@ public final class LeaseManager {
             // this instance does not hold.
             held = null;
             heldVersion = null;
+            ambiguous = false;
             return Optional.empty();
         }
         held = candidate;
         heldVersion = won.get();
+        ambiguous = false;
         return Optional.of(candidate);
     }
 }
