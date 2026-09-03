@@ -72,6 +72,102 @@ def decode_unicode_escapes(src):
     return UNICODE_ESC.sub(lambda m: m.group(1) + chr(int(m.group(2), 16)), src)
 
 
+def _blank(text, keep):
+    """Same length, same newlines, nothing but `keep` and whitespace."""
+    return ''.join(c if c == '\n' else (c if c in keep else ' ') for c in text)
+
+
+def hashable(text):
+    """What a red record is hashed over: code, with literals kept verbatim.
+
+    ⚠️ ONE LEX PASS doing two things that must not be done separately.
+    Comments are DROPPED, and whitespace between tokens is collapsed -- but only
+    outside literals, whose interiors are appended exactly as written.
+
+    ⚠️ Each half fixes a defect a review demonstrated. Hashing raw made a
+    sentence added to a class javadoc invalidate every record in the file, which
+    is the churn this task exists to remove. Collapsing whitespace GLOBALLY made
+    a shared `EXPECTED = "hello  world"` rewritable to `"hello world"` -- the
+    value the test asserts against -- with the gate printing `ok ... unchanged
+    since`. Doing both in one pass is what keeps them from trading off.
+
+    ⚠️ Blanking comments length-preservingly, which was tried, is not enough: it
+    makes a comment's CONTENT irrelevant and leaves its LENGTH in the hash, so
+    adding or deleting one still invalidates.
+
+    ⚠️ Applied AFTER slicing, which is what makes removal safe -- offsets are
+    needed only to cut a declaration out, and nothing indexes into the result.
+    Callers pass whole declarations or whole remainder pieces, so the re-lex
+    cannot begin inside a literal.
+    """
+    src = decode_unicode_escapes(text)
+    # ⚠️ Literals come OUT first, behind placeholders, so the collapse that
+    # follows cannot reach inside one. Comments become a single SPACE rather
+    # than nothing, and the reason is token fusion, not spacing: the collapse
+    # runs afterwards, so `a /*c*/ b` gives `a b` either way -- but `int/*c*/x`
+    # gives `int x` with the space and `intx` without it, which is a different
+    # program. An earlier note here gave the spacing reason, which is measurably
+    # not what happens.
+    lits, out, at = [], [], 0
+    for m in NOISE.finditer(src):
+        out.append(src[at:m.start()])
+        if m.lastgroup in ('string', 'char', 'textblock'):
+            out.append('\x00%d\x00' % len(lits))
+            lits.append(m.group(0))
+        else:
+            out.append(' ')
+        at = m.end()
+    out.append(src[at:])
+    collapsed = re.sub(r'\s+', ' ', ''.join(out)).strip()
+    return re.sub(r'\x00(\d+)\x00', lambda m: lits[int(m.group(1))], collapsed)
+
+
+def normalise_lp(src):
+    """`normalise`, but LENGTH-PRESERVING, so offsets index the RAW source.
+
+    ⚠️ THE POINT IS THE OFFSETS, not the parsing. `normalise` shortens: it
+    decodes unicode escapes, replaces a string with `""` and strips annotation
+    arguments. Spans taken from it therefore cannot slice the original, and a
+    binding key computed from normalised text is blind to exactly what
+    `normalise` threw away — every string literal, char literal, text block and
+    annotation argument in a test. M0.56's first attempt did that, and review
+    proved a whole NDJSON text block and 11 of 12 `@CsvSource` rows could be
+    rewritten after a red run with the key unchanged.
+
+    ⚠️ Same removals, same effect on the tokeniser: what remains carries no
+    quote, no comment delimiter and no annotation-argument brace. Only the
+    lengths differ, and `scan` is indifferent to length.
+    """
+    out = UNICODE_ESC.sub(
+        lambda m: (m.group(1) + chr(int(m.group(2), 16))).ljust(len(m.group(0))), src)
+    out = NOISE.sub(lambda m: _blank(m.group(0), '"\''), out)
+    # ⚠️ Innermost-first, repeatedly, exactly as `normalise` does -- but the
+    # annotation NAME is kept in place and only its argument list is blanked, so
+    # the offsets of everything after it do not move.
+    prev = None
+    while prev != out:
+        prev = out
+        # ⚠️ `\s*` is INSIDE group 2. Outside it, `re.sub` dropped the space in
+        # `@SuppressWarnings ("unchecked")` -- legal Java, no formatter here
+        # forbids it -- and the length guard then refused a file `normalise`
+        # reads perfectly. Two normalisations disagreeing about whether a real
+        # file is parseable is how a gate that rejects real files gets switched
+        # off.
+        out = re.sub(r'(@[A-Za-z_$][\w$]*)(\s*\([^()]*\))',
+                     lambda m: m.group(1) + _blank(m.group(2), ''), out)
+    if len(out) != len(src):
+        # ⚠️ Names the construct, not two integers: an operator cannot act on
+        # `161 -> 160`. This fails CLOSED, which is right -- a span that does
+        # not slice what it claims to would bind a record to the wrong bytes.
+        for i, (a, b) in enumerate(zip(src, out)):
+            if a != b and b != ' ' and b != '\n':
+                break
+        raise UnparseableJava(
+            'normalise_lp changed the length (%d -> %d); first divergence near: %r'
+            % (len(src), len(out), src[max(0, i - 40):i + 40]))
+    return out
+
+
 def normalise(src):
     """Remove everything that can carry a brace without meaning one.
 
@@ -104,18 +200,44 @@ def normalise(src):
     return src
 
 
+def scan_raw_spans(src):
+    """{id: (start, end)} as offsets into the RAW `src`.
+
+    ⚠️ Separate entry point rather than a change to `scan`, because `scan`'s
+    `body` feeds `check-test-integrity`'s `strength()` scoring and must keep
+    the shortened normalisation it has always had. This one exists only so a
+    red record can be bound to raw bytes.
+    """
+    return {k: v['span'] for k, v in _scan(src, pre=normalise_lp(src))[0].items()}
+
+
 def scan(src):
-    """{'pkg.Outer$Inner#method': {'disabled': bool, 'body': str}}."""
+    """{'pkg.Outer$Inner#method': {'disabled': bool, 'body': str, 'span': (int, int)}}.
+
+    ⚠️ `span` covers the DECLARATION -- from the arming test annotation through
+    the closing brace -- where `body` covers only the braces. A red record binds
+    to the declaration plus the file's non-test remainder (M0.56), so a test
+    must own its annotations and signature: otherwise adding a test would append
+    its signature to the shared remainder and invalidate every other record in
+    the file, which is the churn that binding was changed to remove.
+
+    ⚠️ These offsets index THIS function's normalised output, which is shorter
+    than the source. A red record needs offsets into the raw file, and takes
+    them from `scan_raw_spans`, which parses `normalise_lp` instead. Do not
+    reach for `span` here to slice an original -- an earlier draft of M0.56 did
+    exactly that, and review proved the resulting key blind to every string
+    literal, char literal, text block and annotation argument in a test.
+    """
     return _scan(src)[0]
 
 
-def _scan(src):
+def _scan(src, pre=None):
     """(found, detected) -- `detected` counts test methods BEFORE ids collapse.
 
     Overloads share one qualified id, so `len(found)` under-counts them. The
     cross-check needs the pre-collapse number or it refuses legal Java.
     """
-    src = normalise(src)
+    src = normalise(src) if pre is None else pre
     m = PKG.search(src)
     pkg = m.group(1) + '.' if m else ''
 
@@ -123,11 +245,13 @@ def _scan(src):
     classes = []           # [name, depth_opened, disabled]
     depth = 0
     pending_class = None   # (name, disabled)
-    pending_method = None  # (name, disabled)
+    pending_method = None  # (name, disabled, decl_start)
     armed = False          # a test annotation is waiting for its signature
+    arm_start = 0          # where the annotation RUN began -- the declaration start
+    run_start = None       # first annotation of a contiguous run, if one is open
     in_annotation_type = False  # inside an `@interface` body
     disabled_here = False  # @Disabled seen in the current annotation block
-    open_method = None     # (id, body_start, depth)
+    open_method = None     # (id, body_start, depth, disabled, decl_start)
     ann_type_depth = None  # brace depth of an @interface body, if open
     detected = 0           # test methods seen, counting overloads separately
 
@@ -136,6 +260,14 @@ def _scan(src):
         if t.group('decl'):
             pending_class = (t.group('name'), disabled_here)
         elif t.group('ann'):
+            # ⚠️ The RUN's start, not the arming annotation's. `@Disabled` or
+            # `@Tag` written ABOVE `@Test` would otherwise fall outside the
+            # declaration and into the shared remainder -- so adding one test
+            # would invalidate every record in the file, which is the churn
+            # M0.56 exists to remove, returning through the one annotation
+            # ordering the design did not cover.
+            if run_start is None:
+                run_start = t.start()
             last = re.sub(r'\s+', '', t.group('ann'))[1:].split('.')[-1]
             # ⚠️ UNCONSTRAINED by the suite. Removing this branch, or the
             # counter's `interface` skip, or both, leaves every fixture green:
@@ -156,17 +288,26 @@ def _scan(src):
                 # JUnit 5 composed annotations (@ClusterTest and friends) carry
                 # @Test on the declaration; treating that as a test method both
                 # invented an id and, via the cross-check, hard-blocked the gate.
+                # ⚠️ `run_start` too, not just `armed`. A run dangling across an
+                # `@interface` declaration made the NEXT test's span start at
+                # the annotation above the annotation TYPE -- swallowing the
+                # whole declaration out of the shared remainder, so editing a
+                # composed annotation left every other test's record valid.
                 armed, disabled_here, pending_class = False, False, None
+                run_start = None
                 in_annotation_type = True
             elif last == 'Disabled':
                 disabled_here = True
             elif TEST_ANN.match(last):
                 armed = True
+                arm_start = run_start
         elif t.group('call'):
             name = t.group('method')
             if armed and classes and name not in NOT_A_METHOD:
-                pending_method = (name, disabled_here or any(c[2] for c in classes))
+                pending_method = (name, disabled_here or any(c[2] for c in classes),
+                                  arm_start)
                 armed = False
+            run_start = None
         elif t.group('open'):
             depth += 1
             if in_annotation_type:
@@ -174,16 +315,19 @@ def _scan(src):
                 in_annotation_type = False
                 armed = False
                 disabled_here = False
+                run_start = None
                 continue
             if pending_method:
                 ident = '%s%s#%s' % (pkg, '$'.join(c[0] for c in classes), pending_method[0])
-                open_method = (ident, t.start(), depth, pending_method[1])
+                open_method = (ident, t.start(), depth, pending_method[1],
+                               pending_method[2])
                 pending_method = None
                 detected += 1
             elif pending_class:
                 classes.append([pending_class[0], depth, pending_class[1]])
                 pending_class = None
             disabled_here = False
+            run_start = None
         elif t.group('close'):
             if ann_type_depth is not None and ann_type_depth == depth:
                 ann_type_depth = None
@@ -191,16 +335,19 @@ def _scan(src):
                 disabled_here = False
                 continue
             if open_method and open_method[2] == depth:
-                ident, start, _, dis = open_method
-                found[ident] = {'disabled': dis, 'body': src[start:t.end()]}
+                ident, start, _, dis, decl = open_method
+                found[ident] = {'disabled': dis, 'body': src[start:t.end()],
+                                'span': (decl, t.end())}
                 open_method = None
             if classes and classes[-1][1] == depth:
                 classes.pop()
             depth -= 1
             disabled_here = False
+            run_start = None
         elif t.group('semi'):
             disabled_here = False
             pending_class = None
+            run_start = None
     return found, detected
 
 

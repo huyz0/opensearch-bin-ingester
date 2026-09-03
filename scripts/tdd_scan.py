@@ -16,7 +16,61 @@ OFF = '\033[0m'
 
 # JUnit 5 has five test-bearing annotations. The old gate matched the literal
 # string "@Test", so @ParameterizedTest and @RepeatedTest were invisible.
-from java_tests import test_ids, UnparseableJava   # one parser, shared with check-test-integrity
+from java_tests import test_ids, scan_raw_spans, hashable, UnparseableJava  # one parser, shared with check-test-integrity
+
+
+def key_parts(src, ident):
+    """The two halves a red record is built from, or None if `ident` is absent.
+
+    ⚠️ ONE FUNCTION FOR BOTH the key and the `key-parts` seam. An earlier
+    version had the seam RECOMPUTE the halves, which made the test assert that
+    the seam was right and nothing about what `binding_key` used -- so dropping
+    `hashable` from the declaration call site survived the whole suite. A seam
+    that duplicates the logic it exposes is not a seam.
+
+    ⚠️ The declaration is one half; the remainder -- the file with every test
+    declaration cut out -- is the other. They are independent paths, and a
+    mutation that transforms one differently is invisible to any comparison of
+    whole keys.
+    """
+    spans = scan_raw_spans(src)
+    if ident not in spans:
+        return None
+    ordered = sorted(spans.values())
+    remainder, at = [], 0
+    for lo, hi in ordered:
+        remainder.append(src[at:lo])
+        at = hi
+    remainder.append(src[at:])
+    # ⚠️ EMPTY PIECES DROPPED, or the separator count leaks the number of tests:
+    # cutting one more span adds one more (empty) piece, so appending a test
+    # would stale every record -- the churn this replaces, surviving as a
+    # delimiter.
+    joined = '\n'.join(p for p in (hashable(p) for p in remainder) if p)
+    lo, hi = spans[ident]
+    return hashable(src[lo:hi]), joined
+
+
+def binding_key(src, ident):
+    """What a red record for `ident` is bound to, or None if it is not there.
+
+    ⚠️ THE TEST'S OWN DECLARATION PLUS THE FILE'S NON-TEST REMAINDER (M0.56).
+    Not the whole file, which invalidated every record in it whenever any one
+    test was added or edited. Not the body alone either, which would be cheaper
+    and would be a real weakening: a shared helper, field, import or fixture in
+    the same file is part of what the test was observed doing.
+
+    ⚠️ Both halves go through `hashable`, which drops comments, collapses
+    whitespace between tokens and keeps every literal verbatim. See `key_parts`.
+    """
+    parts = key_parts(src, ident)
+    if parts is None:
+        return None
+    h = hashlib.sha256()
+    h.update(parts[0].encode())
+    h.update(b'\x00')
+    h.update(parts[1].encode())
+    return h.hexdigest()
 
 
 def git(*a):
@@ -53,7 +107,15 @@ def check(base):
             return 1
         for i in fresh:
             new_ids.add(i)
-            blob_sha[i] = hashlib.sha256(after.encode()).hexdigest()
+            blob_sha[i] = binding_key(after, i)
+            if blob_sha[i] is None:
+                # ⚠️ Both SIDES, not just the writer. `stale` below compares
+                # `rec[i].get('sha256') == blob_sha[i]`, and None == None
+                # passes -- so a null here is the vacuous acceptance the
+                # comment there says is refused.
+                print('  %sFAIL%s %s is staged but invisible to the parser'
+                      % (RED, OFF, i))
+                return 1
 
     if not new_ids:
         print('  %sok%s   no new tests in this diff' % (GREEN, OFF))
@@ -186,7 +248,7 @@ def record_one(out_dir, ident):
     record for one. The runner therefore invokes Gradle once per selector, and
     every testcase in the results belongs to that selector by construction.
     """
-    import glob as _glob, hashlib as _h, json as _j, time as _t
+    import glob as _glob, json as _j, time as _t
     import xml.etree.ElementTree as ET
 
     cls = ident.split('#')[0]
@@ -220,10 +282,23 @@ def record_one(out_dir, ident):
               % (RED, OFF, ident))
         print('         observed failing is not evidence.')
         return 1
+    key = binding_key(open(src).read(), ident)
+    if key is None:
+        # ⚠️ REFUSED, not stored. `check`'s own comment says a record with a
+        # null sha256 is refused because "the tolerance WAS the bypass" -- and
+        # its staleness test compares `rec[i].get('sha256') == blob_sha[i]`,
+        # where None == None passes. Writing a null here would hand that
+        # comparison the vacuous pass it was written to prevent. Reachable via
+        # the M0.17 composed-annotation blind spot, where the parser does not
+        # see the test at all.
+        print('  %sFAIL%s %s is not visible to the parser in %s'
+              % (RED, OFF, ident, src))
+        print('         A record not bound to bytes is not evidence (M0.17).')
+        return 1
     path = os.path.join(out_dir, 'red.json')
     rec = _j.load(open(path)) if os.path.exists(path) else {"red": {}}
     rec["red"][ident] = {"at": int(_t.time()), "source": src,
-                         "sha256": _h.sha256(open(src, 'rb').read()).hexdigest()}
+                         "sha256": key}
     os.makedirs(out_dir, exist_ok=True)
     _j.dump(rec, open(path, 'w'), indent=2, sort_keys=True)
     print('  %sok%s   %s observed failing (%d of %d case(s))'
@@ -244,6 +319,57 @@ if __name__ == '__main__':
             # it with '' blinds that gate while every parser test stays green.
             print('%s %s body=%d'
                   % (k, 'DISABLED' if v['disabled'] else 'enabled', len(v['body'])))
+        sys.exit(0)
+    if cmd == 'key':
+        # ⚠️ A seam for testing the binding as the pure transform it is, over
+        # source TEXT. The rule it encodes -- what makes an observation stale --
+        # is otherwise reachable only through a staged git diff.
+        k = binding_key(open(sys.argv[2]).read(), sys.argv[3])
+        if k is None:
+            print('no such test: ' + sys.argv[3])
+            sys.exit(1)
+        print(k)
+        sys.exit(0)
+    if cmd == 'key-parts':
+        # ⚠️ THE HALVES AS BYTES, base64'd, not as digests of them.
+        #
+        # Printing digests made this a CONSISTENCY seam: a test could only ask
+        # production whether it agreed with itself, and such a test is blind to
+        # any transform applied UNIFORMLY to both sides -- which is exactly the
+        # defect class five review rounds kept re-finding. Blanking text blocks
+        # in `binding_key` after `key_parts` returned, or hashing the raw
+        # declaration there, both survived a whole suite.
+        #
+        # ⚠️ With the halves as bytes a test can compute the key ITSELF --
+        # sha256(decl + NUL + remainder) -- and compare. That turns "does
+        # production agree with production" into an independent check, and it
+        # is the only way anything between `key_parts` and `hexdigest()` is
+        # constrained at all.
+        parts = key_parts(open(sys.argv[2]).read(), sys.argv[3])
+        if parts is None:
+            print('no such test: ' + sys.argv[3])
+            sys.exit(1)
+        import base64
+        print('DECL %s' % base64.b64encode(parts[0].encode()).decode())
+        print('REM %s' % base64.b64encode(parts[1].encode()).decode())
+        sys.exit(0)
+    if cmd == 'hashable':
+        # ⚠️ A seam for asserting the transform ITSELF. Four review rounds each
+        # found one more of its behaviours unconstrained, and the cause was
+        # structural: every claim about it was made by comparing two 64-hex
+        # digests, and a digest says only SAME or DIFFERENT, never WHY. So each
+        # behaviour cost a fixture file and the set was always one short.
+        print(hashable(open(sys.argv[2]).read()), end='')
+        sys.exit(0)
+    if cmd == 'spans':
+        # ⚠️ A seam for asserting that the two normalisations AGREE. The whole
+        # binding rests on `normalise_lp` seeing exactly the tests `normalise`
+        # does; where they disagree a span slices the wrong bytes and a record
+        # is bound to something other than the test -- a false green, not churn.
+        src = open(sys.argv[2]).read()
+        for k, (lo, hi) in sorted(scan_raw_spans(src).items()):
+            print('%s %d %d %s' % (k, lo, hi, 'OK' if src[lo] == '@' and src[hi - 1] == '}'
+                                   else 'MALFORMED'))
         sys.exit(0)
     if cmd == 'ids':
         for i in sorted(test_ids(open(sys.argv[2]).read())):
