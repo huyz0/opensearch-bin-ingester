@@ -41,18 +41,18 @@ class LeaseManagerConcurrencyTest {
         // executable.
         //
         // ⚠️ The interleave is DETERMINISTIC, not raced. Thread A is parked
-        // inside its `putIfAbsent` by the gate; B then runs. WITH the monitor B
-        // cannot enter `tryAcquire` at all, so it blocks; A wins; B's later
+        // inside its `putIfAbsent` by the gate; B then runs. WITH the lock B
+        // cannot enter the cycle at all, so it parks; A wins; B's later
         // pass sees the lease present-and-unexpired and returns early WITHOUT
         // calling `adopt`, so A's belief survives. WITHOUT the monitor B
         // interleaves: it stats (still absent -- A has not written yet), wins
         // its own `putIfAbsent`, sets `held`, and then A's write LOSES and
         // `adopt(empty)` clears `held` on the SAME instance, wiping the
-        // winner's belief. One instance is the point: `synchronized` is
-        // per-instance and `held` is instance state.
+        // winner's belief. One instance is the point: the lock is
+        // per-instance and the belief is instance state.
         //
-        // ⚠️ The sync point is B BLOCKED-or-finished, never "B completed"
-        // alone: under the correct build B blocks on the monitor and cannot
+        // ⚠️ The sync point is B PARKED-or-finished, never "B completed"
+        // alone: under the correct build B parks on the lock and cannot
         // complete while A is gated, so awaiting completion would deadlock
         // exactly the implementation this test defends.
         MemoryBinStore backing = new MemoryBinStore();
@@ -115,11 +115,19 @@ class LeaseManagerConcurrencyTest {
     /** ⚠️ Bounded spin, never {@code Thread.sleep} -- testing.md leaves no escape. */
     private static void awaitParkedOrDone(Thread t) {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        // ⚠️ TIMED_WAITING is here because M4.3f made the lease lock a
+        // `ReentrantLock` acquired with a timeout: a contender parks in
+        // `tryLock` rather than blocking on a monitor. Leaving it out did not
+        // make the test stricter, it made it WRONG -- the spin never saw B
+        // park, so the gate was released only after B had already timed out
+        // and thrown, and the test failed on a contender that behaved exactly
+        // as designed.
         while (t.getState() != Thread.State.BLOCKED
                 && t.getState() != Thread.State.WAITING
+                && t.getState() != Thread.State.TIMED_WAITING
                 && t.getState() != Thread.State.TERMINATED) {
             if (System.nanoTime() > deadline) {
-                throw new AssertionError("B never reached the monitor or finished: " + t.getState());
+                throw new AssertionError("B never reached the lock or finished: " + t.getState());
             }
             Thread.onSpinWait();
         }

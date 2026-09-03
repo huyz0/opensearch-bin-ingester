@@ -13,6 +13,8 @@ import java.time.Duration;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Acquires, renews and releases {@code <prefix>/ctl/lease/<slot>.json} — the
@@ -46,7 +48,7 @@ import java.util.Optional;
  * that as "fenced" would make a healthy leader stand down, and treating it as
  * "renewed" would let a genuinely fenced one keep sequencing — so it is treated
  * as neither: the belief is kept, a flag is set, and the next call re-reads
- * before trusting its version. See {@code refreshVersion}.
+ * before trusting its version. See {@code refreshed}.
  *
  * <p>⚠️ THAT COVERS {@code renew} AND {@code release} ONLY, and the gap is
  * bigger than the one it closes rather than smaller. An ambiguous
@@ -61,14 +63,29 @@ import java.util.Optional;
  *
  * <p>⚠️ And the refresh NARROWS the renew window rather than closing it: it
  * gets one attempt, so a write still queued inside the object store when
- * {@code refreshVersion} does its {@code stat} lands afterwards, and the next
+ * {@code refreshed} does its {@code stat} lands afterwards, and the next
  * conditional write loses with the flag already cleared — the original
  * self-fence, from a rarer starting point. Safety is untouched either way,
  * because a lost CAS is always the safe direction.
  *
- * <p>⚠️ NOT THREAD-SAFE BY ACCIDENT — {@code synchronized}, for the same
- * reason {@code IndexOrdinalRegistry} is: the read-decide-CAS cycle must not
+ * <p>⚠️ NOT THREAD-SAFE BY ACCIDENT — a lock, for the same reason
+ * {@code IndexOrdinalRegistry} needs one: the read-decide-CAS cycle must not
  * interleave with itself.
+ *
+ * <p>⚠️ A {@code ReentrantLock} RATHER THAN A MONITOR, because the lock is held
+ * across object-store I/O and java-style.md rule 6 says so. A monitor cannot be
+ * given up: one hung PUT would park every other caller with no timeout and no
+ * interruptibility. The bound is {@code renewInterval} — derived, not a new
+ * constant — because waiting longer than one renew interval for the lock
+ * guarantees missing the renew anyway, so there is nothing to buy by waiting
+ * longer.
+ *
+ * <p>⚠️ {@code held()} TAKES NO LOCK AT ALL. It is what a caller gates on, so
+ * queueing it behind a write in flight would make "am I the leader?" hang on a
+ * slow PUT. The belief is one immutable {@link Belief} in a volatile field,
+ * swapped whole — which also makes the old three-field invariant
+ * ("{@code held == null} implies {@code ambiguous == false}") unrepresentable
+ * rather than merely maintained.
  *
  * <p>⚠️ TTL and the renew interval are CONFIGURATION, not constants.
  * Measurement M1 settles their values at M8 from real GC-pause data, and this
@@ -84,10 +101,28 @@ public final class LeaseManager {
     private final Duration renewInterval;
     private final Clock clock;
 
-    private Lease held;
-    private Version heldVersion;
-    /** ⚠️ Set when a conditional write's OUTCOME is unknown — see {@link #renew()}. */
-    private boolean ambiguous;
+    /**
+     * What this instance believes, as ONE value.
+     *
+     * <p>⚠️ Three separate fields let a state exist that means nothing —
+     * ambiguity over a belief that is not held — and M4.3d had to keep the
+     * three in step by hand at six assignment sites. Here {@code null} is the
+     * whole of "holds nothing", so there is no such state to maintain.
+     *
+     * @param ambiguous the last conditional write's outcome is UNKNOWN, so
+     *     {@code version} may be stale — see {@link #renew()}
+     */
+    private record Belief(Lease lease, Version version, boolean ambiguous) {
+
+        Belief uncertain() {
+            return new Belief(lease, version, true);
+        }
+    }
+
+    /** ⚠️ VOLATILE, so {@link #held()} can read it without taking the lock. */
+    private volatile Belief belief;
+
+    private final ReentrantLock lock = new ReentrantLock();
 
     public LeaseManager(BinStore store, String prefix, String podId, String endpoint,
             Duration ttl, Duration renewInterval, Clock clock) {
@@ -137,9 +172,52 @@ public final class LeaseManager {
         return key;
     }
 
-    /** What this instance believes it holds, or empty if it holds nothing. */
-    public synchronized Optional<Lease> held() {
-        return Optional.ofNullable(held);
+    /**
+     * What this instance believes it holds, or empty if it holds nothing.
+     *
+     * <p>⚠️ TAKES NO LOCK. A caller gates on this, and a hung PUT elsewhere
+     * must not make asking hang too — see the class javadoc.
+     */
+    public Optional<Lease> held() {
+        Belief b = belief;
+        return b == null ? Optional.empty() : Optional.of(b.lease());
+    }
+
+    /**
+     * Takes the lock, or reports why not.
+     *
+     * <p>⚠️ AN IOException, never a quiet {@code false}. {@code tryAcquire} and
+     * {@code renew} both have a "nothing happened" return value that means
+     * something ELSE — empty from {@code renew} means FENCED, and a caller must
+     * stop sequencing on it — so a lock timeout must not borrow that signal.
+     * Failing to take a lock held across object-store I/O is evidence of slow
+     * I/O, not of having lost the lease.
+     *
+     * <p>⚠️ THE BOUND IS THE CALLER'S, because the right one is not the same for
+     * all three. For {@code tryAcquire} and {@code renew} it is
+     * {@code renewInterval}: waiting longer than one renew interval guarantees
+     * missing the renew anyway, and giving up early costs a retry. For
+     * {@code release} that argument INVERTS — giving up early costs exactly the
+     * thing release exists to buy — so its bound is the {@code ttl}, which is
+     * what a successor pays when the release does not happen. Waiting up to
+     * that is never worse than not waiting.
+     *
+     * <p>⚠️ Nanoseconds, so a sub-millisecond bound is not truncated to a
+     * single non-blocking attempt while the message quotes the duration asked
+     * for.
+     */
+    private void lockOrFail(String what, Duration bound) throws IOException {
+        boolean taken;
+        try {
+            taken = lock.tryLock(bound.toNanos(), TimeUnit.NANOSECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("interrupted waiting for the lease lock to " + what, e);
+        }
+        if (!taken) {
+            throw new IOException("could not take the lease lock to " + what
+                    + " within " + bound + "; a store call is still in flight");
+        }
     }
 
     /** How often the holder should renew — configuration, see the class javadoc. */
@@ -159,10 +237,20 @@ public final class LeaseManager {
      *     supervisor tick or a restarted election loop is enough. Gate on
      *     {@link #held()}, which after M4.3e no longer reports a term this
      *     instance does not hold
-     * @throws IOException the store was unreachable, or the lease object could
-     *     not be parsed — ⚠️ NOT treated as unheld, see below
+     * @throws IOException the store was unreachable, the lease object could
+     *     not be parsed, or the lock could not be taken within
+     *     {@code renewInterval} — ⚠️ NONE of them treated as unheld, see below
      */
-    public synchronized Optional<Lease> tryAcquire() throws IOException {
+    public Optional<Lease> tryAcquire() throws IOException {
+        lockOrFail("acquire", renewInterval);
+        try {
+            return acquireLocked();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private Optional<Lease> acquireLocked() throws IOException {
         Optional<ObjectStat> stat = store.stat(key);
         if (stat.isEmpty()) {
             // ⚠️ putIfAbsent, not putIfMatch — see the class javadoc.
@@ -190,11 +278,10 @@ public final class LeaseManager {
             // instance may legitimately be looking at its OWN unexpired lease,
             // and clearing there would make a healthy leader forget its term
             // for the sole offence of having asked. Same (epoch, podId)
-            // identity `refreshVersion` uses, and for the same reason.
-            if (held != null && !isOwnTerm(held, current)) {
-                held = null;
-                heldVersion = null;
-                ambiguous = false;
+            // identity `refreshed` uses, and for the same reason.
+            Belief b = belief;
+            if (b != null && !isOwnTerm(b.lease(), current)) {
+                belief = null;
             }
             return Optional.empty();
         }
@@ -210,22 +297,46 @@ public final class LeaseManager {
      *     has been fenced — ⚠️ an empty result is how a holder LEARNS it is
      *     fenced, and it must then stop sequencing immediately. It never
      *     consults a clock to decide that
+     * @throws IOException the store was unreachable, or the lock could not be
+     *     taken within {@code renewInterval} — ⚠️ NOT the same as empty, and
+     *     the two are not the same as each other either: an IOException out of
+     *     the conditional write leaves the belief AMBIGUOUS, while one out of
+     *     the lock leaves it untouched, because nothing was written
      */
-    public synchronized Optional<Lease> renew() throws IOException {
-        if (held == null) {
+    public Optional<Lease> renew() throws IOException {
+        lockOrFail("renew", renewInterval);
+        try {
+            return renewLocked();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private Optional<Lease> renewLocked() throws IOException {
+        // ⚠️ ONE snapshot, then work from it. Correct either way today --
+        // every write to `belief` happens under this lock -- but re-reading a
+        // volatile field for each use makes that a property a reader has to
+        // reconstruct, and one unlocked writer added later would silently make
+        // `lease()` and `version()` a TORN PAIR: an expired lease written
+        // against a version from a different belief.
+        Belief mine = belief;
+        if (mine == null) {
             return Optional.empty();
         }
         // ⚠️ Owed only after an ambiguous write, never on the healthy path.
-        if (ambiguous && !refreshVersion()) {
-            return Optional.empty();
+        if (mine.ambiguous()) {
+            mine = refreshed(mine);
+            if (mine == null) {
+                return Optional.empty();
+            }
         }
-        Lease renewed = held.renewedUntil(clock.millis() + ttl.toMillis());
+        Lease renewed = mine.lease().renewedUntil(clock.millis() + ttl.toMillis());
         // ⚠️ ONE conditional write, with no re-read: the holder already knows
         // its own version. A read per renew would double the lease's request
         // rate for nothing.
         Optional<Version> won;
         try {
-            won = store.putIfMatch(key, Body.ofBytes(renewed.encode()), heldVersion);
+            won = store.putIfMatch(key, Body.ofBytes(renewed.encode()), mine.version());
         } catch (IOException e) {
             // ⚠️ AMBIGUOUS, NOT FAILED. The write may have landed and lost only
             // its response, in which case `heldVersion` is now stale and the
@@ -233,19 +344,16 @@ public final class LeaseManager {
             // kept -- being unable to reach the store is not evidence of being
             // fenced -- but the next renew must re-read before trusting the
             // version it cached.
-            ambiguous = true;
+            belief = mine.uncertain();
             throw e;
         }
         if (won.isEmpty()) {
             // ⚠️ Fenced. Drop the local belief too, so a caller that ignores
             // the empty result cannot keep renewing against a stale version.
-            held = null;
-            heldVersion = null;
-            ambiguous = false;
+            belief = null;
             return Optional.empty();
         }
-        held = renewed;
-        heldVersion = won.get();
+        belief = new Belief(renewed, won.get(), false);
         return Optional.of(renewed);
     }
 
@@ -283,19 +391,23 @@ public final class LeaseManager {
      * exactly one and stamps the new holder, so a successor's term can never
      * be mistaken for this one's.
      *
-     * @return true if the term still stands, with the version refreshed; false
-     *     if this instance was genuinely superseded, in which case the belief
-     *     is dropped exactly as a lost conditional write drops it
+     * <p>⚠️ RETURNS THE NEW BELIEF rather than a boolean plus a field write, so
+     * a caller cannot act on the stale snapshot it passed in. That was possible
+     * while this returned {@code true} and left the caller to re-read the field.
+     *
+     * @param mine what the caller believes, and what its own later reads use
+     * @return the refreshed belief if the term still stands, or null if this
+     *     instance was genuinely superseded — in which case the belief is
+     *     dropped exactly as a lost conditional write drops it
      */
-    private boolean refreshVersion() throws IOException {
+    private Belief refreshed(Belief mine) throws IOException {
         Optional<ObjectStat> stat = store.stat(key);
         if (stat.isPresent()) {
             Lease current = read();
-            if (isOwnTerm(held, current)) {
-                held = current;
-                heldVersion = stat.get().version();
-                ambiguous = false;
-                return true;
+            if (isOwnTerm(mine.lease(), current)) {
+                Belief fresh = new Belief(current, stat.get().version(), false);
+                belief = fresh;
+                return fresh;
             }
         }
         // ⚠️ An ABSENT lease also lands here. Nothing legitimately deletes the
@@ -303,10 +415,8 @@ public final class LeaseManager {
         // counter survives -- so its absence means someone did something this
         // protocol does not model, and continuing to sequence on that basis is
         // the failure mode worth avoiding.
-        held = null;
-        heldVersion = null;
-        ambiguous = false;
-        return false;
+        belief = null;
+        return null;
     }
 
     /**
@@ -321,8 +431,28 @@ public final class LeaseManager {
      * writes nothing is indistinguishable from no release at all: the successor
      * waits out a TTL this method exists to spare it.
      */
-    public synchronized void release() throws IOException {
-        if (held == null) {
+    public void release() throws IOException {
+        // ⚠️ AHEAD OF THE LOCK, deliberately. This is the documented no-op, it
+        // touches no I/O, and `belief` is volatile precisely so it can be read
+        // without the lock. Behind the lock, a pod that never held the lease
+        // and happens to have an election thread inside a slow `tryAcquire`
+        // would block its whole shutdown path and then throw about a lock it
+        // had no reason to want.
+        if (belief == null) {
+            return;
+        }
+        lockOrFail("release", ttl);
+        try {
+            releaseLocked();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private void releaseLocked() throws IOException {
+        Belief mine = belief;
+        if (mine == null) {
+            // ⚠️ Re-checked under the lock: the fast path above raced.
             return;
         }
         // ⚠️ Expiry is INCLUSIVE, so `now` is already expired.
@@ -335,14 +465,15 @@ public final class LeaseManager {
         // ambiguous release is idempotent in effect. If its write landed, the
         // expired lease is already on the store and a retry's lost CAS changes
         // nothing; if it was lost, the version never moved and the retry wins.
-        if (ambiguous && !refreshVersion()) {
-            return;
+        if (mine.ambiguous()) {
+            mine = refreshed(mine);
+            if (mine == null) {
+                return;
+            }
         }
-        Lease expired = held.renewedUntil(clock.millis());
-        store.putIfMatch(key, Body.ofBytes(expired.encode()), heldVersion);
-        held = null;
-        heldVersion = null;
-        ambiguous = false;
+        Lease expired = mine.lease().renewedUntil(clock.millis());
+        store.putIfMatch(key, Body.ofBytes(expired.encode()), mine.version());
+        belief = null;
     }
 
     private Lease read() throws IOException {
@@ -356,14 +487,10 @@ public final class LeaseManager {
             // ⚠️ Drop any prior belief too, exactly as `renew` does. Leaving a
             // superseded lease in `held` would make `held()` report a term
             // this instance does not hold.
-            held = null;
-            heldVersion = null;
-            ambiguous = false;
+            belief = null;
             return Optional.empty();
         }
-        held = candidate;
-        heldVersion = won.get();
-        ambiguous = false;
+        belief = new Belief(candidate, won.get(), false);
         return Optional.of(candidate);
     }
 }
