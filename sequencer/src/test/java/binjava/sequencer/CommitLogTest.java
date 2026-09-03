@@ -188,4 +188,120 @@ class CommitLogTest {
         assertThat(store.counts().puts()).isEqualTo(1);
         assertThat(store.counts().total()).isEqualTo(1);
     }
+
+    // ---- M4.4: the epoch in the object path ----
+
+    @Test
+    void theKeyCarriesTheEpochZeroPaddedSoLexicographicOrderIsNumericOrder() {
+        // ⚠️ The epoch is IN THE PATH (ADR-0002). That is what makes fencing
+        // independent of catching a write in time: a fenced leader's in-flight
+        // PUT lands under its OWN epoch, where readers of the new epoch never
+        // look. Nothing has to arrive before anything else.
+        // ⚠️ Zero-padded to 16 hex digits, like the sequence beside it, so
+        // lexicographic order IS numeric order -- the property `list` depends
+        // on, since ADR-0022 removed `lastModifiedMillis` and left key order as
+        // the only ordering available.
+        assertThat(new CommitLog(new MemoryBinStore(), "p", 0).logPrefix())
+                .isEqualTo("p/ctl/log/0/0000000000000000/");
+        assertThat(new CommitLog(new MemoryBinStore(), "p", 1).logPrefix())
+                .isEqualTo("p/ctl/log/0/0000000000000001/");
+        assertThat(new CommitLog(new MemoryBinStore(), "p", 255).logPrefix())
+                .isEqualTo("p/ctl/log/0/00000000000000ff/");
+        // ⚠️ The FULL key, not only the prefix. Round-1 test review measured
+        // that `keyFor` was pinned by nothing: dropping the `.delta` suffix, or
+        // rendering the SEQUENCE unpadded, each left all 490 tests green -- and
+        // this test's own name reads as covering the key grammar when it did
+        // not. The sequence carries the same padding for the same reason the
+        // epoch does.
+        assertThat(new CommitLog(new MemoryBinStore(), "p", 255).keyFor(4095))
+                .isEqualTo("p/ctl/log/0/00000000000000ff/0000000000000fff.delta");
+    }
+
+    @Test
+    void epochPrefixesSortInNumericOrderAcrossTheNineToSixteenBoundary() {
+        // ⚠️ The case an UNPADDED epoch gets wrong: "10" sorts before "9", and
+        // hex makes it worse -- 16 renders "10" and would sort before "9" too.
+        String nine = new CommitLog(new MemoryBinStore(), "p", 9).logPrefix();
+        String ten = new CommitLog(new MemoryBinStore(), "p", 10).logPrefix();
+        String sixteen = new CommitLog(new MemoryBinStore(), "p", 16).logPrefix();
+        assertThat(nine).isLessThan(ten);
+        assertThat(ten).isLessThan(sixteen);
+    }
+
+    @Test
+    void theTwoArgConstructorIsEpochZeroSoEveryExistingCallSiteKeepsItsMeaning() {
+        // ⚠️ M1 wrote slot 0 / epoch 0 and said so: "their SLOTS are in the
+        // grammar from the first object so that M4's leases and epochs are not
+        // a key-grammar change". This is that promise being kept -- the
+        // dimension was always there, and M4 only fills it in.
+        assertThat(new CommitLog(new MemoryBinStore(), "p").logPrefix())
+                .isEqualTo(new CommitLog(new MemoryBinStore(), "p", 0).logPrefix());
+    }
+
+    @Test
+    void theChainReportsWhichTermItBelongsTo() {
+        // ⚠️ `epoch()` is how a caller (M4.5's CONTINUE header, M4.6's seal)
+        // learns which term a chain is; untested, `return 0` is unconstrained.
+        assertThat(new CommitLog(new MemoryBinStore(), "p", 7).epoch()).isEqualTo(7);
+        assertThat(new CommitLog(new MemoryBinStore(), "p").epoch())
+                .as("the no-lease default is epoch 0 -- see M4.4b on why that collides")
+                .isZero();
+    }
+
+    @Test
+    void aNegativeEpochIsRefused() {
+        assertThatThrownBy(() -> new CommitLog(new MemoryBinStore(), "p", -1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("epoch");
+    }
+
+    @Test
+    void twoEpochsWriteToDisjointPrefixesAndNeitherSeesTheOthersDeltas() throws Exception {
+        // ⚠️ THE FENCING PROPERTY ITSELF (I3): a reader applies only deltas in
+        // a sealed prefix or a LATER epoch's chain, never in a discarded
+        // suffix. Here the new epoch simply cannot see the old one's writes,
+        // because they are not under its prefix at all.
+        MemoryBinStore shared = new MemoryBinStore();
+        CommitLog old = new CommitLog(shared, "p", 0);
+        old.commit("seg-old", counts(new RunKey(A, 0), 4));
+
+        CommitLog fresh = new CommitLog(shared, "p", 1);
+        fresh.commit("seg-new", counts(new RunKey(B, 0), 7));
+        CommitLog reader = new CommitLog(shared, "p", 1);
+        reader.recover();
+        // ⚠️ A POSITIVE CONTROL first: round-1 test review measured that this
+        // test survived `recover()` with an EMPTY BODY, because every other
+        // assertion here is that something is NOT seen. Asserting the epoch's
+        // own commit IS seen is what stops "sees nothing at all" passing for
+        // "sees nothing of the other epoch".
+        assertThat(reader.nextOffset(new RunKey(B, 0)))
+                .as("the epoch DOES see its own chain").isEqualTo(7);
+
+        CommitLog fresh2 = new CommitLog(shared, "p", 2);
+        fresh2.recover();
+        assertThat(fresh2.nextSequence()).as("a new epoch starts its own chain at 0").isZero();
+        assertThat(fresh2.nextOffset(new RunKey(A, 0)))
+                .as("and sees none of the old epoch's offsets from its own prefix")
+                .isZero();
+    }
+
+    @Test
+    void aFencedWritersLaterPutLandsWhereTheNewEpochsReaderNeverLooks() throws Exception {
+        // ⚠️ The whole point of putting the epoch in the PATH rather than
+        // checking it on write: the fenced leader does not have to be stopped
+        // in time. It keeps writing, and its writes are simply invisible.
+        MemoryBinStore shared = new MemoryBinStore();
+        CommitLog fenced = new CommitLog(shared, "p", 0);
+        CommitLog current = new CommitLog(shared, "p", 1);
+        current.commit("seg-new", counts(new RunKey(A, 0), 2));
+
+        // the fenced leader, unaware, commits again
+        fenced.commit("seg-zombie", counts(new RunKey(A, 0), 99));
+
+        CommitLog reader = new CommitLog(shared, "p", 1);
+        reader.recover();
+        assertThat(reader.nextOffset(new RunKey(A, 0)))
+                .as("the zombie's 99 records are not in this epoch's chain")
+                .isEqualTo(2);
+    }
 }
