@@ -166,6 +166,52 @@ public final class CommitLog {
         }
     }
 
+    /**
+     * Finds where this chain ENDS without reading what it holds.
+     *
+     * <p>⚠️ FOR A WRITER THAT WILL ONLY SEAL. A taking-over leader needs the
+     * predecessor's last slot and nothing else; {@link #recover} would spend one
+     * GET per delta of that whole term and then drop every offset it built.
+     * Measured on a 51-entry chain: 52 GETs, all discarded — a failover cost
+     * growing without bound in the PREVIOUS term's length, on the path whose
+     * entire purpose is restoring sequencing quickly.
+     *
+     * <p>⚠️ The LIST alone gives the answer because {@link #keyFor} zero-pads to
+     * 16 hex digits precisely so lexicographic order IS numeric order, so the
+     * last key is the highest sequence. Only that one entry is read, to learn
+     * whether the chain is already sealed.
+     *
+     * <p>⚠️ THIS LOG MUST NOT THEN COMMIT. It deliberately leaves {@code
+     * nextOffsets} empty, so a commit through it would reassign offsets from 0
+     * — which is I2. It is a boundary probe, not a recovery.
+     */
+    public void recoverChainEnd() throws IOException {
+        String lastKey = null;
+        String startAfter = null;
+        while (true) {
+            ListPage page = store.list(logPrefix(), startAfter, 1000);
+            for (ObjectStat stat : page.objects()) {
+                lastKey = stat.key();
+            }
+            if (page.nextStartAfter().isEmpty()) {
+                break;
+            }
+            startAfter = page.nextStartAfter().get();
+        }
+        if (lastKey == null) {
+            nextSequence = 0;
+            return;
+        }
+        ChainEntry last = readEntry(lastKey);
+        // ⚠️ Set directly rather than via `apply`: applying a DELTA here would
+        // populate `nextOffsets` from one arbitrary entry, which is worse than
+        // leaving it empty because it looks like recovery and is not.
+        nextSequence = last.sequence() + 1;
+        if (last instanceof Seal seal) {
+            sealedAt = seal;
+        }
+    }
+
     private ChainEntry readEntry(String key) throws IOException {
         try (InputStream in = store.get(key)) {
             return ChainEntry.decode(in.readAllBytes());
@@ -268,6 +314,119 @@ public final class CommitLog {
                 // the half that must not wait.
                 throw fenced(seal);
             }
+            apply(taken);
+        }
+    }
+
+    /**
+     * Opens this chain with a CONTINUE at slot 0, naming the chain it follows.
+     *
+     * <p>⚠️ IDEMPOTENT ON PURPOSE. A leader that crashed between acquiring its
+     * lease and opening its chain restarts at the SAME epoch only if it also
+     * re-won the same term, but a caller may legitimately re-run this after a
+     * partial start; losing slot 0 to an identical CONTINUE is success, not
+     * contention. Losing it to anything else means this epoch's chain was opened
+     * by somebody else, which cannot happen while the lease is held and is
+     * therefore reported rather than absorbed.
+     *
+     * <p>⚠️ {@code prevEpoch == 0} is not a placeholder. Epoch 0 is RESERVED for
+     * the unleased chain (M4.4b), so a first leader naming it says truthfully
+     * that there was no predecessor chain — which M4.5 chose over an explicit
+     * absent-marker, because a marker can be forgotten and an epoch cannot.
+     */
+    public Continue open(long prevEpoch, long prevSeq) throws IOException {
+        Continue opening = new Continue(0, prevEpoch, prevSeq);
+        byte[] bytes = opening.encode();
+        Optional<binjava.binstore.Version> written = store.putIfAbsent(keyFor(0),
+                new Body(bytes.length, () -> new ByteArrayInputStream(bytes)));
+        if (written.isPresent()) {
+            apply(opening);
+            return opening;
+        }
+        ChainEntry taken = readEntry(keyFor(0));
+        if (opening.equals(taken)) {
+            apply(opening);
+            return opening;
+        }
+        throw new IOException("chain at epoch " + epoch + " was opened by something else: "
+                + taken + "; this node holds the lease and must not share the chain");
+    }
+
+    /**
+     * Closes this chain with a SEAL, naming the epoch it continues at.
+     *
+     * <p>⚠️ THE OTHER LOSING BRANCH, and it is the OPPOSITE of {@link #commit}'s.
+     * A fenced old leader that loses a slot stops, because anything it writes is
+     * in a discarded suffix (I3). A NEW leader holding a valid lease REDRIVES:
+     * it is racing the old leader's still-in-flight commits, and stopping would
+     * surrender sequencing cluster-wide while holding the lease — a
+     * self-inflicted outage. The caller is the one that knows which it is,
+     * because the lease lives there.
+     *
+     * <p>⚠️ CONSECUTIVENESS IS LOAD-BEARING. A fenced leader must claim {@code
+     * N+1} before {@code N+2}, so it necessarily collides with this seal. The
+     * protocol never asks whether a slot is EMPTY — it claims it, and lets the
+     * store adjudicate. A timestamp- or randomly-keyed log would not have that
+     * property.
+     *
+     * @param maxRedrives the caller's budget, and it is NOT the old leader's
+     *     in-flight depth. A fenced leader does not learn it is fenced until a
+     *     write loses or its renew fails, so it keeps ORIGINATING commits for up
+     *     to one renew interval; a budget sized to in-flight depth gives up
+     *     early and causes the outage this branch prevents. The bound belongs to
+     *     the caller because it derives from the renew interval, which this
+     *     class does not know. Termination does not rest on it — the old leader
+     *     stops on its own first lost race — so it is a safety net against a
+     *     store that never lets this writer win, never the argument.
+     */
+    public Seal seal(long continuedAt, int maxRedrives) throws IOException {
+        if (sealedAt != null) {
+            // ⚠️ THE SAME GUARD `commit` HAS, and it was missing here — the
+            // M4.6a hole one method over. A fresh CommitLog that recovers an
+            // already-sealed chain proposes at sealSeq+1, WINS uncontended, and
+            // writes a SECOND seal past the barrier. Measured: "first seal
+            // seq=1, second seal seq=2". The adopt branch below states the
+            // principle this contradicted — the chain is closed, which is what
+            // was asked for.
+            // ⚠️ Two consequences, both downstream: the CONTINUE would name a
+            // slot past the real boundary, which is exactly what M4.6e's
+            // crossing reader follows; and `open`'s advertised idempotence
+            // after a partial start breaks, because the retry's CONTINUE would
+            // not equal the one this node wrote.
+            return sealedAt;
+        }
+        for (int redrives = 0; ; redrives++) {
+            Seal proposed = new Seal(nextSequence, continuedAt);
+            byte[] bytes = proposed.encode();
+            Optional<binjava.binstore.Version> written = store.putIfAbsent(keyFor(nextSequence),
+                    new Body(bytes.length, () -> new ByteArrayInputStream(bytes)));
+            if (written.isPresent()) {
+                apply(proposed);
+                // ⚠️ Binds the writer to its OWN seal. Otherwise the node that
+                // closed the chain is the one node still able to write past the
+                // barrier it just installed, which is I5 by the shortest route
+                // there is.
+                sealedAt = proposed;
+                return proposed;
+            }
+            ChainEntry taken = readEntry(keyFor(nextSequence));
+            if (taken instanceof Seal existing) {
+                // ⚠️ NOT a failure. The chain is closed, which is what was
+                // asked for; failing here would abandon a takeover that had
+                // already succeeded. Adopt THEIR seal, including their
+                // continuation epoch — ours was only a proposal.
+                apply(existing);
+                sealedAt = existing;
+                return existing;
+            }
+            if (redrives >= maxRedrives) {
+                throw new IOException("seal did not converge at seq " + nextSequence
+                        + " within " + maxRedrives + " redrive(s); a writer is still"
+                        + " originating commits on a chain this node is trying to close");
+            }
+            // ⚠️ RE-READ AND APPLY, never blind-retry: the offsets that commit
+            // assigned are now part of this chain's history, and a seal written
+            // without them would leave a reader's state disagreeing with the log.
             apply(taken);
         }
     }
