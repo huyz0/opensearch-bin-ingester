@@ -18,6 +18,13 @@ dependencies {
     // Nothing here reaches the production classpath, and rule 4 still holds:
     // `http` depends on these, not the other way round.
     testImplementation(project(":binstore-backends"))
+    // ⚠️ TEST ONLY, for `TestSequencers`. The reason is plain and NOT about
+    // counting requests: since M4.6d a `DefaultIngest` REQUIRES a Sequencer, and
+    // the tests here construct real ones over a real store. ⚠️ An earlier draft
+    // of this comment claimed these tests count a commit-log append among the
+    // PUTs they measure -- they do not, and no test under http/src/test reads
+    // `counts()` at all. See TestSequencers' javadoc.
+    testImplementation(testFixtures(project(":sequencer")))
 }
 
 // ⚠️ T12 / criterion 8 (M1.18): a 200 MB `_bulk` body ingested under a 256 MB

@@ -214,15 +214,16 @@ public final class LeaseManager {
         Optional<ObjectStat> stat = store.stat(key);
         if (stat.isEmpty()) {
             // ⚠️ putIfAbsent, not putIfMatch — see the class javadoc.
-            // ⚠️ EPOCH 1, not 0 (M4.4b). Epoch 0 is RESERVED for "no lease":
-            // `CommitLog`'s 2-arg constructor writes it for every caller that
-            // has no lease yet, `DefaultIngest` among them. If the first
-            // leadership term were also 0, wiring the lease into the commit
-            // path would put a first leader's chain byte-identical to what
-            // those callers already write — `putIfAbsent` would still buy I1,
-            // but I3's "readers of the new epoch never look there" would be
-            // VOID, because it would not be a different epoch. Reserving 0
-            // makes every leased chain provably disjoint from the unleased one.
+            // ⚠️ EPOCH 1, not 0 (M4.4b). Epoch 0 is RESERVED for "no lease" --
+            // the chain M1 wrote, and what `CommitLog`'s 2-arg constructor still
+            // writes for a test. ⚠️ NO LONGER `DefaultIngest` AMONG THEM: M4.6d
+            // routed it through a `Sequencer`, so nothing in production commits
+            // unleased. If the first leadership term were also 0, a first
+            // leader's chain would be byte-identical to what M1 left on an
+            // existing prefix — `putIfAbsent` would still buy I1, but I3's
+            // "readers of the new epoch never look there" would be VOID, because
+            // it would not be a different epoch. Reserving 0 makes every leased
+            // chain provably disjoint from the unleased one.
             Lease fresh = new Lease(1, podId, endpoint, clock.millis() + ttl.toMillis());
             return adopt(fresh, writeOrRemember(fresh,
                     () -> store.putIfAbsent(key, Body.ofBytes(fresh.encode()))));

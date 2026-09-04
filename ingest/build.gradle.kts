@@ -6,6 +6,7 @@ dependencies {
     api(project(":binstore-spi"))
     api(project(":format"))
     api(project(":sequencer"))
+    testImplementation(testFixtures(project(":sequencer")))
 
     // ⚠️ TEST ONLY. The production surface stays binstore-spi + format +
     // sequencer (architecture.md); a backend here would let ingest depend on a

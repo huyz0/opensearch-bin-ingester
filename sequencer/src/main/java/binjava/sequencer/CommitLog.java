@@ -52,19 +52,23 @@ public final class CommitLog {
     private Seal sealedAt;
 
     /**
-     * The chain for epoch 0 — what M1 wrote, and what every call site that has
-     * no lease yet still writes.
+     * The chain for epoch 0 — what M1 wrote. ⚠️ SINCE M4.6d NO PRODUCTION CALLER
+     * REACHES IT: {@code DefaultIngest} commits through a {@code Sequencer},
+     * which holds a lease and therefore an epoch of at least 1. What is left
+     * here is a test-only convenience, and M4.6f owns deleting it so the fork
+     * below stops being representable at all.
      *
-     * <p>⚠️ THIS CHAIN IS A FORK, and the wiring commit must END it rather
-     * than leave it running. Once a leader writes at epoch 1, a reader of that
+     * <p>⚠️ THIS CHAIN IS A FORK, which is WHY the production path had to leave
+     * it rather than be handed an epoch. Once a leader writes at epoch 1, a reader of that
      * epoch never lists this prefix — so records committed here are acked and
      * never become visible, and the leader re-issues offsets this chain already
      * assigned. Nor can this chain be SEALED: the seal depends on a losing
      * writer treating its loss as proof it is fenced, and {@code commit} does
      * the opposite by construction, folding the winner's offsets in and
      * retrying at the next sequence forever. There is no leader here to fence.
-     * ⚠️ So M4.5/M4.6 must REMOVE the unleased production commit path, not
-     * merely pass an epoch to it — and {@code CONTINUE} may not use
+     * ⚠️ M4.6d REMOVED the unleased production commit path rather than passing
+     * an epoch to it, because a default that silently forks the log is a bad
+     * state best made unrepresentable — and {@code CONTINUE} may not use
      * {@code prevEpoch=0} as a "no previous chain" sentinel, because 0 now
      * names a live one.
      *
