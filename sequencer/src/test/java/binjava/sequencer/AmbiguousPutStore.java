@@ -26,6 +26,14 @@ import java.util.Optional;
  * <p>⚠️ Only the first call is ambiguous, so a test can observe what the NEXT
  * one does. That is where a self-fence would show up: the second write loses to
  * the first one's own bytes.
+ *
+ * <p>⚠️ {@code thenRefuseNextRead} makes the COMPOUND failure writable: the
+ * object store still unreachable when {@code refreshVersion} tries to RE-READ
+ * after the ambiguous write, not merely unreachable for the write itself.
+ * Without it that path -- the {@code IOException} escaping {@code refreshed()}
+ * before {@code belief} is ever reassigned, so the ambiguous flag survives --
+ * was correct only by nobody's intent, and unfalsifiable (M4.3i, found by
+ * M4.3d's round-1 test review).
  */
 public final class AmbiguousPutStore implements BinStore {
 
@@ -48,16 +56,39 @@ public final class AmbiguousPutStore implements BinStore {
     private final BinStore delegate;
     private final Mode mode;
     private final Target target;
+    private final boolean thenRefuseNextRead;
     private boolean fired;
+    private boolean readRefused;
 
     public AmbiguousPutStore(BinStore delegate, Mode mode) {
         this(delegate, mode, Target.PUT_IF_MATCH);
     }
 
     public AmbiguousPutStore(BinStore delegate, Mode mode, Target target) {
+        this(delegate, mode, target, false);
+    }
+
+    /**
+     * @param thenRefuseNextRead once the ambiguous write has fired, makes the
+     *     NEXT {@link #stat} or {@link #get} — whichever comes first — throw
+     *     once, then behave normally. Models the store still being unreachable
+     *     when a caller tries to RE-READ after the ambiguous write, rather
+     *     than having recovered by then.
+     */
+    public AmbiguousPutStore(BinStore delegate, Mode mode, Target target,
+            boolean thenRefuseNextRead) {
         this.delegate = delegate;
         this.mode = mode;
         this.target = target;
+        this.thenRefuseNextRead = thenRefuseNextRead;
+    }
+
+    private void refuseReadIfDue() throws IOException {
+        if (fired && thenRefuseNextRead && !readRefused) {
+            readRefused = true;
+            throw new IOException("store still unreachable for the re-read "
+                    + "after the ambiguous write");
+        }
     }
 
     /** @return true if this call is the one made ambiguous, and marks it taken. */
@@ -93,6 +124,7 @@ public final class AmbiguousPutStore implements BinStore {
 
     @Override
     public InputStream get(String k) throws IOException {
+        refuseReadIfDue();
         return delegate.get(k);
     }
 
@@ -103,6 +135,7 @@ public final class AmbiguousPutStore implements BinStore {
 
     @Override
     public Optional<ObjectStat> stat(String k) throws IOException {
+        refuseReadIfDue();
         return delegate.stat(k);
     }
 

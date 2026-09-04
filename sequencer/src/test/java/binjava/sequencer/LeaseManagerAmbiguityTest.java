@@ -97,6 +97,58 @@ class LeaseManagerAmbiguityTest {
     }
 
     @Test
+    void aCompoundFailureWhereTheREREADAlsoFailsStillKeepsTheAmbiguousTermRatherThanFencing()
+            throws Exception {
+        // ⚠️ THE COMPOUND FAILURE M4.3d's round-1 test review flagged as
+        // defended by nobody's intent (M4.3i): the object store is STILL
+        // unreachable when the next renew's `refreshed()` tries to RE-READ,
+        // after an earlier write's response was already lost. The shipped
+        // code is correct here by CONSTRUCTION -- `refreshed()`'s `store.stat`
+        // throws before `belief` is ever reassigned, so the ambiguous flag
+        // untouched by that call survives as whatever it already was -- but
+        // nothing proved it. A well-meaning try/catch around a caller's own
+        // renew loop that read ANY IOException as "not renewed" and self-fenced
+        // would reintroduce M4.3d's exact harm through this exact path, with
+        // every OTHER test in this file still green, because none of them
+        // makes the store fail on the read half.
+        MemoryBinStore backing = new MemoryBinStore();
+        AmbiguousPutStore store = new AmbiguousPutStore(backing, AmbiguousPutStore.Mode.LANDED,
+                AmbiguousPutStore.Target.PUT_IF_MATCH, true);
+        TestClock clock = new TestClock();
+        LeaseManager m = manager(store, "podA", clock);
+        assertThat(m.tryAcquire()).isPresent();
+
+        clock.advance(RENEW);
+        assertThatThrownBy(m::renew)
+                .as("the ambiguous write's response is lost")
+                .isInstanceOf(IOException.class);
+
+        clock.advance(RENEW);
+        assertThatThrownBy(m::renew)
+                .as("the re-read that would resolve the ambiguity ALSO fails -- "
+                        + "a compound failure, not the same one reported twice")
+                .isInstanceOf(IOException.class);
+        // ⚠️ THE ASSERTION THAT MATTERS. Two failures in a row are exactly the
+        // shape that tempts a caller into giving up -- and `held()` staying
+        // present here is what proves NOTHING in this instance did.
+        assertThat(m.held())
+                .as("the term is not given up over a transient read failure "
+                        + "stacked on a transient write failure")
+                .isPresent();
+
+        clock.advance(RENEW);
+        assertThat(m.renew())
+                .as("once the store is reachable again the deferred refresh "
+                        + "completes and the SAME term renews -- the ambiguous "
+                        + "flag survived BOTH failures rather than being cleared "
+                        + "by either")
+                .isPresent();
+        assertThat(Lease.decode(backing.get(m.key()).readAllBytes()).epoch())
+                .as("still the SAME term -- recovery is not a takeover")
+                .isEqualTo(1);
+    }
+
+    @Test
     void anAmbiguousRenewWhoseWriteWasLostAlsoKeepsTheTerm() throws Exception {
         // ⚠️ The version did NOT move here, so a correct recovery must find
         // the term intact and keep it. A refresh that cleared the belief
