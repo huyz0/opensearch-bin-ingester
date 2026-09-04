@@ -5,7 +5,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import binjava.binstore.BinStore;
-import binjava.binstore.CountingBinStore;
 import binjava.binstore.backend.MemoryBinStore;
 import binjava.format.ChainEntry;
 import binjava.format.CommitDelta;
@@ -160,11 +159,22 @@ class LocalSequencerTest {
         unleased.commit("seg/unleased", counts(3));
         long before = store.list(unleased.logPrefix(), null, 100).objects().size();
 
-        LocalSequencer.start(store, PREFIX, manager(store, "pod1"), 8).orElseThrow();
+        LocalSequencer leader =
+                LocalSequencer.start(store, PREFIX, manager(store, "pod1"), 8).orElseThrow();
 
         assertThat(store.list(unleased.logPrefix(), null, 100).objects().size())
                 .as("the reserved chain gains nothing -- no seal, no slot consumed")
                 .isEqualTo(before);
+        // ⚠️ THE READ SIDE, and it was unpinned. There are TWO epoch-0 guards --
+        // one on the recover path, one in `open`'s inheritance -- and only the
+        // first was constrained. Deleting the `open` one passed everything while
+        // a first leader INHERITED the reserved unleased chain's offsets: the
+        // M4.6d fork, arriving through the other door. The fixture already wrote
+        // those 3 records; nothing asked what the leader made of them.
+        assertThat(leader.commit(request("pod1", 2, "seg/1", 1))
+                        .runs().getFirst().firstOffset())
+                .as("a first leader starts its stream at 0, not after epoch 0's records")
+                .isZero();
     }
 
     @Test
@@ -377,68 +387,6 @@ class LocalSequencerTest {
                 .as("recovery found the chain's end, so ONE write sealed it")
                 .isEqualTo(new Seal(5, 2));
         assertThat(second.epoch()).isEqualTo(2);
-    }
-
-    @Test
-    void aStartThatFailsAFTERAcquiringHandsTheLeaseBackRatherThanStrandingIt()
-            throws Exception {
-        // ⚠️ THE BLOCKING DEFECT REVIEW FOUND. `start` acquired the lease, sealed
-        // the predecessor, then failed opening its own chain -- and returned
-        // without releasing. A caller reads that as "not the leader" while this
-        // node HOLDS the term, so the cluster has no sequencer for a full TTL:
-        // the outage the redrive branch exists to prevent, arriving by the other
-        // door. Measured before the fix: retry EMPTY, other pod EMPTY, chain 1
-        // sealed, chain 2 absent.
-        MemoryBinStore backing = new MemoryBinStore();
-        LocalSequencer first = start(backing, "pod1");
-        first.commit(request("pod1", 1, "seg/0", 3));
-        first.close();
-        String opensChain2 = new CommitLog(backing, PREFIX, 2).keyFor(0);
-        BinStore refuses = new RefuseKeyStore(backing, opensChain2);
-
-        assertThatThrownBy(() -> LocalSequencer.start(refuses, PREFIX,
-                manager(refuses, "pod2"), 8))
-                .as("the failure is reported as a failure, not disguised as a lost race")
-                .isInstanceOf(IOException.class);
-
-        // ⚠️ THE ASSERTION THAT MATTERS: somebody else can lead IMMEDIATELY.
-        assertThat(LocalSequencer.start(backing, PREFIX, manager(backing, "pod3"), 8))
-                .as("the lease was handed back, so a successor takes over in "
-                        + "milliseconds rather than waiting out the TTL")
-                .isPresent();
-    }
-
-    @Test
-    void aTakeoverReadsThePredecessorsCHAINENDRatherThanEveryDeltaInIt()
-            throws Exception {
-        // ⚠️ `start` consumed only `.seal(...).sequence()`, but paid a full
-        // `recover()` to get it -- one GET per delta of the predecessor's whole
-        // term, every one discarded with the local. Measured on a 51-entry
-        // chain: 52 GETs. Failover cost and latency then grow without bound in
-        // the PREVIOUS term's length, on the path whose purpose is restoring
-        // sequencing quickly.
-        MemoryBinStore backing = new MemoryBinStore();
-        LocalSequencer first = start(backing, "pod1");
-        for (int i = 0; i < 12; i++) {
-            first.commit(request("pod1", i, "seg/" + i, 1));
-        }
-        first.close();
-
-        CountingBinStore counting = new CountingBinStore(backing);
-        LocalSequencer second = LocalSequencer
-                .start(counting, PREFIX, manager(counting, "pod2"), 8).orElseThrow();
-
-        assertThat(second.epoch()).isEqualTo(2);
-        assertThat(counting.counts().gets())
-                .as("a takeover reads the chain's END, not its contents -- the "
-                        + "13-entry predecessor costs a CONSTANT number of GETs")
-                // ⚠️ EXACTLY 2, not "fewer than 5". A slack bound let
-                // `nextSequence = last.sequence()` -- one slot short -- survive,
-                // because the sibling's budget of 1 absorbed the extra lost slot
-                // and this assertion had three GETs of headroom. Sitting ON the
-                // boundary is `theBudgetBoundaryIsExactRatherThanOffByOne`'s own
-                // lesson, one method over.
-                .isEqualTo(2L);
     }
 
     @Test

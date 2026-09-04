@@ -17,15 +17,18 @@ import java.util.Optional;
  * commit's worth of behaviour and why {@link #start} does all three before it
  * hands back anything a caller can commit through.
  *
- * <p>⚠️ OFFSETS RESTART AT 0 ON EVERY TAKEOVER, and this class does not yet
- * honour the contract it implements. {@link Sequencer#commit} promises offsets
- * "will never be reassigned (I2, and NFR-11 across a failover)" and the M4 SPEC
- * makes it acceptance criterion 4 — but a new leader's {@code recover()} reads
- * only its OWN epoch's prefix, so a successor begins the stream again at 0.
- * Measured: leader 1 acknowledges 100 records at 0..99 and leader 2's first
- * commit for the same stream returns {@code firstOffset = 0}. M4.6e closes it by
- * following the CONTINUE across the boundary; until then a multi-term deployment
- * violates I2, and that is stated here rather than left to be discovered.
+ * <p>⚠️ OFFSETS SURVIVE A TAKEOVER, as of M4.6e. A new leader's `recover()`
+ * reads only its own epoch's prefix, so until the CONTINUE was followed across
+ * the boundary a successor began every stream again at 0 — violating I2,
+ * NFR-11 and acceptance criterion 4, the contract {@link Sequencer#commit}
+ * states verbatim. It now crosses: measured, leader 1 acknowledges records at
+ * 0..99 and leader 2's first commit for the same stream returns 100.
+ *
+ * <p>⚠️ WHAT THAT COSTS is stated rather than buried: the crossing is
+ * TRANSITIVE, so a takeover re-reads every entry of every ancestor chain and
+ * per-failover cost grows with the cluster's whole history. M4.8's checkpoints
+ * are what make it constant again. `LocalSequencerFailoverTest` pins both
+ * slopes so the growth cannot get worse unnoticed.
  *
  * <p>⚠️ COMMIT FORWARDING IS M5's. A node that does not hold the lease gets an
  * empty {@link Optional} here and has no way to reach the node that does, so a
@@ -91,6 +94,18 @@ public final class LocalSequencer implements Sequencer {
                 prevSeq = predecessor.seal(epoch, sealRedriveBudget).sequence();
             }
             CommitLog log = new CommitLog(store, prefix, epoch);
+            // ⚠️ RECOVER BEFORE SEQUENCING, and the note below moved here from
+            // DefaultIngest's constructor with the responsibility. `commit`
+            // starts at sequence 0 and walks slot by slot on a lost
+            // `putIfAbsent`, so against an existing prefix of N entries the
+            // first append would issue ~2N requests -- a rate scaling with
+            // commit-log HISTORY.
+            // ⚠️ `recover()` is NOT "one LIST": it is one LIST per 1000 objects
+            // PLUS one GET per entry, and since M4.6e it also crosses into the
+            // predecessor to inherit offsets. The request COST is off the hot
+            // path and R2 permits it; the STARTUP LATENCY is unbounded in log
+            // length, and an operator should not have to learn that from the
+            // code. M4.9's bounded recovery is what fixes it.
             log.recover();
             log.open(prevEpoch, prevSeq);
             return Optional.of(new LocalSequencer(leases, log));

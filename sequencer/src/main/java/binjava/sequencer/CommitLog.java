@@ -133,36 +133,12 @@ public final class CommitLog {
      * startup, never on a hot path.
      */
     public void recover() throws IOException {
+        ChainReplay.Result r = ChainReplay.replay(store, prefix, epoch);
         nextOffsets.clear();
-        nextSequence = 0;
-        String startAfter = null;
-        while (true) {
-            ListPage page = store.list(logPrefix(), startAfter, 1000);
-            for (ObjectStat stat : page.objects()) {
-                ChainEntry entry = readEntry(stat.key());
-                apply(entry);
-                if (entry instanceof Seal seal) {
-                    // ⚠️ A BARRIER, not an entry to count and move past. M4.5
-                    // closed this in `commit` for a writer that LOSES a slot to
-                    // a seal; it could not close it for one that never loses
-                    // one. Recovery used to advance `nextSequence` PAST the
-                    // seal, so the next commit picked a FREE slot, won it
-                    // outright, and never reached that check -- I5 with no lost
-                    // race anywhere in it. Measured before this fix: the commit
-                    // succeeded, and a recovery over [delta, SEAL, delta]
-                    // reported offset 9 where the sealed prefix ended at 3,
-                    // which is I3.
-                    // ⚠️ Returning here also STOPS the LIST. Everything beyond
-                    // a seal is a discarded suffix, so paging on would spend
-                    // requests reading bytes that must not be applied.
-                    sealedAt = seal;
-                    return;
-                }
-            }
-            if (page.nextStartAfter().isEmpty()) {
-                return;
-            }
-            startAfter = page.nextStartAfter().get();
+        nextOffsets.putAll(r.offsets());
+        nextSequence = r.nextSequence();
+        if (r.seal() != null) {
+            sealedAt = r.seal();
         }
     }
 
@@ -186,29 +162,10 @@ public final class CommitLog {
      * — which is I2. It is a boundary probe, not a recovery.
      */
     public void recoverChainEnd() throws IOException {
-        String lastKey = null;
-        String startAfter = null;
-        while (true) {
-            ListPage page = store.list(logPrefix(), startAfter, 1000);
-            for (ObjectStat stat : page.objects()) {
-                lastKey = stat.key();
-            }
-            if (page.nextStartAfter().isEmpty()) {
-                break;
-            }
-            startAfter = page.nextStartAfter().get();
-        }
-        if (lastKey == null) {
-            nextSequence = 0;
-            return;
-        }
-        ChainEntry last = readEntry(lastKey);
-        // ⚠️ Set directly rather than via `apply`: applying a DELTA here would
-        // populate `nextOffsets` from one arbitrary entry, which is worse than
-        // leaving it empty because it looks like recovery and is not.
-        nextSequence = last.sequence() + 1;
-        if (last instanceof Seal seal) {
-            sealedAt = seal;
+        ChainReplay.Result r = ChainReplay.chainEnd(store, prefix, epoch);
+        nextSequence = r.nextSequence();
+        if (r.seal() != null) {
+            sealedAt = r.seal();
         }
     }
 
@@ -234,15 +191,17 @@ public final class CommitLog {
      */
     private void apply(ChainEntry entry) {
         switch (entry) {
-            case CommitDelta delta -> {
-                for (RunCommit run : delta.runs()) {
-                    nextOffsets.merge(run.key(), run.lastOffset() + 1, Math::max);
-                }
-            }
+            case CommitDelta delta -> ChainReplay.fold(delta, nextOffsets);
             case Seal ignored -> { }
             case Continue ignored -> { }
         }
         nextSequence = Math.max(nextSequence, entry.sequence() + 1);
+    }
+
+    /** Merges in whatever this chain inherits from the slot its CONTINUE names. */
+    private void crossFrom(long prevEpoch, long prevSeq) throws IOException {
+        ChainReplay.inherited(store, prefix, prevEpoch, prevSeq)
+                .forEach((key, next) -> nextOffsets.merge(key, next, Math::max));
     }
 
     /** The offset the next record of this stream will get. */
@@ -341,11 +300,13 @@ public final class CommitLog {
                 new Body(bytes.length, () -> new ByteArrayInputStream(bytes)));
         if (written.isPresent()) {
             apply(opening);
+            crossFrom(prevEpoch, prevSeq);
             return opening;
         }
         ChainEntry taken = readEntry(keyFor(0));
         if (opening.equals(taken)) {
             apply(opening);
+            crossFrom(prevEpoch, prevSeq);
             return opening;
         }
         throw new IOException("chain at epoch " + epoch + " was opened by something else: "
