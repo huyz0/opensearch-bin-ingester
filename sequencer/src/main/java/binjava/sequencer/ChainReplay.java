@@ -253,11 +253,56 @@ final class ChainReplay {
      * because paging is where this reader's cost lives.
      */
     private ChainEntry firstEntry(long chainEpoch) throws IOException {
+        return firstEntry(store, prefix, chainEpoch);
+    }
+
+    private static ChainEntry firstEntry(BinStore store, String prefix, long chainEpoch)
+            throws IOException {
         String slotZero = new CommitLog(store, prefix, chainEpoch).keyFor(0);
         if (store.stat(slotZero).isEmpty()) {
             return null;
         }
         return read(store, slotZero);
+    }
+
+    /**
+     * The nearest ancestor of {@code prevEpoch}, walking backward, that was
+     * genuinely opened — carries a real {@link Continue} at slot 0, not a
+     * chain burned before ever writing one. ADR-0029: this is the ancestor a
+     * taking-over leader must SEAL before crossing into it, because it is the
+     * one whose offsets {@link #inherited} will eventually read.
+     *
+     * <p>⚠️ NOT {@link #replayAncestry}. That walk follows every
+     * {@code CONTINUE} transitively, because a full replay needs the whole
+     * ancestry. This one stops at the FIRST real {@code CONTINUE} it meets —
+     * ADR-0029's decision only needs the one hop back, because sealing it is
+     * what stops its writer, and the existing transitive walk in
+     * {@link #inherited} already reads everything beyond it once this method's
+     * caller has sealed it and named it directly in the new chain's own
+     * {@code CONTINUE}.
+     *
+     * <p>⚠️ SHARES {@link #neverOpened}'S ORIGIN CAVEAT. {@code prevEpoch}
+     * itself is treated as the origin, so a {@code prevEpoch} that is
+     * completely empty (no {@code CONTINUE}, no {@code Seal} — a store outage
+     * spanning the acquisition that minted it, before anything was ever
+     * written) is not walked past here, same as {@link #inherited}. That gap
+     * is M4.23's, not this method's: closing it changes {@link #neverOpened}
+     * for both callers at once, and this method is deliberately built on the
+     * same primitive as {@link #inherited} rather than a divergent one.
+     *
+     * @return {@code prevEpoch} or a lower epoch, or {@code 0} when nothing
+     *     needs sealing — mirrors the {@code prevEpoch >= 1} guard callers
+     *     already use for "no predecessor to seal"
+     */
+    static long firstInheritableAncestor(BinStore store, String prefix, long prevEpoch)
+            throws IOException {
+        long chainEpoch = prevEpoch;
+        boolean atOrigin = true;
+        while (chainEpoch >= 1 && neverOpened(firstEntry(store, prefix, chainEpoch), atOrigin)) {
+            chainEpoch--;
+            atOrigin = false;
+        }
+        return chainEpoch;
     }
 
     private void applyChain(Hop hop) throws IOException {

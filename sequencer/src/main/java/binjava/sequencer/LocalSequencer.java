@@ -80,7 +80,21 @@ public final class LocalSequencer implements Sequencer {
             // predecessor is E-1 — and at E == 1 that is epoch 0, the RESERVED
             // unleased chain, which has no leader to fence and therefore cannot
             // be sealed at all.
-            long prevEpoch = epoch - 1;
+            //
+            // ⚠️ ADR-0029: SEAL THE ANCESTOR YOU INHERIT FROM, NOT `epoch - 1`
+            // BLINDLY. When a run of epochs burned right after the real
+            // predecessor — every failed `start` burns one, and a store outage
+            // burns many — `epoch - 1` names a chain that was never opened and
+            // has nothing to seal, while the genuine ancestor further back
+            // stays unsealed and its leader, unaware it has been superseded,
+            // keeps committing into offsets this chain is about to reassign.
+            // I2. `firstInheritableAncestor` walks back through exactly those
+            // burned epochs — the same arithmetic the crossing already does —
+            // to the one chain whose offsets actually get inherited, and it is
+            // sealed here, BEFORE `open` below crosses into it. Order is
+            // load-bearing: reading first and sealing second would read a
+            // still-growing chain, reopening the defect this closes.
+            long prevEpoch = ChainReplay.firstInheritableAncestor(store, prefix, epoch - 1);
             long prevSeq = 0;
             if (prevEpoch >= 1) {
                 CommitLog predecessor = new CommitLog(store, prefix, prevEpoch);

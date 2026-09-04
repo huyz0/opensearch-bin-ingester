@@ -148,16 +148,28 @@ class LocalSequencerFailoverTest {
         // LIST per predecessor ENTRY survive -- a request rate scaling with
         // records, which is the one thing non-negotiable 6 forbids outright, on
         // the path this commit adds.
+        // ⚠️ +1 GET EVERY CASE BELOW, ADR-0029 (M4.32). `LocalSequencer.start`
+        // now probes the immediate predecessor's slot 0 to learn whether it was
+        // genuinely opened before deciding what to seal -- one extra GET per
+        // takeover, NOT per ancestor or per entry: this fixture burns no epochs,
+        // so the probe finds a real CONTINUE immediately and the walk it guards
+        // never iterates. A walk that DID skip burned epochs would cost one more
+        // GET per epoch skipped, which is the failover-only, O(epochs-skipped)
+        // price ADR-0029's Alternatives section costs and accepts against the
+        // I2 violation it closes -- see `LocalSequencerAncestorSealTest` for
+        // that shape. Stating the move plainly rather than silently, same
+        // discipline as the `isEqualTo(2L)` note above this one.
         StoreCounts small = takeoverCost(1, 12);
         StoreCounts longer = takeoverCost(1, 40);
         assertThat(small.gets())
                 .as("12 entries: one GET each, plus a constant for the chain end, "
-                        + "the seal probe, the ancestry probe and the new CONTINUE")
-                .isEqualTo(17L);
+                        + "the seal probe, the inheritable-ancestor probe, the "
+                        + "ancestry probe and the new CONTINUE")
+                .isEqualTo(18L);
         assertThat(longer.gets())
                 .as("40 entries: the SAME constant, so the slope in ENTRIES is "
                         + "exactly 1 -- this is what catches a super-linear regression")
-                .isEqualTo(45L);
+                .isEqualTo(46L);
         // ⚠️ TOTAL, not an enumerated subset. Asserting gets+lists let a per-entry
         // `stat` survive -- and `stat` is precisely the request class the
         // ancestry probe added this round, so the enumeration was stale the
@@ -166,11 +178,12 @@ class LocalSequencerFailoverTest {
         // name and waiting for `puts` to be next.
         assertThat(small.total())
                 .as("12 entries: EVERY request kind counted, so a per-entry stat, "
-                        + "list or head shows up here")
-                .isEqualTo(26L);
+                        + "list or head shows up here -- +2 here, not +1: the "
+                        + "inheritable-ancestor probe is a stat AND a get")
+                .isEqualTo(28L);
         assertThat(longer.total())
                 .as("40 entries: the same constant overhead, slope still 1")
-                .isEqualTo(54L);
+                .isEqualTo(56L);
 
         // ⚠️ THE SECOND DIMENSION: hold the chain length and vary the number of
         // prior TERMS. The slope here is what makes the cost unbounded over a
@@ -180,12 +193,16 @@ class LocalSequencerFailoverTest {
         // ⚠️ Totals here too, and exact rather than a divided slope: integer
         // division left up to two requests of drift, which is room a mutation
         // can live in.
-        assertThat(oneTerm.total()).as("one ancestor").isEqualTo(18L);
+        assertThat(oneTerm.total()).as("one ancestor").isEqualTo(20L);
         assertThat(fourTerms.total())
                 .as("four ancestors: each costs its entries plus a constant ONCE -- "
                         + "re-reading an ancestor per descendant would grow this "
-                        + "quadratically")
-                .isEqualTo(45L);
+                        + "quadratically. The inheritable-ancestor probe is ALSO "
+                        + "once per takeover (a stat plus a get), not once per prior "
+                        + "term: this fixture has no burned epochs, so it only ever "
+                        + "probes the immediate predecessor before finding a real "
+                        + "CONTINUE there")
+                .isEqualTo(47L);
     }
 
     @Test
