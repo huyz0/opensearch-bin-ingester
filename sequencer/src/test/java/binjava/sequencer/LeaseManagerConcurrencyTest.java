@@ -100,6 +100,124 @@ class LeaseManagerConcurrencyTest {
                 .isEqualTo(1);
     }
 
+    @Test
+    void aReleaseDuringAnInFlightAcquireWAITSForItRatherThanNoOpingInstantly() throws Exception {
+        // ⚠️ M4.3k. `belief == null` means "I held nothing at the INSTANT of
+        // this read", not "there is nothing to release" -- and an acquiring
+        // thread holds the lock across stat+get+PUT, writing `belief` only at
+        // the END. So the window in which the OLD fast path was wrong was the
+        // ENTIRE duration of an in-flight acquire: rolling restart, election
+        // thread polling `tryAcquire`; SIGTERM lands while the acquire that
+        // WINS is in flight; `release` reads null, returns instantly, the pod
+        // exits, and the lease it won a moment later is orphaned with nobody
+        // renewing it -- the successor waits the full TTL.
+        //
+        // ⚠️ THE INTERLEAVE, deterministic exactly as the test above builds
+        // one: A parks inside its `putIfAbsent`, HOLDING THE LOCK (M4.3f).
+        // `release` on the SAME instance from a second thread must therefore
+        // park too -- observably, on the lock -- rather than reading `belief`
+        // (still null) and returning at once.
+        MemoryBinStore backing = new MemoryBinStore();
+        GateFirstPutStore gate = new GateFirstPutStore(backing);
+        LeaseManager shared = new LeaseManager(gate, new LeaseConfig("bins/cluster-a", "podA", "",
+                TTL, RENEW), FIXED);
+
+        AtomicReference<Optional<Lease>> acquired = new AtomicReference<>();
+        AtomicReference<Throwable> failed = new AtomicReference<>();
+        Thread acquirer = thread("acquire-A", shared, acquired, failed);
+        AtomicReference<Throwable> releaseFailed = new AtomicReference<>();
+        Thread releaser = releaseThread(shared, releaseFailed);
+
+        acquirer.start();
+        try {
+            gate.awaitEntered();
+            releaser.start();
+            // ⚠️ THE ASSERTION THAT MATTERS. Under the OLD fast path this
+            // spin times out with `releaser` already TERMINATED -- it read
+            // `belief == null` and returned before ever reaching the lock.
+            awaitParkedOrDone(releaser);
+            assertThat(releaser.getState())
+                    .as("release() must be WAITING for the lock the in-flight "
+                            + "acquire holds, not finished already -- a "
+                            + "terminated releaser here means it no-opped "
+                            + "instantly on a belief that had not been "
+                            + "written yet")
+                    .isNotEqualTo(Thread.State.TERMINATED);
+        } finally {
+            gate.release();
+            acquirer.join();
+            releaser.join();
+        }
+
+        assertThat(failed.get()).as("the acquirer did not throw").isNull();
+        assertThat(releaseFailed.get()).as("the releaser did not throw").isNull();
+        assertThat(acquired.get()).as("A won the lease").isPresent();
+        // ⚠️ AND RELEASED, not merely unparked. `release` waiting for the
+        // lock and then finding nothing to do would pass the assertion above
+        // for the wrong reason -- the store must show the lease actually
+        // given up.
+        assertThat(Lease.decode(backing.get(shared.key()).readAllBytes())
+                .isExpiredAt(FIXED.millis()))
+                .as("the lease A won a moment ago is released, not orphaned")
+                .isTrue();
+        assertThat(shared.held())
+                .as("and the instance no longer believes it holds anything")
+                .isEmpty();
+    }
+
+    @Test
+    void anUncontendedReleaseDoesNotWedgeTheLockForALaterThread() throws Exception {
+        // ⚠️ THE HALF THE INTERLEAVE TEST ABOVE CANNOT SEE, found by review
+        // rather than by the task's own text. `release()`'s new
+        // `if (!lock.tryLock()) { lock.takeOrFail(...); }` pairs exactly one
+        // lock attempt with the existing `finally { lock.unlock(); }` -- but
+        // a mutation that ALSO calls `takeOrFail` after an already-successful
+        // `tryLock()` (a negated condition, for instance) would silently
+        // double-lock on the UNCONTENDED path. `ReentrantLock` is reentrant,
+        // so the SAME thread's second acquisition just succeeds -- no
+        // exception, nothing to catch on a single thread -- and the single
+        // `unlock()` in `finally` leaves the hold count at ONE rather than
+        // ZERO. Every test above stays on one or two threads that each touch
+        // the lock once; only a THIRD, later thread on the SAME instance can
+        // tell a hold count of one from zero.
+        MemoryBinStore backing = new MemoryBinStore();
+        LeaseManager m = new LeaseManager(backing, new LeaseConfig("bins/cluster-a", "podA", "",
+                TTL, RENEW), FIXED);
+
+        AtomicReference<Throwable> releaseFailed = new AtomicReference<>();
+        Thread releaser = releaseThread(m, releaseFailed);
+        releaser.start();
+        releaser.join(TimeUnit.SECONDS.toMillis(10));
+        assertThat(releaseFailed.get()).as("the uncontended release did not throw").isNull();
+
+        // ⚠️ THE PROBE. A DIFFERENT thread now needs the SAME instance's
+        // lock. Wedged, this thread parks until the class's own
+        // SEPARATE_THREAD @Timeout kills the whole test; free, it returns at
+        // once with the lease won.
+        AtomicReference<Optional<Lease>> acquired = new AtomicReference<>();
+        AtomicReference<Throwable> acquireFailed = new AtomicReference<>();
+        Thread prober = thread("prober", m, acquired, acquireFailed);
+        prober.start();
+        prober.join(TimeUnit.SECONDS.toMillis(10));
+        assertThat(acquireFailed.get()).as("the probing thread did not throw").isNull();
+        assertThat(acquired.get())
+                .as("a fresh thread could take the lock and win the lease -- the "
+                        + "uncontended release did not leave it wedged")
+                .isPresent();
+    }
+
+    private static Thread releaseThread(LeaseManager m, AtomicReference<Throwable> failed) {
+        Thread t = new Thread(() -> {
+            try {
+                m.release();
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        }, "release");
+        t.setUncaughtExceptionHandler((thread, e) -> failed.compareAndSet(null, e));
+        return t;
+    }
+
     private static Thread thread(String name, LeaseManager m,
             AtomicReference<Optional<Lease>> got, AtomicReference<Throwable> failed) {
         Thread t = new Thread(() -> {

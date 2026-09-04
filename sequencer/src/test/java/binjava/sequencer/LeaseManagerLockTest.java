@@ -168,12 +168,26 @@ class LeaseManagerLockTest {
     }
 
     @Test
-    void releasingWhenNothingIsHeldDoesNotWaitForTheLockAtAll() throws Exception {
-        // ⚠️ `release`'s javadoc calls this a no-op, and a SIGTERM on a
-        // non-holder is entirely normal. Behind the lock it stops being one: a
-        // pod that never held the lease, whose election thread is inside a slow
-        // `tryAcquire`, blocks its whole shutdown path and then throws about a
-        // lock it had no reason to want.
+    void releasingWithNothingBELIEVEDHeldStillWaitsForAnInFlightAcquireRatherThanNoOping()
+            throws Exception {
+        // ⚠️ M4.3k. `belief == null` means "I held nothing at the INSTANT of
+        // this read", not "there is nothing to release" -- and an acquiring
+        // thread writes `belief` only at the END of stat+get+PUT, so the
+        // window in which the OLD fast path (`if (belief == null) return;`,
+        // ahead of the lock) was wrong was the ENTIRE duration of an in-flight
+        // acquire. Measured: rolling restart, election thread polling
+        // `tryAcquire`; SIGTERM lands while the acquire that WINS is in
+        // flight; `release` read null and returned instantly; the pod exited;
+        // the lease it won a moment later was orphaned with nobody renewing
+        // it, and the successor waited the full TTL.
+        // ⚠️ THIS TEST'S OWN NAME USED TO BE THE OPPOSITE, asserting exactly
+        // that defect as intended behaviour -- correct under the fast path
+        // that predated the lock (M4.3f found the lock's OWN two gaps but not
+        // this one), false the moment the lock started guarding the field it
+        // reads. Fixed here rather than deleted, because "release still does
+        // not wait when GENUINELY nothing was ever attempted" is exactly what
+        // the fast path's `tryLock()` -- uncontended, instant, cannot throw --
+        // still buys; only the CONTENDED half changed.
         MemoryBinStore backing = new MemoryBinStore();
         GateFirstPutStore gate = new GateFirstPutStore(backing);
         LeaseManager m = manager(gate);
@@ -182,7 +196,16 @@ class LeaseManagerLockTest {
         elector.start();
         try {
             gate.awaitEntered();
-            m.release();
+            assertThatThrownBy(m::release)
+                    .as("release must WAIT for the in-flight acquire's lock "
+                            + "rather than reading a belief not written yet, "
+                            + "and its bound is the TTL like every other "
+                            + "release wait -- not the renew interval, and "
+                            + "not returning at once")
+                    .isInstanceOf(IOException.class)
+                    .hasMessageContaining("release")
+                    .hasMessageContaining("PT0.2S")
+                    .hasMessageNotContaining("PT0.05S");
         } finally {
             gate.release();
         }

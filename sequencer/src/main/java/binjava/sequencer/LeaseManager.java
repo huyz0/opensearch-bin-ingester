@@ -94,10 +94,15 @@ import java.util.Optional;
  * <p>⚠️ A {@code ReentrantLock} RATHER THAN A MONITOR, because the lock is held
  * across object-store I/O and java-style.md rule 6 says so. A monitor cannot be
  * given up: one hung PUT would park every other caller with no timeout and no
- * interruptibility. The bound is {@code renewInterval} — derived, not a new
- * constant — because waiting longer than one renew interval for the lock
- * guarantees missing the renew anyway, so there is nothing to buy by waiting
- * longer.
+ * interruptibility. ⚠️ THE BOUND IS NOT ONE CONSTANT — see {@link BoundedLock},
+ * which owns it per caller rather than this class stating it once. {@code
+ * tryAcquire} and {@code renew} bound on {@code renewInterval}, derived rather
+ * than a new constant, because waiting longer than one renew interval for the
+ * lock guarantees missing the renew anyway, so there is nothing to buy by
+ * waiting longer. {@code release} INVERTS that argument — giving up early
+ * costs exactly the thing it exists to buy (M4.3k) — so its bound is
+ * {@code ttl}: waiting up to what a successor would otherwise pay is never
+ * worse than not waiting.
  *
  * <p>⚠️ {@code held()} TAKES NO LOCK AT ALL. It is what a caller gates on, so
  * queueing it behind a write in flight would make "am I the leader?" hang on a
@@ -394,18 +399,26 @@ public final class LeaseManager {
      * <p>⚠️ Refreshes first after an ambiguous write, because a release that
      * writes nothing is indistinguishable from no release at all: the successor
      * waits out a TTL this method exists to spare it.
+     *
+     * @throws IOException the store was unreachable, or the lock could not be
+     *     taken within {@code ttl} — ⚠️ NOT {@code renewInterval}: see the
+     *     class javadoc and {@link BoundedLock}, whose bound is the caller's
+     *     because the right one differs by caller
      */
     public void release() throws IOException {
-        // ⚠️ AHEAD OF THE LOCK, deliberately. This is the documented no-op, it
-        // touches no I/O, and `belief` is volatile precisely so it can be read
-        // without the lock. Behind the lock, a pod that never held the lease
-        // and happens to have an election thread inside a slow `tryAcquire`
-        // would block its whole shutdown path and then throw about a lock it
-        // had no reason to want.
-        if (belief == null) {
-            return;
+        // ⚠️ NOT `if (belief == null) return;` ahead of the lock — M4.3k.
+        // That answers "I held nothing at the INSTANT of this read", not
+        // "there is nothing to release": an acquiring thread holds the lock
+        // across stat+get+PUT and writes `belief` only at the end, so a
+        // SIGTERM racing an in-flight acquire's WINNING write used to read
+        // null and return at once, orphaning the lease nobody then renewed.
+        // `tryLock()` first keeps the documented no-op cheap when uncontended
+        // (instant, cannot throw); contended, falling through to
+        // `takeOrFail` waits up to `ttl` for the write to land so
+        // `releaseLocked` below can actually release what was won.
+        if (!lock.tryLock()) {
+            lock.takeOrFail("release", ttl);
         }
-        lock.takeOrFail("release", ttl);
         try {
             releaseLocked();
         } finally {

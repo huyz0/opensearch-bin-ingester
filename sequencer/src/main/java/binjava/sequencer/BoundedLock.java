@@ -34,6 +34,16 @@ final class BoundedLock {
     private final ReentrantLock lock = new ReentrantLock();
 
     /**
+     * A non-blocking attempt, for a caller whose fast path must not wait on an
+     * uncontended lock but must still not skip a contended one.
+     *
+     * @return whether the lock was taken
+     */
+    boolean tryLock() {
+        return lock.tryLock();
+    }
+
+    /**
      * @param what the operation waiting, named in the failure message
      * @param bound how long this particular caller may wait
      * @throws IOException the lock could not be taken within {@code bound}

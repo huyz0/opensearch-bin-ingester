@@ -236,6 +236,58 @@ class LeaseManagerAmbiguityTest {
     }
 
     @Test
+    void aReleaseWhoseSuccessfulRefreshIsFollowedByAFailedWriteKeepsTheRefreshedBelief()
+            throws Exception {
+        // ⚠️ M4.3k, folding in an M4.3f round-2 minor. `refreshed()`'s
+        // `belief = fresh` field write is unconstrained by every OTHER test
+        // in this file: a caller only ever needs the RETURN value for its own
+        // local logic, so deleting the field write leaves the whole suite
+        // green -- the return value carries the caller, but nothing checks
+        // the FIELD afterward. It is not dead: a `release` whose post-refresh
+        // conditional write ALSO fails leaves the STALE belief in the field
+        // instead of the FRESH one, if that field write is missing.
+        //
+        // ⚠️ TWO INDEPENDENT AMBIGUOUS EVENTS, not one replayed: the cold-start
+        // acquisition (`putIfAbsent`) is made ambiguous first, landing for
+        // real but losing its response -- `writeOrRemember` remembers an
+        // UNVERIFIED candidate (version == null, M4.3g). `release`'s OWN
+        // conditional write (`putIfMatch`) is independently made ambiguous
+        // second. `Target.PUT_IF_ABSENT` and `Target.PUT_IF_MATCH` never
+        // intercept each other's calls, so stacking the two fakes here does
+        // not need either to know about the other -- unlike stacking two on
+        // the SAME target, where `Mode.LANDED`'s own delegate call would be
+        // caught by the inner fake before the outer's caller ever sees it.
+        MemoryBinStore backing = new MemoryBinStore();
+        AmbiguousPutStore acquireLands = new AmbiguousPutStore(backing,
+                AmbiguousPutStore.Mode.LANDED, AmbiguousPutStore.Target.PUT_IF_ABSENT);
+        AmbiguousPutStore store = new AmbiguousPutStore(acquireLands,
+                AmbiguousPutStore.Mode.LOST, AmbiguousPutStore.Target.PUT_IF_MATCH);
+        TestClock clock = new TestClock();
+        LeaseManager m = manager(store, "podA", clock);
+
+        assertThatThrownBy(m::tryAcquire)
+                .as("the cold-start write landed but its response was lost")
+                .isInstanceOf(IOException.class);
+
+        assertThatThrownBy(m::release)
+                .as("release's own refresh succeeds -- clearing the ambiguity "
+                        + "and establishing a REAL version where there was none "
+                        + "-- but release's OWN conditional write then fails too")
+                .isInstanceOf(IOException.class);
+
+        // ⚠️ THE ASSERTION THAT MATTERS. Under the fix, `belief` is the
+        // REFRESHED belief -- version real, ambiguous cleared -- so `held()`
+        // reports present. Under a mutant that deletes `refreshed()`'s
+        // `belief = fresh` field write, `belief` is still the ORIGINAL
+        // `unverified()` candidate from the failed acquire: version null,
+        // `verified()` false, so `held()` would report EMPTY instead, even
+        // though a successful refresh happened moments before.
+        assertThat(m.held())
+                .as("the refreshed belief survives release's own failed write")
+                .isPresent();
+    }
+
+    @Test
     void aRecoveryThatFindsNoLeaseAtAllStandsDownInsteadOfLooping() throws Exception {
         // ⚠️ Nothing legitimately deletes the object -- `release` writes an
         // expired lease precisely so the epoch counter survives -- so absence
