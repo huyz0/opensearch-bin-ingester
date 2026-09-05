@@ -38,22 +38,48 @@ public final class FakeSequencer implements Sequencer {
     private long nextSequence;
 
     @Override
-    public CommitDelta commit(CommitRequest request) {
-        List<RunCommit> runs = new ArrayList<>(request.recordCounts().size());
-        // ⚠️ Sorted, so a delta's runs are in a deterministic order and two
-        // replays of the same commit produce byte-identical deltas. The real
-        // CommitLog sorts for the same reason.
-        request.recordCounts().entrySet().stream()
-                // ⚠️ RunKey is already Comparable, sorted by
-                // (indexId, partitionId) "so that ONE consumer's runs are
-                // adjacent" -- reuse that rather than restate it here.
-                .sorted(Map.Entry.comparingByKey())
-                .forEach(e -> {
-                    long first = nextOffsets.getOrDefault(e.getKey(), 0L);
-                    runs.add(new RunCommit(e.getKey(), e.getValue(), first));
-                    nextOffsets.put(e.getKey(), first + e.getValue());
-                });
-        return new CommitDelta(nextSequence++, request.segmentKey(), runs);
+    public CommitDelta commitAll(List<CommitRequest> requests) {
+        if (requests.isEmpty()) {
+            throw new IllegalArgumentException("a commit with no segments commits nothing");
+        }
+        // ⚠️ VALIDATED BEFORE ANYTHING IS MUTATED, like the real log. An earlier
+        // draft built the segments first and let `CommitDelta`'s constructor
+        // refuse a duplicate key — by which point `nextOffsets` had advanced and
+        // `nextSequence` had been incremented, so a fake that REJECTED a batch
+        // had still moved. A caller's retry would then see offsets skip, which
+        // the real `CommitLog` never does.
+        java.util.Set<String> keys = new java.util.HashSet<>();
+        for (CommitRequest r : requests) {
+            if (!keys.add(r.segmentKey())) {
+                throw new IllegalArgumentException(
+                        "two submissions in one batch name the same segment: " + r.segmentKey());
+            }
+        }
+        // ⚠️ KEPT IN STEP WITH THE REAL LOG, including the part that is easy to
+        // get wrong: offsets advance ACROSS segments, so two pods flushing the
+        // same stream into one batch do not both start where the fake had
+        // reached. A fake that got this wrong would let a caller's tests pass
+        // while the real sequencer assigned one range twice — which is I2, and
+        // is exactly the bug a fake exists to make visible rather than hide.
+        List<binjava.format.SegmentCommit> segments = new ArrayList<>(requests.size());
+        for (CommitRequest request : requests) {
+            List<RunCommit> runs = new ArrayList<>(request.recordCounts().size());
+            // ⚠️ Sorted, so a delta's runs are in a deterministic order and two
+            // replays of the same commit produce byte-identical deltas. The real
+            // CommitLog sorts for the same reason.
+            request.recordCounts().entrySet().stream()
+                    // ⚠️ RunKey is already Comparable, sorted by
+                    // (indexId, partitionId) "so that ONE consumer's runs are
+                    // adjacent" -- reuse that rather than restate it here.
+                    .sorted(Map.Entry.comparingByKey())
+                    .forEach(e -> {
+                        long first = nextOffsets.getOrDefault(e.getKey(), 0L);
+                        runs.add(new RunCommit(e.getKey(), e.getValue(), first));
+                        nextOffsets.put(e.getKey(), first + e.getValue());
+                    });
+            segments.add(new binjava.format.SegmentCommit(request.segmentKey(), runs));
+        }
+        return new CommitDelta(nextSequence++, segments);
     }
 
     /** The offset the next commit for {@code key} would receive. */

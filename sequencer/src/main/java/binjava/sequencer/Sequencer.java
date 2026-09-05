@@ -3,6 +3,7 @@ package binjava.sequencer;
 
 import binjava.format.CommitDelta;
 import java.io.IOException;
+import java.util.List;
 
 /**
  * Assigns offsets and appends to the write-once commit log. One of the four
@@ -87,7 +88,27 @@ public interface Sequencer extends AutoCloseable {
      *     {@code (podId, flushSeq)} is safe only from M4.10; see the
      *     failure-and-retry note above
      */
-    CommitDelta commit(CommitRequest request) throws IOException;
+    default CommitDelta commit(CommitRequest request) throws IOException {
+        return commitAll(List.of(request));
+    }
+
+    /**
+     * Assigns offsets for MANY flushes and appends them as ONE delta.
+     *
+     * <p>⚠️ THE PRIMITIVE, with {@link #commit} as the one-request case, and
+     * that direction is deliberate: M4.7's cost argument is that the commit rate
+     * scales with WINDOWS rather than pods, and an interface whose primitive is
+     * one-at-a-time makes the batched path the exception rather than the rule.
+     * A default that looped over {@code commit} would satisfy the compiler and
+     * silently restore the per-pod PUT rate the milestone exists to remove.
+     *
+     * @param requests the flushes to commit together. ⚠️ Their segment keys must
+     *     be DISTINCT — attribution depends on it, and an implementation refuses
+     *     a batch that collides rather than picking a winner
+     * @return the durable delta carrying every submitted segment
+     * @throws IOException as {@link #commit}
+     */
+    CommitDelta commitAll(List<CommitRequest> requests) throws IOException;
 
     /**
      * Releases whatever this instance holds. ⚠️ For an implementation holding a

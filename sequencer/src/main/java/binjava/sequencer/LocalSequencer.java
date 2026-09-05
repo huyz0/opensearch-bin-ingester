@@ -5,6 +5,7 @@ import binjava.binstore.BinStore;
 import binjava.format.CommitDelta;
 import binjava.format.Lease;
 import java.io.IOException;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -145,7 +146,7 @@ public final class LocalSequencer implements Sequencer {
     }
 
     @Override
-    public CommitDelta commit(CommitRequest request) throws IOException {
+    public CommitDelta commitAll(List<CommitRequest> requests) throws IOException {
         if (closed) {
             // ⚠️ The Sequencer contract says a commit after close must FAIL. The
             // lease is released, so another node may already have sealed this
@@ -153,7 +154,7 @@ public final class LocalSequencer implements Sequencer {
             throw new IOException("this sequencer released its lease at epoch "
                     + log.epoch() + " and must not commit again");
         }
-        return log.commit(request.segmentKey(), request.recordCounts());
+        return log.commitAll(requests);
     }
 
     @Override

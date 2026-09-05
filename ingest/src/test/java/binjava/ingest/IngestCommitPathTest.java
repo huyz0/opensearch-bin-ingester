@@ -135,10 +135,14 @@ class IngestCommitPathTest {
             this.delegate = delegate;
         }
 
+        // ⚠️ RECORDS AT `commitAll`, the seam's primitive, so a batched submission
+        // is seen as the batch it is rather than as nothing. Overriding only
+        // `commit` would still compile — it is a default now — and this decorator
+        // would silently observe none of the requests a batching caller submits.
         @Override
-        public CommitDelta commit(CommitRequest request) throws IOException {
-            seen.add(request);
-            return delegate.commit(request);
+        public CommitDelta commitAll(List<CommitRequest> requests) throws IOException {
+            seen.addAll(requests);
+            return delegate.commitAll(requests);
         }
 
         @Override

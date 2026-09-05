@@ -35,6 +35,64 @@ class FakeSequencerTest {
     }
 
     @Test
+    void aBATCHEDCommitAdvancesOffsetsACROSSSegmentsJustAsTheRealLogDoes() throws Exception {
+        // ⚠️ THE FAKE'S MULTI-REQUEST PATH HAD NO TEST AT ALL, and two mutations
+        // survived the whole tree: dropping every request but the first, and
+        // snapshotting the offsets before the loop so they do NOT advance across
+        // segments. The second is exactly the I2 divergence — two pods flushing
+        // one stream in a window both starting where the fake had reached — and
+        // a fake that gets it wrong lets every caller's tests pass while the
+        // real sequencer assigns one range twice. That is the failure a fake
+        // exists to make visible.
+        FakeSequencer fake = new FakeSequencer();
+        RunKey stream = new RunKey(LOGS, 0);
+
+        CommitDelta delta = fake.commitAll(java.util.List.of(
+                new CommitRequest("pod0", 0, "seg-a", counts(stream, 3)),
+                new CommitRequest("pod1", 0, "seg-b", counts(stream, 5))));
+
+        assertThat(delta.segments()).as("every submitted flush is in the delta").hasSize(2);
+        // ⚠️ WHICH KEY CARRIES WHICH RUNS, not merely that both are present.
+        // Measured: giving every segment its NEIGHBOUR's key left the entire
+        // tree green — offsets stay correct, only the pairing is wrong, and the
+        // pairing is what the Sequencer contract settles. This is the fixture
+        // every downstream module tests against, so a fake that mis-pairs hides
+        // the defect in all of them.
+        assertThat(delta.segments().get(0).segmentKey()).isEqualTo("seg-a");
+        assertThat(delta.segments().get(1).segmentKey()).isEqualTo("seg-b");
+        assertThat(delta.segments().get(0).runs().get(0).recordCount()).isEqualTo(3);
+        assertThat(delta.segments().get(1).runs().get(0).recordCount()).isEqualTo(5);
+        assertThat(delta.segments().get(0).runs().get(0).firstOffset()).isZero();
+        assertThat(delta.segments().get(1).runs().get(0).firstOffset())
+                .as("the second segment starts where the FIRST stopped, not at zero")
+                .isEqualTo(3);
+        assertThat(fake.nextOffset(stream)).as("and the fake reflects both").isEqualTo(8);
+    }
+
+    @Test
+    void theFakeRefusesAColLidingBatchWITHOUTAdvancingItsState() throws Exception {
+        // ⚠️ REFUSE BEFORE MUTATING, like the real log. Building the segments
+        // first and letting `CommitDelta`'s constructor refuse leaves the
+        // offsets already advanced and the sequence already incremented — so a
+        // fake that REJECTED a batch had still moved, and a caller's retry would
+        // see offsets skip where the real `CommitLog` never does.
+        FakeSequencer fake = new FakeSequencer();
+        RunKey stream = new RunKey(LOGS, 0);
+        fake.commit(new CommitRequest("pod0", 0, "seg-a", counts(stream, 4)));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> fake.commitAll(java.util.List.of(
+                new CommitRequest("pod0", 1, "seg-clash", counts(stream, 1)),
+                new CommitRequest("pod1", 0, "seg-clash", counts(stream, 1)))))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        assertThat(fake.nextOffset(stream))
+                .as("a refused batch must leave the fake exactly where it was").isEqualTo(4);
+        assertThat(fake.commit(new CommitRequest("pod0", 2, "seg-b", counts(stream, 1)))
+                .sequence())
+                .as("and must not have consumed a sequence number either").isEqualTo(1);
+    }
+
+    @Test
     void offsetsAreContiguousPerStreamAcrossCommits() throws Exception {
         // ⚠️ FR-3: a stable, monotonic offset per (index, partition). The
         // second commit must start where the first ended -- not at zero, which

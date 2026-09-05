@@ -12,6 +12,7 @@ import binjava.format.Continue;
 import binjava.format.RunCommit;
 import binjava.format.RunKey;
 import binjava.format.Seal;
+import binjava.format.SegmentCommit;
 import java.io.IOException;
 import java.io.InputStream;
 import java.time.Clock;
@@ -215,6 +216,47 @@ class LocalSequencerTest {
                 .as("the request's segment key reaches the delta").isEqualTo("seg/0");
         assertThat(second.runs().getFirst().firstOffset())
                 .as("and the FIRST commit's count is what the second starts after")
+                .isEqualTo(5);
+    }
+
+    @Test
+    void aBATCHEDCommitCarriesEVERYRequestNotJustTheFirst() throws Exception {
+        // ⚠️ THE REAL SEQUENCER'S BATCHED PATH HAD NO TEST AT ALL. `commitAll`
+        // is the interface PRIMITIVE and this is its only production
+        // implementation, but every test here drove `commit` with one request,
+        // and `BatchingSequencer` is only ever composed with test-local
+        // delegates -- so `log.commitAll(requests)` could have been
+        // `log.commitAll(List.of(requests.getFirst()))` with the whole suite
+        // green. That mutation silently drops every pod but one from a batch,
+        // which is precisely what M4.7 exists to make safe: the batch is ONE
+        // conditional PUT, so the dropped flushes are acked and never durable.
+        MemoryBinStore store = new MemoryBinStore();
+        LocalSequencer seq =
+                LocalSequencer.start(store, PREFIX, manager(store, "pod1"), 8).orElseThrow();
+
+        // ⚠️ TWO DIFFERENT PODS, because the per-POD dimension is the one M4.7's
+        // row says has to be built and asserted, and DISTINCT counts, so an
+        // implementation that keeps the right number of runs but pairs them
+        // wrongly cannot pass.
+        var delta = seq.commitAll(List.of(
+                request("pod1", 1, "seg/a", 5),
+                request("pod2", 7, "seg/b", 3)));
+
+        assertThat(delta.segments())
+                .as("both submissions are in the one entry")
+                .hasSize(2);
+        assertThat(delta.segments().stream().map(SegmentCommit::segmentKey).toList())
+                .as("and each keeps its own segment key")
+                .containsExactly("seg/a", "seg/b");
+        // ⚠️ THE PAIRING, NOT JUST THE ARITY. Asserting only `hasSize(2)` is
+        // satisfied by an implementation that returns both keys with each
+        // other's offsets; the counts are 5 and 3 precisely so the second
+        // segment's first offset can only be 5 if the FIRST one's count was
+        // what advanced the stream.
+        assertThat(delta.segments().getFirst().runs().getFirst().firstOffset())
+                .as("the first segment opens the stream").isZero();
+        assertThat(delta.segments().get(1).runs().getFirst().firstOffset())
+                .as("and the second starts after the first one's records")
                 .isEqualTo(5);
     }
 
