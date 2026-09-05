@@ -40,6 +40,84 @@
     Fixing it is permitted and usually wrong: the next round's surface is the
     prose the fix just added.
 12. **Two rounds is the cap.** Round one finds, round two verifies.
+    ⚠️ **And the cap is ARGUABLE, keyed `rounds:<task>` in a staged
+    `baselines/review.txt`** — because the alternative is worse. Before that
+    existed, an author whose commit genuinely could not be split had no route but
+    `SKIP=check-reviewed`, and a SKIP disables the gate's *substantive* checks
+    too: both roles present, and no unresolved blocking or major finding. So a
+    missing escape did not make the cap bite harder, it made the gate ABSENT
+    exactly when the cap bit. Measured on M4 with `git log --grep=SKIP=check-reviewed`:
+    **at least nine** commits landed that way — the grep finds commits that
+    DISCLOSED a skip, not commits that took one, and M4.12 bypassed a 12-round cap
+    naming neither the skip nor the gate — M4.0, M4.1, M4.3, M4.3b, M4.4b, M4.6c,
+    M4.6e, M4.19 and M4.20 — each naming the round cap as the only remaining
+    refusal and recording the skip in its body because the body was the only trace
+    available. ⚠️ **The first draft of this rule said "three"**, counted from
+    the commits that numbered themselves rather than from the log — and only two
+    of the nine carry an ordinal at all (M4.19 "the second time", M4.20 "the
+    third"), so even that count was inferred rather than read. The number is load-bearing twice — as
+    the evidence for the escape and as the baseline for the warning below — so it
+    is measured here rather than remembered.
+    An argued exception keeps every required role and no-unresolved-majors
+    enforced and puts the reason in the tree. → `ReviewRoundCapTest`
+    ⚠️ **What the gate actually requires, all three of which it enforces and only
+    one of which an earlier draft of this rule stated:** the line is keyed
+    `rounds:<task>` as its FIRST field; it carries a reason after the key; and it
+    is **ADDED by this commit** in a **staged `baselines/review.txt`** — an
+    argument sitting in the already-committed file does not carry a later round,
+    and a `rounds:` line in some other staged file does not count at all. One
+    added line then covers every further round of the same commit — ⚠️ except
+    that "ADDED" means "git renders it as an added line", so an edit that
+    re-renders an already-committed argument as added re-arms it. Measured, not
+    yet fixed: M4.31.
+    ⚠️ **Stated here even though this is NOT where the agent that needs it will
+    look, and a draft of this rule claimed otherwise.** It said the requirements
+    belong here "because the milestone loop reads this file" — it does not.
+    `milestone/SKILL.md`'s bounds table mentions this standard only in a
+    parenthetical, and its breach action is "Stop and report", so an agent at the
+    cap stops without learning the escape exists. M4.33 is the row that fixes the
+    skills and its premise is the correct one; this paragraph is the reference,
+    not the delivery mechanism. ⚠️ The draft's version was worse than wrong: it
+    would have let whoever picks up M4.33 read this rule and close the row as
+    already covered.
+    ⚠️ **A growing list of `rounds:` entries is a signal, not a workflow.** Rule
+    12 exists because it was violated repeatedly in one session when nothing
+    counted; an escape used routinely is that failure with paperwork.
+    ⚠️ **How often, measured rather than remembered.** Grouping distinct
+    `diff_sha256` by `task` across `.harness/review`: **at least 22 tasks** have
+    gone over the cap, M4.12 reaching 12 rounds and M0.13 eleven.
+    ⚠️ **NO DENOMINATOR HERE, and three drafts of this sentence are why.** The
+    first quoted a total hash count; the second "22 of 78"; the third "22 of 79"
+    and dated it. Every one was stale before the round that checked it finished
+    — measured across this task's own reviews, the same denominator read 78, 79,
+    80 and 81 within hours, because it counts reviewed TASKS and tasks keep being
+    reviewed. Dating it is not enough at day granularity. The numerator is a
+    floor and behaves like one, so the floor is what is quoted.
+    ⚠️ **NOT a second reason 22 is a floor, and a draft of this paragraph got the
+    mechanism wrong twice.** 90 of the files in `.harness/review` carry no `task`,
+    but 89 are `record --file` INPUTS — hand- or agent-written before being fed
+    to `review.sh record`, not written by it — in a different name shape that
+    `rounds_for`'s `<64hex>.<role>.json` glob never reads at all. Of the files
+    that shape actually matches, exactly one lacks a task — and its same-hash
+    sibling names one, which `rounds_for` counts by task across every verdict for
+    the hash. Measured: **zero rounds count against nothing.** M4.29 is a real
+    gap (a verdict recorded with no `--task` at all, no sibling to rescue it, is
+    a reachable future state) but it is not evidence that today's 22 undercounts.
+    ⚠️ How badly the rule was broken the FIRST time, the tree contradicts itself
+    about: `check-reviewed.sh`, backlog M0.47 (which calls it this repository's
+    own record) and backlog M4.21 all say **8** of 12 tasks; `review_rounds.py`
+    says 7, and said so before any of this. Neither is reconstructible, so the
+    split is recorded rather than settled.
+    ⚠️ **Three drafts of the commit that wrote this paragraph got that wrong, each
+    inside the sentence disclosing the previous error.** The first quietly changed
+    an 8 to a 7 — a measured number moved in the direction that weakens the case
+    for the cap the same commit was loosening. The second restored one of the two
+    sites and announced that "the higher figure is kept", which was false: it had
+    been relocated, not reverted. The third is this one. The lesson is not about
+    arithmetic — a correction is a claim about the diff, and it needs measuring
+    against the diff exactly like any other claim. So does the draft that said
+    "21 of 78 reviewed hashes", taken from a reviewer's prose rather than
+    counted, wrong in both the number and the unit.
     ⚠️ **A blocking finding in round two does not buy a round three — it means
     the commit is too big.** Split it and review the pieces. Measured on M-1.1:
     a 129-file commit (a research corpus, 24 scripts, 12 standards and 21 ADRs
@@ -53,7 +131,24 @@
     how a reviewer once spent its whole budget fuzzing 20,295 files of an
     unrelated upstream checkout.
 12b. ⚠️ **Never edit the tree while a review is running.** The verdict is bound to
-    the staged bytes by hash, so an edit throws the review away. Three were lost
-    that way in one session. Batch the changes, then review once.
+    the staged bytes by hash, so an edit throws the review away. It has happened
+    repeatedly in single sessions — no running total is kept here. A draft carried
+    one, backlog M0.21 carries another ("five times in one session"), the two
+    disagreed, and a count that must be incremented by hand is a count that goes
+    stale. One place claiming a number is enough. Batch the changes, then review once.
+    ⚠️ **AND THE EDITOR NEED NOT BE THE AUTHOR.** One was lost when a
+    SECOND agent session working in the same checkout staged its own task over
+    this one's index mid-round; the reviewer found `git diff --cached` empty,
+    correctly declined to bind its verdict to the empty diff, and the round was
+    gone. Sessions sharing a worktree share one index AND one HEAD: two blobs of
+    the same file built from different bases cannot both land, and the loser is
+    reverted with no conflict marker to warn anyone.
+    ⚠️ **NO REMEDY IS PRESCRIBED HERE, because the draft that prescribed one was
+    wrong.** It offered a private `GIT_INDEX_FILE`, which does stop two sessions
+    staging over each other but CANNOT carry the review step: `review.sh` and
+    `check-reviewed.sh` both hash `git diff --cached`, so a reviewer not
+    inheriting that index reviews different bytes. The commit that wrote the
+    advice was its own counter-example. Sequencing the commits by hand is what
+    actually worked. M0.21 owns the real fix.
 13. **Minors are harvested at the milestone boundary**, not left in commit
     bodies nobody greps.
