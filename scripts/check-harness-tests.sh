@@ -35,7 +35,23 @@ fi
 # inversion of the "reported 0 tests -- it did not run" antidote five lines
 # below. check-module.sh already does this; this script runs FIRST and did not.
 mkdir -p .harness
-if ./gradlew -p buildSrc test --console=plain -q > .harness/harness-tests.log 2>&1; then
+# ⚠️ THE INDEX IS UNSET FOR THE CHILD, and this gate is where it matters most:
+# `review.sh context` runs the whole gate loop, so generating a review packet
+# under a private index used to run this suite with that index inherited -- and
+# harness tests shell out to `git add` inside their own temp repositories, so
+# they wrote THEIR fixture paths into it. Measured repeatedly on M0.57, a
+# private index going from hundreds of entries to a handful -- once to a
+# reviewer mid-review -- with the suite reporting BUILD SUCCESSFUL each time.
+# No single pair of numbers is quoted here because the counts differ per run and
+# per suite, and a figure that moves is a figure that goes stale in a comment.
+# The tests need no index of the caller's; every one builds its own repository.
+# ⚠️ EVERY `GIT_*` VARIABLE, not the three obvious ones. `review-tree.sh` and
+# `GitEnv` both argue by name that a three-key list is insufficient --
+# `GIT_OBJECT_DIRECTORY` alone redirects a child's objects into the caller's
+# store -- and a three-key list HERE would be that same claim contradicted
+# inside one commit.
+if env $(env | sed -n 's/^\(GIT_[A-Za-z0-9_]*\)=.*/-u \1/p') \
+     ./gradlew -p buildSrc test --console=plain -q > .harness/harness-tests.log 2>&1; then
   n=$(python3 - <<'PY'
 import glob, xml.etree.ElementTree as ET
 print(sum(int(ET.parse(x).getroot().get('tests', 0))

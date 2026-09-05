@@ -32,6 +32,50 @@ case "$CMD" in
     echo "=== WHAT TO LOOK AT (selected from paths, not improvised per commit) ==="
     ./scripts/review-lenses.sh
     echo
+    # ⚠️ M0.57. Verifying by MUTATION is what finds the majors here, so the
+    # tree to mutate is issued rather than improvised: reviewers were already
+    # rsync'ing scratch copies into their own scratchpads, differently each
+    # time, and two of them doing that in ONE tree is how M4.3's evidence got
+    # corrupted. Printed for both roles because the packet serves both.
+    echo "=== YOUR OWN TREE TO MUTATE IN (do not mutate the repository) ==="
+    echo "The two reviewers run CONCURRENTLY and both verify by mutating."
+    echo "Materialise your own copy of the STAGED bytes, and do every"
+    echo "mutation, build and test run inside it:"
+    echo
+    echo "    TREE=\$(./scripts/review-tree.sh <your-role>) && cd \"\$TREE\""
+    echo
+    echo "It is a copy of the INDEX, not of HEAD and not of the worktree, so"
+    echo "it holds exactly the bytes this verdict is bound to. It has its own"
+    echo "build/ -- sharing one would overwrite the test-results XML every"
+    echo "pass/fail count reads."
+    echo
+    echo "⚠️ RUN THE BUILD WITH THE INDEX UNSET, ALWAYS:"
+    echo
+    echo "    env -u GIT_INDEX_FILE ./gradlew -p buildSrc test"
+    echo
+    echo "GIT_INDEX_FILE is INHERITED, and harness tests shell out to git"
+    echo "inside their own temp repositories -- so a suite run that inherits"
+    echo "it writes THEIR fixture paths into YOUR index. Measured twice on"
+    echo "this very task: a private index went from hundreds of entries to a"
+    echo "handful, with the suite reporting BUILD SUCCESSFUL, and the"
+    echo "reviewed bytes were only recoverable because a tree had been"
+    echo "materialised beforehand."
+    echo
+    echo "⚠️ The tree IS a git repository, because every per-file gate resolves"
+    echo "its input through git and would otherwise pass having examined"
+    echo "nothing. Its shape matters to you: an EMPTY base commit, and every"
+    echo "file STAGED on top of it. Gates default to delta mode, whose input is"
+    echo "\`git diff --cached\`, so staging is what makes them see the tree;"
+    echo "committing it would leave that delta empty and every gate would go"
+    echo "green having examined nothing."
+    echo
+    echo "⚠️ SO RESTORE A FILE WITH \`git checkout -- <path>\`, never with"
+    echo "\`git checkout HEAD -- <path>\` (HEAD is the EMPTY commit and knows no"
+    echo "paths), and NEVER with \`git reset --hard\`, which resolves to that"
+    echo "empty commit and would delete every file in your tree mid-review."
+    echo "It carries no HISTORY and no remote. Record your verdict, and read"
+    echo "\`.harness/\`, back in the REPOSITORY."
+    echo
     echo "=== ROUNDS AND WHAT ACTUALLY BLOCKS ==="
     # ⚠️ PRINTED, not left to memory. Rule 11 -- a `minor` on a `pass` lands --
     # already existed as prose in review/SKILL.md and was violated eight times
