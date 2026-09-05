@@ -75,6 +75,15 @@ repos:
         stages: [pre-commit]
         pass_filenames: false
         always_run: true
+      # Cheap, text-only, and the tax it collects is paid by every session
+      # rather than by this commit -- so it runs beside the other text gates.
+      - id: check-backlog-size
+        name: "backlog.md holds open, summary-sized rows only -- it is read at every session start"
+        entry: scripts/check-backlog-size.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
       - id: check-links
         name: "every relative markdown link resolves"
         entry: scripts/check-links.sh

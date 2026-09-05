@@ -7,9 +7,12 @@ description: Choose what to work on next and confirm it is genuinely ready. Use 
 
 ## Choose
 
-1. Read `docs/internal/product/backlog.md`. Only the current milestone is
-   decomposed; if it is not, decompose it before writing code
-   ([`spec`](../spec/SKILL.md)).
+1. Read `docs/internal/product/backlog.md`. It holds OPEN rows only, each a
+   one-line summary — landed rows are in `backlog-done.md` and nothing loads it.
+   ⚠️ **Read `backlog-notes.md` only for the task you pick**, following that
+   row's `[notes]` link; loading it whole is the thing the split undid. Only the
+   current milestone is decomposed; if it is not, decompose it before writing
+   code ([`spec`](../spec/SKILL.md)).
 2. Take the **top unblocked task** — top, not the most interesting one. Order is
    dependency order and was chosen deliberately.
 3. A task is **blocked** if it depends on an unfinished task or on a decision

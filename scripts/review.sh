@@ -36,8 +36,18 @@ case "$CMD" in
     # which one binds the diff. The dots are escaped because M4.7 must not match
     # M4x7.
     TASK_RE=$(printf '%s' "$TASK" | sed 's/\./\\./g')
-    grep -E "^\| *${TASK_RE} *\|" docs/internal/product/backlog.md 2>/dev/null \
+    # ⚠️ The archive too: a follow-up commit names a task whose row has already
+    # moved out of backlog.md, and a packet that cannot show the row leaves the
+    # reviewer reconstructing intent from the diff alone.
+    grep -hE "^\| *${TASK_RE} *\|" docs/internal/product/backlog*.md 2>/dev/null \
       || echo "(no row whose ID column is exactly $TASK)"
+    # The row is a summary; the essay, if there is one, lives here.
+    if [ -f docs/internal/product/backlog-notes.md ]; then
+      awk -v id="$TASK" '
+        $0 == "### " id { p = 1; print; next }
+        /^### / { p = 0 }
+        p { print }' docs/internal/product/backlog-notes.md
+    fi
     echo
     echo "=== STANDARDS THE REVIEWER MUST READ (selected from paths, not by the author) ==="
     ./scripts/which-standards.sh

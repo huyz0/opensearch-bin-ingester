@@ -16,7 +16,7 @@ an index. Detail lives in the linked files.
 - [docs/internal/product/requirements.md](docs/internal/product/requirements.md) — FR/NFR IDs that specs and tasks cite
 - [docs/internal/product/architecture.md](docs/internal/product/architecture.md) — component map and the seams
 - [docs/internal/product/roadmap.md](docs/internal/product/roadmap.md) — milestones in execution order, each with a completion condition
-- [docs/internal/product/backlog.md](docs/internal/product/backlog.md) — the current task list, authoritative, current milestone only
+- [docs/internal/product/backlog.md](docs/internal/product/backlog.md) — the current task list, authoritative. **Open rows only**, each a summary; landed rows are in [backlog-done.md](docs/internal/product/backlog-done.md) and the reasoning behind a long row is under its ID in [backlog-notes.md](docs/internal/product/backlog-notes.md). ⚠️ Read the notes for the ONE task you pick, never whole
 - [docs/internal/product/decisions/](docs/internal/product/decisions/) — architecture decision records
 
 ## The research corpus
@@ -182,6 +182,7 @@ runs is exactly the list that goes stale:
 | `check-gate-scope.sh` | pre-commit | every gate judges this repository only, never .tmp/ or a sibling checkout |
 | `check-harness-tests.sh` | pre-commit | the harness's own tests run -- buildSrc tests are NOT run by ./gradlew build |
 | `check-module.sh` | pre-commit | architecture.md rules 2/4/5: each module stays inside its dependency surface |
+| `check-backlog-size.sh` | pre-commit | backlog.md holds open, summary-sized rows only -- it is read at every session start |
 | `check-links.sh` | pre-commit | every relative markdown link resolves |
 | `scripts/build-index.sh --check` | pre-commit | the generated index regions in AGENTS.md and skills/README.md are current |
 | `check-terminology.sh` | pre-commit | glossary.md: one name per concept -- producer/ingester/writer/reader/consumer/plugin |

@@ -13,11 +13,18 @@ if [ -z "$id" ]; then
   fail "subject does not start with a task ID (expected e.g. 'M0.3 <summary>'): $subject"
   finish
 fi
-BACKLOG=docs/internal/product/backlog.md
-if [ ! -f "$BACKLOG" ]; then
-  fail "$BACKLOG does not exist, so the ID cannot be verified"
+# ⚠️ THE BACKLOG AND ITS ARCHIVE. Done rows move out of backlog.md so a session
+# does not load them (check-backlog-size.sh), and a completed task's ID must stay
+# nameable -- otherwise every follow-up, revert and fix-up commit that cites the
+# task it amends is refused. The glob is the whole list: backlog.md and
+# backlog-done.md today, and any later split without a second edit here.
+BACKLOG=$(ls docs/internal/product/backlog*.md 2>/dev/null)
+if [ -z "$BACKLOG" ]; then
+  fail "no docs/internal/product/backlog*.md, so the ID cannot be verified"
   finish
 fi
-grep -qE "(^|[^0-9A-Za-z.])${id}([^0-9]|$)" "$BACKLOG" || fail "task $id is not in $BACKLOG"
+# shellcheck disable=SC2086
+grep -qE "(^|[^0-9A-Za-z.])${id}([^0-9]|$)" $BACKLOG \
+  || fail "task $id is in none of: $(echo $BACKLOG | tr '\n' ' ')"
 [ "$FAILED" -eq 0 ] && ok "subject names backlog task $id"
 finish
