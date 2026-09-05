@@ -6,6 +6,7 @@ import binjava.format.CommitDelta;
 import binjava.format.Lease;
 import java.io.IOException;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 
 /**
@@ -38,13 +39,122 @@ import java.util.Optional;
  */
 public final class LocalSequencer implements Sequencer {
 
+    /**
+     * How long until the next renew is due.
+     *
+     * <p>⚠️ A SEAM, for the reason {@code BatchingSequencer.WindowTimer} is one:
+     * a test that slept would assert "renewed at roughly the right time", and
+     * testing.md forbids the sleep that buys it.
+     */
+    @FunctionalInterface
+    public interface RenewTicker {
+        /** Blocks until the holder should renew again. */
+        void awaitNextRenew() throws InterruptedException;
+    }
+
+    private static final System.Logger LOG =
+            System.getLogger(LocalSequencer.class.getName());
+
     private final LeaseManager leases;
     private final CommitLog log;
-    private boolean closed;
+    private final RenewTicker ticker;
+    private final Thread renewer;
+    private volatile boolean closed;
 
-    private LocalSequencer(LeaseManager leases, CommitLog log) {
+    /**
+     * Set when a renew came back EMPTY, which is how a holder learns it has been
+     * fenced — {@link LeaseManager#renew()} says so and says the holder must
+     * stop sequencing immediately.
+     *
+     * <p>⚠️ SEPARATE FROM {@code closed}, because they are different events with
+     * different messages: one is this node deciding to stop, the other is this
+     * node being told it already has. Conflating them tells an operator a
+     * shutdown happened when a takeover did.
+     */
+    private volatile boolean fenced;
+
+    private LocalSequencer(LeaseManager leases, CommitLog log, RenewTicker ticker) {
         this.leases = leases;
         this.log = log;
+        this.ticker = ticker;
+        // ⚠️ A VIRTUAL THREAD parked on the tick, like every other blocking
+        // worker here.
+        this.renewer = Thread.ofVirtual().name("lease-renewer").start(this::renewForever);
+    }
+
+    /**
+     * Waits for the renew thread to stop.
+     *
+     * <p>⚠️ A TEST OBSERVATION POINT, package-private and doing nothing for
+     * production -- and it is what turns the close/renewer race from an
+     * unbounded poll into an exact assertion. {@code fenced} is written BEFORE
+     * the thread terminates, so {@code join} is a happens-before edge: once
+     * this returns true, whatever the renewer was going to do it has done.
+     * Three earlier attempts polled for three seconds instead and could not be
+     * made to fail on demand, which is why the test they backed was deleted.
+     */
+    boolean awaitRenewerStopped(long millis) throws InterruptedException {
+        renewer.join(millis);
+        return !renewer.isAlive();
+    }
+
+    private void renewForever() {
+        while (!closed && !fenced) {
+            try {
+                ticker.awaitNextRenew();
+                if (closed) {
+                    return;
+                }
+                if (leases.renew().isEmpty()) {
+                    // ⚠️ EMPTY MEANS FENCED, and it is the ONLY thing that does.
+                    // Another node holds the term now, and it has sealed this
+                    // chain; committing on would reassign offsets a successor
+                    // has already issued, which is I2.
+                    fenced = true;
+                    // ⚠️ NOT NECESSARILY A TAKEOVER, and an earlier draft of
+                    // this line said it was. ADR-0027 accepts a case where the
+                    // renew comes back empty because this node's OWN late write
+                    // landed between the refresh and the CAS -- nobody took the
+                    // term. From in here the two are indistinguishable, which
+                    // is why stopping is right and why the message must not
+                    // send an operator hunting for a successor that may not
+                    // exist.
+                    // ⚠️ ERROR, ABOVE the renewer-died case below, because this
+                    // one is PERMANENT until restart while a lapsed renewer
+                    // merely fails over at the TTL. An earlier draft had the
+                    // severities the other way round.
+                    LOG.log(System.Logger.Level.ERROR,
+                            "the lease renew at epoch " + log.epoch() + " returned empty: either "
+                                    + "another node took the term or this one self-fenced after an "
+                                    + "ambiguous write (ADR-0027). This node will not sequence "
+                                    + "again and must be restarted to rejoin.");
+                    return;
+                }
+            } catch (InterruptedException stopping) {
+                Thread.currentThread().interrupt();
+                return;
+            } catch (IOException transientFailure) {
+                // ⚠️ NOT FENCED. `renew`'s contract separates an IOException --
+                // the store was unreachable, or the lock could not be taken --
+                // from an empty result, and only the latter means the term is
+                // gone. Standing down here would turn every store hiccup into a
+                // cluster-wide failover, which is the outage this task removes
+                // rather than one it should add. The next tick retries.
+                LOG.log(System.Logger.Level.WARNING,
+                        "a lease renew failed; the term is untouched and the next tick retries",
+                        transientFailure);
+            } catch (Throwable died) {
+                // ⚠️ THE RENEWER MUST NOT DIE SILENTLY. If it does, the lease
+                // lapses and the cluster fails over at the TTL -- survivable,
+                // and exactly the behaviour that existed before this task, but
+                // an operator has no other way to learn it happened.
+                LOG.log(System.Logger.Level.WARNING,
+                        "the lease renewer terminated; this node's term will lapse at its TTL "
+                                + "and the cluster will fail over -- survivable, unlike a fence",
+                        died);
+                return;
+            }
+        }
     }
 
     /**
@@ -60,6 +170,26 @@ public final class LocalSequencer implements Sequencer {
      */
     public static Optional<LocalSequencer> start(BinStore store, String prefix,
             LeaseManager leases, int sealRedriveBudget) throws IOException {
+        return start(store, prefix, leases, sealRedriveBudget,
+                sleepFor(leases.renewInterval()));
+    }
+
+    /**
+     * ⚠️ PACKAGE-PRIVATE FOR ONE TEST, exactly as
+     * {@code BatchingSequencer.sleepFor} is and for the same measured reason:
+     * the shipping ticker is installed by the 4-arg {@link #start} and exposed
+     * nowhere, so every test injected its own and this one ran in NO test.
+     * Measured: {@code sleepFor(Duration.ofDays(1))} left the whole build
+     * green, which is a leader that renews once a day against a ten-second TTL.
+     */
+    static RenewTicker sleepFor(java.time.Duration interval) {
+        return () -> Thread.sleep(interval);
+    }
+
+    /** As {@link #start}, with the renew tick injected. */
+    public static Optional<LocalSequencer> start(BinStore store, String prefix,
+            LeaseManager leases, int sealRedriveBudget, RenewTicker ticker) throws IOException {
+        Objects.requireNonNull(ticker, "ticker");
         Optional<Lease> won = leases.tryAcquire();
         if (won.isEmpty()) {
             return Optional.empty();
@@ -123,7 +253,7 @@ public final class LocalSequencer implements Sequencer {
             // code. M4.9's bounded recovery is what fixes it.
             log.recover();
             log.open(prevEpoch, prevSeq);
-            return Optional.of(new LocalSequencer(leases, log));
+            return Optional.of(new LocalSequencer(leases, log, ticker));
         } catch (IOException failed) {
             // ⚠️ WE HOLD THE LEASE AND CANNOT USE IT. Returning empty here would
             // report "not the leader" while holding the term, and the cluster
@@ -147,6 +277,15 @@ public final class LocalSequencer implements Sequencer {
 
     @Override
     public CommitDelta commitAll(List<CommitRequest> requests) throws IOException {
+        if (fenced) {
+            // ⚠️ REFUSED HERE, BEFORE THE STORE. `CommitLog` would also refuse,
+            // because a successor sealed this chain -- but only after a round
+            // trip, and only once the seal is visible. This node already KNOWS,
+            // and spending a request to be told again is both slower and a
+            // request that scales with a fenced pod's retry rate.
+            throw new IOException("this sequencer lost its lease at epoch " + log.epoch()
+                    + " and has been fenced; it must not commit again");
+        }
         if (closed) {
             // ⚠️ The Sequencer contract says a commit after close must FAIL. The
             // lease is released, so another node may already have sealed this
@@ -160,6 +299,23 @@ public final class LocalSequencer implements Sequencer {
     @Override
     public void close() throws IOException {
         closed = true;
+        // ⚠️ SIGNALLED, NOT JOINED, and two earlier drafts gave wrong reasons.
+        // The first said the renewer holds no chain state, which argues only
+        // that the order does not matter. The second said the interrupt stops
+        // an in-flight renew "resurrecting" the lease -- and that fork does not
+        // exist: `renewLocked` and `releaseLocked` both read `belief` under the
+        // same `BoundedLock`, so a renew arriving after `release()` finds a
+        // null belief and returns EMPTY rather than writing. Nothing is
+        // resurrected, and this commit's own tests measured that.
+        // ⚠️ WHAT THE SIGNAL ACTUALLY BUYS is that a renewer already past its
+        // `closed` check does not go on to latch `fenced` and log a "must be
+        // restarted" ERROR for what was a deliberate shutdown. It is NOT about
+        // saving a store request: after `releaseLocked` nulls the belief,
+        // `renewLocked` returns at its `mine == null` guard and issues none.
+        // The post-tick `closed` check covers the other ordering, and the two
+        // together are pinned by `aCallerAfterCLOSEIsToldCLOSEDRatherThanFENCED`
+        // -- each masks the other, so only removing BOTH fails it.
+        renewer.interrupt();
         leases.release();
     }
 }

@@ -247,7 +247,25 @@ public final class CommitProtocolSimulation {
         try {
             LeaseManager leases = new LeaseManager(store,
                     new LeaseConfig(PREFIX, pod, "", TTL, RENEW), clock);
-            return LocalSequencer.start(store, PREFIX, leases, 32);
+            // ⚠️ A TICK THAT NEVER FIRES, because this harness's javadoc says
+            // nothing here reads a wall clock or sleeps, and M4.17's production
+            // ticker would have made both false: every retained zombie
+            // sequencer would park a real thread on a real `Thread.sleep`,
+            // holding its `MemoryBinStore` live and introducing wall-clock
+            // concurrency into a harness whose whole value is REPRODUCIBILITY.
+            // Measured at 28ms/seed against a 3000ms first tick -- a 107x
+            // margin that nothing holds, and M4.13 takes this to 1,000 seeds.
+            // ⚠️ THE RENEWER EXITS IMMEDIATELY rather than parking forever.
+            // A ticker that blocks is still a real thread on a real wait, and
+            // it retains every zombie seed's `MemoryBinStore` for the run --
+            // review measured that a `Thread.sleep(Long.MAX_VALUE)` version
+            // fixed only the wall-clock-concurrency third of the problem.
+            // Throwing here takes the renew loop's InterruptedException exit, so
+            // the thread is gone before the seed returns and this harness's
+            // "nothing here reads a wall clock or sleeps" stays true.
+            return LocalSequencer.start(store, PREFIX, leases, 32, () -> {
+                throw new InterruptedException("the simulation does not renew");
+            });
         } catch (IOException injected) {
             return Optional.empty();
         }
