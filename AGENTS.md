@@ -86,16 +86,15 @@ Skills spec. A skill calls a script in `scripts/`, never a tool-specific built-i
 <!-- index:skills:start -->
 | Skill | Use when |
 |---|---|
-| [`adr`](.agents/skills/adr/SKILL.md) | When making a choice that is expensive to reverse, when changing a wire format or the store SPI, when a research conclusion is overturned, or when a future reader would otherwise ask "why on earth is it done this way" |
-| [`bench`](.agents/skills/bench/SKILL.md) | When a change touches a hot path, when adding or changing a JMH benchmark, when a latency or throughput number is claimed, or when tempted to optimise anything |
-| [`cost-budget`](.agents/skills/cost-budget/SKILL.md) | Whenever a change touches how objects are written, read, listed, or discovered — and before claiming any change is cost-neutral. This project exists to control these numbers |
-| [`gate-design`](.agents/skills/gate-design/SKILL.md) | When adding a gate, a review step, a research step, or any rule an agent is expected to follow — and before writing an instruction that says "remember to" or "make sure you" |
-| [`milestone-review`](.agents/skills/milestone-review/SKILL.md) | When a milestone reaches its completion condition or a checkpoint, and the commits need reading together rather than one at a time |
-| [`milestone`](.agents/skills/milestone/SKILL.md) | When told to work through a milestone, or when a session should keep going until the milestone's completion condition is met |
-| [`next-task`](.agents/skills/next-task/SKILL.md) | At the start of any working session, after finishing a task, or when unsure what to do. Prevents starting work that is blocked, unspecified, or already done |
-| [`research`](.agents/skills/research/SKILL.md) | Before any web search or design argument about object storage, cost models, OpenSearch ingestion, WarpStream/AutoMQ, CAS coordination, or Java runtime choices — the answer is usually already here, with numbers |
+| [`adr`](.agents/skills/adr/SKILL.md) | When making a choice that is expensive to reverse, when changing a wire format or the store SPI, or when a research conclusion is overturned |
+| [`bench`](.agents/skills/bench/SKILL.md) | When a change touches a hot path, when adding or changing a JMH benchmark, when a latency or throughput number is claimed, or when tempted to optimise |
+| [`cost-budget`](.agents/skills/cost-budget/SKILL.md) | Whenever a change touches how objects are written, read, listed or discovered — and before claiming any change is cost-neutral |
+| [`gate-design`](.agents/skills/gate-design/SKILL.md) | Before adding a gate, a review step or a research step, and before writing any instruction that says "remember to" or "make sure you" |
+| [`milestone`](.agents/skills/milestone/SKILL.md) | When told to work through a milestone, when a session should run until its completion condition is met, or when a milestone needs reviewing as a whole |
+| [`next-task`](.agents/skills/next-task/SKILL.md) | At the start of any working session, after finishing a task, or when unsure what to do. Prevents starting work that is blocked, unspecified or done |
+| [`research`](.agents/skills/research/SKILL.md) | Before any web search or design argument about object storage, cost models, OpenSearch ingestion, WarpStream/AutoMQ, CAS coordination or the Java runtime |
 | [`review`](.agents/skills/review/SKILL.md) | Before every commit. Defines what the reviewer is given, what it is deliberately denied, and what to look for that the deterministic gates cannot see |
-| [`skill-forge`](.agents/skills/skill-forge/SKILL.md) | When a procedure has been explained more than twice, when a skill is not being invoked at the right moment, or when adding a command adapter |
+| [`skill-forge`](.agents/skills/skill-forge/SKILL.md) | When a procedure has been explained more than twice, when a skill is not invoked at the right moment, or when adding a command adapter |
 | [`spec`](.agents/skills/spec/SKILL.md) | When starting a milestone, when a task lacks acceptance criteria, or when what to build is clearer than how it will be checked |
 | [`tdd`](.agents/skills/tdd/SKILL.md) | When writing any code. Covers the red-green cycle, what to assert, the test tiers, and the rules that keep the resulting test worth having |
 | [`wire-format-change`](.agents/skills/wire-format-change/SKILL.md) | Whenever bytes that outlive a process, or cross a process boundary, change shape |

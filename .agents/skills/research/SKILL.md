@@ -1,6 +1,6 @@
 ---
 name: research
-description: Find whether a question is already answered in the research corpus before investigating it fresh. Use before any web search or design argument about object storage, cost models, OpenSearch ingestion, WarpStream/AutoMQ, CAS coordination, or Java runtime choices — the answer is usually already here, with numbers.
+description: Use before any web search or design argument about object storage, cost models, OpenSearch ingestion, WarpStream/AutoMQ, CAS coordination or the Java runtime.
 ---
 
 # Research corpus

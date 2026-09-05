@@ -1,6 +1,6 @@
 ---
 name: next-task
-description: Choose what to work on next and confirm it is genuinely ready. Use at the start of any working session, after finishing a task, or when unsure what to do. Prevents starting work that is blocked, unspecified, or already done.
+description: Use at the start of any working session, after finishing a task, or when unsure what to do. Prevents starting work that is blocked, unspecified or done.
 ---
 
 # Next task

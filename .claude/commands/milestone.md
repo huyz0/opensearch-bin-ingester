@@ -1,5 +1,5 @@
 ---
-description: Drive a milestone to completion autonomously, one task per commit, without asking between tasks. Use
+description: Use when told to work through a milestone, when a session should run until its completion condition is met, or
 ---
 
 Follow the procedure in `.agents/skills/milestone/SKILL.md`. Read that file now and

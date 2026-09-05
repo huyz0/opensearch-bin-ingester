@@ -1,5 +1,5 @@
 ---
-description: Write an architecture decision record. Use when making a choice that is expensive to reverse, when c
+description: Use when making a choice that is expensive to reverse, when changing a wire format or the store SPI, or when a
 ---
 
 Follow the procedure in `.agents/skills/adr/SKILL.md`. Read that file now and

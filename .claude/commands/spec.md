@@ -1,5 +1,5 @@
 ---
-description: Write a spec before implementing, and decompose it into commit-sized tasks. Use when starting a mile
+description: Use when starting a milestone, when a task lacks acceptance criteria, or when what to build is clearer than ho
 ---
 
 Follow the procedure in `.agents/skills/spec/SKILL.md`. Read that file now and

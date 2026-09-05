@@ -1,6 +1,6 @@
 ---
 name: review
-description: Review a staged change as an independent agent that did not write it. Use before every commit. Defines what the reviewer is given, what it is deliberately denied, and what to look for that the deterministic gates cannot see.
+description: Use before every commit. Defines what the reviewer is given, what it is deliberately denied, and what to look for that the deterministic gates cannot see.
 ---
 
 # Review

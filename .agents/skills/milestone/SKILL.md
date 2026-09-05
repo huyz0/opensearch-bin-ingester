@@ -1,6 +1,6 @@
 ---
 name: milestone
-description: Drive a milestone to completion autonomously, one task per commit, without asking between tasks. Use when told to work through a milestone, or when a session should keep going until the milestone's completion condition is met.
+description: Use when told to work through a milestone, when a session should run until its completion condition is met, or when a milestone needs reviewing as a whole.
 ---
 
 # Milestone
@@ -47,7 +47,7 @@ completion:
    and say so in the report. **Never write an evidence line for something you did
    not run** — that is non-negotiable 4, and it is the rule every other one rests
    on.
-4. Run [`milestone-review`](../milestone-review/SKILL.md) over the whole diff.
+4. Run the **milestone review** below over the whole diff.
 
 The script cannot check that the evidence is *true*. It forces **enumeration**,
 which is what catches the quiet omission of criterion 6.
@@ -86,3 +86,48 @@ observability.
   one-task-one-commit property just as much as doing less.
 - **Never commit a tree you know is broken**, including "I will fix it in the
   next commit".
+
+## Milestone review — reading the commits together
+
+⚠️ Merged in from the separate `milestone-review` skill: it was only ever
+invoked from step 4 above, so a session doing milestone work loaded two bodies
+and every session paid for two layer-1 descriptions to reach one procedure.
+
+Per-commit review sees one diff at a time and cannot see what only shows up
+across a milestone: a concept that drifted, a duplication that accumulated, an
+abstraction that stopped fitting, a budget that eroded a little per commit.
+
+### Inputs
+
+- `git log --oneline <milestone-start>..HEAD` and the full diff
+- The milestone's `SPEC.md` and its completion condition in the roadmap
+- Every `minor` finding recorded in a commit body during the milestone
+- The cost meter's trend across the milestone
+
+### What to look for
+
+**Did it deliver what was specified?**
+- Every acceptance criterion in the spec, observed — not assumed.
+- Anything in scope that quietly did not happen.
+- Anything delivered that was never in scope.
+
+**Erosion the per-commit gate cannot see:**
+- Requests-per-MiB trending upward commit by commit, each increment defensible.
+- A concept implemented two ways in two commits.
+- An abstraction introduced for one caller and never given a second.
+- Tests that grew to assert implementation as the implementation settled.
+- A research finding the milestone silently contradicted.
+
+**Harvest the minors.** Every `minor` recorded in a commit body during the
+milestone gets read here and either becomes a backlog row or is explicitly
+dropped. ⚠️ This is the only place they are collected; without it they exist
+only in commit bodies nobody greps.
+
+### Output
+
+1. Findings, each with a concrete failure or erosion scenario.
+2. **Backlog rows** for what should be fixed — in the next milestone, not
+   retrofitted into this one.
+3. A re-plan: does the roadmap's next milestone still start in the right place?
+4. Update the research corpus if the milestone taught something the corpus
+   should have said.

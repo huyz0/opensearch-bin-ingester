@@ -1,5 +1,5 @@
 ---
-description: Measure before optimising, and prove an optimisation worked. Use when a change touches a hot path, w
+description: Use when a change touches a hot path, when adding or changing a JMH benchmark, when a latency or throughput nu
 ---
 
 Follow the procedure in `.agents/skills/bench/SKILL.md`. Read that file now and

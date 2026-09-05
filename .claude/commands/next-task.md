@@ -1,5 +1,5 @@
 ---
-description: Choose what to work on next and confirm it is genuinely ready. Use at the start of any working sessi
+description: Use at the start of any working session, after finishing a task, or when unsure what to do. Prevents starting 
 ---
 
 Follow the procedure in `.agents/skills/next-task/SKILL.md`. Read that file now and

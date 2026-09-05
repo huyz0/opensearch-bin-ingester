@@ -1,5 +1,5 @@
 ---
-description: Find whether a question is already answered in the research corpus before investigating it fresh. Us
+description: Use before any web search or design argument about object storage, cost models, OpenSearch ingestion, WarpStre
 ---
 
 Follow the procedure in `.agents/skills/research/SKILL.md`. Read that file now and

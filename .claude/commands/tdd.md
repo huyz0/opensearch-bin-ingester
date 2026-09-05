@@ -1,5 +1,5 @@
 ---
-description: Implement a task test-first in Java. Use when writing any code. Covers the red-green cycle, what to 
+description: Use when writing any code. Covers the red-green cycle, what to assert, the test tiers, and the rules that keep
 ---
 
 Follow the procedure in `.agents/skills/tdd/SKILL.md`. Read that file now and

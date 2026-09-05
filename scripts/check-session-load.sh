@@ -40,6 +40,7 @@ BACKLOG=docs/internal/product/backlog.md
 : "${BACKLOG_ROW_CAP:=600}"
 : "${BACKLOG_PREAMBLE_CAP:=4000}"
 : "${LAYER0_CAP:=17000}"
+: "${SKILL_DESCRIPTION_CAP:=200}"
 
 # ⚠️ DERIVED FROM CLAUDE.md's IMPORTS, never listed here. Rung 2 of the
 # gate-design ladder rather than rung 3: a hardcoded list would keep reporting
@@ -66,6 +67,26 @@ EOF
     ok "every session loads $total bytes (cap $LAYER0_CAP): $detail"
   fi
 fi
+
+# LAYER 1 is every skill's `description:` line, and only that line -- it is what
+# an agent sees before deciding whether to load a skill's body, so every session
+# pays for every skill whether or not any is used. Measured: 3,034 bytes across
+# 13 skills here, against pstore's 1,011 across 5.
+#
+# ⚠️ A description says WHEN TO USE THIS, not what the skill is. "Write an ADR"
+# is a title; "use when making a choice that is expensive to reverse" is a
+# description that gets the skill loaded at the right moment. Past a couple of
+# sentences it has stopped being either and become a summary of the body.
+for f in .agents/skills/*/SKILL.md; do
+  [ -f "$f" ] || continue
+  d=$(sed -n 's/^description: //p' "$f")
+  [ -n "$d" ] || continue
+  if [ "${#d}" -gt "$SKILL_DESCRIPTION_CAP" ]; then
+    fail "$f: description is ${#d} chars, cap $SKILL_DESCRIPTION_CAP -- layer 1 is"
+    echo "         paid on every session for every skill. Say WHEN to use it; the"
+    echo "         body is where what it does belongs."
+  fi
+done
 
 [ -f "$BACKLOG" ] || finish
 

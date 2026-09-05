@@ -1,6 +1,6 @@
 ---
 name: wire-format-change
-description: Change a persisted or on-the-wire format — the segment layout, the object key grammar, the commit-log delta or checkpoint, the subscription protocol, or the store SPI. Use whenever bytes that outlive a process, or cross a process boundary, change shape.
+description: Use whenever bytes that outlive a process, or cross a process boundary, change shape.
 ---
 
 # Wire and format change

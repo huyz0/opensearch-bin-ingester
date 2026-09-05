@@ -1,5 +1,5 @@
 ---
-description: Change a persisted or on-the-wire format — the segment layout, the object key grammar, the commit-
+description: Use whenever bytes that outlive a process, or cross a process boundary, change shape.
 ---
 
 Follow the procedure in `.agents/skills/wire-format-change/SKILL.md`. Read that file now and

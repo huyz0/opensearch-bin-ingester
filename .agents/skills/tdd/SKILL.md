@@ -1,6 +1,6 @@
 ---
 name: tdd
-description: Implement a task test-first in Java. Use when writing any code. Covers the red-green cycle, what to assert, the test tiers, and the rules that keep the resulting test worth having.
+description: Use when writing any code. Covers the red-green cycle, what to assert, the test tiers, and the rules that keep the resulting test worth having.
 ---
 
 # Test-driven implementation

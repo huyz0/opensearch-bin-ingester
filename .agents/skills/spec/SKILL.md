@@ -1,6 +1,6 @@
 ---
 name: spec
-description: Write a spec before implementing, and decompose it into commit-sized tasks. Use when starting a milestone, when a task lacks acceptance criteria, or when what to build is clearer than how it will be checked.
+description: Use when starting a milestone, when a task lacks acceptance criteria, or when what to build is clearer than how it will be checked.
 ---
 
 # Spec

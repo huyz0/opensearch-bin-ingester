@@ -94,6 +94,46 @@ class SessionLoadTest {
   }
 
   /**
+   * Layer 1 is every skill's {@code description:} line, and only that line: it is
+   * what an agent sees before deciding whether to load a skill's body.
+   *
+   * <p>⚠️ MEASURED: 3,034 bytes across 13 skills here against pstore's 1,011
+   * across 5 — the count differs more than the length, but a description is a
+   * *when to use this*, not a summary of the skill, and eight of the thirteen had
+   * grown past 200 characters into the second.
+   *
+   * <p>⚠️ Both sides again: over the cap refuses and names the skill, under it
+   * passes. A description still has to say when the skill applies.
+   */
+  @Test
+  void anOversizedSkillDescriptionIsRefusedAndOneWithinTheCapIsNot(@TempDir Path dir)
+      throws Exception {
+    Path over = scratch(dir, "desc-over", "@AGENTS.md\n", 100, 100);
+    skill(over, "verbose", "d".repeat(400));
+    Gate bad = gate(over);
+    assertThat(bad.status())
+        .as("layer 1 is paid on every session, for every skill, loaded or not\n%s",
+            bad.output())
+        .isNotZero();
+    assertThat(bad.output()).contains("verbose");
+
+    Path under = scratch(dir, "desc-under", "@AGENTS.md\n", 100, 100);
+    skill(under, "terse", "Use when the thing happens.");
+    Gate good = gate(under);
+    assertThat(good.status())
+        .as("a description still has to say when the skill applies\n%s", good.output())
+        .isZero();
+  }
+
+  /** A skill with a frontmatter description, as every skill has. */
+  private void skill(Path dir, String name, String description) throws Exception {
+    Path f = dir.resolve(".agents/skills").resolve(name).resolve("SKILL.md");
+    Files.createDirectories(f.getParent());
+    Files.writeString(f, "---\nname: " + name + "\ndescription: " + description + "\n---\n\n# "
+        + name + "\n");
+  }
+
+  /**
    * ⚠️ A file becomes layer 0 by being IMPORTED, so the gate must count what
    * CLAUDE.md actually pulls in and nothing else.
    *

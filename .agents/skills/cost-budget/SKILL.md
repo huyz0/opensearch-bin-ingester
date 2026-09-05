@@ -1,6 +1,6 @@
 ---
 name: cost-budget
-description: Check that a change does not move object-store request rates in the wrong direction. Use whenever a change touches how objects are written, read, listed, or discovered — and before claiming any change is cost-neutral. This project exists to control these numbers.
+description: Use whenever a change touches how objects are written, read, listed or discovered — and before claiming any change is cost-neutral.
 ---
 
 # Cost budget

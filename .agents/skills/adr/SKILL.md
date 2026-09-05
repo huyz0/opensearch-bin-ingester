@@ -1,6 +1,6 @@
 ---
 name: adr
-description: Write an architecture decision record. Use when making a choice that is expensive to reverse, when changing a wire format or the store SPI, when a research conclusion is overturned, or when a future reader would otherwise ask "why on earth is it done this way".
+description: Use when making a choice that is expensive to reverse, when changing a wire format or the store SPI, or when a research conclusion is overturned.
 ---
 
 # Architecture decision record

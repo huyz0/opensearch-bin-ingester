@@ -1,6 +1,6 @@
 ---
 name: bench
-description: Measure before optimising, and prove an optimisation worked. Use when a change touches a hot path, when adding or changing a JMH benchmark, when a latency or throughput number is claimed, or when tempted to optimise anything.
+description: Use when a change touches a hot path, when adding or changing a JMH benchmark, when a latency or throughput number is claimed, or when tempted to optimise.
 ---
 
 # Benchmarking

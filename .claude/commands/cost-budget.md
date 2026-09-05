@@ -1,5 +1,5 @@
 ---
-description: Check that a change does not move object-store request rates in the wrong direction. Use whenever a 
+description: Use whenever a change touches how objects are written, read, listed or discovered — and before claiming any ch
 ---
 
 Follow the procedure in `.agents/skills/cost-budget/SKILL.md`. Read that file now and

@@ -1,6 +1,6 @@
 ---
 name: skill-forge
-description: Create, audit or edit a skill. Use when a procedure has been explained more than twice, when a skill is not being invoked at the right moment, or when adding a command adapter.
+description: Use when a procedure has been explained more than twice, when a skill is not invoked at the right moment, or when adding a command adapter.
 ---
 
 # Skill forge
