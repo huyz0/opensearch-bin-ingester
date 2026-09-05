@@ -197,7 +197,7 @@ class ReviewRoundCapTest {
   void anUNSTAGEDArgumentDoesNOTLiftTheCap(@TempDir Path dir) throws Exception {
     Path d = scratch(dir, 3, null);
     Files.createDirectories(d.resolve("baselines"));
-    // ⚠️ WRITTEN BUT NOT STAGED. review.md rule 9: an unstaged entry suppresses a
+    // ⚠️ WRITTEN BUT NOT STAGED. review.md rule fixed-or-argued: an unstaged entry suppresses a
     // finding while leaving no trace of it, which is the whole reason the gate
     // reads the INDEX rather than the working tree.
     Files.writeString(d.resolve("baselines/review.txt"),
@@ -215,7 +215,7 @@ class ReviewRoundCapTest {
    * index entirely, so the diff of the index is empty and any read at all refuses.
    * Here the file IS staged, carrying a legitimate finding-argument line, while the
    * {@code rounds:} line exists only in the WORKTREE. A gate reading the worktree
-   * would lift the cap; one reading the staged diff refuses — review.md rule 9.
+   * would lift the cap; one reading the staged diff refuses — review.md rule fixed-or-argued.
    */
   @Test
   void aROUNDSLineOnlyInTheWORKTREEOfASTAGEDFileDoesNOTLiftTheCap(@TempDir Path dir)
@@ -227,7 +227,7 @@ class ReviewRoundCapTest {
     Gate g = gate(d);
     assertThat(g.status())
         .as("the gate reads the INDEX, so a rounds: line present only on disk argues "
-            + "nothing -- review.md rule 9, and the reason the staged-name guard alone is "
+            + "nothing -- review.md rule fixed-or-argued, and the reason the staged-name guard alone is "
             + "not enough\n%s", g.output())
         .isNotZero();
   }

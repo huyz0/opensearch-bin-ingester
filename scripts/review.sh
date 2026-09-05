@@ -261,14 +261,14 @@ for i, f in enumerate(v.get('findings', [])):
         errs.append('finding %d has no failure_scenario -- that makes it a style opinion' % i)
     if f.get('severity') not in ('blocking', 'major', 'minor'):
         errs.append('finding %d: severity must be blocking|major|minor' % i)
-# review.md rules 9-10: a blocking or major finding is fixed or argued. A
+# review.md rules fixed-or-argued and major-blocks: a blocking or major finding is fixed or argued. A
 # 'pass' carrying either was accepted here and then never checked against
 # baselines/review.txt by check-reviewed.sh, so the finding vanished into a
 # gitignored directory.
 heavy = sorted({f.get('severity') for f in v.get('findings', [])
                 if f.get('severity') in ('blocking', 'major')})
 if v.get('verdict') == 'pass' and heavy:
-    errs.append("a 'pass' cannot coexist with a %s finding -- review.md rules 9-10"
+    errs.append("a 'pass' cannot coexist with a %s finding -- review.md rules fixed-or-argued and major-blocks"
                 % '/'.join(heavy))
 if errs:
     for e in errs:

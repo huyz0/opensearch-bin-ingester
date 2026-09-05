@@ -28,7 +28,7 @@ until completion condition met:
 
 | Bound | Value | On breach |
 |---|---|---|
-| Review rounds per task | **2** (review.md rule 12) | Stop and report. Round one finds, round two verifies; only a blocking finding may extend it |
+| Review rounds per task | **2** (review.md rule two-round-cap) | Stop and report. Round one finds, round two verifies; only a blocking finding may extend it |
 | Red→green attempts per task | **3** | Stop and report. Three failures means the task or the spec is wrong, not the code |
 | Tasks between checkpoints | **5** | Emit a progress report — tasks done, gates run, cost delta — and continue. **Do not wait for a reply**; this is a report, not a question |
 

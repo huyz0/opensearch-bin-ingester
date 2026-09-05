@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
-# review.md rule 15: one worktree per session, so two agent sessions never share
+# review.md rule worktree-per-session: one worktree per session, so two agent sessions never share
 # an index or a HEAD.
 #
 #   session-worktree.sh <name>     create it if absent, print its path

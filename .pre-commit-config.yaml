@@ -84,6 +84,13 @@ repos:
         stages: [pre-commit]
         pass_filenames: false
         always_run: true
+      - id: check-rule-citations
+        name: "every rule of review.md is cited by NAME, and every name resolves -- a number goes stale silently"
+        entry: scripts/check-rule-citations.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
       - id: check-links
         name: "every relative markdown link resolves"
         entry: scripts/check-links.sh

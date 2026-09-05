@@ -1,45 +1,51 @@
 # Review
 
+⚠️ **Cite these by NAME, never by number.** The numbering is for reading order and
+shifts when a rule is added — this file already carries 1a, 1b and 3a because
+inserting one would have renumbered every citation in the tree. Each rule's name
+is the slug in backticks after its statement, and `scripts/check-rule-citations.sh`
+refuses a numeric citation and an unresolvable name alike.
+
 **Family:** Process
 **Read when:** Writing a review prompt, deciding whether a finding blocks a commit, or wondering why the reviewer was not given the author's reasoning.
 
-1. **Every commit is reviewed by two agents that did not write it** — `reviewer`
+1. **Every commit is reviewed by two agents that did not write it** (`two-reviewers`) — `reviewer`
    for production, `test-reviewer` for the tests. Both are mandatory.
    → `scripts/check-reviewed.sh`
-1a. **The test review is a separate pass with a separate question:** *would this
+1a. **The test review is a separate pass with a separate question:** (`test-review-separate`) *would this
    test fail if the code were wrong?* Test weakness is invisible to coverage,
    which counts executed lines rather than constrained ones, so it needs an agent
    whose only job is to find a surviving mutation.
-1b. **A weak-test finding must name the mutation that would survive.** Without
+1b. **A weak-test finding must name the mutation that would survive.** (`name-the-mutation`) Without
    one it is a style opinion.
 2. **The reviewer is given the task, the diff, the selected standards, and the
-   list of gates that passed — and nothing else.** No transcript, no plan, no
+   list of gates that passed — and nothing else.** (`reasoning-denied`) No transcript, no plan, no
    author rationale.
-3. **Standards are selected from the staged paths**, by
+3. **Standards are selected from the staged paths** (`standards-from-paths`), by
    `scripts/which-standards.sh`, not chosen by the author.
-3a. **Both verdicts are required.** `check-reviewed.sh` refuses a commit missing
+3a. **Both verdicts are required.** (`both-verdicts`) `check-reviewed.sh` refuses a commit missing
    either the `reviewer` or the `test-reviewer` artifact. A production-only review
    is not a review, because test weakness is invisible to every other gate.
-4. **The verdict is bound to the staged diff by hash.** Amending one byte after
+4. **The verdict is bound to the staged diff by hash.** (`hash-bound`) Amending one byte after
    review invalidates it. That is what makes the review a fact rather than a claim.
 5. ⚠️ **The hash proves the verdict matches the diff. It does not prove the
-   reviewer was not the author** — that is bought by the harness, and saying so
+   reviewer was not the author** (`hash-proves-what`) — that is bought by the harness, and saying so
    is the same discipline as non-negotiable 3.
-6. **Every finding names a concrete failure scenario.** A finding that cannot say
+6. **Every finding names a concrete failure scenario.** (`failure-scenario`) A finding that cannot say
    how it fails is a style opinion, and style is the formatter's job.
-7. **The reviewer does not re-check what a gate already checked.**
-8. **An empty findings list is a valid outcome.** Invented findings are worse
+7. **The reviewer does not re-check what a gate already checked.** (`no-regating`)
+8. **An empty findings list is a valid outcome.** (`empty-is-valid`) Invented findings are worse
    than none.
-9. **A blocking finding is fixed or argued**, and an argued entry in
+9. **A blocking finding is fixed or argued** (`fixed-or-argued`), and an argued entry in
    `baselines/review.txt` must be **staged** — an unstaged one suppresses a
    finding while leaving no trace.
-10. **On `changes-requested`, `major` findings block too.** Otherwise a reviewer
+10. **On `changes-requested`, `major` findings block too.** (`major-blocks`) Otherwise a reviewer
     asks for changes, the commit lands anyway, and the findings live only in a
     gitignored directory.
-11. **On `pass`, a `minor` is recorded in the commit body and the commit lands.**
+11. **On `pass`, a `minor` is recorded in the commit body and the commit lands.** (`minors-land`)
     Fixing it is permitted and usually wrong: the next round's surface is the
     prose the fix just added.
-12. **Two rounds is the cap.** Round one finds, round two verifies.
+12. **Two rounds is the cap.** (`two-round-cap`) Round one finds, round two verifies.
     ⚠️ **And the cap is ARGUABLE, keyed `rounds:<task>` in a staged
     `baselines/review.txt`** — because the alternative is worse. Before that
     existed, an author whose commit genuinely could not be split had no route but
@@ -150,9 +156,9 @@
     inheriting that index reviews different bytes. The commit that wrote the
     advice was its own counter-example. Sequencing the commits by hand is what
     actually worked. M0.21 owns the real fix.
-13. **Minors are harvested at the milestone boundary**, not left in commit
+13. **Minors are harvested at the milestone boundary** (`minors-at-milestone`), not left in commit
     bodies nobody greps.
-14. **A change confined to the harness machinery needs NO reviewer verdict.**
+14. **A change confined to the harness machinery needs NO reviewer verdict.** (`harness-exempt`)
     → `check-reviewed.sh`, `HarnessExemptionTest`
     ⚠️ **This LOOSENS the gate, deliberately, and the owner decided it after the
     cost was measured.** Reviewing the harness with the harness compounds: a
@@ -182,7 +188,7 @@
     bundling. A docs-only commit is NOT exempt; it is already reduced to one role
     by `review-roles.sh`, and exempting it would exempt most commits in the
     project. **Say plainly in the commit body that no reviewer saw the change.**
-15. **One worktree per session.** ⚠️ Rule 12's tail records what sharing one
+15. **One worktree per session.** (`worktree-per-session`) ⚠️ Rule 12's tail records what sharing one
     costs and declines to prescribe a remedy, because the draft that did
     prescribed a private `GIT_INDEX_FILE` — which stops two sessions staging
     over each other and then **cannot carry the commit**: `pre-commit` clears

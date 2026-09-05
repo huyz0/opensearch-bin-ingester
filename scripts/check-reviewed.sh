@@ -12,7 +12,7 @@ else
   SHA=$(git diff --cached | sha256sum | cut -d' ' -f1)
 fi
 # ⚠️ THE HARNESS REVIEWS ITSELF THROUGH ITS TESTS, NOT THROUGH AGENTS --
-# review.md rule 14. A change confined to the harness machinery does not need a
+# review.md rule harness-exempt. A change confined to the harness machinery does not need a
 # reviewer verdict, and this is a DELIBERATE LOOSENING, decided by the owner
 # after measuring the cost: two harness tasks in one session took ten and five
 # rounds, and reviewing the harness with the harness turns every correction into
@@ -49,7 +49,7 @@ for f in $CHANGED; do
   esac
 done
 if [ "$HARNESS_ONLY" -eq 1 ] && [ "$TOUCHES_MACHINERY" -eq 1 ]; then
-  warn "HARNESS-ONLY diff -- reviewer verdicts not required (review.md rule 14)"
+  warn "HARNESS-ONLY diff -- reviewer verdicts not required (review.md rule harness-exempt)"
   echo "         The tests are the gate here: check-tdd still demands a red"
   echo "         record for every new test, and the suite must be green."
   echo "         Say plainly in the commit body that no reviewer saw this."
@@ -79,7 +79,7 @@ for ROLE in $REQUIRED_ROLES; do
 done
 [ "$FAILED" -eq 0 ] || finish
 
-# ⚠️ review.md rule 12's cap, as a predicate rather than a sentence. It was
+# ⚠️ review.md rule two-round-cap's cap, as a predicate rather than a sentence. It was
 # violated on 8 of 12 tasks in one session -- one reaching ELEVEN rounds, where
 # rounds 9-11 fixed `minor` findings this gate has never blocked on -- because
 # NOTHING COUNTED. A rule only the author can uphold differs per run and dies
@@ -95,7 +95,7 @@ done
 # ⚠️ WHAT THE TREE SAYS: 8 here, 8 in backlog M0.47 (which calls it this repository's own
 # record) and 8 in the M4.21 row; 7 in `review_rounds.py`, which said 7 before this
 # change and is not this commit's to reinterpret. Neither is reconstructible, so the
-# split is recorded in review.md rule 12 rather than settled.
+# split is recorded in review.md rule two-round-cap rather than settled.
 # ⚠️ THE EXIT STATUS IS CHECKED, not swallowed. `|| echo 0` treated every failure
 # as "no rounds yet" -- including the refusal `review_rounds.py` raises when two
 # verdicts for one hash disagree about the task, which turned a deliberate stop
@@ -210,7 +210,7 @@ if [ "${ROUNDS:-0}" -gt 2 ]; then
     fi
   fi
   if [ "$ARGUED" -eq 0 ]; then
-    fail "review round $ROUNDS exceeds review.md rule 12's cap of 2"
+    fail "review round $ROUNDS exceeds review.md rule two-round-cap's cap of 2"
     echo "         Round one finds, round two verifies. A third means the commit is"
     echo "         too big: SPLIT it, or argue it with a STAGED baselines/review.txt"
     echo "         line keyed 'rounds:$TASK  <why it cannot be split>'."
@@ -227,7 +227,7 @@ if [ "${ROUNDS:-0}" -gt 2 ]; then
     echo "         them before it looks at the cap again."
     echo "         ⚠️ Only 'blocking' and 'major' findings block a commit -- a 'pass'"
     echo "         carrying 'minor' findings lands, with them recorded in the"
-    echo "         commit body (review.md rule 11)."
+    echo "         commit body (review.md rule minors-land)."
     finish
   fi
   warn "review round $ROUNDS exceeds the cap of 2, ARGUED as 'rounds:$TASK' in baselines/review.txt"
@@ -235,7 +235,7 @@ fi
 
 for ROLE in $REQUIRED_ROLES; do
 V=".harness/review/$SHA.$ROLE.json"
-# Checked for EVERY verdict, not only changes-requested: review.md rules 9-10
+# Checked for EVERY verdict, not only changes-requested: review.md rules fixed-or-argued and major-blocks
 # say a blocking or major finding is fixed or argued, and a reviewer returning
 # 'pass' while carrying one is exactly the case that used to slip through.
 unresolved=$(python3 - "$V" "$ROLE" <<'PY'

@@ -132,7 +132,7 @@ class ReviewRoundCapArgumentValidityTest {
    * <p>⚠️ It matters because the escape is supposed to be greppable in one known
    * place. An argument that counts from any staged file means a source comment,
    * a test fixture or a doc paragraph containing the key waives the cap, and
-   * review.md rule 12 states the criterion as a staged {@code baselines/review.txt}.
+   * review.md rule two-round-cap states the criterion as a staged {@code baselines/review.txt}.
    */
   @Test
   void anArgumentInADIFFERENTSTAGEDFileDoesNOTLiftTheCap(@TempDir Path dir) throws Exception {

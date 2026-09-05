@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * review.md rule 14: a change confined to the harness machinery needs no
+ * review.md rule harness-exempt: a change confined to the harness machinery needs no
  * reviewer verdict, and everything else still does.
  *
  * <p>⚠️ This exemption LOOSENS a gate, which is the direction that normally
