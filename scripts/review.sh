@@ -88,10 +88,13 @@ case "$CMD" in
     echo "own copy of the STAGED bytes and do every mutation, build and test in it:"
     echo
     echo "    TREE=\$(./scripts/review-tree.sh <your-role>) && cd \"\$TREE\""
-    echo "    env -u GIT_INDEX_FILE ./gradlew -p buildSrc test"
+    echo "    env -u GIT_INDEX_FILE GRADLE_USER_HOME=$(./scripts/review-tree.sh --gradle-home) \\"
+    echo "        ./gradlew -p buildSrc test"
     echo
     echo "⚠️ ALWAYS unset GIT_INDEX_FILE for the build: it is inherited, and a"
     echo "   suite run that inherits it rewrites the index you are reviewing."
+    echo "⚠️ GRADLE_USER_HOME is SHARED between the two of you on purpose -- it is"
+    echo "   the dependency cache, not evidence. Your build/ stays your own."
     echo "⚠️ Restore a file with \`git checkout -- <path>\`. NEVER"
     echo "   \`git checkout HEAD -- <path>\` (HEAD is an EMPTY commit) and NEVER"
     echo "   \`git reset --hard\`, which would delete every file in your tree."

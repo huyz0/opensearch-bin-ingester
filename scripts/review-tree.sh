@@ -42,14 +42,26 @@ source "$(dirname "$0")/lib.sh"
 cd "$ROOT"
 
 ROLE="${1:-}"
+
+# ⚠️ `--gradle-home` PRINTS THE SHARED DEPENDENCY CACHE AND EXITS, materialising
+# no tree. WHAT IS SHARED AND WHAT IS NOT is the whole of this: a per-tree
+# `build/` is the isolation that matters -- two reviewers writing one clobber the
+# test-results XML every pass/fail count reads -- while GRADLE_USER_HOME holds the
+# wrapper distribution, the dependency cache and the build cache, none of which is
+# evidence. Re-fetching all of it per tree was pure cold-start cost on a round
+# already priced at 7-13 minutes, paid twice a round, forever.
+#
+# ⚠️ It sits UNDER THE SAME BASE as the trees, so it inherits every containment
+# guard below rather than repeating them, and so a person clearing the base in one
+# deliberate act clears the cache with it.
 # ⚠️ AN ALLOWLIST, and it is load-bearing rather than tidy: ROLE lands in a
 # filesystem path, and round-1 test review demonstrated `review-tree.sh
 # '../../../victim'` deleting a file outside the tree back when this script
 # removed its destination. There is no `rm -rf` here any more, but a traversing
 # role would still materialise a repository somewhere nobody asked for.
 case "$ROLE" in
-  reviewer|test-reviewer) ;;
-  *) echo "usage: review-tree.sh <reviewer|test-reviewer>" >&2; exit 2 ;;
+  reviewer|test-reviewer|--gradle-home) ;;
+  *) echo "usage: review-tree.sh <reviewer|test-reviewer|--gradle-home>" >&2; exit 2 ;;
 esac
 
 # ⚠️ RESOLVED AND REFUSED BEFORE ANYTHING IS CREATED. An earlier draft checked
@@ -98,6 +110,32 @@ else
   # Freshly created directly under an already-physical TMPROOT, so it is one.
   BASE_P=$BASE
 fi
+# The shared cache, created under the already-guarded BASE_P. Answered here and
+# not in review.sh so the path exists in exactly one place: a literal duplicated
+# across two scripts is a fork waiting to drift.
+GRADLE_HOME="$BASE_P/gradle-home"
+mkdir -p "$GRADLE_HOME" || {
+  echo "review-tree: cannot create $GRADLE_HOME" >&2; exit 1
+}
+if [ "$ROLE" = "--gradle-home" ]; then
+  printf '%s\n' "$GRADLE_HOME"
+  exit 0
+fi
+
+# ⚠️ WHAT THE TREES COST, REPORTED RATHER THAN RECLAIMED. Nothing here removes
+# anything, deliberately: this script's history is that the `rm -rf` was the
+# dangerous part -- an earlier draft was measured destroying a live reviewer's
+# tree mid-review -- and an age-based sweep would put it back. So the number is
+# printed instead, and removing them stays one deliberate act by a person who
+# knows no reviewer is running:
+#     rm -rf "$BASE_P"
+n=$(find "$BASE_P" -maxdepth 1 -type d -name '*-reviewer.*' -o -maxdepth 1 -type d -name 'reviewer.*' 2>/dev/null | wc -l)
+if [ "${n:-0}" -gt 40 ]; then
+  echo "review-tree: $n trees under $BASE_P ($(du -sh "$BASE_P" 2>/dev/null | cut -f1))." >&2
+  echo "review-tree: nothing here reclaims them. When no review is running:" >&2
+  echo "review-tree:     rm -rf \"$BASE_P\"" >&2
+fi
+
 # `mktemp -d` creates a real directory, never a symlink, so appending its name
 # to a physical parent keeps the result physical: no further resolution is
 # needed here, and an unfalsifiable one would only look like a guard.
