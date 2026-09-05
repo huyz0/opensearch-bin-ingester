@@ -99,7 +99,7 @@ public class SearchableIT extends OpenSearchSingleNodeTestCase {
     public void testDocumentsAreSearchableAfterIngest() throws Exception {
         Path root = Files.createTempDirectory("binstore-e2e");
         CountingBinStore store = new CountingBinStore(new LocalFsBinStore(root));
-        CommitLog log = new CommitLog(store, "bins/cluster-a");
+        CommitLog log = new CommitLog(store, "bins/cluster-a", 0);
         TestClock clock = new TestClock();
         Accumulator accumulator = new Accumulator(
                 new IngestConfig(Duration.ofMillis(250), 8L << 20, "cluster-a"), clock);

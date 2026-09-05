@@ -42,7 +42,7 @@ class CommitLogTest {
 
     @Test
     void offsetsAreMonotonicPerStreamAcrossFlushes() throws Exception {
-        CommitLog log = new CommitLog(new MemoryBinStore(), "p");
+        CommitLog log = new CommitLog(new MemoryBinStore(), "p", 0);
         CommitDelta first = log.commit("seg-1", counts(new RunKey(A, 0), 3));
         CommitDelta second = log.commit("seg-2", counts(new RunKey(A, 0), 2));
 
@@ -57,7 +57,7 @@ class CommitLogTest {
 
     @Test
     void offsetsAreIndependentPerStream() throws Exception {
-        CommitLog log = new CommitLog(new MemoryBinStore(), "p");
+        CommitLog log = new CommitLog(new MemoryBinStore(), "p", 0);
         log.commit("seg-1", counts(new RunKey(A, 0), 5, new RunKey(B, 0), 2));
         CommitDelta second = log.commit("seg-2", counts(new RunKey(A, 0), 1, new RunKey(B, 0), 1));
 
@@ -74,8 +74,8 @@ class CommitLogTest {
     @Test
     void aLostRaceRetriesAtTheNextSlotRatherThanFailing() throws Exception {
         MemoryBinStore shared = new MemoryBinStore();
-        CommitLog mine = new CommitLog(shared, "p");
-        CommitLog theirs = new CommitLog(shared, "p");
+        CommitLog mine = new CommitLog(shared, "p", 0);
+        CommitLog theirs = new CommitLog(shared, "p", 0);
 
         theirs.commit("their-seg", counts(new RunKey(A, 0), 4));
         // ⚠️ `mine` still believes slot 0 is free. Losing it is NORMAL -- the
@@ -99,7 +99,7 @@ class CommitLogTest {
             for (int i = 0; i < writers; i++) {
                 final int id = i;
                 tasks.add(() -> {
-                    CommitLog log = new CommitLog(shared, "p");
+                    CommitLog log = new CommitLog(shared, "p", 0);
                     start.await();
                     return log.commit("seg-" + id, counts(new RunKey(A, 0), 1));
                 });
@@ -126,12 +126,12 @@ class CommitLogTest {
     @Test
     void recoveryRebuildsOffsetsFromTheLogAlone() throws Exception {
         MemoryBinStore shared = new MemoryBinStore();
-        CommitLog before = new CommitLog(shared, "p");
+        CommitLog before = new CommitLog(shared, "p", 0);
         before.commit("seg-1", counts(new RunKey(A, 0), 3, new RunKey(B, 7), 5));
         before.commit("seg-2", counts(new RunKey(A, 0), 2));
 
         // a fresh process, nothing in memory
-        CommitLog after = new CommitLog(shared, "p");
+        CommitLog after = new CommitLog(shared, "p", 0);
         assertThat(after.nextOffset(new RunKey(A, 0))).as("before recovery it knows nothing")
                 .isZero();
         after.recover();
@@ -150,7 +150,7 @@ class CommitLogTest {
 
     @Test
     void aDeltaRoundTripsThroughItsEncoding() throws Exception {
-        CommitLog log = new CommitLog(new MemoryBinStore(), "p");
+        CommitLog log = new CommitLog(new MemoryBinStore(), "p", 0);
         CommitDelta committed =
                 log.commit("some/segment/key.bseg", counts(new RunKey(A, 0), 3, new RunKey(B, 9), 1));
         byte[] encoded = committed.encode();
@@ -161,7 +161,7 @@ class CommitLogTest {
 
     @Test
     void aCorruptOrTruncatedDeltaIsRefused() throws Exception {
-        CommitLog log = new CommitLog(new MemoryBinStore(), "p");
+        CommitLog log = new CommitLog(new MemoryBinStore(), "p", 0);
         byte[] good = log.commit("k", counts(new RunKey(A, 0), 1)).encode();
         assertThatThrownBy(() -> CommitDelta.decode(java.util.Arrays.copyOf(good, good.length - 2)))
                 .isInstanceOf(java.io.IOException.class);
@@ -175,7 +175,7 @@ class CommitLogTest {
 
     @Test
     void anEmptyCommitIsRefused() {
-        CommitLog log = new CommitLog(new MemoryBinStore(), "p");
+        CommitLog log = new CommitLog(new MemoryBinStore(), "p", 0);
         // ⚠️ It would consume a sequence number and commit nothing, so a replay
         // would see a gap it cannot explain.
         // ⚠️ The MESSAGE, so it is CommitLog's guard being tested and not
@@ -190,7 +190,7 @@ class CommitLogTest {
     @Test
     void committingCostsExactlyOneRequestWhenUncontended() throws Exception {
         CountingBinStore store = new CountingBinStore(new MemoryBinStore());
-        CommitLog log = new CommitLog(store, "p");
+        CommitLog log = new CommitLog(store, "p", 0);
         log.commit("seg-1", counts(new RunKey(A, 0), 3, new RunKey(B, 0), 2));
         // ⚠️ ONE putIfAbsent for the whole flush, whatever it carries -- so a
         // flush costs one PUT for the segment and one for its delta, and neither
@@ -239,23 +239,17 @@ class CommitLogTest {
     }
 
     @Test
-    void theTwoArgConstructorIsEpochZeroSoEveryExistingCallSiteKeepsItsMeaning() {
-        // ⚠️ M1 wrote slot 0 / epoch 0 and said so: "their SLOTS are in the
-        // grammar from the first object so that M4's leases and epochs are not
-        // a key-grammar change". This is that promise being kept -- the
-        // dimension was always there, and M4 only fills it in.
-        assertThat(new CommitLog(new MemoryBinStore(), "p").logPrefix())
-                .isEqualTo(new CommitLog(new MemoryBinStore(), "p", 0).logPrefix());
-    }
-
-    @Test
     void theChainReportsWhichTermItBelongsTo() {
         // ⚠️ `epoch()` is how a caller (M4.5's CONTINUE header, M4.6's seal)
         // learns which term a chain is; untested, `return 0` is unconstrained.
         assertThat(new CommitLog(new MemoryBinStore(), "p", 7).epoch()).isEqualTo(7);
-        assertThat(new CommitLog(new MemoryBinStore(), "p").epoch())
-                .as("the no-lease default is epoch 0, reserved by M4.4b so no leased chain collides")
-                .isZero();
+        // ⚠️ EPOCH 0 IS STILL A LEGAL ARGUMENT, and this is the assertion that
+        // keeps it so: M4.6f removed the two-arg constructor that DEFAULTED to
+        // it, not the value. `CONTINUE` uses `prevEpoch = 0` for "no
+        // predecessor", and a test must still be able to build the historical
+        // unleased chain deliberately -- what is gone is reaching it by
+        // omission.
+        assertThat(new CommitLog(new MemoryBinStore(), "p", 0).epoch()).isZero();
     }
 
     @Test

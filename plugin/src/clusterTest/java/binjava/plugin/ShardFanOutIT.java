@@ -164,6 +164,6 @@ public class ShardFanOutIT extends OpenSearchSingleNodeTestCase {
         String key = new SegmentKey("bins/cluster-a", reader.createdAtMillis(), "pod1", 0,
                 headerLen).key();
         store.put(key, new Body(segment.length, () -> new ByteArrayInputStream(segment)));
-        HUB.publish(new CommitLog(store, "bins/cluster-a").commit(key, counts), segment);
+        HUB.publish(new CommitLog(store, "bins/cluster-a", 0).commit(key, counts), segment);
     }
 }

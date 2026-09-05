@@ -131,7 +131,7 @@ class SubscriptionHubTest {
         // they are still subscribed -- "all 1,600 were alive, not merely
         // silent" -- which a dead or never-started consumer would not show.
         CountingBinStore store = new CountingBinStore(new MemoryBinStore());
-        CommitLog log = new CommitLog(store, "p");
+        CommitLog log = new CommitLog(store, "p", 0);
         SubscriptionHub hub = new SubscriptionHub();
 
         var subs = new java.util.ArrayList<SubscriptionHub.Subscription>();

@@ -52,39 +52,6 @@ public final class CommitLog {
     private Seal sealedAt;
 
     /**
-     * The chain for epoch 0 — what M1 wrote. ⚠️ SINCE M4.6d NO PRODUCTION CALLER
-     * REACHES IT: {@code DefaultIngest} commits through a {@code Sequencer},
-     * which holds a lease and therefore an epoch of at least 1. What is left
-     * here is a test-only convenience, and M4.6f owns deleting it so the fork
-     * below stops being representable at all.
-     *
-     * <p>⚠️ THIS CHAIN IS A FORK, which is WHY the production path had to leave
-     * it rather than be handed an epoch. Once a leader writes at epoch 1, a reader of that
-     * epoch never lists this prefix — so records committed here are acked and
-     * never become visible, and the leader re-issues offsets this chain already
-     * assigned. Nor can this chain be SEALED: the seal depends on a losing
-     * writer treating its loss as proof it is fenced, and {@code commit} does
-     * the opposite by construction, folding the winner's offsets in and
-     * retrying at the next sequence forever. There is no leader here to fence.
-     * ⚠️ M4.6d REMOVED the unleased production commit path rather than passing
-     * an epoch to it, because a default that silently forks the log is a bad
-     * state best made unrepresentable — and {@code CONTINUE} may not use
-     * {@code prevEpoch=0} as a "no previous chain" sentinel, because 0 now
-     * names a live one.
-     *
-     * <p>⚠️ EPOCH 0 IS RESERVED FOR EXACTLY THIS — "no lease" — and
-     * {@code LeaseManager} starts its FIRST term at 1 so that no leased chain
-     * can ever collide with this one (M4.4b). That reservation is what keeps
-     * I3 true for the first term: were a first leader also at epoch 0, its
-     * chain would be byte-identical to what every no-lease caller here writes,
-     * {@code putIfAbsent} would still buy I1, but "readers of the new epoch
-     * never look there" would be void — it would not be a different epoch.
-     */
-    public CommitLog(BinStore store, String prefix) {
-        this(store, prefix, 0);
-    }
-
-    /**
      * The chain for one term of leadership.
      *
      * <p>⚠️ THE EPOCH IS IN THE PATH, and that is what makes fencing not depend
@@ -92,6 +59,27 @@ public final class CommitLog {
      * lands under its OWN epoch, where readers of the new epoch never look — so
      * it does not have to be stopped before it writes, only before anyone
      * believes it.
+     *
+     * <p>⚠️ THE EPOCH IS ALWAYS PASSED, never defaulted. M4.6f deleted a two-arg
+     * constructor that supplied 0, because the chain it opened is a FORK: once a
+     * leader writes at epoch 1, a reader of that epoch never lists epoch 0's
+     * prefix, so records committed there are acked and never become visible, and
+     * the leader re-issues offsets that chain already assigned. Nor can such a
+     * chain be SEALED — the seal depends on a losing writer treating its loss as
+     * proof it is fenced, and {@code commit} does the opposite by construction,
+     * folding the winner's offsets in and retrying at the next sequence forever.
+     * There is no leader there to fence. M4.6d had already removed the last
+     * production caller; what remained was a default the next wiring commit
+     * could reach by accident, which is rung 1 of gate-design left undone.
+     *
+     * <p>⚠️ EPOCH 0 IS STILL A LEGAL ARGUMENT, and reserved for "no lease".
+     * {@code LeaseManager} starts its FIRST term at 1 so no leased chain can
+     * collide with the historical one (M4.4b) — that reservation is what keeps
+     * I3 true for the first term, since a first leader also at epoch 0 would
+     * write a byte-identical chain and "readers of the new epoch never look
+     * there" would be void. {@code CONTINUE} likewise uses {@code prevEpoch = 0}
+     * for "no predecessor". What M4.6f removed is reaching epoch 0 by OMISSION,
+     * not the value itself.
      */
     public CommitLog(BinStore store, String prefix, long epoch) {
         this.store = Objects.requireNonNull(store, "store");
