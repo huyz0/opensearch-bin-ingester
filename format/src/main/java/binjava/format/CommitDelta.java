@@ -7,8 +7,10 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * One entry in the commit log: a segment became part of the log, and these
@@ -35,6 +37,22 @@ public record CommitDelta(long sequence, List<SegmentCommit> segments)
             // ⚠️ An empty delta would consume a sequence number and commit
             // nothing, so a replay would see a gap it cannot explain.
             throw new IllegalArgumentException("a delta with no segments commits nothing");
+        }
+        // ⚠️ RUNG 1: attribution rests on this, so it is made unrepresentable
+        // rather than checked on the way in. A caller finds ITS offsets by the
+        // segment key it submitted (see `Sequencer.commit`), and
+        // `CommitLog.commitAll` refuses a batch whose submissions collide — but
+        // enforcing it only there leaves the invariant unable to survive the
+        // bytes: a delta with duplicate keys arriving from a torn object or a
+        // foreign writer would decode without complaint, and the caller's
+        // `findFirst` would silently take the wrong segment's offsets.
+        Set<String> keys = new HashSet<>();
+        for (SegmentCommit s : segments) {
+            if (!keys.add(s.segmentKey())) {
+                throw new IllegalArgumentException(
+                        "a delta names the same segment twice, so no caller could tell "
+                                + "which offsets are its own: " + s.segmentKey());
+            }
         }
     }
 

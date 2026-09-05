@@ -72,8 +72,16 @@ public interface Sequencer extends AutoCloseable {
      *     treat the whole delta as its own. ⚠️ Selecting by {@link
      *     binjava.format.RunKey} is NOT sufficient either: two nodes may commit
      *     the same stream in one batch window, and neither {@code CommitDelta}
-     *     nor {@code RunCommit} carries pod attribution. How a caller learns
-     *     which offsets are its own is M4.7's to settle
+     *     nor {@code RunCommit} carries pod attribution.
+     *     ⚠️ SETTLED BY M4.7b: <b>a caller finds its offsets by the SEGMENT KEY
+     *     it submitted</b> — {@code delta.segments()}, matched on
+     *     {@code request.segmentKey()}. That works because each request brings
+     *     its own segment, and {@code CommitLog.commitAll} REFUSES a batch whose
+     *     submissions share a key, so the match is unique. This paragraph used
+     *     to end "is M4.7's to settle", and the settlement is recorded here
+     *     rather than only on the implementation, because this interface is
+     *     what a caller reads and the obvious re-derivation — select by
+     *     {@code RunKey} — is the one the sentence above warns against
      * @throws IOException the store was unreachable — ⚠️ AMBIGUOUS, so the
      *     commit may or may not have landed. Retrying with the same
      *     {@code (podId, flushSeq)} is safe only from M4.10; see the

@@ -11,6 +11,7 @@ import binjava.format.Continue;
 import binjava.format.Seal;
 import binjava.format.RunCommit;
 import binjava.format.RunKey;
+import binjava.format.SegmentCommit;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -20,6 +21,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * The commit log v0 (M1.10): a chain of sequentially numbered deltas, each
@@ -217,8 +219,67 @@ public final class CommitLog {
      */
     public CommitDelta commit(String segmentKey, Map<RunKey, Integer> recordCounts)
             throws IOException {
-        if (recordCounts.isEmpty()) {
-            throw new IllegalArgumentException("a commit with no runs commits nothing");
+        return commitSubmissions(List.of(new Submission(segmentKey, recordCounts)));
+    }
+
+    /**
+     * One segment's worth of a commit — what a single flush contributes.
+     *
+     * <p>⚠️ WHY THIS EXISTS AT ALL, stated correctly: {@link #commit(String,
+     * Map)} has no {@code podId} and no {@code flushSeq} to offer, so it cannot
+     * build a {@link CommitRequest} without inventing them — and an invented
+     * pod id in the log's own primitive is exactly the kind of placeholder
+     * M4.10's idempotency would later key on by accident.
+     *
+     * <p>⚠️ AN EARLIER VERSION OF THIS COMMENT CLAIMED THE LOG IS IGNORANT OF
+     * {@code CommitRequest}, which is false twenty lines below, where
+     * {@code commitAll} names it in the log's public API. The boundary is
+     * narrower than that: the log never READS {@code podId} or {@code flushSeq},
+     * and this record is what makes that visible rather than promised.
+     */
+    record Submission(String segmentKey, Map<RunKey, Integer> recordCounts) { }
+
+    /**
+     * Commits MANY flushes as ONE chain entry, which is the whole of M4.7's
+     * cost argument: the commit rate then scales with WINDOWS, not with pods.
+     *
+     * <p>⚠️ OFFSETS ADVANCE ACROSS SEGMENTS, not just within one. Two pods may
+     * flush the same stream into a single window, and computing each segment's
+     * offsets from the log's committed state would hand both the SAME base —
+     * two segments claiming one range, which is I2 and which no amount of
+     * conditional-write protection catches, because the entry is written once
+     * and is internally wrong. The running cursor below is what makes the
+     * second contributor start where the first stopped.
+     *
+     * <p>⚠️ SEGMENT KEYS MUST BE DISTINCT within a batch, and that is checked
+     * rather than assumed: a caller finds ITS offsets in the returned delta by
+     * the key it submitted (that is how M4.7 settles the attribution question
+     * the {@link Sequencer} contract left open), so two submissions sharing a
+     * key would make one of them unfindable and the other ambiguous.
+     */
+    public CommitDelta commitAll(List<CommitRequest> requests) throws IOException {
+        List<Submission> submissions = new ArrayList<>(requests.size());
+        for (CommitRequest r : requests) {
+            submissions.add(new Submission(r.segmentKey(), r.recordCounts()));
+        }
+        return commitSubmissions(submissions);
+    }
+
+    private CommitDelta commitSubmissions(List<Submission> submissions)
+            throws IOException {
+        if (submissions.isEmpty()) {
+            throw new IllegalArgumentException("a commit with no segments commits nothing");
+        }
+        Set<String> keys = new java.util.HashSet<>();
+        for (Submission s : submissions) {
+            if (s.recordCounts().isEmpty()) {
+                throw new IllegalArgumentException("a commit with no runs commits nothing");
+            }
+            if (!keys.add(s.segmentKey())) {
+                throw new IllegalArgumentException(
+                        "two submissions in one batch name the same segment, so neither "
+                                + "caller could find its own offsets: " + s.segmentKey());
+            }
         }
         if (sealedAt != null) {
             // ⚠️ The half `commit`'s lost-race branch below cannot reach. That
@@ -228,14 +289,25 @@ public final class CommitLog {
             throw fenced(sealedAt);
         }
         while (true) {
-            List<RunCommit> runs = new ArrayList<>(recordCounts.size());
-            // ⚠️ Sorted, so a delta's runs are in the same order the segment's
-            // directory uses and a replay is deterministic.
-            recordCounts.entrySet().stream()
-                    .sorted(Map.Entry.comparingByKey())
-                    .forEach(e -> runs.add(
-                            new RunCommit(e.getKey(), e.getValue(), nextOffset(e.getKey()))));
-            CommitDelta delta = new CommitDelta(nextSequence, segmentKey, runs);
+            // ⚠️ RECOMPUTED INSIDE THE LOOP. A lost race folds the winner's
+            // offsets in, so every base below moves — which is why this cursor
+            // cannot be hoisted out however tempting that looks.
+            Map<RunKey, Long> cursor = new HashMap<>();
+            List<SegmentCommit> segments = new ArrayList<>(submissions.size());
+            for (Submission submission : submissions) {
+                List<RunCommit> runs = new ArrayList<>(submission.recordCounts().size());
+                // ⚠️ Sorted, so a delta's runs are in the same order the segment's
+                // directory uses and a replay is deterministic.
+                submission.recordCounts().entrySet().stream()
+                        .sorted(Map.Entry.comparingByKey())
+                        .forEach(e -> {
+                            long base = cursor.computeIfAbsent(e.getKey(), this::nextOffset);
+                            runs.add(new RunCommit(e.getKey(), e.getValue(), base));
+                            cursor.put(e.getKey(), base + e.getValue());
+                        });
+                segments.add(new SegmentCommit(submission.segmentKey(), runs));
+            }
+            CommitDelta delta = new CommitDelta(nextSequence, segments);
             Optional<binjava.binstore.Version> written = store.putIfAbsent(keyFor(nextSequence),
                     new Body(delta.encode().length, () -> new ByteArrayInputStream(delta.encode())));
             if (written.isPresent()) {
