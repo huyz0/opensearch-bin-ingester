@@ -26,18 +26,14 @@ code existed**: the cost model, prior art read from source (WarpStream, AutoMQ,
 KIP-1150, SlateDB, Quickwit), the OpenSearch 3.8.0 SPI, and this project's own
 design. **It is upstream of the product docs, not parallel to them.**
 
-⚠️ **Do not read it wholesale and do not re-derive what it answers.** Start at
-its README — it has a tier table and a task-based routing table — or use the
-[`research`](.agents/skills/research/SKILL.md) skill.
-
-Two things to know before trusting any single page: several documents carry ⚠️
-**revision banners** where a later finding at real scale overturned an earlier
-one, and **when an early conclusion and a revision banner disagree, the banner
-wins**. And [50-open-questions.md](docs/research/50-open-questions.md) is the decision
-log: **every question is answered**, ten of them as
-[ADRs](docs/internal/product/decisions/). Six constants remain *deferred to
-measurement* — that is a list of things to measure, not a list of things to
-decide. ⚠️ Re-opening a settled decision is allowed, but it is an ADR, not a task.
+⚠️ **Do not read it wholesale and do not re-derive what it answers.** Route
+through its README, or use the [`research`](.agents/skills/research/SKILL.md)
+skill, which is where the rest of this lives: the revision banners that overturn
+an earlier finding (**the banner wins**), and
+[50-open-questions.md](docs/research/50-open-questions.md), where **every question
+is answered** — ten as [ADRs](docs/internal/product/decisions/), six deferred to
+*measurement*. ⚠️ Re-opening a settled decision is allowed; it is an ADR, not a
+task.
 
 ## Vocabulary
 
@@ -54,14 +50,13 @@ producer ──bulk/202──▶ ingester  (K8s pods, 3 AZ, scalable; disks only
                           plugin  (in the OpenSearch node process)
 ```
 
-Deprecated synonyms are listed in the glossary and **rejected at commit time**.
-→ `scripts/check-terminology.sh`
+Deprecated synonyms are **rejected at commit time**. → `scripts/check-terminology.sh`
 
 ## Standards
 
-Rules that are always true. Read the one that covers what you are touching.
-Each names its gate, or is marked as having none — **the second kind matters
-more, because it is where judgement is still required.**
+Rules that are always true. Read the one covering what you are touching. Each
+names its gate, or is marked as having none — **the second kind matters more,
+because it is where judgement is still required.**
 
 <!-- index:standards:start -->
 | Family | Standard | Read when |
@@ -80,15 +75,13 @@ more, because it is where judgement is still required.**
 | Code | [java-style.md](docs/internal/standards/java-style.md) | Naming things, choosing a concurrency construct, writing buffer-handling code, or when a diff is hard to read for reasons code-structure.md does not cover. |
 <!-- index:standards:end -->
 
-⚠️ **A rule whose script is missing is a preference.** Most of these have no
-script yet, because this repository has a harness before it has a build. That is
-deliberate and temporary; see *Gates* below for what actually runs today.
+⚠️ **A rule whose script is missing is a preference.** Most of these have none
+yet — see *Gates* below for what actually runs today.
 
 ## Skills
 
 Procedures, in [.agents/skills/](.agents/skills/README.md), written to the Agent
-Skills spec so they work in any tool that reads `SKILL.md`. A skill calls a
-script in `scripts/`, never a tool-specific built-in.
+Skills spec. A skill calls a script in `scripts/`, never a tool-specific built-in.
 
 <!-- index:skills:start -->
 | Skill | Use when |
@@ -108,14 +101,11 @@ script in `scripts/`, never a tool-specific built-in.
 | [`wire-format-change`](.agents/skills/wire-format-change/SKILL.md) | Whenever bytes that outlive a process, or cross a process boundary, change shape |
 <!-- index:skills:end -->
 
-**Progressive disclosure.** This file is layer 0 and is deliberately an index.
-Skill *descriptions* are layer 1 and cost a few hundred words. A skill's *body*
-is layer 2. Standards, product docs and the research corpus are layer 3, loaded
-only when a skill says to read one — never wholesale.
-
-⚠️ **`.claude/` is an adapter layer and holds no procedures.** A command file
-containing a procedure rather than a pointer is a fork waiting to drift.
-`.claude/skills` is a symlink to `.agents/skills`.
+**Progressive disclosure.** Layer 0 is this file, an index; layer 1 the skill
+*descriptions* above; layer 2 a skill's body; layer 3 the standards, product docs
+and research corpus, loaded only when a skill says to read one — never wholesale.
+⚠️ `.claude/` is a thin adapter and holds no procedures.
+→ [skills/README.md](.agents/skills/README.md).
 
 ## Non-negotiables
 
@@ -128,7 +118,6 @@ containing a procedure rather than a pointer is a fork waiting to drift.
 3. **The test is written first and observed to fail; production code changes to
    satisfy the test, never the reverse.** New tests must have a red record.
    → `scripts/tdd-red.sh`, `scripts/check-tdd.sh`, `scripts/check-test-integrity.sh`
-   ⚠️ These raise the cost of skipping; they do not prove virtue — see rule 4.
 4. **Never claim a test passes, a gate runs, or a number was measured, without
    having done it.** **No script enforces this, and none can.** Every other rule
    rests on it: a green gate reported by someone who did not run it is worth less
@@ -137,12 +126,9 @@ containing a procedure rather than a pointer is a fork waiting to drift.
 5. **Every commit is reviewed by two agents that did not write it** — `reviewer`
    for production, `test-reviewer` for the tests — given the task and the diff but
    never the author's reasoning, with the verdict bound to the staged diff by hash.
-   → `scripts/review.sh`, `scripts/check-reviewed.sh`
-   ⚠️ The test pass is separate because **test weakness is invisible to coverage**,
-   which counts executed lines rather than constrained ones.
-   ⚠️ The hash binds a verdict to a diff; it does **not** prove the reviewer was
-   not the author — that is bought by the harness, and saying so is the same
-   discipline as rule 3.
+   → `scripts/review.sh`, `scripts/check-reviewed.sh`,
+   [review.md](docs/internal/standards/review.md) — including why the test pass
+   is separate, and what the hash does *not* prove.
 6. **Request rates scale with segments, AZs and nodes — never with records,
    shards, partitions or indices.** This one line is the architecture.
    See [cost.md](docs/internal/standards/cost.md). *No script until the store SPI
@@ -156,24 +142,18 @@ containing a procedure rather than a pointer is a fork waiting to drift.
 
 9. **A new check is deterministic by default.** Before adding a gate, a review
    step or a research step, work down the ladder in
-   [`gate-design`](.agents/skills/gate-design/SKILL.md): make the bad state
-   unrepresentable, derive it from a source of truth, script it, commit the fact
-   and diff it, generate it — and only then ask an agent. **If the rule can be
+   [`gate-design`](.agents/skills/gate-design/SKILL.md). **If the rule can be
    stated as a predicate over files in the tree, an agent must not be asked to
-   check it.** An instruction in a prompt is the weakest enforcement there is:
-   it differs per run, is invisible outside the prompt, and dies with the
-   session. ⚠️ Reaching for rung 6 or 7 means writing one sentence in the commit
-   body saying why 1–5 cannot carry it.
+   check it** — an instruction in a prompt differs per run, is invisible outside
+   the prompt, and dies with the session. ⚠️ Reaching for rung 6 or 7 means one
+   sentence in the commit body saying why 1–5 cannot carry it.
 
 ## Gates
 
-⚠️ **This section is the honest answer to "what actually runs".** A skill or a
-standard may name a script that does not exist; `scripts/` is the truth on the
-day you read it.
-
-Running today, wired in `.pre-commit-config.yaml`. ⚠️ **This table is
-generated** from that file and from `scripts/` — a hand-maintained list of what
-runs is exactly the list that goes stale:
+⚠️ **The honest answer to "what actually runs".** A skill or a standard may name
+a script that does not exist; `scripts/` is the truth on the day you read it.
+Generated from `.pre-commit-config.yaml` and `scripts/` — a hand-maintained list
+of what runs is exactly the list that goes stale:
 
 <!-- index:gates:start -->
 | Script | Stage | Enforces |
@@ -182,7 +162,7 @@ runs is exactly the list that goes stale:
 | `check-gate-scope.sh` | pre-commit | every gate judges this repository only, never .tmp/ or a sibling checkout |
 | `check-harness-tests.sh` | pre-commit | the harness's own tests run -- buildSrc tests are NOT run by ./gradlew build |
 | `check-module.sh` | pre-commit | architecture.md rules 2/4/5: each module stays inside its dependency surface |
-| `check-backlog-size.sh` | pre-commit | backlog.md holds open, summary-sized rows only -- it is read at every session start |
+| `check-session-load.sh` | pre-commit | what EVERY session loads stays bounded -- CLAUDE.md and its imports, plus an open-rows-only backlog |
 | `check-links.sh` | pre-commit | every relative markdown link resolves |
 | `scripts/build-index.sh --check` | pre-commit | the generated index regions in AGENTS.md and skills/README.md are current |
 | `check-terminology.sh` | pre-commit | glossary.md: one name per concept -- producer/ingester/writer/reader/consumer/plugin |
@@ -200,78 +180,33 @@ Present in `scripts/` but **not** wired into `.pre-commit-config.yaml` — invok
 <!-- index:gates:end -->
 
 Not yet existing, and named by skills and standards that say so:
-**`check-mutants.sh` (80% killed on changed code)**, the cost meter
-(`cost-budget`), and the benchmark gates. **When a skill tells you to run one of
-these and it is absent, say the gate did not run.** Do not proceed as though it
-passed.
-
-⚠️ **What CI can and cannot enforce**, because the difference matters more
-than the claim:
-
-| Gate | In CI? | Why |
-|---|---|---|
-| the ten text/build gates | ✅ | `pre-commit run --all-files` |
-| `check-test-integrity` | ✅ **only with `CHECK_RANGE`** | it reads the *staged* diff, which is empty in a fresh checkout; `CHECK_RANGE=<base-ref>` makes it compare against the push or pull-request base. Without it it prints `ok` having examined nothing |
-| `check-tdd` | ❌ **cannot** | `CHECK_RANGE` lets it find the new tests, but the red records live in `.harness/tdd/red.json`, which `.gitignore` excludes — so it fails in CI with "no red record" no matter the range. Verified: `CHECK_RANGE=HEAD~1 ./scripts/check-tdd.sh` exits 1 in a clean tree |
-| `check-commit-msg`, `check-test-integrity` | ⚠️ **needs explicit invocation** | `pre-commit run --all-files` runs the pre-commit stage only and never fires commit-msg hooks |
-| `check-module` | ✅ **only with `GATE_SCOPE=full`** | its default delta path selects modules from the *staged* diff, which is empty in a fresh checkout, so it would report "no module changed" having built nothing. CI sets `GATE_SCOPE=full` to build all eight |
-| `check-reviewed` | ❌ **cannot** | its evidence lives in `.harness/review/`, gitignored and local to the machine that ran the review. ⚠️ It is a *pre-commit-stage* hook, so `--all-files` **does** invoke it — and with nothing staged it prints `ok nothing staged` and **passes vacuously**. It does not fail, which is worse: a green line that means nothing. CI runs `SKIP=check-reviewed` so the skip is visible in the log instead |
+**`check-mutants.sh`** (80% killed on changed code), the cost meter
+(`cost-budget`), the benchmark gates. **When a skill tells you to run one and it
+is absent, say the gate did not run** — never proceed as though it passed.
 
 ⚠️ **Gates run in `delta` mode by default** — only the files a change touches —
 and print which mode they used. `GATE_SCOPE=full` examines the whole tree and is
-what CI runs. A gate that cannot be sound on a delta either escalates itself
-(`check-links` goes full whenever a file is deleted or renamed) or does not offer
-the mode. See [build.md](docs/internal/standards/build.md) § Gate scope.
+what CI runs. See [build.md](docs/internal/standards/build.md) § Gate scope.
 
-⚠️ **Known blind spot in `check-tdd` / `check-test-integrity`:** a test
-annotated only with a project-defined *composed* annotation
-(`@Test public @interface ClusterTest {}`, then `@ClusterTest void x()`) is not
-seen by either gate. It does not refuse — it does not see the test at all, so no
-red record is demanded and a weakening is invisible. Recorded as M0.17. Until it
-lands, annotate tests with a JUnit annotation directly.
-
-⚠️ **A second, distinct blind spot in `check-tdd`:** a test whose failure mode
-is a JVM crash (an `OutOfMemoryError` under a deliberately small heap, for
-example) does not produce a JUnit `<failure>` element — the test executor
-process dies first, and the result is recorded as `<skipped/>`.
-`tdd_scan.py record-one` reads only `<failure>`/`<error>`, so it reports the
-test as never having failed, indistinguishable from one that passed. Found on
-M1.18's `MemoryFlatUnderTenXBodySizeTest`: four mutations at different
-magnitudes (fully disabled, 50x, 5x, 2x the real chunk size) all crashed the
-executor rather than failing an assertion, so no red record could be produced
-mechanically. Falsifiability was verified by hand instead (the mutation
-genuinely and repeatably throws `OutOfMemoryError`), and the commit was made
-with `SKIP=check-tdd`, stated plainly rather than worked around. No script
-fix is proposed yet — unlike M0.17, closing this would mean teaching the
-scanner to treat a crash-with-no-failure-element as a positive signal for
-*this specific class* of test, which risks masking a genuinely-skipped test
-in every other case.
-
-⚠️ **So non-negotiable 5 is enforced locally only.** A commit made with
-`--no-verify` carries no reviewer verdict and nothing downstream will notice.
-The hash binds a verdict to a diff; it does not make the verdict travel. Closing
-that would mean committing verdicts to the tree or checking them server-side,
-and neither is built — so the honest statement is that this one rests on the
-harness rather than on a gate.
+⚠️ **What runs locally and what runs in CI are not the same list.** `check-tdd`
+and `check-reviewed` **cannot** run in CI at all, and `check-reviewed` passes
+*vacuously* rather than failing when it is invoked with nothing staged —
+so **non-negotiable 5 is enforced locally only**, and a `--no-verify` commit
+carries no verdict that anything downstream will notice. `check-tdd` has two
+further blind spots that make it see nothing rather than refuse. All of it, with
+what was measured: → [build.md](docs/internal/standards/build.md)
+§ What CI can and cannot enforce.
 
 ## Never
 
 - Never push unless asked.
 - Never commit a tree you know is broken, including "I will fix it in the next
   commit".
-- Never report to a person in bare task IDs. `M0.20` names nothing a reader can
-  hold: say **`M0.20 (check-cross-refs.sh — every M<n> and R<n> resolves)`**.
-  A status line built out of IDs — "M0.20, M0.28 and M0.9 are queued" — forces
-  the reader to open `backlog.md` to learn what is being discussed, and reads as
-  progress without being checkable. The name is a few words saying what the task
-  *is*. ⚠️ **No script can enforce this**, because it governs what is said rather
-  than what is committed; it holds only as long as it is followed.
-  ⚠️ And the ID must RESOLVE. The first draft of this bullet taught the rule
-  using `M0.37`, an ID with no backlog row — invented in conversation, repeated
-  for a whole session, and never written down. An unresolvable ID is the same
-  defect one step worse: it names nothing AND there is nothing to look up.
-  `M0.20` is the gate that would catch it in the tree; nothing catches it in
-  speech.
+- Never report to a person in bare task IDs, and never name an ID that does not
+  RESOLVE. `M0.20` names nothing a reader can hold: say
+  **`M0.20 (check-cross-refs.sh — every M<n> and R<n> resolves)`**. ⚠️ No script
+  enforces this — it governs what is *said*, not what is committed.
+  → [review.md](docs/internal/standards/review.md) § Reporting to a person.
 - Never widen scope silently. Doing more than the task asked is as much a problem
   as doing less, because it breaks the one-task-one-commit property.
 - Never add an object-store request that scales with records, shards, partitions

@@ -77,9 +77,9 @@ repos:
         always_run: true
       # Cheap, text-only, and the tax it collects is paid by every session
       # rather than by this commit -- so it runs beside the other text gates.
-      - id: check-backlog-size
-        name: "backlog.md holds open, summary-sized rows only -- it is read at every session start"
-        entry: scripts/check-backlog-size.sh
+      - id: check-session-load
+        name: "what EVERY session loads stays bounded -- CLAUDE.md and its imports, plus an open-rows-only backlog"
+        entry: scripts/check-session-load.sh
         language: system
         stages: [pre-commit]
         pass_filenames: false

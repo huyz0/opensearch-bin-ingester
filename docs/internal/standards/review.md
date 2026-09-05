@@ -200,3 +200,22 @@
     ⚠️ **And commit small.** One session in this repository ended with a
     complete, fourteen-round, fully-reviewed change existing nowhere but its
     working directory. A worktree isolates; only committing preserves.
+
+## Reporting to a person
+
+⚠️ Moved out of AGENTS.md by M0.71, which keeps the rule in layer 0 and
+links here for what it cost to learn it.
+
+- Never report in bare task IDs. `M0.20` names nothing a reader can hold:
+  say **`M0.20 (check-cross-refs.sh — every M<n> and R<n> resolves)`**.
+  A status line built out of IDs — "M0.20, M0.28 and M0.9 are queued" — forces
+  the reader to open `backlog.md` to learn what is being discussed, and reads as
+  progress without being checkable. The name is a few words saying what the task
+  *is*. ⚠️ **No script can enforce this**, because it governs what is said rather
+  than what is committed; it holds only as long as it is followed.
+  ⚠️ And the ID must RESOLVE. The first draft of this bullet taught the rule
+  using `M0.37`, an ID with no backlog row — invented in conversation, repeated
+  for a whole session, and never written down. An unresolvable ID is the same
+  defect one step worse: it names nothing AND there is nothing to look up.
+  `M0.20` is the gate that would catch it in the tree; nothing catches it in
+  speech.

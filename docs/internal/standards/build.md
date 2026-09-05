@@ -234,3 +234,51 @@ ingester is a separate deployment. **They will diverge.**
 - Prefer Docker running **inside** WSL2 over Docker Desktop — one less VM.
 - Testcontainers needs a reachable Docker socket; check it before assuming a test
   hang is our bug.
+
+## What CI can and cannot enforce
+
+⚠️ Moved out of AGENTS.md by M0.71. It is true and load-bearing, and it is
+not an index: layer 0 states the conclusion and links here for the evidence.
+
+⚠️ **What CI can and cannot enforce**, because the difference matters more
+than the claim:
+
+| Gate | In CI? | Why |
+|---|---|---|
+| the ten text/build gates | ✅ | `pre-commit run --all-files` |
+| `check-test-integrity` | ✅ **only with `CHECK_RANGE`** | it reads the *staged* diff, which is empty in a fresh checkout; `CHECK_RANGE=<base-ref>` makes it compare against the push or pull-request base. Without it it prints `ok` having examined nothing |
+| `check-tdd` | ❌ **cannot** | `CHECK_RANGE` lets it find the new tests, but the red records live in `.harness/tdd/red.json`, which `.gitignore` excludes — so it fails in CI with "no red record" no matter the range. Verified: `CHECK_RANGE=HEAD~1 ./scripts/check-tdd.sh` exits 1 in a clean tree |
+| `check-commit-msg`, `check-test-integrity` | ⚠️ **needs explicit invocation** | `pre-commit run --all-files` runs the pre-commit stage only and never fires commit-msg hooks |
+| `check-module` | ✅ **only with `GATE_SCOPE=full`** | its default delta path selects modules from the *staged* diff, which is empty in a fresh checkout, so it would report "no module changed" having built nothing. CI sets `GATE_SCOPE=full` to build all eight |
+| `check-reviewed` | ❌ **cannot** | its evidence lives in `.harness/review/`, gitignored and local to the machine that ran the review. ⚠️ It is a *pre-commit-stage* hook, so `--all-files` **does** invoke it — and with nothing staged it prints `ok nothing staged` and **passes vacuously**. It does not fail, which is worse: a green line that means nothing. CI runs `SKIP=check-reviewed` so the skip is visible in the log instead |
+
+⚠️ **Known blind spot in `check-tdd` / `check-test-integrity`:** a test
+annotated only with a project-defined *composed* annotation
+(`@Test public @interface ClusterTest {}`, then `@ClusterTest void x()`) is not
+seen by either gate. It does not refuse — it does not see the test at all, so no
+red record is demanded and a weakening is invisible. Recorded as M0.17. Until it
+lands, annotate tests with a JUnit annotation directly.
+
+⚠️ **A second, distinct blind spot in `check-tdd`:** a test whose failure mode
+is a JVM crash (an `OutOfMemoryError` under a deliberately small heap, for
+example) does not produce a JUnit `<failure>` element — the test executor
+process dies first, and the result is recorded as `<skipped/>`.
+`tdd_scan.py record-one` reads only `<failure>`/`<error>`, so it reports the
+test as never having failed, indistinguishable from one that passed. Found on
+M1.18's `MemoryFlatUnderTenXBodySizeTest`: four mutations at different
+magnitudes (fully disabled, 50x, 5x, 2x the real chunk size) all crashed the
+executor rather than failing an assertion, so no red record could be produced
+mechanically. Falsifiability was verified by hand instead (the mutation
+genuinely and repeatably throws `OutOfMemoryError`), and the commit was made
+with `SKIP=check-tdd`, stated plainly rather than worked around. No script
+fix is proposed yet — unlike M0.17, closing this would mean teaching the
+scanner to treat a crash-with-no-failure-element as a positive signal for
+*this specific class* of test, which risks masking a genuinely-skipped test
+in every other case.
+
+⚠️ **So non-negotiable 5 is enforced locally only.** A commit made with
+`--no-verify` carries no reviewer verdict and nothing downstream will notice.
+The hash binds a verdict to a diff; it does not make the verdict travel. Closing
+that would mean committing verdicts to the tree or checking them server-side,
+and neither is built — so the honest statement is that this one rests on the
+harness rather than on a gate.

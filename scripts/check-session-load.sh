@@ -19,15 +19,55 @@
 # ⚠️ THE ARCHIVE IS NOT JUDGED, deliberately. Applying the row cap to rows that
 # already shipped would turn a size gate into an instruction to rewrite the
 # record, and nothing loads the archive, so its size costs nothing.
+#
+# LAYER 0 is the other half of the same number: AGENTS.md and skills/README.md
+# are loaded into EVERY session by every agent tool, whether or not any work
+# happens. Measured against the harness this one was distilled from: pstore's
+# always-loaded set is 10,053 bytes and this project's was 26,856, AGENTS.md
+# alone 20,936 against 6,664. The excess was incident narrative -- true, worth
+# keeping, and not an index.
+#
+# ⚠️ A CAP IS NOT A CONTENT RULE. It cannot tell an index from an essay. What it
+# does is make the tradeoff VISIBLE: adding a paragraph to layer 0 means deciding
+# what leaves it. Detail moves DOWN a layer, to a standard loaded when a skill
+# says to read it -- it is never deleted to make a number go green
+# (non-negotiable 2 applies to this threshold like any other).
 source "$(dirname "$0")/lib.sh"
 cd "$ROOT"
-hdr "check-backlog-size"
+hdr "check-session-load"
 
 BACKLOG=docs/internal/product/backlog.md
 : "${BACKLOG_ROW_CAP:=600}"
 : "${BACKLOG_PREAMBLE_CAP:=4000}"
+: "${LAYER0_CAP:=17000}"
 
-[ -f "$BACKLOG" ] || { ok "no $BACKLOG"; finish; }
+# ⚠️ DERIVED FROM CLAUDE.md's IMPORTS, never listed here. Rung 2 of the
+# gate-design ladder rather than rung 3: a hardcoded list would keep reporting
+# the old number the day someone adds a third import, which is the exact failure
+# mode of every hand-maintained list of what runs.
+if [ -f CLAUDE.md ]; then
+  total=$(wc -c < CLAUDE.md)
+  detail="CLAUDE.md $(wc -c < CLAUDE.md)"
+  while IFS= read -r imp; do
+    [ -f "$imp" ] || continue
+    n=$(wc -c < "$imp")
+    total=$((total + n))
+    detail="$detail, $imp $n"
+  done <<EOF
+$(grep -oE '^@[^ ]+' CLAUDE.md | cut -c2-)
+EOF
+  if [ "$total" -gt "$LAYER0_CAP" ]; then
+    fail "every session loads $total bytes, cap $LAYER0_CAP -- $detail"
+    echo "         Layer 0 is an INDEX and is paid on every session, including the"
+    echo "         ones that do no work. Move detail DOWN a layer -- a standard, a"
+    echo "         skill body, backlog-notes.md -- and link it. Do not delete it,"
+    echo "         and do not raise the cap (non-negotiable 2 applies here too)."
+  else
+    ok "every session loads $total bytes (cap $LAYER0_CAP): $detail"
+  fi
+fi
+
+[ -f "$BACKLOG" ] || finish
 
 python3 - "$BACKLOG" "$BACKLOG_ROW_CAP" "$BACKLOG_PREAMBLE_CAP" <<'PY'
 import re, sys

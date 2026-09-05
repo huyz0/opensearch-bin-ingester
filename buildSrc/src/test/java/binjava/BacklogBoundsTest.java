@@ -79,7 +79,7 @@ class BacklogBoundsTest {
   }
 
   private Gate gate(Path dir) throws Exception {
-    return run(dir, List.of("bash", "scripts/check-backlog-size.sh"));
+    return run(dir, List.of("bash", "scripts/check-session-load.sh"));
   }
 
   private Gate commitMsg(Path dir, String subject) throws Exception {
@@ -91,7 +91,7 @@ class BacklogBoundsTest {
   @Test
   void aDoneRowInTheBacklogIsRefusedAndTheSameRowInTheArchiveIsNot(@TempDir Path dir)
       throws Exception {
-    Path d = scratch(dir, "check-backlog-size.sh");
+    Path d = scratch(dir, "check-session-load.sh");
     write(d, "docs/internal/product/backlog.md", HDR + "| M9.1 | short | — | **done** |\n");
     write(d, "docs/internal/product/backlog-done.md", HDR);
     Gate bad = gate(d);
@@ -108,7 +108,7 @@ class BacklogBoundsTest {
   /** A row is a summary, and the boundary is checked from both sides. */
   @Test
   void aRowOverTheLengthCapIsRefusedAndOneUnderItIsNot(@TempDir Path dir) throws Exception {
-    Path d = scratch(dir, "check-backlog-size.sh");
+    Path d = scratch(dir, "check-session-load.sh");
     write(d, "docs/internal/product/backlog-done.md", HDR);
     write(d, "docs/internal/product/backlog.md",
         HDR + "| M9.1 | " + "e".repeat(900) + " | — | todo |\n");
@@ -130,7 +130,7 @@ class BacklogBoundsTest {
    */
   @Test
   void aPreambleOverTheCapIsRefusedAndAShortOneIsNot(@TempDir Path dir) throws Exception {
-    Path d = scratch(dir, "check-backlog-size.sh");
+    Path d = scratch(dir, "check-session-load.sh");
     write(d, "docs/internal/product/backlog-done.md", HDR);
     write(d, "docs/internal/product/backlog.md",
         "# Backlog\n\n" + "narrative. ".repeat(900) + "\n\n" + HDR + "| M9.1 | s | — | todo |\n");

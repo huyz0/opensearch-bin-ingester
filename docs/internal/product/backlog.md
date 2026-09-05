@@ -5,7 +5,7 @@ reasoning behind a long one is under its ID in
 [backlog-notes.md](backlog-notes.md), opened for the task a session picks
 rather than for all of them. Completed rows move to
 [backlog-done.md](backlog-done.md), which nothing loads.
-`scripts/check-backlog-size.sh` enforces all three.
+`scripts/check-session-load.sh` enforces all three.
 
 IDs are stable and never reused. `scripts/check-commit-msg.sh` requires a
 commit subject to start with an ID present here or in the archive.
@@ -34,6 +34,7 @@ commit subject to start with an ID present here or in the archive.
 | M0.65 | `CommitLog` holds TWO states for one fact: `commit`'s lost-race branch throws without setting `sealedAt`, so a writer fenced that way re-races the seal on every flush forever -- two wasted requests per segment flush, indefinitely -- while a writer that learned it from `recover` refuses locally at no cost. Setting the field there makes the class hold one state and the second attempt free. [notes](backlog-notes.md#m065) | FR-11 | todo |
 | M0.66 | ⚠️ `check-reviewed`'s ROUND CAP IS ABSORBING AND ITS DOCUMENTED ESCAPES DO NOT WORK, so a task that exceeds it cannot be committed at all. Three defects, each verified in source rather than inferred, found when M4.6a hit the cap with BOTH roles passing. [notes](backlog-notes.md#m066) | — | **todo, NARROWED TO ITEM (3) — M4.21 landed (1) and (2)** ⚠️ ... |
 | M0.67 | A FIXTURE CONVENTION for the seal tests, because three rounds of M4.6c produced three one-token fixes to the same shape and the tree is saying the FIXTURES are the source, not the assertions. [notes](backlog-notes.md#m067) | — | todo |
+| M0.71 | BOUND WHAT EVERY SESSION LOADS, and derive the set from CLAUDE.md's imports rather than listing it. 26,856 -> 16,678 bytes; AGENTS.md says of itself that it is "deliberately an index", which was prose in the file nobody gates. [notes](backlog-notes.md#m071) | — | todo |
 | M0.70 | SPLIT THE BACKLOG AND GATE ITS SIZE. It is read whole at every session start and grew 18,638 -> 315,383 bytes in five days, monotonically; its own first line said "current milestone only", which is prose in the file nobody gates. [notes](backlog-notes.md#m070) | — | todo |
 | M0.69 | BOUND THE REVIEW PACKET, which is what a round costs to read. ⚠️ MEASURED on the staged M4.7 diff: ~140 KB per packet, built TWICE a round (both roles) across 2.6 rounds average -- 477 verdicts over 92 tasks. [notes](backlog-notes.md#m069) | — | todo |
 | M0.14 | `scripts/check-mutants.sh` — PIT, 80% killed on the staged diff, `baselines/mutants.txt` | — | todo |
