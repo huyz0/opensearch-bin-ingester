@@ -1,0 +1,56 @@
+# Surviving mutants, argued rather than killed.
+#
+# testing.md rule 9: 80% killed on changed code, and a survivor is killed OR
+# argued here. An unstaged survivor is not argued -- it is just a survivor.
+#
+# ⚠️ A WRONG EQUIVALENCE ARGUMENT IS WORSE THAN AN UNARGUED SURVIVOR, and the
+# first draft of this file carried two. It argued the `streamCount < 0` and
+# `podLen < 0` halves as equivalent-on-the-observable; review measured both
+# flipping REFUSE into ACCEPT -- a 20-byte object decoding to a checkpoint with
+# no streams, and a podId length narrowing to 1 and taking a byte of the next
+# field. It also claimed a test killed the `podCount < 0` half when that test's
+# splice left trailing bytes, so the trailing-bytes check fired either way and a
+# bare `isInstanceOf(IOException)` could not tell them apart. All four `< 0`
+# halves are now KILLED and none belongs in this file. Three are killed by
+# objects built by hand to END exactly after the field under test, so without
+# the guard the object DECODES rather than being refused differently -- the kill
+# does not depend on message wording. The partitionId half is killed by a splice
+# that replaces one byte with ten, which also leaves the object ending at its
+# last field.
+#
+# One entry per GUARD; two entries cover two mutant forms each, so four entries
+# carry six mutants.
+
+Checkpoint.java: the `streamCount` bound's `> c.remaining() / 18` divisor removed, or halved to /9
+  EQUIVALENT ON THE OBSERVABLE. The bound exists so a count cannot be trusted as an allocation size --
+  the OutOfMemoryError M4.7a measured in a delta -- and `decode` presizes neither map: both are
+  default-capacity `LinkedHashMap`s, unlike `CommitDelta`'s `new ArrayList<>((int) count)`. So the guard
+  fronts a loop that fails on its first short read regardless, and every divisor from 1 to 18 refuses the
+  same objects; only the message differs. ⚠️ THIS IS THE `> limit` HALF ONLY. The `< 0` half of the same
+  bound is NOT equivalent and is killed by test.
+
+Checkpoint.java: the `podCount` bound's `> c.remaining()` doubled to `> 2 * c.remaining()`
+  EQUIVALENT ON THE OBSERVABLE. Every pod iteration consumes at least one byte through `Cursor`, so an
+  over-large count terminates in `IOException` with or without the bound; what changes is whether the
+  operator reads "claims N pods but only M bytes remain" or a failure further in. ⚠️ AGAIN THE `> limit`
+  HALF ONLY.
+
+Checkpoint.java: the `podLen` bound's `> c.remaining()` widened to `> Integer.MAX_VALUE`
+  EQUIVALENT ON THE OBSERVABLE. `Cursor.bytes` bounds the read against the buffer, so an over-long length
+  fails there rather than here; the guard turns "ran off the end" into a message naming the length that
+  caused it. ⚠️ AGAIN THE `> limit` HALF ONLY.
+
+Checkpoint.java: either `Objects.requireNonNull` on the two map parameters deleted
+  EQUIVALENT ON THE OBSERVABLE, though not merely in the message: measured, `new Checkpoint(1, null,
+  Map.of())` raises NullPointerException either way, but `new Checkpoint(-1, null, Map.of())` raises
+  IllegalArgumentException about the sequence once the parameter check is gone, because the deleted check
+  ran first. So the exception TYPE can change. Nothing is ACCEPTED in either world and no caller can
+  branch on which unchecked throw arrives, which is why this is argued rather than killed. ⚠️ THIS IS THE PARAMETER
+  check only -- the per-ENTRY null checks inside the copied maps are NOT equivalent and are killed by test.
+
+# ⚠️ NO SCORE IS QUOTED HERE ON PURPOSE. Two have been measured by review:
+# 73.7% (28/38), then 78.9% (30/38) after the round-3 tests. Neither includes
+# the crafted-object tests that kill all four `< 0` halves, and deriving the new
+# figure by arithmetic is exactly the error that put two false arguments in this
+# file's first draft. `scripts/check-mutants.sh` does not exist, so the only
+# honest source is a review that re-runs the matrix.
