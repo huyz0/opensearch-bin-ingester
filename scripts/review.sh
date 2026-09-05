@@ -18,13 +18,26 @@ while [ $# -gt 0 ]; do
   esac
 done
 DIFF_SHA=$(git diff --cached | sha256sum | cut -d' ' -f1)
+# ⚠️ The staged TREE, not just its diff hash. A verify round is supposed to be
+# shown only what changed since the last reviewed round, and a hash cannot
+# reconstruct a tree -- so the tree object is recorded with the verdict and the
+# next round diffs against it. `write-tree` writes objects git already holds for
+# every staged blob, so this costs nothing and changes no ref.
+STAGED_TREE=$(git write-tree 2>/dev/null || true)
 OUT=".harness/review"; mkdir -p "$OUT"
 
 case "$CMD" in
   context)
     [ -n "$TASK" ] || { echo "--task required" >&2; exit 2; }
     echo "=== TASK $TASK ==="
-    grep -F "$TASK" docs/internal/product/backlog.md 2>/dev/null || echo "(not found in backlog)"
+    # ⚠️ ANCHORED TO THE ID COLUMN. `grep -F "$TASK"` substring-matched, so the
+    # packet for M4.7 carried M4.7a and M4.7b too -- 11,620 bytes for a row of
+    # about 1,000, and three sets of acceptance criteria with nothing saying
+    # which one binds the diff. The dots are escaped because M4.7 must not match
+    # M4x7.
+    TASK_RE=$(printf '%s' "$TASK" | sed 's/\./\\./g')
+    grep -E "^\| *${TASK_RE} *\|" docs/internal/product/backlog.md 2>/dev/null \
+      || echo "(no row whose ID column is exactly $TASK)"
     echo
     echo "=== STANDARDS THE REVIEWER MUST READ (selected from paths, not by the author) ==="
     ./scripts/which-standards.sh
@@ -37,44 +50,42 @@ case "$CMD" in
     # rsync'ing scratch copies into their own scratchpads, differently each
     # time, and two of them doing that in ONE tree is how M4.3's evidence got
     # corrupted. Printed for both roles because the packet serves both.
+    # ⚠️ WHAT IS PRINTED HERE IS THE INSTRUCTION; WHY IT EXISTS IS A COMMENT.
+    # The packet is read by an agent, twice a round, and every byte of it is
+    # paid for at that rate -- so the reasoning that makes a rule credible to a
+    # maintainer lives where maintainers read, and only the part that changes
+    # what the reviewer DOES is echoed. Measured: this block alone was ~4 KB of
+    # war story per packet.
+    #
+    #   * The tree is issued rather than improvised because reviewers were
+    #     rsync'ing scratch copies differently each time, and two of them doing
+    #     that in ONE tree is how M4.3's evidence got corrupted.
+    #   * It is a copy of the INDEX, not of HEAD and not of the worktree, so it
+    #     holds exactly the bytes the verdict is bound to. Its own build/ --
+    #     sharing one overwrites the test-results XML every pass/fail count reads.
+    #   * GIT_INDEX_FILE is INHERITED, and harness tests shell out to git inside
+    #     their own temp repositories, so a suite run that inherits it writes
+    #     THEIR fixture paths into YOUR index. Measured twice: a private index
+    #     went from hundreds of entries to a handful with the suite reporting
+    #     BUILD SUCCESSFUL.
+    #   * The tree IS a git repository, with an EMPTY base commit and every file
+    #     STAGED on top of it, because every per-file gate resolves its input
+    #     through git and gates default to delta mode -- committing it would
+    #     leave `git diff --cached` empty and every gate would go green having
+    #     examined nothing.
     echo "=== YOUR OWN TREE TO MUTATE IN (do not mutate the repository) ==="
-    echo "The two reviewers run CONCURRENTLY and both verify by mutating."
-    echo "Materialise your own copy of the STAGED bytes, and do every"
-    echo "mutation, build and test run inside it:"
+    echo "Both reviewers run CONCURRENTLY and both verify by mutating. Take your"
+    echo "own copy of the STAGED bytes and do every mutation, build and test in it:"
     echo
     echo "    TREE=\$(./scripts/review-tree.sh <your-role>) && cd \"\$TREE\""
-    echo
-    echo "It is a copy of the INDEX, not of HEAD and not of the worktree, so"
-    echo "it holds exactly the bytes this verdict is bound to. It has its own"
-    echo "build/ -- sharing one would overwrite the test-results XML every"
-    echo "pass/fail count reads."
-    echo
-    echo "⚠️ RUN THE BUILD WITH THE INDEX UNSET, ALWAYS:"
-    echo
     echo "    env -u GIT_INDEX_FILE ./gradlew -p buildSrc test"
     echo
-    echo "GIT_INDEX_FILE is INHERITED, and harness tests shell out to git"
-    echo "inside their own temp repositories -- so a suite run that inherits"
-    echo "it writes THEIR fixture paths into YOUR index. Measured twice on"
-    echo "this very task: a private index went from hundreds of entries to a"
-    echo "handful, with the suite reporting BUILD SUCCESSFUL, and the"
-    echo "reviewed bytes were only recoverable because a tree had been"
-    echo "materialised beforehand."
-    echo
-    echo "⚠️ The tree IS a git repository, because every per-file gate resolves"
-    echo "its input through git and would otherwise pass having examined"
-    echo "nothing. Its shape matters to you: an EMPTY base commit, and every"
-    echo "file STAGED on top of it. Gates default to delta mode, whose input is"
-    echo "\`git diff --cached\`, so staging is what makes them see the tree;"
-    echo "committing it would leave that delta empty and every gate would go"
-    echo "green having examined nothing."
-    echo
-    echo "⚠️ SO RESTORE A FILE WITH \`git checkout -- <path>\`, never with"
-    echo "\`git checkout HEAD -- <path>\` (HEAD is the EMPTY commit and knows no"
-    echo "paths), and NEVER with \`git reset --hard\`, which resolves to that"
-    echo "empty commit and would delete every file in your tree mid-review."
-    echo "It carries no HISTORY and no remote. Record your verdict, and read"
-    echo "\`.harness/\`, back in the REPOSITORY."
+    echo "⚠️ ALWAYS unset GIT_INDEX_FILE for the build: it is inherited, and a"
+    echo "   suite run that inherits it rewrites the index you are reviewing."
+    echo "⚠️ Restore a file with \`git checkout -- <path>\`. NEVER"
+    echo "   \`git checkout HEAD -- <path>\` (HEAD is an EMPTY commit) and NEVER"
+    echo "   \`git reset --hard\`, which would delete every file in your tree."
+    echo "⚠️ Record your verdict, and read \`.harness/\`, back in the REPOSITORY."
     echo
     echo "=== ROUNDS AND WHAT ACTUALLY BLOCKS ==="
     # ⚠️ PRINTED, not left to memory. Rule 11 -- a `minor` on a `pass` lands --
@@ -115,19 +126,18 @@ case "$CMD" in
       exit 1
     fi
     echo "This is round $ROUND of 2 for $TASK."
-    echo "review.md rule 12: round one finds, round two verifies. A blocking"
-    echo "finding in round two means the commit is TOO BIG -- it is split, not"
-    echo "reviewed a third time."
     echo
-    echo "⚠️ ONLY 'blocking' and 'major' block a commit (check-reviewed.sh)."
-    echo "A 'pass' carrying 'minor' findings LANDS: they are recorded in the"
-    echo "commit body or become a backlog row. Rule 11 -- fixing a minor is"
-    echo "'permitted and usually wrong, because the new round's surface is the"
-    echo "prose the fix just added'. Measured here: one task reached ELEVEN"
-    echo "rounds that way, rounds 9-11 fixing minors that never blocked."
+    echo "Round one FINDS, round two VERIFIES. A blocking finding in round two"
+    echo "means the commit is TOO BIG -- it is split, not reviewed a third time."
     echo
-    echo "So: report severity honestly, and do not hunt for minors to justify"
-    echo "the round. An empty findings list is a valid and expected outcome."
+    echo "⚠️ ONLY 'blocking' and 'major' block a commit. A 'pass' carrying"
+    echo "'minor' findings LANDS -- minors go in the commit body or become a"
+    echo "backlog row. Fixing a minor is permitted and USUALLY WRONG: the next"
+    echo "round's surface is the prose the fix just added. One task reached"
+    echo "ELEVEN rounds that way, rounds 9-11 fixing minors that never blocked."
+    echo
+    echo "So report severity honestly, and do not hunt for minors to justify the"
+    echo "round. An empty findings list is a valid and expected outcome."
     echo
     # ⚠️ A verify round gets the DELTA, not the whole diff again. Returns
     # non-zero on round one, when there is no prior round to delta against.
@@ -140,30 +150,45 @@ case "$CMD" in
     # this heading without invoking anything -- which is precisely the claim
     # non-negotiable 4 exists to forbid, made by the script that serves the
     # reviewer.
+    # ⚠️ CACHED BY THE STAGED HASH, which makes it a cache and not a skip: a
+    # gate's answer is a function of the bytes it judged, and BOTH roles build a
+    # packet for the SAME hash. Every round therefore paid for two identical
+    # runs of the whole suite, one of them carrying Gradle through
+    # check-module.sh. Only a PASS is cached -- a failure exits below, and the
+    # fix that follows changes the hash anyway.
+    GATE_CACHE="$OUT/$DIFF_SHA.gates"
     echo "=== GATES THAT ALREADY PASSED (do not re-check these) ==="
-    gate_failed=0
-    for g in $(grep -oE 'scripts/check-[a-z-]+\.sh' .pre-commit-config.yaml | sort -u) \
-             "scripts/build-index.sh --check"; do
-      case "$g" in
-        */check-commit-msg.sh|*/check-test-integrity.sh) continue ;;  # need the message file
-        # check-reviewed is the gate this packet exists to satisfy. Running it
-        # here would fail by construction, every time.
-        */check-reviewed.sh) continue ;;
-      esac
-      if out=$(eval "$g" 2>&1); then
-        echo "  PASSED  $(basename "$g")"
-      else
-        echo "  FAILED  $(basename "$g")"
-        echo "$out" | sed 's/^/          /'
-        gate_failed=1
+    if [ -s "$GATE_CACHE" ]; then
+      cat "$GATE_CACHE"
+      echo "  (cached: run once against these exact staged bytes, sha $DIFF_SHA)"
+    else
+      gate_failed=0
+      gate_lines=""
+      for g in $(grep -oE 'scripts/check-[a-z-]+\.sh' .pre-commit-config.yaml | sort -u) \
+               "scripts/build-index.sh --check"; do
+        case "$g" in
+          */check-commit-msg.sh|*/check-test-integrity.sh) continue ;;  # need the message file
+          # check-reviewed is the gate this packet exists to satisfy. Running it
+          # here would fail by construction, every time.
+          */check-reviewed.sh) continue ;;
+        esac
+        if out=$(eval "$g" 2>&1); then
+          gate_lines="$gate_lines  PASSED  $(basename "$g")"$'\n'
+        else
+          echo "  FAILED  $(basename "$g")"
+          echo "$out" | sed 's/^/          /'
+          gate_failed=1
+        fi
+      done
+      if [ "$gate_failed" -ne 0 ]; then
+        echo
+        echo "!!! A deterministic gate is failing. Fix it before spending a review:"
+        echo "!!! the reviewer's attention is the scarce thing, and a script already"
+        echo "!!! knows the answer to whatever it would find."
+        exit 1
       fi
-    done
-    if [ "$gate_failed" -ne 0 ]; then
-      echo
-      echo "!!! A deterministic gate is failing. Fix it before spending a review:"
-      echo "!!! the reviewer's attention is the scarce thing, and a script already"
-      echo "!!! knows the answer to whatever it would find."
-      exit 1
+      printf '%s' "$gate_lines" > "$GATE_CACHE"
+      printf '%s' "$gate_lines"
     fi
     echo
     # Deletions and renames first, because they are what a mis-staged index looks
@@ -179,16 +204,41 @@ case "$CMD" in
       git diff --cached --name-status | grep '^D' | head -20 | sed 's/^/      /'
     fi
     echo
-    echo "=== STAGED DIFF (sha256 $DIFF_SHA) ==="
-    git diff --cached
+    # ⚠️ A VERIFY ROUND GETS THE DELTA. review_delta.py has promised this in its
+    # own docstring since it was written -- "the delta since the last reviewed
+    # hash" -- while this script printed `git diff --cached` in full anyway, under
+    # a heading that said FILES TOUCHED SINCE THE LAST REVIEWED ROUND above a
+    # command that lists every staged file. Round two of M0.31 re-read ~200 lines
+    # to confirm three fixes; round five re-read them again.
+    #
+    # ⚠️ AND THE WHOLE DIFF IS STILL NAMED, because this is a REDUCTION in what a
+    # reviewer sees. Less review is never the failure-safe default: with no prior
+    # tree recorded, or on round one, the whole diff is what is printed.
+    PRIOR_TREE=""
+    if [ -n "$STAGED_TREE" ]; then
+      PRIOR_TREE=$(python3 scripts/review_delta.py --prior-tree "$TASK" "$DIFF_SHA" 2>/dev/null || true)
+    fi
+    if [ -n "$PRIOR_TREE" ]; then
+      echo "=== WHAT CHANGED SINCE THE LAST REVIEWED ROUND (staged sha256 $DIFF_SHA) ==="
+      git diff "$PRIOR_TREE" "$STAGED_TREE"
+      echo
+      echo "=== THE WHOLE DIFF IS STILL AVAILABLE ==="
+      echo "Everything above is what changed since the round that already carries"
+      echo "a verdict. When the delta does not stand on its own, read all of it:"
+      echo
+      echo "    git diff --cached"
+    else
+      echo "=== STAGED DIFF (sha256 $DIFF_SHA) ==="
+      git diff --cached
+    fi
     ;;
   record)
     [ -n "$FILE" ] && [ -f "$FILE" ] || { echo "--file <verdict.json> required" >&2; exit 2; }
     case "$ROLE" in reviewer|test-reviewer) ;; *) echo "--role reviewer|test-reviewer required" >&2; exit 2 ;; esac
     command -v python3 >/dev/null || { echo "python3 required" >&2; exit 2; }
-    python3 - "$FILE" "$DIFF_SHA" "$TASK" "$OUT" "$ROLE" <<'PY'
+    python3 - "$FILE" "$DIFF_SHA" "$TASK" "$OUT" "$ROLE" "$STAGED_TREE" <<'PY'
 import json, sys, os
-path, sha, task, out, role = sys.argv[1:6]
+path, sha, task, out, role, tree = sys.argv[1:7]
 v = json.load(open(path))
 errs = []
 if v.get('diff_sha256') != sha:
@@ -215,6 +265,12 @@ if errs:
         print('  \033[31mFAIL\033[0m ' + e)
     sys.exit(1)
 v['task'] = task; v['role'] = role
+# ⚠️ The tree the verdict is bound to, so the NEXT round can be shown only what
+# changed since this one. Absent (empty) rather than guessed when git could not
+# write one -- review_delta.py then reports no prior tree and the caller falls
+# back to the whole diff.
+if tree:
+    v['staged_tree'] = tree
 json.dump(v, open(os.path.join(out, '%s.%s.json' % (sha, role)), 'w'), indent=2)
 print('  \033[32mok\033[0m   %s verdict recorded for %s (%s)' % (role, sha[:12], v['verdict']))
 PY

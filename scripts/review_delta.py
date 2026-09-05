@@ -50,9 +50,45 @@ def open_findings(task, current_sha, review_dir='.harness/review'):
     return found
 
 
+def prior_tree(task, current_sha, review_dir='.harness/review'):
+    """The staged git TREE the last reviewed round was bound to, or None.
+
+    ⚠️ MTIME, not filename. `prior_rounds` sorts by path, which is hash order and
+    therefore arbitrary -- fine for gathering open findings, wrong for "the last
+    round", because the tree of an OLDER round would then decide what a verify
+    round is shown.
+
+    ⚠️ Returns None rather than guessing when no round recorded a tree. The
+    caller falls back to the whole diff: less review is never the failure-safe
+    default.
+    """
+    import os
+    best = None
+    for f, d in prior_rounds(task, current_sha, review_dir):
+        if not d.get('staged_tree'):
+            continue
+        try:
+            mtime = os.path.getmtime(f)
+        except OSError:
+            continue
+        if best is None or mtime > best[0]:
+            best = (mtime, d['staged_tree'])
+    return best[1] if best else None
+
+
 def main():
-    task, sha = sys.argv[1], sys.argv[2]
-    review_dir = sys.argv[3] if len(sys.argv) > 3 else '.harness/review'
+    argv = sys.argv[1:]
+    want_tree = '--prior-tree' in argv
+    if want_tree:
+        argv.remove('--prior-tree')
+    task, sha = argv[0], argv[1]
+    review_dir = argv[2] if len(argv) > 2 else '.harness/review'
+    if want_tree:
+        t = prior_tree(task, sha, review_dir)
+        if not t:
+            return 1
+        print(t)
+        return 0
     prior = prior_rounds(task, sha, review_dir)
     if not prior:
         return 1  # round one: caller shows the full diff
