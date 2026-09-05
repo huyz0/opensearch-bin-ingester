@@ -355,6 +355,50 @@ class UnparseableJava(Exception):
     """The parser does not trust its own answer for this file."""
 
 
+def package_of(src):
+    """The source's package, or '' when it declares none.
+
+    ⚠️ NORMALISED FIRST, so this agrees with the package the ids were built
+    from by construction. `_scan` searches `normalise(src)`; searching the raw
+    text instead disagreed on two constructible inputs -- a block comment whose
+    line begins `package x;`, and a package-less file with a text-block line
+    that looks like one -- and `rekey` then produced
+    `binjava.sequencer.binjava.ingest.FooTest#m`.
+    """
+    m = PKG.search(normalise(src))
+    return m.group(1) if m else ''
+
+
+def rekey(ident, from_pkg, to_pkg):
+    """The same test id, re-qualified from one package into another (M0.53).
+
+    ⚠️ MODULE MOVES CHANGE EVERY ID, because module and top-level package are
+    the same thing in this repository -- so following a rename to the SOURCE
+    blob is not enough on its own: the before-ids would all differ from the
+    after-ids and every method would read as REMOVED. That is a false
+    accusation, and its documented workaround is worse than the defect: the
+    `Test-removed:` trailer is matched over the WHOLE commit body, so silencing
+    the phantom removals silences any genuine one in the same commit too.
+
+    ⚠️ A PREFIX SWAP, not a split on the last dot: ids nest with `$`
+    (`pkg.Outer$Inner#method`), and only the package part may move.
+    """
+    if from_pkg == to_pkg:
+        return ident
+    # ⚠️ THE `startswith` GUARD IS UNFALSIFIABLE BY FIXTURE, and that is
+    # recorded rather than hidden: replacing it with a bare `if from_pkg:`
+    # breaks no test. ⚠️ AND NOT FOR THE REASON A DRAFT OF THIS COMMENT GAVE,
+    # which said ids come from `PKG.search(normalise(src))` while `from_pkg`
+    # comes from the raw source -- both call sites pass `package_of`, added in
+    # this same commit, which normalises first and says so. So `from_pkg` IS the
+    # package the ids were built from, the prefix always matches, and the two
+    # arms cannot differ. Kept because a prefix swap that does not check the
+    # prefix is wrong on its face.
+    if from_pkg and ident.startswith(from_pkg + '.'):
+        ident = ident[len(from_pkg) + 1:]
+    return to_pkg + '.' + ident if to_pkg else ident
+
+
 def scan_checked(src, path='<source>'):
     """`scan`, with its result cross-checked against independent signals.
 

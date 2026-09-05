@@ -160,7 +160,10 @@ class RedRecordWiringTest {
     Path scripts = tmp.resolve("scripts");
     Files.createDirectories(scripts);
     Path real = Path.of("..").toAbsolutePath().normalize().resolve("scripts");
-    for (String f : List.of("tdd_scan.py", "java_tests.py")) {
+    // ⚠️ `git_renames.py` travels with the scanner for the same reason
+    // `java_tests.py` does: `tdd_scan` imports it (M0.53), so a fixture
+    // without it fails on an ImportError rather than on its subject.
+    for (String f : List.of("tdd_scan.py", "java_tests.py", "git_renames.py")) {
       Files.copy(real.resolve(f), scripts.resolve(f));
     }
   }

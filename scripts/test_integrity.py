@@ -17,7 +17,8 @@ non-negotiable 5 buys a second pair of eyes rather than a third script.
 """
 import os, re, subprocess, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from java_tests import scan_checked, UnparseableJava   # one parser, shared with check-tdd
+from java_tests import scan_checked, UnparseableJava, package_of, rekey   # one parser, shared with check-tdd
+from git_renames import rename_map                     # one rename map, shared with check-tdd
 
 RED, GREEN, YEL = '\033[31m', '\033[32m', '\033[33m'
 OFF = '\033[0m'
@@ -74,22 +75,79 @@ def main(msg_file, base):
         names = git('diff', '--cached', '--name-only') or ''
         after_ref, before_ref = ':', 'HEAD:'
     paths = names.split()
+    # ⚠️ M0.53. `--name-only` gives only a rename's DESTINATION, whose blob
+    # does not exist at `before_ref` -- so without this the loop below took
+    # its "new test file" branch and a moved-and-gutted test walked past
+    # this gate with exit 0.
+    renamed = rename_map(base)
+    # ⚠️ `--name-only` obeys `diff.renames`; the map forces `-M`. With
+    # renames off the source is listed too, and without this it reports every
+    # moved method twice -- once against the destination, once as a deletion
+    # of the source.
+    # ⚠️ ONE PREDICATE, THE LOOP'S OWN, asked of both ends of every rename. An
+    # earlier draft of this block asked THREE subtly different questions -- a
+    # bare path-regex test here, another there, and the extension checked only
+    # down in the loop -- and the gap between them was a WEAKENING relative to
+    # HEAD, not merely an uncovered case: `git mv FooTest.java FooTest.java.bak`
+    # (equally, the in-place `.java` -> `.kt` conversion) has a destination that
+    # still matches TEST_PATH, so the source was dropped as redundant while the
+    # destination was never read. Measured with `diff.renames` off, alongside a
+    # production change: HEAD refused it, exit 1, naming both methods; the
+    # three-predicate draft printed `ok`, exit 0.
+    reads = lambda q: q.endswith('.java') and TEST_PATH.search(q)
+    # A source is redundant ONLY where the destination is read in its place.
+    # This half fires only with `diff.renames` configured OFF -- under git's
+    # DEFAULT the source is not in `paths` at all, so there is nothing to drop.
+    sources = {src for dest, src in renamed.items() if reads(src) and reads(dest)}
+    paths = [q for q in paths if q not in sources]
+    # ⚠️ AND THE CONVERSE, which is the shape that actually hides a gutting and
+    # which the dropping half above CANNOT reach. A test whose destination this
+    # loop never reads has left the tier, and under the default config
+    # `--name-only` emits only that destination -- so the departure was
+    # invisible: measured, `FooTest.java` moved from `src/test/java` to
+    # `src/testFixtures/java` with `isEqualTo(3)` gutted to `isNotNull()`
+    # alongside a production change scored R092 and this gate printed `ok no
+    # test weakened, disabled or removed`, exit 0. Taking the source back makes
+    # it read as the removal it is: `before` is its old content, `after` is
+    # absent, and `origin == p` so no re-qualification runs.
+    departed = sorted({src for dest, src in renamed.items()
+                       if reads(src) and not reads(dest)})
+    paths = [q for q in paths if q not in departed] + departed
 
-    if not any(p.endswith('.java') and MAIN_PATH.search(p) for p in paths):
+    # ⚠️ A FILE THAT LEFT `src/main` IS STILL A PRODUCTION CHANGE, and under the
+    # default config its only listed path is the DESTINATION -- so moving
+    # `Foo.java` into a test source set left no `/src/main/java/` path at all
+    # and this short-circuit skipped the ENTIRE gate, gutting and all. Measured:
+    # `Foo.java` main -> test with `isEqualTo(3)` -> `isNotNull()` in a
+    # different, untouched-by-rename test printed `ok`, exit 0.
+    touched = list(paths) + [src for src in renamed.values() if MAIN_PATH.search(src)]
+    if not any(p.endswith('.java') and MAIN_PATH.search(p) for p in touched):
         print('  %sok%s   no production change in this commit' % (GREEN, OFF))
         return 0
 
     weakened, removed, disabled = [], [], []
     for p in paths:
-        if not (p.endswith('.java') and TEST_PATH.search(p)):
+        # ⚠️ `reads`, NOT A SECOND COPY OF IT. This line was the last place in
+        # either scanner where the two ends of a rename could be asked different
+        # questions -- which is exactly the shape of the two weakenings measured
+        # on this task -- and a spelled-out copy here would go stale the moment
+        # `reads` gains a tier or drops the `.java` clause.
+        if not reads(p):
             continue
-        before = git('show', before_ref + p)
+        origin = renamed.get(p, p)
+        before = git('show', before_ref + origin)
         if before is None:
             continue                       # new test file: nothing to weaken
         after = git('show', after_ref + p)
         try:
             b = test_methods(before, p)
             a = test_methods(after, p) if after is not None else {}
+            if origin != p:
+                # ⚠️ A move across modules changes the package, and so every
+                # id. Re-qualify the before-ids into the destination's package
+                # or a pure move reads as a wholesale removal.
+                b = {rekey(k, package_of(before), package_of(after or '')): v
+                     for k, v in b.items()}
         except UnparseableJava as e:
             print('  %sFAIL%s %s' % (RED, OFF, e))
             print('         Refusing to certify a file the parser cannot read.')

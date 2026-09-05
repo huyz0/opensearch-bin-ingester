@@ -16,7 +16,8 @@ OFF = '\033[0m'
 
 # JUnit 5 has five test-bearing annotations. The old gate matched the literal
 # string "@Test", so @ParameterizedTest and @RepeatedTest were invisible.
-from java_tests import test_ids, scan_raw_spans, hashable, UnparseableJava  # one parser, shared with check-test-integrity
+from java_tests import test_ids, scan_raw_spans, hashable, UnparseableJava, package_of, rekey  # one parser, shared with check-test-integrity
+from git_renames import rename_map  # one rename map, shared with check-test-integrity
 
 
 def key_parts(src, ident):
@@ -92,15 +93,44 @@ def check(base):
         names = git('diff', '--cached', '--name-only') or ''
         after_ref, before_ref = ':', 'HEAD:'
 
-    paths = [p for p in names.split() if p.endswith('.java') and TEST_PATH.search(p)]
+    # ⚠️ ONE PREDICATE, asked of every path AND of every rename source below.
+    reads = lambda q: q.endswith('.java') and TEST_PATH.search(q)
+    paths = [p for p in names.split() if reads(p)]
+    # ⚠️ M0.53. Without the rename map a MOVED test reads as new, because
+    # `<before_ref>:<destination>` is absent -- so a file moved between source
+    # sets demanded a fresh red record for every test in it.
+    renamed = rename_map(base)
+    # ⚠️ NO `sources` FILTER HERE, and the asymmetry with `test_integrity` is
+    # deliberate rather than an omission: when `diff.renames` is off and the
+    # source is listed too, the loop below already drops it, because a rename's
+    # source does not exist at `after_ref` and `after is None` continues.
+    # `test_integrity` has no such early return, so it needs the filter and
+    # this does not. Round-2 review measured the copy here as unfalsifiable.
     new_ids, blob_sha = set(), {}
     for p in paths:
         after = git('show', after_ref + p)
         if after is None:
             continue                                   # deleted
-        before = git('show', before_ref + p) or ''     # absent => new file
+        # ⚠️ ONLY A SOURCE THIS GATE WOULD ITSELF HAVE SCANNED may supply the
+        # `before`. Following a rename from anywhere subtracts that file's ids
+        # from `fresh`, so an unguarded `origin` is a two-commit, green-tree
+        # bypass of non-negotiable 3: add `docs/drafts/FooTest.java`, which no
+        # gate reads, then `git mv` it into the test tier. Measured against
+        # HEAD, which refuses it -- so the guard is what keeps this change from
+        # being WEAKER than the gate it fixes. `integrationTest -> test` still
+        # follows, because that source IS one this gate scans.
+        origin = renamed.get(p, p)
+        if not reads(origin):
+            origin = p
+        before = git('show', before_ref + origin) or ''   # absent => new file
         try:
-            fresh = test_ids(after, p) - test_ids(before, p)
+            was = test_ids(before, p)
+            if origin != p:
+                # ⚠️ A module move changes the package, so the before-ids must
+                # be re-qualified or every moved test reads as new and is told
+                # to earn a red record it already has.
+                was = {rekey(i, package_of(before), package_of(after)) for i in was}
+            fresh = test_ids(after, p) - was
         except UnparseableJava as e:
             print('  %sFAIL%s %s' % (RED, OFF, e))
             print('         Refusing to certify a file the parser cannot read.')
