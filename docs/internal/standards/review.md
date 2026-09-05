@@ -152,3 +152,51 @@
     actually worked. M0.21 owns the real fix.
 13. **Minors are harvested at the milestone boundary**, not left in commit
     bodies nobody greps.
+14. **A change confined to the harness machinery needs NO reviewer verdict.**
+    → `check-reviewed.sh`, `HarnessExemptionTest`
+    ⚠️ **This LOOSENS the gate, deliberately, and the owner decided it after the
+    cost was measured.** Reviewing the harness with the harness compounds: a
+    verdict is bound to the exact staged bytes, so *any* edit voids it and every
+    correction costs two more agent runs. Two harness tasks in one session took
+    **ten** and **five** rounds. On the ten-round one, rounds 7–10 found nothing
+    in the code at all — every finding was a false sentence in the backlog prose
+    *describing the review*, which the author then corrected, which voided the
+    verdicts, which bought another round. The author was generating the defect
+    surface the next round consumed.
+    ⚠️ **What replaces the reviewer is not nothing.** `check-tdd` still demands a
+    red record for every new test, `check-test-integrity` still refuses a
+    weakened assertion, and the suite must be green. For gate code these are the
+    *stronger* signal anyway: a gate is verified by mutating it and watching a
+    test fail, which is what the reviewers were doing by hand.
+    ⚠️ **What it costs, stated rather than hidden.** The reviews on harness code
+    are what caught two changes in one session that left a gate WEAKER than
+    before it was touched — a `git mv` that walked past `check-test-integrity`,
+    and a rename-following rule that opened a two-commit bypass of
+    non-negotiable 3. No test then existing would have caught either. The bet is
+    that the tests those rounds produced now do; if a harness weakening ships
+    unnoticed, this rule is the first suspect.
+    ⚠️ **Scope is COMPUTED from the staged paths, never claimed**, and fails
+    closed twice: every path must be inside the allowlist, AND the diff must
+    touch `scripts/` or `buildSrc/`. One product file, one build file, and the
+    whole diff takes the ordinary path — so the exemption cannot be bought by
+    bundling. A docs-only commit is NOT exempt; it is already reduced to one role
+    by `review-roles.sh`, and exempting it would exempt most commits in the
+    project. **Say plainly in the commit body that no reviewer saw the change.**
+15. **One worktree per session.** ⚠️ Rule 12's tail records what sharing one
+    costs and declines to prescribe a remedy, because the draft that did
+    prescribed a private `GIT_INDEX_FILE` — which stops two sessions staging
+    over each other and then **cannot carry the commit**: `pre-commit` clears
+    that variable, so every hook evaluates the SHARED index instead. Measured:
+    the staged diff hashed `927b8a9a…` outside the hook and `63e3cb9d…` inside
+    it, `check-reviewed` refused verdicts it had just been given, and a stale
+    blob the shared index still referenced produced `fatal: unable to read
+    15d0fc41…` four separate times in one session.
+    ⚠️ **The remedy is a separate worktree**, `git worktree add`, or the agent
+    tool's `isolation: "worktree"`. Each session then has its own working tree
+    AND its own index against the same history, so nothing above can happen:
+    no staged-file collisions, no parking another session's files around every
+    commit, no `pre-commit` stashing work that belongs to someone else.
+    → `scripts/session-worktree.sh`
+    ⚠️ **And commit small.** One session in this repository ended with a
+    complete, fourteen-round, fully-reviewed change existing nowhere but its
+    working directory. A worktree isolates; only committing preserves.

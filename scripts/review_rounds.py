@@ -59,11 +59,45 @@ def rounds_for(sha, review_dir='.harness/review'):
     return len(seen), task
 
 
+def rounds_of_task(task, review_dir='.harness/review'):
+    """Rounds recorded for a NAMED task, without needing a hash to resolve it.
+
+    ⚠️ THIS EXISTS BECAUSE THE PACKET SAID "round 1 of 2" ON EVERY ROUND.
+    `rounds_for` resolves the task from a verdict FOR THE HASH IT IS GIVEN, and
+    `review.sh context` runs before any verdict for the new hash exists -- so it
+    resolved nothing, printed 0, and told every reviewer it was round one. The
+    one number that decides whether rule 12 is about to bite was wrong in the
+    document the reviewer reads, on every round, for the life of the gate.
+    Measured: a round-3 packet said `This is round 1 of 2` with six verdicts for
+    that task already on disk, and reviewers therefore never applied rule 12's
+    split remedy -- two tasks reached ten and five rounds that way.
+    ⚠️ The gate is unaffected and stays on `rounds_for`: at COMMIT time the
+    staged hash does carry verdicts, so the task resolves and the count is
+    right. The defect was only ever in the packet.
+    """
+    seen = set()
+    for f in glob.glob('%s/*.json' % review_dir):
+        try:
+            d = json.load(open(f))
+        except (OSError, ValueError):
+            continue
+        if d.get('task') == task and d.get('diff_sha256'):
+            seen.add(d['diff_sha256'])
+    return len(seen)
+
+
 if __name__ == '__main__':
     # ⚠️ `--task` prints the TASK rather than the count, so the gate can key an
     # argued round-cap exception on it. Kept as a flag on the same script because
     # the task is already resolved here, from the verdict files, and a second
     # resolver would be a second thing to drift.
+    # ⚠️ `--for-task <ID>` counts by NAME instead, for callers that know the task
+    # and whose hash is not yet reviewed -- which is every packet.
+    if '--for-task' in sys.argv:
+        i = sys.argv.index('--for-task')
+        rest = sys.argv[i + 2:]
+        print(rounds_of_task(sys.argv[i + 1], rest[0] if rest else '.harness/review'))
+        raise SystemExit(0)
     args = [a for a in sys.argv[1:] if a != '--task']
     n, task = rounds_for(args[0], args[1] if len(args) > 1 else '.harness/review')
     if '--task' in sys.argv:

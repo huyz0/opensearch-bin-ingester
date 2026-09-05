@@ -39,8 +39,38 @@ case "$CMD" in
     # arrives many turns later saying only "minor". A rule an agent has to
     # RECALL at the deciding moment is the weakest rung on non-negotiable 9's
     # ladder; this is the same rule as a line the reader cannot miss.
-    ROUND_N=$(python3 scripts/review_rounds.py "$DIFF_SHA" 2>/dev/null || echo 0)
-    echo "This is round $((ROUND_N + 1)) of 2 for $TASK."
+    # ⚠️ COUNTED BY TASK, NOT BY HASH. The previous form asked
+    # `review_rounds.py "$DIFF_SHA"`, which resolves the task from a verdict FOR
+    # THAT HASH -- and no verdict for it exists yet, because generating this
+    # packet is how one gets made. So it printed 0 and this line said "round 1 of
+    # 2" on EVERY round, for the life of the gate. Measured: a round-3 packet
+    # said round 1 with six verdicts for the task already on disk. The number
+    # that decides whether rule 12 is about to bite was wrong in the one document
+    # the reviewer reads, so no reviewer ever applied the split remedy, and two
+    # tasks in one session reached ten and five rounds.
+    ROUND_N=$(python3 scripts/review_rounds.py --for-task "$TASK" 2>/dev/null || echo 0)
+    ROUND=$((ROUND_N + 1))
+    # ⚠️ A BUDGET THAT INTERRUPTS THE BEHAVIOUR, not just the outcome. The cap
+    # refuses the COMMIT; nothing refused the next ROUND, so an author could
+    # keep spending pairs of agents indefinitely and each round felt justified
+    # because it found something. It always finds something: reviewers verify by
+    # mutation, and the marginal round is never empty. What decays is SEVERITY --
+    # on the ten-round task, rounds 7-10 found only false sentences in the prose
+    # describing the review, each correction voiding the verdicts and buying the
+    # next round. This makes continuing a decision rather than a default.
+    if [ "$ROUND" -gt "${REVIEW_ROUND_BUDGET:-4}" ]; then
+      echo "!!! Round $ROUND for $TASK exceeds the budget of ${REVIEW_ROUND_BUDGET:-4}."
+      echo "!!!"
+      echo "!!! Rule 12's remedy is SPLIT, not another round. If it genuinely"
+      echo "!!! cannot be split, argue the cap with a staged 'rounds:$TASK' line"
+      echo "!!! in baselines/review.txt -- and if the last rounds have been"
+      echo "!!! finding prose rather than defects, the honest move is to DELETE"
+      echo "!!! the prose that keeps being wrong rather than correct it again."
+      echo "!!!"
+      echo "!!! Deliberate override: REVIEW_ROUND_BUDGET=$ROUND $0 context --task $TASK"
+      exit 1
+    fi
+    echo "This is round $ROUND of 2 for $TASK."
     echo "review.md rule 12: round one finds, round two verifies. A blocking"
     echo "finding in round two means the commit is TOO BIG -- it is split, not"
     echo "reviewed a third time."

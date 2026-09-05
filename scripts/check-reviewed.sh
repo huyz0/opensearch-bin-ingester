@@ -11,6 +11,52 @@ else
   git diff --cached --quiet && { ok "nothing staged"; finish; }
   SHA=$(git diff --cached | sha256sum | cut -d' ' -f1)
 fi
+# ⚠️ THE HARNESS REVIEWS ITSELF THROUGH ITS TESTS, NOT THROUGH AGENTS --
+# review.md rule 14. A change confined to the harness machinery does not need a
+# reviewer verdict, and this is a DELIBERATE LOOSENING, decided by the owner
+# after measuring the cost: two harness tasks in one session took ten and five
+# rounds, and reviewing the harness with the harness turns every correction into
+# two more agent runs, because a verdict is bound to the exact staged bytes and
+# any edit voids it. Four rounds on one of them found nothing in the code at all
+# -- only false sentences in the prose describing the review.
+#
+# ⚠️ WHAT REPLACES IT IS NOT NOTHING. `check-tdd` still demands a red record for
+# every new test, `check-test-integrity` still refuses a weakened assertion, and
+# the suite must be green -- and for gate code those are the stronger signal
+# anyway, because a gate is verified by mutating it and watching a test fail.
+# ⚠️ WHAT IT COSTS is real and is stated rather than hidden: the reviews on
+# harness code are what caught two changes in one session that left a gate
+# WEAKER than before it was touched, neither of which any test then existing
+# would have caught. The bet is that the tests those rounds produced now do.
+#
+# ⚠️ COMPUTED FROM THE STAGED PATHS, never claimed by the author -- same
+# discipline as the role deriver below -- and FAIL-CLOSED twice over: one path
+# outside the allowlist and the whole diff needs review, and the diff must also
+# TOUCH the machinery (`scripts/` or `buildSrc/`) rather than merely being
+# confined to docs, so a documentation commit takes the ordinary path.
+if [ -n "${CHECK_RANGE:-}" ]; then
+  CHANGED=$(git diff --name-only "$CHECK_RANGE" HEAD)
+else
+  CHANGED=$(git diff --cached --name-only)
+fi
+HARNESS_ONLY=1
+TOUCHES_MACHINERY=0
+for f in $CHANGED; do
+  case "$f" in
+    scripts/*|buildSrc/*) TOUCHES_MACHINERY=1 ;;
+    .agents/*|.claude/*|docs/*|baselines/*|.pre-commit-config.yaml|AGENTS.md|CLAUDE.md) ;;
+    *) HARNESS_ONLY=0; break ;;
+  esac
+done
+if [ "$HARNESS_ONLY" -eq 1 ] && [ "$TOUCHES_MACHINERY" -eq 1 ]; then
+  warn "HARNESS-ONLY diff -- reviewer verdicts not required (review.md rule 14)"
+  echo "         The tests are the gate here: check-tdd still demands a red"
+  echo "         record for every new test, and the suite must be green."
+  echo "         Say plainly in the commit body that no reviewer saw this."
+  ok "$(printf '%s' "$CHANGED" | grep -c .) harness file(s), review exempt"
+  finish
+fi
+
 # ⚠️ WHICH roles is DERIVED from the staged paths, never declared by the author.
 # This once read `for ROLE in reviewer test-reviewer` unconditionally, so a
 # documentation-only commit summoned a test-reviewer that had no test to
