@@ -2,6 +2,7 @@
 package binjava.ingest;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import binjava.binstore.CountingBinStore;
 import binjava.binstore.backend.MemoryBinStore;
@@ -24,6 +25,70 @@ class SubscriptionHubTest {
 
     private static CommitDelta delta(long seq, RunKey key, int count, long first) {
         return new CommitDelta(seq, "seg-" + seq, List.of(new RunCommit(key, count, first)));
+    }
+
+    @Test
+    void everyRunIsDeliveredUnderITSOWNSegmentNotTheFirstInTheBatch() {
+        // ⚠️ THE SILENT DATA ERROR ADR-0032 EXISTS TO PREVENT. A batched delta
+        // carries every pod's flush in one commit window, so it names many
+        // segments. Deliver a run under the wrong one and the push SUCCEEDS,
+        // the offsets look right, and the consumer fetches another pod's
+        // object -- nothing throws, and no test whose window happened to batch
+        // a single flush would notice.
+        SubscriptionHub hub = new SubscriptionHub();
+        var forA = new CopyOnWriteArrayList<SubscriptionHub.Push>();
+        var forB = new CopyOnWriteArrayList<SubscriptionHub.Push>();
+        CommitDelta batched = new CommitDelta(7, List.of(
+                new binjava.format.SegmentCommit("seg-from-pod-a",
+                        List.of(new RunCommit(new RunKey(A, 0), 3, 10))),
+                new binjava.format.SegmentCommit("seg-from-pod-b",
+                        List.of(new RunCommit(new RunKey(B, 0), 5, 20)))));
+
+        try (var ignoredA = hub.subscribe(new RunKey(A, 0), forA::add);
+                var ignoredB = hub.subscribe(new RunKey(B, 0), forB::add)) {
+            hub.publish(batched);
+        }
+
+        assertThat(forA).singleElement().satisfies(p -> {
+            assertThat(p.segmentKey()).isEqualTo("seg-from-pod-a");
+            assertThat(p.firstOffset()).isEqualTo(10);
+        });
+        assertThat(forB).singleElement().satisfies(p -> {
+            assertThat(p.segmentKey())
+                    .as("pod B's run must not be delivered under pod A's segment")
+                    .isEqualTo("seg-from-pod-b");
+            assertThat(p.firstOffset()).isEqualTo(20);
+            // ⚠️ THE PAYLOAD IS ASSERTED, not merely the key. This overload's
+            // whole safety argument is "no bytes, so nothing to mis-pair" --
+            // unpinned, `new byte[0]` could become any array and the argument
+            // would be false while every key assertion still passed.
+            assertThat(p.segment())
+                    .as("this overload attaches no bytes; that is why it is safe to batch")
+                    .isEmpty();
+        });
+    }
+
+    @Test
+    void publishingABatchedDeltaWithONESharedPayloadIsRefused() {
+        // ⚠️ FIXING THE KEY IS NOT FIXING THE BYTES, and the first draft of
+        // this change did only the first. `Push` carries the segment INLINE
+        // (ADR-0004), so the payload is what the consumer parses and the key is
+        // only a label: handing every run the same array while pairing each
+        // with its own key leaves the bytes wrong. A subscriber whose stream is
+        // absent from the other pod's segment throws inside the sink and is
+        // SWALLOWED here as slow-or-dead — silent record loss — and where two
+        // pods committed the same RunKey in one window it decodes the WRONG
+        // RECORDS under its own offsets. Neither throws; no gate sees either.
+        SubscriptionHub hub = new SubscriptionHub();
+        CommitDelta batched = new CommitDelta(7, List.of(
+                new binjava.format.SegmentCommit("seg-from-pod-a",
+                        List.of(new RunCommit(new RunKey(A, 0), 3, 10))),
+                new binjava.format.SegmentCommit("seg-from-pod-b",
+                        List.of(new RunCommit(new RunKey(B, 0), 5, 20)))));
+
+        assertThatThrownBy(() -> hub.publish(batched, new byte[] {1, 2, 3}))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("cannot be the payload");
     }
 
     @Test

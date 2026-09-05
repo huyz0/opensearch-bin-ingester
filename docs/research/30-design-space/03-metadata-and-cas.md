@@ -153,6 +153,29 @@ delta = header{ podId, epochPerSlot[], flushSeq }
                        segmentKey ref (interned), byteStart, byteLen }
 ```
 
+> ⚠️ **Revised 2026-09-05 — what shipped groups by SEGMENT, not by slot, and
+> carries less than this sketch.** [ADR-0032](../../internal/product/decisions/0032-a-batched-delta-carries-many-segments-under-the-reserved-kind.md)
+> is the shape in the tree: `CommitDelta(sequence, List<SegmentCommit>)` with
+> `SegmentCommit(segmentKey, List<RunCommit>)`, written under the v1 kinded
+> header at the kind ADR-0028 reserved for exactly this.
+>
+> The conclusion this section reaches is unchanged and is the reason for the
+> change: **one delta per window, not one per flush**, so commit PUT/s stays
+> independent of pods, streams, partitions and indices. What differs is the
+> grouping and the contents. Grouping is by segment because that is the pairing
+> a consumer needs — a run's offsets are meaningless without the object holding
+> the records, and grouping by slot would leave that pairing to a separate
+> interning table nothing type-checks. ⚠️ **ADR-0007 fixes S = 1**, so a
+> per-slot section list would today always have exactly one entry: the
+> dimension this sketch sections on is not yet a dimension.
+>
+> Not carried, deliberately: `podId` and `flushSeq` are on the *request*
+> (`CommitRequest`) rather than the entry, and the interning, `byteStart` and
+> `byteLen` are absent — a consumer reads the whole segment object today.
+> ⚠️ **`podId`/`flushSeq` in the entry is what M4.10's idempotency needs**, so
+> that part of this sketch is deferred rather than rejected; it is not in the
+> entry yet, and the `Sequencer` contract says so in as many words.
+
 ```
 commit PUTs/s = (number of sequencer pods) x (commit flush rate)
 ```

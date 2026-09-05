@@ -18,9 +18,16 @@ import java.nio.ByteOrder;
  * <p>⚠️ THE VERSION DISTINGUISHES LAYOUTS, NOT RELEASES. Version 0 <em>is</em>
  * "a delta": it carries no kind field, so a v0 object can only ever be one, and
  * every delta already in a bucket stays readable for the whole retention window
- * without being rewritten. Version 1 <em>is</em> "a kinded entry". A delta
- * therefore still writes v0 — nothing about a delta changed, and re-encoding
- * one would churn bytes and golden files to say the same thing. See ADR-0028.
+ * without being rewritten. Version 1 <em>is</em> "a kinded entry". See ADR-0028.
+ *
+ * <p>⚠️ A DELTA NOW WRITES EITHER, chosen by its own contents (ADR-0032), and
+ * an earlier version of this paragraph said flatly that a delta "still writes
+ * v0 — nothing about a delta changed", which stopped being true the moment a
+ * delta could carry many segments. One segment still emits v0, byte-for-byte,
+ * so no bucket churns and both golden files stand; two or more emit v1 under
+ * {@link #KIND_DELTA}, the kind reserved below for exactly this. A reader that
+ * takes the old sentence at its word and dispatches v1 to a seal-or-continue
+ * switch sees every batched delta as corrupt bytes.
  *
  * <p>⚠️ AN UNKNOWN KIND OR VERSION STOPS, it does not skip. The
  * {@code wire-format-change} skill requires this answer be stated rather than
@@ -40,12 +47,20 @@ public sealed interface ChainEntry permits CommitDelta, Seal, Continue {
     /** A kinded entry: the header is followed by a {@code KIND_*} uvarint. */
     int VERSION_KINDED = 1;
 
-    // ⚠️ Kind 0 is deliberately UNASSIGNED. A v1-kinded delta would be a second
-    // encoding of what v0 already says -- decode would accept it while `encode`
-    // returned v0, so a round trip would not be byte-stable -- and any writer
-    // emitting it would produce bytes every earlier reader rejects, for no
-    // gain. It is left free so a FUTURE delta layout can claim it, at which
-    // point v0 and it are genuinely different shapes.
+    // ⚠️ CLAIMED BY ADR-0032, on exactly the terms this comment reserved it.
+    // It read: "Kind 0 is deliberately UNASSIGNED. A v1-kinded delta would be a
+    // second encoding of what v0 already says ... It is left free so a FUTURE
+    // delta layout can claim it, at which point v0 and it are genuinely
+    // different shapes." A BATCHED delta -- many segments in one entry, so the
+    // commit rate stops scaling with pods -- is genuinely a different shape,
+    // and v0 cannot express it at all.
+    // ⚠️ THE ROUND-TRIP CAVEAT THE OLD COMMENT RAISED IS STILL LIVE and is
+    // answered rather than dismissed: a writer emits v0 for one segment and
+    // this kind for many, so the only non-byte-stable input -- a kind-0 entry
+    // carrying a single segment -- is one no writer produces. See
+    // CommitDelta.encode.
+    int KIND_DELTA = 0;
+
     int KIND_SEAL = 1;
 
     int KIND_CONTINUE = 2;
@@ -105,6 +120,9 @@ public sealed interface ChainEntry permits CommitDelta, Seal, Continue {
         // object would throw an unchecked exception straight past `recover`'s
         // own `throws IOException` and every caller catching it.
         try {
+            if (kind == KIND_DELTA) {
+                return CommitDelta.decodeBatchedBody(c);
+            }
             if (kind == KIND_SEAL) {
                 return new Seal(c.uvarint(), c.uvarint());
             }

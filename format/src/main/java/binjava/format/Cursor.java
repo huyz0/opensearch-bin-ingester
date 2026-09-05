@@ -29,6 +29,28 @@ final class Cursor {
         return i == a.length;
     }
 
+    /**
+     * Bytes not yet consumed — an upper bound on any COUNT the remaining object
+     * could possibly justify.
+     *
+     * <p>⚠️ EXISTS SO A COUNT CANNOT BECOME AN ALLOCATION SIZE, which is the
+     * invariant this class's own header claims and which repeated fields broke.
+     * A torn object claiming {@code 0x7FFFFFFF} segments — or {@code
+     * 0x7FFFFFFF} runs inside an honest segment — sized an {@code ArrayList}
+     * before reading a byte, and recovery died with an {@code OutOfMemoryError}
+     * past its own {@code throws IOException}. Both were measured.
+     *
+     * <p>⚠️ THE LENGTH-PREFIXED CASE WAS ALREADY CLOSED and the REPEAT-COUNT
+     * case was not, in EITHER of its two places. The run count predates the
+     * batched layout and is reachable from the v0 path every bucket already
+     * holds; it is bounded here rather than left behind a comment claiming the
+     * class was closed. ⚠️ Whoever adds the next repeated field bounds it too —
+     * this method does not do it for them.
+     */
+    int remaining() {
+        return a.length - i;
+    }
+
     long uvarint() throws IOException {
         long value = 0;
         int shift = 0;

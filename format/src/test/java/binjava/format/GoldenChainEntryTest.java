@@ -10,10 +10,13 @@ import org.junit.jupiter.api.Test;
 /**
  * Chain entries written by an earlier build must still parse (M4.5, ADR-0028).
  *
- * <p>⚠️ THREE FILES, ONE PER SHAPE, and the v0 delta is the one that matters
- * most: every delta already in a bucket is v0 and outlives this change by the
- * whole retention window. The {@code wire-format-change} checklist wants golden
- * files for the old shape AND the new, not the old one rewritten to look new.
+ * <p>⚠️ FOUR FILES — one per shape, and TWO for a delta since ADR-0032 gave it
+ * a batched layout under the reserved kind. The v0 delta is still the one that
+ * matters most: every delta already in a bucket is v0 and outlives these changes
+ * by the whole retention window. The {@code wire-format-change} checklist wants
+ * golden files for the old shape AND the new, not the old one rewritten to look
+ * new — so `chain-delta-v0.bin` is byte-identical to what it always was, and the
+ * batched file was added beside it.
  *
  * <p>⚠️ Do NOT regenerate these to make the test pass — the same discipline
  * {@code GoldenSegmentTest} and {@code GoldenSegmentV1Test} carry. They were
@@ -50,6 +53,33 @@ class GoldenChainEntryTest {
 
         assertThat(delta.encode())
                 .as("and re-encoding is byte-identical -- a v0 delta is still written as v0")
+                .isEqualTo(bytes);
+    }
+
+    @Test
+    void aBatchedDeltaFromAnEarlierBuildStillParses() throws Exception {
+        // ⚠️ THE FOURTH FILE, added by ADR-0032 rather than replacing the v0
+        // one: a batched delta is a genuinely different shape under the kind
+        // ADR-0028 reserved, and the v0 file must keep parsing for as long as
+        // any bucket holds one. Verified by hand against the layout before
+        // being committed -- magic, version 1, kind 0, sequence 5, segment
+        // count 2, then each segment's length-prefixed key, run count and runs.
+        // The `0a` before each key really is 10, the length of "bins/a.seg",
+        // and the trailing `2a` really is the second run's firstOffset of 42.
+        byte[] bytes = golden("chain-delta-batched-v1.bin");
+        ChainEntry entry = ChainEntry.decode(bytes);
+
+        assertThat(entry).isInstanceOf(CommitDelta.class);
+        CommitDelta delta = (CommitDelta) entry;
+        assertThat(delta.sequence()).isEqualTo(5);
+        assertThat(delta.segments()).containsExactly(
+                new SegmentCommit("bins/a.seg", List.of(new RunCommit(new RunKey(
+                        UUID.fromString("00000000-0000-0000-0000-0000000000aa"), 3), 2, 10))),
+                new SegmentCommit("bins/b.seg", List.of(new RunCommit(new RunKey(
+                        UUID.fromString("00000000-0000-0000-0000-0000000000bb"), 0), 7, 42))));
+
+        assertThat(delta.encode())
+                .as("and re-encoding a MULTI-segment delta is byte-identical too")
                 .isEqualTo(bytes);
     }
 

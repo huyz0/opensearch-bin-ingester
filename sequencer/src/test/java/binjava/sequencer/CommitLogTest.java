@@ -10,8 +10,10 @@ import binjava.binstore.Body;
 import binjava.format.CommitDelta;
 import binjava.format.Continue;
 import binjava.format.Seal;
+import binjava.format.RunCommit;
 import binjava.format.RunKey;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Callable;
@@ -146,6 +148,35 @@ class CommitLogTest {
         CommitDelta next = after.commit("seg-3", counts(new RunKey(A, 0), 1));
         assertThat(next.sequence()).isEqualTo(2);
         assertThat(next.runs().get(0).firstOffset()).isEqualTo(5);
+    }
+
+    @Test
+    void recoveryFoldsOffsetsFromEVERYSegmentOfABatchedDelta() throws Exception {
+        // ⚠️ THE CALLER `allRuns()` WAS ADDED FOR, and it had no test: reverting
+        // `ChainReplay.fold` to `delta.runs()` — undoing the production change
+        // outright — left the whole suite green, because nothing replayed a
+        // chain that CONTAINED a batched delta. Once M4.7 batches, that revert
+        // either throws out of `fold` or folds one pod's runs and silently
+        // reassigns offsets another pod already acked, which is I2.
+        MemoryBinStore store = new MemoryBinStore();
+        CommitLog log = new CommitLog(store, "p", 0);
+        byte[] batched = new CommitDelta(0, List.of(
+                new binjava.format.SegmentCommit("seg-pod-a",
+                        List.of(new RunCommit(new RunKey(A, 0), 3, 0))),
+                new binjava.format.SegmentCommit("seg-pod-b",
+                        List.of(new RunCommit(new RunKey(B, 7), 5, 0))))).encode();
+        store.putIfAbsent(log.keyFor(0),
+                new Body(batched.length, () -> new java.io.ByteArrayInputStream(batched)));
+
+        CommitLog after = new CommitLog(store, "p", 0);
+        after.recover();
+
+        assertThat(after.nextOffset(new RunKey(A, 0)))
+                .as("the first segment's stream advanced").isEqualTo(3);
+        assertThat(after.nextOffset(new RunKey(B, 7)))
+                .as("and so did the SECOND segment's -- a stream folded from only the "
+                        + "first would be handed offsets another pod already used")
+                .isEqualTo(5);
     }
 
     @Test

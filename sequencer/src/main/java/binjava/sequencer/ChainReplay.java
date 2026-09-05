@@ -363,7 +363,12 @@ final class ChainReplay {
      */
     static void fold(ChainEntry entry, Map<RunKey, Long> into) {
         if (entry instanceof CommitDelta delta) {
-            for (RunCommit run : delta.runs()) {
+            // ⚠️ `allRuns`, deliberately: an offset is a STREAM fact, not a
+            // segment fact, so this is the one reader that genuinely does not
+            // care which object holds the records. Everything that DELIVERS
+            // records pairs each run with its own segment instead — see
+            // SubscriptionHub and ADR-0032.
+            for (RunCommit run : delta.allRuns()) {
                 into.merge(run.key(), run.lastOffset() + 1, Math::max);
             }
         }
