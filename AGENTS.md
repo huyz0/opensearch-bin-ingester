@@ -88,6 +88,7 @@ Skills spec. A skill calls a script in `scripts/`, never a tool-specific built-i
 |---|---|
 | [`adr`](.agents/skills/adr/SKILL.md) | When making a choice that is expensive to reverse, when changing a wire format or the store SPI, or when a research conclusion is overturned |
 | [`bench`](.agents/skills/bench/SKILL.md) | When a change touches a hot path, when adding or changing a JMH benchmark, when a latency or throughput number is claimed, or when tempted to optimise |
+| [`brevity`](.agents/skills/brevity/SKILL.md) | When writing any reply, review report or finding. Cuts preamble, recap, tool-call narration and hedging; never the code, errors, negations or evidence inside a finding |
 | [`cost-budget`](.agents/skills/cost-budget/SKILL.md) | Whenever a change touches how objects are written, read, listed or discovered — and before claiming any change is cost-neutral |
 | [`gate-design`](.agents/skills/gate-design/SKILL.md) | Before adding a gate, a review step or a research step, and before writing any instruction that says "remember to" or "make sure you" |
 | [`milestone`](.agents/skills/milestone/SKILL.md) | When told to work through a milestone, when a session should run until its completion condition is met, or when a milestone needs reviewing as a whole |

@@ -127,6 +127,13 @@ The gate recomputes that hash, so amending one byte after review invalidates it
 ⚠️ An empty findings list is a valid and expected outcome; invented findings are
 worse than none.
 
+**Output style follows [`brevity`](../brevity/SKILL.md)**, for BOTH roles — no
+preamble, no recap of the diff, no narration between tool calls. It never
+overrides the finding format above: `file:line`, the severity, the concrete
+failure scenario, any surviving mutation by name, and whether a result was
+MEASURED or inferred all stay, in full. Brevity cuts the wrapper around a
+finding, never the evidence inside it.
+
 ## Resolution
 
 Each blocking finding is **fixed** (the diff changes, the hash changes, review

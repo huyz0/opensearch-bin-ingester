@@ -66,6 +66,7 @@ commit subject to start with an ID present here or in the archive.
 | M0.19 | `scripts/check-catalog-only.sh` — a module may not declare a literal dependency coordinate, only a catalogue alias or `project(...)`; the licence gate's completeness rests on it | — | todo |
 | M0.77 | SWEEP THE PRE-EXISTING ASSERTION INVENTORIES -- "every other test here", "the only assertion". MEASURED 2026-09-06: 61 occurrences in 36 files; a line-scoped grep sees 50 in 31. Quote the method with the number -- this row has carried three wrong figures. No gate: see M0.76 and [notes](backlog-notes.md) | — | todo |
 | M0.78 | HARDEN `check-archive-row-size.sh` and its test, from five minors both reviewers ACCEPTED at M0.76: three row shapes that still evade the cap, a landed row that can be GROWN past it, and three mutations its tests do not kill. [notes](backlog-notes.md) | — | todo |
+| M0.79 | LAND THE `brevity` SKILL AND ITS ADAPTER, which arrived in the working tree from outside any task and which the generated-index gate then blocks every commit on. Skill body, `.claude/commands/brevity.md`, and the `reviewer`/`test-reviewer` agent files pointed at it for OUTPUT STYLE ONLY -- the finding format (`file:line`, severity, concrete failure scenario) is explicitly not overridden | — | todo |
 
 ## M1 — walking skeleton
 

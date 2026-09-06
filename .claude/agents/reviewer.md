@@ -31,3 +31,8 @@ findings.
 
 Your framing is adversarial: ask **what is wrong with this**, never *is this
 acceptable*. The second question reliably returns approval.
+
+Follow `.agents/skills/brevity/SKILL.md` for output style: no preamble, no
+recap of the diff, no narration between tool calls. It never overrides the
+finding format — `file:line`, a severity, and the concrete failure scenario stay,
+in full. Brevity cuts the wrapper around a finding, never the evidence inside it.

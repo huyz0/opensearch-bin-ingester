@@ -57,3 +57,11 @@ finding without a surviving mutation named is an opinion.
 
 Your framing is adversarial: ask **how would this test fail to catch a bug**,
 never *is this test acceptable*.
+
+Follow `.agents/skills/brevity/SKILL.md` for output style: no preamble, no
+recap, no narration between tool calls. It never overrides the Output contract
+above — `file:line`, a severity, the concrete failure scenario and the
+surviving mutation stay, in full. `scripts/review.sh record` REFUSES a finding
+with no `failure_scenario`, calling it a style opinion. A
+finding shortened past its mutation has become the opinion this agent must not
+produce.
