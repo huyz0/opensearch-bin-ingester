@@ -72,6 +72,18 @@ public final class LocalSequencer implements Sequencer {
      * shutdown happened when a takeover did.
      */
     private volatile boolean fenced;
+    private volatile CheckpointWriter checkpoints;
+
+    /**
+     * ⚠️ DEFAULTS, and they are a COST choice rather than a correctness one: one
+     * checkpoint per 1000 deltas or per minute, whichever comes first, so a busy
+     * cluster pays a fraction of a percent on top of its commit rate and an idle
+     * one pays nothing at all (the writer is dirty-flagged). M4.9 measures what
+     * they should be; these are what it measures against.
+     */
+    static final long CHECKPOINT_EVERY_DELTAS = 1000;
+
+    static final java.time.Duration CHECKPOINT_INTERVAL = java.time.Duration.ofSeconds(60);
 
     private LocalSequencer(LeaseManager leases, CommitLog log, RenewTicker ticker) {
         this.leases = leases;
@@ -111,6 +123,14 @@ public final class LocalSequencer implements Sequencer {
                     // chain; committing on would reassign offsets a successor
                     // has already issued, which is I2.
                     fenced = true;
+                    // ⚠️ THE WRITER STOPS WITH THE LEASE. A fenced node still
+                    // holds a live CheckpointWriter, and a checkpoint PUT is a
+                    // write into the chain's own prefix -- the thing being
+                    // fenced is exactly the right to make it.
+                    CheckpointWriter fencedWriter = checkpoints;
+                    if (fencedWriter != null) {
+                        fencedWriter.close();
+                    }
                     // ⚠️ NOT NECESSARILY A TAKEOVER, and an earlier draft of
                     // this line said it was. ADR-0027 accepts a case where the
                     // renew comes back empty because this node's OWN late write
@@ -189,7 +209,34 @@ public final class LocalSequencer implements Sequencer {
     /** As {@link #start}, with the renew tick injected. */
     public static Optional<LocalSequencer> start(BinStore store, String prefix,
             LeaseManager leases, int sealRedriveBudget, RenewTicker ticker) throws IOException {
+        return start(store, prefix, leases, sealRedriveBudget, ticker,
+                CHECKPOINT_EVERY_DELTAS, CheckpointWriter.sleepFor(CHECKPOINT_INTERVAL));
+    }
+
+    /**
+     * As {@link #start}, with the checkpoint policy injected too.
+     *
+     * <p>⚠️ PACKAGE-PRIVATE FOR THE SAME MEASURED REASON {@link #sleepFor}
+     * records: a seam nothing shipping installs is a seam no test exercises. The
+     * K here is crossed by a test in two commits; the shipped default takes a
+     * thousand, so without this the WIRING -- that {@code commitAll} calls the
+     * writer at all -- would be pinned by nothing.
+     */
+    static Optional<LocalSequencer> start(BinStore store, String prefix, LeaseManager leases,
+            int sealRedriveBudget, RenewTicker ticker, long checkpointEveryDeltas,
+            CheckpointWriter.Ticker checkpointTicker) throws IOException {
         Objects.requireNonNull(ticker, "ticker");
+        // ⚠️ BEFORE `tryAcquire`, and that ordering is the whole point. The
+        // writer is built after the renewer thread is already running, so an
+        // IllegalArgumentException from its constructor escapes the
+        // `catch (IOException)` below with the lease HELD and RENEWED -- no node
+        // can take that term again, for as long as the process lives.
+        // ⚠️ THE TICKER IS NULL-CHECKED HERE FOR THE SAME REASON as the policy,
+        // and leaving it out was the same defect one argument along: an NPE from
+        // the CheckpointWriter constructor escapes the `catch (IOException)`
+        // below with the lease HELD AND RENEWED.
+        Objects.requireNonNull(checkpointTicker, "checkpointTicker");
+        CheckpointWriter.checkPolicy(checkpointEveryDeltas, CHECKPOINT_INTERVAL);
         Optional<Lease> won = leases.tryAcquire();
         if (won.isEmpty()) {
             return Optional.empty();
@@ -253,7 +300,10 @@ public final class LocalSequencer implements Sequencer {
             // code. M4.9's bounded recovery is what fixes it.
             log.recover();
             log.open(prevEpoch, prevSeq);
-            return Optional.of(new LocalSequencer(leases, log, ticker));
+            LocalSequencer sequencer = new LocalSequencer(leases, log, ticker);
+            sequencer.checkpoints = new CheckpointWriter(store, log, prefix,
+                    checkpointEveryDeltas, CHECKPOINT_INTERVAL, checkpointTicker);
+            return Optional.of(sequencer);
         } catch (IOException failed) {
             // ⚠️ WE HOLD THE LEASE AND CANNOT USE IT. Returning empty here would
             // report "not the leader" while holding the term, and the cluster
@@ -293,7 +343,16 @@ public final class LocalSequencer implements Sequencer {
             throw new IOException("this sequencer released its lease at epoch "
                     + log.epoch() + " and must not commit again");
         }
-        return log.commitAll(requests);
+        CommitDelta delta = log.commitAll(requests);
+        // ⚠️ AFTER the commit, never before: the writer reads `nextSequence` and
+        // the offsets, and observing first would checkpoint a chain state that
+        // does not exist yet. ⚠️ It cannot throw -- a failed checkpoint must not
+        // fail an acknowledged write.
+        CheckpointWriter writer = checkpoints;
+        if (writer != null) {
+            writer.observe(requests);
+        }
+        return delta;
     }
 
     @Override
@@ -316,6 +375,10 @@ public final class LocalSequencer implements Sequencer {
         // together are pinned by `aCallerAfterCLOSEIsToldCLOSEDRatherThanFENCED`
         // -- each masks the other, so only removing BOTH fails it.
         renewer.interrupt();
+        CheckpointWriter writer = checkpoints;
+        if (writer != null) {
+            writer.close();
+        }
         leases.release();
     }
 }

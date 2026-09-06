@@ -36,6 +36,23 @@ record LogKeys(String prefix, long epoch) {
     }
 
     /**
+     * Where the checkpoint covering up to {@code sequence} is written.
+     *
+     * <p>⚠️ UNDER {@link #logPrefix}, which is why {@link #isEntryKey} exists:
+     * {@code BinStore.list} is flat, so these come back from the chain's own
+     * LIST and every reader must skip them by key. M4.8b1 landed that filter
+     * before this grammar for exactly that reason.
+     *
+     * <p>⚠️ ZERO-PADDED, like {@link #keyFor} and for the same reason —
+     * lexicographic order IS numeric order (ADR-0022 left key order as the only
+     * ordering a reader has). Unpadded, {@code 10.ckpt} sorts before
+     * {@code 9.ckpt}, and M4.9 bounds replay by taking the LAST of these.
+     */
+    String checkpointKeyFor(long sequence) {
+        return String.format(Locale.ROOT, "%sckpt/%016x.ckpt", logPrefix(), sequence);
+    }
+
+    /**
      * Whether {@code key} is one this chain WROTE, rather than merely one that
      * sorts under its prefix.
      *

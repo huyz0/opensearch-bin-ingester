@@ -203,6 +203,25 @@ public final class CommitLog {
         return nextOffsets.getOrDefault(key, 0L);
     }
 
+    /**
+     * Every stream this log has offsets for, as a snapshot.
+     *
+     * <p>⚠️ A COPY, not a view, so a caller cannot mutate this log's offsets by
+     * holding the map. ⚠️ AN EARLIER VERSION CLAIMED THE COPY GUARDED A
+     * CROSS-THREAD READ BY THE CHECKPOINT WRITER; it never could -- a copy of a
+     * plain HashMap taken while another thread writes it is not safe -- and the
+     * writer now reads this only on the commit thread, so there is no such read
+     * to guard. {@link #nextOffset} answers for ONE stream and cannot enumerate.
+     *
+     * <p>⚠️ O(ALL STREAMS) PER CALL, and the checkpoint writer calls it per
+     * commit while using the result once per K. That is bounded by the commit
+     * rate and dwarfed by the delta PUT beside it, so it is recorded here rather
+     * than optimised (performance.md rule 8).
+     */
+    public Map<RunKey, Long> offsets() {
+        return Map.copyOf(nextOffsets);
+    }
+
     public long nextSequence() {
         return nextSequence;
     }

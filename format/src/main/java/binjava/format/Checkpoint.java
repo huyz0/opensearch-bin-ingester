@@ -31,6 +31,13 @@ import java.util.Objects;
  * nothing consumes it before M7, for the reason {@code CommitRequest} carried
  * {@code (podId, flushSeq)} from M4.1: adding a field later is a format change,
  * and this is the one commit where a format change costs nothing.
+  *
+ * <p>⚠️ {@code sequence} IS EXCLUSIVE — the next chain slot NOT covered by this
+ * checkpoint — so a reader resumes by replaying deltas FROM {@code sequence}
+ * forward, never from {@code sequence + 1}. It is stated here, on the record
+ * itself, because the writer that chose it (M4.8b2's {@code CheckpointWriter})
+ * is package-private in another module and M4.9 reads only these bytes. An
+ * off-by-one here silently drops one delta's offsets, which is I2.
  */
 public record Checkpoint(long sequence,
         Map<RunKey, StreamOffsets> streams,
