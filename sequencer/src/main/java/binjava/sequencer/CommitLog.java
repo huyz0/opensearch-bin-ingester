@@ -156,7 +156,7 @@ public final class CommitLog {
      * — which is I2. It is a boundary probe, not a recovery.
      */
     public void recoverChainEnd() throws IOException {
-        ChainReplay.Result r = ChainReplay.chainEnd(store, prefix, epoch);
+        ChainReplay.Result r = ChainEnd.of(store, prefix, epoch);
         nextSequence = r.nextSequence();
         if (r.seal() != null) {
             sealedAt = r.seal();

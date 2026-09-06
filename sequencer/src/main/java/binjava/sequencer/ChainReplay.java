@@ -42,8 +42,16 @@ import java.util.Map;
  */
 final class ChainReplay {
 
-    /** One hop of the ancestry: which chain to replay, and how far into it. */
-    private record Hop(long epoch, long upTo) {
+    /**
+     * One hop of the ancestry: which chain, where to start, and how far in.
+     *
+     * <p>⚠️ {@code from} IS WHAT M4.9 ADDED. It is the first sequence NOT
+     * already covered by a checkpoint, so the LIST starts after the entries
+     * below it and they are never GET at all — bounding the LIST, the GETs and
+     * the stats together, which is the point: the measurement this replaces had
+     * all three growing per ancestor.
+     */
+    private record Hop(long epoch, long from, long upTo) {
     }
 
     /** What a replay learned: offsets, this chain's next free slot, its seal. */
@@ -88,52 +96,6 @@ final class ChainReplay {
     }
 
     /**
-     * Where a chain ENDS, without reading what it holds.
-     *
-     * <p>⚠️ FOR A WRITER THAT WILL ONLY SEAL. A taking-over leader needs the
-     * predecessor's last slot and nothing else, and a full replay would spend
-     * one GET per entry of that whole term. The LIST alone gives the answer
-     * because the keys sort numerically; only the last entry is read, to learn
-     * whether the chain is already sealed.
-     *
-     * <p>⚠️ The returned offsets are EMPTY on purpose. A log recovered this way
-     * must never commit — that would reassign offsets from 0, which is I2.
-     */
-    static Result chainEnd(BinStore store, String prefix, long epoch) throws IOException {
-        String lastKey = null;
-        String startAfter = null;
-        LogKeys keys = new LogKeys(prefix, epoch);
-        String logPrefix = keys.logPrefix();
-        while (true) {
-            ListPage page = store.list(logPrefix, startAfter, 1000);
-            for (ObjectStat stat : page.objects()) {
-                // ⚠️ SKIP, never STOP. A checkpoint sorts after every entry, so
-                // breaking here would be indistinguishable against one — but a
-                // non-entry key that sorts in the MIDDLE (a half-written
-                // `.delta.tmp`) would end the chain early and hand a taking-over
-                // leader a `nextSequence` inside its predecessor's history.
-                if (!keys.isEntryKey(stat.key())) {
-                    continue;
-                }
-                lastKey = stat.key();
-            }
-            if (page.nextStartAfter().isEmpty()) {
-                break;
-            }
-            startAfter = page.nextStartAfter().get();
-        }
-        if (lastKey == null) {
-            return new Result(Map.of(), 0, null);
-        }
-        ChainEntry last = read(store, lastKey);
-        // ⚠️ Set directly rather than by applying: applying a DELTA here would
-        // populate offsets from one arbitrary entry, which is worse than leaving
-        // them empty because it looks like recovery and is not.
-        return new Result(Map.of(), last.sequence() + 1,
-                last instanceof Seal s ? s : null);
-    }
-
-    /**
      * Replays {@code epoch} and every chain it continues from, OLDEST FIRST.
      *
      * <p>⚠️ ITERATIVE, not recursive, and that is a correctness property rather
@@ -158,7 +120,17 @@ final class ChainReplay {
         // unleased chain, which every `CommitLog(store, prefix)` uses — recover
         // NOTHING, because 0 fails the ancestry test that has no business
         // applying to the chain itself.
-        hops.add(new Hop(epoch, upTo));
+        // ⚠️ THE FIRST HOP IS CHECKED TOO, and omitting it made the bound do
+        // nothing on the path that matters. `LocalSequencer.start` calls
+        // `recover()` BEFORE `open()`, so the new chain is empty and that walk
+        // terminates immediately; the crossing that actually reads the ancestry
+        // is `inherited()`, which STARTS at the predecessor. Checking only the
+        // epochs reached by following a CONTINUE skipped exactly that one.
+        if (crossFromCheckpoint(hops, epoch, upTo)) {
+            applyChain(hops.get(0));
+            return;
+        }
+        hops.add(new Hop(epoch, 0, upTo));
         long chainEpoch = epoch;
         long limit = upTo;
         boolean atOrigin = true;
@@ -180,13 +152,25 @@ final class ChainReplay {
                 }
                 limit = opening.prevSeq();
                 chainEpoch = opening.prevEpoch();
+                // ⚠️ A CHECKPOINT TERMINATES THE WALK, and that is the whole of
+                // M4.9's bound. Its offsets are CUMULATIVE — the leader that
+                // wrote it had already recovered everything IT inherited — so
+                // reaching one means nothing older need be read. Without this
+                // the crossing is transitive and a takeover costs O(all
+                // commit-log entries ever written), which is the shape
+                // M4.6e's row records. Measured on THIS harness at 1/2/4/8/16
+                // prior terms: 29/46/80/148/284 requests.
+                if (chainEpoch >= 1 && crossFromCheckpoint(hops, chainEpoch, limit)) {
+                    atOrigin = false;
+                    break;
+                }
                 // ⚠️ EPOCH 0 IS NOT FOLLOWED. It is the RESERVED unleased chain
                 // (M4.4b), which a first leader names truthfully to say it had
                 // no predecessor. Replaying it would read the unleased chain
                 // into a leased one's history — the fork M4.6d removes — so the
                 // hop is not added and the loop below ends.
                 if (chainEpoch >= 1) {
-                    hops.add(new Hop(chainEpoch, limit));
+                    hops.add(new Hop(chainEpoch, 0, limit));
                 }
                 atOrigin = false;
             } else if (neverOpened(first, atOrigin)) {
@@ -203,8 +187,18 @@ final class ChainReplay {
                 limit = Long.MAX_VALUE;
                 chainEpoch = chainEpoch - 1;
                 atOrigin = false;
+                // ⚠️ THIS BRANCH IS PROBED TOO. Without it, the first genuinely
+                // opened chain reached across a run of BURNED epochs is replayed
+                // in full with its checkpoint sitting unread — unreachable today
+                // only because `LocalSequencer.start` resolves burned epochs
+                // through `firstInheritableAncestor` first, which is an ordering
+                // invariant held in ANOTHER CLASS. `neverOpened`'s own javadoc
+                // records that caveat rather than assuming it; so does this.
+                if (chainEpoch >= 1 && crossFromCheckpoint(hops, chainEpoch, limit)) {
+                    break;
+                }
                 if (chainEpoch >= 1) {
-                    hops.add(new Hop(chainEpoch, limit));
+                    hops.add(new Hop(chainEpoch, 0, limit));
                 }
             } else {
                 break;
@@ -218,6 +212,48 @@ final class ChainReplay {
         for (int i = hops.size() - 1; i >= 0; i--) {
             applyChain(hops.get(i));
         }
+    }
+
+    /**
+     * Seeds this replay from {@code chainEpoch}'s newest checkpoint, if it has
+     * one that is SAFE to use, and reports whether the walk can stop there.
+     *
+     * <p>⚠️ SAFE MEANS AT OR BEFORE THE BARRIER. A checkpoint at sequence S
+     * reflects the chain through S-1, so it may only be used when
+     * {@code S - 1 <= upTo}. A leader that was fenced goes on writing for a
+     * while, and its checkpoints can cover entries PAST the slot its successor's
+     * CONTINUE named — applying one of those would fold a discarded suffix into
+     * the history, which is I3. When the newest is too new there is no older one
+     * to fall back to (the pointer holds one), so the walk continues unbounded
+     * and correct.
+     *
+     * <p>⚠️ THE OFFSETS ARE MERGED, not assigned, for the reason {@link #fold}
+     * gives: a crossing merges an older chain's offsets into a newer one's and
+     * taking the later value unconditionally would rewind the stream (I2).
+     */
+    private boolean crossFromCheckpoint(List<Hop> hops, long chainEpoch, long upTo)
+            throws IOException {
+        java.util.Optional<Checkpoint> found = CheckpointCursor.newest(store, prefix, chainEpoch);
+        if (found.isEmpty()) {
+            return false;
+        }
+        Checkpoint checkpoint = found.get();
+        if (checkpoint.sequence() - 1 > upTo) {
+            return false;
+        }
+        checkpoint.streams().forEach(
+                (key, at) -> offsets.merge(key, at.nextOffset(), Math::max));
+        if (chainEpoch == ownEpoch) {
+            // ⚠️ `nextSequence` IS DERIVED FROM THE ENTRIES READ, so skipping
+            // the ones a checkpoint covers would leave it short — at zero if the
+            // checkpoint covers the whole chain — and the next commit would
+            // re-race slots that are already taken. The checkpoint's own
+            // sequence IS the writer's `nextSequence` at the moment it was
+            // written, so it restores exactly what the skipped entries would.
+            nextSequence = Math.max(nextSequence, checkpoint.sequence());
+        }
+        hops.add(new Hop(chainEpoch, checkpoint.sequence(), upTo));
+        return true;
     }
 
     /**
@@ -322,62 +358,15 @@ final class ChainReplay {
         return chainEpoch;
     }
 
-    /**
-     * The NEWEST checkpoint of {@code epoch}, or empty if it has none.
-     *
-     * <p>⚠️ A CONSTANT NUMBER OF REQUESTS, INDEPENDENT OF HOW MANY CHECKPOINTS
-     * EXIST — one {@code stat} on a cold chain, one {@code stat} and one
-     * {@code get} on a warm one. That is the property AC5 needs and it is
-     * strictly stronger than the "zero {@code list}" it states: a backward walk
-     * from the chain head, and probing the sequence space with {@code stat},
-     * both issue zero LISTs while costing one request per checkpoint.
-     * ADR-0034.
-     *
-     * <p>⚠️ IT ANSWERS FOR ONE EPOCH, the one passed, and M4.9 MUST NOT CALL IT
-     * WITH ITS OWN. A leader acquires a FRESH epoch — {@code start} takes
-     * {@code won.get().epoch()}, and M4.6e records that every restart, rolling
-     * deploy, TTL expiry and failed {@code start} burns one — so its own chain
-     * is empty at the moment it recovers and this returns EMPTY at every
-     * takeover. The checkpoints that bound the replay are the PREDECESSOR's,
-     * reached through {@link #firstInheritableAncestor}.
-     *
-     * <p>⚠️ AN EARLIER VERSION OF THIS PARAGRAPH SAID THE OPPOSITE — that a
-     * chain-wide answer costs one {@code stat} per ancestor and "nothing needs
-     * it". The ARITHMETIC was right and the CONCLUSION was wrong, and a first
-     * correction overstated that as "both halves were false". M4.9's row
-     * requires the CROSSING to be bounded, not merely own-chain replay, and a
-     * {@code Checkpoint} IS offsets plus a sequence, so a predecessor's is
-     * exactly what bounds it.
-     *
-     * <p>⚠️ ONE {@code stat} PER ANCESTOR IS CHEAP BUT NOT BOUNDED, and M4.9
-     * owns the difference. It replaces one GET per entry of every ancestor
-     * term — which M4.6e measured growing with the cluster's whole history — so
-     * it is the better side of that trade; but it is {@code O(epochs walked)},
-     * and an outage that burns a run of epochs makes that a page-count
-     * weakening in a new dimension. M4.9 needs a bound on the WALK, not only on
-     * the replay.
-     *
-     * <p>⚠️ {@code stat} FIRST, NEVER A CAUGHT {@code get}. {@link BinStore}
-     * defines {@code IOException} as "the store is unreachable" and has no
-     * not-found type, so catching it and returning empty would report an outage
-     * as a chain that has never checkpointed — and M4.9 would then replay the
-     * whole term believing that was correct.
-     */
-    static java.util.Optional<Checkpoint> newestCheckpoint(BinStore store, String prefix,
-            long epoch) throws IOException {
-        String pointer = new LogKeys(prefix, epoch).latestCheckpointKey();
-        if (store.stat(pointer).isEmpty()) {
-            return java.util.Optional.empty();
-        }
-        try (InputStream in = store.get(pointer)) {
-            return java.util.Optional.of(Checkpoint.decode(in.readAllBytes()));
-        }
-    }
 
     private void applyChain(Hop hop) throws IOException {
         LogKeys keys = new LogKeys(prefix, hop.epoch());
         String logPrefix = keys.logPrefix();
-        String startAfter = null;
+        // ⚠️ START THE LIST AFTER THE LAST COVERED ENTRY, rather than filtering
+        // after reading. `startAfter` is what keeps the LIST itself bounded —
+        // the measurement this replaces had LISTs growing per ancestor too, and
+        // skipping entries in the loop would leave that class untouched.
+        String startAfter = hop.from() > 0 ? keys.keyFor(hop.from() - 1) : null;
         while (true) {
             ListPage page = store.list(logPrefix, startAfter, 1000);
             for (ObjectStat stat : page.objects()) {
@@ -454,7 +443,13 @@ final class ChainReplay {
         }
     }
 
-    private static ChainEntry read(BinStore store, String key) throws IOException {
+    /**
+     * ⚠️ PACKAGE-PRIVATE, not private, because {@link ChainEnd} reads the one
+     * entry it needs through the same decoder. Two copies of "GET it and
+     * decode it" is how a reader stops agreeing with its sibling about what a
+     * chain entry is.
+     */
+    static ChainEntry read(BinStore store, String key) throws IOException {
         try (InputStream in = store.get(key)) {
             return ChainEntry.decode(in.readAllBytes());
         }

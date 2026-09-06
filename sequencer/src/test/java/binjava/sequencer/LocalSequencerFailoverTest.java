@@ -141,9 +141,13 @@ class LocalSequencerFailoverTest {
         // log entries ever written). An earlier version of this test pinned only
         // the predecessor-LENGTH dimension, holding the term count at 2, so
         // re-reading every ancestor twice passed it unchanged. Both dimensions
-        // are pinned below. M4.8's checkpoints are what make this constant
-        // again; M4.9 must bound the CROSSING and not merely own-chain replay,
-        // and its row now says so.
+        // are pinned below. ⚠️ M4.8's checkpoints DO NOT make THIS fixture
+        // constant, and an earlier version of this sentence said they would.
+        // This fixture is uncheckpointed by construction -- the 4-arg `start`
+        // ships K = 1000 deltas and it commits far fewer -- so what it pins is
+        // still the UNBOUNDED shape. M4.9 made the CHECKPOINTED crossing
+        // constant, measured at 17 requests whether one prior term or sixteen,
+        // and `LocalSequencerBoundedRecoveryTest` is where that is asserted.
         // ⚠️ LISTS ARE COUNTED TOO. Asserting only GETs let a mutation adding one
         // LIST per predecessor ENTRY survive -- a request rate scaling with
         // records, which is the one thing non-negotiable 6 forbids outright, on
@@ -159,6 +163,18 @@ class LocalSequencerFailoverTest {
         // I2 violation it closes -- see `LocalSequencerAncestorSealTest` for
         // that shape. Stating the move plainly rather than silently, same
         // discipline as the `isEqualTo(2L)` note above this one.
+        // ⚠️ M4.9 MOVED THESE TOTALS UP BY ONE PER TAKEOVER PLUS ONE PER
+        // ANCESTOR, and that is a threshold moving in the WEAKENING direction,
+        // so it is stated rather than quietly edited. Bounded recovery probes
+        // each chain for a checkpoint before deciding whether to walk past it;
+        // on a chain that HAS one the walk stops and the cost becomes constant,
+        // which `LocalSequencerBoundedRecoveryTest` asserts. This fixture builds
+        // an ancestry with NO checkpoints -- it uses the 4-arg `start`, whose
+        // shipped K is a thousand deltas -- so every probe here misses and buys
+        // nothing. That is the honest cost of the bound on the path that cannot
+        // use it, and it is a `stat`: GETs below are UNCHANGED at 18 and 46.
+        // ⚠️ THE SHAPE IS UNCHANGED, which is what this test exists to pin: cost
+        // still grows per ancestor and per entry. Only the constant moved.
         StoreCounts small = takeoverCost(1, 12);
         StoreCounts longer = takeoverCost(1, 40);
         assertThat(small.gets())
@@ -180,10 +196,10 @@ class LocalSequencerFailoverTest {
                 .as("12 entries: EVERY request kind counted, so a per-entry stat, "
                         + "list or head shows up here -- +2 here, not +1: the "
                         + "inheritable-ancestor probe is a stat AND a get")
-                .isEqualTo(28L);
+                .isEqualTo(30L);
         assertThat(longer.total())
                 .as("40 entries: the same constant overhead, slope still 1")
-                .isEqualTo(56L);
+                .isEqualTo(58L);
 
         // ⚠️ THE SECOND DIMENSION: hold the chain length and vary the number of
         // prior TERMS. The slope here is what makes the cost unbounded over a
@@ -193,7 +209,7 @@ class LocalSequencerFailoverTest {
         // ⚠️ Totals here too, and exact rather than a divided slope: integer
         // division left up to two requests of drift, which is room a mutation
         // can live in.
-        assertThat(oneTerm.total()).as("one ancestor").isEqualTo(20L);
+        assertThat(oneTerm.total()).as("one ancestor").isEqualTo(22L);
         assertThat(fourTerms.total())
                 .as("four ancestors: each costs its entries plus a constant ONCE -- "
                         + "re-reading an ancestor per descendant would grow this "
@@ -201,8 +217,10 @@ class LocalSequencerFailoverTest {
                         + "once per takeover (a stat plus a get), not once per prior "
                         + "term: this fixture has no burned epochs, so it only ever "
                         + "probes the immediate predecessor before finding a real "
-                        + "CONTINUE there")
-                .isEqualTo(47L);
+                        + "CONTINUE there. ⚠️ M4.9 adds one checkpoint probe per "
+                        + "ancestor on top -- 52 rather than 47 -- and this "
+                        + "fixture is UNCHECKPOINTED, so every one of them misses")
+                .isEqualTo(52L);
     }
 
     @Test

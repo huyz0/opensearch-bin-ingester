@@ -120,11 +120,11 @@ class CheckpointDiscoveryTest {
         CountingBinStore few = new CountingBinStore(seeded(500));
         // ⚠️ THE RESULT IS ASSERTED, not discarded: an implementation issuing
         // ZERO requests and returning empty satisfies every count below.
-        assertThat(ChainReplay.newestCheckpoint(few, "bins", 1)).isPresent();
+        assertThat(CheckpointCursor.newest(few, "bins", 1)).isPresent();
         StoreCounts small = few.counts();
 
         CountingBinStore many = new CountingBinStore(seeded(5_000));
-        assertThat(ChainReplay.newestCheckpoint(many, "bins", 1)).isPresent();
+        assertThat(CheckpointCursor.newest(many, "bins", 1)).isPresent();
         StoreCounts large = many.counts();
 
         // ⚠️ TOTAL, ALL VERBS. A LIST bound alone admits the backward walk and
@@ -144,7 +144,7 @@ class CheckpointDiscoveryTest {
     void discoveryReturnsTheNEWESTCheckpointRatherThanAnyOther() throws Exception {
         MemoryBinStore store = seeded(5_000);
 
-        Optional<Checkpoint> found = ChainReplay.newestCheckpoint(store, "bins", 1);
+        Optional<Checkpoint> found = CheckpointCursor.newest(store, "bins", 1);
 
         assertThat(found).isPresent();
         assertThat(found.get().sequence())
@@ -161,7 +161,7 @@ class CheckpointDiscoveryTest {
         // ask `stat` rather than catching an IOException and calling it empty.
         CountingBinStore store = new CountingBinStore(new MemoryBinStore());
 
-        assertThat(ChainReplay.newestCheckpoint(store, "bins", 1)).isEmpty();
+        assertThat(CheckpointCursor.newest(store, "bins", 1)).isEmpty();
         assertThat(store.counts().lists()).isZero();
         assertThat(store.counts().total())
                 .as("and costs no more than the warm path")
@@ -185,7 +185,7 @@ class CheckpointDiscoveryTest {
         try (CheckpointWriter writer =
                 new CheckpointWriter(store, log, "bins", 1, Duration.ofSeconds(30), frozen)) {
             commitOne(log, writer, "poda", 0, 3, 1);
-            long afterFirst = ChainReplay.newestCheckpoint(store, "bins", 1)
+            long afterFirst = CheckpointCursor.newest(store, "bins", 1)
                     .orElseThrow().sequence();
 
             // ⚠️ THREE STREAMS AND TWO REQUESTS IN ONE DELTA, so the count below
@@ -193,7 +193,7 @@ class CheckpointDiscoveryTest {
             // request. With one request the last of those was numerically
             // identical to per-trigger and the mutant survived the whole build.
             commitOne(log, writer, "podb", 1, 4, 3, 2);
-            long afterSecond = ChainReplay.newestCheckpoint(store, "bins", 1)
+            long afterSecond = CheckpointCursor.newest(store, "bins", 1)
                     .orElseThrow().sequence();
 
             assertThat(afterSecond)
@@ -215,10 +215,10 @@ class CheckpointDiscoveryTest {
         put(store, new LogKeys("bins", 1).latestCheckpointKey(), checkpointAt(111).encode());
         put(store, new LogKeys("bins", 2).latestCheckpointKey(), checkpointAt(222).encode());
 
-        assertThat(ChainReplay.newestCheckpoint(store, "bins", 2).orElseThrow().sequence())
+        assertThat(CheckpointCursor.newest(store, "bins", 2).orElseThrow().sequence())
                 .as("epoch 2's own pointer, not epoch 1's")
                 .isEqualTo(222);
-        assertThat(ChainReplay.newestCheckpoint(store, "bins", 1).orElseThrow().sequence())
+        assertThat(CheckpointCursor.newest(store, "bins", 1).orElseThrow().sequence())
                 .isEqualTo(111);
     }
 
@@ -245,7 +245,7 @@ class CheckpointDiscoveryTest {
                     .singleElement(org.assertj.core.api.InstanceOfAssertFactories.STRING)
                     .as("epoch 2's pointer, under epoch 2's prefix")
                     .isEqualTo(new LogKeys("bins", 2).latestCheckpointKey());
-            assertThat(ChainReplay.newestCheckpoint(store, "bins", 2))
+            assertThat(CheckpointCursor.newest(store, "bins", 2))
                     .as("and the live epoch's discovery finds it")
                     .isPresent();
         }
@@ -271,13 +271,13 @@ class CheckpointDiscoveryTest {
                 new CheckpointWriter(store, log, "bins", 1, Duration.ofSeconds(30), ticker)) {
             store.failNextPointerPut(new IOException("the store is unreachable"));
             commitOne(log, writer, "poda", 0, 3, 1);
-            assertThat(ChainReplay.newestCheckpoint(store, "bins", 1))
+            assertThat(CheckpointCursor.newest(store, "bins", 1))
                     .as("the pointer never landed, so discovery finds nothing yet")
                     .isEmpty();
 
             tickAndAwait(ticker, writer);
 
-            assertThat(ChainReplay.newestCheckpoint(store, "bins", 1))
+            assertThat(CheckpointCursor.newest(store, "bins", 1))
                     .as("the checkpoint was NOT marked written, so the next TICK redid both")
                     .isPresent();
         }
@@ -342,7 +342,7 @@ class CheckpointDiscoveryTest {
         RecordingBinStore store = new RecordingBinStore(seeded(3));
         store.failEveryGet(new IOException("the store is unreachable"));
 
-        assertThatThrownBy(() -> ChainReplay.newestCheckpoint(store, "bins", 1))
+        assertThatThrownBy(() -> CheckpointCursor.newest(store, "bins", 1))
                 .as("an outage propagates; it is not silently an empty chain")
                 .isInstanceOf(IOException.class);
     }
@@ -407,7 +407,7 @@ class CheckpointDiscoveryTest {
             log.commitAll(requests);
             writer.observe(requests);
 
-            Optional<Checkpoint> found = ChainReplay.newestCheckpoint(store, "bins", 1);
+            Optional<Checkpoint> found = CheckpointCursor.newest(store, "bins", 1);
             assertThat(found).isPresent();
             assertThat(found.get().sequence()).isEqualTo(log.nextSequence());
             assertThat(found.get().pods()).containsEntry("poda", 7L);
