@@ -38,6 +38,8 @@ final class RecordingBinStore implements BinStore {
     private final List<Put> puts = new CopyOnWriteArrayList<>();
     private volatile IOException armed;
     private volatile RuntimeException armedUnchecked;
+    private volatile IOException getFailure;
+    private volatile IOException armedPointer;
 
     RecordingBinStore(BinStore delegate) {
         this.delegate = delegate;
@@ -67,6 +69,25 @@ final class RecordingBinStore implements BinStore {
         this.armedUnchecked = failure;
     }
 
+    /**
+     * The next POINTER PUT — and only that one — fails.
+     *
+     * <p>⚠️ A CHECKPOINT COSTS TWO PUTs SINCE ADR-0034, and the other arming
+     * methods are scoped to {@code .ckpt} while the pointer ends in
+     * {@code /LATEST} — so nothing here could fail the SECOND of them, and
+     * ADR-0034's ordering consequence had no test that would fail if it were
+     * untrue. Measured: hoisting {@code written = true} above the pointer PUT
+     * survived the whole suite.
+     */
+    void failNextPointerPut(IOException failure) {
+        this.armedPointer = failure;
+    }
+
+    /** Every GET fails — an UNREACHABLE store, not an absent object. */
+    void failEveryGet(IOException failure) {
+        this.getFailure = failure;
+    }
+
     /** Stop failing — the "until cleared" half of the method above. */
     void stopFailingCheckpointPuts() {
         this.armedUnchecked = null;
@@ -83,6 +104,24 @@ final class RecordingBinStore implements BinStore {
         List<String> out = new ArrayList<>();
         for (Put p : puts) {
             if (p.key().endsWith(".ckpt")) {
+                out.add(p.key());
+            }
+        }
+        return out;
+    }
+
+    /**
+     * PUT keys of the LATEST pointer, in order.
+     *
+     * <p>⚠️ {@link #checkpointKeys} CANNOT SEE THESE: it filters on
+     * {@code .ckpt}, and the pointer key ends in {@code /LATEST}. Without this,
+     * writing the pointer twenty times per trigger stays green against every
+     * rate assertion in the suite.
+     */
+    List<String> pointerKeys() {
+        List<String> out = new ArrayList<>();
+        for (Put p : puts) {
+            if (p.key().endsWith("/LATEST")) {
                 out.add(p.key());
             }
         }
@@ -117,6 +156,13 @@ final class RecordingBinStore implements BinStore {
     private byte[] capture(String key, Body body) throws IOException {
         byte[] bytes = body.readFully();
         puts.add(new Put(key, bytes));
+        if (key.endsWith("/LATEST")) {
+            IOException pointerFailure = armedPointer;
+            if (pointerFailure != null) {
+                armedPointer = null;
+                throw pointerFailure;
+            }
+        }
         if (key.endsWith(".ckpt")) {
             RuntimeException unchecked = armedUnchecked;
             if (unchecked != null) {
@@ -148,6 +194,10 @@ final class RecordingBinStore implements BinStore {
 
     @Override
     public InputStream get(String key) throws IOException {
+        IOException unreachable = getFailure;
+        if (unreachable != null) {
+            throw unreachable;
+        }
         return delegate.get(key);
     }
 

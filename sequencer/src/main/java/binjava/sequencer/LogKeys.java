@@ -46,10 +46,29 @@ record LogKeys(String prefix, long epoch) {
      * <p>⚠️ ZERO-PADDED, like {@link #keyFor} and for the same reason —
      * lexicographic order IS numeric order (ADR-0022 left key order as the only
      * ordering a reader has). Unpadded, {@code 10.ckpt} sorts before
-     * {@code 9.ckpt}, and M4.9 bounds replay by taking the LAST of these.
+     * {@code 9.ckpt}. ⚠️ M4.9 DOES NOT FIND THE NEWEST BY TAKING THE LAST OF
+     * THESE, and an earlier version of this sentence said it did — that is the
+     * {@code list}-and-take-last mechanism ADR-0034 rejects. It reads
+     * {@link #latestCheckpointKey}. The padding still matters, because the
+     * seq-keyed objects are the ordered history M7 prunes.
      */
     String checkpointKeyFor(long sequence) {
         return String.format(Locale.ROOT, "%sckpt/%016x.ckpt", logPrefix(), sequence);
+    }
+
+    /**
+     * The pointer to the NEWEST checkpoint, at a key known without listing.
+     *
+     * <p>⚠️ NO SEQUENCE IN IT, which is the whole point: a reader that must
+     * LIST or probe to learn the newest sequence cannot be constant in the
+     * number of checkpoints. ADR-0034.
+     *
+     * <p>⚠️ IT DOES NOT END IN {@code .delta}, so {@link #isEntryKey} refuses it
+     * and M4.8b1's filter skips it at both recovery sites — the same protection
+     * that lets the {@code ckpt/} objects live under this prefix at all.
+     */
+    String latestCheckpointKey() {
+        return logPrefix() + "ckpt/LATEST";
     }
 
     /**

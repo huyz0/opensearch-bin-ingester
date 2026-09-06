@@ -234,6 +234,14 @@ final class CheckpointWriter implements AutoCloseable {
             // there".
             store.putIfAbsent(keys.checkpointKeyFor(sequence),
                     new Body(body.length, () -> new ByteArrayInputStream(body)));
+            // ⚠️ THE POINTER IS WHAT MAKES DISCOVERY CONSTANT (ADR-0034), and it
+            // carries the checkpoint's own BYTES rather than its sequence: a
+            // pointer holding a number would be a second wire format to version
+            // and golden-file, and this way discovery is one GET rather than two.
+            // ⚠️ `put`, not `putIfAbsent`: this key is MEANT to be overwritten,
+            // and it is the one object here that moves.
+            store.put(keys.latestCheckpointKey(),
+                    new Body(body.length, () -> new ByteArrayInputStream(body)));
             written = true;
         } catch (IOException retryAtTheNextTrigger) {
             // ⚠️ THE DIRTY FLAG IS LEFT SET so a later trigger retries; clearing

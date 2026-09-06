@@ -243,9 +243,14 @@ class CheckpointWriterContentTest {
     @Test
     void theCheckpointKeyIsZeroPaddedSoLexicographicOrderIsNumericOrder() {
         // ⚠️ COUNT CANNOT SEE THIS: `Long.toHexString(seq)` leaves every count
-        // identical while `10.ckpt` sorts before `9.ckpt` -- and M4.9 bounds
-        // replay by taking the LAST key under the prefix. Asserted as an ORDERED
-        // PAIR, with a seq pair whose padded and unpadded orders DIFFER.
+        // identical while `10.ckpt` sorts before `9.ckpt`. Asserted as an
+        // ORDERED PAIR, with a seq pair whose padded and unpadded orders DIFFER.
+        // ⚠️ M4.9 DOES NOT TAKE THE LAST KEY UNDER THE PREFIX, and an earlier
+        // version of this comment said it did -- that is the mechanism ADR-0034
+        // rejects; it reads `latestCheckpointKey()`. The padding still matters,
+        // because these are the ordered history M7 prunes. THIRD SITE of one
+        // claim, corrected twice before this one was found by grep rather than
+        // by fixing the instance a reviewer named.
         LogKeys keys = new LogKeys("bins", 1);
         String nine = keys.checkpointKeyFor(9);
         String sixteen = keys.checkpointKeyFor(16);

@@ -337,11 +337,26 @@ public final class Invariants {
     private static List<ChainEntry> readChain(BinStore store, String prefix, long epoch)
             throws IOException {
         CommitLog addressing = new CommitLog(store, prefix, epoch);
+        LogKeys keys = new LogKeys(prefix, epoch);
         List<ChainEntry> out = new ArrayList<>();
         String after = null;
         while (true) {
             ListPage page = store.list(addressing.logPrefix(), after, 1000);
             for (ObjectStat stat : page.objects()) {
+                // ⚠️ THE SAME ALLOW-LIST PRODUCTION USES, and NOT a caught
+                // decode failure. `catch (IOException) { continue; }` here would
+                // blind the invariant checker to genuinely corrupt bytes -- the
+                // inversion `check-test-integrity.sh` exists to catch, and the
+                // one M4.8b1's row names as the tempting repair.
+                // ⚠️ THIS SITE WAS A LANDMINE FOR M4.13. The simulation is green
+                // only because checkpointing never triggers in it; review
+                // measured that forcing one pointer PUT per commit fails seven
+                // simulation and invariant tests with "not a chain entry: bad
+                // magic". The 1,000-seed run IS the milestone's completion
+                // condition, so it would have detonated there.
+                if (!keys.isEntryKey(stat.key())) {
+                    continue;
+                }
                 try (InputStream in = store.get(stat.key())) {
                     out.add(ChainEntry.decode(in.readAllBytes()));
                 }
