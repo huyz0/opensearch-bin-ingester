@@ -26,11 +26,18 @@ import java.util.Map;
  * to one are different jobs, and only the writer needs a lease, a redrive budget
  * or a barrier to respect.
  *
- * <p>⚠️ ADDRESSING COMES FROM {@link CommitLog}, never re-derived here. The key
+ * <p>⚠️ ADDRESSING COMES FROM {@link LogKeys}, never re-derived here. The key
  * grammar zero-pads epoch and sequence to 16 hex digits so lexicographic order
  * is numeric order (ADR-0022 left key order as the only ordering a reader has),
  * and a second copy of that formatting would be a wire-format duplication
  * waiting to drift.
+ *
+ * <p>⚠️ ONE SITE STILL GOES THROUGH {@link CommitLog} — {@link #firstEntry}
+ * builds one to address slot 0 — and it is a LEFTOVER of the split, not a
+ * guard. An earlier draft claimed the constructor's {@code epoch < 0} check was
+ * why it stayed; that was measured FALSE. Both callers already establish
+ * {@code chainEpoch >= 1} before reaching it, so the throw is unreachable here
+ * and a bare {@link LogKeys} leaves the suite green.
  */
 final class ChainReplay {
 
@@ -94,10 +101,19 @@ final class ChainReplay {
     static Result chainEnd(BinStore store, String prefix, long epoch) throws IOException {
         String lastKey = null;
         String startAfter = null;
-        String logPrefix = new CommitLog(store, prefix, epoch).logPrefix();
+        LogKeys keys = new LogKeys(prefix, epoch);
+        String logPrefix = keys.logPrefix();
         while (true) {
             ListPage page = store.list(logPrefix, startAfter, 1000);
             for (ObjectStat stat : page.objects()) {
+                // ⚠️ SKIP, never STOP. A checkpoint sorts after every entry, so
+                // breaking here would be indistinguishable against one — but a
+                // non-entry key that sorts in the MIDDLE (a half-written
+                // `.delta.tmp`) would end the chain early and hand a taking-over
+                // leader a `nextSequence` inside its predecessor's history.
+                if (!keys.isEntryKey(stat.key())) {
+                    continue;
+                }
                 lastKey = stat.key();
             }
             if (page.nextStartAfter().isEmpty()) {
@@ -306,11 +322,22 @@ final class ChainReplay {
     }
 
     private void applyChain(Hop hop) throws IOException {
-        String logPrefix = new CommitLog(store, prefix, hop.epoch()).logPrefix();
+        LogKeys keys = new LogKeys(prefix, hop.epoch());
+        String logPrefix = keys.logPrefix();
         String startAfter = null;
         while (true) {
             ListPage page = store.list(logPrefix, startAfter, 1000);
             for (ObjectStat stat : page.objects()) {
+                // ⚠️ NOT OURS, so not READ — the GET is skipped, not issued and
+                // its failure swallowed. Swallowing would be I3 and would also
+                // make recovery's cost grow with the checkpoints beside the
+                // chain, which is the dimension its test pins.
+                // ⚠️ `continue`, never `return`: a key that sorts between two
+                // entries would otherwise TRUNCATE the chain and silently drop
+                // every offset past it (I2).
+                if (!keys.isEntryKey(stat.key())) {
+                    continue;
+                }
                 ChainEntry entry = read(store, stat.key());
                 // ⚠️ STOP AT THE SLOT THE CONTINUE NAMED, not at the chain's end.
                 // Anything past it was written by a leader that had already been

@@ -42,6 +42,7 @@ public final class CommitLog {
     private final BinStore store;
     private final String prefix;
     private final long epoch;
+    private final LogKeys logKeys;
     private final Map<RunKey, Long> nextOffsets = new HashMap<>();
     private long nextSequence;
     /**
@@ -92,6 +93,7 @@ public final class CommitLog {
             throw new IllegalArgumentException("epoch is never negative: " + epoch);
         }
         this.epoch = epoch;
+        this.logKeys = new LogKeys(prefix, epoch);
     }
 
     /**
@@ -106,13 +108,11 @@ public final class CommitLog {
      * only ordering a reader has; unpadded, epoch 10 would sort before epoch 9.
      */
     String keyFor(long sequence) {
-        // ⚠️ Locale.ROOT: an object key is a wire value and must not depend on
-        // the process's locale.
-        return String.format(java.util.Locale.ROOT, "%s%016x.delta", logPrefix(), sequence);
+        return logKeys.keyFor(sequence);
     }
 
     String logPrefix() {
-        return String.format(java.util.Locale.ROOT, "%s/ctl/log/0/%016x/", prefix, epoch);
+        return logKeys.logPrefix();
     }
 
     /** Which term of leadership this chain belongs to. */
