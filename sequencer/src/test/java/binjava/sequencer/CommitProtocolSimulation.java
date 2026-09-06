@@ -7,6 +7,7 @@ import binjava.format.RunKey;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -54,14 +55,30 @@ public final class CommitProtocolSimulation {
     private static final Duration RENEW = Duration.ofSeconds(3);
     private static final String PREFIX = "bins/cluster-a";
 
+    /** One `(podId, flushSeq)` as it was ISSUED, with the segment it named. */
+    public record Issued(String podId, long flushSeq, String segmentKey) {
+    }
+
     /** What one seed produced, including what it is NOT evidence about. */
     public record Result(long seed, int commits, int takeovers, long highestEpoch,
             int zombieWrites, int zombieAttempts,
             List<FaultInjectingStore.Injected> faults,
+            List<Issued> issued,
             List<Invariants.Violation> violations) {
     }
 
     private CommitProtocolSimulation() {
+    }
+
+    /**
+     * ⚠️ READ FROM THE REQUEST THAT IS SENT, never from sibling locals. Built
+     * from locals, the recording agreed with the request only BY ADJACENCY:
+     * review measured that reverting just the request's `flushSeq` argument,
+     * leaving the recording alone, kept this test and the whole suite green
+     * while the driver reissued `(pod1, 0)` for two different segments.
+     */
+    private static Issued record(CommitRequest request) {
+        return new Issued(request.podId(), request.flushSeq(), request.segmentKey());
     }
 
     private static Map<RunKey, Integer> counts(int n) {
@@ -116,6 +133,18 @@ public final class CommitProtocolSimulation {
         // what the assertion says.
         int zombieWrites = 0;
         int zombieAttempts = 0;
+        // ⚠️ DERIVED, NOT DECLARED. Recorded at the point of issue, so a test
+        // reads what the driver actually sent rather than a counter it set --
+        // the shape M4.27 records as satisfiable by hard-coding.
+        List<Issued> issued = new ArrayList<>();
+        // ⚠️ PER POD, PER ATTEMPT -- what a real pod does. `commits` and
+        // `zombieWrites` count OUTCOMES and advance only on success, so using
+        // either as `flushSeq` reissues a number for a different segment after
+        // every failure, and a zombie's pod name can be re-picked as the next
+        // leader so the two counters collide on `podId` too. M4.10 dedups on
+        // this pair; against a reissued pair that dedup suppresses a genuine
+        // commit, which is worse than the duplication it exists to prevent.
+        Map<String, Long> nextFlushSeq = new HashMap<>();
 
         for (int round = 0; round < rounds; round++) {
             if (leader == null) {
@@ -185,8 +214,12 @@ public final class CommitProtocolSimulation {
                 int z = random.nextInt(zombies.size());
                 zombieAttempts++;
                 try {
-                    zombies.get(z).commit(new CommitRequest(zombiePods.get(z), zombieWrites,
-                            "seg/zombie-" + round, counts(1 + random.nextInt(3))));
+                    String zombiePod = zombiePods.get(z);
+                    CommitRequest zombieReq = new CommitRequest(zombiePod,
+                            nextFlushSeq.merge(zombiePod, 1L, Long::sum) - 1,
+                            "seg/zombie-" + round, counts(1 + random.nextInt(3)));
+                    issued.add(record(zombieReq));
+                    zombies.get(z).commit(zombieReq);
                     zombieWrites++;
                 } catch (IOException fenced) {
                     // correct: the zombie discovered it is fenced
@@ -196,8 +229,11 @@ public final class CommitProtocolSimulation {
                 continue;
             }
             try {
-                leader.commit(new CommitRequest(leaderPod, commits,
-                        "seg/" + round, counts(1 + random.nextInt(3))));
+                CommitRequest leaderReq = new CommitRequest(leaderPod,
+                        nextFlushSeq.merge(leaderPod, 1L, Long::sum) - 1,
+                        "seg/" + round, counts(1 + random.nextInt(3)));
+                issued.add(record(leaderReq));
+                leader.commit(leaderReq);
                 commits++;
             } catch (IOException injected) {
                 // ⚠️ AMBIGUOUS. The commit may have landed. A leader that
@@ -234,7 +270,7 @@ public final class CommitProtocolSimulation {
                     + " -- chains past it were never checked");
         }
         return new Result(seed, commits, takeovers, highest, zombieWrites, zombieAttempts,
-                store.injected(), violations);
+                store.injected(), issued, violations);
     }
 
     private static boolean hasChain(BinStore store, long epoch) throws IOException {
