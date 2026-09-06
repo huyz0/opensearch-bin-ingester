@@ -1,7 +1,13 @@
 # 0033. A checkpoint carries offsets and flush seqs, never the segment index
 
-Status: accepted
+Status: accepted; per-pod half amended by ADR-0036 (2026-09-07)
 Date: 2026-09-06
+
+⚠️ **Amended 2026-09-07 by [ADR-0036](0036-the-idempotency-key-carries-an-explicit-pod-incarnation.md).**
+The per-pod `lastAppliedFlushSeq` this ADR decides gains an `incarnationId` and a pointer to the delta that last applied,
+because `(podId, flushSeq)` cannot discriminate a pod restart. The size argument below,
+and the exclusion of the offset-to-segment index, are unchanged -- and are what rejected
+storing a segment key per pod in ADR-0036.
 Requirements: FR-11, FR-10
 Research: docs/research/30-design-space/03-metadata-and-cas.md
 

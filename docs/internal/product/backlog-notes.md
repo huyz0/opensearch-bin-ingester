@@ -181,12 +181,11 @@ things are separable, and IF a format change proves necessary, non-negotiable 8
 requires it land atomically with its ADR, goldens, readers, writers and fakes
 -- so it cannot be a hunk inside a larger commit.
 
-Order is forced by M4.10b, which decides the key's shape and whether any
-format changes at all. M4.10c happens only if it does, and may be void.
-M4.10d is blocked by M4.10b. Its ANCHOR needs no format change —
-`Checkpoint.pods` already exists — but how far its dedup reaches depends on
-M4.10b's answer: returning the original offsets across a takeover needs a
-carrier for `flushSeq`.
+M4.10b is DONE: ADR-0036 keys idempotency on
+`(podId, incarnationId, flushSeq)` and both formats change, so M4.10c is not
+conditional and is not void. M4.10d is blocked by M4.10c, because returning the
+original offsets across a takeover needs the carrier M4.10c adds; its ANCHOR
+alone needs no format change, since `Checkpoint.pods` already exists.
 
 The primary argument is unchanged and is why the naive version is dangerous:
 `flushSeq` restarts at 0 on every process start while `podShortId` is stable,
@@ -202,7 +201,9 @@ commits.
 
 ⚠️ A FACT TO WEIGH, NOT A CONCLUSION. `SegmentKey.render` emits
 timestampMillis, podShortId, then a per-pod sequence `SegmentPublisher` calls
-"unique WITHOUT coordination". `podShortId` is stable and the timestamp advances, but
+"unique WITHOUT coordination". `podShortId` is stable, and the timestamp does NOT reliably advance across a
+restart -- that premise was measured false and is what retired this candidate;
+also
 `SegmentPublisher.sequence` is an instance `AtomicLong` and restarts with the
 process; the durable half today is `Checkpoint.pods`, one uvarint per pod -- written,
 but recovered by nothing, which is the gap M4.10d's fold closes. Whether any of that suffices
@@ -239,33 +240,105 @@ choosing it produced five falsifiable guesses:
 
 ### M4.10c
 
-⚠️ CONDITIONAL ON M4.10b AND POSSIBLY VOID. Do not start before that ADR lands.
-This row is ONLY the format change; everything that needs no format change is
-M4.10d's, deliberately, so that a "no format change" finding cannot take the
-end-to-end anchor down with it.
+⚠️ NO LONGER CONDITIONAL. ADR-0036 decided the key and BOTH formats change; an
+earlier draft of this section, written before that ADR, called the row possibly
+void and declined to prescribe a shape. It prescribes one now.
 
-⚠️ THE FORMAT ADR TRAVELS IN THIS COMMIT, not in M4.10b. `wire-format-change`
-requires the record, the codec, every reader and writer, the fakes, the golden
-and the ADR together; M4.10b decides the KEY and cannot discharge that. If
-M4.10b's decision pins BYTES rather than a key, then b and c are one commit and
-this row is absorbed — say so in the ADR rather than leaving the tree between
-them contradicting an accepted decision.
+`Checkpoint.pods` becomes `podId -> (incarnationId, lastAppliedFlushSeq, epoch,
+sequence)` — the watermark AND a pointer to the delta that last applied for that
+pod. Without the pointer, detection is unbounded-depth and answering is bounded
+to the uncheckpointed tail.
 
-If a field is needed, `CommitDelta` and `Checkpoint` must agree on the key's
-SHAPE, or a window recovered from a checkpoint compares a bare pair against a
-qualified one and post-restart `flushSeq 0` matches pre-restart `flushSeq 0` —
-the failure this task exists to prevent, reintroduced by the fix for it.
+`CommitDelta` carries the triple PER `SegmentCommit`, not once per delta, and
+the delta's `podId` is AUTHORITATIVE for the window while `segmentKey` stays
+opaque to the sequencer. ⚠️ Do not drop `podId` on the ground that `segmentKey`
+holds `podShortId`: that is true of one CALLER, not of the record --
+`SegmentCommit.segmentKey` is a `String` checked only for non-emptiness,
+`SegmentKey` exposes no parser for the pod, and `chain-delta-batched-v1.bin`
+holds `bins/a.seg` with no pod in it. `CheckpointWriter` merges on
+`request.podId()`, so a tail without it leaves a rebuilt window with no key to
+be written back under.
+⚠️ WHAT THE TESTS MUST ASSERT, not what data they must carry: the PER-SEGMENT
+triple, after round-trip and after `commitAll`. ⚠️ THE DATA REQUIREMENT STANDS TOO, and an
+earlier draft of this paragraph retracted it on a false premise: `SegmentCommit`
+is `(String segmentKey, List<RunCommit> runs)` and carries NO `podId` at all, so
+no fixture varies by pod today — `BatchedCommitDeltaTest` varies only a key
+STRING, which this same section argues is not pod attribution. So both are
+needed: the fixtures must set DIFFERENT triples per segment once M4.10c adds the
+fields, AND the assertion must read them back per segment. Give three segments
+the SAME triple and `isEqualTo(original)` passes under encode-once,
+fan-out-on-decode.
+The maximal survivor is the PARTIAL hoist: `podId` per segment, incarnation and
+flushSeq once per delta. `BatchedCommitDeltaTest`'s whole-record equality kills
+a full hoist; `BatchingSequencerTest`'s two-pod case cannot see either: its only assertion on
+that delta is `assertThat(delta.segments()).hasSize(2)`, and both requests are
+`from("pod0", 0)` / `from("pod1", 0)` — identical flushSeq. ⚠️ The class DOES
+assert per-segment run counts and offset tiling over a three-pod delta
+elsewhere, which is the strongest per-segment fixture available and the natural
+place to add the triple assertion.
 
-⚠️ THE TWO DISCRIMINATE DIFFERENTLY AND THIS ROW DOES NOT PRESCRIBE HOW; two
-earlier drafts did, wrongly. And `CommitDelta` ITSELF LIVES IN TWO VERSIONS:
-`encode` emits `VERSION_DELTA` (v0, no kind byte) for a single segment and the
-kinded `VERSION_KINDED = 1` for a batch, and every production delta is
-single-segment today because nothing constructs a `BatchingSequencer` outside
-its own test (M4.7c). Both paths change, or neither. `Checkpoint` is not a
-`ChainEntry` at all — own MAGIC, own VERSION, no kind byte — and ADR-0033
-requires it never decode as one.
-ADR-0028 leaves the version path open, and the kind value ADR-0032 used had
-been RESERVED — `ChainEntry` records that reservation consumed.
+⚠️ DO NOT REGENERATE `golden/chain-delta-batched-v1.bin` to carry the new field.
+`GoldenChainEntryTest` says "Do NOT regenerate these to make the test pass", and
+that file is the only proof a v1-kinded delta written by an earlier build still
+parses. The discriminating golden is a NEW file beside it.
+
+In PRODUCTION the two placements are byte-equivalent today, which is why the
+assertions are the only thing standing between this and M5.
+
+⚠️ BOTH DELTA PATHS CARRY THE FIELD — `VERSION_DELTA` and the kinded batch,
+both or neither — BY A NEW VERSION, not by changing either existing layout: a
+delta carrying no triple must still encode exactly as it does today, because
+`GoldenChainEntryTest` asserts byte-identity on both goldens. `Checkpoint` is not a `ChainEntry` at all
+— own MAGIC, own VERSION, no kind byte — and ADR-0033 requires it never decode
+as one, so the two formats discriminate by different means.
+
+⚠️ AND THIS ROW OWNS THE MINTING SITE, which no other row named and which
+ADR-0036 calls its highest-risk clause. `CommitRequest` gains `incarnationId`
+(it is never encoded, so it is not one of the two FORMATS) and `DefaultIngest`
+mints it ONCE PER INSTANCE. Minting per FLUSH — `UUID.randomUUID()` beside
+`flushSeq++` inside `flushLocked`, the smallest edit that compiles — makes
+dedup a total no-op in production while every sequencer-seam suite stays green,
+because those tests supply the incarnation themselves. The fixture that sees it
+is `IngestCommitPathTest`'s recording sequencer: two `DefaultIngest` instances
+sharing a `podShortId` must record DIFFERENT incarnations, and one instance's
+two flushes the SAME one.
+
+⚠️ AND THE JAVA SITES BELOW ARE THIS ROW'S, which an earlier sweep missed by
+stopping at markdown. ⚠️ THE LIST IS THE AUTHORITY, NOT A COUNT — two drafts
+gave a numeral and both were wrong. `git grep -n 'podId, flushSeq' -- '*.java'`
+finds most of them, ⚠️ BUT NOT ALL AND THIS PARAGRAPH DOES NOT CERTIFY
+OTHERWISE — two earlier drafts did and both were wrong. Known to the grep's
+blind spot: the sentence promising the record shape does not change, spanning
+`Sequencer.java:48-50`; and `CheckpointWriter.java:105-106`, "the only place the writer can see `podId`
+and `flushSeq`, which the chain does not carry" — the premise this ADR
+reverses, in the class M4.10d must change; and `CommitRequest.java:35-36`,
+`@param flushSeq ...
+Together with {@code podId} it identifies this commit uniquely across the
+fleet`, which is the tree's strongest statement of the premise ADR-0036
+measures false and which will sit three lines from the new `@param
+incarnationId`. Read the javadoc BLOCKS, not the grep hits. Falsified by
+ADR-0036 and load-bearing: `Sequencer.java:35` ("NOT that a given
+`(podId, flushSeq)` is applied at most once — that is M4.10"), which will now
+NEVER hold, because a restarted pod legitimately reissues `(podId, 0)`;
+`Sequencer.java:46` and `:88`; the javadoc promising "carried from this first
+commit precisely so M4.10 can make the retry safe WITHOUT CHANGING THE RECORD
+SHAPE" (`Sequencer.java:48-50`), which this row falsifies by adding
+`incarnationId` to `CommitRequest`; `CommitRequest.java:19`;
+`FakeSequencer.java:27` and `:29`, and `FakeSequencerTest:178`;
+`Checkpoint.java:32`; `IngestCommitPathTest.java:81`;
+`CommitProtocolSimulation.java:58` and `CommitProtocolSimulationFlushSeqTest:23`.
+
+⚠️ AN M4.10d SESSION READS THE SEAM, NOT THIS FILE. Left standing, those javadocs
+tell it to key dedup on the pair; every M4 fixture is single-incarnation, so the
+suite stays green while a restarted pod is SUPPRESSED.
+
+⚠️ AND THREE DESCRIPTIVE `SPEC.md` SITES ARE THIS ROW'S, cited by TEXT because
+this commit has already moved their line numbers twice and a correction moved
+them again: the scope sentence beginning "from the outset", the Risks row
+"The multi-pod gap becomes invisible", and the M4.1 task row. All three say the
+commit request carries `(podId, flushSeq, …)`. They describe the
+seam as it stands and ADR-0036 does not falsify them; they become incomplete
+the moment this row lands.
 
 ⚠️ OLD OBJECTS MUST STILL DECODE. `Checkpoint.decode` compares against one
 constant and `CheckpointCursor.newest` lets that `IOException` out where
@@ -279,8 +352,25 @@ rather than discovering it.
 
 ### M4.10d
 
-Refuse a replayed `(podId, flushSeq)` using per-pod `lastAppliedFlushSeq`,
-including a replay arriving after a checkpoint recorded it.
+Refuse a replayed `(podId, incarnationId, flushSeq)` per ADR-0036 -- a replay
+is `flushSeq <= lastAppliedFlushSeq` for the SAME incarnation -- including a
+replay arriving after a checkpoint recorded it.
+
+⚠️ THE REFUSAL'S CALLER SEMANTICS ARE THIS ROW'S TO DECIDE, and ADR-0036
+deliberately does not state them, because TWO HISTORIES REACH THE REFUSE BRANCH
+AND THE SEQUENCER CANNOT TELL THEM APART: flush 5 applied in one delta and 6 in
+the next, with a duplicate of 5 arriving (the key DID apply, so a re-flush
+duplicates the records); and a `flushSeq` consumed by `DefaultIngest`'s
+unconditional `flushSeq++` on a commit that then threw. Density is over ISSUED flushes, not applied ones. A blanket
+"refuse, then re-flush" is therefore unsafe, and a test written from it is
+GREEN while one set of records holds two sets of committed offsets.
+
+⚠️ PIN THE UPDATE RULE, NOT ONLY THE COMPARISON. `CheckpointWriter`'s existing
+`pods.merge(podId, flushSeq, Math::max)` carries a comment arguing for exactly
+the behaviour an incarnation-aware merge must NOT have: carried across
+incarnations it refuses the SECOND commit after a restart, and the required
+discriminator is depth-one and passes it. ADR-0036 also leaves the slot
+destructible by an interleaving incarnation; pin that bound.
 
 ⚠️ THIS ROW OWNS THE END-TO-END ANCHOR, and it needs NO format change:
 `Checkpoint.pods` already exists. Fold the recovered window into the
@@ -557,4 +647,27 @@ shape the gate's own header names about its predecessor. ⚠️ `judged` is unpi
 in BOTH directions: incrementing it for EXEMPT rows also survives, turning
 `1 new archive row(s)` into `2` on a commit that edits one landed row and adds
 one new one, exit 0 either way. A fix aimed at one direction leaves the other.
+
+### M4.46
+
+`SegmentPublisher` PUTs unconditionally, justified in place: "put, not
+putIfAbsent: the key already contains a pod id and a per-pod sequence, so it is
+unique WITHOUT coordination". That premise is false across incarnations.
+`SegmentKey.timestampMillis` is the segment's `firstAppendMillis`, not a
+publish stamp, and `SegmentPublisher.sequence` is an instance `AtomicLong` that
+restarts at 0 -- so two incarnations of one pod can mint byte-identical keys.
+
+MEASURED by M4.10b's review: 200/200 under a frozen clock. ⚠️ The 175/200 on
+`Clock.systemUTC()` is an artifact of a fixture whose appends fall inside one
+millisecond, NOT an 87% production rate. The production trigger is a clock that
+does not advance across a restart.
+
+⚠️ THE BROKEN INVARIANT IS NOT "DATA LOSS", which would invite a
+retention-shaped fix. The chain still names the overwritten key in a
+`SegmentCommit`, so the offsets already acknowledged for the first incarnation
+now resolve to the second's records: a committed offset must resolve to the
+records committed at it.
+
+⚠️ NOT M4.10's. This is the segment path and it is independent of idempotency;
+M4.10b only found it.
 

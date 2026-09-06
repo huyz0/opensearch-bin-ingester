@@ -144,8 +144,11 @@ says more, the extra clause is kept because it is the testable part.
     have shipped with every criterion green.
 8. **Bounded recovery**: newest checkpoint + at most K deltas, replacing today's
    unbounded full-chain replay.
-9. **Commit idempotency.** `(podId, flushSeq)` with `lastAppliedFlushSeq` per
-   pod, carried in checkpoints, so a retried pod is not assigned offsets twice.
+9. **Commit idempotency.** ⚠️ AMENDED BY ADR-0036 (2026-09-07): the key is
+   `(podId, incarnationId, flushSeq)`, not the pair. The pair cannot
+   discriminate a pod restart -- `flushSeq` restarts at 0 while `podShortId` is
+   stable -- so dedup on it SUPPRESSES real commits. `lastAppliedFlushSeq`
+   survives, carried in checkpoints beside the incarnation and a pointer.
 10. **The ack-ordering rule (I5).** Pipelining for throughput is permitted;
    acknowledging out of order is not.
 11. **Deterministic simulation**: injectable clock, fault-injecting store,
@@ -412,9 +415,25 @@ only a latency one.
    showed ≥50 does too — 50 keys fit inside one 1,000-key page. The workload
    must exceed a page for the assertion to discriminate at all. Cold start (no
    lease, no checkpoint) is exempt and tested separately.
-6. **Commit is idempotent**: replaying a `(podId, flushSeq)` already applied
-   assigns no new offsets and returns the original assignment — including when
-   the replay arrives after a checkpoint recorded `lastAppliedFlushSeq`.
+6. **Commit is idempotent**: replaying a
+   `(podId, incarnationId, flushSeq)` already applied assigns no new offsets --
+   including when the replay arrives after a checkpoint recorded it -- and
+   returns the original assignment. ⚠️ THE POINTER IS RECORDED FOR EVERY COMMIT
+   THE LEADER OBSERVES APPLYING, and a replay of a pod's most recent such
+   `flushSeq` is answered. ⚠️ AN AMBIGUOUS COMMIT IS NOT ONE OF THEM:
+   `LocalSequencer` calls `observe` only after `commitAll` RETURNS, and the
+   `IOException` means the PUT may have landed — so the commit applies and the
+   in-memory window never learns of it. M4.10d must reconcile that case from
+   the CHAIN, which carries the triple after M4.10c, rather than treating the
+   in-memory map as authoritative; a dedup tested only after successful commits
+   is a no-op against exactly the ambiguity M4.10 exists for. Below that
+   watermark, a replay the pointed delta DOES carry is answered
+   too; refusal is permitted ONLY when the pointed delta does not carry the
+   triple. A dedup that records the pointer and never populates it, or that
+   refuses below the watermark without reading, satisfies neither this
+   criterion nor the T0 row. ⚠️ AMENDED BY ADR-0036 (2026-09-07), which supplies both
+   the incarnation and that bound; a restarted pod reissuing `flushSeq 0` is a
+   NEW commit and must be ACCEPTED, which the pair-keyed wording forbade.
 7. **The ack-ordering rule (I5) is enforced, and its violation is detectable**: a
    commit is acknowledged only after every lower-numbered write in its chain is
    confirmed. ⚠️ The test must **fail** against a deliberately naive pipelining
@@ -434,7 +453,13 @@ only a latency one.
    which every batch is saturated, the number of commit-chain PUTs is
    **bounded by `window / commitBatchInterval`** and does not change when the
    workload goes from 1 pod to 6, or from 1 stream to 1,000 — asserted through
-   `CountingBinStore`. ⚠️ The saturation clause matters: "unchanged" alone is
+   `CountingBinStore`.
+   ⚠️ **AND NOR DOES THE REPLAY-ANSWERING GET** (ADR-0036), which this clause
+   does not count: a batch may hold several replays whose pointers name ONE
+   shared delta, so at most one GET per distinct `(epoch, sequence)` per
+   `commitAll`. N GETs of one object is the pod axis M4.7 removed, returning as
+   reads.
+   ⚠️ The saturation clause matters: "unchanged" alone is
    not true of a correct batcher at trickle rates, where a window may carry one
    commit or none.
    ⚠️ The **pod** dimension is the one that matters — the stream dimension
@@ -465,9 +490,11 @@ production code exists, and the mutation column is what makes each worth having.
 | T0 | Checkpoint round-trip; contents omit the full offset→segment index | a checkpoint that grows with the retention window |
 | T1 | Newest-checkpoint discovery issues **zero** `list` calls with ≥5,000 checkpoints present | a discovery that pages the `ckpt/` prefix — ⚠️ the workload must exceed one 1,000-key page, or `list`-and-take-last passes |
 | T1 | Bounded recovery reconstructs state identical to full replay | recovery that reads the whole chain anyway — caught by request count, not by result |
-| T0 | Idempotent commit on `(podId, flushSeq)` replay, including post-checkpoint | a sequencer that assigns fresh offsets to a retry — silent duplication |
+| T0 | Idempotent commit on `(podId, incarnationId, flushSeq)` replay, including post-checkpoint | a sequencer that assigns fresh offsets to a retry — silent duplication; and one keyed on the bare `(podId, flushSeq)`, which dedups a retry within an incarnation but SUPPRESSES a restarted pod's new commit |
 | T1 | Ack-ordering: acked commits never exceed the confirmed prefix | naive pipelining that acks `N+2` before `N+1` confirms |
 | T1 | Commit batching: PUT count unchanged from 1 pod to 6 and 1 stream to 1,000 | a commit rate that scales with pods |
+| T1 | Replay after an AMBIGUOUS commit (the PUT landed, `commitAll` threw, `observe` never ran) is detected and answered from the CHAIN | a dedup that consults only the in-memory window — green against every successful-commit fixture |
+| T1 | Replay answering: EXACTLY ONE GET per `commitAll` when 6 replaying pods' pointers share one delta, and every replay answered WITH ITS OWN original offsets | N GETs of one shared delta; answering all six from the pointed delta's first run — the pod axis returning as reads; and an always-refuse dedup, which 0 == 0 would otherwise satisfy |
 | T1 | Offset stability across induced failover | an implementation that re-assigns after failover (I2/NFR-11) |
 | **T1** | **1,000-seed deterministic simulation** asserting I1–I5, many logical pods through the seam | any of the five; failing seeds pinned as named regressions |
 
@@ -510,7 +537,7 @@ One commit each, decomposed in [backlog.md](../../backlog.md).
 | M4.7 | Commit batching on `commitBatchInterval` — one delta per window across pods and streams |
 | M4.8 | Checkpoints: contents, key grammar, cadence (K/T as configuration), and newest-checkpoint discovery with **zero `list` calls** — mechanism chosen here and recorded in an ADR |
 | M4.9 | Bounded recovery: newest checkpoint + ≤K deltas, asserted by request count |
-| M4.10 | Commit idempotency on `(podId, flushSeq)` |
+| M4.10 | Commit idempotency on `(podId, incarnationId, flushSeq)` (ADR-0036) |
 | M4.11 | The ack-ordering rule, with the naive-pipelining mutation as its red record |
 | M4.12 | The fault-injecting store decorator and the seeded simulation harness |
 | M4.13 | The 1,000-seed run asserting I1–I5; failing seeds pinned as regressions |
