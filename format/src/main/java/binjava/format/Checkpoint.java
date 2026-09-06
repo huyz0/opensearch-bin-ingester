@@ -17,7 +17,7 @@ import java.util.Objects;
  * A point the commit chain can be replayed FROM, rather than replayed to
  * (M4.8a).
  *
- * <p>⚠️ THE RECORD AND ITS CODEC ONLY. Nothing writes one — M4.8b decides when
+ * <p>⚠️ THE RECORD AND ITS CODEC ONLY. Nothing writes one — M4.8b2 decides when
  * a checkpoint is written and under which key, and M4.9 is what reads one to
  * bound recovery. The precedent for shipping a value type with no producer is
  * M4.1, which landed the {@code Sequencer} seam and its fake the same way.

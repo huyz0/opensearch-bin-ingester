@@ -72,7 +72,7 @@ discriminates — and `oldestRetainedOffset`, the field nothing consumes before
 M7, is exactly the one a careless fixture leaves at 0. Measured: that swap
 round-trips green and fails the golden test's value assertions.
 
-**Nothing writes one yet.** M4.8b decides when a checkpoint is written and under
+**Nothing writes one yet.** M4.8b2 decides when a checkpoint is written and under
 which key; M4.9 reads it. Shipping the record and its codec alone follows M4.1,
 which landed the `Sequencer` seam and its fake with no implementation behind it,
 and satisfies `wire-format-change` because with no writer there are no bytes and
@@ -85,9 +85,18 @@ grow with history, which is the property M4.9 exists to remove.
 
 **Reuse `ChainEntry` with a new kind.** Rejected. A checkpoint is addressed
 separately and read on a different path, and putting it behind the chain's magic
-invites exactly the confusion M4.8b records as a live hazard — `ChainReplay`
-decodes every key under the log prefix and takes the last as the chain end.
+invites exactly the confusion M4.8b1 records as a live hazard — `ChainReplay`
+reads keys from under the log prefix and takes the last as the chain end.
 Distinct magic makes a checkpoint decoded as a chain entry fail loudly.
+
+⚠️ **Corrected 2026-09-06**, in the commit that split M4.8b rather than by
+rewriting the sentence above silently: this originally said `ChainReplay`
+*decodes every key* under the prefix. It does not. `chainEnd` takes the last
+key, and `applyChain` returns at `hop.upTo` and at the first `Seal`. The
+decision is unaffected — a checkpoint under that prefix is still read as the
+chain end by `chainEnd` — but the wrong version made a plain takeover test look
+sufficient, and it is not: the seal's key sorts before `ckpt/`, so such a test
+never reaches a checkpoint at the `applyChain` site.
 
 **JSON, as the lease uses.** Rejected. The lease is one small object per slot
 rewritten every few seconds, where readability wins; a checkpoint is thousands
