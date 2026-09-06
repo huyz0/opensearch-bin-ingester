@@ -64,6 +64,8 @@ commit subject to start with an ID present here or in the archive.
 | M0.21 | `review.sh` refuses a verdict whose index moved while the review was in flight — review.md rule hash-bound was broken five times in one session, and a prose rule broken five times is a predicate written as English (non-negotiable 9) | — | todo |
 | M0.20 | `scripts/check-cross-refs.sh` — every `M<n>` and `R<n>` cited anywhere resolves to a roadmap row / a `cost.md` rule, and no row under `## Completed` contradicts its own State cell. Review found all three by hand | — | todo |
 | M0.19 | `scripts/check-catalog-only.sh` — a module may not declare a literal dependency coordinate, only a catalogue alias or `project(...)`; the licence gate's completeness rests on it | — | todo |
+| M0.77 | SWEEP THE PRE-EXISTING ASSERTION INVENTORIES -- "every other test here", "the only assertion". MEASURED 2026-09-06: 61 occurrences in 36 files; a line-scoped grep sees 50 in 31. Quote the method with the number -- this row has carried three wrong figures. No gate: see M0.76 and [notes](backlog-notes.md) | — | todo |
+| M0.78 | HARDEN `check-archive-row-size.sh` and its test, from five minors both reviewers ACCEPTED at M0.76: three row shapes that still evade the cap, a landed row that can be GROWN past it, and three mutations its tests do not kill. [notes](backlog-notes.md) | — | todo |
 
 ## M1 — walking skeleton
 

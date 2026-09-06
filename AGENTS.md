@@ -171,6 +171,7 @@ of what runs is exactly the list that goes stale:
 | `check-metric-cardinality.sh` | pre-commit | observability.md rule 1: no high-cardinality metric or span labels |
 | `check-test-budget.sh` | pre-commit | build.md: memory caps declared; a runaway dies as a JVM/Docker OOM, not a lost WSL2 session |
 | `check-file-size.sh` | pre-commit | code-structure.md rule 1: no source file over 500 lines |
+| `check-archive-row-size.sh` | pre-commit | a row ADDED to the archive is a summary -- the essay goes to backlog-notes.md |
 | `check-tdd.sh` | pre-commit | testing.md rule 2: every new test was observed to fail before the code existed |
 | `check-reviewed.sh` | pre-commit | non-negotiable 5: the staged bytes were reviewed by both reviewers |
 | `check-commit-msg.sh` | commit-msg | non-negotiable 1: the commit subject names a real backlog task |

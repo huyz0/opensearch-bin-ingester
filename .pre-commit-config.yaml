@@ -147,6 +147,13 @@ repos:
         stages: [pre-commit]
         pass_filenames: false
         always_run: true
+      - id: check-archive-row-size
+        name: "a row ADDED to the archive is a summary -- the essay goes to backlog-notes.md"
+        entry: scripts/check-archive-row-size.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
       - id: check-tdd
         name: "testing.md rule 2: every new test was observed to fail before the code existed"
         entry: scripts/check-tdd.sh

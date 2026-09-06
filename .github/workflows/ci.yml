@@ -87,12 +87,13 @@ jobs:
           # delta path selects from a staged diff, and a fresh checkout has
           # nothing staged, so every one would print `ok` over an empty set.
           GATE_SCOPE: full
-          # ⚠️ CHECK_RANGE is carried but currently drives NOTHING that runs
-          # here: under GATE_SCOPE=full the gates resolve through
-          # workspace_files, and its only other consumers are check-tdd and
-          # check-reviewed, both skipped below, plus check-test-integrity, whose
-          # invocation is M0.25. It is set, and fails closed, so it is correct
-          # the day M0.25 lands -- not because it guards something today.
+          # ⚠️ CHECK_RANGE DRIVES check-archive-row-size, which is why it is
+          # resolved fail-closed above. That gate asks what a CHANGE ADDS, which
+          # GATE_SCOPE=full cannot express -- there is no whole-tree reading of
+          # "added" -- so without a range it would read the empty index of a
+          # fresh checkout and print `ok` over nothing. Its other consumers are
+          # check-tdd and check-reviewed, both skipped below, plus
+          # check-test-integrity, whose invocation is M0.25.
           CHECK_RANGE: ${{ steps.range.outputs.base }}
         # ⚠️ Both skips are REQUIRED, and check-reviewed's reason is stronger
         # than "it would pass vacuously". That vacuous branch is taken only when

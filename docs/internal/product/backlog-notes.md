@@ -344,3 +344,48 @@ so the build goes first.
 
 | M4.45 | `FakeSequencerTest`'s comment reads "At three keys a missing sort still produces the asserted order 1 run in 6, i.e. a broken sort would pass CI most times; round-2 review measured exactly that." ⚠️ THE TRAILING CLAUSE IS THE WORSE HALF, and an earlier draft of this row truncated the quotation before it: it attributes the INVERTED reading to a named review, so a session checking the claim is pointed at a measurement that says the opposite. The clause before the "i.e." matches M4.1's landed record; the one after is its reciprocal -- surviving 1 run in 6 means FAILING roughly 5 in 6. ⚠️ NO ASSERTION IS AFFECTED: the six-key fixture beside it and its 1-in-720 figure are consistent with the correct reading, so this is a false gloss on a sound test. ⚠️ IT IS THE COPY A SESSION HITS, though, because it is the one attached to the fixture rather than to a backlog row, and M4.8a's prescription now says the opposite in its own words. ⚠️ FOUND BY A REVIEWER GREPPING `*.java` WHERE MINE COVERED ONLY DOCS -- the same correct-one-copy-miss-the-duplicate failure the M4.8 split commit records twice, escaping a grep scoped to the file type the fix happened to be in | — | todo |
 
+### M0.77
+
+MEASURED 2026-09-06 over `*Test.java`/`*Tests.java`, case-insensitively, with the
+withdrawn gate's pattern -- ⚠️ WHICH IS IN NO COMMITTED OBJECT, since that script
+was withdrawn before it ever landed, so it is written out here or the number is
+not reproducible:
+
+```
+(every|no) other (test|assertion)|the only (test|assertion|absolute)|every (test|assertion|cost assertion) (here|in this file)|(survived|survives|passed) all [0-9]+ tests
+```
+
+**61 occurrences in 36 files** once javadoc
+`*` and `//` continuation markers are stripped and the text joined; a line-scoped
+grep sees **50 in 31**, so **11 wrap across lines** and no line-oriented matcher
+can see them.
+
+⚠️ THIS ROW HAS CARRIED THREE WRONG FIGURES, which is why the method is quoted
+beside the number: "~19 files", read off a truncated `head`; "51 in 32", which is
+all `*.java` rather than the test globs the row describes; and "38 in 26", which is
+the case-SENSITIVE count of a pattern the script applied with `grep -Ei`.
+
+No gate enforces this -- see M0.76 for the measurement that withdrew one.
+
+### M0.78
+
+Five minors both reviewers accepted at M0.76 rather than blocked on.
+
+**The gate.** Exemption is by ID across all 121 base rows, so a row can land
+compliant and be grown past the cap in any later commit with the gate printing
+`ok`. Three shapes still pass at 4,200 characters: `| M9.9B |` (uppercase
+suffix), `` | **`M9.9`** | `` (four markers), and `> | M9.9 |` (blockquote).
+
+**The tests.** Deleting EITHER fail-closed branch alone survives: both cases in
+`anUnreadableDiffIsRefusedByNameRatherThanReportedAsClean` break the diff read
+AND the base read, so whichever guard remains prints the same asserted tail.
+Assert the message HEAD, and add a case where the diff reads but the base does
+not (a `CHECK_RANGE` predating the archive). Replacing the diff with the
+worktree file survives, because every test writes and stages in one call, so
+ADDED-LINES-ONLY is unpinned. Deleting `judged += 1` survives, leaving the
+success line permanently at "0 new archive row(s)" -- the invisible-failure
+shape the gate's own header names about its predecessor. ⚠️ `judged` is unpinned
+in BOTH directions: incrementing it for EXEMPT rows also survives, turning
+`1 new archive row(s)` into `2` on a commit that edits one landed row and adds
+one new one, exit 0 either way. A fix aimed at one direction leaves the other.
+
