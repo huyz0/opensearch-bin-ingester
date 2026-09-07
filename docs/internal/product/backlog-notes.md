@@ -435,6 +435,52 @@ ambiguous and duplicate PUT arms are the existing seam. So this row must
 either add the retry path or say plainly that its coverage stops at the
 sequencer seam.
 
+### M0.83
+
+`./gradlew dependencyLicenses` -- the step ci.yml calls "authoritative" -- has
+failed on **every one of the 10 recorded CI runs**, back to the workflow's first
+commit. It was never a regression: the tree carried 123 `.jar.sha1` pins and 5
+licence texts, so 75 of each half were missing plus one stale pin.
+
+⚠️ THE SCOPE WAS NOT NARROWED, and that was the tempting fix. `licenseCheck`
+resolves every alias in the version catalogue, including `compileOnly`
+OpenSearch deps and test-only ones that this project never redistributes --
+excluding them would have turned the gate green in one line. build.md rule 2
+says "every dependency jar", rule 3 says an exception needs a line in
+`baselines/licenses.txt` naming who reviewed it, and non-negotiable 2 forbids
+moving a gate in the direction that weakens it to make a check pass. So the
+licences were supplied instead.
+
+⚠️ EVERY IDENTIFIER COMES FROM THE ARTIFACT'S PUBLISHED POM, following parent
+POMs where a child declares none, and the prose-to-SPDX mapping is ENUMERATED --
+anything unlisted stops the script rather than being guessed, because a wrong
+identifier is worse than a missing one when the identifier is what the deny-list
+is matched against. No denied licence appeared.
+
+⚠️ AN EARLIER DRAFT OF THAT SENTENCE WAS FALSE, and review caught it: it covered
+the 71 NEW entries and not the 5 that predated them, one of which was wrong.
+`junit:junit:4.13.2` arrives transitively through `org.opensearch.test:framework`
+and its bare artifactId does not match `^junit-.*`, so it fell to the `junit`
+prefix and was labelled EPL-2.0 -- while its POM declares Eclipse Public License
+**1.0**, a different licence with a different Secondary Licenses clause and a
+different patent-defence trigger. Fixed by WIDENING the gate: a `^junit$` mapping
+to a new `junit4` prefix with the EPL-1.0 text. The other four predecessors were
+re-derived and are correct; Helidon's declaration sits five parents up, deeper
+than a four-level walk reaches.
+
+⚠️ FOUR ARTIFACTS ARE DUAL-LICENSED and the entry names the side taken:
+`jakarta.annotation-api` EPL-2.0 (not GPL-2.0-with-classpath-exception), `jna`
+Apache-2.0 (not LGPL-2.1-or-later), `HdrHistogram` BSD-2-Clause, `jts-core`
+BSD-3-Clause via the Eclipse Distribution Licence. "Either of these two" is not
+an identifier.
+
+⚠️ THE ATTRIBUTION HALF IS ONLY PARTLY MET, and SPDX.txt says so rather than
+looking complete: the text is the jar's own META-INF licence where it ships one
+(53 of 71) and the canonical SPDX text otherwise. A canonical Apache-2.0 text is
+complete because attribution lives in NOTICE, but a canonical MIT or BSD text
+carries "<copyright holders>" and attributes nobody -- 8 artifacts are in that
+state and are listed by name in the file.
+
 ### M0.82
 
 `check-diff-size.sh` counts every added line under `*/src/*`, tests included.

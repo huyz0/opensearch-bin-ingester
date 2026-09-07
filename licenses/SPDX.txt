@@ -7,8 +7,95 @@
 # claim, the text is the attribution.
 #
 #   <licence-file-prefix>  <SPDX-ID>
-junit        EPL-2.0
+junit        EPL-2.0   # junit-5.x artifacts (^junit-.*)
+junit4       EPL-1.0   # junit:junit:4.13.2, transitive via org.opensearch.test:framework
 assertj      Apache-2.0
 byte-buddy   Apache-2.0
 opentest4j   Apache-2.0
 helidon      Apache-2.0
+
+# Added when the gate was first satisfied: every jar the licenseCheck
+# configuration resolves, mapped from the licence its published POM
+# declares. ⚠️ A DUAL-LICENSED ARTIFACT NAMES THE SIDE TAKEN, because
+# the identifier is the claim and "either of these two" is not one.
+#
+# ⚠️ THE TEXT BESIDE EACH ENTRY IS THE JAR'S OWN META-INF LICENCE WHERE
+# IT SHIPS ONE -- 53 of 71 -- and the canonical SPDX text otherwise.
+# For the 18 that fall back, an Apache-2.0 text is complete (attribution
+# lives in NOTICE, not in the licence), but a canonical MIT or BSD text
+# carries "<copyright holders>" and so ATTRIBUTES NOBODY. Those are:
+#   hamcrest, jopt-simple, jts-core, jzlib, mockito-core, protobuf-java, reactive-streams, zstd-jni-1.5.6
+# The SPDX identifier is unaffected -- it is the claim the deny-list is
+# matched against -- but the attribution half of build.md rule 2 is only
+# partly met for those, and saying so beats a file that looks complete.
+HdrHistogram                 BSD-2-Clause   # dual CC0-1.0 / BSD-2-Clause; BSD-2-Clause taken
+RoaringBitmap                Apache-2.0
+commons-codec                Apache-2.0
+commons-logging              Apache-2.0
+framework                    Apache-2.0
+hamcrest                     BSD-3-Clause
+httpclient5                  Apache-2.0
+httpcore5                    Apache-2.0
+httpcore5-h2                 Apache-2.0
+httpcore5-reactive           Apache-2.0
+jackson-core                 Apache-2.0
+jackson-dataformat-cbor      Apache-2.0
+jackson-dataformat-smile     Apache-2.0
+jackson-dataformat-yaml      Apache-2.0
+jakarta.annotation-api       EPL-2.0   # dual EPL-2.0 / GPL-2.0-with-classpath-exception; EPL-2.0 taken
+jna                          Apache-2.0   # dual LGPL-2.1-or-later / Apache-2.0; Apache-2.0 taken
+joda-time                    Apache-2.0
+jopt-simple                  MIT
+jts-core                     BSD-3-Clause   # dual EPL / Eclipse Distribution Licence 1.0; EDL-1.0 is BSD-3-Clause and is taken
+jzlib                        BSD-3-Clause
+log4j-api                    Apache-2.0
+log4j-core                   Apache-2.0
+log4j-jul                    Apache-2.0
+lucene-analysis-common       Apache-2.0
+lucene-backward-codecs       Apache-2.0
+lucene-codecs                Apache-2.0
+lucene-core                  Apache-2.0
+lucene-grouping              Apache-2.0
+lucene-highlighter           Apache-2.0
+lucene-join                  Apache-2.0
+lucene-memory                Apache-2.0
+lucene-misc                  Apache-2.0
+lucene-queries               Apache-2.0
+lucene-queryparser           Apache-2.0
+lucene-sandbox               Apache-2.0
+lucene-spatial-extras        Apache-2.0
+lucene-spatial3d             Apache-2.0
+lucene-suggest               Apache-2.0
+lucene-test-framework        Apache-2.0
+mockito-core                 MIT
+netty-pkitesting             Apache-2.0
+objenesis                    Apache-2.0
+opensearch                   Apache-2.0
+opensearch-agent             Apache-2.0
+opensearch-agent-bootstrap   Apache-2.0
+opensearch-agent-policy      Apache-2.0
+opensearch-arrow-spi         Apache-2.0
+opensearch-cli               Apache-2.0
+opensearch-common            Apache-2.0
+opensearch-compress          Apache-2.0
+opensearch-concurrent-queue  Apache-2.0
+opensearch-core              Apache-2.0
+opensearch-geo               Apache-2.0
+opensearch-nio               Apache-2.0
+opensearch-rest-client       Apache-2.0
+opensearch-rest-client-sniffer Apache-2.0
+opensearch-secure-sm         Apache-2.0
+opensearch-task-commons      Apache-2.0
+opensearch-telemetry         Apache-2.0
+opensearch-x-content         Apache-2.0
+protobuf-java                BSD-3-Clause
+randomizedtesting-runner     Apache-2.0
+reactive-streams             MIT-0
+reactor-core                 Apache-2.0
+slf4j-api                    MIT
+snakeyaml                    Apache-2.0
+snakeyaml-engine             Apache-2.0
+spatial4j                    Apache-2.0
+t-digest                     Apache-2.0
+telemetry                    Apache-2.0
+zstd-jni-1.5.6               BSD-2-Clause
