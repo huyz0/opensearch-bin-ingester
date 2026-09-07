@@ -35,18 +35,38 @@ fi
 # ⚠️ ACMRD, with D. A commit that DELETES a test is exactly the case
 # non-negotiable 2 names, and it must still summon a test reviewer.
 testable=0
+TESTABLE_PATHS=""
 while IFS= read -r p; do
   [ -n "$p" ] || continue
   case "$p" in
-    */src/test/*|*/src/main/*|*Test.java|*.java|*.kt)          testable=1; break ;;
-    scripts/*.sh|scripts/*.py|*.gradle.kts|.pre-commit-config.yaml) testable=1; break ;;
-    .github/workflows/*)                                        testable=1; break ;;
+    */src/test/*|*/src/main/*|*Test.java|*.java|*.kt) ;;
+    scripts/*.sh|scripts/*.py|*.gradle.kts|.pre-commit-config.yaml) ;;
+    .github/workflows/*) ;;
+    *) continue ;;
   esac
+  # ⚠️ NO `break`. It used to stop at the first testable path, which was enough
+  # to answer "both roles?" but not "is every one of them prose?" -- and a diff
+  # whose first file was a comment-only .java would have hidden a changed script
+  # behind it. Measured as a one-role routing for a diff that edited a shell
+  # script, before this loop was made to see the whole diff.
+  testable=1
+  TESTABLE_PATHS="$TESTABLE_PATHS$p
+"
 done <<EOF
 $PATHS
 EOF
 
-if [ "$testable" -eq 1 ]; then
+# ⚠️ CONTENT, AFTER PATH (M0.80). A `.java` diff whose every edit is a comment
+# gives a test-reviewer nothing to mutate -- the same bind docs-only diffs were
+# in, one level down. `diff_shape.py` answers `prose` only when EVERY changed
+# Java file is identical to its committed version once comments are dropped, and
+# `executable` for everything it cannot decide, so a broken or missing script
+# keeps both roles rather than buying a one-role commit.
+SHAPE=$(printf '%s' "$TESTABLE_PATHS" | python3 scripts/diff_shape.py 2>/dev/null || echo executable)
+if [ "$testable" -eq 1 ] && [ "$SHAPE" = "prose" ]; then
+  echo "reviewer"
+  echo "# reviewer only: every Java edit in this diff is a comment" >&2
+elif [ "$testable" -eq 1 ]; then
   echo "reviewer"
   echo "test-reviewer"
   echo "# both: the diff touches code, tests, or executable enforcement" >&2
