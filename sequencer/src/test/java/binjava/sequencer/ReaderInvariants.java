@@ -174,7 +174,7 @@ final class ReaderInvariants {
                 break;
             }
             if (e instanceof CommitDelta delta) {
-                for (RunCommit run : delta.runs()) {
+                for (RunCommit run : delta.allRuns()) {
                     expected.merge(run.key(), run.firstOffset() + run.recordCount(), Math::max);
                 }
             }

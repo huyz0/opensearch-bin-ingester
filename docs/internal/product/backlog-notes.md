@@ -1209,3 +1209,56 @@ offsets read as I3 -- naming the wrong invariant for what is a chain defect
 `checkChain` already reports as a gap. The question this row answers is whether
 such a chain should be judged at all, not merely which branch it takes.
 
+### M4.13n
+
+The three checkers read a delta differently from the reader they judge.
+
+⚠️ MEASURED, not inferred. `log.commitAll(two requests)` then
+`Invariants.checkChain(...)` raises
+`IllegalStateException: this delta batches 2 segments; ask for segments() and
+pair each run with its own, or the records are read from the wrong object`.
+
+⚠️ THE GUARD IS RIGHT AND THE CALLER IS WRONG. `runs()` refuses a multi-segment
+delta because pairing a run with the wrong segment reads records from the wrong
+object. But an OFFSET is a stream fact, not a segment fact -- `ChainReplay.fold`
+says so in as many words and uses `allRuns()` -- and all three checker sites are
+folding offsets, so `allRuns()` is what they should have called.
+
+⚠️ WHY NOTHING CAUGHT IT: `CommitProtocolSimulation` drives `commit(` and never
+`commitAll`, so no fixture in the sweep produces a delta with more than one
+segment. The suite is green because the case is absent, not because it works --
+and M4.13's completion condition would be met by a sweep that never exercises
+the batching M4 exists to do.
+
+⚠️ LANDED. All three sites use `allRuns()`, and each is pinned by its own test:
+reverting any one of the three fails the suite. ⚠️ THE SWEEP STILL DOES NOT
+BATCH -- this row fixed the CHECKERS, not the simulation, and making
+`CommitProtocolSimulation` drive `commitAll` belongs with M4.13's own work.
+Until it does, batching is covered by these four fixtures and not by 1,000 seeds.
+
+⚠️ IT ALSO BLOCKS M4.13f. A permuted batch -- two segments in one delta whose
+submission order disagrees with their assigned offsets -- is the writer-side
+reorder that I4's reorder clause is actually about in M4, and it shows up over
+the bytes as a gap plus an I2. That cannot be checked while the checker throws
+on every batched delta.
+
+### M4.13o
+
+The append path has M4.13n's defect and needs a different fix.
+
+⚠️ `DefaultIngest` iterates `delta.runs()` over the delta the Sequencer returned.
+`BatchingSequencer.commitBatch` calls `p.complete(delta)` with the SAME full
+batched delta for every waiter and `PendingCommit.complete` does not narrow it,
+so the first window that groups two submissions throws.
+
+⚠️ `allRuns()` IS THE WRONG FIX HERE, and that is the whole reason this is a
+separate row rather than more of M4.13n. Two pods committing to one stream
+produce two runs for the same `RunKey`, and `firstOffsets.put` would keep the
+LAST -- so the caller would be told its records start where the OTHER pod's do.
+It needs `segments()` plus the caller's own published key, which is the pairing
+`CommitDelta.runs()`' guard exists to force.
+
+⚠️ UNREACHABLE TODAY: nothing in `ingest/` or `app/` constructs a
+`BatchingSequencer`, so no window ever groups. It becomes reachable the moment
+one does.
+

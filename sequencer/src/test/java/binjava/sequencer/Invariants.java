@@ -141,7 +141,19 @@ public final class Invariants {
                 case Seal s -> seal = s;
                 case Continue ignored -> { }
                 case CommitDelta delta -> {
-                    for (RunCommit run : delta.runs()) {
+                    // ⚠️ `allRuns`, NEVER `runs()`, and this is not a style
+                    // choice: `runs()` REFUSES a delta carrying more than one
+                    // segment, so every checker here threw
+                    // `IllegalStateException` on the batched commit M4's scope
+                    // item 5 is about -- "one delta carries every stream and
+                    // every contributing pod". The guard is right and the caller
+                    // was wrong: an OFFSET is a stream fact, not a segment fact,
+                    // which is why `ChainReplay.fold` -- the reader this checker
+                    // judges -- uses `allRuns()` too.
+                    // ⚠️ THE SUITE WAS GREEN BECAUSE THE CASE WAS ABSENT:
+                    // `CommitProtocolSimulation` drives `commit(` and never
+                    // `commitAll`, so no seed ever built one (M4.13n).
+                    for (RunCommit run : delta.allRuns()) {
                         long from = nextOffset.getOrDefault(run.key(), 0L);
                         // ⚠️ A REWIND AND A GAP ARE DIFFERENT DEFECTS, and the
                         // first version of this reported both as I2. I2 is
@@ -308,7 +320,7 @@ public final class Invariants {
                 break;
             }
             if (e instanceof CommitDelta delta) {
-                for (RunCommit run : delta.runs()) {
+                for (RunCommit run : delta.allRuns()) {
                     inherited.merge(run.key(), run.lastOffset() + 1, Math::max);
                 }
             }
