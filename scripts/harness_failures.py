@@ -24,9 +24,17 @@ for path in sorted(glob.glob('buildSrc/build/test-results/test/TEST-*.xml')):
         seen += 1
         if seen > CAP:
             continue
-        msg = (bad[0].get('message') or '').replace('\n', ' ')[:120]
+        # ⚠️ THE MESSAGE AND THE FIRST LINES OF THE TEXT, and generously.
+        # A 120-character cap was tried and it truncated `rm: cannot remove
+        # '/tmp/fresh...'` exactly before the errno -- the one word that says
+        # whether the cause is a permission, a busy file or a race. A reporter
+        # that cuts off the reason has moved the problem rather than solved it.
+        msg = (bad[0].get('message') or '').replace('\n', ' ')[:600]
         print('%s.%s' % (tc.get('classname', '?').rsplit('.', 1)[-1], tc.get('name', '?')))
         print('    %s' % msg)
+        body = (bad[0].text or '').strip().splitlines()
+        for line in body[:4]:
+            print('      | %s' % line.strip()[:220])
 if seen > CAP:
     print('... and %d more' % (seen - CAP))
 if seen == 0:
