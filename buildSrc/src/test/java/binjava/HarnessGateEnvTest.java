@@ -70,4 +70,34 @@ class HarnessGateEnvTest {
             + "write into the caller's index")
         .contains("NO_GIT_VARS");
   }
+
+  /**
+   * ⚠️ AND THE GATE-SCOPING VARIABLES, for the same reason as {@code GIT_*}.
+   * CI exports {@code GATE_SCOPE=full} and {@code CHECK_RANGE=<base sha>} for
+   * the whole Gates step, and this suite runs inside it. Harness tests spawn
+   * the real gate scripts against their OWN scratch repositories, where that
+   * sha does not exist — so every gate that reads a range dies with
+   * {@code fatal: ambiguous argument}.
+   *
+   * <p>MEASURED: 31 of them, across 8 classes, the first time CI ever reached
+   * this step. It never had before, because `dependencyLicenses` failed earlier
+   * on all 10 previous runs. Fixing it per-test is 31 fixes and one forgotten
+   * test away from returning; stripping it here is one line that cannot be
+   * forgotten.
+   */
+  @Test
+  void theSuiteIsHandedNoInheritedGATESCOPEOrCHECKRANGE(@TempDir Path dir) throws Exception {
+    String script = Files.readString(Path.of("..", "scripts", "check-harness-tests.sh"));
+
+    int envLine = script.indexOf("./gradlew -p buildSrc test");
+    assertThat(envLine).as("the suite invocation must be findable").isGreaterThan(0);
+    String invocation = script.substring(Math.max(0, envLine - 400), envLine);
+
+    assertThat(invocation)
+        .as("GATE_SCOPE must be stripped before the suite runs:\n%s", invocation)
+        .contains("GATE_SCOPE");
+    assertThat(invocation)
+        .as("CHECK_RANGE must be stripped before the suite runs:\n%s", invocation)
+        .contains("CHECK_RANGE");
+  }
 }

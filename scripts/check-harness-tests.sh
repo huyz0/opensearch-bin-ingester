@@ -50,7 +50,16 @@ mkdir -p .harness
 # `GIT_OBJECT_DIRECTORY` alone redirects a child's objects into the caller's
 # store -- and a three-key list HERE would be that same claim contradicted
 # inside one commit.
-if env $(env | sed -n 's/^\(GIT_[A-Za-z0-9_]*\)=.*/-u \1/p') \
+# ⚠️ AND THE GATE-SCOPING VARIABLES, for the same reason. CI exports
+# GATE_SCOPE=full and CHECK_RANGE=<base sha> for the whole Gates step, and this
+# suite runs inside it -- while its tests spawn the real gate scripts against
+# their OWN scratch repositories, where that sha does not exist. MEASURED the
+# first time CI ever reached this step: 31 failures across 8 classes, all
+# `fatal: ambiguous argument`. It had never reached it before, because
+# `dependencyLicenses` failed earlier on all 10 previous runs.
+# ⚠️ STRIPPED HERE RATHER THAN IN 31 TESTS, which is the difference between a
+# property and a habit: a test added tomorrow inherits the fix.
+if env $(env | sed -n 's/^\(GIT_[A-Za-z0-9_]*\)=.*/-u \1/p') -u GATE_SCOPE -u CHECK_RANGE \
      ./gradlew -p buildSrc test --console=plain -q > .harness/harness-tests.log 2>&1; then
   n=$(python3 - <<'PY'
 import glob, xml.etree.ElementTree as ET
