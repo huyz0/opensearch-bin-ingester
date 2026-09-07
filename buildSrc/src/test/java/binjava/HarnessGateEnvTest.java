@@ -100,4 +100,53 @@ class HarnessGateEnvTest {
         .as("CHECK_RANGE must be stripped before the suite runs:\n%s", invocation)
         .contains("CHECK_RANGE");
   }
+
+  /**
+   * ⚠️ A FAILURE THAT NAMES NOTHING IS BARELY BETTER THAN NO GATE. The suite
+   * runs under {@code --console=plain -q}, so its log holds "BUILD FAILED" and
+   * no test names; the gate greps that log, so CI printed exactly that and the
+   * failing tests were unknowable from the run.
+   *
+   * <p>MEASURED: two CI runs were spent unable to say WHICH harness test failed,
+   * because the names live only in the JUnit XML the suite writes.
+   */
+  @Test
+  void aFailingSuiteNAMESTheFailingTests(@TempDir Path dir) throws Exception {
+    Files.createDirectories(dir.resolve("scripts"));
+    Path repo = Path.of("..").toAbsolutePath().normalize();
+    for (String f : List.of("check-harness-tests.sh", "lib.sh", "harness_failures.py")) {
+      Path dst = dir.resolve("scripts").resolve(f);
+      Files.copy(repo.resolve("scripts").resolve(f), dst);
+      dst.toFile().setExecutable(true);
+    }
+    // A stub Gradle that FAILS, having written the XML a real run would leave.
+    Path results = dir.resolve("buildSrc/build/test-results/test");
+    Files.createDirectories(results);
+    Files.writeString(results.resolve("TEST-binjava.ThingTest.xml"),
+        "<?xml version='1.0'?><testsuite tests='2'>"
+        + "<testcase classname='binjava.ThingTest' name='oneThatPasses'/>"
+        + "<testcase classname='binjava.ThingTest' name='theOneThatBROKE'>"
+        + "<failure message='expected true'/></testcase></testsuite>");
+    Path gradlew = dir.resolve("gradlew");
+    Files.writeString(gradlew, "#!/usr/bin/env bash\necho 'BUILD FAILED in 1m'\nexit 1\n");
+    gradlew.toFile().setExecutable(true);
+    Process init = GitEnv.stripped(new ProcessBuilder("bash", "-c",
+        "git init -q . && git config user.email t@e && git config user.name t"
+            + " && git add -A && git commit -qm base")
+        .directory(dir.toFile())).redirectErrorStream(true).start();
+    assertThat(init.waitFor()).isZero();
+
+    ProcessBuilder b = GitEnv.stripped(
+        new ProcessBuilder("bash", "scripts/check-harness-tests.sh").directory(dir.toFile()));
+    b.environment().put("GATE_SCOPE", "full");
+    b.redirectErrorStream(true);
+    Process p = b.start();
+    String out = new String(p.getInputStream().readAllBytes());
+    p.waitFor();
+
+    assertThat(out).as("the failing test must be NAMED in the gate's own output:\n%s", out)
+        .contains("theOneThatBROKE");
+    assertThat(out).as("and a passing sibling must not be:\n%s", out)
+        .doesNotContain("oneThatPasses");
+  }
 }

@@ -70,7 +70,12 @@ PY
   [ "${n:-0}" -gt 0 ] || { fail "the harness suite reported 0 tests -- it did not run"; finish; }
   ok "$n harness test(s) pass"
 else
-  fail "harness tests failed -- see .harness/harness-tests.log"
-  grep -E "expected|actual|FAILED|AssertionError" .harness/harness-tests.log | head -6 | sed 's/^/           /'
+  fail "harness tests failed"
+  # ⚠️ FROM THE JUnit XML, NOT FROM THE LOG. The suite runs under
+  # `--console=plain -q`, so its log holds "BUILD FAILED" and no test names --
+  # and the old grep matched exactly that, printing a line that names nothing.
+  # Two CI runs were spent unable to say WHICH harness test failed, on a machine
+  # whose .harness/ is never uploaded. The names are in the results XML.
+  python3 scripts/harness_failures.py | sed 's/^/           /'
 fi
 finish
