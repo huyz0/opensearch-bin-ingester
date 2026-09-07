@@ -86,7 +86,7 @@ class ChainReplayNonDeltaKeyTest {
     private static void seedCheckpoint(MemoryBinStore store, String logPrefix, long seq)
             throws Exception {
         Checkpoint ckpt = new Checkpoint(seq,
-                Map.of(RA, new StreamOffsets(7, 0)), Map.of("poda", 1L));
+                Map.of(RA, new StreamOffsets(7, 0)), Map.of("poda", Checkpoint.PodState.bare(1L)));
         put(store, String.format(java.util.Locale.ROOT, "%sckpt/%016x.ckpt", logPrefix, seq),
                 ckpt.encode());
     }

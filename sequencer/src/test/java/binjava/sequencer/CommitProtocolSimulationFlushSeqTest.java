@@ -24,6 +24,14 @@ import org.junit.jupiter.api.Timeout;
  * segment, that dedup would SUPPRESS A GENUINE COMMIT — worse than the
  * duplication it exists to prevent, and it would look like a passing test.
  *
+ * <p>⚠️ THE KEY WIDENED AT M4.10c AND THIS TEST WIDENED WITH IT, which is not a
+ * weakening: it asserted uniqueness of `(podId, flushSeq)`, and ADR-0036
+ * measured that pair unable to tell a RESTART from a REPLAY. The simulation now
+ * gives each pod incarnation its own identity and its own dense counter, so the
+ * PAIR is legitimately reissued across a restart -- exactly the case the ADR
+ * exists for -- while the TRIPLE stays unique. Asserting the old pair here
+ * would now assert the defect.
+ *
  * <p>⚠️ ASSERTED OVER THE ISSUED TRIPLES, read from the {@code CommitRequest}
  * that is actually sent. M4.27 records a `Result` counter that was declared
  * rather than derived and stayed green when hard-coded.
@@ -53,7 +61,7 @@ class CommitProtocolSimulationFlushSeqTest {
      * uniqueness assertion over an empty list is green for the wrong reason.
      */
     @Test
-    void noPodIdAndFlushSeqPairIsEverIssuedForTwoDifferentSegments() throws Exception {
+    void noIdempotencyKeyIsEverIssuedForTwoDifferentSegments() throws Exception {
         int issuedCount = 0;
         int landed = 0;
         Set<String> pods = new HashSet<>();
@@ -64,13 +72,13 @@ class CommitProtocolSimulationFlushSeqTest {
             Map<String, String> seen = new HashMap<>();
             for (Issued i : result.issued()) {
                 pods.add(i.podId());
-                String pair = i.podId() + "#" + i.flushSeq();
-                String previous = seen.putIfAbsent(pair, i.segmentKey());
+                String key = i.podId() + "#" + i.incarnationId() + "#" + i.flushSeq();
+                String previous = seen.putIfAbsent(key, i.segmentKey());
                 if (previous != null) {
                     assertThat(previous)
-                            .as("seed %d reissued %s for %s after %s -- dedup on this pair "
+                            .as("seed %d reissued %s for %s after %s -- dedup on this key "
                                     + "would suppress a real commit",
-                                    seed, pair, i.segmentKey(), previous)
+                                    seed, key, i.segmentKey(), previous)
                             .isEqualTo(i.segmentKey());
                 }
             }
@@ -97,7 +105,8 @@ class CommitProtocolSimulationFlushSeqTest {
             var result = CommitProtocolSimulation.run(seed, 120, 3, ROUGH);
             Map<String, List<Long>> byPod = new HashMap<>();
             for (Issued i : result.issued()) {
-                byPod.computeIfAbsent(i.podId(), unused -> new ArrayList<>()).add(i.flushSeq());
+                byPod.computeIfAbsent(i.podId() + "#" + i.incarnationId(),
+                        unused -> new ArrayList<>()).add(i.flushSeq());
             }
             Map<Long, String> valueOwner = new HashMap<>();
             boolean shared = false;
@@ -107,8 +116,8 @@ class CommitProtocolSimulationFlushSeqTest {
                     expected.add(n);
                 }
                 assertThat(pod.getValue())
-                        .as("seed %d: pod %s must issue 0..n-1, so the allocator is PER POD "
-                                + "rather than one shared counter", seed, pod.getKey())
+                        .as("seed %d: %s must issue 0..n-1, so the allocator is PER "
+                                + "INCARNATION rather than one shared counter", seed, pod.getKey())
                         .isEqualTo(expected);
                 for (Long v : pod.getValue()) {
                     String owner = valueOwner.putIfAbsent(v, pod.getKey());

@@ -29,15 +29,33 @@ class CommitRequestTest {
         return m;
     }
 
+    /**
+     * ⚠️ Every sibling field's refusal is tested here; the new one arrived with
+     * a guard, a four-line comment and no case, and deleting the guard left the
+     * whole build green.
+     */
+    @Test
+    void aBlankOrNullIncarnationIsRefused() {
+        assertThatThrownBy(() -> new CommitRequest("poda", " ", 0, "seg", Map.of()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("incarnationId is never blank");
+        assertThatThrownBy(() -> new CommitRequest("poda", "", 0, "seg", Map.of()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("incarnationId is never blank");
+        assertThatThrownBy(() -> new CommitRequest("poda", null, 0, "seg", Map.of()))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("incarnationId");
+    }
+
     @Test
     void aBlankPodIdIsRefused() {
         // ⚠️ Not cosmetic: podId is the idempotency key's first half (M4.10),
         // so a blank one would collapse every node's commits into one identity
         // and make a replay from node A look like a replay from node B.
-        assertThatThrownBy(() -> new CommitRequest("  ", 0L, "k", counts()))
+        assertThatThrownBy(() -> new CommitRequest("  ", "i1", 0L, "k", counts()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("podId");
-        assertThatThrownBy(() -> new CommitRequest(null, 0L, "k", counts()))
+        assertThatThrownBy(() -> new CommitRequest(null, "i1", 0L, "k", counts()))
                 .isInstanceOf(NullPointerException.class);
     }
 
@@ -49,22 +67,22 @@ class CommitRequestTest {
         // own key grammar IS parsed on those separators. Consequence worth
         // knowing: a Kubernetes POD_NAME is hyphenated in every StatefulSet, so
         // a caller must pass the short id, not the pod name.
-        assertThatThrownBy(() -> new CommitRequest("pod-1", 0L, "k", counts()))
+        assertThatThrownBy(() -> new CommitRequest("pod-1", "i1", 0L, "k", counts()))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new CommitRequest("pod/1", 0L, "k", counts()))
+        assertThatThrownBy(() -> new CommitRequest("pod/1", "i1", 0L, "k", counts()))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
     void aNegativeFlushSeqIsRefused() {
-        assertThatThrownBy(() -> new CommitRequest("pod1", -1L, "k", counts()))
+        assertThatThrownBy(() -> new CommitRequest("pod1", "i1", -1L, "k", counts()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("flushSeq");
     }
 
     @Test
     void aBlankSegmentKeyIsRefused() {
-        assertThatThrownBy(() -> new CommitRequest("pod1", 0L, " ", counts()))
+        assertThatThrownBy(() -> new CommitRequest("pod1", "i1", 0L, " ", counts()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("segmentKey");
     }
@@ -76,10 +94,10 @@ class CommitRequestTest {
         // nothing, so a replay would see a gap it cannot explain". Refusing it
         // HERE means the caller learns at the seam rather than several layers
         // down inside the delta's own constructor.
-        assertThatThrownBy(() -> new CommitRequest("pod1", 0L, "k", Map.of()))
+        assertThatThrownBy(() -> new CommitRequest("pod1", "i1", 0L, "k", Map.of()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("recordCounts");
-        assertThatThrownBy(() -> new CommitRequest("pod1", 0L, "k",
+        assertThatThrownBy(() -> new CommitRequest("pod1", "i1", 0L, "k",
                 Map.of(new RunKey(LOGS, 0), 0)))
                 .isInstanceOf(IllegalArgumentException.class);
     }
@@ -90,7 +108,7 @@ class CommitRequestTest {
         // reused its map would otherwise be able to alter what was committed
         // after the fact.
         Map<RunKey, Integer> mutable = counts();
-        CommitRequest r = new CommitRequest("pod1", 0L, "k", mutable);
+        CommitRequest r = new CommitRequest("pod1", "i1", 0L, "k", mutable);
         mutable.put(new RunKey(LOGS, 1), 99);
         assertThat(r.recordCounts()).hasSize(1);
     }
@@ -103,7 +121,7 @@ class CommitRequestTest {
         // `recordCounts` -- and podId/flushSeq are the two fields the whole
         // seam design rests on. Mutating the compact constructor to pin either
         // to a constant went undetected by every other test here.
-        CommitRequest r = new CommitRequest("podz", 42L, "bins/cluster-a/seg", counts());
+        CommitRequest r = new CommitRequest("podz", "i1", 42L, "bins/cluster-a/seg", counts());
         assertThat(r.podId()).isEqualTo("podz");
         assertThat(r.flushSeq()).isEqualTo(42L);
         assertThat(r.segmentKey()).isEqualTo("bins/cluster-a/seg");
@@ -114,7 +132,7 @@ class CommitRequestTest {
         // ⚠️ Aliasing was pinned; immutability was not -- `new HashMap<>(...)`
         // passed the aliasing test while leaving a holder able to mutate what
         // it was given, which matters for a record that crosses a network.
-        CommitRequest r = new CommitRequest("pod1", 0L, "k", counts());
+        CommitRequest r = new CommitRequest("pod1", "i1", 0L, "k", counts());
         assertThatThrownBy(() -> r.recordCounts().put(new RunKey(LOGS, 9), 1))
                 .isInstanceOf(UnsupportedOperationException.class);
     }

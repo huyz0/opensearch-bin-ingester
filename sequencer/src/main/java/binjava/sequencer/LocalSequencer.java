@@ -350,7 +350,7 @@ public final class LocalSequencer implements Sequencer {
         // fail an acknowledged write.
         CheckpointWriter writer = checkpoints;
         if (writer != null) {
-            writer.observe(requests);
+            writer.observe(requests, delta.sequence());
         }
         return delta;
     }

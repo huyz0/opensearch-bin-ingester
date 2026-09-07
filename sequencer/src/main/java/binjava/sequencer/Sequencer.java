@@ -32,9 +32,12 @@ import java.util.List;
  * consumer yet — fan-out happens after the commit is durable, never before,
  * because notifying about an uncommitted offset lets a consumer read a record a
  * failover could un-assign (I4). Nor that {@code flushSeq} values arrive in
- * order. ⚠️ And NOT that a given {@code (podId, flushSeq)} is applied at most
- * once — that is M4.10 and does not hold yet; see the failure-and-retry note
- * below. An earlier draft of this very sentence promised it, four lines above
+ * order. ⚠️ And NOT that a given commit is applied at most once — that is
+ * M4.10d and does not hold yet; see the failure-and-retry note below.
+ * ⚠️ THE KEY IS NOT {@code (podId, flushSeq)}: ADR-0036 measured that pair
+ * unable to tell a RESTART from a REPLAY, because {@code flushSeq} restarts at
+ * 0 while {@code podId} is stable. It is
+ * {@code (podId, incarnationId, flushSeq)}. An earlier draft of this very sentence promised it, four lines above
  * the paragraph retracting it.
  *
  * <p><b>Failure and retry — and what is NOT yet guaranteed.</b>
@@ -43,12 +46,14 @@ import java.util.List;
  * which is an empty {@code Optional}). ⚠️ That is the AMBIGUOUS case, not a
  * clean failure: a conditional PUT whose response was lost has still landed.
  * So a retry is safe only once the sequencer ignores a replay of a
- * {@code (podId, flushSeq)} it has already applied — and <b>it does not yet</b>.
- * That is M4.10, and until it lands <b>a retry after an ambiguous failure may
- * assign a second set of offsets to the same records</b>. The pair is carried
- * from this first commit precisely so M4.10 can make the retry safe without
- * changing the record shape; it does not make it safe today, and
- * {@link binjava.sequencer.FakeSequencer} does not model it either.
+ * {@code (podId, incarnationId, flushSeq)} it has already applied — and <b>it
+ * does not yet</b>. That is M4.10d, and until it lands <b>a retry after an
+ * ambiguous failure may assign a second set of offsets to the same records</b>.
+ * ⚠️ AN EARLIER DRAFT SAID THE PAIR WAS CARRIED "so M4.10 can make the retry
+ * safe WITHOUT CHANGING THE RECORD SHAPE". M4.10c changed it: ADR-0036 added
+ * {@code incarnationId} to this record, because the pair could not discriminate
+ * a restart. {@link binjava.sequencer.FakeSequencer} carries the triple onto
+ * each segment but still does not model the refusal.
  *
  * <p>⚠️ Losing a CAS race is NOT a failure and never surfaces here: an
  * implementation redrives internally, re-reading and rebuilding rather than
@@ -72,8 +77,11 @@ public interface Sequencer extends AutoCloseable {
      *     delta may carry runs this caller did not submit, so a caller must not
      *     treat the whole delta as its own. ⚠️ Selecting by {@link
      *     binjava.format.RunKey} is NOT sufficient either: two nodes may commit
-     *     the same stream in one batch window, and neither {@code CommitDelta}
-     *     nor {@code RunCommit} carries pod attribution.
+     *     the same stream in one batch window. ⚠️ {@code RunCommit} still
+     *     carries no pod attribution; since M4.10c {@code SegmentCommit} DOES,
+     *     as an optional {@code Attribution}, which is what lets a successor
+     *     rebuild the idempotency window from the uncheckpointed tail — it is
+     *     not a selector for a caller's own offsets.
      *     ⚠️ SETTLED BY M4.7b: <b>a caller finds its offsets by the SEGMENT KEY
      *     it submitted</b> — {@code delta.segments()}, matched on
      *     {@code request.segmentKey()}. That works because each request brings
@@ -85,8 +93,8 @@ public interface Sequencer extends AutoCloseable {
      *     {@code RunKey} — is the one the sentence above warns against
      * @throws IOException the store was unreachable — ⚠️ AMBIGUOUS, so the
      *     commit may or may not have landed. Retrying with the same
-     *     {@code (podId, flushSeq)} is safe only from M4.10; see the
-     *     failure-and-retry note above
+     *     {@code (podId, incarnationId, flushSeq)} is safe only from M4.10d;
+     *     see the failure-and-retry note above
      */
     default CommitDelta commit(CommitRequest request) throws IOException {
         return commitAll(List.of(request));

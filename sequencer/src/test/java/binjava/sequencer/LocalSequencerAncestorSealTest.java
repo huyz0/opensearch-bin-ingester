@@ -178,7 +178,7 @@ class LocalSequencerAncestorSealTest {
 
         // And offsets carried across correctly: the successor resumes the
         // stream at 3, it does not restart it and does not reassign it.
-        var resumed = successor.commit(new CommitRequest("podB", 1, "seg/b", counts(2)));
+        var resumed = successor.commit(new CommitRequest("podB", "i1", 1, "seg/b", counts(2)));
         assertThat(resumed.runs().getFirst().firstOffset())
                 .as("resumes where epoch 1 left off (0..2 assigned), not at 0")
                 .isEqualTo(3);
@@ -247,7 +247,7 @@ class LocalSequencerAncestorSealTest {
         // 0..2 only) and this would read 3 instead, COLLIDING with the in-flight
         // delta's own 3..4 -- the exact I2 violation this ADR closes, reopened
         // by one swapped pair of statements.
-        var resumed = successor.commit(new CommitRequest("podB", 1, "seg/b", counts(1)));
+        var resumed = successor.commit(new CommitRequest("podB", "i1", 1, "seg/b", counts(1)));
         assertThat(resumed.runs().getFirst().firstOffset())
                 .as("resumes AFTER the redriven delta's 3..4, not before it")
                 .isEqualTo(5);

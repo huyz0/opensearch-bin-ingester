@@ -169,12 +169,17 @@ delta = header{ podId, epochPerSlot[], flushSeq }
 > per-slot section list would today always have exactly one entry: the
 > dimension this sketch sections on is not yet a dimension.
 >
-> Not carried, deliberately: `podId` and `flushSeq` are on the *request*
-> (`CommitRequest`) rather than the entry, and the interning, `byteStart` and
-> `byteLen` are absent — a consumer reads the whole segment object today.
-> ⚠️ **`podId`/`flushSeq` in the entry is what M4.10's idempotency needs**, so
-> that part of this sketch is deferred rather than rejected; it is not in the
-> entry yet, and the `Sequencer` contract says so in as many words.
+> Not carried at the time of writing: `podId` and `flushSeq` were on the
+> *request* (`CommitRequest`) rather than the entry, and the interning,
+> `byteStart` and `byteLen` are absent — a consumer reads the whole segment
+> object today.
+> ⚠️ **CARRIED SINCE M4.10c (2026-09-07).** `SegmentCommit` now holds an
+> optional `Attribution(podId, incarnationId, flushSeq)` under a reserved
+> `KIND_DELTA_ATTRIBUTED`, which is what lets a successor rebuild the
+> idempotency window from the uncheckpointed tail. ⚠️ THE KEY IS THE TRIPLE,
+> not the pair this sketch names: ADR-0036 measured `(podId, flushSeq)` unable
+> to tell a RESTART from a REPLAY, because `flushSeq` restarts at 0 while
+> `podId` is stable. The interning and byte ranges remain deferred.
 
 ```
 commit PUTs/s = (number of sequencer pods) x (commit flush rate)

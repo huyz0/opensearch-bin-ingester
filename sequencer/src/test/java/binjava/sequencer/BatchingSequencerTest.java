@@ -39,7 +39,7 @@ class BatchingSequencerTest {
     }
 
     private static CommitRequest from(String pod, long flushSeq) {
-        return new CommitRequest(pod, flushSeq, "bins/" + pod + "/" + flushSeq + ".bseg",
+        return new CommitRequest(pod, "i1", flushSeq, "bins/" + pod + "/" + flushSeq + ".bseg",
                 counts(new RunKey(A, 0), 3));
     }
 
@@ -149,7 +149,7 @@ class BatchingSequencerTest {
                 // every caller another pod's range and the suite stayed green.
                 // Distinct counts make each caller's own pair checkable.
                 int count = 1 << pod;
-                CommitRequest request = new CommitRequest("pod" + pod, 0,
+                CommitRequest request = new CommitRequest("pod" + pod, "i1", 0,
                         "bins/pod" + pod + "/0.bseg", counts(new RunKey(A, 0), count));
                 threads.add(Thread.ofVirtual().start(() -> {
                     try {

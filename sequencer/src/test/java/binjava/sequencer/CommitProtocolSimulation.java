@@ -55,8 +55,17 @@ public final class CommitProtocolSimulation {
     private static final Duration RENEW = Duration.ofSeconds(3);
     private static final String PREFIX = "bins/cluster-a";
 
-    /** One `(podId, flushSeq)` as it was ISSUED, with the segment it named. */
-    public record Issued(String podId, long flushSeq, String segmentKey) {
+    /**
+     * One idempotency key as it was ISSUED, with the segment it named.
+     *
+     * <p>⚠️ CARRIES THE INCARNATION. An earlier version recorded only
+     * `(podId, flushSeq)`, so giving each pod its own incarnation changed
+     * nothing any assertion could see: both sweeps still keyed on the pair
+     * ADR-0036 rejects, and a dedup keyed on it was indistinguishable from a
+     * correct one in every seed.
+     */
+    public record Issued(String podId, String incarnationId, long flushSeq,
+            String segmentKey) {
     }
 
     /** What one seed produced, including what it is NOT evidence about. */
@@ -78,7 +87,8 @@ public final class CommitProtocolSimulation {
      * while the driver reissued `(pod1, 0)` for two different segments.
      */
     private static Issued record(CommitRequest request) {
-        return new Issued(request.podId(), request.flushSeq(), request.segmentKey());
+        return new Issued(request.podId(), request.incarnationId(), request.flushSeq(),
+                request.segmentKey());
     }
 
     private static Map<RunKey, Integer> counts(int n) {
@@ -137,6 +147,18 @@ public final class CommitProtocolSimulation {
         // reads what the driver actually sent rather than a counter it set --
         // the shape M4.27 records as satisfiable by hard-coding.
         List<Issued> issued = new ArrayList<>();
+        // ⚠️ ONE INCARNATION PER POD PER RUN, not one constant for the whole
+        // fleet. A single shared "i1" makes every commit look like the same
+        // incarnation, so a dedup keyed on the bare `(podId, flushSeq)` -- the
+        // pair ADR-0036 rejects -- is indistinguishable from a correct one in
+        // every seed. The zombie keeps its OWN incarnation for the same reason:
+        // a fenced writer is a different process, and merging its watermark
+        // into the leader's slot is the suppression M4.10d must not do.
+        Map<String, String> incarnations = new HashMap<>();
+        // ⚠️ KEYED ON (pod, incarnation), NOT on the bare pod. Keyed on the pod
+        // alone the counter keeps ascending across a restart, so the RESTART
+        // this simulation exists to model -- flushSeq back to 0 under a new
+        // incarnation -- appeared in no seed at all.
         // ⚠️ PER POD, PER ATTEMPT -- what a real pod does. `commits` and
         // `zombieWrites` count OUTCOMES and advance only on success, so using
         // either as `flushSeq` reissues a number for a different segment after
@@ -215,8 +237,10 @@ public final class CommitProtocolSimulation {
                 zombieAttempts++;
                 try {
                     String zombiePod = zombiePods.get(z);
-                    CommitRequest zombieReq = new CommitRequest(zombiePod,
-                            nextFlushSeq.merge(zombiePod, 1L, Long::sum) - 1,
+                    String zombieInc = incarnations.computeIfAbsent("z:" + zombiePod,
+                            k -> "inc-" + k + "-" + seed);
+                    CommitRequest zombieReq = new CommitRequest(zombiePod, zombieInc,
+                            nextFlushSeq.merge(zombieInc, 1L, Long::sum) - 1,
                             "seg/zombie-" + round, counts(1 + random.nextInt(3)));
                     issued.add(record(zombieReq));
                     zombies.get(z).commit(zombieReq);
@@ -229,8 +253,10 @@ public final class CommitProtocolSimulation {
                 continue;
             }
             try {
-                CommitRequest leaderReq = new CommitRequest(leaderPod,
-                        nextFlushSeq.merge(leaderPod, 1L, Long::sum) - 1,
+                String leaderInc = incarnations.computeIfAbsent("l:" + leaderPod,
+                        k -> "inc-" + k + "-" + seed);
+                CommitRequest leaderReq = new CommitRequest(leaderPod, leaderInc,
+                        nextFlushSeq.merge(leaderInc, 1L, Long::sum) - 1,
                         "seg/" + round, counts(1 + random.nextInt(3)));
                 issued.add(record(leaderReq));
                 leader.commit(leaderReq);

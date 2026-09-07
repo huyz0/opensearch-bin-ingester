@@ -61,6 +61,12 @@ public final class DefaultIngest implements Ingest {
      * concurrency this class deliberately excludes.
      */
     private long flushSeq;
+    // ⚠️ ONCE PER INSTANCE, never per flush (ADR-0036). A new process is a new
+    // incarnation by construction -- no clock, no coordination -- which is what
+    // lets a replay be told from a restart when `flushSeq` restarts at 0 and
+    // `podShortId` does not. Minting this inside `flushLocked` compiles, keeps
+    // every sequencer-seam suite green, and makes dedup a no-op in production.
+    private final String incarnationId = java.util.UUID.randomUUID().toString();
     private final SubscriptionHub hub;
     private final StreamResolver streams;
 
@@ -346,7 +352,7 @@ public final class DefaultIngest implements Ingest {
             SegmentPublisher.Published published = publisher.publish(accumulator)
                     .orElseThrow(() -> new IOException(
                             "the accumulator produced no segment for a non-empty batch"));
-            CommitDelta delta = sequencer.commit(new CommitRequest(podShortId, flushSeq++,
+            CommitDelta delta = sequencer.commit(new CommitRequest(podShortId, incarnationId, flushSeq++,
                     published.key(), published.recordCounts()));
 
             Map<RunKey, Long> firstOffsets = new HashMap<>();

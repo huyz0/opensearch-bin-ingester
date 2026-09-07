@@ -250,13 +250,19 @@ public final class CommitLog {
      * pod id in the log's own primitive is exactly the kind of placeholder
      * M4.10's idempotency would later key on by accident.
      *
-     * <p>⚠️ AN EARLIER VERSION OF THIS COMMENT CLAIMED THE LOG IS IGNORANT OF
-     * {@code CommitRequest}, which is false twenty lines below, where
-     * {@code commitAll} names it in the log's public API. The boundary is
-     * narrower than that: the log never READS {@code podId} or {@code flushSeq},
-     * and this record is what makes that visible rather than promised.
+     * <p>⚠️ TWO EARLIER VERSIONS OF THIS COMMENT WERE FALSE: the log is not
+     * ignorant of {@code CommitRequest} ({@code commitAll} names it), and it
+     * does now READ {@code podId}, {@code incarnationId} and {@code flushSeq}
+     * — to COPY them onto the delta, never to decide anything, which is the
+     * boundary this record still makes visible. The attribution is null for
+     * {@link #commit(String, Map)}, which has no request behind it.
      */
-    record Submission(String segmentKey, Map<RunKey, Integer> recordCounts) { }
+    record Submission(String segmentKey, Map<RunKey, Integer> recordCounts,
+            SegmentCommit.Attribution attribution) {
+        Submission(String segmentKey, Map<RunKey, Integer> recordCounts) {
+            this(segmentKey, recordCounts, null);
+        }
+    }
 
     /**
      * Commits MANY flushes as ONE chain entry, which is the whole of M4.7's
@@ -279,7 +285,8 @@ public final class CommitLog {
     public CommitDelta commitAll(List<CommitRequest> requests) throws IOException {
         List<Submission> submissions = new ArrayList<>(requests.size());
         for (CommitRequest r : requests) {
-            submissions.add(new Submission(r.segmentKey(), r.recordCounts()));
+            submissions.add(new Submission(r.segmentKey(), r.recordCounts(),
+                    new SegmentCommit.Attribution(r.podId(), r.incarnationId(), r.flushSeq())));
         }
         return commitSubmissions(submissions);
     }
@@ -324,7 +331,8 @@ public final class CommitLog {
                             runs.add(new RunCommit(e.getKey(), e.getValue(), base));
                             cursor.put(e.getKey(), base + e.getValue());
                         });
-                segments.add(new SegmentCommit(submission.segmentKey(), runs));
+                segments.add(new SegmentCommit(submission.segmentKey(), runs,
+                        submission.attribution()));
             }
             CommitDelta delta = new CommitDelta(nextSequence, segments);
             Optional<binjava.binstore.Version> written = store.putIfAbsent(keyFor(nextSequence),

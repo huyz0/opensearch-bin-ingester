@@ -16,7 +16,9 @@ import java.util.Objects;
  * of the node that produced it and that node's own flush sequence. Carrying
  * both now is what stops the record shape changing when the remote
  * implementation lands (M4 SPEC § <i>Deployment constraint</i>), and
- * {@code (podId, flushSeq)} is the idempotency key M4.10 will use to ignore a
+ * {@code (podId, incarnationId, flushSeq)} is the idempotency key M4.10d will
+ * use to ignore a replay. ⚠️ THE SHAPE DID CHANGE ONCE, at M4.10c: ADR-0036
+ * added {@code incarnationId} because the pair could not tell a restart from a
  * replay.
  *
  * <p>⚠️ At the end of M4 a multi-node deployment is NOT yet correct, because the
@@ -32,18 +34,34 @@ import java.util.Objects;
  *     — so the constraint is inherited, not intrinsic. ⚠️ Consequence for a
  *     deployment: a Kubernetes {@code POD_NAME} is hyphenated in every
  *     StatefulSet, so a caller must pass the short id, not the pod name
- * @param flushSeq that node's own monotonic flush counter. Together with
- *     {@code podId} it identifies this commit uniquely across the fleet
+ * @param incarnationId minted ONCE per ingester process (ADR-0036). ⚠️ It is
+ *     what tells a RESTART from a REPLAY: {@code flushSeq} restarts at 0 on
+ *     every process start while {@code podId} is stable, so the pair alone
+ *     would suppress a restarted pod's genuine commits. Minted per FLUSH
+ *     instead, dedup becomes a no-op in production while every sequencer-seam
+ *     suite stays green.
+ * @param flushSeq that node's own monotonic flush counter. ⚠️ AN EARLIER
+ *     VERSION SAID IT IDENTIFIES THIS COMMIT UNIQUELY "together with podId",
+ *     which ADR-0036 measured false across a restart. The three fields
+ *     together do.
  * @param segmentKey the segment already durable in the store — ordering is
  *     assigned here, not at write time (ADR-0001)
  * @param recordCounts how many records each stream contributed. ⚠️ COPIED, not
  *     aliased: this record crosses a seam and, from M5, a network
  */
-public record CommitRequest(String podId, long flushSeq, String segmentKey,
-        Map<RunKey, Integer> recordCounts) {
+public record CommitRequest(String podId, String incarnationId, long flushSeq,
+        String segmentKey, Map<RunKey, Integer> recordCounts) {
 
     public CommitRequest {
         Objects.requireNonNull(podId, "podId");
+        Objects.requireNonNull(incarnationId, "incarnationId");
+        if (incarnationId.isBlank()) {
+            // ⚠️ ADR-0036: `flushSeq` restarts at 0 on every process start while
+            // `podId` is stable, so the pair cannot tell a RESTART from a
+            // REPLAY. A blank incarnation collapses every incarnation of a pod
+            // into one identity and reinstates exactly that.
+            throw new IllegalArgumentException("incarnationId is never blank");
+        }
         Objects.requireNonNull(segmentKey, "segmentKey");
         Objects.requireNonNull(recordCounts, "recordCounts");
         if (podId.isBlank()) {

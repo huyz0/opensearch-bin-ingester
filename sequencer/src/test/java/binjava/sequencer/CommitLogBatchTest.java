@@ -38,7 +38,7 @@ class CommitLogBatchTest {
     }
 
     private static CommitRequest from(String pod, long flushSeq, Map<RunKey, Integer> counts) {
-        return new CommitRequest(pod, flushSeq, "bins/" + pod + "/" + flushSeq + ".bseg", counts);
+        return new CommitRequest(pod, "i1", flushSeq, "bins/" + pod + "/" + flushSeq + ".bseg", counts);
     }
 
     @Test
@@ -176,7 +176,7 @@ class CommitLogBatchTest {
         // unfindable and the other would answer for both.
         CommitLog log = new CommitLog(new MemoryBinStore(), "p", 1);
         CommitRequest first = from("pod0", 0, counts(new RunKey(A, 0), 1));
-        CommitRequest sameKey = new CommitRequest("pod1", 0, first.segmentKey(),
+        CommitRequest sameKey = new CommitRequest("pod1", "i1", 0, first.segmentKey(),
                 counts(new RunKey(B, 0), 1));
 
         assertThatThrownBy(() -> log.commitAll(List.of(first, sameKey)))

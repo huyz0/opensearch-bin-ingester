@@ -87,7 +87,7 @@ final class BoundedRecoveryFixture {
     static CommitRequest request(String pod, long flushSeq, String segment, RunKey key) {
         Map<RunKey, Integer> counts = new LinkedHashMap<>();
         counts.put(key, 1);
-        return new CommitRequest(pod, flushSeq, segment, counts);
+        return new CommitRequest(pod, "i1", flushSeq, segment, counts);
     }
 
     /** A stream unique to term {@code t}, so only that term's entries carry it. */

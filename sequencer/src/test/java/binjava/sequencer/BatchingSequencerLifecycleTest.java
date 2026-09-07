@@ -46,7 +46,7 @@ class BatchingSequencerLifecycleTest {
     }
 
     private static CommitRequest from(String pod, long flushSeq) {
-        return new CommitRequest(pod, flushSeq, "bins/" + pod + "/" + flushSeq + ".bseg",
+        return new CommitRequest(pod, "i1", flushSeq, "bins/" + pod + "/" + flushSeq + ".bseg",
                 counts(new RunKey(A, 0), 3));
     }
 
@@ -252,7 +252,7 @@ class BatchingSequencerLifecycleTest {
         var failures = new CopyOnWriteArrayList<Throwable>();
         // Two submissions naming the SAME segment: the delegate refuses the batch.
         CommitRequest one = from("pod0", 0);
-        CommitRequest clash = new CommitRequest("pod1", 0, one.segmentKey(),
+        CommitRequest clash = new CommitRequest("pod1", "i1", 0, one.segmentKey(),
                 counts(new RunKey(A, 1), 2));
         var threads = new java.util.ArrayList<Thread>();
 

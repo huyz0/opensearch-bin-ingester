@@ -39,8 +39,8 @@ class InvariantsTest {
         // `start` dead, so its seal-redrive budget was unconstrained.
         MemoryBinStore store = new MemoryBinStore();
         LocalSequencer seq = start(store, "pod1");
-        seq.commit(new CommitRequest("pod1", 1, "seg/a", counts(3)));
-        seq.commit(new CommitRequest("pod1", 2, "seg/b", counts(4)));
+        seq.commit(new CommitRequest("pod1", "i1", 1, "seg/a", counts(3)));
+        seq.commit(new CommitRequest("pod1", "i1", 2, "seg/b", counts(4)));
 
         assertThat(Invariants.checkChain(store, PREFIX, 1))
                 .as("a chain opened by a CONTINUE and extended by two commits is clean")

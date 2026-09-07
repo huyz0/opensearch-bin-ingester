@@ -22,7 +22,32 @@ import java.util.Objects;
  * across thousands of runs, and nothing in that shape would stop two runs of the
  * same segment naming different keys.
  */
-public record SegmentCommit(String segmentKey, List<RunCommit> runs) {
+public record SegmentCommit(String segmentKey, List<RunCommit> runs,
+        Attribution attribution) {
+
+    /**
+     * Who committed this segment, and which of that pod's flushes it was
+     * (ADR-0036). ⚠️ `podId` alone cannot say: `flushSeq` restarts at 0 on
+     * every process start while `podId` is stable, so the incarnation is what
+     * tells a RESTART from a REPLAY.
+     */
+    public record Attribution(String podId, String incarnationId, long flushSeq) {
+        public Attribution {
+            Objects.requireNonNull(podId, "podId");
+            Objects.requireNonNull(incarnationId, "incarnationId");
+            if (podId.isBlank() || incarnationId.isBlank()) {
+                throw new IllegalArgumentException("podId and incarnationId are never blank");
+            }
+            if (flushSeq < 0) {
+                throw new IllegalArgumentException("flushSeq must not be negative: " + flushSeq);
+            }
+        }
+    }
+
+    /** ⚠️ A delta written before ADR-0036 carries no attribution, and still decodes. */
+    public SegmentCommit(String segmentKey, List<RunCommit> runs) {
+        this(segmentKey, runs, null);
+    }
 
     public SegmentCommit {
         Objects.requireNonNull(segmentKey, "segmentKey");

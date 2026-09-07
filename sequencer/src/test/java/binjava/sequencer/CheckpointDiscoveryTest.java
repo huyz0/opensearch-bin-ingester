@@ -89,7 +89,7 @@ class CheckpointDiscoveryTest {
 
     private static Checkpoint checkpointAt(long sequence) {
         return new Checkpoint(sequence, Map.of(RA, new StreamOffsets(sequence * 10, 0)),
-                Map.of("poda", sequence));
+                Map.of("poda", Checkpoint.PodState.bare(sequence)));
     }
 
     private static void put(MemoryBinStore store, String key, byte[] body) throws IOException {
@@ -382,12 +382,11 @@ class CheckpointDiscoveryTest {
             for (int extra = 1; extra < streams; extra++) {
                 counts.put(new RunKey(new UUID(0x5150, extra), extra), records);
             }
-            batch.add(new CommitRequest(pod + request, flushSeq, "seg/" + pod + "/" + request,
+            batch.add(new CommitRequest(pod + request, "i1", flushSeq, "seg/" + pod + "/" + request,
                     counts));
         }
         java.util.List<CommitRequest> requestList = java.util.List.copyOf(batch);
-        log.commitAll(requestList);
-        writer.observe(requestList);
+        writer.observe(requestList, log.commitAll(requestList).sequence());
     }
 
     @Test
@@ -403,14 +402,17 @@ class CheckpointDiscoveryTest {
             Map<RunKey, Integer> counts = new LinkedHashMap<>();
             counts.put(RA, 3);
             java.util.List<CommitRequest> requests =
-                    java.util.List.of(new CommitRequest("poda", 7, "seg/0", counts));
-            log.commitAll(requests);
-            writer.observe(requests);
+                    java.util.List.of(new CommitRequest("poda", "i1", 7, "seg/0", counts));
+            writer.observe(requests, log.commitAll(requests).sequence());
 
             Optional<Checkpoint> found = CheckpointCursor.newest(store, "bins", 1);
             assertThat(found).isPresent();
             assertThat(found.get().sequence()).isEqualTo(log.nextSequence());
-            assertThat(found.get().pods()).containsEntry("poda", 7L);
+            assertThat(found.get().pods()).hasEntrySatisfying("poda", s -> {
+                        assertThat(s.lastAppliedFlushSeq()).isEqualTo(7L);
+                        assertThat(s.incarnationId()).isNotNull();
+                        assertThat(s.hasPointer()).isTrue();
+                    });
         }
     }
 }

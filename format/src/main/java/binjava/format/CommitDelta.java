@@ -132,16 +132,29 @@ public record CommitDelta(long sequence, List<SegmentCommit> segments)
      * two or more emit **v1 kinded, kind 0**, the kind ADR-0028's implementation
      * reserved in as many words for "a FUTURE delta layout … at which point v0
      * and it are genuinely different shapes". This is that layout.
-     *
-     * <p>⚠️ SO A SINGLE-SEGMENT v1 DELTA DECODES BUT IS NEVER WRITTEN, and that
-     * asymmetry is bought deliberately. Round-tripping it would mean always
-     * emitting v1, which churns every byte in every bucket and both golden files
-     * to say what v0 already says — exactly what ADR-0028 refused. Round-trip
-     * stability is therefore defined over CANONICAL encodings, and the golden
-     * files pin both.
      */
     @Override
     public byte[] encode() {
+        // ⚠️ ATTRIBUTION SELECTS THE LAYOUT, never mutates an existing one: a
+        // delta carrying none encodes byte-for-byte as it did before ADR-0036,
+        // which is what keeps both goldens and every bucket readable.
+        boolean attributed = false;
+        for (SegmentCommit s : segments) {
+            if (s.attribution() != null) {
+                attributed = true;
+                break;
+            }
+        }
+        if (attributed) {
+            ByteArrayOutputStream out = ChainEntry.kinded(ChainEntry.KIND_DELTA_ATTRIBUTED);
+            SegmentWriter.putUvarint(out, sequence);
+            SegmentWriter.putUvarint(out, segments.size());
+            for (SegmentCommit s : segments) {
+                writeSegment(out, s);
+                writeAttribution(out, s.attribution());
+            }
+            return out.toByteArray();
+        }
         if (segments.size() == 1) {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             out.writeBytes(ChainEntry.header(ChainEntry.VERSION_DELTA));
@@ -159,10 +172,66 @@ public record CommitDelta(long sequence, List<SegmentCommit> segments)
     }
 
     /**
-     * ⚠️ ONE WRITER FOR BOTH VERSIONS, so the per-segment bytes cannot drift
-     * apart. v1 is v0's body repeated under a count — that is the whole of the
-     * difference — and two copies of this loop is how the two would stop
-     * agreeing on a field nobody re-read.
+     * ⚠️ PER SEGMENT, immediately after that segment's runs. Written once per
+     * DELTA instead, every fixture in the tree still round-trips -- no
+     * production delta is multi-segment -- and M5's first forwarded multi-pod
+     * batch drops every pod but one.
+     */
+    private static void writeAttribution(ByteArrayOutputStream out,
+            SegmentCommit.Attribution a) {
+        if (a == null) {
+            throw new IllegalStateException(
+                    "an attributed delta cannot mix attributed and unattributed segments");
+        }
+        byte[] pod = a.podId().getBytes(StandardCharsets.UTF_8);
+        SegmentWriter.putUvarint(out, pod.length);
+        out.writeBytes(pod);
+        byte[] inc = a.incarnationId().getBytes(StandardCharsets.UTF_8);
+        SegmentWriter.putUvarint(out, inc.length);
+        out.writeBytes(inc);
+        SegmentWriter.putUvarint(out, a.flushSeq());
+    }
+
+    private static int attributionLen(Cursor c, String field) throws IOException {
+        long len = c.uvarint();
+        if (len < 0 || len > c.remaining()) {
+            throw new IOException("a delta claims a " + len + "-byte " + field
+                    + " but only " + c.remaining() + " bytes remain");
+        }
+        return (int) len;
+    }
+
+    static CommitDelta decodeAttributedBody(Cursor c) throws IOException {
+        long sequence = c.uvarint();
+        long count = c.uvarint();
+        if (count <= 0 || count > c.remaining()) {
+            throw new IOException("delta claims " + count + " segments");
+        }
+        List<SegmentCommit> segments = new ArrayList<>((int) count);
+        for (long i = 0; i < count; i++) {
+            SegmentCommit bare = readSegment(c);
+            // ⚠️ BOUND BEFORE THE CAST, both fields. The length is 64-bit on the
+            // wire and this cast is where it stops being: `0x1_0000_0004`
+            // narrows to 4 -- a VALID length -- so an unbounded read ACCEPTS the
+            // object carrying the wrong pod, and a negative-reading value
+            // narrows to a positive int the same way. Measured on the sibling
+            // fields in `Checkpoint` and recorded there; this kind inherited the
+            // norm and, until now, none of the guards.
+            String pod = new String(c.bytes(attributionLen(c, "podId")), StandardCharsets.UTF_8);
+            String inc = new String(c.bytes(attributionLen(c, "incarnationId")),
+                    StandardCharsets.UTF_8);
+            long flushSeq = c.uvarint();
+            segments.add(new SegmentCommit(bare.segmentKey(), bare.runs(),
+                    new SegmentCommit.Attribution(pod, inc, flushSeq)));
+        }
+        return new CommitDelta(sequence, segments);
+    }
+
+    /**
+     * ⚠️ ONE WRITER FOR EVERY VERSION, so the per-segment bytes cannot drift
+     * apart. The kinded batch is v0's body repeated under a count, and the
+     * attributed kind is that with a triple after each segment — two copies of
+     * this loop is how they would stop agreeing on a field nobody re-read.
      */
     private static void writeSegment(ByteArrayOutputStream out, SegmentCommit segment) {
         byte[] key = segment.segmentKey().getBytes(StandardCharsets.UTF_8);

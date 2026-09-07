@@ -143,8 +143,7 @@ class BoundedRecoveryCorrectnessTest {
             for (int i = 0; i < 5; i++) {
                 java.util.List<CommitRequest> batch =
                         java.util.List.of(request("poda", i, "seg/" + i));
-                log.commitAll(batch);
-                writer.observe(batch);
+                                writer.observe(batch, log.commitAll(batch).sequence());
             }
             expected = log.nextSequence();
         }
@@ -198,7 +197,7 @@ class BoundedRecoveryCorrectnessTest {
         reader.recover();
         long barrier = reader.nextSequence();
         Checkpoint pastTheBarrier = new Checkpoint(barrier + 2,
-                Map.of(streamOfTerm(0), new StreamOffsets(9_999, 0)), Map.of("pod0", 99L));
+                Map.of(streamOfTerm(0), new StreamOffsets(9_999, 0)), Map.of("pod0", Checkpoint.PodState.bare(99L)));
         byte[] body = pastTheBarrier.encode();
         backing.put(new LogKeys(PREFIX, 1).latestCheckpointKey(),
                 new Body(body.length, () -> new java.io.ByteArrayInputStream(body)));
@@ -234,7 +233,7 @@ class BoundedRecoveryCorrectnessTest {
         reader.recover();
         long barrier = reader.nextSequence();
         Checkpoint onTheBarrier = new Checkpoint(barrier + 1,
-                Map.of(streamOfTerm(0), new StreamOffsets(5, 0)), Map.of("pod0", 4L));
+                Map.of(streamOfTerm(0), new StreamOffsets(5, 0)), Map.of("pod0", Checkpoint.PodState.bare(4L)));
         byte[] body = onTheBarrier.encode();
         backing.put(new LogKeys(PREFIX, 1).latestCheckpointKey(),
                 new Body(body.length, () -> new java.io.ByteArrayInputStream(body)));
@@ -286,8 +285,7 @@ class BoundedRecoveryCorrectnessTest {
             for (int i = 0; i < 40; i++) {
                 List<CommitRequest> batch =
                         List.of(request("pod1", i, "seg/1/" + i, streamOfTerm(1)));
-                epoch1.commitAll(batch);
-                writer.observe(batch);
+                                writer.observe(batch, epoch1.commitAll(batch).sequence());
             }
         }
         long burnedAt = epoch1.nextSequence();
@@ -352,7 +350,7 @@ class BoundedRecoveryCorrectnessTest {
         fenced.commitAll(List.of(request("pod1", 1, "seg/1/zombie", streamOfTerm(1))));
 
         Checkpoint atTheBarrier = new Checkpoint(barrier,
-                Map.of(streamOfTerm(1), new StreamOffsets(0, 0)), Map.of("pod1", 0L));
+                Map.of(streamOfTerm(1), new StreamOffsets(0, 0)), Map.of("pod1", Checkpoint.PodState.bare(0L)));
         byte[] pointer = atTheBarrier.encode();
         store.put(new LogKeys(PREFIX, 1).latestCheckpointKey(),
                 new Body(pointer.length, () -> new java.io.ByteArrayInputStream(pointer)));
@@ -384,7 +382,7 @@ class BoundedRecoveryCorrectnessTest {
         fenced.commitAll(List.of(request("pod1", 1, "seg/1/zombie", streamOfTerm(1))));
 
         Checkpoint atTheBarrier = new Checkpoint(barrier,
-                Map.of(streamOfTerm(1), new StreamOffsets(0, 0)), Map.of("pod1", 0L));
+                Map.of(streamOfTerm(1), new StreamOffsets(0, 0)), Map.of("pod1", Checkpoint.PodState.bare(0L)));
         byte[] pointer = atTheBarrier.encode();
         store.put(new LogKeys(PREFIX, 1).latestCheckpointKey(),
                 new Body(pointer.length, () -> new java.io.ByteArrayInputStream(pointer)));

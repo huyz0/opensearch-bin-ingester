@@ -82,12 +82,12 @@ class LocalSequencerCheckpointTest {
         LocalSequencer sequencer = LocalSequencer.start(store, PREFIX, manager(store, "poda"), 8,
                 LocalSequencer.sleepFor(RENEW), 2, frozen).orElseThrow();
         try {
-            sequencer.commit(new CommitRequest("poda", 0, "seg/0", counts(3)));
+            sequencer.commit(new CommitRequest("poda", "i1", 0, "seg/0", counts(3)));
             assertThat(store.checkpointKeys())
                     .as("one delta is below K, so nothing is written yet")
                     .isEmpty();
 
-            sequencer.commit(new CommitRequest("poda", 1, "seg/1", counts(4)));
+            sequencer.commit(new CommitRequest("poda", "i1", 1, "seg/1", counts(4)));
 
             assertThat(store.checkpointKeys())
                     .as("the second delta crosses K, THROUGH the sequencer's own commit path")
@@ -98,7 +98,23 @@ class LocalSequencerCheckpointTest {
                     .isEqualTo(7);
             assertThat(written.pods())
                     .as("with the pod identity only the request carries")
-                    .containsEntry("poda", 1L);
+                    .hasEntrySatisfying("poda", s -> {
+                        assertThat(s.lastAppliedFlushSeq()).isEqualTo(1L);
+                        assertThat(s.incarnationId()).isNotNull();
+                        // ⚠️ THE POINTER'S VALUE, THROUGH THE REAL COMMIT PATH.
+                        // `hasPointer()` alone was all this asserted, and
+                        // `observe(requests, 0L)` at LocalSequencer's only call
+                        // site then left the WHOLE BUILD green -- the writer's
+                        // own tests call `observe` directly and recompute the
+                        // argument the same way production does, so they mirror
+                        // the wiring instead of exercising it. The checkpoint's
+                        // own sequence is EXCLUSIVE (one past the last applied
+                        // delta), so the pointer is one below it.
+                        assertThat(s.sequence())
+                                .as("the pointer names the delta the SEQUENCER committed")
+                                .isEqualTo(written.sequence() - 1);
+                        assertThat(s.epoch()).isEqualTo(1L);
+                    });
         } finally {
             sequencer.close();
         }

@@ -75,6 +75,51 @@ class IngestCommitPathTest {
         }
     }
 
+    /**
+     * ADR-0036: the incarnation is what tells a RESTART from a REPLAY, and
+     * `flushSeq` cannot, because it restarts at 0 while `podId` is stable.
+     *
+     * <p>⚠️ THE MINTING SITE IS THE DECISION, not an implementation detail.
+     * Minted per FLUSH instead of per INSTANCE, dedup becomes a total no-op in
+     * production while every sequencer-seam suite stays green, because those
+     * tests supply the incarnation themselves. Only a recording seam at the
+     * ingest boundary can see it — which is why this assertion lives here and
+     * not in `sequencer`.
+     */
+    @Test
+    void theIncarnationIsMintedOncePerIngestInstanceAndDiffersBetweenTwoOfThem()
+            throws Exception {
+        CountingBinStore store = new CountingBinStore(new MemoryBinStore());
+        Recording first = new Recording(IngestTestSupport.sequencer(store, "pod7"));
+        try (DefaultIngest ingest = new DefaultIngest(
+                IngestTestSupport.pinnedIntervalConfig(IngestTestSupport.NEVER, 8L << 20),
+                store, IngestTestSupport.PREFIX, "pod7", first, new SubscriptionHub(),
+                Clock.systemUTC(), index -> IngestTestSupport.LOGS)) {
+            appendOnce(ingest, "logs", 0, 2);
+            appendOnce(ingest, "logs", 0, 3);
+        }
+        List<String> incarnations =
+                first.seen.stream().map(CommitRequest::incarnationId).distinct().toList();
+        assertThat(incarnations)
+                .as("one DefaultIngest is one incarnation, however many times it flushes")
+                .hasSize(1);
+        assertThat(incarnations.get(0)).as("and it is never blank").isNotBlank();
+
+        // A SECOND instance with the SAME podShortId is a new incarnation --
+        // this is the restart the bare pair cannot see.
+        Recording second = new Recording(IngestTestSupport.sequencer(store, "pod7"));
+        try (DefaultIngest ingest = new DefaultIngest(
+                IngestTestSupport.pinnedIntervalConfig(IngestTestSupport.NEVER, 8L << 20),
+                store, IngestTestSupport.PREFIX, "pod7", second, new SubscriptionHub(),
+                Clock.systemUTC(), index -> IngestTestSupport.LOGS)) {
+            appendOnce(ingest, "logs", 0, 4);
+        }
+        assertThat(second.seen).isNotEmpty();
+        assertThat(second.seen.get(0).incarnationId())
+                .as("a restarted pod is a DIFFERENT incarnation, though podId is stable")
+                .isNotEqualTo(incarnations.get(0));
+    }
+
     @Test
     void theCommitRequestCarriesThisPodAndAFlushSeqThatAdvancesOncePerFlush()
             throws Exception {

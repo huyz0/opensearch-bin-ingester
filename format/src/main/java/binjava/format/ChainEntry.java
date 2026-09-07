@@ -65,6 +65,18 @@ public sealed interface ChainEntry permits CommitDelta, Seal, Continue {
 
     int KIND_CONTINUE = 2;
 
+    /**
+     * A delta whose segments carry `(podId, incarnationId, flushSeq)`
+     * (ADR-0036). ⚠️ RESERVED HERE RATHER THAN ASSUMED: ADR-0032 took
+     * {@link #KIND_DELTA}'s value on exactly these terms, and this comment is
+     * what a later kind must be able to point at. ⚠️ It exists because a
+     * VERSION is a LAYOUT: adding the triple to {@link #VERSION_DELTA} or to
+     * {@link #KIND_DELTA} would change bytes every delta already in a bucket
+     * is read back with, so an unattributed delta still encodes under those
+     * two and neither golden moves.
+     */
+    int KIND_DELTA_ATTRIBUTED = 3;
+
     /** Where in its chain this entry sits. */
     long sequence();
 
@@ -122,6 +134,9 @@ public sealed interface ChainEntry permits CommitDelta, Seal, Continue {
         try {
             if (kind == KIND_DELTA) {
                 return CommitDelta.decodeBatchedBody(c);
+            }
+            if (kind == KIND_DELTA_ATTRIBUTED) {
+                return CommitDelta.decodeAttributedBody(c);
             }
             if (kind == KIND_SEAL) {
                 return new Seal(c.uvarint(), c.uvarint());

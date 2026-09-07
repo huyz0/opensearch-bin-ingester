@@ -74,7 +74,7 @@ class LocalSequencerFailoverTest {
     }
 
     private static CommitRequest request(String pod, long flushSeq, String seg, int n) {
-        return new CommitRequest(pod, flushSeq, seg, counts(n));
+        return new CommitRequest(pod, "i1", flushSeq, seg, counts(n));
     }
 
     /** A takeover after {@code terms} prior terms of {@code entries} commits each. */

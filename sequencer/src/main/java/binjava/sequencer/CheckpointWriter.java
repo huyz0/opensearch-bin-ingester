@@ -45,14 +45,17 @@ import java.util.concurrent.atomic.AtomicLong;
  * optimisation, so an {@code IOException} here is logged, the dirty flag is
  * LEFT SET, and the next trigger retries. Propagating it would fail writes that
  * already succeeded.
+ * <p>⚠️ EVERY {@code SegmentCommit} CARRIES AN OPTIONAL
+ * {@code Attribution(podId, incarnationId, flushSeq)} (ADR-0036), and this
+ * writer records a POINTER to the delta that last applied for each pod.
+ * ⚠️ NOTHING IN {@code src/main} READS EITHER BACK YET — M4.10d is where a
+ * successor folds the uncheckpointed tail into the window.
  *
- * <p>⚠️ PER-POD {@code lastAppliedFlushSeq} IS PROCESS-LOCAL, and that is a
- * known hole rather than a design: {@code CommitDelta} carries
- * {@code (sequence, segments)} and nothing else, so a new leader cannot recover
- * it and its first checkpoint carries no pods at all — emptying the idempotency
- * window M4.10 will depend on, exactly when duplicates are likeliest.
- * {@code CheckpointWriterContentTest} asserts that, to make M4.10 confront it
- * rather than inherit it.
+ * <p>⚠️ WHAT REMAINS PROCESS-LOCAL is the in-memory map below: it learns only
+ * from {@link #observe}, which {@code LocalSequencer} calls AFTER a successful
+ * {@code commitAll}. An AMBIGUOUS commit — the PUT landed, the response was
+ * lost — applies without ever reaching it, which is why M4.10d must reconcile
+ * that case from the chain rather than treating this map as authoritative.
  */
 final class CheckpointWriter implements AutoCloseable {
 
@@ -75,7 +78,7 @@ final class CheckpointWriter implements AutoCloseable {
     private final CommitLog log;
     private final LogKeys keys;
     private final long everyDeltas;
-    private final Map<String, Long> pods = new HashMap<>();
+    private final Map<String, Checkpoint.PodState> pods = new HashMap<>();
     private final AtomicLong ticksProcessed = new AtomicLong();
     private final Thread tickerThread;
     private long pendingSequence;
@@ -103,13 +106,13 @@ final class CheckpointWriter implements AutoCloseable {
 
     /**
      * Every commit passes through here: it is the only place the writer can see
-     * {@code podId} and {@code flushSeq}, which the chain does not carry.
+     * {@code podId} and {@code flushSeq}, which the chain carries only since M4.10c, and only per SegmentCommit.
      *
      * <p>⚠️ Does NOT throw. See the class note on failed checkpoints.
      */
-    synchronized void observe(List<CommitRequest> requests) {
+    synchronized void observe(List<CommitRequest> requests, long appliedSequence) {
         try {
-            capture(requests);
+            capture(requests, appliedSequence);
         } catch (Throwable neverFailAnAcknowledgedCommit) {
             // ⚠️ Throwable, not IOException, and for the reason `renewForever`
             // and `commitBatch` both catch it: these records are ALREADY durable
@@ -121,12 +124,31 @@ final class CheckpointWriter implements AutoCloseable {
         }
     }
 
-    private void capture(List<CommitRequest> requests) {
+    private void capture(List<CommitRequest> requests, long appliedSequence) {
+        // ⚠️ THE SEQUENCE OF THE DELTA THAT APPLIED, passed in by the caller --
+        // NOT `log.nextSequence()`. `observe` runs AFTER `commitAll`, by which
+        // point `apply` has advanced `nextSequence` past the delta, so reading
+        // it here recorded a pointer ONE PAST the object it names: measured, a
+        // delta at sequence 0 stored 1/1. Every checkpoint then pointed at an
+        // empty slot or an unrelated later delta, and a detected replay could
+        // not be answered at all.
+        long pointerEpoch = log.epoch();
+        long pointerSequence = appliedSequence;
         for (CommitRequest request : requests) {
-            // ⚠️ Math::max, never put: a retried or late flush arrives with a
-            // LOWER flushSeq than one already applied, and taking the last one
-            // seen would walk the idempotency watermark backwards.
-            pods.merge(request.podId(), request.flushSeq(), Math::max);
+            // ⚠️ Math::max WITHIN AN INCARNATION, never across one. A retried or
+            // late flush arrives with a LOWER flushSeq than one already applied,
+            // and taking the last seen would walk the watermark backwards. But
+            // a RESTARTED pod reissues from 0 under a NEW incarnation, and
+            // maxing across that refuses its second commit for ever -- which is
+            // the suppression ADR-0036 exists to prevent, and a depth-one
+            // fixture passes it.
+            pods.merge(request.podId(),
+                    new Checkpoint.PodState(request.incarnationId(), request.flushSeq(),
+                            pointerEpoch, pointerSequence),
+                    (existing, incoming) -> existing.incarnationId() != null
+                            && existing.incarnationId().equals(incoming.incarnationId())
+                            && existing.lastAppliedFlushSeq() > incoming.lastAppliedFlushSeq()
+                            ? existing : incoming);
         }
         // ⚠️ ONE `commitAll` IS ONE DELTA, however many requests it batches --
         // M4.7's whole point -- so this counts deltas, which is what K means.

@@ -41,7 +41,7 @@ class CheckpointDecodeRefusalTest {
     private static byte[] oneStream(long next, long oldest) {
         Map<RunKey, StreamOffsets> one = new LinkedHashMap<>();
         one.put(new RunKey(idx(1), 1), new StreamOffsets(next, oldest));
-        return new Checkpoint(1, one, Map.of("poda", 1L)).encode();
+        return new Checkpoint(1, one, Map.of("poda", Checkpoint.PodState.bare(1L))).encode();
     }
 
     /** The uvarint encoding of {@code 0x1_0000_0001}, which narrows to 1 as an int. */
@@ -113,10 +113,30 @@ class CheckpointDecodeRefusalTest {
     void anUNKNOWNVersionSTOPSRatherThanGuessingTheLayout() throws Exception {
         // ⚠️ THE FORWARD-COMPAT GUARD `wire-format-change` RESTS ON, and it was
         // unconstrained: deleting the version check left the whole build green.
+        // ⚠️ THE BYTE MOVED FROM 1 TO 9 BECAUSE 1 IS NOW A REAL VERSION
+        // (ADR-0036's attributed checkpoint), so `bytes[7] = 1` stopped testing
+        // an UNKNOWN version and started testing a known one -- it went vacuous
+        // rather than failing, which is why this comment exists. The cheap
+        // repair was to loosen the message assertion below; that is the
+        // testing.md rule 5 inversion and is not what happened.
         byte[] bytes = CheckpointTest.fixture().encode();
-        bytes[7] = 1;
+        bytes[7] = 9;
 
         assertThatThrownBy(() -> Checkpoint.decode(bytes))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("unsupported checkpoint version");
+
+        // ⚠️ THE DISCRIMINATING CASE IS A NEGATIVE VERSION, and an earlier
+        // draft of this comment was wrong: `bytes[7] = 9` is refused by an
+        // enumerated set AND by `version <= VERSION_ATTRIBUTED` alike, so it
+        // proves nothing about which is implemented. A negative int passes a
+        // `<=` comparison and fails an enumeration, which is the only shape
+        // that tells them apart -- review measured the range mutation surviving
+        // the version-9 case.
+        byte[] negative = CheckpointTest.fixture().encode();
+        negative[4] = (byte) 0xFF;
+        assertThatThrownBy(() -> Checkpoint.decode(negative))
+                .as("a NEGATIVE version is refused: an enumerated set, not a range")
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("unsupported checkpoint version");
     }
@@ -333,5 +353,107 @@ class CheckpointDecodeRefusalTest {
         assertThatThrownBy(() -> Checkpoint.decode(doubled))
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("repeats pod");
+    }
+
+    /**
+     * ⚠️ THE v1 POD SLOT ADDS FOUR UNTRUSTED READS and had no refusal case: the
+     * presence flag, the incarnation length, and the two pointer uvarints. Every
+     * other fixture in this file is a v0 `PodState.bare` slot, so review measured
+     * BOTH of these accepting corrupt input with the build green.
+     */
+    private static byte[] oneAttributedPod() {
+        Map<RunKey, StreamOffsets> one = new LinkedHashMap<>();
+        one.put(new RunKey(idx(1), 1), new StreamOffsets(5, 1));
+        return new Checkpoint(1, one,
+                Map.of("poda", new Checkpoint.PodState("inc", 5, 2, 3))).encode();
+    }
+
+    @Test
+    void anOverLongIncarnationLengthIsREFUSEDRatherThanNarrowed() {
+        byte[] v1 = oneAttributedPod();
+        // the incarnation length is the byte after the presence flag, which
+        // follows the watermark; find it by its known value of 3 ("inc").
+        int at = -1;
+        for (int i = v1.length - 4; i > 8; i--) {
+            if (v1[i] == 3 && v1[i + 1] == 'i' && v1[i + 2] == 'n' && v1[i + 3] == 'c') {
+                at = i;
+                break;
+            }
+        }
+        assertThat(at).as("the fixture must contain a length-prefixed \"inc\"").isPositive();
+        final int lengthAt = at;
+
+        // ⚠️ 0x1_0000_0003 -- narrows to 3, the CORRECT length, so a decoder
+        // that casts without checking accepts the object carrying real data.
+        byte[] wide = {(byte) 0x83, (byte) 0x80, (byte) 0x80, (byte) 0x80, 0x10};
+        assertThatThrownBy(() -> Checkpoint.decode(spliceAt(v1, lengthAt, wide)))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("incarnationId");
+
+        // ⚠️ AND THE `< 0` HALF, which the wide-positive case above does NOT
+        // pin: review measured `incLen < 0 ||` deletable with the tree green,
+        // decoding a pod nobody wrote and moving another pod's pointer.
+        // ⚠️ 0xFFFFFFFF_00000003: NEGATIVE as a long, and narrows to 3 -- the
+        // CORRECT length -- so `> c.remaining()` is false and only the sign
+        // check refuses it. A value narrowing to any OTHER length is caught by
+        // the bound instead and proves nothing about this half; my first
+        // attempt reused WIDE_NEGATIVE, which narrows to 1, and the mutation
+        // survived it.
+        byte[] negativeNarrowingToThree = {(byte) 0x83, (byte) 0x80, (byte) 0x80, (byte) 0x80,
+            (byte) 0xF0, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0x01};
+        assertThatThrownBy(() -> Checkpoint.decode(spliceAt(v1, lengthAt, negativeNarrowingToThree)))
+                .as("a negative length narrowing to a VALID int must be refused by the sign check")
+                .isInstanceOf(IOException.class);
+    }
+
+    @Test
+    void aV1SlotTruncatedAfterItsWatermarkIsREFUSEDNotReadAsBare() {
+        byte[] v1 = oneAttributedPod();
+        // ⚠️ CUT EXACTLY AT THE PRESENCE FLAG, derived rather than guessed: the
+        // flag is the byte before the incarnation's length prefix. Under a
+        // decoder that reads the flag only `if (c.remaining() > 0)`, the slot
+        // then decodes as BARE and the object is ACCEPTED with its pointer
+        // silently gone. A cut anywhere else fails on some other field and
+        // proves nothing about this one.
+        int lengthAt = -1;
+        for (int i = v1.length - 4; i > 8; i--) {
+            if (v1[i] == 3 && v1[i + 1] == 'i' && v1[i + 2] == 'n' && v1[i + 3] == 'c') {
+                lengthAt = i;
+                break;
+            }
+        }
+        assertThat(lengthAt).isPositive();
+        byte[] truncated = new byte[lengthAt - 1];
+        System.arraycopy(v1, 0, truncated, 0, truncated.length);
+
+        assertThatThrownBy(() -> Checkpoint.decode(truncated))
+                .as("a v1 checkpoint missing its slot tail is corrupt, not pointerless")
+                .isInstanceOf(IOException.class);
+    }
+
+    /**
+     * ⚠️ THE PRESENCE FLAG IS ENUMERATED, not `== 1`. Any other value decoded as
+     * a BARE slot, so a corrupt flag silently dropped a pod's pointer rather
+     * than refusing the object — `!= 0` survived the whole build, and the
+     * archive row's word for this format is "enumerated".
+     */
+    @Test
+    void aPodSlotPresenceFlagOtherThanZeroOrOneIsREFUSED() throws Exception {
+        byte[] v1 = oneAttributedPod();
+        int lengthAt = -1;
+        for (int i = v1.length - 4; i > 8; i--) {
+            if (v1[i] == 3 && v1[i + 1] == 'i' && v1[i + 2] == 'n' && v1[i + 3] == 'c') {
+                lengthAt = i;
+                break;
+            }
+        }
+        assertThat(lengthAt).isPositive();
+        final int flagAt = lengthAt - 1;
+
+        byte[] corrupt = v1.clone();
+        corrupt[flagAt] = 2;
+        assertThatThrownBy(() -> Checkpoint.decode(corrupt))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("presence flag");
     }
 }

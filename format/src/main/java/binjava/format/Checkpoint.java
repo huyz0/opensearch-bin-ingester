@@ -41,12 +41,70 @@ import java.util.Objects;
  */
 public record Checkpoint(long sequence,
         Map<RunKey, StreamOffsets> streams,
-        Map<String, Long> pods) {
+        Map<String, PodState> pods) {
+
+    /**
+     * One pod's idempotency slot (ADR-0036): the incarnation, the watermark,
+     * and a POINTER to the delta that last applied for that pod.
+     *
+     * <p>⚠️ THE POINTER IS WHAT MAKES A REPLAY ANSWERABLE. Without it,
+     * detection is unbounded-depth while answering is bounded to the
+     * uncheckpointed tail, since entries below the newest checkpoint are never
+     * GET — the very defect that rejects bounding the window to the tail.
+     *
+     * <p>⚠️ THE INCARNATION IS A VALUE HERE, never a qualifier on the pod id:
+     * qualifying the id adds an entry per restart, so the checkpoint would grow
+     * with history against ADR-0033.
+     *
+     * <p>⚠️ {@code incarnationId} is null in a v0 checkpoint, which carried a
+     * bare watermark and no pointer. {@code epoch} and {@code sequence} are
+     * then {@code -1}, NOT zero: {@code (0, 0)} is a real delta address, and a
+     * slot that looked addressable would answer a replay from the wrong object.
+     */
+    public record PodState(String incarnationId, long lastAppliedFlushSeq,
+            long epoch, long sequence) {
+        public PodState {
+            if (lastAppliedFlushSeq < 0) {
+                throw new IllegalArgumentException(
+                        "lastAppliedFlushSeq is never negative: " + lastAppliedFlushSeq);
+            }
+            boolean pointed = epoch >= 0 && sequence >= 0;
+            boolean absent = epoch == -1 && sequence == -1;
+            if (!pointed && !absent) {
+                throw new IllegalArgumentException(
+                        "a pointer is both parts or neither: " + epoch + "/" + sequence);
+            }
+            if (incarnationId != null && incarnationId.isBlank()) {
+                throw new IllegalArgumentException("incarnationId is never blank");
+            }
+            if ((incarnationId == null) != absent) {
+                throw new IllegalArgumentException(
+                        "an incarnation and a pointer travel together");
+            }
+        }
+
+        /** A v0 slot: a watermark with no incarnation and no pointer. */
+        public static PodState bare(long lastAppliedFlushSeq) {
+            return new PodState(null, lastAppliedFlushSeq, -1, -1);
+        }
+
+        public boolean hasPointer() {
+            return incarnationId != null;
+        }
+    }
 
     /** ⚠️ Its own magic: a checkpoint is not a chain entry and never decodes as one. */
     public static final int MAGIC = 0x42434B50;
 
     public static final int VERSION = 0;
+
+    /**
+     * A checkpoint whose pod slots carry an incarnation and a pointer
+     * (ADR-0036). ⚠️ A NEW VERSION, because a version IS a layout: a v0 object
+     * already in a bucket must keep decoding for the retention window, and
+     * `golden/checkpoint-v0.bin` asserts its bytes.
+     */
+    public static final int VERSION_ATTRIBUTED = 1;
 
     /** Where a stream stands: the next offset to assign, and the oldest still kept. */
     public record StreamOffsets(long nextOffset, long oldestRetainedOffset) {
@@ -88,14 +146,14 @@ public record Checkpoint(long sequence,
             Objects.requireNonNull(e.getKey(), "a stream key");
             Objects.requireNonNull(e.getValue(), "stream offsets");
         }
-        for (Map.Entry<String, Long> p : pods.entrySet()) {
+        for (Map.Entry<String, PodState> p : pods.entrySet()) {
             if (p.getKey().isBlank()) {
                 throw new IllegalArgumentException("a podId is never blank");
             }
-            if (p.getValue() == null || p.getValue() < 0) {
-                throw new IllegalArgumentException(
-                        "lastAppliedFlushSeq is never negative: " + p.getKey());
-            }
+            // ⚠️ PodState's own constructor checks the watermark and the
+            // pointer-pair invariant; this loop still rejects a null VALUE,
+            // which Map.copyOf would not reach through an unmodifiable view.
+            Objects.requireNonNull(p.getValue(), "pod state for " + p.getKey());
         }
     }
 
@@ -108,8 +166,13 @@ public record Checkpoint(long sequence,
     public byte[] encode() {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         ByteBuffer head = ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN);
+        // ⚠️ THE SLOTS SELECT THE LAYOUT, never mutate one: a checkpoint whose
+        // pods carry no incarnation encodes byte-for-byte as it did before
+        // ADR-0036, which is what keeps `checkpoint-v0.bin` and every written
+        // checkpoint readable.
+        boolean attributed = pods.values().stream().anyMatch(PodState::hasPointer);
         head.putInt(MAGIC);
-        head.putInt(VERSION);
+        head.putInt(attributed ? VERSION_ATTRIBUTED : VERSION);
         out.writeBytes(head.array());
         SegmentWriter.putUvarint(out, sequence);
 
@@ -134,7 +197,23 @@ public record Checkpoint(long sequence,
             byte[] raw = pod.getBytes(StandardCharsets.UTF_8);
             SegmentWriter.putUvarint(out, raw.length);
             out.writeBytes(raw);
-            SegmentWriter.putUvarint(out, pods.get(pod));
+            PodState s = pods.get(pod);
+            SegmentWriter.putUvarint(out, s.lastAppliedFlushSeq());
+            if (attributed) {
+                // ⚠️ A PER-SLOT FLAG, because MIXED IS THE NORMAL STATE after an
+                // upgrade: a pod that has committed since carries an incarnation,
+                // one recovered from a v0 checkpoint does not, and both live in
+                // one map until the next checkpoint. A version-wide flag would
+                // force the writer to invent an incarnation for the second.
+                SegmentWriter.putUvarint(out, s.hasPointer() ? 1 : 0);
+                if (s.hasPointer()) {
+                    byte[] inc = s.incarnationId().getBytes(StandardCharsets.UTF_8);
+                    SegmentWriter.putUvarint(out, inc.length);
+                    out.writeBytes(inc);
+                    SegmentWriter.putUvarint(out, s.epoch());
+                    SegmentWriter.putUvarint(out, s.sequence());
+                }
+            }
         }
         return out.toByteArray();
     }
@@ -148,12 +227,12 @@ public record Checkpoint(long sequence,
             throw new IOException("not a checkpoint: bad magic");
         }
         int version = b.getInt(4);
-        if (version != VERSION) {
+        if (version != VERSION && version != VERSION_ATTRIBUTED) {
             throw new IOException("unsupported checkpoint version: " + version);
         }
         Cursor c = new Cursor(bytes, 8);
         try {
-            return decodeBody(c);
+            return decodeBody(c, version);
         } catch (IllegalArgumentException refused) {
             // ⚠️ A VALUE THE WIRE CAN CARRY BUT A RECORD REFUSES IS CORRUPT
             // INPUT, not a programming error -- the rule `ChainEntry.decodeKinded`
@@ -178,7 +257,21 @@ public record Checkpoint(long sequence,
         }
     }
 
-    private static Checkpoint decodeBody(Cursor c) throws IOException {
+    /**
+     * ⚠️ ENUMERATED, not `== 1`. Any other value decoded as a BARE slot, so a
+     * corrupt flag silently dropped a pod's pointer instead of refusing the
+     * object — and `!= 0` survived the whole build. The archive row's word for
+     * this format is "enumerated", and this is the field it has to be true of.
+     */
+    private static boolean attributedSlot(Cursor c) throws IOException {
+        long flag = c.uvarint();
+        if (flag != 0 && flag != 1) {
+            throw new IOException("a checkpoint pod slot claims presence flag " + flag);
+        }
+        return flag == 1;
+    }
+
+    private static Checkpoint decodeBody(Cursor c, int version) throws IOException {
         long sequence = c.uvarint();
 
         long streamCount = c.uvarint();
@@ -223,7 +316,7 @@ public record Checkpoint(long sequence,
             throw new IOException("a checkpoint claims " + podCount + " pods but only "
                     + c.remaining() + " bytes remain");
         }
-        Map<String, Long> pods = new LinkedHashMap<>();
+        Map<String, PodState> pods = new LinkedHashMap<>();
         for (long i = 0; i < podCount; i++) {
             // ⚠️ THE LENGTH IS 64-BIT ON THE WIRE and this cast is where it
             // stops being. Measured: `0x1_0000_0004` narrows to 4 and the object
@@ -235,7 +328,18 @@ public record Checkpoint(long sequence,
                         + c.remaining() + " bytes remain");
             }
             String pod = new String(c.bytes((int) podLen), StandardCharsets.UTF_8);
-            if (pods.put(pod, c.uvarint()) != null) {
+            long watermark = c.uvarint();
+            PodState state = PodState.bare(watermark);
+            if (version == VERSION_ATTRIBUTED && attributedSlot(c)) {
+                long incLen = c.uvarint();
+                if (incLen < 0 || incLen > c.remaining()) {
+                    throw new IOException("a checkpoint claims a " + incLen
+                            + "-byte incarnationId but only " + c.remaining() + " bytes remain");
+                }
+                String inc = new String(c.bytes((int) incLen), StandardCharsets.UTF_8);
+                state = new PodState(inc, watermark, c.uvarint(), c.uvarint());
+            }
+            if (pods.put(pod, state) != null) {
                 throw new IOException("a checkpoint repeats pod " + pod);
             }
         }

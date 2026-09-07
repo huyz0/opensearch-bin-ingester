@@ -49,17 +49,17 @@ class InvariantsAcrossChainsTest {
         // is what a capability flag is for.
         MemoryBinStore store = new MemoryBinStore();
         LocalSequencer first = start(store, "pod1");
-        first.commit(new CommitRequest("pod1", 1, "seg/a", counts(6)));
+        first.commit(new CommitRequest("pod1", "i1", 1, "seg/a", counts(6)));
         // ⚠️ A SECOND DELTA, and it is the only reason the fold's AGGREGATION is
         // exercised anywhere. Every predecessor chain in this file used to carry
         // exactly one, so `merge(..., Math::max)` could become `Math::min` with
         // all 18 tests green -- a real false negative, not just an untested line:
         // with two deltas the checker reports the rewind as I2 and the mutant
         // reports it as a `gap`, so the KIND is wrong and M4.13 pins exact counts.
-        first.commit(new CommitRequest("pod1", 2, "seg/a2", counts(2)));
+        first.commit(new CommitRequest("pod1", "i1", 2, "seg/a2", counts(2)));
         first.close();
         LocalSequencer second = start(store, "pod2");
-        var resumed = second.commit(new CommitRequest("pod2", 1, "seg/b", counts(2)));
+        var resumed = second.commit(new CommitRequest("pod2", "i1", 1, "seg/b", counts(2)));
 
         assertThat(Invariants.checkChain(store, PREFIX, 1))
                 .as("the sealed predecessor is clean").isEmpty();

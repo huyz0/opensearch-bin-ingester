@@ -34,6 +34,28 @@ class FakeSequencerTest {
                 .map(RunCommit::firstOffset).findFirst().orElseThrow();
     }
 
+    /**
+     * ⚠️ THE FAKE MUST CARRY THE ATTRIBUTION, and reverting it to the two-arg
+     * `SegmentCommit` left `:sequencer:`, `:ingest:` and `:http:` all green
+     * while contradicting the fixture's own javadoc. A fake that drops it lets
+     * a test pass while the real delta carries nothing for a successor to
+     * rebuild its window from — the drift this fixture exists to prevent.
+     */
+    @Test
+    void theFakeCopiesTheRequestsTripleOntoEachSegment() throws Exception {
+        FakeSequencer fake = new FakeSequencer();
+
+        var delta = fake.commitAll(java.util.List.of(
+                new CommitRequest("poda", "inc-1", 4, "seg-a", counts(new RunKey(UUID.fromString("00000000-0000-0000-0000-0000000000aa"), 0), 1)),
+                new CommitRequest("podb", "inc-2", 0, "seg-b", counts(new RunKey(UUID.fromString("00000000-0000-0000-0000-0000000000aa"), 0), 1))));
+
+        assertThat(delta.segments().get(0).attribution())
+                .isEqualTo(new binjava.format.SegmentCommit.Attribution("poda", "inc-1", 4));
+        assertThat(delta.segments().get(1).attribution())
+                .as("the second segment's OWN triple, not the first's")
+                .isEqualTo(new binjava.format.SegmentCommit.Attribution("podb", "inc-2", 0));
+    }
+
     @Test
     void aBATCHEDCommitAdvancesOffsetsACROSSSegmentsJustAsTheRealLogDoes() throws Exception {
         // ⚠️ THE FAKE'S MULTI-REQUEST PATH HAD NO TEST AT ALL, and two mutations
@@ -48,8 +70,8 @@ class FakeSequencerTest {
         RunKey stream = new RunKey(LOGS, 0);
 
         CommitDelta delta = fake.commitAll(java.util.List.of(
-                new CommitRequest("pod0", 0, "seg-a", counts(stream, 3)),
-                new CommitRequest("pod1", 0, "seg-b", counts(stream, 5))));
+                new CommitRequest("pod0", "i1", 0, "seg-a", counts(stream, 3)),
+                new CommitRequest("pod1", "i1", 0, "seg-b", counts(stream, 5))));
 
         assertThat(delta.segments()).as("every submitted flush is in the delta").hasSize(2);
         // ⚠️ WHICH KEY CARRIES WHICH RUNS, not merely that both are present.
@@ -78,16 +100,16 @@ class FakeSequencerTest {
         // see offsets skip where the real `CommitLog` never does.
         FakeSequencer fake = new FakeSequencer();
         RunKey stream = new RunKey(LOGS, 0);
-        fake.commit(new CommitRequest("pod0", 0, "seg-a", counts(stream, 4)));
+        fake.commit(new CommitRequest("pod0", "i1", 0, "seg-a", counts(stream, 4)));
 
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> fake.commitAll(java.util.List.of(
-                new CommitRequest("pod0", 1, "seg-clash", counts(stream, 1)),
-                new CommitRequest("pod1", 0, "seg-clash", counts(stream, 1)))))
+                new CommitRequest("pod0", "i1", 1, "seg-clash", counts(stream, 1)),
+                new CommitRequest("pod1", "i1", 0, "seg-clash", counts(stream, 1)))))
                 .isInstanceOf(IllegalArgumentException.class);
 
         assertThat(fake.nextOffset(stream))
                 .as("a refused batch must leave the fake exactly where it was").isEqualTo(4);
-        assertThat(fake.commit(new CommitRequest("pod0", 2, "seg-b", counts(stream, 1)))
+        assertThat(fake.commit(new CommitRequest("pod0", "i1", 2, "seg-b", counts(stream, 1)))
                 .sequence())
                 .as("and must not have consumed a sequence number either").isEqualTo(1);
     }
@@ -99,8 +121,8 @@ class FakeSequencerTest {
         // is what a fake that forgets its state returns.
         try (FakeSequencer seq = new FakeSequencer()) {
             RunKey key = new RunKey(LOGS, 0);
-            CommitDelta first = seq.commit(new CommitRequest("pod1", 0L, "seg-1", counts(key, 3)));
-            CommitDelta second = seq.commit(new CommitRequest("pod1", 1L, "seg-2", counts(key, 4)));
+            CommitDelta first = seq.commit(new CommitRequest("pod1", "i1", 0L, "seg-1", counts(key, 3)));
+            CommitDelta second = seq.commit(new CommitRequest("pod1", "i1", 1L, "seg-2", counts(key, 4)));
             assertThat(firstOffsetOf(first, key)).isZero();
             assertThat(firstOffsetOf(second, key)).isEqualTo(3L);
         }
@@ -115,8 +137,8 @@ class FakeSequencerTest {
         try (FakeSequencer seq = new FakeSequencer()) {
             RunKey logs = new RunKey(LOGS, 0);
             RunKey metrics = new RunKey(METRICS, 0);
-            seq.commit(new CommitRequest("pod1", 0L, "seg-1", counts(logs, 5)));
-            CommitDelta d = seq.commit(new CommitRequest("pod1", 1L, "seg-2", counts(metrics, 2)));
+            seq.commit(new CommitRequest("pod1", "i1", 0L, "seg-1", counts(logs, 5)));
+            CommitDelta d = seq.commit(new CommitRequest("pod1", "i1", 1L, "seg-2", counts(metrics, 2)));
             assertThat(firstOffsetOf(d, metrics))
                     .as("a fresh stream starts at 0 however many offsets another stream used")
                     .isZero();
@@ -125,7 +147,7 @@ class FakeSequencerTest {
             // an earlier draft of this test showed exactly that, passing against
             // a stub. Asserting that `logs` then CONTINUES at 5 is what makes
             // this fail against a stuck offset as well as against a global one.
-            CommitDelta back = seq.commit(new CommitRequest("pod1", 2L, "seg-3", counts(logs, 1)));
+            CommitDelta back = seq.commit(new CommitRequest("pod1", "i1", 2L, "seg-3", counts(logs, 1)));
             assertThat(firstOffsetOf(back, logs))
                     .as("the other stream kept its own position meanwhile")
                     .isEqualTo(5L);
@@ -137,11 +159,11 @@ class FakeSequencerTest {
         try (FakeSequencer seq = new FakeSequencer()) {
             RunKey p0 = new RunKey(LOGS, 0);
             RunKey p1 = new RunKey(LOGS, 1);
-            seq.commit(new CommitRequest("pod1", 0L, "seg-1", counts(p0, 7)));
-            CommitDelta d = seq.commit(new CommitRequest("pod1", 1L, "seg-2", counts(p1, 1)));
+            seq.commit(new CommitRequest("pod1", "i1", 0L, "seg-1", counts(p0, 7)));
+            CommitDelta d = seq.commit(new CommitRequest("pod1", "i1", 1L, "seg-2", counts(p1, 1)));
             assertThat(firstOffsetOf(d, p1)).isZero();
             // ⚠️ As above: the continuation half is what discriminates.
-            CommitDelta back = seq.commit(new CommitRequest("pod1", 2L, "seg-3", counts(p0, 1)));
+            CommitDelta back = seq.commit(new CommitRequest("pod1", "i1", 2L, "seg-3", counts(p0, 1)));
             assertThat(firstOffsetOf(back, p0)).isEqualTo(7L);
         }
     }
@@ -155,7 +177,7 @@ class FakeSequencerTest {
             RunKey key = new RunKey(LOGS, 0);
             for (int i = 0; i < 5; i++) {
                 CommitDelta d = seq.commit(
-                        new CommitRequest("pod1", i, "seg-" + i, counts(key, 1)));
+                        new CommitRequest("pod1", "i1", i, "seg-" + i, counts(key, 1)));
                 assertThat(d.sequence()).as("commit %d", i).isEqualTo(i);
             }
         }
@@ -169,8 +191,8 @@ class FakeSequencerTest {
         // consumer reads one stream and cannot tell which node produced what.
         try (FakeSequencer seq = new FakeSequencer()) {
             RunKey key = new RunKey(LOGS, 0);
-            CommitDelta a = seq.commit(new CommitRequest("podA", 0L, "seg-a", counts(key, 2)));
-            CommitDelta b = seq.commit(new CommitRequest("podB", 0L, "seg-b", counts(key, 2)));
+            CommitDelta a = seq.commit(new CommitRequest("podA", "i1", 0L, "seg-a", counts(key, 2)));
+            CommitDelta b = seq.commit(new CommitRequest("podB", "i1", 0L, "seg-b", counts(key, 2)));
             assertThat(firstOffsetOf(a, key)).isZero();
             assertThat(firstOffsetOf(b, key))
                     .as("node B continues node A's run -- the offset space is the STREAM's, "
@@ -184,7 +206,7 @@ class FakeSequencerTest {
     @Test
     void theDeltaCarriesTheSegmentKeyItWasCommittedFor() throws Exception {
         try (FakeSequencer seq = new FakeSequencer()) {
-            CommitDelta d = seq.commit(new CommitRequest("pod1", 0L, "bins/cluster-a/seg-xyz",
+            CommitDelta d = seq.commit(new CommitRequest("pod1", "i1", 0L, "bins/cluster-a/seg-xyz",
                     counts(new RunKey(LOGS, 0), 1)));
             assertThat(d.segmentKey()).isEqualTo("bins/cluster-a/seg-xyz");
         }
@@ -221,7 +243,7 @@ class FakeSequencerTest {
             many.put(a, 3);
             many.put(e0, 13);
             many.put(b, 5);
-            CommitDelta d = seq.commit(new CommitRequest("pod1", 0L, "seg-1", many));
+            CommitDelta d = seq.commit(new CommitRequest("pod1", "i1", 0L, "seg-1", many));
 
             assertThat(d.runs()).as("every stream committed comes back").hasSize(6);
             assertThat(d.runs()).extracting(RunCommit::key)
@@ -247,12 +269,12 @@ class FakeSequencerTest {
             Map<RunKey, Integer> first = new LinkedHashMap<>();
             first.put(a, 3);
             first.put(b, 5);
-            seq.commit(new CommitRequest("pod1", 0L, "seg-1", first));
+            seq.commit(new CommitRequest("pod1", "i1", 0L, "seg-1", first));
 
             Map<RunKey, Integer> second = new LinkedHashMap<>();
             second.put(a, 1);
             second.put(b, 1);
-            CommitDelta d = seq.commit(new CommitRequest("pod1", 1L, "seg-2", second));
+            CommitDelta d = seq.commit(new CommitRequest("pod1", "i1", 1L, "seg-2", second));
             assertThat(firstOffsetOf(d, a)).isEqualTo(3L);
             assertThat(firstOffsetOf(d, b)).isEqualTo(5L);
         }
@@ -265,7 +287,7 @@ class FakeSequencerTest {
         try (FakeSequencer seq = new FakeSequencer()) {
             RunKey key = new RunKey(LOGS, 0);
             assertThat(seq.nextOffset(key)).as("nothing committed yet").isZero();
-            seq.commit(new CommitRequest("pod1", 0L, "seg-1", counts(key, 4)));
+            seq.commit(new CommitRequest("pod1", "i1", 0L, "seg-1", counts(key, 4)));
             assertThat(seq.nextOffset(key)).isEqualTo(4L);
             assertThat(seq.nextOffset(new RunKey(METRICS, 0)))
                     .as("an untouched stream is still at 0").isZero();

@@ -47,7 +47,7 @@ class BatchingSequencerTerminationTest {
     private static CommitRequest from(String pod, long flushSeq) {
         Map<RunKey, Integer> counts = new LinkedHashMap<>();
         counts.put(new RunKey(A, 0), 3);
-        return new CommitRequest(pod, flushSeq, "bins/" + pod + "/" + flushSeq + ".bseg", counts);
+        return new CommitRequest(pod, "i1", flushSeq, "bins/" + pod + "/" + flushSeq + ".bseg", counts);
     }
 
     /**

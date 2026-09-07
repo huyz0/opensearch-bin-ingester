@@ -64,13 +64,13 @@ class CheckpointTest {
         // differently by insertion order.
         streams.put(new RunKey(idx(3), 9), new StreamOffsets(3009, 309));
         streams.put(new RunKey(idx(3), 4), new StreamOffsets(3004, 304));
-        Map<String, Long> pods = new LinkedHashMap<>();
-        pods.put("podb", 77L);
-        pods.put("poda", 42L);
+        Map<String, Checkpoint.PodState> pods = new LinkedHashMap<>();
+        pods.put("podb", Checkpoint.PodState.bare(77L));
+        pods.put("poda", Checkpoint.PodState.bare(42L));
         // ⚠️ ONE NON-ASCII podId, because every other one is ASCII and
         // `putUvarint(out, raw.length)` -> `putUvarint(out, pod.length())`
         // survives when bytes and chars agree.
-        pods.put("pod-\u00e9", 5L);
+        pods.put("pod-\u00e9", Checkpoint.PodState.bare(5L));
         return new Checkpoint(9, streams, pods);
     }
 
@@ -115,10 +115,10 @@ class CheckpointTest {
                 ascending.put(new RunKey(idx(3), 9), new StreamOffsets(3009, 309));
             }
         }
-        Map<String, Long> pods = new LinkedHashMap<>();
-        pods.put("pod-\u00e9", 5L);
-        pods.put("poda", 42L);
-        pods.put("podb", 77L);
+        Map<String, Checkpoint.PodState> pods = new LinkedHashMap<>();
+        pods.put("pod-\u00e9", Checkpoint.PodState.bare(5L));
+        pods.put("poda", Checkpoint.PodState.bare(42L));
+        pods.put("podb", Checkpoint.PodState.bare(77L));
 
         byte[] fromAscending = new Checkpoint(9, ascending, pods).encode();
 
@@ -161,8 +161,8 @@ class CheckpointTest {
         for (int n = 0; n < 1600; n++) {
             streams.put(new RunKey(idx(n), n), new StreamOffsets(500_000L + n, 1_000L + n));
         }
-        Map<String, Long> pods = new LinkedHashMap<>();
-        pods.put("poda", 1L);
+        Map<String, Checkpoint.PodState> pods = new LinkedHashMap<>();
+        pods.put("poda", Checkpoint.PodState.bare(1L));
 
         int size = new Checkpoint(1, streams, pods).encode().length;
 
@@ -193,9 +193,9 @@ class CheckpointTest {
                 .hasMessageContaining("oldestRetainedOffset");
         assertThatThrownBy(() -> new Checkpoint(-1, Map.of(), Map.of()))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("sequence");
-        assertThatThrownBy(() -> new Checkpoint(1, Map.of(), Map.of(" ", 1L)))
+        assertThatThrownBy(() -> new Checkpoint(1, Map.of(), Map.of(" ", Checkpoint.PodState.bare(1L))))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("never blank");
-        assertThatThrownBy(() -> new Checkpoint(1, Map.of(), Map.of("poda", -1L)))
+        assertThatThrownBy(() -> new Checkpoint(1, Map.of(), Map.of("poda", Checkpoint.PodState.bare(-1L))))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("lastAppliedFlushSeq");
         // ⚠️ A NEGATIVE ROUND-TRIPS CLEANLY as a 10-byte varint, so nothing
@@ -224,12 +224,12 @@ class CheckpointTest {
     void theMapsAreCOPIEDSoALaterMutationCannotReachTheRecord() {
         Map<RunKey, StreamOffsets> streams = new LinkedHashMap<>();
         streams.put(new RunKey(idx(1), 1), new StreamOffsets(5, 1));
-        Map<String, Long> pods = new LinkedHashMap<>();
-        pods.put("poda", 1L);
+        Map<String, Checkpoint.PodState> pods = new LinkedHashMap<>();
+        pods.put("poda", Checkpoint.PodState.bare(1L));
         Checkpoint c = new Checkpoint(1, streams, pods);
 
         streams.put(new RunKey(idx(2), 2), new StreamOffsets(9, 2));
-        pods.put("podz", 9L);
+        pods.put("podz", Checkpoint.PodState.bare(9L));
 
         assertThat(c.streams()).as("the record kept its own copy").hasSize(1);
         assertThat(c.pods()).hasSize(1);
@@ -238,7 +238,7 @@ class CheckpointTest {
         // ⚠️ BOTH MAPS, because the name says "the maps" and an earlier version
         // pinned only `streams()`: dropping `unmodifiableMap` from `pods` left
         // the suite green and `pods().put(...)` succeeding.
-        assertThatThrownBy(() -> c.pods().put("podz", 9L))
+        assertThatThrownBy(() -> c.pods().put("podz", Checkpoint.PodState.bare(9L)))
                 .isInstanceOf(UnsupportedOperationException.class);
     }
 

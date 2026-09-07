@@ -52,7 +52,7 @@ fetch"), and **no milestone currently owns it**.
 **Resolution, and it is a scoping decision this spec makes explicitly:**
 
 - M4 defines the **`Sequencer` seam** with a contract designed for forwarding
-  from the outset — the commit request carries `(podId, flushSeq, segments…)`
+  from the outset — the commit request carries `(podId, incarnationId, flushSeq, segments…)`
   precisely so that it is meaningful when it arrives from *another* pod, and so
   the record shape does not have to change when the remote implementation lands.
   M4.10's idempotency exists for exactly this reason.
@@ -517,7 +517,7 @@ which is why criteria 1, 3 and 7 each demand a recorded red.
 | **The GC-pause seal race**: a leader paused by a long GC resumes several epochs later. The corpus says *"believed safe by I3; needs proof"* (`:282-283`) — the single most SPEC-worthy open item | A simulation seed that pauses a leader across ≥2 epoch changes and then lets its writes land. ⚠️ If it cannot be shown safe, that is an ADR, not a bug fix |
 | **I5 asserted vacuously** — today's `CommitLog` is strictly serial, so it satisfies I5 by accident | Criterion 7's required red against a naive pipelining implementation |
 | **The simulation proves the simulator** — a fault-injecting store that never injects the fault that matters | Criterion 1's requirement that each fault class have a seed where it changes the outcome |
-| **The multi-pod gap becomes invisible** — every test in the tree is single-pod, so a missing forwarding path stays green until M6/M8 | The deployment-constraint section above, the seam contract carrying `(podId, flushSeq)` from the start, and criterion 9's pod dimension |
+| **The multi-pod gap becomes invisible** — every test in the tree is single-pod, so a missing forwarding path stays green until M6/M8 | The deployment-constraint section above, the seam contract carrying `(podId, incarnationId, flushSeq)` from the start, and criterion 9's pod dimension |
 | **Moving `CommitLog` from `ingest` to `sequencer`** crosses a gate-enforced module boundary | `check-module.sh` at `GATE_SCOPE=full`; done as its own commit (M4.2), not folded into a behaviour change |
 
 ## Tasks
@@ -527,7 +527,7 @@ One commit each, decomposed in [backlog.md](../../backlog.md).
 | ID | Task |
 |---|---|
 | M4.0 | This spec; the roadmap's stale `I1–I4` corrected to `I1–I5`; M5's row named as commit forwarding's owner |
-| M4.1 | `Sequencer` seam interface and its fake, with the contract stated — the commit request carries `(podId, flushSeq, …)` so it is meaningful from another pod |
+| M4.1 | `Sequencer` seam interface and its fake, with the contract stated — the commit request carries `(podId, incarnationId, flushSeq, …)` so it is meaningful from another pod |
 | M4.2 | Move `CommitLog` from `ingest` to `sequencer` — **pure move, no behaviour change** |
 | M4.3 | `Lease` — the record, its validation and its JSON codec, in `format`, mirroring the `IndexRegistry`/`IndexOrdinalRegistry` split |
 | M4.3b | `LeaseManager` in `sequencer`: the key grammar and acquire/renew/release — ⚠️ `putIfAbsent` for FIRST acquisition (`putIfMatch` throws on an absent key), `putIfMatch` to take over or renew; TTL and renew interval as configuration. ⚠️ Split out of M4.3, which was two changes in two modules; M1's own table carries `M1.3b`/`M1.16b`/`M1.19b`, so the convention is established |

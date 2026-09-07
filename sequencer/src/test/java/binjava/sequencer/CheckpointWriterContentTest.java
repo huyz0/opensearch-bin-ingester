@@ -56,10 +56,77 @@ class CheckpointWriterContentTest {
 
     private static void commit(CommitLog log, CheckpointWriter writer, String pod, long flushSeq,
             Map<RunKey, Integer> what) throws IOException {
-        List<CommitRequest> requests =
-                List.of(new CommitRequest(pod, flushSeq, "seg/" + pod + "/" + flushSeq, what));
-        log.commitAll(requests);
-        writer.observe(requests);
+        commit(log, writer, pod, "i1", flushSeq, what);
+    }
+
+    /** ⚠️ The incarnation is a PARAMETER: every fixture passing one constant is
+     * what let a merge that maxes ACROSS incarnations survive. */
+    private static long commit(CommitLog log, CheckpointWriter writer, String pod,
+            String incarnation, long flushSeq, Map<RunKey, Integer> what) throws IOException {
+        List<CommitRequest> requests = List.of(new CommitRequest(pod, incarnation, flushSeq,
+                "seg/" + pod + "/" + incarnation + "/" + flushSeq, what));
+        long applied = log.commitAll(requests).sequence();
+        writer.observe(requests, applied);
+        return applied;
+    }
+
+    /**
+     * ⚠️ ASSERTING `hasPointer()` IS NOT ASSERTING A POINTER. The writer read
+     * `log.nextSequence()` inside `observe`, which runs AFTER `commitAll` has
+     * advanced it, so every slot named the delta ONE PAST the one it described —
+     * measured, a delta at sequence 0 stored 1/1. `pointerEpoch = 0;
+     * pointerSequence = 0;` passed the entire suite before this test existed.
+     */
+    @Test
+    void theSlotPointsAtTheDeltaThatAppliedNotTheOneAfterIt() throws Exception {
+        RecordingBinStore store = new RecordingBinStore(new MemoryBinStore());
+        // ⚠️ EPOCH 4 ON PURPOSE. Every other fixture in this file is epoch 1, so
+        // `pointerEpoch = 1L` was indistinguishable from `log.epoch()`.
+        CommitLog log = new CommitLog(store, "bins", 4);
+        log.open(0, 0);
+        // ⚠️ the 1 is everyDeltas, NOT the epoch -- checkpoint on every commit.
+        try (CheckpointWriter writer = new CheckpointWriter(store, log, "bins", 1, T, frozen())) {
+            long applied = commit(log, writer, "poda", "i1", 3, counts(RA, 2));
+
+            Checkpoint.PodState slot = lastWritten(store).pods().get("poda");
+            assertThat(slot.sequence())
+                    .as("the pointer names the delta that applied, not nextSequence")
+                    .isEqualTo(applied);
+            assertThat(slot.epoch()).as("and its epoch").isEqualTo(log.epoch());
+            assertThat(slot.epoch())
+                    .as("EPOCH 4, not the 1 every other fixture uses -- `pointerEpoch = 1L` "
+                            + "survived the whole module before this literal existed")
+                    .isEqualTo(4L);
+        }
+    }
+
+    /**
+     * ⚠️ DEPTH TWO, because depth one passes the pre-ADR merge. `Math::max`
+     * carried ACROSS incarnations keeps the dead incarnation's higher watermark
+     * for ever, so a restarted pod's SECOND commit is refused — the suppression
+     * ADR-0036 exists to prevent. Every other fixture in this file passes one
+     * constant incarnation and cannot see it.
+     */
+    @Test
+    void aRestartedPodsSecondCommitIsNotRefusedByTheDeadIncarnationsWatermark()
+            throws Exception {
+        RecordingBinStore store = new RecordingBinStore(new MemoryBinStore());
+        CommitLog log = new CommitLog(store, "bins", 1);
+        log.open(0, 0);
+        try (CheckpointWriter writer = new CheckpointWriter(store, log, "bins", 1, T, frozen())) {
+            commit(log, writer, "poda", "i1", 9, counts(RA, 1));
+            commit(log, writer, "poda", "i2", 0, counts(RA, 1));
+            long applied = commit(log, writer, "poda", "i2", 1, counts(RA, 1));
+
+            Checkpoint.PodState slot = lastWritten(store).pods().get("poda");
+            assertThat(slot.incarnationId())
+                    .as("the LIVE incarnation owns the slot, not the dead one")
+                    .isEqualTo("i2");
+            assertThat(slot.lastAppliedFlushSeq())
+                    .as("and its own watermark, not 9 carried across the restart")
+                    .isEqualTo(1);
+            assertThat(slot.sequence()).isEqualTo(applied);
+        }
     }
 
     private static Checkpoint lastWritten(RecordingBinStore store) throws IOException {
@@ -87,7 +154,15 @@ class CheckpointWriterContentTest {
                     .isEqualTo(7);
             assertThat(ckpt.pods())
                     .as("each pod's own latest flushSeq, not each other's")
-                    .containsExactlyInAnyOrderEntriesOf(Map.of("poda", 6L, "podb", 11L));
+                    .hasSize(2).hasEntrySatisfying("poda", s -> {
+                        assertThat(s.lastAppliedFlushSeq()).isEqualTo(6L);
+                        assertThat(s.incarnationId()).isNotNull();
+                        assertThat(s.hasPointer()).isTrue();
+                    }).hasEntrySatisfying("podb", s -> {
+                        assertThat(s.lastAppliedFlushSeq()).isEqualTo(11L);
+                        assertThat(s.incarnationId()).isNotNull();
+                        assertThat(s.hasPointer()).isTrue();
+                    });
         }
     }
 
@@ -125,24 +200,35 @@ class CheckpointWriterContentTest {
 
             assertThat(lastWritten(store).pods())
                     .as("the highest flushSeq seen, not the last one seen")
-                    .containsEntry("poda", 9L);
+                    .hasEntrySatisfying("poda", s -> {
+                        assertThat(s.lastAppliedFlushSeq()).isEqualTo(9L);
+                        assertThat(s.incarnationId()).isNotNull();
+                        assertThat(s.hasPointer()).isTrue();
+                    });
         }
     }
 
     @Test
     void theFirstCheckpointAfterATakeoverCarriesNoPodsAtAll() throws Exception {
         // ⚠️ THE STATE IS PROCESS-LOCAL AND THIS TEST EXISTS TO SAY SO, not to
-        // bless it. `CommitDelta` carries (sequence, segments) and nothing else,
-        // so a new leader cannot recover `lastAppliedFlushSeq` from the chain and
-        // starts with an empty map -- emptying the idempotency window M4.10 will
-        // depend on, exactly when duplicates are likeliest. Asserting what it
-        // ACTUALLY carries is what will make M4.10 notice this rather than
-        // inherit it silently.
+        // bless it. ⚠️ THE REASON CHANGED IN THIS COMMIT and the assertion did
+        // not: ADR-0036 put `(podId, incarnationId, flushSeq)` ON the chain, so
+        // it is no longer true that the fact is unrecoverable. What is still
+        // true is that NOTHING IN src/main READS IT BACK -- `observe` learns
+        // only from live commits -- so a successor still starts with an empty
+        // map, emptying the idempotency window exactly when duplicates are
+        // likeliest. ⚠️ M4.10d IS WHERE THIS INVERTS: folding the recovered
+        // tail into the window makes `doesNotContainKey` the wrong assertion,
+        // and this comment is the notice that it must be changed, not deleted.
         RecordingBinStore store = new RecordingBinStore(new MemoryBinStore());
         CommitLog first = new CommitLog(store, "bins", 1);
         try (CheckpointWriter writer = new CheckpointWriter(store, first, "bins", 1, T, frozen())) {
             commit(first, writer, "poda", 42, counts(RA, 3));
-            assertThat(lastWritten(store).pods()).containsEntry("poda", 42L);
+            assertThat(lastWritten(store).pods()).hasEntrySatisfying("poda", s -> {
+                        assertThat(s.lastAppliedFlushSeq()).isEqualTo(42L);
+                        assertThat(s.incarnationId()).isNotNull();
+                        assertThat(s.hasPointer()).isTrue();
+                    });
         }
 
         CommitLog successor = new CommitLog(store, "bins", 2);
@@ -152,7 +238,7 @@ class CheckpointWriterContentTest {
             commit(successor, writer, "podb", 0, counts(RB, 1));
 
             assertThat(lastWritten(store).pods())
-                    .as("poda's flushSeq did not survive the takeover -- it is nowhere on the chain")
+                    .as("poda's flushSeq is on the chain but nothing reads it back yet")
                     .doesNotContainKey("poda");
         }
     }
@@ -215,7 +301,15 @@ class CheckpointWriterContentTest {
                     .containsOnlyKeys(RA, RB);
             assertThat(second.pods())
                     .as("and about the pod that committed it")
-                    .containsExactlyInAnyOrderEntriesOf(Map.of("poda", 0L, "podb", 5L));
+                    .hasSize(2).hasEntrySatisfying("poda", s -> {
+                        assertThat(s.lastAppliedFlushSeq()).isEqualTo(0L);
+                        assertThat(s.incarnationId()).isNotNull();
+                        assertThat(s.hasPointer()).isTrue();
+                    }).hasEntrySatisfying("podb", s -> {
+                        assertThat(s.lastAppliedFlushSeq()).isEqualTo(5L);
+                        assertThat(s.incarnationId()).isNotNull();
+                        assertThat(s.hasPointer()).isTrue();
+                    });
         }
     }
 

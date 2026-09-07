@@ -54,8 +54,8 @@ class GoldenCheckpointTest {
         assertThat(c.sequence()).isEqualTo(9);
         assertThat(c.streams()).hasSize(6);
         assertThat(c.pods()).containsExactly(
-                java.util.Map.entry("poda", 42L),
-                java.util.Map.entry("podb", 77L));
+                java.util.Map.entry("poda", Checkpoint.PodState.bare(42L)),
+                java.util.Map.entry("podb", Checkpoint.PodState.bare(77L)));
 
         RunKey first = new RunKey(new UUID(0x1111_2222_3333_4444L, 1), 1);
         assertThat(c.streams().get(first))

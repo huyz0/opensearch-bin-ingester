@@ -94,9 +94,8 @@ class CheckpointWriterTriggerTest {
     private static void commit(CommitLog log, CheckpointWriter writer, String pod, long flushSeq)
             throws IOException {
         List<CommitRequest> requests =
-                List.of(new CommitRequest(pod, flushSeq, "seg/" + pod + "/" + flushSeq, counts(RA, 2)));
-        log.commitAll(requests);
-        writer.observe(requests);
+                List.of(new CommitRequest(pod, "i1", flushSeq, "seg/" + pod + "/" + flushSeq, counts(RA, 2)));
+                writer.observe(requests, log.commitAll(requests).sequence());
     }
 
     private record Fixture(RecordingBinStore store, CommitLog log) { }
@@ -227,8 +226,9 @@ class CheckpointWriterTriggerTest {
         Fixture few = fixture();
         try (CheckpointWriter writer =
                 new CheckpointWriter(few.store(), few.log(), "bins", 1, T, frozen())) {
-            few.log().commitAll(List.of(new CommitRequest("poda", 0, "seg/a", counts(RA, 1))));
-            writer.observe(List.of(new CommitRequest("poda", 0, "seg/a", counts(RA, 1))));
+            List<CommitRequest> one =
+                    List.of(new CommitRequest("poda", "i1", 0, "seg/a", counts(RA, 1)));
+            writer.observe(one, few.log().commitAll(one).sequence());
         }
 
         Fixture many = fixture();
@@ -239,12 +239,11 @@ class CheckpointWriterTriggerTest {
         try (CheckpointWriter writer =
                 new CheckpointWriter(many.store(), many.log(), "bins", 1, T, frozen())) {
             List<CommitRequest> batch = List.of(
-                    new CommitRequest("poda", 0, "seg/a", wide),
-                    new CommitRequest("podb", 0, "seg/b", wide),
-                    new CommitRequest("podc", 0, "seg/c", wide),
-                    new CommitRequest("podd", 0, "seg/d", wide));
-            many.log().commitAll(batch);
-            writer.observe(batch);
+                    new CommitRequest("poda", "i1", 0, "seg/a", wide),
+                    new CommitRequest("podb", "i1", 0, "seg/b", wide),
+                    new CommitRequest("podc", "i1", 0, "seg/c", wide),
+                    new CommitRequest("podd", "i1", 0, "seg/d", wide));
+            writer.observe(batch, many.log().commitAll(batch).sequence());
         }
 
         assertThat(many.store().checkpointKeys().size())
