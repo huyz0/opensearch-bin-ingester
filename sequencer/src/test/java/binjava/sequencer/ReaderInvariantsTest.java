@@ -33,7 +33,7 @@ import org.junit.jupiter.api.Test;
  * DROP CLAUSE IS ASSERTED HERE, and this file says so rather than letting a
  * reader conclude M4's completion condition is met: a reader's next-offset map
  * is a high-water mark, so runs folded in the wrong ORDER end on the same
- * number. The reorder clause is M4.13f.
+ * number. The reorder clause was settled by M4.13f: it has no arm of its own, because at the granularity the chain carries it follows from I2 plus append-onlyness, and a permutation within one delta is the clause's permitted half.
  *
  * <p>⚠️ I3 TAKES THE READER'S VIEW AS AN INPUT, and that is the whole design.
  * A checker that recomputed the view itself could not DISAGREE with production

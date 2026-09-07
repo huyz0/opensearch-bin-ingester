@@ -14,6 +14,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -26,12 +27,13 @@ import java.util.Map;
  * the thing it checks agrees with it. So this walks the raw chain and decodes
  * bytes, and shares no state with any writer.
  *
- * <p>⚠️ NOT EVERY {@code invariant} STRING IS AN INVARIANT ID. Six kinds are
+ * <p>⚠️ NOT EVERY {@code invariant} STRING IS AN INVARIANT ID. Seven kinds are
  * reported: {@code I1}, {@code I2}, {@code I5} name invariants;
- * {@code chain}, {@code gap} and {@code link} name structural defects that no
- * invariant covers by name. ⚠️ A consumer filtering on {@code startsWith("I")}
- * therefore drops {@code link} -- the only arm that catches either defect this
- * class was split out of M4.12 for. Filter on nothing; report them all.
+ * {@code chain}, {@code gap}, {@code link} and {@code order} name structural
+ * defects that no invariant covers by name. ⚠️ A consumer filtering on
+ * {@code startsWith("I")} therefore drops {@code link} and {@code order} --
+ * {@code link} is the only arm that catches either defect this class was split
+ * out of M4.12 for. Filter on nothing; report them all.
  *
  * <p>⚠️ WHAT IS AND IS NOT CHECKED HERE, stated rather than implied:
  * <ul>
@@ -80,15 +82,29 @@ import java.util.Map;
  *       {@link #offsetsSealedInto}; an EMPTY chain inherits nothing instead,
  *       because production has not crossed at that point, and conflating the two
  *       was measured reporting a false I4 against production's own reader.</li>
- *   <li><b>I4</b> — ⚠️ HALF OF IT, and the half is named rather than implied.
- *       The DROP clause -- a reader losing records the chain committed -- is
- *       checked by {@link ReaderInvariants#checkReader}. The REORDER clause is not: a
- *       next-offset map is a high-water mark, so runs folded in the wrong order
- *       land on the same number. What stands in for it is {@link #checkChain}'s
- *       I2 arm over the bytes, and a per-record consumer trace is what would
- *       close it -- **M4.13f**. ⚠️ THE DROP CLAUSE ITSELF NOW HOLDS ON EVERY
- *       CHAIN, since M4.13i removed the never-opened exception that used to
- *       cost it as much as I3.</li>
+ *   <li><b>I4</b> — "Uncommitted records may be reordered or dropped; committed
+ *       ones may not". The DROP clause is checked by
+ *       {@link ReaderInvariants#checkReader}, on every chain since M4.13i.
+ *       ⚠️ THE REORDER CLAUSE HAS NO ARM OF ITS OWN (M4.13f). At the
+ *       granularity the CHAIN carries -- which stream's records occupy which
+ *       RUN of offsets -- it is carried by {@link #checkChain}'s I2 arm plus the
+ *       chain being append-only: a run of offsets never reassigned, in entries
+ *       never rewritten, is an order that cannot change. And a permutation
+ *       WITHIN one delta is the clause's PERMITTED half, since every record in a
+ *       delta is uncommitted until it lands -- {@code DefaultIngest} completes
+ *       the appends' futures only after {@code sequencer.commit} returns.
+ *       ⚠️ BELOW THE RUN, NOTHING HERE CAN SEE IT, and this list says so rather
+ *       than reading as a clean conclusion. WHICH record sits at offset 4 versus
+ *       5 lives in the SEGMENT object, not in the chain, so a segment rewritten
+ *       with the same counts in permuted order reorders committed records with
+ *       {@code checkChain} and {@code checkReader} both silent. No object in
+ *       this protocol is rewritten today, which is why it is a residue rather
+ *       than a hole -- but the residue is the segment bytes, and no checker here
+ *       reads them.
+ *       ⚠️ SO THE ARM M4.13f ADDED IS {@code order}, NOT I4: a delta whose
+ *       segment order disagrees with its offset order is malformed, and worth
+ *       reporting, but calling it I4 would claim an invariant that explicitly
+ *       allows it.</li>
  * </ul>
  */
 public final class Invariants {
@@ -149,32 +165,71 @@ public final class Invariants {
                     // every contributing pod". The guard is right and the caller
                     // was wrong: an OFFSET is a stream fact, not a segment fact,
                     // which is why `ChainReplay.fold` -- the reader this checker
-                    // judges -- uses `allRuns()` too.
-                    // ⚠️ THE SUITE WAS GREEN BECAUSE THE CASE WAS ABSENT:
-                    // `CommitProtocolSimulation` drives `commit(` and never
-                    // `commitAll`, so no seed ever built one (M4.13n).
+                    // judges -- uses `allRuns()` too (M4.13n).
+                    Map<RunKey, List<RunCommit>> bySegmentOrder = new LinkedHashMap<>();
                     for (RunCommit run : delta.allRuns()) {
-                        long from = nextOffset.getOrDefault(run.key(), 0L);
-                        // ⚠️ A REWIND AND A GAP ARE DIFFERENT DEFECTS, and the
-                        // first version of this reported both as I2. I2 is
-                        // "offsets are never REASSIGNED", so only resuming BELOW
-                        // the high-water mark violates it -- two writers handing
-                        // the same offset to different records. Resuming ABOVE it
-                        // loses no data and duplicates nothing; it is a hole,
-                        // which readers and NFR-11 care about for other reasons.
-                        // Conflating them makes every severed CONTINUE read as
-                        // data corruption and buries the real thing.
-                        if (run.firstOffset() < from) {
-                            found.add(new Violation("I2",
-                                    "stream " + run.key() + " resumes at " + run.firstOffset()
-                                            + " but the chain had assigned up to " + from));
-                        } else if (run.firstOffset() > from) {
-                            found.add(new Violation("gap",
-                                    "stream " + run.key() + " resumes at " + run.firstOffset()
-                                            + ", skipping " + (run.firstOffset() - from)));
+                        bySegmentOrder.computeIfAbsent(run.key(), k -> new ArrayList<>()).add(run);
+                    }
+                    for (Map.Entry<RunKey, List<RunCommit>> stream : bySegmentOrder.entrySet()) {
+                        List<RunCommit> inSegmentOrder = stream.getValue();
+                        // ⚠️ `order`, NOT `I4`, AND THE DIFFERENCE IS THE WHOLE
+                        // POINT (M4.13f). `commitSubmissions` walks a batch in
+                        // list order against ONE shared cursor, so a delta whose
+                        // segment order disagrees with its offset order is
+                        // malformed. But I4 permits reordering UNCOMMITTED
+                        // records, and every record in a delta is uncommitted
+                        // until it lands -- so this is I4's permitted half, and
+                        // the name joins `chain`, `gap` and `link` as a defect
+                        // no invariant covers.
+                        for (int r = 1; r < inSegmentOrder.size(); r++) {
+                            if (inSegmentOrder.get(r).firstOffset()
+                                    < inSegmentOrder.get(r - 1).firstOffset()) {
+                                // ⚠️ NO SEGMENT INDEX: `r` walks this STREAM's
+                                // runs, not the delta's segments, so the old
+                                // wording named a "segment 1" that need not
+                                // exist. The offsets say it without that.
+                                found.add(new Violation("order", "stream " + stream.getKey()
+                                        + " runs out of order within the delta at sequence "
+                                        + e.sequence() + ": a run starting at "
+                                        + inSegmentOrder.get(r).firstOffset()
+                                        + " follows one starting at "
+                                        + inSegmentOrder.get(r - 1).firstOffset()));
+                                break;
+                            }
                         }
-                        nextOffset.put(run.key(),
-                                Math.max(from, run.firstOffset() + run.recordCount()));
+                        // ⚠️ FOLDED IN OFFSET ORDER, NOT SEGMENT ORDER, which is
+                        // what lets the three defects keep their own names.
+                        // Against a HIGH-WATER MARK a permutation and a
+                        // reassignment look identical -- the later run resumes
+                        // below the mark either way -- so a permuted batch read
+                        // as `gap` plus `I2` when nothing was skipped and
+                        // nothing reassigned. Sorting first shows the
+                        // arithmetic the coverage the records actually have.
+                        List<RunCommit> inOffsetOrder = new ArrayList<>(inSegmentOrder);
+                        inOffsetOrder.sort(java.util.Comparator.comparingLong(RunCommit::firstOffset));
+                        for (RunCommit run : inOffsetOrder) {
+                            long from = nextOffset.getOrDefault(run.key(), 0L);
+                            // ⚠️ A REWIND AND A GAP ARE DIFFERENT DEFECTS, and the
+                            // first version reported both as I2. I2 is "offsets are
+                            // never REASSIGNED", so only resuming BELOW the
+                            // high-water mark violates it -- two writers handing the
+                            // same offset to different records. Resuming ABOVE it
+                            // loses no data and duplicates nothing; it is a hole,
+                            // which readers and NFR-11 care about for other reasons.
+                            // Conflating them makes every severed CONTINUE read as
+                            // data corruption and buries the real thing.
+                            if (run.firstOffset() < from) {
+                                found.add(new Violation("I2",
+                                        "stream " + run.key() + " resumes at " + run.firstOffset()
+                                                + " but the chain had assigned up to " + from));
+                            } else if (run.firstOffset() > from) {
+                                found.add(new Violation("gap",
+                                        "stream " + run.key() + " resumes at " + run.firstOffset()
+                                                + ", skipping " + (run.firstOffset() - from)));
+                            }
+                            nextOffset.put(run.key(),
+                                    Math.max(from, run.firstOffset() + run.recordCount()));
+                        }
                     }
                 }
             }

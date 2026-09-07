@@ -1262,3 +1262,110 @@ It needs `segments()` plus the caller's own published key, which is the pairing
 `BatchingSequencer`, so no window ever groups. It becomes reachable the moment
 one does.
 
+### M4.13f
+
+⚠️ THE ROW'S ORIGINAL PREMISE WAS WRONG, and M4.13n is where that came out. It
+said the reorder clause needs "the reader to report WHICH runs it applied in
+WHICH order -- a per-record consumer trace, which nothing produces today". A
+reader permutes nothing: a record's offset is fixed in the delta bytes by the
+writer, and `ChainReplay.fold` merges with `Math::max`, which is commutative. So
+there is no reader-side degree of freedom to trace.
+
+⚠️ THE REORDER THAT DOES EXIST IN M4 IS WRITER-SIDE. `CommitLog.commitSubmissions`
+walks submissions in list order against one shared cursor, so batch order decides
+which segment's records get the lower offsets for a shared stream. A batch whose
+segment order disagrees with its offset order is that reorder, and it IS a
+predicate over the stored bytes.
+
+⚠️ `checkChain` ALREADY DETECTS IT AND NAMES IT WRONG. On the fixture in
+`BatchedDeltaInvariantsTest#aBatchedDeltaWhoseSECONDSegmentREWINDSIsStillCaught`
+it reports `gap` plus `I2`. I2 means an offset was REASSIGNED; there the two runs
+are disjoint -- 4..6 and 0..3, covering 0..6 exactly once -- and only the order
+is wrong.
+
+⚠️ RENAMING UNCONDITIONALLY IS NOT THE FIX, which review established rather than
+asserted: `checkChain` carries a HIGH-WATER MARK, not the set of assigned
+offsets, so its `firstOffset() < from` branch genuinely cannot tell a permutation
+from a real reassignment -- segment B resuming at 0 IS I2 when 0..6 were really
+handed out. Separating them needs interval tracking per stream, which is a
+checker-semantics change and the actual work of this row.
+
+⚠️ THE OBLIGATION IS ALSO RECORDED IN THE TEST, whose javadoc says the rename
+belongs here. Closing this row on the reader side alone would leave that
+mislabel outliving it, behind a green test whose description reads as
+endorsement.
+
+⚠️ AND THE ARM IS NOT NAMED I4, which is the row's real conclusion. architecture
+.md defines I4 as "Uncommitted records may be reordered or dropped; committed
+ones may not", and every record in a delta is UNCOMMITTED until that delta lands
+-- `DefaultIngest` completes the appends' futures only after `sequencer.commit`
+returns. So an intra-delta permutation is the clause's PERMITTED half, and
+naming it I4 would claim an invariant that explicitly allows it. It is `order`,
+joining `chain`, `gap` and `link` as a defect no invariant covers by name.
+
+⚠️ SO I4's REORDER CLAUSE HAS NO ARM OF ITS OWN, AND THAT IS A CONCLUSION WITH A
+STATED LIMIT RATHER THAN A GAP. At the granularity the CHAIN carries -- which
+stream's records occupy which RUN of offsets -- it follows from `checkChain`'s
+I2 arm plus append-onlyness: a run never reassigned, in entries never rewritten,
+is an order that cannot change.
+
+⚠️ BELOW THE RUN, NOTHING IN `Invariants` CAN SEE IT, and an earlier draft of
+this paragraph read as a clean conclusion without saying so. WHICH record sits at
+offset 4 versus 5 lives in the SEGMENT object, so a segment rewritten with the
+same counts in permuted order reorders committed records with `checkChain` and
+`checkReader` both silent. Nothing rewrites an object today, which makes it a
+residue rather than a hole -- but the residue is the segment bytes, and no
+checker reads them.
+
+⚠️ WHAT `order` DOES NOT CATCH IS **M4.13p**: producer-visible order is per-pod
+FLUSH order, not segment list position. The attribution has been in the bytes
+since M4.10c and this grouping discards it.
+
+⚠️ LANDED, AND NOT BY RENAMING THE I2 BRANCH. `checkChain` now folds a delta's
+runs per stream in OFFSET order for the cross-entry arithmetic, and separately
+reports segment-order disagreement as `order`. That is what lets the three
+defects keep their own names: a permutation is `order`, a genuine overlap is
+still I2, a genuine hole is still `gap`. Renaming the I2 branch would have
+mislabelled the real reassignment, which review established before the code was
+written.
+
+⚠️ MOST OF THESE FIXTURES EXIST BECAUSE HAND MUTATION FOUND THE GAP, NOT
+BECAUSE THE DESIGN PREDICTED IT. ⚠️ NO COUNT IS CARRIED HERE, deliberately: a
+first draft said "six fixtures, four of them" and was stale by the next round,
+which is the defect M0.53's argued entry records as its own ("the count is left
+to the script, because every draft carrying one by hand was stale by the round
+after"). `grep -c "@Test"` answers it and cannot go stale. What the fixtures
+pin: equal starts are I2 and NOT also `order`; one stream out of order twice is
+ONE violation, not one per pair; a stream out of order only in a LATER pair is
+caught, which a check anchored on the FIRST segment misses; one out of order
+only in an EARLY pair is caught, which a check reading only the LAST pair
+misses; one permuted stream does not indict another in the same batch; and a
+permutation that ALSO overlaps reports BOTH names.
+
+⚠️ THE ARM IS PER-DELTA, and one boundary out the old mislabel survives --
+**M4.13q**, which must first decide whether that shape is even reachable.
+
+⚠️ WHAT IS STILL NOT CHECKED: the ordering a CONSUMER observes. That is a
+delivery property, it belongs to `SubscriptionHub` rather than the sequencer, and
+M5 is where a consumer exists to observe it. This row closes the reorder clause
+for what M4 can write, which is the batch.
+
+### M4.13p
+
+⚠️ SEGMENT LIST POSITION IS THE WRONG PROXY FOR PRODUCER-VISIBLE ORDER, which is
+what M4.13f's `order` arm uses. What a producer can observe is its OWN flushes
+arriving in order, and that is carried by the attribution
+`(podId, incarnationId, flushSeq)` M4.10c put in the bytes.
+
+⚠️ MEASURED through the production `commitAll` path: a batch carrying
+`pod1/inc-1 flushSeq=2` at offsets 0..2 and `flushSeq=1` at 3..5 yields
+`checkChain == []`. The same pod's EARLIER flush got the LATER offsets, and
+nothing reports it, because the grouping over `allRuns()` discards the
+attribution before comparing anything.
+
+⚠️ WHETHER IT IS A VIOLATION AT ALL IS THE FIRST QUESTION, not the last: records
+in one delta are uncommitted until it lands, so I4 permits reordering them. The
+argument for reporting it is that a pod's own flush order is a promise the
+ingester makes to that pod, which is a different guarantee from I4 and may need
+its own name.
+
