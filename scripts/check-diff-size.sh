@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
-# review.md rule 12's remedy, applied BEFORE the rounds are spent (M0.81).
+# review.md two-round-cap's remedy, applied BEFORE the rounds are spent (M0.81).
 #
 # ⚠️ WHY A CAP AT ALL. This repository's three largest commits to module source
 # trees are also the ones that consumed the most review rounds: M4.7 at 2,039
-# added lines, M4.10c at 1,423 over six rounds, M4.8b2 at 1,385. Rule 12 already
+# added lines, M4.10c at 1,423 over six rounds, M4.8b2 at 1,385. The two-round-cap rule already
 # says the remedy for exceeding the round budget is to SPLIT; by then two agents
 # have read the thing several times each.
 #
@@ -60,7 +60,7 @@ if [ -n "$REASON" ] && printf '%s' "$REASON" | grep -q '[^[:space:]]'; then
 fi
 
 fail "$ADDED added line(s) of source, over the cap of $CAP"
-echo "         review.md rule 12: SPLIT it. Two reviewers read every round of"
+echo "         review.md two-round-cap: SPLIT it. Two reviewers read every round"
 echo "         this, and the largest commits here have cost the most rounds."
 echo "         If it genuinely cannot be split -- one wire format, which"
 echo "         non-negotiable 8 forbids splitting -- stage a line in"

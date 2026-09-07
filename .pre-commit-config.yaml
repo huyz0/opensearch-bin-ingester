@@ -188,7 +188,7 @@ repos:
       # justification for a weakened or removed test in the commit body, and the
       # commit body does not exist at the pre-commit stage.
       - id: check-diff-size
-        name: "review.md rule 12: a commit too large to review in a round or two says why"
+        name: "review.md two-round-cap: a commit too large to review in a round or two says why"
         entry: scripts/check-diff-size.sh
         language: system
         stages: [commit-msg]

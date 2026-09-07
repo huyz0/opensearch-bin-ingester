@@ -177,7 +177,7 @@ of what runs is exactly the list that goes stale:
 | `check-tdd.sh` | pre-commit | testing.md rule 2: every new test was observed to fail before the code existed |
 | `check-reviewed.sh` | pre-commit | non-negotiable 5: the staged bytes were reviewed by both reviewers |
 | `check-commit-msg.sh` | commit-msg | non-negotiable 1: the commit subject names a real backlog task |
-| `check-diff-size.sh` | commit-msg | review.md rule 12: a commit too large to review in a round or two says why |
+| `check-diff-size.sh` | commit-msg | review.md two-round-cap: a commit too large to review in a round or two says why |
 | `check-test-integrity.sh` | commit-msg | testing.md rules 4-5: no assertion weakened alongside a production change |
 
 Present in `scripts/` but **not** wired into `.pre-commit-config.yaml` — invoke by hand, from a skill, or from CI: `check-coverage.sh`, `check-milestone-verified.sh`, `check-suite-time.sh`.
