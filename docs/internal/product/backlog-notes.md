@@ -709,6 +709,14 @@ M4.10d records is written alongside the delta it points at.
 
 ### M4.22
 
+⚠️ `checkAckOrder` IS A SECOND ENTRY POINT WITH THE SAME SHAPE, added by M4.11
+and not named by the row below. It returns an empty list both for a trace that
+held nothing wrong and for a trace that contained no acks at all, so a caller
+cannot tell CLEAN from NOTHING-EXAMINED -- the exact failure this row exists to
+close, now in two places. M4.13 pins exact counts against it, so the ambiguity
+is load-bearing there rather than theoretical.
+
+
 | M4.22 | MAKE THE CHECKER SAY HOW MUCH IT EXAMINED. `Invariants.checkChain` returns an empty list both for a chain that held nothing wrong and for a chain that was never there -- measured: on an empty store it returns `[]` for any epoch and any prefix -- so a caller cannot tell CLEAN from UNREAD. That is the failure mode the class exists to prevent, occurring in the class itself, and it is the checker-side half of M4.20's `SEED 17 COMMITS ZERO AND REPORTS CLEAN`. ⚠️ SPLIT OUT OF M4.19 at round 2 per review.md rule 12: an attempt at it there added a `Report` carrying `entriesExamined`/`boundariesFollowed` whose counters were DECLARED rather than derived -- hard-coding them left the suite green, `boundariesFollowed` had no reader anywhere, and `entriesExamined` came from `readChain` rather than the walk, so gutting the walk did not drive it to zero. That is `crossEpochOffsetsChecked()`'s shape reintroduced one step milder, in the same commit that deleted it. ⚠️ SO THE ROW'S REAL WORK IS THE FALSIFIABILITY, not the accessor: whatever is reported must go to zero when the examination is removed, and a fixture must prove it does. ⚠️ THE DRIVER NEEDS A NARROWER VERSION OF THE SAME THING, and the first draft of this clause overstated it: `Result` DOES carry `commits`, and 208 at ROUGH against 2,133 CLEAN over the same seeds is a loud difference, so a leaderless run is NOT indistinguishable from a healthy one. What is missing is a measure of ROUNDS PRODUCTIVE -- measured at ROUGH, only 300 of 3,600 rounds ever had a leader and 3,223 ended with `tryStart` empty, and nothing in `Result` says so. That matters because the two are different failures: few commits means the cluster is degraded, while few rounds LED means it spent its time failing to elect anyone, which is what M4.17's missing renew tick and M4.16's burned epochs both produce | FR-11 | todo |
 
 ### M4.23
@@ -756,6 +764,21 @@ M4.10d records is written alongside the delta it points at.
 | M4.34 | THE REVIEW PACKET TRUNCATES SILENTLY AT ~37 KB, so a reviewer judges a diff it was never shown and is not told. ⚠️ MEASURED on M4.21's round-6 production review: `./scripts/review.sh context` cut off partway, dropping the last third of `ReviewRoundCapTest.java` and most of the backlog rows. The reviewer concluded three of the coverage cases the task claimed were untested, then found on its own initiative that all three existed and that its packet was the problem -- so the near miss was a MAJOR filed against real code on the strength of bytes the reviewer never received. ⚠️ WHY IT IS WORSE THAN A SIZE LIMIT: the cut is silent. A truncated packet is indistinguishable from a complete one, so the reviewer cannot discount its own conclusions, and non-negotiable 5's guarantee -- that the staged bytes were read by two agents that did not write them -- quietly becomes a guarantee about a prefix. This is the `ok nothing staged` failure shape: a green-looking result that means less than it appears to. ⚠️ FIX IS A CHOICE and rung 2 beats rung 6: either refuse to emit a packet over the cap (fail closed, the author must split -- which is what rule 12 wants anyway), or emit the diff in numbered parts and state the count so a reviewer can tell it has them all. Do NOT solve it by asking the reviewer to notice. ⚠️ Found by the review it damaged; the verdict itself was `pass` and its findings held up. | — | todo |
 
 ### M4.13
+
+⚠️ THE SWEEP MUST EMIT A CONFIRMED EVENT FOR THE SLOT-0 `CONTINUE` when it
+feeds `Invariants.checkAckOrder` (M4.11). That checker bases each chain on the
+lowest sequence the trace SHOWS for it, deliberately -- inventing a base is how
+its first version reported two violations of a strictly serial writer. The cost
+is that a chain whose FIRST observed write is the lost one reads clean, and a
+fresh leader pipelining its first two commits, losing 1 and acking 2 is exactly
+that shape. Emitting the CONTINUE pins the floor at 0 and removes it; a
+caller-supplied base was considered and rejected as a second unchecked
+parameter.
+
+⚠️ AND THE SWEEP MUST RUN BOTH CHECKERS. `checkAckOrder` alone is blind to that
+residue; `checkChain`'s gap and I5 arms catch it structurally. Running only one
+is the blind spot.
+
 
 | M4.13 | The 1,000-seed run asserting I1-I5; every failing seed pinned as a named regression test. T1 (MemoryBinStore) so it runs on every commit, with a stated budget of <60s for 1,000 seeds and a configurable seed count. ⚠️ Each injected fault class must have at least one seed where it changes the outcome, or the simulation proves the simulator rather than the system ⚠️ AND IT OWNS THE TWO FAULT CLASSES M4.12 DOES NOT MODEL -- delayed writes and reordered completions -- plus partitioned leaders as an actual injectable fault rather than only its consequence, which needs the store to know WHICH pod is calling and needs `putIfMatch` to be able to fail cleanly. Criterion 1 requires each class to have at least one seed where it CHANGES THE OUTCOME, reported by the harness; recorded here because M4.12 is done and a closed row is no place to leave an unmet criterion ⚠️ AND THE WITHHELD-WRITE AMBIGUITY, a gap in the FAULT MODEL rather than in its tests: M4.12's ambiguous arms attempt the write before throwing, so whenever the CAS would have won the fault always resolves as LANDED, and there is no arm where the response was lost and nothing landed. `AmbiguousPutStore` already has `Mode.LOST` for exactly that shape. Without it the sweep cannot produce "the renew threw, nothing landed, and the retry with the same version must succeed" -- half of what M4.3d and M4.3h were about | FR-11 | todo |
 
