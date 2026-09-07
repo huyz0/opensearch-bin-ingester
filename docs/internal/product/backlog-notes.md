@@ -435,6 +435,150 @@ ambiguous and duplicate PUT arms are the existing seam. So this row must
 either add the retry path or say plainly that its coverage stops at the
 sequencer seam.
 
+### M0.82
+
+`check-diff-size.sh` counts every added line under `*/src/*`, tests included.
+M4.10d was split twice to 960 lines, under the cap and unargued, then round 3
+demanded four more tests -- each killing a mutation a reviewer had measured
+surviving -- and it went back over at 1147.
+
+⚠️ THIS IS NOT A THRESHOLD MOVE, and the distinction is the whole row. Counting
+production lines only would put that commit at ~450 and let the very change that
+exposed the problem through; moving a gate in the direction that unblocks its own
+author is non-negotiable 2. The question is whether test lines predict review
+rounds the way production lines do, and this repository's own history is the
+evidence: M4.7 at 2,039, M4.10c at 1,423 over six rounds, M4.8b2 at 1,385 -- the
+split between production and test lines in each is not yet measured.
+
+⚠️ A GATE THAT REFUSES LEGITIMATE INPUT GETS SWITCHED OFF (gate-design step 3),
+and one argued twice by its own author within a session of writing it is on that
+path. Either answer is acceptable; leaving it to whoever is next blocked by it is
+not.
+
+### M4.10g
+
+Bound `IdempotencyWindow.byIncarnation`. It gains an entry per pod INCARNATION,
+one per restart rather than one per pod, and nothing evicts.
+
+⚠️ A BOUND SHIPPED AND WAS WITHDRAWN, and the withdrawal is the point: at
+M4.10d round 4 three mutations of the eviction loop survived the whole suite --
+`byAge.size() - MAX_SLOTS` reduced to `byAge.size()`, which CLEARS the window at
+the threshold so every live pod loses idempotency rather than the oldest; the
+same bound halved; and `MAX_SLOTS = 4096` lowered to `2`, a threshold moved in
+the weakening direction that no gate can see. A bound that looks tested and is
+not is worse than a documented absence.
+
+⚠️ THE FIXTURE NEEDS THREE ASSERTIONS, not one. M4.10d's had a first assertion
+that ran BEFORE the bound was crossed and a last one satisfied by any policy
+that drops the oldest, so it constrained the LOSS and nothing else. Add: after
+crossing, a MIDDLE incarnation is still answered at its original offsets --
+which alone kills all three mutations above.
+
+⚠️ AND THE COMPARATOR NEEDS BOTH KEYS EXERCISED. Sorting by map key instead of
+by pointer survived, because in a single-epoch fixture the lexicographically
+first incarnation is also the oldest. Killing that needs incarnation names whose
+lexicographic order OPPOSES their commit order; the epoch half needs slots at
+differing epochs, which M4.10f's notes already require.
+
+⚠️ EVICTION COSTS IDEMPOTENCY for whatever it drops, so the policy is a real
+choice: which slot is least likely to have a flush still in flight, and whether
+4096 is a fleet bound or a guess.
+
+### M4.10e
+
+Reconcile an AMBIGUOUS commit from the chain. `commitAll` records a triple as
+applied only AFTER `log.commitAll` RETURNS, so a conditional PUT that landed and
+lost its response is never recorded, and the retry commits the same records
+twice. ⚠️ MEASURED TWICE by review, independently: three records at two sets of
+committed offsets -- one leader, one epoch, no takeover, neither of M4.10d's
+documented limits covering it.
+
+⚠️ THE MARKER IS PER REQUEST, NOT PER INCARNATION, and this is the blocking
+defect the M4.10d attempt shipped. That version cleared the per-incarnation
+marker in a `finally` after the FIRST request of a batch; a second flush from
+the same incarnation then saw no marker, was not yet a replay (its higher
+flushSeq exceeded the watermark the first resolve had just recorded), and
+committed fresh -- `seg/b` durable at offsets 3-6 AND 7-10. Both reviewers
+reproduced it from the same shape, and M4.10d's own
+`aBatchAPPLYINGTwoFlushesOutOfOrderKeepsTheHIGHESTWatermark` asserts that a
+batch legitimately carries two flushSeqs from one incarnation.
+
+⚠️ THE SCAN MUST PROBE FORWARD, not scan to `nextSequence`. `CommitLog` does not
+advance its in-memory counter when the PUT throws, so on the retry that
+immediately follows, `nextSequence` still EQUALS the slot the write took: a
+range scan examines nothing and the retry commits again. Measured, as the first
+attempt at this fix.
+
+⚠️ IT MUST NOT RE-READ PER POD. One batch of 200 distinct incarnations pointing
+at ONE delta cost `gets=200 stats=200` to read a single object, where 2 suffice.
+`answer()` already has a read cache and a stated bound of at most one GET per
+distinct `(epoch, sequence)`; this path needs the same, and it fires exactly
+when the store has just failed.
+
+⚠️ THE FIXTURE NEEDS BOTH ARMS -- landed-then-threw AND threw-without-landing.
+A test written against only the landing arm passes whether the retry is answered
+or committed, because both leave one delta at the same offsets. That is how
+M4.10d shipped a test named for the lost case that asserted nothing, caught only
+because minting its red record failed.
+
+### M4.10f
+
+Inherit the idempotency window across a takeover. A successor starts with an
+empty window, so a retry that crosses a leader change commits twice -- exactly
+when the store was flaky enough to cause the change.
+
+⚠️ ZERO ADDITIONAL REQUESTS, and this is the whole design constraint.
+`ChainReplay.crossFromCheckpoint` already fetches the predecessor's newest
+checkpoint to bound the crossing and discards its `pods`; take them from there.
+An earlier attempt called `CheckpointCursor.newest` a second time and two
+exact-cost assertions went 17 to 19 and 18 to 20 -- the gate that catches this
+is `BoundedRecoveryCorrectnessTest`.
+
+⚠️ A WALK CONSUMES AT MOST ONE CHECKPOINT, so the merge is a PUT: every call
+site of `crossFromCheckpoint` returns or breaks on success. An earlier version
+compared epoch and sequence to pick the newest slot when a pod appeared in
+several ancestors' checkpoints, which cannot arise; PIT reported the whole
+comparison NO_COVERAGE and review confirmed the reasoning by instrumenting the
+method to throw on a second success.
+
+⚠️ DEPTH TWO, THREE LEADERS. A two-leader fixture seeds the successor from the
+predecessor's own checkpoint; only a THIRD leader reads a checkpoint the second
+one re-emitted. Review measured `CheckpointWriter.inherit` storing BARE slots --
+no incarnation, no pointer -- surviving the whole module green at depth one,
+while the third leader's window came up empty and the replay committed again.
+
+⚠️ `CheckpointWriter.pods` MUST BE BOUNDED ON THE COMMIT PATH, not only on
+inheritance. `pods.merge` runs once per commit and pod names churn on every
+scale event; review measured 5000 pods and 92,686 bytes after a SINGLE term
+against a javadoc claiming the size was a constant. A test that calls
+`inherit(...)` directly green-lights the bounded path and is blind to the
+growing one.
+
+⚠️ AND SO IS THE ANSWER CACHE'S KEY. `IdempotencyWindow.answer` keys its
+read cache `epoch + "/" + sequence`, and dropping the epoch half survives the
+whole suite: a process-local window holds one epoch, so only an INHERITED
+pointer makes the pair meaningful. Its comment gives a live reason -- that a
+successor inherits pointers into a PREDECESSOR's chain -- where the sibling
+guard twelve lines down honestly says UNREACHABLE UNTIL M4.10f, so it reads as
+pinned when nothing can pin it yet. Fix the comment here, with the fixture.
+
+⚠️ THE EVICTION COMPARATOR'S `epoch()` KEY IS INERT UNTIL THIS ROW, and review
+recorded it as a minor rather than a defect: every pointer M4.10d records is at
+one `log.epoch()`, so dropping the epoch key survives its suite. The moment a
+window inherits pointers from a PREDECESSOR's chain, that key decides which slot
+is oldest -- so a fixture here must build slots at DIFFERENT epochs, which
+M4.10d's own eviction test failed to do (all at epoch 1, comparator's first key
+replaceable by a constant with the module green).
+
+⚠️ IT OWNS THE INVERSION of `CheckpointWriterContentTest`'s
+`doesNotContainKey("poda")` tripwire, and DELETING that assertion instead is the
+testing.md rule 5 move -- `doesNotContainKey` scores 0 in `test_integrity.py`'s
+STRENGTH table, so a deletion prints "no test weakened".
+
+⚠️ AND IT OWNS `aPointerAtASlotHoldingNoDeltaIsREFUSED`, moved here from M4.10d
+because only an INHERITED pointer can outlive the delta it names: every pointer
+M4.10d records is written alongside the delta it points at.
+
 ### M4.22
 
 | M4.22 | MAKE THE CHECKER SAY HOW MUCH IT EXAMINED. `Invariants.checkChain` returns an empty list both for a chain that held nothing wrong and for a chain that was never there -- measured: on an empty store it returns `[]` for any epoch and any prefix -- so a caller cannot tell CLEAN from UNREAD. That is the failure mode the class exists to prevent, occurring in the class itself, and it is the checker-side half of M4.20's `SEED 17 COMMITS ZERO AND REPORTS CLEAN`. ⚠️ SPLIT OUT OF M4.19 at round 2 per review.md rule 12: an attempt at it there added a `Report` carrying `entriesExamined`/`boundariesFollowed` whose counters were DECLARED rather than derived -- hard-coding them left the suite green, `boundariesFollowed` had no reader anywhere, and `entriesExamined` came from `readChain` rather than the walk, so gutting the walk did not drive it to zero. That is `crossEpochOffsetsChecked()`'s shape reintroduced one step milder, in the same commit that deleted it. ⚠️ SO THE ROW'S REAL WORK IS THE FALSIFIABILITY, not the accessor: whatever is reported must go to zero when the examination is removed, and a fixture must prove it does. ⚠️ THE DRIVER NEEDS A NARROWER VERSION OF THE SAME THING, and the first draft of this clause overstated it: `Result` DOES carry `commits`, and 208 at ROUGH against 2,133 CLEAN over the same seeds is a loud difference, so a leaderless run is NOT indistinguishable from a healthy one. What is missing is a measure of ROUNDS PRODUCTIVE -- measured at ROUGH, only 300 of 3,600 rounds ever had a leader and 3,223 ended with `tryStart` empty, and nothing in `Result` says so. That matters because the two are different failures: few commits means the cluster is degraded, while few rounds LED means it spent its time failing to elect anyone, which is what M4.17's missing renew tick and M4.16's burned epochs both produce | FR-11 | todo |

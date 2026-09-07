@@ -7,6 +7,7 @@ import binjava.format.CommitDelta;
 import binjava.format.RunCommit;
 import binjava.format.RunKey;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -292,5 +293,126 @@ class FakeSequencerTest {
             assertThat(seq.nextOffset(new RunKey(METRICS, 0)))
                     .as("an untouched stream is still at 0").isZero();
         }
+    }
+
+    /**
+     * ⚠️ THE FAKE MUST REFUSE TOO (M4.10d). A fake that applied a replay twice
+     * would let every caller's retry test pass while the real sequencer
+     * answered instead of committing -- the exact divergence a fake kept in the
+     * same commit exists to prevent.
+     */
+    @Test
+    void aReplayedTripleIsAnsweredRatherThanAppliedTwice() throws Exception {
+        try (FakeSequencer fake = new FakeSequencer()) {
+            CommitRequest flush = new CommitRequest("poda", "i1", 0, "seg/0",
+                    counts(new RunKey(LOGS, 0), 3));
+            CommitDelta first = fake.commitAll(List.of(flush));
+            long assigned = first.segments().get(0).runs().get(0).firstOffset();
+
+            CommitDelta replay = fake.commitAll(List.of(flush));
+
+            assertThat(replay.segments().get(0).runs().get(0).firstOffset())
+                    .as("the retry gets the offsets that already apply")
+                    .isEqualTo(assigned);
+            assertThat(fake.nextOffset(new RunKey(LOGS, 0)))
+                    .as("and NOTHING advanced -- 3 records committed, not 6")
+                    .isEqualTo(3L);
+        }
+    }
+
+    /**
+     * ⚠️ A RESTART IS NOT A REPLAY, in the fake as in the real one: the same
+     * pod reissues flushSeq 0 under a new incarnation and must be ACCEPTED.
+     */
+    @Test
+    void aRestartedPodReissuingFlushSeqZeroIsAcceptedByTheFake() throws Exception {
+        try (FakeSequencer fake = new FakeSequencer()) {
+            fake.commitAll(List.of(new CommitRequest("poda", "i1", 0, "seg/0", counts(new RunKey(LOGS, 0), 3))));
+            fake.commitAll(List.of(new CommitRequest("poda", "i2", 0, "seg/1", counts(new RunKey(LOGS, 0), 4))));
+
+            assertThat(fake.nextOffset(new RunKey(LOGS, 0)))
+                    .as("both flushes committed: 3 then 4")
+                    .isEqualTo(7L);
+        }
+    }
+
+    /**
+     * ⚠️ THE FAKE MUST MERGE TOO. Review measured `segments.addAll(answered)`
+     * deletable with the suite green: the fake would then drop a replayed
+     * caller's segment from a mixed batch, so a caller matching by segment key
+     * would find nothing -- while production, which IS pinned, returns it.
+     */
+    @Test
+    void aMixedBatchThroughTheFakeCarriesBothTheFreshAndTheAnswered() throws Exception {
+        try (FakeSequencer fake = new FakeSequencer()) {
+            CommitRequest a = new CommitRequest("poda", "i1", 0, "seg/a",
+                    counts(new RunKey(LOGS, 0), 3));
+            fake.commitAll(List.of(a));
+            CommitRequest fresh = new CommitRequest("podb", "i9", 0, "seg/b",
+                    counts(new RunKey(LOGS, 0), 4));
+
+            CommitDelta mixed = fake.commitAll(List.of(a, fresh));
+
+            assertThat(mixed.segments().stream().map(s -> s.segmentKey()).toList())
+                    .as("both submitted segments come back")
+                    .containsExactlyInAnyOrder("seg/a", "seg/b");
+        }
+    }
+
+    /**
+     * ⚠️ AND ITS ALL-REPLAY SEQUENCE NAMES THE DELTA THAT HOLDS THE RECORDS,
+     * not the slot the next write would take -- `nextSequence - 1`, which
+     * review measured mutable to `nextSequence` with everything green.
+     */
+    @Test
+    void anAllReplayBatchThroughTheFakeReportsTheSequenceThatHoldsIt() throws Exception {
+        try (FakeSequencer fake = new FakeSequencer()) {
+            CommitRequest a = new CommitRequest("poda", "i1", 0, "seg/a",
+                    counts(new RunKey(LOGS, 0), 3));
+            long landed = fake.commitAll(List.of(a)).sequence();
+
+            assertThat(fake.commitAll(List.of(a)).sequence())
+                    .as("the retry names the delta that already holds these records")
+                    .isEqualTo(landed);
+        }
+    }
+
+    /**
+     * ⚠️ THE FAKE MUST KEY ON THE SEGMENT TOO. One flush may submit several
+     * segments under one flushSeq; keying on the triple alone makes the second
+     * overwrite the first, so both retried requests resolve to the LAST segment
+     * and the returned delta names it twice. Review measured the fake THROWING
+     * on an input the real sequencer answers -- the divergence a fake exists to
+     * prevent.
+     */
+    @Test
+    void theFakeAnswersPerSEGMENTWhenOneTripleCarriesTwo() throws Exception {
+        try (FakeSequencer fake = new FakeSequencer()) {
+            CommitRequest a = new CommitRequest("podx", "i1", 5, "seg/a",
+                    counts(new RunKey(LOGS, 0), 3));
+            CommitRequest b = new CommitRequest("podx", "i1", 5, "seg/b",
+                    counts(new RunKey(LOGS, 0), 4));
+            CommitDelta first = fake.commitAll(List.of(a, b));
+            long offsetA = firstOffsetOf(first, RA_KEY_A);
+            long offsetB = firstOffsetOf(first, RA_KEY_B);
+
+            CommitDelta retry = fake.commitAll(List.of(a, b));
+
+            assertThat(firstOffsetOf(retry, RA_KEY_A)).as("seg/a keeps ITS offsets")
+                    .isEqualTo(offsetA);
+            assertThat(firstOffsetOf(retry, RA_KEY_B)).as("seg/b keeps ITS offsets")
+                    .isEqualTo(offsetB);
+        }
+    }
+
+    private static final String RA_KEY_A = "seg/a";
+    private static final String RA_KEY_B = "seg/b";
+
+    private static long firstOffsetOf(CommitDelta delta, String segmentKey) {
+        return delta.segments().stream()
+                .filter(s -> s.segmentKey().equals(segmentKey))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("nothing for " + segmentKey))
+                .runs().get(0).firstOffset();
     }
 }

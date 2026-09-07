@@ -48,6 +48,26 @@ Checkpoint.java: either `Objects.requireNonNull` on the two map parameters delet
   branch on which unchecked throw arrives, which is why this is argued rather than killed. ⚠️ THIS IS THE PARAMETER
   check only -- the per-ENTRY null checks inside the copied maps are NOT equivalent and are killed by test.
 
+IdempotencyWindow.java: `applied`'s `flushSeq > prior.lastAppliedFlushSeq()` boundary-mutated to `>=`
+  EQUIVALENT ON THE OBSERVABLE -- but ⚠️ NOT FOR THE REASON THE FIRST DRAFT OF THIS ENTRY GAVE, which
+  review falsified by measurement. That draft said the equal case "cannot arrive" because `applied` is
+  reached only for submissions `replayOf` called FRESH. The equal case DOES arrive: `commitAll`
+  classifies every request in a batch against the window BEFORE recording any of them, so two requests
+  in one batch sharing `(podId, incarnationId, flushSeq)` are both fresh and the second `applied` hits
+  equality. Reproduced through the real `LocalSequencer` with `("poda","i1",5,"seg/a")` and
+  `("poda","i1",5,"seg/b")` -- ⚠️ REACHING THE EQUAL CASE ONLY. Review pointed out that the same
+  input's REPLAY was never exercised, and it exposed a separate defect: `answers` matched the triple
+  and not the segment key, so both replays resolved to ONE `SegmentCommit` and the returned delta named
+  a segment twice. Fixed in the same commit; the key is now part of the match.
+  THE TRUE ARGUMENT is that every request in one `applyFresh` is recorded with the SAME `log.epoch()`
+  and the same `delta.sequence()`, so on the equal case `>=` writes a record field-identical to the one
+  `>` keeps: same flushSeq, same epoch, same sequence. Nothing downstream can distinguish them.
+  ⚠️ THIS IS THE BOUNDARY HALF ONLY. Removing the comparison entirely -- last-wins instead of
+  highest-wins -- is NOT equivalent and is killed by
+  `aBatchAPPLYINGTwoFlushesOutOfOrderKeepsTheHIGHESTWatermark`: one batch can carry flushSeq 4 before
+  flushSeq 3 from the same incarnation, and lowering the watermark to 3 would accept 4 a second time.
+
+
 LogKeys.java: `key.endsWith(SUFFIX)` widened to `key.contains(SUFFIX)`
   EQUIVALENT ON THE OBSERVABLE, measured by review over the whole suite. The RETURN value cannot differ:
   the final `key.equals(keyFor(sequence))` admits only the canonical key, and that key ends with the

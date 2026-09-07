@@ -32,8 +32,7 @@ import java.util.List;
  * consumer yet — fan-out happens after the commit is durable, never before,
  * because notifying about an uncommitted offset lets a consumer read a record a
  * failover could un-assign (I4). Nor that {@code flushSeq} values arrive in
- * order. ⚠️ And NOT that a given commit is applied at most once — that is
- * M4.10d and does not hold yet; see the failure-and-retry note below.
+ * order.
  * ⚠️ THE KEY IS NOT {@code (podId, flushSeq)}: ADR-0036 measured that pair
  * unable to tell a RESTART from a REPLAY, because {@code flushSeq} restarts at
  * 0 while {@code podId} is stable. It is
@@ -45,15 +44,25 @@ import java.util.List;
  * ({@code BinStore}'s own contract distinguishes that from losing a CAS race,
  * which is an empty {@code Optional}). ⚠️ That is the AMBIGUOUS case, not a
  * clean failure: a conditional PUT whose response was lost has still landed.
- * So a retry is safe only once the sequencer ignores a replay of a
- * {@code (podId, incarnationId, flushSeq)} it has already applied — and <b>it
- * does not yet</b>. That is M4.10d, and until it lands <b>a retry after an
- * ambiguous failure may assign a second set of offsets to the same records</b>.
+ * <b>A resubmission of a triple this sequencer has already APPLIED is
+ * answered</b> (M4.10d): it gets the offsets that already apply and appends
+ * nothing. ⚠️ THAT IS NOT THE AMBIGUOUS CASE. A PUT whose response was lost is
+ * never recorded as applied -- {@code commitAll} records only after the write
+ * RETURNS -- so a retry after {@code IOException} still commits the same
+ * records a second time. Reconciling that from the chain is M4.10e, and it is
+ * NOT in this build. ⚠️ WHEN IT LANDS, THE RETRY MUST REUSE THE TRIPLE. A caller that mints a
+ * fresh {@code flushSeq} for the retry is submitting a different commit, and
+ * the same records are committed twice — {@code DefaultIngest} increments
+ * unconditionally today, so THIS GUARANTEE STOPS AT THIS SEAM and no
+ * production caller yet reaches it.
+ *
+ * <p>⚠️ AND IT IS PROCESS-LOCAL. A SUCCESSOR INHERITS NOTHING: the window is
+ * built per instance and no path seeds it from a predecessor, so every replay
+ * that crosses a takeover commits twice. Inheriting it is M4.10f.
  * ⚠️ AN EARLIER DRAFT SAID THE PAIR WAS CARRIED "so M4.10 can make the retry
  * safe WITHOUT CHANGING THE RECORD SHAPE". M4.10c changed it: ADR-0036 added
  * {@code incarnationId} to this record, because the pair could not discriminate
- * a restart. {@link binjava.sequencer.FakeSequencer} carries the triple onto
- * each segment but still does not model the refusal.
+ * a restart. {@link binjava.sequencer.FakeSequencer} models the refusal.
  *
  * <p>⚠️ Losing a CAS race is NOT a failure and never surfaces here: an
  * implementation redrives internally, re-reading and rebuilding rather than
@@ -79,9 +88,10 @@ public interface Sequencer extends AutoCloseable {
      *     binjava.format.RunKey} is NOT sufficient either: two nodes may commit
      *     the same stream in one batch window. ⚠️ {@code RunCommit} still
      *     carries no pod attribution; since M4.10c {@code SegmentCommit} DOES,
-     *     as an optional {@code Attribution}, which is what lets a successor
-     *     rebuild the idempotency window from the uncheckpointed tail — it is
-     *     not a selector for a caller's own offsets.
+     *     as an optional {@code Attribution}, which is what the replay-answer
+     *     path matches a retry against, and what M4.10f will rebuild a
+     *     successor's window FROM. It is not a selector for a caller's own
+     *     offsets.
      *     ⚠️ SETTLED BY M4.7b: <b>a caller finds its offsets by the SEGMENT KEY
      *     it submitted</b> — {@code delta.segments()}, matched on
      *     {@code request.segmentKey()}. That works because each request brings
@@ -93,8 +103,10 @@ public interface Sequencer extends AutoCloseable {
      *     {@code RunKey} — is the one the sentence above warns against
      * @throws IOException the store was unreachable — ⚠️ AMBIGUOUS, so the
      *     commit may or may not have landed. Retrying with the same
-     *     {@code (podId, incarnationId, flushSeq)} is safe only from M4.10d;
-     *     see the failure-and-retry note above
+     *     {@code (podId, incarnationId, flushSeq)} IS NOT YET SAFE: an
+     *     ambiguous commit is never recorded as applied, because the record
+     *     happens after the write RETURNS, so the retry commits the same
+     *     records again. M4.10e owns that; see the failure-and-retry note
      */
     default CommitDelta commit(CommitRequest request) throws IOException {
         return commitAll(List.of(request));

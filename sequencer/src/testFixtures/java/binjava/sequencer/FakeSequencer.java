@@ -41,6 +41,8 @@ public final class FakeSequencer implements Sequencer {
 
     /** ⚠️ Per stream, not global — offsets are per (index, partition) (FR-3). */
     private final Map<RunKey, Long> nextOffsets = new HashMap<>();
+    /** Every triple this fake has applied, so a replay is answered (M4.10d). */
+    private final Map<String, binjava.format.SegmentCommit> applied = new java.util.HashMap<>();
 
     private long nextSequence;
 
@@ -68,8 +70,28 @@ public final class FakeSequencer implements Sequencer {
         // reached. A fake that got this wrong would let a caller's tests pass
         // while the real sequencer assigned one range twice — which is I2, and
         // is exactly the bug a fake exists to make visible rather than hide.
-        List<binjava.format.SegmentCommit> segments = new ArrayList<>(requests.size());
+        // ⚠️ THE REFUSAL IS MODELLED (M4.10d), because a fake that applied a
+        // replay twice would let a caller's retry tests pass while the real
+        // sequencer answered instead of committing. Kept deliberately SIMPLER
+        // than the real one: this answers from segments it remembers rather
+        // than reading a delta back, so it models the CONTRACT -- a replayed
+        // triple gets its original offsets and appends nothing -- without
+        // modelling the chain.
+        List<binjava.format.SegmentCommit> answered = new ArrayList<>();
+        List<CommitRequest> fresh = new ArrayList<>(requests.size());
         for (CommitRequest request : requests) {
+            binjava.format.SegmentCommit already = applied.get(tripleOf(request));
+            if (already != null) {
+                answered.add(already);
+            } else {
+                fresh.add(request);
+            }
+        }
+        if (fresh.isEmpty()) {
+            return new CommitDelta(nextSequence - 1, answered);
+        }
+        List<binjava.format.SegmentCommit> segments = new ArrayList<>(fresh.size());
+        for (CommitRequest request : fresh) {
             List<RunCommit> runs = new ArrayList<>(request.recordCounts().size());
             // ⚠️ Sorted, so a delta's runs are in a deterministic order and two
             // replays of the same commit produce byte-identical deltas. The real
@@ -84,11 +106,27 @@ public final class FakeSequencer implements Sequencer {
                         runs.add(new RunCommit(e.getKey(), e.getValue(), first));
                         nextOffsets.put(e.getKey(), first + e.getValue());
                     });
-            segments.add(new binjava.format.SegmentCommit(request.segmentKey(), runs,
-                    new binjava.format.SegmentCommit.Attribution(request.podId(),
-                            request.incarnationId(), request.flushSeq())));
+            binjava.format.SegmentCommit segment =
+                    new binjava.format.SegmentCommit(request.segmentKey(), runs,
+                            new binjava.format.SegmentCommit.Attribution(request.podId(),
+                                    request.incarnationId(), request.flushSeq()));
+            segments.add(segment);
+            applied.put(tripleOf(request), segment);
         }
+        segments.addAll(answered);
         return new CommitDelta(nextSequence++, segments);
+    }
+
+    private static String tripleOf(CommitRequest request) {
+        // ⚠️ AND THE SEGMENT KEY, because production's `answers` requires it.
+        // Without it one flush submitting several segments under one flushSeq
+        // overwrites its own earlier entry, so both retried requests resolve to
+        // the LAST segment and the returned delta names it twice -- measured by
+        // review as the fake throwing where the real sequencer answers. A fake
+        // that diverges here is worse than no fake: it fails a caller's retry
+        // test for a reason production does not have.
+        return request.podId() + "\0" + request.incarnationId() + "\0"
+                + request.flushSeq() + "\0" + request.segmentKey();
     }
 
     /** The offset the next commit for {@code key} would receive. */

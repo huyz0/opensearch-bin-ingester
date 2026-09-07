@@ -3,6 +3,10 @@ package binjava.sequencer;
 
 import binjava.binstore.BinStore;
 import binjava.format.CommitDelta;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.ArrayList;
+import binjava.format.SegmentCommit;
 import binjava.format.Lease;
 import java.io.IOException;
 import java.util.List;
@@ -58,6 +62,8 @@ public final class LocalSequencer implements Sequencer {
     private final LeaseManager leases;
     private final CommitLog log;
     private final RenewTicker ticker;
+    private final BinStore store;
+    private final String prefix;
     private final Thread renewer;
     private volatile boolean closed;
 
@@ -75,6 +81,16 @@ public final class LocalSequencer implements Sequencer {
     private volatile CheckpointWriter checkpoints;
 
     /**
+     * What each pod incarnation has already had applied (M4.10d).
+     *
+     * <p>⚠️ CONFINED TO THE COMMIT PATH. Every read and write happens inside
+     * {@link #commitAll}, which the lease makes single-writer per epoch, so a
+     * plain map needs no lock -- unlike {@link #checkpoints}, which the renewer
+     * thread also touches and which is therefore {@code volatile}.
+     */
+    private final IdempotencyWindow window;
+
+    /**
      * ⚠️ DEFAULTS, and they are a COST choice rather than a correctness one: one
      * checkpoint per 1000 deltas or per minute, whichever comes first, so a busy
      * cluster pays a fraction of a percent on top of its commit rate and an idle
@@ -85,10 +101,14 @@ public final class LocalSequencer implements Sequencer {
 
     static final java.time.Duration CHECKPOINT_INTERVAL = java.time.Duration.ofSeconds(60);
 
-    private LocalSequencer(LeaseManager leases, CommitLog log, RenewTicker ticker) {
+    private LocalSequencer(LeaseManager leases, CommitLog log, RenewTicker ticker,
+            BinStore store, String prefix) {
         this.leases = leases;
         this.log = log;
         this.ticker = ticker;
+        this.store = store;
+        this.prefix = prefix;
+        this.window = new IdempotencyWindow(store, prefix);
         // ⚠️ A VIRTUAL THREAD parked on the tick, like every other blocking
         // worker here.
         this.renewer = Thread.ofVirtual().name("lease-renewer").start(this::renewForever);
@@ -300,7 +320,14 @@ public final class LocalSequencer implements Sequencer {
             // code. M4.9's bounded recovery is what fixes it.
             log.recover();
             log.open(prevEpoch, prevSeq);
-            LocalSequencer sequencer = new LocalSequencer(leases, log, ticker);
+            LocalSequencer sequencer =
+                    new LocalSequencer(leases, log, ticker, store, prefix);
+            // ⚠️ THE WINDOW IS INHERITED, NOT RESTARTED (M4.10d). Without this
+            // a successor knows nothing about what its predecessor applied, so
+            // a retry that arrives across a takeover -- exactly when the store
+            // was flaky enough to cause one -- commits a second time. The
+            // predecessor's newest checkpoint carries the per-pod watermarks
+            // and a pointer to the delta that last applied for each.
             sequencer.checkpoints = new CheckpointWriter(store, log, prefix,
                     checkpointEveryDeltas, CHECKPOINT_INTERVAL, checkpointTicker);
             return Optional.of(sequencer);
@@ -343,7 +370,41 @@ public final class LocalSequencer implements Sequencer {
             throw new IOException("this sequencer released its lease at epoch "
                     + log.epoch() + " and must not commit again");
         }
+        // ⚠️ CLASSIFY FIRST, then commit the fresh submissions BEFORE anything
+        // can refuse. `BatchingSequencer` fails a whole window together, so a
+        // refusal raised first loses flushes that had nothing wrong with them
+        // -- measured at offset 7 instead of 12.
+        IdempotencyWindow.Split split = window.split(requests);
+        List<CommitRequest> fresh = split.fresh();
+        List<CommitRequest> replays = split.replays();
+        List<SegmentCommit> answered = new ArrayList<>();
+        if (replays.isEmpty()) {
+            return applyFresh(requests);
+        }
+        CommitDelta delta = fresh.isEmpty() ? null : applyFresh(fresh);
+        // ⚠️ AFTER the fresh commit, deliberately: this can throw, and by then
+        // everything that could be made durable already is.
+        answered.addAll(window.answer(replays));
+        if (delta == null) {
+            // ⚠️ NOTHING WAS WRITTEN: the pure retry. The sequence returned is
+            // the one that already holds these records.
+            return new CommitDelta(window.sequenceOf(replays), answered);
+        }
+        List<SegmentCommit> merged = new ArrayList<>(delta.segments());
+        merged.addAll(answered);
+        // ⚠️ THE RETURNED DELTA IS NOT THE DURABLE ONE when a batch mixes the
+        // two. It carries every submitted segment because a caller matches its
+        // own flush by segment key; the replayed ones are at their ORIGINAL
+        // offsets, under a sequence naming the FRESH write. Never read back.
+        return new CommitDelta(delta.sequence(), merged);
+    }
+
+    /** Commits {@code requests} for real, and records what that applied. */
+    private CommitDelta applyFresh(List<CommitRequest> requests) throws IOException {
         CommitDelta delta = log.commitAll(requests);
+        for (CommitRequest request : requests) {
+            window.applied(request, log.epoch(), delta.sequence());
+        }
         // ⚠️ AFTER the commit, never before: the writer reads `nextSequence` and
         // the offsets, and observing first would checkpoint a chain state that
         // does not exist yet. ⚠️ It cannot throw -- a failed checkpoint must not
