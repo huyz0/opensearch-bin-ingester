@@ -240,4 +240,52 @@ class ArchiveRowSizeTest {
     assertThat(bad.status()).as("an unresolvable range must refuse too: " + bad.output())
         .isNotZero();
   }
+
+  /**
+   * ⚠️ A FILE THAT DID NOT EXIST AT THE BASE IS NOT AN UNREADABLE BASE. The
+   * gate reads the archive at the base to decide which rows are NEW, and it
+   * fails closed when that read fails -- correctly, for a base it cannot see.
+   * But an archive ADDED by the range under test has no version at the base at
+   * all, and every row in it is new by definition.
+   *
+   * <p>MEASURED IN CI: the first push after `dependencyLicenses` was fixed
+   * carried the commit that CREATED backlog-done.md, so this gate refused with
+   * "could not read ... at 7d9c9f24" and took the whole run down. The licence
+   * failure had masked it on every earlier run.
+   */
+  @Test
+  void anArchiveABSENTAtTheBaseIsEveryRowNEWNotAFailure(@TempDir Path dir) throws Exception {
+    Path d = scratch(dir);
+    // scratch() commits an archive, so start from a commit that has none.
+    git(d, "rm", "-q", ARCHIVE);
+    git(d, "commit", "-qm", "a base with no archive at all");
+    String base = git(d, "rev-parse", "HEAD").output().trim();
+
+    write(d, HDR + row("M9.7", CAP) + "\n");
+    git(d, "add", "-A");
+    git(d, "commit", "-qm", "add the archive");
+
+    Gate g = run(d, Map.of("CHECK_RANGE", base), "bash", "scripts/check-archive-row-size.sh");
+
+    assertThat(g.status()).as("a NEW archive is not an unreadable base: " + g.output()).isZero();
+    assertThat(g.output()).doesNotContain("could not read");
+  }
+
+  /** ⚠️ And an oversized row in that newly added archive is still REFUSED. */
+  @Test
+  void anOversizedRowInANEWArchiveIsStillRefused(@TempDir Path dir) throws Exception {
+    Path d = scratch(dir);
+    git(d, "rm", "-q", ARCHIVE);
+    git(d, "commit", "-qm", "a base with no archive at all");
+    String base = git(d, "rev-parse", "HEAD").output().trim();
+
+    write(d, HDR + row("M9.8", CAP + 1) + "\n");
+    git(d, "add", "-A");
+    git(d, "commit", "-qm", "add the archive with an oversized row");
+
+    Gate g = run(d, Map.of("CHECK_RANGE", base), "bash", "scripts/check-archive-row-size.sh");
+
+    assertThat(g.status()).as("the cap still binds in a new file: " + g.output()).isNotZero();
+    assertThat(g.output()).contains("M9.8");
+  }
 }

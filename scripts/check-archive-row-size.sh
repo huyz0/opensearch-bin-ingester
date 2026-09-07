@@ -71,7 +71,15 @@ if diff is None:
           "reporting a clean tree" % (mode, archive))
     sys.exit(1)
 
-before = run('git', 'show', '%s:%s' % (base, archive))
+# ⚠️ ABSENT AT THE BASE IS NOT UNREADABLE AT THE BASE, and conflating them took
+# a CI run down. An archive ADDED by the range under test has no version at the
+# base, and every row in it is NEW by definition -- which is the strict reading,
+# not a lenient one. A base this cannot see is still a refusal, below.
+# MEASURED: the push that first fixed `dependencyLicenses` carried the commit
+# creating backlog-done.md, and this gate refused the whole run for it.
+absent = subprocess.run(['git', 'cat-file', '-e', '%s:%s' % (base, archive)],
+                        capture_output=True).returncode != 0
+before = '' if absent else run('git', 'show', '%s:%s' % (base, archive))
 if before is None:
     print("  \033[31mFAIL\033[0m could not read %s at %s -- refusing rather than "
           "reporting a clean tree" % (archive, base))

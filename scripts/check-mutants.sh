@@ -18,6 +18,13 @@ cd "$ROOT"
 hdr "check-mutants"
 [ -x ./gradlew ] || { warn "no build yet -- mutation unenforced"; finish; }
 
+# ⚠️ `changed_files`, NEVER `scoped_files`, AND THIS IS THE ONE GATE THAT DOES
+# NOT WIDEN AT GATE_SCOPE=full. build.md states it as the design -- "a whole-tree
+# mutation score is dominated by code nobody touched and moves too slowly to gate
+# a commit" -- and the shared helper does the opposite: at full scope it returns
+# every tracked file. MEASURED IN CI, where the gates step runs GATE_SCOPE=full:
+# that handed PIT all 281 tracked Java files and the job hit its 10-minute
+# timeout with seven java processes still alive.
 FLOOR="${MUTANT_FLOOR:-80}"
 TARGETS=".harness/mutants-targets.txt"
 mkdir -p .harness
@@ -39,7 +46,7 @@ while IFS= read -r f; do
   printf '%s\n' "$fqcn" >> "$TARGETS"
   case " $MODULES " in *" $mod "*) ;; *) MODULES="$MODULES $mod" ;; esac
 done <<EOF
-$(scoped_files '*.java')
+$(changed_files '*.java')
 EOF
 
 if [ ! -s "$TARGETS" ]; then

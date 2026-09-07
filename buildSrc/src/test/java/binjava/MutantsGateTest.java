@@ -17,6 +17,12 @@ import org.junit.jupiter.api.io.TempDir;
  * measuring nothing, which is why the cases below are weighted toward
  * "measured nothing" rather than toward arithmetic.
  *
+ * <p>⚠️ THESE FIXTURES STAGE RATHER THAN COMMIT, and that is load-bearing:
+ * this gate reads the DIFF at every scope, so a committed-but-unstaged class is
+ * correctly invisible to it. An earlier version of these tests committed and
+ * leaned on GATE_SCOPE=full to make the gate see the file, which is the widening
+ * that took a CI job to its timeout.
+ *
  * <p>⚠️ PIT ITSELF IS NOT RUN HERE. The gate's job is to SCOPE mutation to the
  * diff, invoke the build, and judge the report; PIT's job is to generate
  * mutants. Running the real thing would put a 15-second JVM in every case and
@@ -134,8 +140,9 @@ class MutantsGateTest {
   @Test
   void aMissingReportAfterAnInvocationFAILS(@TempDir Path dir) throws Exception {
     Path repo = scratch(dir);
-    productionClass(repo, "format", "CommitDelta");
     commit(repo);
+    productionClass(repo, "format", "CommitDelta");
+    run(repo, "git add -A");
 
     String out = gate(repo);
 
@@ -147,8 +154,9 @@ class MutantsGateTest {
   @Test
   void exactlyTheFloorPASSES(@TempDir Path dir) throws Exception {
     Path repo = scratch(dir);
-    productionClass(repo, "format", "CommitDelta");
     commit(repo);
+    productionClass(repo, "format", "CommitDelta");
+    run(repo, "git add -A");
     pitReport(repo, "format", "CommitDelta:KILLED", "CommitDelta:KILLED",
         "CommitDelta:KILLED", "CommitDelta:KILLED", "CommitDelta:SURVIVED");
 
@@ -162,8 +170,9 @@ class MutantsGateTest {
   @Test
   void belowTheFloorFAILSAndNamesTheSurvivors(@TempDir Path dir) throws Exception {
     Path repo = scratch(dir);
-    productionClass(repo, "format", "CommitDelta");
     commit(repo);
+    productionClass(repo, "format", "CommitDelta");
+    run(repo, "git add -A");
     pitReport(repo, "format", "CommitDelta:KILLED", "CommitDelta:SURVIVED",
         "CommitDelta:SURVIVED");
 
@@ -207,8 +216,9 @@ class MutantsGateTest {
   @Test
   void theBuildIsInvokedWithTheCHANGEDClassesAsTargets(@TempDir Path dir) throws Exception {
     Path repo = scratch(dir);
-    productionClass(repo, "format", "CommitDelta");
     commit(repo);
+    productionClass(repo, "format", "CommitDelta");
+    run(repo, "git add -A");
     pitReport(repo, "format", "CommitDelta:KILLED");
 
     gate(repo);
@@ -216,5 +226,41 @@ class MutantsGateTest {
     String invocations = Files.readString(repo.resolve("gradlew-invocations"));
     assertThat(invocations).as(invocations).contains(":format:pitest");
     assertThat(invocations).as(invocations).contains("binjava.format.CommitDelta");
+  }
+
+  /**
+   * ⚠️ DIFF-SCOPED EVEN AT GATE_SCOPE=full, which build.md states as the
+   * design: "a whole-tree mutation score is dominated by code nobody touched
+   * and moves too slowly to gate a commit". Every other gate widens at full
+   * scope; this one must not, and the distinction is not decorative.
+   *
+   * <p>MEASURED IN CI: using the shared `scoped_files` helper made this gate
+   * ask PIT to mutate all 281 tracked Java files, and the job hit its
+   * 10-minute timeout with seven java processes still running. The licence
+   * failure had masked it until the run that fixed that.
+   */
+  @Test
+  void atFULLScopeItStillJudgesTheDIFFAndNotTheWholeTree(@TempDir Path dir) throws Exception {
+    Path repo = scratch(dir);
+    productionClass(repo, "format", "Untouched");
+    commit(repo);
+    // Only CommitDelta is added by the change under test.
+    productionClass(repo, "format", "CommitDelta");
+    run(repo, "git add -A");
+    pitReport(repo, "format", "CommitDelta:KILLED");
+
+    ProcessBuilder pb =
+        new ProcessBuilder("bash", "scripts/check-mutants.sh").directory(repo.toFile());
+    pb.environment().put("GATE_SCOPE", "full");
+    pb.environment().remove("CHECK_RANGE");
+    pb.redirectErrorStream(true);
+    Process p = pb.start();
+    String out = p.waitFor() + "\n" + new String(p.getInputStream().readAllBytes());
+
+    assertThat(out).as(out).startsWith("0");
+    String invocations = Files.readString(repo.resolve("gradlew-invocations"));
+    assertThat(invocations)
+        .as("the UNCHANGED class must not be handed to PIT: %s", invocations)
+        .doesNotContain("Untouched");
   }
 }

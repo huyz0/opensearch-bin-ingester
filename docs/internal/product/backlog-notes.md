@@ -481,6 +481,88 @@ complete because attribution lives in NOTICE, but a canonical MIT or BSD text
 carries "<copyright holders>" and attributes nobody -- 8 artifacts are in that
 state and are listed by name in the file.
 
+### M0.86
+
+Two gate defects that only CI could show, both of mine, and both MASKED until
+`dependencyLicenses` was fixed: the licence step failed first on every run, so
+the Gates step never ran to completion.
+
+⚠️ **ABSENT AT THE BASE IS NOT UNREADABLE AT THE BASE.**
+`check-archive-row-size` reads the archive at the base to decide which rows are
+NEW and fails closed when that read fails -- right for a base it cannot see,
+wrong for a file the range CREATED. The push carried the commit that added
+`backlog-done.md`, so the gate refused with "could not read ... at 7d9c9f24" and
+took the run down. An archive absent at the base has every row new by
+definition, which is the STRICT reading, not a lenient one. Two tests: a new
+archive passes, and an oversized row in one is still refused.
+
+⚠️ **`check-mutants` IS THE ONE GATE THAT MUST NOT WIDEN AT GATE_SCOPE=full.**
+build.md already said so -- "a whole-tree mutation score is dominated by code
+nobody touched and moves too slowly to gate a commit" -- and the script used the
+shared `scoped_files` helper, which does exactly the opposite. In CI that meant
+PIT over all 281 tracked Java files; the job died at its 10-minute timeout with
+seven java processes still alive. Now `changed_files`, always.
+
+⚠️ FIXING IT BROKE FOUR OF ITS OWN TESTS, and that was the fix working: they
+committed the class and leaned on GATE_SCOPE=full to make the gate see it, which
+is the widening being removed. They stage now, which is what the gate actually
+judges.
+
+### M0.84
+
+`DependencyLicensesTask` can be made green while a denied licence goes
+unreported. All three measured by review on M0.83:
+
+⚠️ **A VALID SPDX EXPRESSION BYPASSES THE DENY LIST.** `framework GPL-3.0-only`
+correctly FAILS; `framework GPL-3.0-only WITH Classpath-exception-2.0` gives
+BUILD SUCCESSFUL. The line is split with `limit = 2`, so the whole remainder
+becomes the identifier, and matching is exact set membership. Lowercase
+`gpl-3.0-only` passes for the same reason. ⚠️ THIS IS NOT HYPOTHETICAL: M0.83
+hand-picked a side for four dual-licensed artifacts, and
+`jakarta.annotation-api` -- whose POM declares GPL-2.0-with-classpath-exception
+-- is exactly the entry someone writes in expression form next time. The rule
+"either of these two is not an identifier" is prose in the file header enforced
+by nothing. It is a predicate over the file (second field contains no
+whitespace; normalise case), so gate-design rung 1 covers it.
+
+⚠️ **A NON-JAR DEPENDENCY IS SKIPPED ENTIRELY.** The task filters
+`it.name.endsWith(".jar")`. A `.zip` added to `licenseCheck` produced zero
+problems -- no sha, no licence, no SPDX entry -- while the stamp still said
+`ok 122 jar(s)`, which reads as a complete set.
+
+⚠️ **`seenLicence` IS WRITTEN AND NEVER READ**, so `.sha1` orphans and SPDX
+orphans are reported while licence-file orphans are not. This puts M0.83's own
+fix two obedient steps from being undone: delete the `^junit$` mapping and the
+gate tells you to delete the `junit4` SPDX line; do that and it is BUILD
+SUCCESSFUL, with junit 4 back on EPL-2.0 and `junit4-LICENSE.txt` orphaned in
+silence. The symmetric loop is three lines over a set that already exists.
+
+⚠️ ALSO HERE: `prefixFor` keys on the jar filename and never the Maven group, so
+a future `framework-<version>.jar` from another group inherits the committed
+`framework Apache-2.0` line. Recorded on M0.19, but M0.19's deliverable is a
+shell script while this needs `buildSrc`, so it belongs with the rest of this
+row's work.
+
+### M0.85
+
+CI resolves `CHECK_RANGE` from `github.event.before`, so a push judges every
+commit it carries. That is right for the gates that ask "what did this change
+add" -- until a push is large enough that its base predates the file being
+judged.
+
+⚠️ MEASURED, ON THE PUSH THAT FIXED `dependencyLicenses`: 34 commits went out at
+once, and `check-archive-row-size` found 25 rows over its 4,000-character cap,
+the largest 18,845. Every one predates M0.76, which added the gate; the gate had
+only ever run on a staged diff locally, so it had never judged history. Nothing
+was wrong with the rows or with the gate -- the RANGE was wrong.
+
+⚠️ THE RIGHT ANSWER IS NOT TO REWRITE 25 ARCHIVED ROWS. `backlog-done.md`'s own
+header says shipped rows are not rewritten, and the next push's range starts at
+the current tip, so the condition clears itself. What wants deciding is whether
+a range gate should bound itself -- refuse a range older than the gate, or
+than the file it judges -- rather than silently re-judging a history nobody is
+in a position to change.
+
 ### M0.82
 
 `check-diff-size.sh` counts every added line under `*/src/*`, tests included.
