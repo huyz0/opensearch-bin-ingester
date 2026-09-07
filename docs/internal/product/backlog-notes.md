@@ -1160,7 +1160,9 @@ empty by construction, and the base is the backward walk `inheritedOffsets`
 already performs -- "epochs advance by exactly one per acquisition", stepping
 over chains that carry no CONTINUE. What blocks it is that the walk sits behind
 a CONTINUE this chain does not have, and extracting it puts `Invariants` over
-code-structure.md's 500-line cap (490 lines today, which is M4.13g).
+code-structure.md's 500-line cap. ⚠️ M4.13g HAS SINCE LANDED and took
+`Invariants` from 490 lines to 397, so that blocker is gone and this row is now
+free to do the extraction.
 
 ⚠️ THE HOLE IS PINNED BY A TEST, not just described:
 `ReaderInvariantsScopeTest` asserts the decline for all three reader shapes on

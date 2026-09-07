@@ -37,11 +37,11 @@ import org.junit.jupiter.api.Test;
 class AckOrderTest {
 
     /** A writer that confirms and acks strictly in sequence order. */
-    private static List<Invariants.AckEvent> serial(int n) {
-        List<Invariants.AckEvent> trace = new ArrayList<>();
+    private static List<AckOrderInvariants.AckEvent> serial(int n) {
+        List<AckOrderInvariants.AckEvent> trace = new ArrayList<>();
         for (int i = 0; i < n; i++) {
-            trace.add(Invariants.AckEvent.confirmed(1, i));
-            trace.add(Invariants.AckEvent.acked(1, i));
+            trace.add(AckOrderInvariants.AckEvent.confirmed(1, i));
+            trace.add(AckOrderInvariants.AckEvent.acked(1, i));
         }
         return trace;
     }
@@ -51,12 +51,12 @@ class AckOrderTest {
      * the naive implementation ADR-0011 forbids. Write 1 confirms first, so it
      * is acked while write 0 is still in flight.
      */
-    private static List<Invariants.AckEvent> naivePipelined() {
+    private static List<AckOrderInvariants.AckEvent> naivePipelined() {
         return List.of(
-                Invariants.AckEvent.confirmed(1, 1),
-                Invariants.AckEvent.acked(1, 1),
-                Invariants.AckEvent.confirmed(1, 0),
-                Invariants.AckEvent.acked(1, 0));
+                AckOrderInvariants.AckEvent.confirmed(1, 1),
+                AckOrderInvariants.AckEvent.acked(1, 1),
+                AckOrderInvariants.AckEvent.confirmed(1, 0),
+                AckOrderInvariants.AckEvent.acked(1, 0));
     }
 
     /**
@@ -64,23 +64,23 @@ class AckOrderTest {
      * write is confirmed. Both PUTs are in flight together; neither is acked
      * early.
      */
-    private static List<Invariants.AckEvent> pipelinedButOrderedAcks() {
+    private static List<AckOrderInvariants.AckEvent> pipelinedButOrderedAcks() {
         return List.of(
-                Invariants.AckEvent.confirmed(1, 1),
-                Invariants.AckEvent.confirmed(1, 0),
-                Invariants.AckEvent.acked(1, 0),
-                Invariants.AckEvent.acked(1, 1));
+                AckOrderInvariants.AckEvent.confirmed(1, 1),
+                AckOrderInvariants.AckEvent.confirmed(1, 0),
+                AckOrderInvariants.AckEvent.acked(1, 0),
+                AckOrderInvariants.AckEvent.acked(1, 1));
     }
 
     @Test
     void aSerialWriterViolatesNOTHING() {
-        assertThat(Invariants.checkAckOrder(serial(4))).isEmpty();
+        assertThat(AckOrderInvariants.checkAckOrder(serial(4))).isEmpty();
     }
 
     /** ⚠️ THE CASE THE ROW EXISTS FOR: the checker must CATCH this. */
     @Test
     void aNAIVEPipeliningWriterVIOLATESI5() {
-        List<Violation> found = Invariants.checkAckOrder(naivePipelined());
+        List<Violation> found = AckOrderInvariants.checkAckOrder(naivePipelined());
 
         assertThat(found).as("acking 1 while 0 is unconfirmed is the ADR-0011 violation")
                 .hasSize(1);
@@ -100,7 +100,7 @@ class AckOrderTest {
      */
     @Test
     void pipeliningThatWAITSToAckIsPERMITTED() {
-        assertThat(Invariants.checkAckOrder(pipelinedButOrderedAcks())).isEmpty();
+        assertThat(AckOrderInvariants.checkAckOrder(pipelinedButOrderedAcks())).isEmpty();
     }
 
     /**
@@ -110,7 +110,7 @@ class AckOrderTest {
      */
     @Test
     void ackingAWriteThatWasNEVERConfirmedIsAVIOLATION() {
-        List<Violation> found = Invariants.checkAckOrder(List.of(Invariants.AckEvent.acked(1, 0)));
+        List<Violation> found = AckOrderInvariants.checkAckOrder(List.of(AckOrderInvariants.AckEvent.acked(1, 0)));
 
         assertThat(found).hasSize(1);
         assertThat(found.get(0).invariant()).isEqualTo("I5");
@@ -119,7 +119,7 @@ class AckOrderTest {
     /** An empty trace is not a pass with evidence; it is nothing to judge. */
     @Test
     void anEmptyTraceReportsNoVIOLATIONAndNoEVIDENCE() {
-        assertThat(Invariants.checkAckOrder(List.of())).isEmpty();
+        assertThat(AckOrderInvariants.checkAckOrder(List.of())).isEmpty();
     }
 
     /**
@@ -128,13 +128,13 @@ class AckOrderTest {
      */
     @Test
     void EVERYOutOfOrderAckIsReportedNotJustTheFirst() {
-        List<Violation> found = Invariants.checkAckOrder(List.of(
-                Invariants.AckEvent.confirmed(1, 2),
-                Invariants.AckEvent.acked(1, 2),
-                Invariants.AckEvent.confirmed(1, 1),
-                Invariants.AckEvent.acked(1, 1),
-                Invariants.AckEvent.confirmed(1, 0),
-                Invariants.AckEvent.acked(1, 0)));
+        List<Violation> found = AckOrderInvariants.checkAckOrder(List.of(
+                AckOrderInvariants.AckEvent.confirmed(1, 2),
+                AckOrderInvariants.AckEvent.acked(1, 2),
+                AckOrderInvariants.AckEvent.confirmed(1, 1),
+                AckOrderInvariants.AckEvent.acked(1, 1),
+                AckOrderInvariants.AckEvent.confirmed(1, 0),
+                AckOrderInvariants.AckEvent.acked(1, 0)));
 
         assertThat(found).as("acking 2 then 1 early are two distinct violations").hasSize(2);
     }
@@ -149,11 +149,11 @@ class AckOrderTest {
      */
     @Test
     void anAckOverAGapOfTWOIsCaught() {
-        List<Violation> found = Invariants.checkAckOrder(List.of(
-                Invariants.AckEvent.confirmed(1, 1),
-                Invariants.AckEvent.confirmed(1, 2),
-                Invariants.AckEvent.acked(1, 2),
-                Invariants.AckEvent.confirmed(1, 0)));
+        List<Violation> found = AckOrderInvariants.checkAckOrder(List.of(
+                AckOrderInvariants.AckEvent.confirmed(1, 1),
+                AckOrderInvariants.AckEvent.confirmed(1, 2),
+                AckOrderInvariants.AckEvent.acked(1, 2),
+                AckOrderInvariants.AckEvent.confirmed(1, 0)));
 
         assertThat(found).as("0 was unconfirmed when 2 was acked, with 1 confirmed between them")
                 .hasSize(1);
@@ -172,11 +172,11 @@ class AckOrderTest {
      */
     @Test
     void aSerialWriterWhoseChainSTARTSAtOneViolatesNOTHING() {
-        assertThat(Invariants.checkAckOrder(List.of(
-                Invariants.AckEvent.confirmed(1, 1),
-                Invariants.AckEvent.acked(1, 1),
-                Invariants.AckEvent.confirmed(1, 2),
-                Invariants.AckEvent.acked(1, 2))))
+        assertThat(AckOrderInvariants.checkAckOrder(List.of(
+                AckOrderInvariants.AckEvent.confirmed(1, 1),
+                AckOrderInvariants.AckEvent.acked(1, 1),
+                AckOrderInvariants.AckEvent.confirmed(1, 2),
+                AckOrderInvariants.AckEvent.acked(1, 2))))
                 .as("the base is the chain's own floor, not the literal 0")
                 .isEmpty();
     }
@@ -191,15 +191,15 @@ class AckOrderTest {
      */
     @Test
     void ONECHAINSConfirmationsDoNotSatisfyANOTHERS() {
-        List<Violation> found = Invariants.checkAckOrder(List.of(
-                Invariants.AckEvent.confirmed(1, 0),
-                Invariants.AckEvent.acked(1, 0),
-                Invariants.AckEvent.confirmed(1, 1),
-                Invariants.AckEvent.acked(1, 1),
-                Invariants.AckEvent.confirmed(1, 2),
-                Invariants.AckEvent.acked(1, 2),
+        List<Violation> found = AckOrderInvariants.checkAckOrder(List.of(
+                AckOrderInvariants.AckEvent.confirmed(1, 0),
+                AckOrderInvariants.AckEvent.acked(1, 0),
+                AckOrderInvariants.AckEvent.confirmed(1, 1),
+                AckOrderInvariants.AckEvent.acked(1, 1),
+                AckOrderInvariants.AckEvent.confirmed(1, 2),
+                AckOrderInvariants.AckEvent.acked(1, 2),
                 // epoch 2 acks its own sequence 2 having confirmed nothing.
-                Invariants.AckEvent.acked(2, 2)));
+                AckOrderInvariants.AckEvent.acked(2, 2)));
 
         assertThat(found).as("epoch 2's ack is unbacked by epoch 2's own confirmations")
                 .hasSize(1);
@@ -213,9 +213,9 @@ class AckOrderTest {
      */
     @Test
     void anAckThatIsBothUnconfirmedAndOutOfOrderCountsONCE() {
-        List<Violation> found = Invariants.checkAckOrder(List.of(
-                Invariants.AckEvent.confirmed(1, 0),
-                Invariants.AckEvent.acked(1, 2)));
+        List<Violation> found = AckOrderInvariants.checkAckOrder(List.of(
+                AckOrderInvariants.AckEvent.confirmed(1, 0),
+                AckOrderInvariants.AckEvent.acked(1, 2)));
 
         assertThat(found).hasSize(1);
     }
@@ -230,15 +230,15 @@ class AckOrderTest {
      */
     @Test
     void legalPipeliningAtDepthTHREEIsPERMITTED() {
-        assertThat(Invariants.checkAckOrder(List.of(
-                Invariants.AckEvent.confirmed(1, 1),
-                Invariants.AckEvent.confirmed(1, 2),
+        assertThat(AckOrderInvariants.checkAckOrder(List.of(
+                AckOrderInvariants.AckEvent.confirmed(1, 1),
+                AckOrderInvariants.AckEvent.confirmed(1, 2),
                 // ⚠️ THIS ONE CONFIRM CLOSES A TWO-WIDE GAP: the watermark must
                 // advance 0 -> 3 in one step, which an `if` cannot do.
-                Invariants.AckEvent.confirmed(1, 0),
-                Invariants.AckEvent.acked(1, 0),
-                Invariants.AckEvent.acked(1, 1),
-                Invariants.AckEvent.acked(1, 2))))
+                AckOrderInvariants.AckEvent.confirmed(1, 0),
+                AckOrderInvariants.AckEvent.acked(1, 0),
+                AckOrderInvariants.AckEvent.acked(1, 1),
+                AckOrderInvariants.AckEvent.acked(1, 2))))
                 .as("all three outstanding at once, acked in order: legal")
                 .isEmpty();
     }
@@ -253,17 +253,17 @@ class AckOrderTest {
      */
     @Test
     void aSUCCESSORChainAckingOutOfOrderIsCaught() {
-        List<Violation> found = Invariants.checkAckOrder(List.of(
-                Invariants.AckEvent.confirmed(1, 0),
-                Invariants.AckEvent.acked(1, 0),
-                Invariants.AckEvent.confirmed(1, 1),
-                Invariants.AckEvent.acked(1, 1),
-                Invariants.AckEvent.confirmed(1, 2),
-                Invariants.AckEvent.acked(1, 2),
+        List<Violation> found = AckOrderInvariants.checkAckOrder(List.of(
+                AckOrderInvariants.AckEvent.confirmed(1, 0),
+                AckOrderInvariants.AckEvent.acked(1, 0),
+                AckOrderInvariants.AckEvent.confirmed(1, 1),
+                AckOrderInvariants.AckEvent.acked(1, 1),
+                AckOrderInvariants.AckEvent.confirmed(1, 2),
+                AckOrderInvariants.AckEvent.acked(1, 2),
                 // epoch 2 confirms 0 and 2, then acks 2 with its OWN 1 in flight
-                Invariants.AckEvent.confirmed(2, 0),
-                Invariants.AckEvent.confirmed(2, 2),
-                Invariants.AckEvent.acked(2, 2)));
+                AckOrderInvariants.AckEvent.confirmed(2, 0),
+                AckOrderInvariants.AckEvent.confirmed(2, 2),
+                AckOrderInvariants.AckEvent.acked(2, 2)));
 
         assertThat(found).as("epoch 1 ran ahead; its watermark must not cover epoch 2")
                 .hasSize(1);
@@ -278,13 +278,13 @@ class AckOrderTest {
      */
     @Test
     void TWOChainsAtDIFFERENTFloorsAreJudgedSeparately() {
-        assertThat(Invariants.checkAckOrder(List.of(
-                Invariants.AckEvent.confirmed(1, 0),
-                Invariants.AckEvent.acked(1, 0),
-                Invariants.AckEvent.confirmed(2, 5),
-                Invariants.AckEvent.acked(2, 5),
-                Invariants.AckEvent.confirmed(2, 6),
-                Invariants.AckEvent.acked(2, 6))))
+        assertThat(AckOrderInvariants.checkAckOrder(List.of(
+                AckOrderInvariants.AckEvent.confirmed(1, 0),
+                AckOrderInvariants.AckEvent.acked(1, 0),
+                AckOrderInvariants.AckEvent.confirmed(2, 5),
+                AckOrderInvariants.AckEvent.acked(2, 5),
+                AckOrderInvariants.AckEvent.confirmed(2, 6),
+                AckOrderInvariants.AckEvent.acked(2, 6))))
                 .as("epoch 2's floor is 5, and epoch 1's 0 must not be imposed on it")
                 .isEmpty();
     }
@@ -297,10 +297,10 @@ class AckOrderTest {
      */
     @Test
     void theMessageNamesTheLOWESTUnconfirmedWriteNotTheFloor() {
-        List<Violation> found = Invariants.checkAckOrder(List.of(
-                Invariants.AckEvent.confirmed(1, 0),
-                Invariants.AckEvent.confirmed(1, 2),
-                Invariants.AckEvent.acked(1, 2)));
+        List<Violation> found = AckOrderInvariants.checkAckOrder(List.of(
+                AckOrderInvariants.AckEvent.confirmed(1, 0),
+                AckOrderInvariants.AckEvent.confirmed(1, 2),
+                AckOrderInvariants.AckEvent.acked(1, 2)));
 
         assertThat(found).hasSize(1);
         assertThat(found.get(0).detail())

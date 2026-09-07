@@ -20,8 +20,8 @@ import java.util.Map;
  * {@link Invariants} reached 571 lines, and the seam the split follows is a
  * real one rather than a line count -- everything left there is a predicate
  * over the STORED BYTES, while this judges an OBSERVATION that leaves no trace
- * in them. {@code Invariants.checkAckOrder} is on this side of that seam too
- * and has not moved; it is the next extraction when the file next grows.
+ * in them. {@link AckOrderInvariants} is on this side of that seam too, and
+ * M4.13g moved it here rather than leaving the split half done.
  */
 final class ReaderInvariants {
 
