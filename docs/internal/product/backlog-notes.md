@@ -782,9 +782,17 @@ acceptance criterion 3 in as many words: "no entry after fencing is ever applied
 by a reader". A checker over the chain cannot see it -- `checkChain` already
 reports an entry PAST a seal, which is the writer's side of the same fact.
 
+⚠️ SCOPE: I3 AND I4's DROP CLAUSE ONLY. I4's REORDER clause is **M4.13f**, and
+M4.13's sweep cannot claim I4 whole until that lands.
+
+⚠️ AND NEITHER IS ASSERTED ON A CHAIN THAT WAS NEVER OPENED, which is
+**M4.13i**. `checkReader` returns NOT-JUDGED before evaluating either invariant,
+so that class leaves I4's drop clause exactly as unjudged as I3 -- the sweep
+cannot claim EITHER whole on failover seeds until M4.13i lands.
+
 ### M4.13b
 
-The three fault classes M4.12 does not model.
+The two TIME-SHAPED fault classes M4.12 does not model.
 
 ⚠️ DELAYED WRITES and REORDERED COMPLETIONS are absent entirely. Both are about
 TIME rather than outcome, so `FaultInjectingStore`'s current shape -- draw,
@@ -889,6 +897,14 @@ is the blind spot.
 
 
 | M4.13 | **SPLIT into M4.13a-e** -- the text below is the PRE-SPLIT row, kept because the reasoning in it is why the split happened, NOT because this row still owns the work. I3/I4 are M4.13a; the time-shaped fault classes M4.13b; partitioned leaders M4.13e; the withheld-write ambiguity M4.13c; per-class outcome evidence M4.13d. ⚠️ THIS ROW IS NOW THE SWEEP AND ITS BUDGET ONLY. | FR-11 | **split** |
+
+⚠️ M4.13i IS A DEPENDENCY, not a nice-to-have. `checkReader` returns NOT-JUDGED
+for a chain that was never opened, and the natural sweep loop --
+`if (v.judged()) { assertThat(v.violations()).isEmpty(); }` -- SKIPS those
+seeds. Without M4.13i the condition "I1-I5 hold across 1,000 seeds" would be
+reported met with I3 and I4's drop clause unasserted on exactly the failover
+seeds they exist for, because fencing a leader at slot 0 is a class the fault
+injector produces on purpose.
 
 ### M4.17
 
@@ -1073,4 +1089,53 @@ records committed at it.
 
 ⚠️ NOT M4.10's. This is the segment path and it is independent of idempotency;
 M4.10b only found it.
+
+### M4.13i
+
+`checkReader` returns NOT-JUDGED for a chain that was never opened: an epoch
+with no objects, or one sealed at slot 0 before its CONTINUE was written -- a
+leader fenced mid-acquisition, which M4.13's fault injection produces on
+purpose.
+
+⚠️ MEASURED, so the hole's size is on record rather than guessed. On such an
+epoch a reader reporting NOTHING -- every stream restarted at 0 across a
+failover, the exact defect `inheritedOffsets`' own javadoc was rewritten to
+catch -- and a reader reporting a wild 500 BOTH come back `judged=false`.
+
+⚠️ THE WRITER'S SIDE STAYS VISIBLE, which bounds the damage: `checkChain` still
+reports a zombie delta appended past the slot-0 seal as I5. It is the READER's
+side that goes unexamined, and that is the side acceptance criterion 3(a) is
+about.
+
+⚠️ THE DECLINE IS NOT FORCED BY THE PROTOCOL. The chain's own sealed prefix is
+empty by construction, and the base is the backward walk `inheritedOffsets`
+already performs -- "epochs advance by exactly one per acquisition", stepping
+over chains that carry no CONTINUE. What blocks it is that the walk sits behind
+a CONTINUE this chain does not have, and extracting it puts `Invariants` over
+code-structure.md's 500-line cap (490 lines today, which is M4.13g).
+
+⚠️ THE HOLE IS PINNED BY A TEST, not just described:
+`ReaderInvariantsScopeTest` asserts the decline for all three reader shapes on
+the slot-0 arm and for the empty arm beside it. ⚠️ BOTH ARMS ARE THIS ROW: an
+epoch with no objects and one sealed at slot 0 are the two shapes the protocol
+gives a leader that acquired and wrote nothing -- `inheritedOffsets` names them
+in one breath, "a SEAL at slot 0 or nothing at all" -- so closing only the
+seal-at-0 arm leaves half the hole while the invariant list records it closed
+whole. Closing this row MUST make those tests fail; if it does not, the row
+closed without changing anything.
+
+### M4.13j
+
+`Invariants.neverOpened` was private and incidental before M4.13a. It is now the
+predicate deciding whether `checkReader` judges at all.
+
+⚠️ MEASURED: dropping `&& sealed.sequence() == 0` to a bare `instanceof Seal`
+leaves the whole `:sequencer` suite green. No fixture has a chain whose first
+entry is a seal at a NONZERO sequence.
+
+⚠️ DECIDE THE BEHAVIOUR BEFORE WRITING THE FIXTURE. A chain whose first visible
+entry is a mid-chain seal folds nothing before it, so a reader's legitimate
+offsets read as I3 -- naming the wrong invariant for what is a chain defect
+`checkChain` already reports as a gap. The question this row answers is whether
+such a chain should be judged at all, not merely which branch it takes.
 

@@ -66,9 +66,26 @@ import java.util.Map;
  *       ⚠️ NOTHING IN PRODUCTION EMITS A TRACE YET: `CommitLog` is strictly
  *       serial, so it satisfies the clause BY ACCIDENT rather than by
  *       construction, and M4.13 is where the simulation feeds a trace in.</li>
- *   <li><b>I3 and I4</b> — about what a READER applies and what a consumer may
- *       see, so neither is a property of the stored bytes alone. NOT-RUN here;
- *       they belong to the simulation's reader side.</li>
+ *   <li><b>I3</b> — what a READER applies, which is not a property of the
+ *       stored bytes alone. ⚠️ CHECKED (M4.13a), by
+ *       {@link ReaderInvariants#checkReader}, and it is a SEPARATE ENTRY POINT
+ *       for the same reason {@link #checkAckOrder} is: it needs the reader's own
+ *       view, and a caller holding only a store cannot supply one.
+ *       ⚠️ EXCEPT ON A CHAIN THAT WAS NEVER OPENED -- no objects at all, or a
+ *       SEAL at slot 0 -- where that checker returns NOT-JUDGED rather than a
+ *       verdict, and this list says so instead of reading CHECKED without
+ *       qualification: a leader fenced at slot 0 whose reader keeps applying is
+ *       the sub-case M4's acceptance criterion 3(a) is written about.
+ *       **M4.13i** closes it.</li>
+ *   <li><b>I4</b> — ⚠️ HALF OF IT, and the half is named rather than implied.
+ *       The DROP clause -- a reader losing records the chain committed -- is
+ *       checked by {@link ReaderInvariants#checkReader}. The REORDER clause is not: a
+ *       next-offset map is a high-water mark, so runs folded in the wrong order
+ *       land on the same number. What stands in for it is {@link #checkChain}'s
+ *       I2 arm over the bytes, and a per-record consumer trace is what would
+ *       close it -- **M4.13f**. ⚠️ AND IT CARRIES I3'S NEVER-OPENED EXCEPTION
+ *       TOO (**M4.13i**), because {@code checkReader} declines before
+ *       evaluating either invariant.</li>
  * </ul>
  */
 public final class Invariants {
@@ -273,7 +290,7 @@ public final class Invariants {
      * {@code prevSeq} disagrees with where the seal actually sits. The rule is
      * restated from the protocol, not delegated to the code that implements it.
      */
-    private static Map<RunKey, Long> inheritedOffsets(BinStore store, String prefix,
+    static Map<RunKey, Long> inheritedOffsets(BinStore store, String prefix,
             List<ChainEntry> entries, long epoch, List<Violation> found, int depth)
             throws IOException {
         Map<RunKey, Long> inherited = new HashMap<>();
@@ -433,14 +450,14 @@ public final class Invariants {
     }
 
     /** A chain that carries no link: abandoned before its CONTINUE was written. */
-    private static boolean neverOpened(List<ChainEntry> entries) {
+    static boolean neverOpened(List<ChainEntry> entries) {
         if (entries.isEmpty()) {
             return true;
         }
         return entries.getFirst() instanceof Seal sealed && sealed.sequence() == 0;
     }
 
-    private static List<ChainEntry> readChain(BinStore store, String prefix, long epoch)
+    static List<ChainEntry> readChain(BinStore store, String prefix, long epoch)
             throws IOException {
         CommitLog addressing = new CommitLog(store, prefix, epoch);
         LogKeys keys = new LogKeys(prefix, epoch);
