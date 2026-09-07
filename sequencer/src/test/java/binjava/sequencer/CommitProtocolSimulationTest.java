@@ -205,4 +205,51 @@ class CommitProtocolSimulationTest {
                         + "separates a degraded cluster from a stalled one", starved, seeds)
                 .isLessThan(3);
     }
+
+    /**
+     * ⚠️ A FAULTED SWEEP HOLDS I1-I5, which is testing.md rule 20 and was the
+     * assertion this suite did not have. Every existing test here checks that
+     * faults FIRED, that the cluster kept committing, that classes are
+     * attributable -- none asserted that a faulted run is CLEAN.
+     *
+     * <p>⚠️ IT IS THE REGRESSION FOR M4.47, the first production defect this
+     * milestone's simulation found. MEASURED with the two ADR-0037 hunks
+     * reverted: 19 violating seeds and 119 I2 violations over these same
+     * `ambiguousPut` seeds, seed 153 reporting
+     * "resumes at 17 but the chain had assigned up to 18". A leader fenced
+     * without its chain being sealed left a landed delta that every reader
+     * folds and the successor's writer did not, so two readers of one cluster
+     * disagreed about what lived at one offset.
+     *
+     * <p>⚠️ SIXTY SEEDS, NOT A THOUSAND, and the difference is whose row this
+     * is: M4.13 owns the 1,000-seed sweep and its budget. Sixty runs in under a
+     * second and reproduces the defect on this fault profile, which is what a
+     * regression needs. ⚠️ IT IS NOT EVIDENCE FOR THE COMPLETION CONDITION --
+     * that needs M4.13's seed count and M4.13b/d/e's fault classes.
+     */
+    @Test
+    void aFAULTEDSweepHoldsTheInvariantsAcrossEverySeed() throws Exception {
+        FaultInjectingStore.Faults ambiguous =
+                new FaultInjectingStore.Faults(0, 0.05, 0, 0);
+        List<String> offending = new ArrayList<>();
+        for (long seed = 0; seed < 60; seed++) {
+            var run = CommitProtocolSimulation.run(seed, 120, 3, ambiguous);
+            for (var v : run.violations()) {
+                offending.add("seed " + seed + ": " + v.invariant() + " -- " + v.detail());
+            }
+        }
+        assertThat(offending)
+                .as("a faulted run must satisfy the same invariants a clean one does; "
+                        + "each entry names the seed that reproduces it")
+                .isEmpty();
+
+        List<String> underRough = new ArrayList<>();
+        for (long seed = 0; seed < 60; seed++) {
+            var run = CommitProtocolSimulation.run(seed, 120, 3, ROUGH);
+            for (var v : run.violations()) {
+                underRough.add("seed " + seed + ": " + v.invariant() + " -- " + v.detail());
+            }
+        }
+        assertThat(underRough).as("and under the mixed profile too").isEmpty();
+    }
 }

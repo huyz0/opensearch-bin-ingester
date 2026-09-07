@@ -157,10 +157,10 @@ final class ReaderInvariants {
             // on its first iteration and reach the same base. What it would
             // cost is one extra `readChain` per call, which is a LIST plus a GET
             // per entry, so the difference is request count and not correctness.
-            expected = Invariants.offsetsSealedInto(
+            expected = CrossEpochInvariants.offsetsSealedInto(
                     store, prefix, view.epoch() - 1, new ArrayList<>(), 0);
         } else {
-            expected = Invariants.inheritedOffsets(
+            expected = CrossEpochInvariants.inheritedOffsets(
                     store, prefix, entries, view.epoch(), new ArrayList<>(), 0);
         }
         Map<RunKey, Long> readerView = view.offsets();

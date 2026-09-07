@@ -1,6 +1,9 @@
 # 0029. Seal the chain you inherit from, before you read it
 
-Status: accepted
+Status: accepted — ⚠️ amended by 0037 (2026-09-07): the decision below holds,
+  but `ChainReplay.neverOpened`'s origin caveat stops the walk-back at a BURNED
+  epoch instead of "the first ancestor that was genuinely opened", so the property
+  this record claims is not reached and I2 still fires. Measured witness in 0037.
 Date: 2026-09-04
 Requirements: FR-11, NFR-11
 Research: docs/research/30-design-space/03-metadata-and-cas.md §12 — answers the

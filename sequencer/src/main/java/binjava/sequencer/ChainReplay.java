@@ -74,7 +74,7 @@ final class ChainReplay {
     /** Full recovery of {@code epoch}, crossing into whatever it continues from. */
     static Result replay(BinStore store, String prefix, long epoch) throws IOException {
         ChainReplay r = new ChainReplay(store, prefix, epoch);
-        r.replayAncestry(epoch, Long.MAX_VALUE);
+        r.replayAncestry(epoch, Long.MAX_VALUE, true);
         return new Result(r.offsets, r.nextSequence, r.seal);
     }
 
@@ -90,7 +90,7 @@ final class ChainReplay {
             long prevSeq) throws IOException {
         ChainReplay r = new ChainReplay(store, prefix, Long.MIN_VALUE);
         if (prevEpoch >= 1) {
-            r.replayAncestry(prevEpoch, prevSeq);
+            r.replayAncestry(prevEpoch, prevSeq, false);
         }
         return r.offsets;
     }
@@ -113,7 +113,8 @@ final class ChainReplay {
      * could never elect a sequencer again while being told its correct history
      * was corrupt bytes.
      */
-    private void replayAncestry(long epoch, long upTo) throws IOException {
+    private void replayAncestry(long epoch, long upTo, boolean originIsOwnChain)
+            throws IOException {
         List<Hop> hops = new ArrayList<>();
         // ⚠️ THE OWN CHAIN IS ALWAYS REPLAYED, before any question of ancestry.
         // Gating this on `epoch >= 1` made an epoch-0 log — the reserved
@@ -133,7 +134,14 @@ final class ChainReplay {
         hops.add(new Hop(epoch, 0, upTo));
         long chainEpoch = epoch;
         long limit = upTo;
-        boolean atOrigin = true;
+        // ⚠️ WHOSE CHAIN THE ORIGIN IS, not "the first iteration" (ADR-0037).
+        // `neverOpened`'s own javadoc already split these: for `replay` the
+        // origin is this node's OWN chain, recovered BEFORE `open`, so empty is
+        // normal there and crossing would read the predecessor twice. For
+        // `inherited` the origin is the PREDECESSOR, where empty is not normal
+        // at all -- and treating it as normal is what stopped the walk one epoch
+        // short, left the genuine ancestor unsealed, and produced I2.
+        boolean atOrigin = originIsOwnChain;
         while (chainEpoch >= 1) {
             ChainEntry first = firstEntry(chainEpoch);
             if (first instanceof Continue opening) {
@@ -281,13 +289,15 @@ final class ChainReplay {
      * normal at all — and an empty one there yields offset 0 silently, with no
      * exception and no failing test.
      *
-     * <p>It is unreachable today only because {@code LocalSequencer.start}
-     * always seals the predecessor before opening, and every route through
-     * {@code seal} leaves at least a {@code Seal} at slot 0. That is an
-     * ordering invariant held in ANOTHER CLASS, so it is recorded here rather
-     * than assumed: any future path that opens without sealing first — M4.6d's
-     * rerouting or M5's forwarding are the candidates — gets silent
-     * reassignment from 0.
+     * <p>⚠️ IT WAS NOT UNREACHABLE, and an earlier draft of this javadoc said it
+     * was — "unreachable today only because {@code LocalSequencer.start} always
+     * seals the predecessor before opening". `start` seals the epoch the WALK
+     * LANDS ON, and this caveat is what made the walk land on a burned epoch
+     * rather than the genuine ancestor, so the ordering invariant it leaned on
+     * was the very thing the caveat broke. M4.13's sweep measured the result:
+     * two readers of one cluster disagreeing about what lives at one offset.
+     * ADR-0037 closes it by passing the origin's MEANING in, so `inherited`
+     * crosses an empty origin and `replay` still does not.
      */
     private static boolean neverOpened(ChainEntry first, boolean atOrigin) {
         if (first == null) {
@@ -334,14 +344,14 @@ final class ChainReplay {
      * caller has sealed it and named it directly in the new chain's own
      * {@code CONTINUE}.
      *
-     * <p>⚠️ SHARES {@link #neverOpened}'S ORIGIN CAVEAT. {@code prevEpoch}
-     * itself is treated as the origin, so a {@code prevEpoch} that is
-     * completely empty (no {@code CONTINUE}, no {@code Seal} — a store outage
-     * spanning the acquisition that minted it, before anything was ever
-     * written) is not walked past here, same as {@link #inherited}. That gap
-     * is M4.23's, not this method's: closing it changes {@link #neverOpened}
-     * for both callers at once, and this method is deliberately built on the
-     * same primitive as {@link #inherited} rather than a divergent one.
+     * <p>⚠️ DOES NOT SHARE {@link #neverOpened}'S ORIGIN CAVEAT ANY MORE
+     * (ADR-0037). It did, and that is what made this walk stop on a chain that
+     * was merely empty AT THAT INSTANT — the lease acquired, nothing written yet
+     * — so the caller sealed the burned epoch and left the genuine ancestor
+     * unsealed and still growing. M4.13's sweep measured the result as I2, with
+     * two readers of one cluster disagreeing about one offset. The caveat is
+     * still right for {@link #replay}, whose origin is the node's OWN chain, so
+     * the origin's MEANING is passed in rather than the flag being deleted.
      *
      * @return {@code prevEpoch} or a lower epoch, or {@code 0} when nothing
      *     needs sealing — mirrors the {@code prevEpoch >= 1} guard callers
@@ -350,7 +360,12 @@ final class ChainReplay {
     static long firstInheritableAncestor(BinStore store, String prefix, long prevEpoch)
             throws IOException {
         long chainEpoch = prevEpoch;
-        boolean atOrigin = true;
+        // ⚠️ `false`, BECAUSE THIS WALK'S ORIGIN IS A PREDECESSOR (ADR-0037).
+        // It started `true`, which meant a `prevEpoch` empty at that instant --
+        // the lease acquired, nothing written yet -- stopped the walk on the
+        // burned epoch. The caller then sealed THAT and left the genuine
+        // ancestor unsealed and still growing, which is the I2 M4.47 measured.
+        boolean atOrigin = false;
         while (chainEpoch >= 1 && neverOpened(firstEntry(store, prefix, chainEpoch), atOrigin)) {
             chainEpoch--;
             atOrigin = false;

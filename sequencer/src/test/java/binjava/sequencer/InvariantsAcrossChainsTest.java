@@ -134,6 +134,17 @@ class InvariantsAcrossChainsTest {
         // ⚠️ The SEAL names epoch 2, so epoch 3's claim on it is false.
         put(store, first, 2, new Seal(2, 2).encode());
 
+        // ⚠️ EPOCH 2 IS GENUINELY OPENED, and before ADR-0037 this fixture left
+        // it absent -- which made it indistinguishable from a BURNED epoch, the
+        // shape a takeover legitimately skips. A seal is write-once, so its
+        // `continuedAt` names the FIRST successor to fence the chain; that
+        // successor burning and a later one inheriting is normal, so "the seal
+        // names somebody else" is only a fork when the somebody else EXISTS.
+        // Without this the test asserted a fork and built a burned run.
+        CommitLog sibling = new CommitLog(store, PREFIX, 2);
+        put(store, sibling, 0, new Continue(0, 1, 2).encode());
+        put(store, sibling, 1, delta(1, 2, 3));
+
         CommitLog fork = new CommitLog(store, PREFIX, 3);
         put(store, fork, 0, new Continue(0, 1, 2).encode());
         put(store, fork, 1, delta(1, 2, 3));

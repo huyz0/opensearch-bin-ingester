@@ -1369,3 +1369,91 @@ argument for reporting it is that a pod's own flush order is a promise the
 ingester makes to that pod, which is a different guarantee from I4 and may need
 its own name.
 
+### M4.47
+
+Found by running the M4.13 sweep across more seeds than any existing test does.
+⚠️ THE FIRST FINDING IN THIS MILESTONE THAT CONSTRAINS PRODUCTION rather than the
+harness: every prior M4.13x row fixed a checker.
+
+⚠️ MEASURED, over 300 seeds at 120 rounds and 3 pods:
+
+| profile | seeds violating | violations |
+|---|---|---|
+| no faults | **0** | 0 |
+| duplicatePut only | **0** | 0 |
+| unreachable only | 45 | 50 |
+| ambiguousPut only | 159 | 230 |
+| ROUGH (all three) | 56 | 60 |
+
+Clean runs are clean, so this is fault-induced rather than a defect in the
+happy path.
+
+⚠️ THE WITNESS IS SEED 153 under `ambiguousPut` at 0.05, which has ZERO zombie
+writes -- so it is not the simulation's deliberately-fenced writers misbehaving:
+
+    epoch 3: [0:CONT<-2/8] [1:D 17+1]     <- commits offset 17, chain NEVER SEALED
+    epoch 4: [0:SEAL@5]                   <- leader fenced at slot 0, seals itself
+    epoch 5: [0:CONT<-4/0] [1:D 17+2]     <- REASSIGNS offset 17
+
+An `ambiguousPut` fired on exactly
+`ctl/log/0/0000000000000003/0000000000000001.delta`: the write LANDED and the
+response was LOST, so the producer was never acked.
+
+⚠️ AND THE READERS DISAGREE, which is what makes it data corruption rather than
+a tolerable discard:
+
+    reader@3 = 18      offset 17 holds record A
+    reader@4 = 18      offset 17 holds record A
+    reader@5 = 23      offset 17 holds record B
+
+architecture.md calls I2 load-bearing for exactly this: "with `all_active`
+replicas, two copies converge only because record R is at offset N on both".
+
+⚠️ THE ASYMMETRY IS BETWEEN THE WRITE PATH AND THE READ PATH. Epoch 5's writer
+derived 17 through `crossFrom` at open; every reader derives 18 through
+`recover`, because the walk steps over the never-opened epoch 4 into epoch 3 and
+folds epoch 3 IN FULL -- there is no seal in epoch 3 to bound it. M4.4's row
+states the fencing guarantee as "a fenced leader's in-flight PUT lands under its
+OWN epoch, where readers of the new epoch never look". That holds only while the
+ancestor is SEALED; nobody sealed epoch 3.
+
+⚠️ `checkReader` PASSES ON THIS SEED. Epoch 5's reader is self-consistent
+against epoch 5's own chain; only `checkChain`'s inherited base catches it. So
+the sweep needs BOTH checkers, which M4.13's own notes already say.
+
+⚠️ THE ROOT CAUSE IS **M4.23's ORIGIN CAVEAT**, and `ChainReplay` predicts this
+seed in its own javadoc: "a `prevEpoch` that is completely empty (no CONTINUE,
+no Seal -- a store outage spanning the acquisition that minted it) is not walked
+past here". `neverOpened(first, atOrigin)` returns `!atOrigin` for an empty
+chain, and `firstInheritableAncestor` starts with `atOrigin = true`, so a
+prevEpoch that is empty AT THAT MOMENT stops the walk.
+
+    epoch 5 starts -> firstInheritableAncestor(4) -> epoch 4 is EMPTY
+                   -> caveat: not walked past -> returns 4
+                   -> seals 4, inherits nothing, epoch 3 LEFT UNSEALED
+
+ADR-0029 already decided "seal the ancestor you inherit from, not `epoch - 1`
+blindly", for this exact I2. It is defeated by the caveat: the walk lands on a
+burned epoch instead of the genuine ancestor.
+
+⚠️ MEASURED AND REJECTED, so the obvious repairs are not available:
+  - Making an unsealed ancestor contribute NOTHING converts every I2 into a
+    `gap` -- 230 of them under `ambiguousPut` -- so the inherited base is
+    genuinely needed.
+  - Making the WRITER fold what a reader folds is IMPOSSIBLE, and this was the
+    first hypothesis. The identical call `ChainReplay.inherited(4, 0)` answers
+    18 against the FINAL store and answered 17 at open: the divergence is
+    TIMING, not logic. A writer cannot fold bytes that do not exist yet.
+
+⚠️ AND ALWAYS STEPPING OVER AN EMPTY CHAIN OPENS THE MIRROR HAZARD, which is
+presumably why the caveat exists: the burned epoch would then be left unsealed,
+and its own leader -- which had acquired the lease and merely not written yet --
+could open it and write beside the successor. The seal on the burned epoch is
+what fences it.
+
+⚠️ SO THE FIX HAS TO DO BOTH: seal every burned epoch stepped over AND keep
+walking to the first real ancestor, sealing that too. ⚠️ THAT HAS A COST
+CONSEQUENCE worth an ADR rather than a patch -- one seal PUT per burned epoch,
+and M4.16 records a run of burned epochs as the NORMAL case, so failover cost
+grows with the number of failed acquisitions.
+

@@ -3,6 +3,7 @@ package binjava.sequencer;
 
 import binjava.binstore.BinStore;
 import binjava.format.CommitDelta;
+import binjava.format.Seal;
 import java.util.Map;
 import java.util.HashMap;
 import java.util.ArrayList;
@@ -293,8 +294,43 @@ public final class LocalSequencer implements Sequencer {
             // load-bearing: reading first and sealing second would read a
             // still-growing chain, reopening the defect this closes.
             long prevEpoch = ChainReplay.firstInheritableAncestor(store, prefix, epoch - 1);
+            // ⚠️ ADR-0037: SEAL EVERY BURNED EPOCH THE WALK CROSSED, not only
+            // the one it lands on. A burned epoch is empty because its leader
+            // acquired the lease and has not written YET -- not because it is
+            // dead -- so stepping over it without sealing leaves it free to open
+            // and write beside this chain, which is the same I2 by another
+            // route. MEASURED over 100 ROUGH seeds: the crossed run is mean
+            // 1.56 and max 7, two orders of magnitude below the "seal every
+            // unsealed ancestor" ADR-0029 rejected on failover latency.
+            // ⚠️ THE ONE UNBOUNDED CASE IS CLUSTER BIRTH, when no epoch was ever
+            // opened and the walk reaches 0: the run is then every epoch minted
+            // so far, which is the count of failed starts before the first
+            // success. It is bounded by that and not by history, because once
+            // any epoch is opened the walk stops there.
+            // ⚠️ THE SEAL'S RETURN VALUE IS THE PROOF, and discarding it was a
+            // defect in this loop's first draft that review MEASURED: the probe
+            // above and these seals are NOT atomic, and nothing renews the lease
+            // during `start`, so a pod stalled past its TTL can open a chain
+            // this walk just read as empty. `seal` redrives past whatever
+            // landed, so a Seal returned ABOVE slot 0 says exactly one thing --
+            // that chain WAS opened after the probe, and it is the real
+            // ancestor. Keeping the stale `prevEpoch` there reassigns every
+            // offset it committed, which is ADR-0037's own rejected (c)
+            // arriving through a race instead of a missing seal.
             long prevSeq = 0;
-            if (prevEpoch >= 1) {
+            for (long crossed = epoch - 1; crossed > Math.max(prevEpoch, 0); crossed--) {
+                CommitLog burned = new CommitLog(store, prefix, crossed);
+                burned.recoverChainEnd();
+                Seal landed = burned.seal(epoch, sealRedriveBudget);
+                if (landed.sequence() > 0) {
+                    // Opened in the window. It is the nearest genuine ancestor,
+                    // and everything below it is its business rather than ours.
+                    prevEpoch = crossed;
+                    prevSeq = landed.sequence();
+                    break;
+                }
+            }
+            if (prevSeq == 0 && prevEpoch >= 1) {
                 CommitLog predecessor = new CommitLog(store, prefix, prevEpoch);
                 // ⚠️ THE END, not the contents. This instance only ever SEALS
                 // the predecessor; the offsets a full `recover()` would build

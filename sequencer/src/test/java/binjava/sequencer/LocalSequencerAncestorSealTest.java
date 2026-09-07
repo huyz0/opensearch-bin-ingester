@@ -65,7 +65,7 @@ class LocalSequencerAncestorSealTest {
         }
     }
 
-    private static LeaseManager manager(BinStore store, String podId) {
+    static LeaseManager manager(BinStore store, String podId) {
         return new LeaseManager(store, new LeaseConfig(PREFIX, podId, "", TTL, RENEW),
                 new FixedClock());
     }
@@ -85,7 +85,7 @@ class LocalSequencerAncestorSealTest {
      * which ADR-0029's Context section names as the reason burns happen in
      * runs.
      */
-    private static void burnEpochs(BinStore store, int count) throws IOException {
+    static void burnEpochs(BinStore store, int count) throws IOException {
         for (int i = 0; i < count; i++) {
             // ⚠️ ONE instance for both calls. `release()` is a documented no-op
             // when its own `belief` is null (never having itself acquired), so
@@ -100,7 +100,7 @@ class LocalSequencerAncestorSealTest {
         }
     }
 
-    private static ChainEntry slotZero(BinStore store, long epoch) throws IOException {
+    static ChainEntry slotZero(BinStore store, long epoch) throws IOException {
         String key = new CommitLog(store, PREFIX, epoch).keyFor(0);
         try (InputStream in = store.get(key)) {
             return ChainEntry.decode(in.readAllBytes());
@@ -156,15 +156,21 @@ class LocalSequencerAncestorSealTest {
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("fenced");
 
-        // The burned epochs in between are untouched -- sealing them would be
-        // wasted work on the one path NFR-9 bounds, and ADR-0029 rejects it.
-        assertThat(store.stat(new CommitLog(store, PREFIX, 2).keyFor(0)))
-                .as("epoch 2 was never opened and this takeover must not seal it")
-                .isEmpty();
+        // ⚠️ THE BURNED EPOCHS ARE NOW SEALED TOO, and this assertion is the
+        // REVERSE of what it said under ADR-0029. That record left them
+        // untouched as wasted work on the path NFR-9 bounds; ADR-0037 amends it,
+        // because a burned epoch is empty only because its leader holds the
+        // lease and has not written YET, so leaving it unsealed lets it open and
+        // write beside this chain -- the same I2 by another route. The cost that
+        // reverses the judgement is measured: the crossed RUN is mean 1.56 and
+        // max 7, not the ~70 per takeover ADR-0029 costed.
+        assertThat(slotZero(store, 2))
+                .as("epoch 2 was crossed by the walk, so its leader is fenced")
+                .isEqualTo(new Seal(0, 4));
         assertThat(slotZero(store, 3))
-                .as("epoch 3 already carried its own Seal from the fixture setup; "
-                        + "the takeover must not touch it a second time -- ADR-0029's "
-                        + "claim that only the ONE real ancestor needs sealing")
+                .as("epoch 3 already carried its own Seal from the fixture setup, and "
+                        + "sealing an already-sealed chain is a no-op rather than a "
+                        + "second write")
                 .isEqualTo(new Seal(0, 4));
 
         // The new chain's CONTINUE names the real ancestor directly, not the
@@ -296,13 +302,84 @@ class LocalSequencerAncestorSealTest {
                         + "to fence either")
                 .isZero();
 
-        // Confirms the walk did not seal anything along the way, including
-        // epoch 1 itself -- the `> 1` mutant would have sealed it.
-        for (long e = 1; e <= 3; e++) {
-            assertThat(store.stat(new CommitLog(store, PREFIX, e).keyFor(0)))
-                    .as("epoch " + e + " was never opened and this takeover "
-                            + "must not seal it")
-                    .isEmpty();
+        // ⚠️ THE WALK NOW SEALS WHAT IT CROSSES, including epoch 1 (ADR-0037).
+        // Under ADR-0029 this asserted the opposite -- that nothing was sealed
+        // -- on the reasoning that an unopened epoch has "no leader to fence
+        // either". That reasoning is what M4.47 falsified: an unopened epoch's
+        // leader holds the lease and may write at any moment, and with no
+        // genuine ancestor anywhere the successor inherits 0, so that write
+        // lands on offsets this chain is about to reassign.
+        // ⚠️ THIS IS THE UNBOUNDED CASE, and it is bounded only by cluster
+        // birth: the run is every epoch minted before the first successful open.
+        for (long e = 1; e <= 4; e++) {
+            assertThat(slotZero(store, e))
+                    .as("epoch " + e + " was crossed by the walk, so its leader is fenced "
+                            + "-- it held the lease and had merely not written yet")
+                    .isEqualTo(new Seal(0, 5));
         }
+    }
+
+    /**
+     * ADR-0037: the same takeover when the IMMEDIATE PREDECESSOR IS WHOLLY
+     * EMPTY, which is the case the test above deliberately does not build.
+     *
+     * <p>⚠️ THAT EXCLUSION IS WHY THIS EXISTS. The sibling gives epoch 3 a
+     * {@code Seal} at slot 0 and says why in as many words -- a wholly-empty
+     * chain at the origin hits {@code ChainReplay.neverOpened}'s disclosed gap,
+     * "scope this task does not own". M4.13's sweep then measured that gap
+     * producing a real I2 in production: {@code firstInheritableAncestor} stops
+     * at the burned epoch, seals THAT, and leaves the genuine ancestor unsealed
+     * and still growing, so a late in-flight write extends what successors
+     * inherit AFTER they have committed at lower offsets.
+     *
+     * <p>⚠️ THE FIXTURE DIFFERS FROM THE SIBLING BY ONE LINE -- epoch 3 keeps
+     * nothing at slot 0 -- and that is the whole point: the defect is invisible
+     * to every shape where the walk's first probe finds bytes.
+     */
+    @Test
+    void aTakeoverWhoseIMMEDIATEPredecessorIsWHOLLYEMPTYStillSealsTheRealAncestor()
+            throws Exception {
+        MemoryBinStore store = new MemoryBinStore();
+
+        CommitLog zombie = new CommitLog(store, PREFIX, 1);
+        zombie.open(0, 0);
+        zombie.commit("seg/a", counts(3));
+
+        // Epochs 2 AND 3 burned and wholly empty -- epoch 3 is the successor's
+        // immediate predecessor and the walk's origin.
+        burnEpochs(store, 3);
+
+        LocalSequencer successor = LocalSequencer.start(store, PREFIX,
+                manager(store, "podB"), 8).orElseThrow();
+        assertThat(successor.epoch()).isEqualTo(4);
+
+        assertThatThrownBy(() -> zombie.commit("seg/zombie", counts(1)))
+                .as("epoch 1 is the genuine ancestor and must be sealed even though "
+                        + "the walk began at an EMPTY chain")
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("fenced");
+
+        // ⚠️ THE BURNED RUN IS SEALED, which the sibling asserts the opposite of
+        // for its own shape. A burned epoch is empty because its leader holds
+        // the lease and has not written YET, not because it is dead -- stepping
+        // over it without sealing leaves it free to open and write beside the
+        // successor, which is ADR-0037's rejected alternative (c).
+        assertThat(slotZero(store, 3))
+                .as("the walk crossed epoch 3, so it must fence epoch 3's own leader")
+                .isEqualTo(new Seal(0, 4));
+        assertThat(slotZero(store, 2))
+                .as("and epoch 2, likewise crossed")
+                .isEqualTo(new Seal(0, 4));
+
+        ChainEntry opening = slotZero(store, 4);
+        assertThat(opening).isInstanceOf(Continue.class);
+        assertThat(((Continue) opening).prevEpoch())
+                .as("the forward link names epoch 1, where the offsets are")
+                .isEqualTo(1);
+
+        var resumed = successor.commit(new CommitRequest("podB", "i1", 1, "seg/b", counts(2)));
+        assertThat(resumed.runs().getFirst().firstOffset())
+                .as("resumes at 3, it does not restart the stream at 0")
+                .isEqualTo(3);
     }
 }

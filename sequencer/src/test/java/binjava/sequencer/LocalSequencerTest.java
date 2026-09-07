@@ -365,9 +365,17 @@ class LocalSequencerTest {
         assertThat(entryAt(store, 1, 0))
                 .as("an empty predecessor chain is sealed at the first slot there is")
                 .isEqualTo(new Seal(0, 2));
+        // ⚠️ THE CONTINUE NAMES 0, NOT 1, SINCE ADR-0037. Epoch 1 was never
+        // opened, so it holds no offsets to inherit and the walk crosses it to
+        // find the genuine ancestor -- of which there is none here, so the link
+        // truthfully says "no predecessor" (epoch 0, the RESERVED unleased
+        // chain, M4.4b). It named 1 while `neverOpened`'s origin caveat stopped
+        // the walk on an empty chain, which is the defect M4.47 measured: the
+        // link pointed at a chain with nothing in it while the ancestor that
+        // DID hold offsets stayed unsealed and still growing.
         assertThat(entryAt(store, 2, 0))
-                .as("and the CONTINUE names that slot")
-                .isEqualTo(new Continue(0, 1, 0));
+                .as("the CONTINUE names no predecessor, because epoch 1 held none")
+                .isEqualTo(new Continue(0, 0, 0));
     }
 
     @Test
