@@ -173,6 +173,7 @@ of what runs is exactly the list that goes stale:
 | `check-test-budget.sh` | pre-commit | build.md: memory caps declared; a runaway dies as a JVM/Docker OOM, not a lost WSL2 session |
 | `check-file-size.sh` | pre-commit | code-structure.md rule 1: no source file over 500 lines |
 | `check-archive-row-size.sh` | pre-commit | a row ADDED to the archive is a summary -- the essay goes to backlog-notes.md |
+| `check-mutants.sh` | pre-commit | testing.md rule 9: 80% of mutants killed on CHANGED production code |
 | `check-tdd.sh` | pre-commit | testing.md rule 2: every new test was observed to fail before the code existed |
 | `check-reviewed.sh` | pre-commit | non-negotiable 5: the staged bytes were reviewed by both reviewers |
 | `check-commit-msg.sh` | commit-msg | non-negotiable 1: the commit subject names a real backlog task |
@@ -181,8 +182,7 @@ of what runs is exactly the list that goes stale:
 Present in `scripts/` but **not** wired into `.pre-commit-config.yaml` — invoke by hand, from a skill, or from CI: `check-coverage.sh`, `check-milestone-verified.sh`, `check-suite-time.sh`.
 <!-- index:gates:end -->
 
-Not yet existing, and named by skills and standards that say so:
-**`check-mutants.sh`** (80% killed on changed code), the cost meter
+Not yet existing, and named by skills and standards that say so: the cost meter
 (`cost-budget`), the benchmark gates. **When a skill tells you to run one and it
 is absent, say the gate did not run** — never proceed as though it passed.
 

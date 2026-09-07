@@ -161,3 +161,4 @@ rewriting rows that already shipped.
 | M0.10 | Answer Q23 (replication mode) → ADR-0009 | done |
 | M0.11 | Close Q9/Q10 (multi-tenancy, security) → ADR-0010 + research doc 11 | done |
 | M0.12 | Close the remaining 13 open questions with evidence; corpus updated | done |
+| M0.14 | `scripts/check-mutants.sh` — PIT, 80% killed on the staged diff, `baselines/mutants.txt` | — | done |

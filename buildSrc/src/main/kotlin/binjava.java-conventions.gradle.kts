@@ -150,3 +150,67 @@ testing {
 tasks.named("check") {
     dependsOn("compileIntegrationTestJava", "compileClusterTestJava")
 }
+
+// testing.md rule 9: mutation score is the metric that measures whether tests
+// constrain anything (M0.14).
+//
+// ⚠️ THE COMMAND-LINE ARTIFACT, NOT `gradle-pitest-plugin`. That plugin targets
+// Gradle 8; this build is Gradle 9.7, and a plugin incompatibility would take
+// the whole gate with it. Driving PIT as a plain JavaExec also keeps the
+// classpath explicit, which is what lets the gate scope mutation to the classes
+// a diff actually changed.
+val pitest: Configuration by configurations.creating
+// ⚠️ 1.21.x IS A FLOOR, NOT A PREFERENCE. `pitest-entry` SHADES ASM -- 149
+// bundled classes -- so the ASM version is fixed by the PIT release and cannot
+// be forced from outside; measured, forcing `org.ow2.asm:asm:9.10.1` onto the
+// classpath changed nothing. 1.19.1's copy cannot read Java 25 bytecode:
+// `IllegalArgumentException: Unsupported class file major version 69`, thrown
+// before a single mutant is generated.
+dependencies {
+    pitest("org.pitest:pitest-command-line:1.21.1")
+    pitest("org.pitest:pitest-junit5-plugin:1.2.3")
+}
+
+tasks.register<JavaExec>("pitest") {
+    group = "verification"
+    description = "PIT mutation coverage; -PmutantTargets scopes it to changed classes"
+    dependsOn(tasks.named("testClasses"))
+    mainClass.set("org.pitest.mutationtest.commandline.MutationCoverageReport")
+    classpath = pitest + sourceSets.main.get().output + sourceSets.test.get().output +
+        configurations.testRuntimeClasspath.get()
+
+    val reportDir = layout.buildDirectory.dir("reports/pitest").get().asFile
+    // ⚠️ Resolved at CONFIGURATION time, like `scratch` above: reading these
+    // from a task action captures the Project and breaks the configuration
+    // cache.
+    val mainClassesDirs = sourceSets.main.get().output.classesDirs.asPath
+    val sourceDirs = sourceSets.main.get().java.srcDirs.joinToString(",")
+    val testClassesDirs = sourceSets.test.get().output.classesDirs.asPath
+    val targets = (project.findProperty("mutantTargets") as String?)?.takeIf { it.isNotBlank() }
+
+    // ⚠️ A module with no targets must NOT be silently skipped into a green
+    // result -- that is the "reports success while measuring nothing" shape
+    // build.md warns about. The gate script decides what to skip; this task
+    // fails loudly if asked to mutate nothing.
+    onlyIf { targets != null }
+
+    doFirst {
+        args = listOf(
+            "--reportDir", reportDir.absolutePath,
+            "--targetClasses", targets ?: "",
+            "--targetTests", "binjava.*",
+            "--sourceDirs", sourceDirs,
+            "--classPath", "$mainClassesDirs:$testClassesDirs",
+            "--outputFormats", "XML",
+            "--timestampedReports", "false",
+            "--testPlugin", "junit5",
+            "--threads", Runtime.getRuntime().availableProcessors().toString(),
+            "--failWhenNoMutations", "false",
+        )
+    }
+}
+
+tasks.register("pitestClasspath") {
+    val cp = tasks.named<JavaExec>("pitest").map { it.classpath.files.map { f -> f.name } }
+    doLast { cp.get().filter { it.contains("asm") }.forEach { println("CP: " + it) } }
+}

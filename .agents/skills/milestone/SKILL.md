@@ -69,10 +69,9 @@ mode this skill exists to prevent.
 
 - Tasks completed, with IDs, one line each
 - Gates that ran, and **gates that did not and why** — ⚠️ never imply a gate
-  passed when it did not run. ⚠️ **`check-coverage`, `check-mutants` and
-  `check-module` do not exist until the Gradle build lands in M0.** Running a
-  milestone before M0 completes means running with the two strongest quality gates
-  absent, and the report must say so every time
+  passed when it did not run. ⚠️ **`check-coverage.sh` EXISTS BUT IS NOT WIRED**
+  into `.pre-commit-config.yaml` (M0.13), so a milestone that does not invoke it
+  by hand ran without a coverage floor, and the report must say so every time
 - Cost budget before and after, if the milestone touched the request path
 - What is now blocked, and what the next milestone should start with
 

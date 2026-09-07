@@ -504,11 +504,14 @@ ADR-0008's addendum. It runs on **every commit**, so it needs a stated time
 budget — **< 60 s for 1,000 seeds**, with the seed count configurable so a
 developer can run 10,000 locally when hunting a failure.
 
-**Coverage and mutation.** ⚠️ `check-mutants.sh` **does not exist**, and
-`check-coverage.sh` exists but is unwired. The strongest automated quality gates
-are therefore absent for the highest-risk component in the system. The simulation
-is the compensating control, and it is only a control if its mutations are real —
-which is why criteria 1, 3 and 7 each demand a recorded red.
+**Coverage and mutation.** ⚠️ **Corrected mid-milestone:** `check-mutants.sh`
+LANDED in M0.14 and is wired into pre-commit, so a mutation floor now applies to
+M4's remaining commits; `check-coverage.sh` still exists but is unwired (M0.13).
+⚠️ THE MUTATION GATE IS NOT A SUBSTITUTE FOR THE SIMULATION. PIT generates
+syntactic mutants only, and M4's characteristic defects were semantic — a
+watermark merged across incarnations, a pointer read one slot late. The
+simulation remains the compensating control, and it is only a control if its
+mutations are real, which is why criteria 1, 3 and 7 each demand a recorded red.
 
 ## Risks
 

@@ -154,6 +154,13 @@ repos:
         stages: [pre-commit]
         pass_filenames: false
         always_run: true
+      - id: check-mutants
+        name: "testing.md rule 9: 80% of mutants killed on CHANGED production code"
+        entry: scripts/check-mutants.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
       - id: check-tdd
         name: "testing.md rule 2: every new test was observed to fail before the code existed"
         entry: scripts/check-tdd.sh
