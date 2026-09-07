@@ -46,7 +46,7 @@ class FaultInjectingStoreStreamsTest {
     }
 
     @Test
-    void theTHREEFaultStreamsAreINDEPENDENTCoinsAndNotOnePhaseLocked() {
+    void theFOURFaultStreamsAreINDEPENDENTCoinsAndNotOnePhaseLocked() {
         // ⚠️ THE DEFECT THIS PINS WAS SHIPPED TWICE and caught by measurement both
         // times, never by a test -- first as one shared Random, then as
         // `seed * 3 + k`, three CONSECUTIVE java.util.Random seeds whose
@@ -60,12 +60,18 @@ class FaultInjectingStoreStreamsTest {
         int seeds = 20_000;
         double p = 0.05;
         double expected = seeds * p * p;
-        // ⚠️ ALL THREE PAIRS, not just (1,2). Round-4 review measured the gap:
+        // ⚠️ ALL SIX PAIRS, not just (1,2). Round-4 review measured the gap:
         // aliasing stream 3 onto stream 1 left every test green, and that alias
-        // is the worst of the three -- `unreachable` throws BEFORE the duplicate
+        // is the worst -- `unreachable` throws BEFORE the duplicate
         // branch is reached, so duplicatePut would fire exactly when it is
         // unobservable, defeating criterion 1 for that class by construction.
-        int[][] pairs = {{1, 2}, {1, 3}, {2, 3}};
+        // ⚠️ STREAM 4 IS `withheldPut` (M4.13c), and every pair involving it is
+        // here for the same reason the others are: a class added at the end is
+        // exactly where the next `seed + k` shortcut would go, and phase-locking
+        // it to `ambiguousPut` would be the worst alias of the four -- the two
+        // model the SAME lost response, so a run where they co-fire proves
+        // nothing about which state the store was left in.
+        int[][] pairs = {{1, 2}, {1, 3}, {2, 3}, {1, 4}, {2, 4}, {3, 4}};
         for (int[] pair : pairs) {
             for (int draw : new int[] {1, 2, 3, 20}) {
                 int both = 0;
@@ -110,14 +116,20 @@ class FaultInjectingStoreStreamsTest {
         // ⚠️ THROUGH THE STORE, one class enabled at a time, so what is compared
         // is where each class ACTUALLY faulted rather than what the scrambler
         // returns for a literal written in this test.
-        List<Integer> unreachable = callsWhereOnly(0.9, 0, 0, "unreachable");
-        List<Integer> ambiguous = callsWhereOnly(0, 0.9, 0, "ambiguousPut");
-        List<Integer> duplicate = callsWhereOnly(0, 0, 0.9, "duplicatePut");
+        // ⚠️ withheldPut (M4.13c) IS HERE FOR THE SAME REASON, and aliasing it
+        // onto `ambiguousPut` would be the worst of the four: the two model the
+        // SAME lost response differing only in what the store was left holding,
+        // so co-firing streams would make the pair prove nothing about which.
+        List<Integer> unreachable = callsWhereOnly(0.9, 0, 0, 0, "unreachable");
+        List<Integer> ambiguous = callsWhereOnly(0, 0.9, 0, 0, "ambiguousPut");
+        List<Integer> duplicate = callsWhereOnly(0, 0, 0.9, 0, "duplicatePut");
+        List<Integer> withheld = callsWhereOnly(0, 0, 0, 0.9, "withheldPut");
 
         assertThat(unreachable).as("every class must actually fire, or the comparison below "
                 + "is between empty lists").isNotEmpty();
         assertThat(ambiguous).isNotEmpty();
         assertThat(duplicate).isNotEmpty();
+        assertThat(withheld).isNotEmpty();
 
         assertThat(unreachable).as("unreachable and ambiguousPut draw from DIFFERENT streams")
                 .isNotEqualTo(ambiguous);
@@ -125,12 +137,19 @@ class FaultInjectingStoreStreamsTest {
                 + "the alias that would make duplicatePut unobservable").isNotEqualTo(duplicate);
         assertThat(ambiguous).as("ambiguousPut and duplicatePut draw from DIFFERENT streams")
                 .isNotEqualTo(duplicate);
+        assertThat(withheld).as("withheldPut and unreachable draw from DIFFERENT streams")
+                .isNotEqualTo(unreachable);
+        assertThat(withheld).as("withheldPut and ambiguousPut draw from DIFFERENT streams -- "
+                + "the alias that would make the two halves of one lost response co-fire")
+                .isNotEqualTo(ambiguous);
+        assertThat(withheld).as("withheldPut and duplicatePut draw from DIFFERENT streams")
+                .isNotEqualTo(duplicate);
     }
 
     private static List<Integer> callsWhereOnly(double unreachable, double ambiguous,
-            double duplicate, String kind) throws IOException {
+            double duplicate, double withheld, String kind) throws IOException {
         FaultInjectingStore store = new FaultInjectingStore(new MemoryBinStore(), 3L,
-                new FaultInjectingStore.Faults(unreachable, ambiguous, duplicate));
+                new FaultInjectingStore.Faults(unreachable, ambiguous, duplicate, withheld));
         List<Integer> at = new ArrayList<>();
         int seen = 0;
         for (int call = 0; call < 60; call++) {
@@ -175,7 +194,7 @@ class FaultInjectingStoreStreamsTest {
         for (long seed = 0; seed < 25; seed++) {
             Fired quiet = firedIndexesWith(seed, 0.0);
             Fired loud = firedIndexesWith(seed, 0.05);
-            for (String kind : new String[] {"ambiguousPut", "duplicatePut"}) {
+            for (String kind : new String[] {"ambiguousPut", "duplicatePut", "withheldPut"}) {
                 List<Integer> unmasked = new ArrayList<>(quiet.of(kind));
                 unmasked.removeAll(loud.of("unreachable"));
                 assertThat(loud.of(kind))
@@ -190,7 +209,7 @@ class FaultInjectingStoreStreamsTest {
 
     private static Fired firedIndexesWith(long seed, double unreachable) throws IOException {
         FaultInjectingStore store = new FaultInjectingStore(new MemoryBinStore(), seed,
-                new FaultInjectingStore.Faults(unreachable, 0.05, 0.05));
+                new FaultInjectingStore.Faults(unreachable, 0.05, 0.05, 0.05));
         Map<String, List<Integer>> byKind = new java.util.TreeMap<>();
         int seen = 0;
         for (int call = 0; call < 120; call++) {
@@ -234,11 +253,11 @@ class FaultInjectingStoreStreamsTest {
         quiet.list("", null, 10);
 
         assertThat(quiet.drawCounts())
-                .as("four conditional writes draw all three streams; the three read verbs draw "
+                .as("four conditional writes draw all four streams; the three read verbs draw "
                         + "ONLY unreachable -- so the totals differ per class, and a read verb "
                         + "pointed at another class's stream shows up here")
-                .containsExactlyInAnyOrderEntriesOf(
-                        Map.of("unreachable", 7, "ambiguousPut", 4, "duplicatePut", 4));
+                .containsExactlyInAnyOrderEntriesOf(Map.of("unreachable", 7,
+                        "ambiguousPut", 4, "duplicatePut", 4, "withheldPut", 4));
 
         // ⚠️ AND ONE putIfMatch THAT ACTUALLY FIRES, so the branch is TAKEN. The
         // count above runs fault-free, so it cannot see draw-versus-BRANCH order:
@@ -248,14 +267,14 @@ class FaultInjectingStoreStreamsTest {
         var seeded = new MemoryBinStore();
         var v2 = seeded.putIfAbsent("m", body("v")).orElseThrow();
         FaultInjectingStore firing = new FaultInjectingStore(seeded, 7L,
-                new FaultInjectingStore.Faults(0, 1.0, 0));
+                new FaultInjectingStore.Faults(0, 1.0, 0, 0));
         assertThatThrownBy(() -> firing.putIfMatch("m", body("v3"), v2))
                 .isInstanceOf(IOException.class);
         assertThat(firing.drawCounts())
-                .as("even when the ambiguous branch is TAKEN and throws, all three streams were "
+                .as("even when the ambiguous branch is TAKEN and throws, all four streams were "
                         + "already drawn -- the draws sit ABOVE the branch, not inside it")
-                .containsExactlyInAnyOrderEntriesOf(
-                        Map.of("unreachable", 1, "ambiguousPut", 1, "duplicatePut", 1));
+                .containsExactlyInAnyOrderEntriesOf(Map.of("unreachable", 1,
+                        "ambiguousPut", 1, "duplicatePut", 1, "withheldPut", 1));
     }
 
 
@@ -265,7 +284,7 @@ class FaultInjectingStoreStreamsTest {
         // ⚠️ The entire value of a seeded simulation. A failing seed must be a
         // named regression test, not a story about a flake -- so nothing here
         // may read a clock or a shared source of randomness.
-        var faults = new FaultInjectingStore.Faults(0.3, 0.3, 0.3);
+        var faults = new FaultInjectingStore.Faults(0.3, 0.3, 0.3, 0);
         assertThat(kindsFor(42L, faults))
                 .as("the same seed replays exactly")
                 .isEqualTo(kindsFor(42L, faults))

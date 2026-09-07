@@ -49,7 +49,7 @@ class FaultInjectingStoreTest {
         // committing".
         MemoryBinStore backing = new MemoryBinStore();
         FaultInjectingStore store = new FaultInjectingStore(backing, 1L,
-                new FaultInjectingStore.Faults(0, 1.0, 0));
+                new FaultInjectingStore.Faults(0, 1.0, 0, 0));
 
         assertThatThrownBy(() -> store.putIfAbsent("k", body("v")))
                 .isInstanceOf(IOException.class)
@@ -82,7 +82,7 @@ class FaultInjectingStoreTest {
         MemoryBinStore backing = new MemoryBinStore();
         backing.putIfAbsent("k", body("B-got-here-first"));
         FaultInjectingStore store = new FaultInjectingStore(backing, 7L,
-                new FaultInjectingStore.Faults(0, 0, 1.0));
+                new FaultInjectingStore.Faults(0, 0, 1.0, 0));
 
         assertThat(store.putIfAbsent("k", body("A-retrying")))
                 .as("A loses the slot, which is an empty Optional and not an error")
@@ -124,7 +124,7 @@ class FaultInjectingStoreTest {
 
         MemoryBinStore faulted = new MemoryBinStore();
         CommitLog unlucky = new CommitLog(new FaultInjectingStore(faulted, 1L,
-                new FaultInjectingStore.Faults(1.0, 0, 0)), "bins", 1);
+                new FaultInjectingStore.Faults(1.0, 0, 0, 0)), "bins", 1);
 
         assertThatThrownBy(() -> unlucky.commit("seg/0", counts(3)))
                 .as("the same call against a faulted store does something DIFFERENT")
@@ -148,7 +148,7 @@ class FaultInjectingStoreTest {
         assertThat(first).as("the fixture needs a version to match against").isPresent();
 
         FaultInjectingStore store = new FaultInjectingStore(backing, 1L,
-                new FaultInjectingStore.Faults(0, 1.0, 0));
+                new FaultInjectingStore.Faults(0, 1.0, 0, 0));
 
         assertThatThrownBy(() -> store.putIfMatch("k", body("v2"), first.get()))
                 .isInstanceOf(IOException.class)
@@ -171,22 +171,22 @@ class FaultInjectingStoreTest {
         // ⚠️ NaN IS THE CASE A NAIVE REWRITE LOSES: `p < 0 || p > 1` accepts it,
         // and `nextDouble() < NaN` is always false, so the class silently never
         // fires while `injected()` still shows the others working.
-        assertThatThrownBy(() -> new FaultInjectingStore.Faults(-0.05, 0, 0))
+        assertThatThrownBy(() -> new FaultInjectingStore.Faults(-0.05, 0, 0, 0))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("unreachable");
-        assertThatThrownBy(() -> new FaultInjectingStore.Faults(0, 1.5, 0))
+        assertThatThrownBy(() -> new FaultInjectingStore.Faults(0, 1.5, 0, 0))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("ambiguousPut");
-        assertThatThrownBy(() -> new FaultInjectingStore.Faults(0, 0, Double.NaN))
+        assertThatThrownBy(() -> new FaultInjectingStore.Faults(0, 0, Double.NaN, 0))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("duplicatePut");
         assertThatThrownBy(
-                () -> new FaultInjectingStore.Faults(Double.POSITIVE_INFINITY, 0, 0))
+                () -> new FaultInjectingStore.Faults(Double.POSITIVE_INFINITY, 0, 0, 0))
                 .isInstanceOf(IllegalArgumentException.class);
         // ⚠️ And the ends of the range are ACCEPTED, or the guard would be a
         // different bug: 0 disables a class on purpose and 1 is how a test forces
         // one to fire on every call.
-        assertThat(new FaultInjectingStore.Faults(0, 0, 1.0).duplicatePut()).isEqualTo(1.0);
+        assertThat(new FaultInjectingStore.Faults(0, 0, 1.0, 0).duplicatePut()).isEqualTo(1.0);
     }
 
     @Test
@@ -199,7 +199,7 @@ class FaultInjectingStoreTest {
         // Observing the DELEGATE is the only way to tell those apart.
         CountingBinStore counting = new CountingBinStore(new MemoryBinStore());
         FaultInjectingStore store = new FaultInjectingStore(counting, 1L,
-                new FaultInjectingStore.Faults(0, 0, 1.0));
+                new FaultInjectingStore.Faults(0, 0, 1.0, 0));
 
         long before = counting.counts().puts();
         var result = store.putIfAbsent("fresh", body("v"));
@@ -233,7 +233,7 @@ class FaultInjectingStoreTest {
         // the only defence against a silent simulator is being able to assert
         // which fault a run saw.
         FaultInjectingStore store = new FaultInjectingStore(new MemoryBinStore(), 1L,
-                new FaultInjectingStore.Faults(1.0, 0, 0));
+                new FaultInjectingStore.Faults(1.0, 0, 0, 0));
 
         assertThatThrownBy(() -> store.stat("s")).isInstanceOf(IOException.class);
         assertThatThrownBy(() -> store.get("g")).isInstanceOf(IOException.class);
@@ -254,7 +254,7 @@ class FaultInjectingStoreTest {
         // ⚠️ `List.copyOf` was unconstrained: returning the live list left the
         // suite green, so a caller could edit the very evidence the sweep reports.
         FaultInjectingStore store = new FaultInjectingStore(new MemoryBinStore(), 1L,
-                new FaultInjectingStore.Faults(1.0, 0, 0));
+                new FaultInjectingStore.Faults(1.0, 0, 0, 0));
         assertThatThrownBy(() -> store.stat("s")).isInstanceOf(IOException.class);
 
         List<FaultInjectingStore.Injected> seen = store.injected();
@@ -270,20 +270,20 @@ class FaultInjectingStoreTest {
         // survived. The read verbs and duplicatePut were already covered, so this
         // closes the third class and the two write verbs.
         FaultInjectingStore unreachable = new FaultInjectingStore(new MemoryBinStore(), 1L,
-                new FaultInjectingStore.Faults(1.0, 0, 0));
+                new FaultInjectingStore.Faults(1.0, 0, 0, 0));
         assertThatThrownBy(() -> unreachable.putIfAbsent("wa", body("v")))
                 .isInstanceOf(IOException.class);
         assertThat(unreachable.injected()).extracting(FaultInjectingStore.Injected::key)
                 .as("the unreachable record names the key it refused").containsExactly("wa");
 
         FaultInjectingStore ambiguous = new FaultInjectingStore(new MemoryBinStore(), 1L,
-                new FaultInjectingStore.Faults(0, 1.0, 0));
+                new FaultInjectingStore.Faults(0, 1.0, 0, 0));
         assertThatThrownBy(() -> ambiguous.putIfAbsent("wb", body("v")))
                 .isInstanceOf(IOException.class);
         var seeded = new MemoryBinStore();
         var version = seeded.putIfAbsent("wc", body("v")).orElseThrow();
         FaultInjectingStore matching = new FaultInjectingStore(seeded, 1L,
-                new FaultInjectingStore.Faults(0, 1.0, 0));
+                new FaultInjectingStore.Faults(0, 1.0, 0, 0));
         assertThatThrownBy(() -> matching.putIfMatch("wc", body("v2"), version))
                 .isInstanceOf(IOException.class);
         assertThat(ambiguous.injected()).extracting(FaultInjectingStore.Injected::key)
@@ -309,7 +309,7 @@ class FaultInjectingStoreTest {
         MemoryBinStore backing = new MemoryBinStore();
         backing.putIfAbsent("taken", body("A-was-here"));
         FaultInjectingStore store = new FaultInjectingStore(backing, 1L,
-                new FaultInjectingStore.Faults(0, 1.0, 0));
+                new FaultInjectingStore.Faults(0, 1.0, 0, 0));
 
         assertThatThrownBy(() -> store.putIfAbsent("taken", body("B-loses")))
                 .isInstanceOf(IOException.class)
@@ -332,7 +332,7 @@ class FaultInjectingStoreTest {
         // corrupt chain the protocol never wrote.
         MemoryBinStore backing = new MemoryBinStore();
         FaultInjectingStore store = new FaultInjectingStore(backing, 1L,
-                new FaultInjectingStore.Faults(0, 1.0, 0));
+                new FaultInjectingStore.Faults(0, 1.0, 0, 0));
 
         assertThatThrownBy(() -> store.putIfAbsent("payload", body("exact-bytes")))
                 .isInstanceOf(IOException.class);
@@ -356,7 +356,7 @@ class FaultInjectingStoreTest {
         backing.putIfMatch("cas", body("v2"), first);
 
         FaultInjectingStore store = new FaultInjectingStore(backing, 1L,
-                new FaultInjectingStore.Faults(0, 1.0, 0));
+                new FaultInjectingStore.Faults(0, 1.0, 0, 0));
         assertThatThrownBy(() -> store.putIfMatch("cas", body("v3"), first))
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("landed but the response was lost");

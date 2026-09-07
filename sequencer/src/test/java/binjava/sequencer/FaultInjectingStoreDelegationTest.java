@@ -144,7 +144,7 @@ class FaultInjectingStoreDelegationTest {
         // having compared nothing -- the silent-simulator failure produced by the
         // accessor rather than by a probability.
         FaultInjectingStore store = new FaultInjectingStore(new MemoryBinStore(), 1L,
-                new FaultInjectingStore.Faults(1.0, 0, 0));
+                new FaultInjectingStore.Faults(1.0, 0, 0, 0));
         assertThatThrownBy(() -> store.stat("a")).isInstanceOf(IOException.class);
 
         List<FaultInjectingStore.Injected> before = store.injected();

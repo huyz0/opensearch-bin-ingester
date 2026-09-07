@@ -53,7 +53,7 @@ import org.junit.jupiter.api.Timeout;
 class CommitProtocolSimulationFlushSeqTest {
 
     private static final FaultInjectingStore.Faults ROUGH =
-            new FaultInjectingStore.Faults(0.05, 0.05, 0.1);
+            new FaultInjectingStore.Faults(0.05, 0.05, 0.1, 0);
 
     /**
      * ⚠️ THE ANTI-VACUITY GUARDS ARE IN THIS METHOD, not a sibling @Test. A

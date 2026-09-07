@@ -848,6 +848,54 @@ model knows the case exists and the injector cannot produce it.
 retry with the same version must succeed" -- half of what M4.3d and M4.3h were
 about, and half of what M4.10e will need to be tested against.
 
+⚠️ LANDED AS A FOURTH FAULT CLASS, NOT AS A COIN INSIDE THE EXISTING ONE. A
+sub-draw off `ambiguousDraws` would have shifted that class's own positions,
+which is the aliasing this file records measuring at 19x and then designing
+away. `withheldPut` has its own scrambled stream at index 4, is drawn
+UNCONDITIONALLY in both conditional-write verbs, and LOSES to the LANDED arm
+when both fire -- documented rather than left to branch order.
+
+⚠️ EVERY CALL SITE WAS WIDENED EXPLICITLY rather than given a defaulting
+3-argument constructor. This file's own javadoc names "a seed that silently
+injects nothing is a green test that proves the absence of testing" as the risk
+it exists to defend against, and a constructor that omits a class is exactly
+that shape.
+
+⚠️ THE SWEEP PROFILES STAY AT `withheldPut = 0`, AND THE REASON IS MEASURED
+RATHER THAN ASSUMED. Over seeds 0..29 at 120 steps and 3 pods, raising it on
+`CommitProtocolSimulationTest`'s ROUGH gives:
+
+| withheldPut | commits | takeovers | seeds committing nothing |
+|---|---|---|---|
+| 0    | 175 | 68 | 1 |
+| 0.01 | 135 | 66 | 2 |
+| 0.02 | 124 | 65 | 3 |
+| 0.05 | 120 | 61 | 3 |
+
+⚠️ AT 0.05 THAT LAST COLUMN REACHES 3, WHICH IS THE BOUND
+`aFAULTEDSWEEPKeepsCOMMITTINGRatherThanSTALLING` ASSERTS -- a bound sited
+between 1 measured healthy and 5 measured stalled. So turning the class on makes
+that assertion fail on a HEALTHY cluster, and the two cheap repairs are both
+forbidden: relaxing it to 4 is non-negotiable 2, and picking 0.01 because that
+is where the bound still passes is fitting a model parameter to an assertion.
+⚠️ WHAT IS REQUIRED IS A RE-BASELINE -- fresh healthy and stalled numbers with
+the class on -- and that belongs to **M4.13d**, which owns "every fault class
+must change an outcome in at least one seed". The loss is ~1 commit per injected
+withheld fault, checked and mechanical rather than a protocol amplification.
+
+⚠️ SO THE ANTI-VACUITY TEST NOW DERIVES ITS EXPECTED SET FROM THE PROFILE. It
+listed three class names by hand, and M4.13c added a fourth that the list did
+not notice -- a green test whose NAME said "every fault class". It now asserts
+every class ENABLED IN THE PROFILE, and is named for that, so a class left at
+zero is visible in the profile instead of hidden in a stale literal, and the
+next class added cannot be forgotten. Rung 2 of gate-design, not a comment
+asking the next hand to remember.
+
+⚠️ THE ALIGNMENT TEST EXCLUDES `duplicatePut` ON PURPOSE. It is an action taken
+AFTER the write, so any earlier throw legitimately preempts it -- masking, not
+aliasing, the same distinction the sibling test already draws for
+`unreachable`.
+
 ### M4.13d
 
 Every fault class must change an outcome in at least one seed, reported by the

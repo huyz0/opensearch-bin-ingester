@@ -22,7 +22,7 @@ class CommitProtocolSimulationTest {
 
     private static final FaultInjectingStore.Faults CLEAN = FaultInjectingStore.Faults.none();
     private static final FaultInjectingStore.Faults ROUGH =
-            new FaultInjectingStore.Faults(0.05, 0.05, 0.1);
+            new FaultInjectingStore.Faults(0.05, 0.05, 0.1, 0);
 
     @Test
     void aRunACTUALLYCommitsAndFailsOverBeforeAnyCleanReportMeansAnything()
@@ -68,8 +68,34 @@ class CommitProtocolSimulationTest {
                 .isEqualTo(a.violations());
     }
 
+    /**
+     * The classes a profile actually turns on, by the same names
+     * {@code FaultInjectingStore.Injected#kind} reports.
+     *
+     * <p>⚠️ THE ZERO-RATE CLASSES ARE EXCLUDED BECAUSE THEY CANNOT FIRE, which
+     * is what makes this a derivation rather than a restatement: a class added
+     * to {@code Faults} and left at zero is reported by this test as not
+     * covered by the sweep, instead of passing because nobody updated a list.
+     */
+    private static Set<String> enabledIn(FaultInjectingStore.Faults f) {
+        Set<String> on = new TreeSet<>();
+        if (f.unreachable() > 0) {
+            on.add("unreachable");
+        }
+        if (f.ambiguousPut() > 0) {
+            on.add("ambiguousPut");
+        }
+        if (f.duplicatePut() > 0) {
+            on.add("duplicatePut");
+        }
+        if (f.withheldPut() > 0) {
+            on.add("withheldPut");
+        }
+        return on;
+    }
+
     @Test
-    void aROUGHSWEEPACTUALLYINJECTSEveryFaultClassAndDRIVESFencedWritersAtTheChain()
+    void aROUGHSWEEPACTUALLYINJECTSEveryENABLEDFaultClassAndDRIVESFencedWritersAtTheChain()
             throws Exception {
         // ⚠️ A RANGE, NOT A HAND-PICKED SEED, and that is a correction rather
         // than a preference. Three times in this task a change to how faults are
@@ -91,11 +117,19 @@ class CommitProtocolSimulationTest {
             commits += r.commits();
         }
 
+        // ⚠️ DERIVED FROM THE PROFILE, NOT LISTED. A hand-written list is true
+        // only until a fault class is added, and then it is a green test whose
+        // NAME says "every fault class" while it enumerates the old ones --
+        // exactly the "seed that silently injects nothing" shape
+        // `FaultInjectingStore`'s javadoc names as the risk it defends against.
+        // M4.13c added `withheldPut` and this list did not notice; deriving it
+        // means the next class cannot be forgotten either, which is rung 2 of
+        // gate-design rather than a comment asking the next hand to remember.
         assertThat(kinds)
-                .as("the decorator is in the path and EVERY configured class fired somewhere "
-                        + "in the range -- an aggregate count is satisfied by one class firing "
-                        + "a hundred times, which is the shape criterion 1 forbids")
-                .containsExactly("ambiguousPut", "duplicatePut", "unreachable");
+                .as("the decorator is in the path and EVERY class ENABLED IN THE PROFILE fired "
+                        + "somewhere in the range -- an aggregate count is satisfied by one "
+                        + "class firing a hundred times, which is the shape criterion 1 forbids")
+                .containsExactlyInAnyOrderElementsOf(enabledIn(ROUGH));
         assertThat(commits)
                 .as("and the faulted cluster still did work, so the range is not reporting "
                         + "cleanly about a system that stopped")

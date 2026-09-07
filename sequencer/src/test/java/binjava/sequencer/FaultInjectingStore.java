@@ -57,7 +57,8 @@ import java.util.Random;
 public final class FaultInjectingStore implements BinStore {
 
     /** What may go wrong, as probabilities in [0,1]. */
-    public record Faults(double unreachable, double ambiguousPut, double duplicatePut) {
+    public record Faults(double unreachable, double ambiguousPut, double duplicatePut,
+            double withheldPut) {
 
         /**
          * ⚠️ REJECTED, not clamped, and this is rung 1 of gate-design: the class
@@ -72,6 +73,7 @@ public final class FaultInjectingStore implements BinStore {
             check("unreachable", unreachable);
             check("ambiguousPut", ambiguousPut);
             check("duplicatePut", duplicatePut);
+            check("withheldPut", withheldPut);
         }
 
         private static void check(String name, double p) {
@@ -82,7 +84,7 @@ public final class FaultInjectingStore implements BinStore {
         }
 
         public static Faults none() {
-            return new Faults(0, 0, 0);
+            return new Faults(0, 0, 0, 0);
         }
     }
 
@@ -106,6 +108,7 @@ public final class FaultInjectingStore implements BinStore {
     private final Random unreachableDraws;
     private final Random ambiguousDraws;
     private final Random duplicateDraws;
+    private final Random withheldDraws;
     private final Faults faults;
     private final List<Injected> injected = new ArrayList<>();
     private final Map<String, Integer> drawCounts = new java.util.TreeMap<>();
@@ -115,6 +118,7 @@ public final class FaultInjectingStore implements BinStore {
         this.unreachableDraws = new Random(scramble(seed, 1));
         this.ambiguousDraws = new Random(scramble(seed, 2));
         this.duplicateDraws = new Random(scramble(seed, 3));
+        this.withheldDraws = new Random(scramble(seed, 4));
         this.faults = faults;
     }
 
@@ -127,7 +131,11 @@ public final class FaultInjectingStore implements BinStore {
      * 50, firing together 0-1 times. Independent knobs is not the same property
      * as independent coins, and criterion 1 wants both: toggling a class must
      * not move another's faults, AND the classes must not fire in lockstep or
-     * the "faults across the range" claim describes one coin wearing three hats.
+     * the "faults across the range" claim describes one coin wearing four hats.
+     * ⚠️ THE MEASUREMENT ABOVE WAS TAKEN OVER THREE CLASSES, before M4.13c added
+     * `withheldPut` at stream 4. It is left as it was rather than restated for
+     * four, because it is a record of what was OBSERVED and re-running it is not
+     * what this comment is for; what carries over is the design, not the number.
      * ⚠️ splitmix64's finalizer, chosen because it is a few lines, has no state
      * of its own, and a run is still identified by ONE number.
      */
@@ -144,7 +152,7 @@ public final class FaultInjectingStore implements BinStore {
     /**
      * ⚠️ SINGLE-THREADED DRIVING IS REQUIRED and nothing enforces it. {@code
      * injected} is a plain {@code ArrayList}, {@code drawCounts} a plain {@code
-     * TreeMap}, and the three streams are drawn in per-call order -- so "the same
+     * TreeMap}, and the four streams are drawn in per-call order -- so "the same
      * seed replays exactly" holds only while one thread drives the store.
      * ⚠️ THIS IS A NOTE TO M4.20, whose stated criterion is "many logical pods":
      * interleave them LOGICALLY, one call at a time from one thread, rather than
@@ -202,7 +210,8 @@ public final class FaultInjectingStore implements BinStore {
      */
     private void countDraw(Random which) {
         String name = which == unreachableDraws ? "unreachable"
-                : which == ambiguousDraws ? "ambiguousPut" : "duplicatePut";
+                : which == ambiguousDraws ? "ambiguousPut"
+                : which == duplicateDraws ? "duplicatePut" : "withheldPut";
         drawCounts.merge(name, 1, Integer::sum);
     }
 
@@ -214,7 +223,7 @@ public final class FaultInjectingStore implements BinStore {
     @Override
     public Optional<binjava.binstore.Version> putIfAbsent(String key, Body body)
             throws IOException {
-        // ⚠️ ALL THREE DRAWN BEFORE ANY BRANCH, and the previous version got this
+        // ⚠️ ALL FOUR DRAWN BEFORE ANY BRANCH, and the previous version got this
         // half right and half wrong. Removing the `p == 0` early return stopped a
         // DISABLED class from re-aligning the others; it did nothing about a
         // FIRING one, because the throw below skipped the two draws after it.
@@ -228,6 +237,7 @@ public final class FaultInjectingStore implements BinStore {
         boolean unreachable = fires(unreachableDraws, faults.unreachable());
         boolean ambiguous = fires(ambiguousDraws, faults.ambiguousPut());
         boolean duplicate = fires(duplicateDraws, faults.duplicatePut());
+        boolean withheld = fires(withheldDraws, faults.withheldPut());
         if (unreachable) {
             injected.add(new Injected("unreachable", key));
             throw new IOException("injected: the store was unreachable");
@@ -245,6 +255,18 @@ public final class FaultInjectingStore implements BinStore {
             delegate.putIfAbsent(key, new Body(bytes.length, () -> new ByteArrayInputStream(bytes)));
             injected.add(new Injected("ambiguousPut", key));
             throw new IOException("injected: the write landed but the response was lost");
+        }
+        if (withheld) {
+            // ⚠️ THE OTHER HALF OF THE SAME AMBIGUITY, and it does NOT delegate.
+            // `ambiguousPut` above attempts the write and then reports failure,
+            // so whenever the CAS would have won it resolves as LANDED and the
+            // model can never produce "the response was lost and NOTHING
+            // landed" -- the shape `AmbiguousPutStore.Mode.LOST` names and the
+            // injector could not make. To the caller the two are
+            // indistinguishable, which is the point; what differs is the state
+            // the store is left in, and a retry can only be judged against that.
+            injected.add(new Injected("withheldPut", key));
+            throw new IOException("injected: the response was lost and nothing landed");
         }
         byte[] bytes = read(body);
         Optional<binjava.binstore.Version> first = delegate.putIfAbsent(key,
@@ -292,7 +314,7 @@ public final class FaultInjectingStore implements BinStore {
 
     @Override public Optional<binjava.binstore.Version> putIfMatch(String k, Body b,
             binjava.binstore.Version v) throws IOException {
-        // ⚠️ ALL THREE DRAWN, for the reason spelled out on putIfAbsent: a class
+        // ⚠️ ALL FOUR DRAWN, for the reason spelled out on putIfAbsent: a class
         // that fires must not shift the streams of the classes after it.
         // ⚠️ `unreachable` IS DRAWN AND DELIBERATELY NOT ACTED ON here. The lease
         // CAS has no clean-failure fault today -- a documented gap, owned by
@@ -303,12 +325,23 @@ public final class FaultInjectingStore implements BinStore {
         fires(unreachableDraws, faults.unreachable());
         boolean ambiguous = fires(ambiguousDraws, faults.ambiguousPut());
         fires(duplicateDraws, faults.duplicatePut());
+        boolean withheld = fires(withheldDraws, faults.withheldPut());
         if (ambiguous) {
             byte[] bytes = read(b);
             delegate.putIfMatch(k, new Body(bytes.length,
                     () -> new ByteArrayInputStream(bytes)), v);
             injected.add(new Injected("ambiguousPut", k));
             throw new IOException("injected: the write landed but the response was lost");
+        }
+        if (withheld) {
+            // ⚠️ THE VERSION DOES NOT MOVE, which is the whole reason the class
+            // exists: it is what makes "the renew threw, nothing landed, and the
+            // retry with the SAME version must succeed" reachable. Against the
+            // LANDED arm that retry always loses, so a lease that treats every
+            // ambiguous CAS failure as possible fencing is indistinguishable
+            // from a correct one until this arm can fire.
+            injected.add(new Injected("withheldPut", k));
+            throw new IOException("injected: the response was lost and nothing landed");
         }
         return delegate.putIfMatch(k, b, v);
     }
