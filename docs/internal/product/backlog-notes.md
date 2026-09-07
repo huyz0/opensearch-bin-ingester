@@ -915,7 +915,7 @@ why it is a row here rather than a note there.
 ### M4.13
 
 ⚠️ THE SWEEP MUST EMIT A CONFIRMED EVENT FOR THE SLOT-0 `CONTINUE` when it
-feeds `Invariants.checkAckOrder` (M4.11). That checker bases each chain on the
+feeds `AckOrderInvariants.checkAckOrder` (M4.11). That checker bases each chain on the
 lowest sequence the trace SHOWS for it, deliberately -- inventing a base is how
 its first version reported two violations of a strictly serial writer. The cost
 is that a chain whose FIRST observed write is the lost one reads clean, and a
@@ -925,7 +925,7 @@ caller-supplied base was considered and rejected as a second unchecked
 parameter.
 
 ⚠️ AND WHEN IT FIRST CONSUMES A VIOLATION MESSAGE, ASSERT ITS CONTENT. M4.11
-left the own-write arm of `Invariants.checkAckOrder` unpinned: mutating it to
+left the own-write arm of `AckOrderInvariants.checkAckOrder` unpinned: mutating it to
 name the EPOCH where the sequence belongs passes all 14 of that row's tests,
 because each asserts only the invariant name, or `hasSize`, or a substring the
 mutant still emits. Detection survives -- a seed still fails -- but the report
@@ -1161,10 +1161,30 @@ already performs -- "epochs advance by exactly one per acquisition", stepping
 over chains that carry no CONTINUE. What blocks it is that the walk sits behind
 a CONTINUE this chain does not have, and extracting it puts `Invariants` over
 code-structure.md's 500-line cap. ⚠️ M4.13g HAS SINCE LANDED and took
-`Invariants` from 490 lines to 397, so that blocker is gone and this row is now
+`Invariants` from 493 lines to 397, so that blocker is gone and this row is now
 free to do the extraction.
 
-⚠️ THE HOLE IS PINNED BY A TEST, not just described:
+⚠️ LANDED, AND THE TWO ARMS TURNED OUT NOT TO BE ONE HOLE. This note and an
+earlier review both said an empty chain and one sealed at slot 0 are the two
+shapes the protocol gives a leader that acquired and wrote nothing, so both
+should walk back. MEASURED against production, which settles it: a reader on an
+EMPTY own chain derives `{}` -- `LocalSequencer.start` calls `recover()` before
+`open()`, so it has not crossed -- while on a slot-0 SEAL it derives the
+predecessor's offsets, because it has. `ChainReplay` carries that distinction as
+its `atOrigin` flag; `Invariants.neverOpened(List)` does not.
+
+⚠️ WALKING BACK FOR THE EMPTY CASE WAS A FALSE I4 AGAINST PRODUCTION'S OWN
+READER -- the checker inherited three records the reader correctly did not have
+and called the difference a drop -- and it was caught only because review asked
+for `ReaderView.of` instead of a hand-fed map. A hand-fed view asserts the
+checker against a reader the test invented rather than the one that exists.
+
+So: an empty chain inherits NOTHING and is still judged; a slot-0 seal walks back
+via `Invariants.offsetsSealedInto`. The `Verdict` type went with the fix -- once
+every chain is judged, `judged` cannot go false, and a claim that cannot go false
+is not evidence.
+
+⚠️ THE HOLE WAS PINNED BY A TEST, not just described:
 `ReaderInvariantsScopeTest` asserts the decline for all three reader shapes on
 the slot-0 arm and for the empty arm beside it. ⚠️ BOTH ARMS ARE THIS ROW: an
 epoch with no objects and one sealed at slot 0 are the two shapes the protocol

@@ -10,6 +10,7 @@ import binjava.format.Seal;
 import binjava.sequencer.Invariants.Violation;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -26,35 +27,6 @@ import java.util.Map;
 final class ReaderInvariants {
 
     private ReaderInvariants() {
-    }
-
-    /**
-     * What {@link #checkReader} concluded, including that it could conclude
-     * NOTHING.
-     *
-     * <p>⚠️ "NO VIOLATIONS" AND "COULD NOT JUDGE" ARE DIFFERENT ANSWERS, and
-     * collapsing them is how a sweep counts a seed it never examined as a seed
-     * that passed. The checker derives its expectation from a chain, and this
-     * one declines for a chain that was never opened -- an epoch with no
-     * objects at all, or one sealed at slot 0 before its CONTINUE was written,
-     * a leader fenced mid-acquisition that M4.13's fault injection produces on
-     * purpose.
-     *
-     * <p>⚠️ THAT IS A KNOWN HOLE, NOT A LIMIT OF THE PROTOCOL: the base IS
-     * derivable, and both arms of it are **M4.13i**, whose backlog note holds
-     * the measurement and the reason the fix is blocked. ⚠️ IT COSTS I4'S DROP
-     * CLAUSE AS WELL AS I3, because this returns before evaluating either.
-     *
-     * <p>⚠️ THROWING WOULD BE WRONG HERE, and an earlier version did. Neither
-     * state is a caller error -- the reader is at its own epoch and its offsets
-     * are correct -- so a throw turns a silent hole into a crash on a
-     * legitimate state and the sweep fails on clean seeds instead.
-     */
-    record Verdict(boolean judged, List<Violation> violations) {
-
-        static Verdict notJudged() {
-            return new Verdict(false, List.of());
-        }
     }
 
     /**
@@ -135,42 +107,64 @@ final class ReaderInvariants {
      * gets silenced, and silencing it is how I3 goes back to unchecked with the
      * invariant list still claiming otherwise.
      *
-     * <p>⚠️ AND WHERE NO EXPECTATION CAN BE DERIVED IT RETURNS
-     * {@link Verdict#notJudged()} rather than an empty list -- see that record
-     * for why the two are different answers.
+     * <p>⚠️ EVERY CHAIN HAS A DERIVABLE EXPECTATION, including one that was
+     * never opened -- see the branch below and M4.13i for where its base comes
+     * from when no CONTINUE names a predecessor.
      *
      * @param view the reader's own epoch and next-offset per stream --
      *     {@link ReaderView#of} for production's reader, or a hand-made one for
      *     a test that needs a broken reader
      */
-    static Verdict checkReader(BinStore store, String prefix, ReaderView view)
+    static List<Violation> checkReader(BinStore store, String prefix, ReaderView view)
             throws IOException {
         List<Violation> found = new ArrayList<>();
         List<ChainEntry> entries = Invariants.readChain(store, prefix, view.epoch());
-        // ⚠️ `neverOpened`, NOT `!(first instanceof Continue)`. A chain may
-        // legitimately begin with a delta -- epoch 1's cold start writes no
-        // CONTINUE -- and refusing to judge those would drop the commonest
-        // chain in the suite.
-        // ⚠️ AND IT COVERS THE EMPTY CHAIN TOO, which is why there is no
-        // `entries.isEmpty() ||` in front of it. There was, and it was dead
-        // code: mutation measured that dropping the emptiness clause changed
-        // nothing, because `neverOpened` returns true for an empty list. A
-        // condition no test can distinguish from its absence is one a reader
-        // has to check the callee to understand.
-        // ⚠️ THIS IS WIDER THAN IT SHOULD BE -- see the Verdict javadoc and
-        // M4.13i. It declines on a class this checker could judge.
-        if (Invariants.neverOpened(entries)) {
-            return Verdict.notJudged();
+        // ⚠️ THREE CASES, AND AN EMPTY CHAIN IS NOT THE SAME AS ONE SEALED AT
+        // SLOT 0. An earlier version treated both as "never opened" and walked
+        // back for both, on the reasoning that they are the two shapes the
+        // protocol gives a leader that acquired and wrote nothing. MEASURED, and
+        // the reasoning was wrong: production's reader on an EMPTY own chain
+        // derives {} -- `LocalSequencer.start` calls `recover()` before `open()`,
+        // so it has not crossed yet -- while on a chain SEALED AT SLOT 0 it
+        // derives the predecessor's offsets, because it has. `ChainReplay`
+        // encodes exactly that distinction as its `atOrigin` flag, which
+        // `Invariants.neverOpened(List)` does not carry.
+        // ⚠️ SO WALKING BACK FOR AN EMPTY CHAIN REPORTS A FALSE I4 against
+        // production's own reader: the checker inherits three records the reader
+        // correctly does not have, and calls the difference a drop.
+        // ⚠️ THE VIOLATION LISTS BELOW ARE DISCARDED. Every violation the two
+        // derivations can raise is already raised by `checkChain` over the same
+        // chain, and a caller running both would see each one twice -- which
+        // makes a report of two violations ambiguous between two defects and one
+        // counted twice.
+        Map<RunKey, Long> expected;
+        if (entries.isEmpty()) {
+            // Nothing crossed yet, so nothing is inherited -- and this is still
+            // JUDGED: a reader claiming offsets its chain never gave it is I3.
+            expected = new HashMap<>();
+        } else if (Invariants.neverOpened(entries)) {
+            // ⚠️ SEALED AT SLOT 0: NO CONTINUE, SO NO LINK, BUT IT DID CROSS.
+            // Its own sealed prefix is empty by construction, and the protocol
+            // advances epochs by exactly one per acquisition, so the base is the
+            // backward walk from `epoch - 1` -- which is what production's
+            // reader derives here, measured. This used to return NOT-JUDGED, and
+            // the cost was that a reader restarting every stream at 0 across a
+            // failover -- the defect `inheritedOffsets`' own javadoc was
+            // rewritten to catch -- came back unexamined rather than as I4.
+            // ⚠️ `epoch - 1`, AND PASSING `epoch` IS AN EQUIVALENT MUTANT
+            // rather than a defect -- measured. This branch runs only when the
+            // chain at `epoch` is never-opened, so the walk would step over it
+            // on its first iteration and reach the same base. What it would
+            // cost is one extra `readChain` per call, which is a LIST plus a GET
+            // per entry, so the difference is request count and not correctness.
+            expected = Invariants.offsetsSealedInto(
+                    store, prefix, view.epoch() - 1, new ArrayList<>(), 0);
+        } else {
+            expected = Invariants.inheritedOffsets(
+                    store, prefix, entries, view.epoch(), new ArrayList<>(), 0);
         }
         Map<RunKey, Long> readerView = view.offsets();
 
-        // ⚠️ DISCARDED. Every violation `inheritedOffsets` can raise is already
-        // raised by `checkChain` over the same chain, and a caller running both
-        // would see each one twice -- which makes a report of two violations
-        // ambiguous between two defects and one counted twice.
-        Map<RunKey, Long> expected =
-                Invariants.inheritedOffsets(
-                        store, prefix, entries, view.epoch(), new ArrayList<>(), 0);
         for (ChainEntry e : entries) {
             if (e instanceof Seal) {
                 // ⚠️ THE FIRST SEAL ENDS THE APPLIED PREFIX, and nothing after
@@ -210,6 +204,6 @@ final class ReaderInvariants {
                                 + ", which the sealed prefix never committed"));
             }
         }
-        return new Verdict(true, found);
+        return found;
     }
 }

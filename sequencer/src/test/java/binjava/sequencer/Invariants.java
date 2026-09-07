@@ -73,21 +73,22 @@ import java.util.Map;
  *       for the same reason {@link AckOrderInvariants#checkAckOrder} is: it needs
  *       the reader's own
  *       view, and a caller holding only a store cannot supply one.
- *       ⚠️ EXCEPT ON A CHAIN THAT WAS NEVER OPENED -- no objects at all, or a
- *       SEAL at slot 0 -- where that checker returns NOT-JUDGED rather than a
- *       verdict, and this list says so instead of reading CHECKED without
- *       qualification: a leader fenced at slot 0 whose reader keeps applying is
- *       the sub-case M4's acceptance criterion 3(a) is written about.
- *       **M4.13i** closes it.</li>
+ *       ⚠️ ON EVERY CHAIN, INCLUDING ONE THAT WAS NEVER OPENED (M4.13i). A
+ *       leader fenced at slot 0 whose reader keeps applying is the sub-case M4's
+ *       acceptance criterion 3(a) is written about, and it used to come back
+ *       NOT-JUDGED. Its base is the backward walk of
+ *       {@link #offsetsSealedInto}; an EMPTY chain inherits nothing instead,
+ *       because production has not crossed at that point, and conflating the two
+ *       was measured reporting a false I4 against production's own reader.</li>
  *   <li><b>I4</b> — ⚠️ HALF OF IT, and the half is named rather than implied.
  *       The DROP clause -- a reader losing records the chain committed -- is
  *       checked by {@link ReaderInvariants#checkReader}. The REORDER clause is not: a
  *       next-offset map is a high-water mark, so runs folded in the wrong order
  *       land on the same number. What stands in for it is {@link #checkChain}'s
  *       I2 arm over the bytes, and a per-record consumer trace is what would
- *       close it -- **M4.13f**. ⚠️ AND IT CARRIES I3'S NEVER-OPENED EXCEPTION
- *       TOO (**M4.13i**), because {@code checkReader} declines before
- *       evaluating either invariant.</li>
+ *       close it -- **M4.13f**. ⚠️ THE DROP CLAUSE ITSELF NOW HOLDS ON EVERY
+ *       CHAIN, since M4.13i removed the never-opened exception that used to
+ *       cost it as much as I3.</li>
  * </ul>
  */
 public final class Invariants {
@@ -244,12 +245,42 @@ public final class Invariants {
         // invisible.
         checkLink(store, prefix, epoch, opening, found);
 
-        long from = opening.prevEpoch();
-        List<ChainEntry> prior = readChain(store, prefix, from);
-        // ⚠️ STEP OVER CHAINS THAT WERE NEVER OPENED, by the arithmetic the
-        // protocol guarantees: epochs advance by exactly one per acquisition. A
-        // leader that acquired and died before writing its CONTINUE leaves a
-        // SEAL at slot 0 or nothing at all, and neither carries a link.
+        inherited.putAll(offsetsSealedInto(store, prefix, opening.prevEpoch(), found, depth));
+        return inherited;
+    }
+
+    /**
+     * The offsets a chain inherits when its predecessor is {@code startFrom},
+     * walking back over epochs that were never opened.
+     *
+     * <p>⚠️ EXTRACTED SO A NEVER-OPENED CHAIN CAN USE IT TOO (M4.13i). This walk
+     * used to sit inside {@link #inheritedOffsets}, reachable only through a
+     * CONTINUE -- so a chain sealed at slot 0, which carries no CONTINUE, had no
+     * way to reach the very arithmetic that defines its base, and
+     * {@code ReaderInvariants} declined to judge it. That was the sub-case M4's
+     * acceptance criterion 3(a) is written about, and the measured cost was that
+     * a reader restarting every stream at 0 across a failover came back
+     * NOT-JUDGED rather than as I4.
+     *
+     * <p>⚠️ THE WALK IS THE PROTOCOL'S OWN ARITHMETIC: epochs advance by exactly
+     * one per acquisition, so a leader that acquired and died before writing its
+     * CONTINUE leaves a SEAL at slot 0 or nothing at all, and neither carries a
+     * link. Stepping back one epoch at a time is therefore sound, and it is a
+     * WALK rather than a decrement because several leaders can die in a row --
+     * that is a lease fight, not a pathology.
+     */
+    static Map<RunKey, Long> offsetsSealedInto(BinStore store, String prefix, long startFrom,
+            List<Violation> found, int depth) throws IOException {
+        // ⚠️ NO DEPTH GUARD HERE, and its absence is deliberate rather than an
+        // omission. One was carried over in the extraction and MEASURED dead:
+        // deleting it left the whole suite green, because both callers have
+        // already handled the condition -- `inheritedOffsets` returns on it with
+        // the same `depth` before reaching this, and `checkReader` passes a
+        // literal 0. The guard that matters is on the recursion, which is
+        // `inheritedOffsets`', and `depth` is threaded through to reach it.
+        Map<RunKey, Long> inherited = new HashMap<>();
+        long from = startFrom;
+        List<ChainEntry> prior = from >= 1 ? readChain(store, prefix, from) : List.of();
         while (from >= 1 && neverOpened(prior)) {
             from -= 1;
             prior = from >= 1 ? readChain(store, prefix, from) : List.of();

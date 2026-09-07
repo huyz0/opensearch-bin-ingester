@@ -81,27 +81,21 @@ class ReaderInvariantsTest {
     }
 
     /**
-     * ⚠️ IT ASSERTS {@code judged()} IS TRUE, AND THAT IS NOT DECORATION. The
-     * NOT-JUDGED tests pin the collapse in one direction; this pins the other,
-     * and without it {@code new Verdict(!found.isEmpty(), found)} -- every chain
-     * the checker fully examined and found CLEAN reported as unexamined --
-     * survives with the whole suite green. A sweep written the natural way,
-     * {@code if (v.judged()) assertThat(v.violations()).isEmpty();}, would then
-     * skip every seed that passes, which on a clean run is all of them, and
-     * I3/I4 go back to NOT-RUN with the invariant list claiming CHECKED.
+     * ⚠️ THE BASELINE CASE, and it is the one every other case here is measured
+     * against: a reader that applied exactly the sealed prefix violates nothing.
+     * It briefly also asserted a {@code judged()} flag, which M4.13i removed --
+     * once every chain is judged, that flag could not go false, and this file's
+     * neighbours record what an always-true claim asserted in a test of its own
+     * costs.
      */
     @Test
-    void aReaderThatSTOPSAtTheSealViolatesNothingANDIsJUDGED() throws Exception {
+    void aReaderThatSTOPSAtTheSealViolatesNothing() throws Exception {
         MemoryBinStore store = chainWithZombieBeyondTheSeal(3, 5);
 
         // The honest reader: it applied the pre-seal delta only.
-        ReaderInvariants.Verdict verdict =
-                ReaderInvariants.checkReader(store, PREFIX, new ReaderView(1, Map.of(RA, 3L)));
+        List<Violation> verdict = ReaderInvariants.checkReader(store, PREFIX, new ReaderView(1, Map.of(RA, 3L)));
 
-        assertThat(verdict.violations()).isEmpty();
-        assertThat(verdict.judged())
-                .as("a clean chain was EXAMINED and found clean -- not left unexamined")
-                .isTrue();
+        assertThat(verdict).isEmpty();
     }
 
     /**
@@ -116,7 +110,7 @@ class ReaderInvariantsTest {
 
         // A reader that folded the zombie delta too: 3 + 5.
         List<Violation> found =
-                ReaderInvariants.checkReader(store, PREFIX, new ReaderView(1, Map.of(RA, 8L))).violations();
+                ReaderInvariants.checkReader(store, PREFIX, new ReaderView(1, Map.of(RA, 8L)));
 
         assertThat(found).as("applying a discarded suffix is I3").hasSize(1);
         assertThat(found.get(0).invariant()).isEqualTo("I3");
@@ -135,7 +129,7 @@ class ReaderInvariantsTest {
         MemoryBinStore store = chainWithZombieBeyondTheSeal(3, 5);
 
         List<Violation> found =
-                ReaderInvariants.checkReader(store, PREFIX, new ReaderView(1, Map.of(RA, 1L))).violations();
+                ReaderInvariants.checkReader(store, PREFIX, new ReaderView(1, Map.of(RA, 1L)));
 
         assertThat(found).hasSize(1);
         assertThat(found.get(0).invariant()).as("dropped, not over-applied").isEqualTo("I4");
@@ -151,7 +145,7 @@ class ReaderInvariantsTest {
     void aReaderThatSAWNoStreamsAtAllVIOLATESI4() throws Exception {
         MemoryBinStore store = chainWithZombieBeyondTheSeal(3, 5);
 
-        List<Violation> found = ReaderInvariants.checkReader(store, PREFIX, new ReaderView(1, Map.of())).violations();
+        List<Violation> found = ReaderInvariants.checkReader(store, PREFIX, new ReaderView(1, Map.of()));
 
         assertThat(found).hasSize(1);
         assertThat(found.get(0).invariant()).isEqualTo("I4");
@@ -170,12 +164,10 @@ class ReaderInvariantsTest {
         CommitLog reader = new CommitLog(store, PREFIX, 1);
         reader.recover();
 
-        ReaderInvariants.Verdict verdict =
-                ReaderInvariants.checkReader(store, PREFIX, ReaderView.of(reader));
-        assertThat(verdict.violations())
+        List<Violation> verdict = ReaderInvariants.checkReader(store, PREFIX, ReaderView.of(reader));
+        assertThat(verdict)
                 .as("production's own reader, judged by the same predicate")
                 .isEmpty();
-        assertThat(verdict.judged()).as("and actually judged, not skipped").isTrue();
     }
 
     /**
@@ -189,7 +181,7 @@ class ReaderInvariantsTest {
         MemoryBinStore store = chainWithZombieBeyondTheSeal(3, 5);
         RunKey invented = new RunKey(InvariantFixtures.A, 7);
 
-        List<Violation> found = ReaderInvariants.checkReader(store, PREFIX, new ReaderView(1, Map.of(RA, 3L, invented, 4L))).violations();
+        List<Violation> found = ReaderInvariants.checkReader(store, PREFIX, new ReaderView(1, Map.of(RA, 3L, invented, 4L)));
 
         assertThat(found).hasSize(1);
         assertThat(found.get(0).invariant()).isEqualTo("I3");
@@ -221,7 +213,7 @@ class ReaderInvariantsTest {
         put(store, second, 1, new CommitDelta(1, "seg/other",
                 List.of(new RunCommit(other, 2, 0))).encode());
 
-        assertThat(ReaderInvariants.checkReader(store, PREFIX, new ReaderView(2, Map.of(RA, 3L, other, 2L))).violations())
+        assertThat(ReaderInvariants.checkReader(store, PREFIX, new ReaderView(2, Map.of(RA, 3L, other, 2L))))
                 .as("RA is inherited from the sealed epoch 1, not invented by the reader")
                 .isEmpty();
     }
@@ -244,7 +236,7 @@ class ReaderInvariantsTest {
         put(store, log, 2, delta(2, 2, 3));
         put(store, log, 3, new Seal(3, 2).encode());
 
-        assertThat(ReaderInvariants.checkReader(store, PREFIX, new ReaderView(1, Map.of(RA, 5L))).violations())
+        assertThat(ReaderInvariants.checkReader(store, PREFIX, new ReaderView(1, Map.of(RA, 5L))))
                 .as("3 records then 2 more is a sealed prefix ending at 5, not at 3")
                 .isEmpty();
     }
@@ -261,7 +253,7 @@ class ReaderInvariantsTest {
         MemoryBinStore store = chainWithZombieBeyondTheSeal(3, 5);
         RunKey untouched = new RunKey(InvariantFixtures.A, 7);
 
-        assertThat(ReaderInvariants.checkReader(store, PREFIX, new ReaderView(1, Map.of(RA, 3L, untouched, 0L))).violations())
+        assertThat(ReaderInvariants.checkReader(store, PREFIX, new ReaderView(1, Map.of(RA, 3L, untouched, 0L))))
                 .as("an empty entry is not an applied record")
                 .isEmpty();
     }
@@ -297,7 +289,7 @@ class ReaderInvariantsTest {
 
         // RA over-applied to 8, `other` dropped back to 1.
         List<Violation> found =
-                ReaderInvariants.checkReader(store, PREFIX, new ReaderView(1, Map.of(RA, 8L, other, 1L))).violations();
+                ReaderInvariants.checkReader(store, PREFIX, new ReaderView(1, Map.of(RA, 8L, other, 1L)));
 
         assertThat(found).hasSize(2);
         assertThat(found).anySatisfy(v -> {
@@ -336,7 +328,7 @@ class ReaderInvariantsTest {
         reader.recover();
 
         assertThat(reader.offsets()).as("the reader carries all 7 records").containsEntry(RA, 7L);
-        assertThat(ReaderInvariants.checkReader(store, PREFIX, ReaderView.of(reader)).violations())
+        assertThat(ReaderInvariants.checkReader(store, PREFIX, ReaderView.of(reader)))
                 .as("3 inherited plus 4 of its own is the whole history, not a discarded suffix")
                 .isEmpty();
     }
@@ -364,7 +356,7 @@ class ReaderInvariantsTest {
                 .as("those bytes ARE an I2 -- checkReader must not add a second, wrong name")
                 .extracting(Violation::invariant).contains("I2");
         assertThat(ReaderInvariants.checkReader(store, PREFIX, new ReaderView(1, Map.of(RA, 5L)))
-                .violations())
+                )
                 .as("the sealed prefix still ends at 5")
                 .isEmpty();
     }
@@ -393,7 +385,7 @@ class ReaderInvariantsTest {
                 .as("the broken link is checkChain's finding")
                 .extracting(Violation::invariant).contains("link");
         assertThat(ReaderInvariants.checkReader(store, PREFIX, new ReaderView(2, Map.of(RA, 7L)))
-                .violations())
+                )
                 .as("and checkReader must not report it a second time")
                 .isEmpty();
     }
@@ -423,7 +415,7 @@ class ReaderInvariantsTest {
         assertThat(Invariants.checkChain(store, PREFIX, 1))
                 .as("the chain is clean -- the staleness is entirely the caller's")
                 .isEmpty();
-        assertThat(ReaderInvariants.checkReader(store, PREFIX, takenEarly).violations())
+        assertThat(ReaderInvariants.checkReader(store, PREFIX, takenEarly))
                 .extracting(Violation::invariant).containsExactly("I4");
     }
 }

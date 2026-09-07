@@ -4,10 +4,8 @@ package binjava.sequencer;
 import binjava.sequencer.Invariants.Violation;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 /**
  * I5's ACK-ORDERING clause: a commit is acknowledged only after every
@@ -52,7 +50,7 @@ final class AckOrderInvariants {
         }
 
         /** The writer told its caller that commit is durable. */
-        public static AckEvent acked(long epoch, long sequence) {
+        static AckEvent acked(long epoch, long sequence) {
             return new AckEvent(epoch, sequence, true);
         }
     }
