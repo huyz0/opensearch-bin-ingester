@@ -187,6 +187,11 @@ repos:
       # Also commit-msg, and not by preference: testing.md rule 5 puts the
       # justification for a weakened or removed test in the commit body, and the
       # commit body does not exist at the pre-commit stage.
+      - id: check-diff-size
+        name: "review.md rule 12: a commit too large to review in a round or two says why"
+        entry: scripts/check-diff-size.sh
+        language: system
+        stages: [commit-msg]
       - id: check-test-integrity
         name: "testing.md rules 4-5: no assertion weakened alongside a production change"
         entry: scripts/check-test-integrity.sh
