@@ -763,6 +763,99 @@ is load-bearing there rather than theoretical.
 
 | M4.34 | THE REVIEW PACKET TRUNCATES SILENTLY AT ~37 KB, so a reviewer judges a diff it was never shown and is not told. ⚠️ MEASURED on M4.21's round-6 production review: `./scripts/review.sh context` cut off partway, dropping the last third of `ReviewRoundCapTest.java` and most of the backlog rows. The reviewer concluded three of the coverage cases the task claimed were untested, then found on its own initiative that all three existed and that its packet was the problem -- so the near miss was a MAJOR filed against real code on the strength of bytes the reviewer never received. ⚠️ WHY IT IS WORSE THAN A SIZE LIMIT: the cut is silent. A truncated packet is indistinguishable from a complete one, so the reviewer cannot discount its own conclusions, and non-negotiable 5's guarantee -- that the staged bytes were read by two agents that did not write them -- quietly becomes a guarantee about a prefix. This is the `ok nothing staged` failure shape: a green-looking result that means less than it appears to. ⚠️ FIX IS A CHOICE and rung 2 beats rung 6: either refuse to emit a packet over the cap (fail closed, the author must split -- which is what rule 12 wants anyway), or emit the diff in numbered parts and state the count so a reviewer can tell it has them all. Do NOT solve it by asking the reviewer to notice. ⚠️ Found by the review it damaged; the verdict itself was `pass` and its findings held up. | — | todo |
 
+### M4.13a
+
+I3 and I4 as predicates. `Invariants`' own list records both as NOT-RUN, with
+the reason: neither is a property of the stored bytes. I3 is what a READER
+applies -- never an entry in a discarded suffix -- and I4 is what a consumer may
+SEE: committed records are never dropped or reordered, while uncommitted ones
+may be. Both need the reader side of the simulation, and until they exist the
+sweep cannot claim I1-I5 however many seeds it runs.
+
+⚠️ THE COMPLETION CONDITION TURNS ON THIS ROW. M4's condition is "invariants
+I1-I5 hold across 1,000 deterministic simulation seeds", and a sweep asserting
+three of five with two NOT-RUN does not meet it. Saying so in the VERIFIED.md
+would be honest; claiming the condition met would not.
+
+⚠️ I3 IS ASSERTED ON THE READER, NOT ON THE WRITER, which M4's SPEC states as
+acceptance criterion 3 in as many words: "no entry after fencing is ever applied
+by a reader". A checker over the chain cannot see it -- `checkChain` already
+reports an entry PAST a seal, which is the writer's side of the same fact.
+
+### M4.13b
+
+The three fault classes M4.12 does not model.
+
+⚠️ DELAYED WRITES and REORDERED COMPLETIONS are absent entirely. Both are about
+TIME rather than outcome, so `FaultInjectingStore`'s current shape -- draw,
+decide, throw or delegate -- cannot express either; a delayed write needs the
+call to return LATE rather than differently.
+
+⚠️ PARTITIONED LEADERS IS **NOT** THIS ROW -- it is M4.13e. Review split the two
+because they share no mechanism: this row needs a deferral queue and a drain
+policy, that one needs identity threaded through the store.
+
+⚠️ EACH CLASS NEEDS ITS OWN STREAM, and M4.12 records what that took: one shared
+Random let a disabled class re-align the others; `seed * 3 + k` gave phase-locked
+streams (two classes co-firing on draw 1 in 4,778 of 100,000 runs against ~250
+expected); drawing lazily let a firing class shift the streams after it, measured
+moving the other classes' positions in 2000 of 2000 seeds. splitmix64 per class,
+all drawn before any branch.
+
+### M4.13e
+
+Partitioned leaders as an INJECTABLE fault rather than only its consequence.
+
+⚠️ THE STORE DOES NOT KNOW WHICH POD IS CALLING, so `unreachable` is a global
+coin flip: it cannot cut one pod off while another stays connected, which is the
+shape a lease fight actually takes. Pod identity has to reach the store before
+this class can exist at all.
+
+⚠️ AND `putIfMatch` -- THE LEASE'S ONLY CAS -- CANNOT FAIL CLEANLY. It gets
+`ambiguousPut` but never `unreachable`, so the sweep cannot produce a lease CAS
+that failed without landing.
+
+⚠️ ITS `duplicatePut` DRAW IS TAKEN AND DISCARDED (`FaultInjectingStore`), so
+that class does not reach the lease path at all. M4.12's row records this as
+evidence and no row owned it until this one -- which is the gap review found
+when the fault classes were split by mechanism.
+
+⚠️ SPLIT FROM M4.13b AT REVIEW, because the two share no mechanism: delayed
+writes and reordered completions need a deferral queue and a drain policy; this
+needs identity threaded through the store and one more arm on one verb. M4.12 is
+the precedent for what happens otherwise -- one decorator, three simpler classes,
+1,327 lines of five separable things, split at round 2.
+
+### M4.13c
+
+The withheld-write ambiguity, a gap in the FAULT MODEL rather than in its tests.
+Both of M4.12's ambiguous arms attempt the write and then throw, so whenever the
+CAS would have won the fault always resolves as LANDED. There is no arm where
+the response was lost and NOTHING landed.
+
+⚠️ `AmbiguousPutStore` ALREADY HAS `Mode.LOST` for exactly that shape, so the
+model knows the case exists and the injector cannot produce it.
+
+⚠️ WITHOUT IT THE SWEEP CANNOT PRODUCE "the renew threw, nothing landed, and the
+retry with the same version must succeed" -- half of what M4.3d and M4.3h were
+about, and half of what M4.10e will need to be tested against.
+
+### M4.13d
+
+Every fault class must change an outcome in at least one seed, reported by the
+harness. Otherwise the simulation proves the simulator rather than the system:
+a class whose faults never alter a result is indistinguishable from a class that
+never fired.
+
+⚠️ IT IS A PROPERTY OF A PAIR OF RUNS, not of one. The evidence is that the SAME
+seed run clean and run faulted DIFFER, so `Result` must carry enough to compare
+-- and M4.20's row records what a declared-rather-than-derived counter costs:
+hard-coding it left the suite green, and `crossEpochOffsetsChecked()` was deleted
+for being a claim that could not go false.
+
+⚠️ M4.12's ROW ALREADY CARRIES THIS AS AN UNMET CRITERION and is closed, which is
+why it is a row here rather than a note there.
+
 ### M4.13
 
 ⚠️ THE SWEEP MUST EMIT A CONFIRMED EVENT FOR THE SLOT-0 `CONTINUE` when it
@@ -775,12 +868,27 @@ that shape. Emitting the CONTINUE pins the floor at 0 and removes it; a
 caller-supplied base was considered and rejected as a second unchecked
 parameter.
 
+⚠️ AND WHEN IT FIRST CONSUMES A VIOLATION MESSAGE, ASSERT ITS CONTENT. M4.11
+left the own-write arm of `Invariants.checkAckOrder` unpinned: mutating it to
+name the EPOCH where the sequence belongs passes all 14 of that row's tests,
+because each asserts only the invariant name, or `hasSize`, or a substring the
+mutant still emits. Detection survives -- a seed still fails -- but the report
+sends whoever pins the regression to the wrong slot. Both reviewers deferred it
+here rather than spend a fifth round on round-1 code already carrying a verdict.
+
+⚠️ THE BUDGET IS <60s FOR 1,000 SEEDS, and THREE separate things now spend it,
+none of which existed when that number was written: M4.24 records `checkChain`
+as O(E-squared) -- 4,999 LISTs for ONE examination at epoch 5000 -- M4.13d needs
+each seed run TWICE (clean and faulted) to show a fault changed an outcome, and
+M4.13a adds two more checkers per seed. Whether the number survives all three is
+measurement, not argument, and this row owns making it.
+
 ⚠️ AND THE SWEEP MUST RUN BOTH CHECKERS. `checkAckOrder` alone is blind to that
 residue; `checkChain`'s gap and I5 arms catch it structurally. Running only one
 is the blind spot.
 
 
-| M4.13 | The 1,000-seed run asserting I1-I5; every failing seed pinned as a named regression test. T1 (MemoryBinStore) so it runs on every commit, with a stated budget of <60s for 1,000 seeds and a configurable seed count. ⚠️ Each injected fault class must have at least one seed where it changes the outcome, or the simulation proves the simulator rather than the system ⚠️ AND IT OWNS THE TWO FAULT CLASSES M4.12 DOES NOT MODEL -- delayed writes and reordered completions -- plus partitioned leaders as an actual injectable fault rather than only its consequence, which needs the store to know WHICH pod is calling and needs `putIfMatch` to be able to fail cleanly. Criterion 1 requires each class to have at least one seed where it CHANGES THE OUTCOME, reported by the harness; recorded here because M4.12 is done and a closed row is no place to leave an unmet criterion ⚠️ AND THE WITHHELD-WRITE AMBIGUITY, a gap in the FAULT MODEL rather than in its tests: M4.12's ambiguous arms attempt the write before throwing, so whenever the CAS would have won the fault always resolves as LANDED, and there is no arm where the response was lost and nothing landed. `AmbiguousPutStore` already has `Mode.LOST` for exactly that shape. Without it the sweep cannot produce "the renew threw, nothing landed, and the retry with the same version must succeed" -- half of what M4.3d and M4.3h were about | FR-11 | todo |
+| M4.13 | **SPLIT into M4.13a-e** -- the text below is the PRE-SPLIT row, kept because the reasoning in it is why the split happened, NOT because this row still owns the work. I3/I4 are M4.13a; the time-shaped fault classes M4.13b; partitioned leaders M4.13e; the withheld-write ambiguity M4.13c; per-class outcome evidence M4.13d. ⚠️ THIS ROW IS NOW THE SWEEP AND ITS BUDGET ONLY. | FR-11 | **split** |
 
 ### M4.17
 

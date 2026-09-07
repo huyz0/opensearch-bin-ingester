@@ -295,8 +295,9 @@ public final class FaultInjectingStore implements BinStore {
         // ⚠️ ALL THREE DRAWN, for the reason spelled out on putIfAbsent: a class
         // that fires must not shift the streams of the classes after it.
         // ⚠️ `unreachable` IS DRAWN AND DELIBERATELY NOT ACTED ON here. The lease
-        // CAS has no clean-failure fault today -- a documented gap in the row,
-        // owned by M4.13 -- and drawing it anyway is what keeps the stream
+        // CAS has no clean-failure fault today -- a documented gap, owned by
+        // M4.13e since M4.13 was split by mechanism -- and drawing it anyway
+        // is what keeps the stream
         // aligned with `putIfAbsent`, so closing that gap later moves no other
         // class's positions.
         fires(unreachableDraws, faults.unreachable());

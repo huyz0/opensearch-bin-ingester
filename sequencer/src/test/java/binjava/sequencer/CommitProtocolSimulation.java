@@ -44,9 +44,11 @@ import java.util.UUID;
  * it to the wrong row. {@code LeaseManagerConcurrencyTest} has a single test and
  * it races two acquires of the LEASE key on one instance. The CHAIN-SLOT race
  * lives in {@code CommitLogSealWriteTest} and in {@code LocalSequencerTest} via
- * {@code StealFirstPutStore}. And M4.13 owns delayed writes, reordered
- * completions, partitioned leaders and the withheld-write ambiguity -- its row
- * says nothing about concurrent pods, which nothing is asking for.
+ * {@code StealFirstPutStore}. And the fault classes this harness does not model
+ * are owned by rows of their own since M4.13 was split by mechanism: delayed
+ * writes and reordered completions by M4.13b, partitioned leaders by M4.13e,
+ * the withheld-write ambiguity by M4.13c. None of their rows says anything
+ * about concurrent pods, which nothing is asking for.
  */
 public final class CommitProtocolSimulation {
 
