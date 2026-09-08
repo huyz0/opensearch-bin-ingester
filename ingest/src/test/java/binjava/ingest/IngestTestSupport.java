@@ -126,6 +126,14 @@ final class IngestTestSupport {
                 IngestConfig.DEFAULT_INTERVAL_SHORTEN_DELAY);
     }
 
+    /** ⚠️ The same wiring as {@link #ingest}, with the sequencer supplied. */
+    static DefaultIngest ingestWithSequencer(CountingBinStore store, Sequencer sequencer)
+            throws IOException {
+        return new DefaultIngest(pinnedIntervalConfig(Duration.ofDays(1), 8L << 20),
+                store, PREFIX, "pod1", sequencer, new SubscriptionHub(), Clock.systemUTC(),
+                index -> LOGS);
+    }
+
     static DefaultIngest ingest(CountingBinStore store) throws IOException {
         return ingest(store, new SubscriptionHub(), NEVER);
     }

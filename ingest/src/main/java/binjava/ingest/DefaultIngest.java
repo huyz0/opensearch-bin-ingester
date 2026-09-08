@@ -352,8 +352,16 @@ public final class DefaultIngest implements Ingest {
             SegmentPublisher.Published published = publisher.publish(accumulator)
                     .orElseThrow(() -> new IOException(
                             "the accumulator produced no segment for a non-empty batch"));
-            CommitDelta delta = sequencer.commit(new CommitRequest(podShortId, incarnationId, flushSeq++,
-                    published.key(), published.recordCounts()));
+            // ⚠️ BUILT ONCE, SO A RETRY COULD CARRY THE SAME TRIPLE -- which is
+            // the only thing that lets the sequencer answer one instead of
+            // committing it twice. `flushSeq++` used to sit inside this
+            // constructor call, so the number moved before the outcome was
+            // known and no two attempts could ever share a triple. Forwarding
+            // will retry when the lease moves under a forwarding pod, and the
+            // request it resends has to be this one.
+            CommitRequest request = new CommitRequest(podShortId, incarnationId, flushSeq++,
+                    published.key(), published.recordCounts());
+            CommitDelta delta = sequencer.commit(request);
 
             Map<RunKey, Long> firstOffsets = new HashMap<>();
             for (RunCommit run : delta.runs()) {
