@@ -229,6 +229,54 @@ class DedupAcrossTakeoverTest {
     }
 
     @Test
+    void aBAREV0CheckpointSlotLeavesItsPodUNPROTECTED_AndThatIsRecorded() throws Exception {
+        // ⚠️ A STATED GAP, PINNED SO IT CANNOT DRIFT. `Checkpoint.decode`
+        // yields `PodState.bare(watermark)` for a v0 object -- no incarnation,
+        // no pointer -- and v0 objects keep decoding for the retention window,
+        // so this is a supported rolling-upgrade state.
+        //
+        // Such a slot cannot be keyed or followed, and admitting it is strictly
+        // WORSE: merged on flushSeq alone it evicts a real pointered slot and
+        // seeds "pod\0null", which nothing matches. It is skipped -- and
+        // because the checkpoint still bounds the walk, that pod's deltas are
+        // never read either, so its replay is applied twice.
+        //
+        // ⚠️ THIS IS NOT A REGRESSION: before M5.1 every takeover replay
+        // duplicated. It is the one case that does not improve, and the test
+        // exists so nobody later reads the seeding code and assumes it does.
+        // Closing it costs either bounded recovery for that chain (M4's
+        // criterion 5) or a new unanswerable-watermark tier -- M5.22.
+        MemoryBinStore store = new MemoryBinStore();
+        CommitRequest flush = new CommitRequest("podb", "i1", 3, "seg/0", counts(3));
+        LocalSequencer first = takeOver(store, "poda");
+        try {
+            first.commitAll(List.of(flush));
+        } finally {
+            first.close();
+        }
+
+        binjava.format.Checkpoint bare = new binjava.format.Checkpoint(2L,
+                java.util.Map.of(),
+                java.util.Map.of("podb", binjava.format.Checkpoint.PodState.bare(100)));
+        byte[] bytes = bare.encode();
+        store.put(new LogKeys(PREFIX, 1L).latestCheckpointKey(),
+                new binjava.binstore.Body(bytes.length,
+                        () -> new java.io.ByteArrayInputStream(bytes)));
+
+        LocalSequencer successor = takeOver(store, "podc");
+        try {
+            successor.commitAll(List.of(flush));
+        } finally {
+            successor.close();
+        }
+        assertThat(deltasCarrying(store, "seg/0"))
+                .as("the KNOWN gap: behind a bare v0 slot the replay is applied twice, "
+                        + "as it was before M5.1. Pinned so the limit is visible rather "
+                        + "than discovered")
+                .isEqualTo(2);
+    }
+
+    @Test
     void aGENUINELYNewFlushAfterATakeoverIsStillApplied() throws Exception {
         // ⚠️ THE NEGATIVE CONTROL, and it is doing real work: a window seeded
         // too eagerly -- one that treated any known incarnation as fully
