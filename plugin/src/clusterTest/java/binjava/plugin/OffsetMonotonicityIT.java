@@ -11,6 +11,7 @@ import binjava.ingest.DefaultIngest;
 import binjava.ingest.IngestConfig;
 import binjava.ingest.SubscriptionHub;
 import binjava.security.Principal;
+import binjava.sequencer.TestSequencers;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -104,7 +105,8 @@ public class OffsetMonotonicityIT extends OpenSearchSingleNodeTestCase {
 
         try (DefaultIngest ingest = new DefaultIngest(
                 new IngestConfig(Duration.ofMillis(250), 8L << 20, "cluster-a"),
-                store, "bins/cluster-a", "pod1", HUB, Clock.systemUTC(), index -> stream)) {
+                store, "bins/cluster-a", "pod1", TestSequencers.leased(store, "bins/cluster-a", "pod1"), HUB, Clock.systemUTC(),
+                index -> stream)) {
 
             // ---- flush 1: two documents
             ingest.append(PRINCIPAL, "logs", 0, docs("a", 2)::forEach);

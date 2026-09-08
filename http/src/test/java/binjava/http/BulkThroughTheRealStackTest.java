@@ -11,6 +11,7 @@ import binjava.ingest.DefaultIngest;
 import binjava.ingest.IngestConfig;
 import binjava.ingest.SubscriptionHub;
 import binjava.security.Principal;
+import binjava.sequencer.TestSequencers;
 import io.helidon.webclient.api.WebClient;
 import io.helidon.webserver.WebServer;
 import io.helidon.webserver.http.HttpRouting;
@@ -97,7 +98,8 @@ class BulkThroughTheRealStackTest {
         try (var sub = hub.subscribe(new RunKey(LOGS, 3), pushed::add);
                 DefaultIngest ingest = new DefaultIngest(
                         new IngestConfig(Duration.ofMillis(30), 8L << 20, "cluster-a"),
-                        store, "bins/cluster-a", "pod1", hub, Clock.systemUTC(),
+                        store, "bins/cluster-a", "pod1", TestSequencers.leased(store, "bins/cluster-a", "pod1"), hub,
+                        Clock.systemUTC(),
                         index -> LOGS)) {
 
             server = WebServer.builder().port(0)

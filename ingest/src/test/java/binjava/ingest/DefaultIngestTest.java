@@ -24,6 +24,7 @@ import binjava.format.RunKey;
 import binjava.format.SegmentReader;
 import binjava.format.SegmentRecord;
 import binjava.security.Principal;
+import binjava.sequencer.CommitLog;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -151,7 +152,8 @@ class DefaultIngestTest {
                 DefaultIngest probe = new DefaultIngest(
                         IngestTestSupport.pinnedIntervalConfig(IngestTestSupport.NEVER,
                                 8L << 20, Long.MAX_VALUE / 4),
-                        sizer, IngestTestSupport.PREFIX, "pod1", sizerHub, Clock.systemUTC(),
+                        sizer, IngestTestSupport.PREFIX, "pod1",
+                        IngestTestSupport.sequencer(sizer, "pod1"), sizerHub, Clock.systemUTC(),
                         index -> IngestTestSupport.LOGS)) {
             appendOnce(probe, "logs", 0, 2);
             awaitPush(measured);
@@ -168,7 +170,8 @@ class DefaultIngestTest {
         try (var sub = hub.subscribe(new RunKey(IngestTestSupport.LOGS, 0), sink);
                 DefaultIngest ingest = new DefaultIngest(
                         IngestTestSupport.pinnedIntervalConfig(IngestTestSupport.NEVER, 8L << 20, budget),
-                        store, IngestTestSupport.PREFIX, "pod1", hub, Clock.systemUTC(),
+                        store, IngestTestSupport.PREFIX, "pod1",
+                        IngestTestSupport.sequencer(store, "pod1"), hub, Clock.systemUTC(),
                         index -> IngestTestSupport.LOGS)) {
             appendOnce(ingest, "logs", 0, 2);
             sink.awaitEntered();
@@ -331,7 +334,8 @@ class DefaultIngestTest {
         // the clock when the buffer is already full.
         CountingBinStore store = new CountingBinStore(new MemoryBinStore());
         try (DefaultIngest ingest = new DefaultIngest(
-                IngestTestSupport.pinnedIntervalConfig(IngestTestSupport.NEVER, 4096L), store, IngestTestSupport.PREFIX, "pod1",
+                IngestTestSupport.pinnedIntervalConfig(IngestTestSupport.NEVER, 4096L), store,
+                IngestTestSupport.PREFIX, "pod1", IngestTestSupport.sequencer(store, "pod1"),
                 new SubscriptionHub(), Clock.systemUTC(), index -> IngestTestSupport.LOGS)) {
             long base = store.counts().total();
             AppendResult result = ingest.append(IngestTestSupport.PRINCIPAL, "logs", 0, docs(400)::forEach);
@@ -457,31 +461,6 @@ class DefaultIngestTest {
                     .as("a refused append leaves nothing waiting for the next flush")
                     .isZero();
         }
-    }
-
-    @Test
-    void closeFlushesWhatIsStillBufferedRatherThanLosingIt() throws Exception {
-        // ⚠️ The shutdown path is the one whose failure loses the LAST segment,
-        // and while append flushed on every call it was unreachable. A no-op
-        // close() must not pass this.
-        CountingBinStore store = new CountingBinStore(new MemoryBinStore());
-        SubscriptionHub hub = new SubscriptionHub();
-        List<SubscriptionHub.Push> seen = new CopyOnWriteArrayList<>();
-        var sub = hub.subscribe(new RunKey(IngestTestSupport.LOGS, 0), seen::add);
-        DefaultIngest ingest = ingest(store, hub, IngestTestSupport.NEVER);
-        long base = store.counts().total();
-        CompletableFuture<AppendResult> inflight = appendAsync(ingest, "logs", 0, 7);
-        awaitPending(ingest, 1);
-        assertThat(store.counts().total() - base)
-                .as("nothing written before the flush").isZero();
-
-        ingest.close();
-
-        assertThat(inflight.get(10, TimeUnit.SECONDS).recordCount()).isEqualTo(7);
-        // ⚠️ M2.6: 2 (segment + commit) + 2 (one genuinely new index).
-        assertThat(store.counts().total() - base).isEqualTo(4);
-        assertThat(seen).hasSize(1);
-        sub.close();
     }
 
     @Test

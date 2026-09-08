@@ -13,6 +13,7 @@ import binjava.ingest.DefaultIngest;
 import binjava.ingest.IngestConfig;
 import binjava.ingest.SubscriptionHub;
 import binjava.security.Principal;
+import binjava.sequencer.TestSequencers;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -114,7 +115,7 @@ public class RestartResumeIT extends OpenSearchSingleNodeTestCase {
 
         try (DefaultIngest ingest = new DefaultIngest(
                 new IngestConfig(Duration.ofMillis(250), 8L << 20, "cluster-a"),
-                store, "bins/cluster-a", "pod1", HUB, Clock.systemUTC(),
+                store, "bins/cluster-a", "pod1", TestSequencers.leased(store, "bins/cluster-a", "pod1"), HUB, Clock.systemUTC(),
                 index -> stream)) {
 
             // ---- batch 1: 20 documents, then wait for them to be searchable

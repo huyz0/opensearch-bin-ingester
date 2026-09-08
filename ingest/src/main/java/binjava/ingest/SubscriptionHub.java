@@ -4,6 +4,7 @@ package binjava.ingest;
 import binjava.format.CommitDelta;
 import binjava.format.RunCommit;
 import binjava.format.RunKey;
+import binjava.format.SegmentCommit;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -107,28 +108,71 @@ public final class SubscriptionHub {
      * crash would then have handed out an offset that never existed.
      */
     public void publish(CommitDelta delta) {
-        publish(delta, new byte[0]);
+        // ⚠️ FREE OF THE MIS-PAIRING the overload below refuses, because with
+        // no bytes attached there is nothing to mis-pair: each run is delivered
+        // under ITS OWN segment key.
+        // ⚠️ BUT THIS IS NOT THE BATCHED DELIVERY PATH, and a draft of this
+        // comment said it was — claiming "a subscriber that needs the records
+        // fetches them", which no subscriber can do. `Push` carries the segment
+        // INLINE (ADR-0004) and `ConsumerClient.decodeInto` opens
+        // `delivery.segment()` with no store fallback, so a run delivered with
+        // `new byte[0]` fails inside the sink and is swallowed below as a
+        // slow-or-dead subscriber: silent record loss for the whole window.
+        // M4.7's batcher needs a per-segment payload API, not this.
+        for (SegmentCommit committed : delta.segments()) {
+            for (RunCommit run : committed.runs()) {
+                publishRun(committed.segmentKey(), run, new byte[0]);
+            }
+        }
     }
 
-    /** Delivers a commit together with the segment bytes it committed. */
+    /**
+     * Delivers a commit together with the segment bytes it committed.
+     *
+     * @throws IllegalStateException if the delta names several segments — ⚠️
+     *     ONE {@code byte[]} CANNOT BE THE PAYLOAD OF MANY SEGMENTS, and this
+     *     refusal is the point. {@code Push} carries the bytes INLINE (ADR-0004:
+     *     the consumer issues no store request), so the payload is what
+     *     {@code ConsumerClient} actually parses and the key is only a label.
+     *     Handing every run the same array while pairing each with its own key
+     *     fixes the label and leaves the bytes wrong — a subscriber then decodes
+     *     another pod's segment. Where its stream is absent that throws inside
+     *     the sink and is SWALLOWED here as a slow-or-dead subscriber: silent
+     *     record loss. Where two pods committed the same {@code RunKey} in one
+     *     window — the case the {@code Sequencer} contract names — the other
+     *     pod's segment does contain that stream, so the subscriber decodes the
+     *     WRONG RECORDS under its own offsets. Neither throws, and no gate sees
+     *     either. ⚠️ M4.7 owns the per-segment payload API this needs; until it
+     *     exists, refusing is the only honest answer.
+     */
     public void publish(CommitDelta delta, byte[] segment) {
-        for (RunCommit run : delta.runs()) {
-            var list = subscribers.get(run.key());
-            if (list == null) {
+        if (delta.segments().size() != 1) {
+            throw new IllegalStateException(
+                    "this delta batches " + delta.segments().size() + " segments and one byte[] "
+                            + "cannot be the payload of all of them; publish per segment");
+        }
+        SegmentCommit committed = delta.segments().get(0);
+        for (RunCommit run : committed.runs()) {
+            publishRun(committed.segmentKey(), run, segment);
+        }
+    }
+
+    private void publishRun(String segmentKey, RunCommit run, byte[] segment) {
+        var list = subscribers.get(run.key());
+        if (list == null) {
+            return;
+        }
+        Push push = new Push(run.key(), segmentKey, run.recordCount(),
+                run.firstOffset(), segment);
+        for (Subscription s : list) {
+            try {
+                s.sink.accept(push);
+            } catch (RuntimeException slowOrDeadSubscriber) {
+                // ⚠️ Swallowed ON PURPOSE, and only here. The commit is
+                // already durable; a consumer that throws must not roll back
+                // or stall a write that succeeded. It falls behind and
+                // recovers from the commit log, which is what the log is for.
                 continue;
-            }
-            Push push = new Push(run.key(), delta.segmentKey(), run.recordCount(),
-                    run.firstOffset(), segment);
-            for (Subscription s : list) {
-                try {
-                    s.sink.accept(push);
-                } catch (RuntimeException slowOrDeadSubscriber) {
-                    // ⚠️ Swallowed ON PURPOSE, and only here. The commit is
-                    // already durable; a consumer that throws must not roll back
-                    // or stall a write that succeeded. It falls behind and
-                    // recovers from the commit log, which is what the log is for.
-                    continue;
-                }
             }
         }
     }

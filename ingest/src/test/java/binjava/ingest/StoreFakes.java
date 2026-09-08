@@ -149,4 +149,79 @@ final class StoreFakes {
             delegate.close();
         }
     }
+
+    /**
+     * A store whose WRITES all start failing on command, reads left working.
+     *
+     * <p>⚠️ BOTH WRITE PRIMITIVES, and that is the point: the shutdown path
+     * publishes a segment ({@code put}), commits a delta ({@code putIfAbsent})
+     * and releases the lease ({@code putIfMatch}). A fake that failed only one of
+     * them could not produce the case where a failed final flush and a failed
+     * release are in flight at once, which is the only case that distinguishes
+     * "suppressed" from "substituted".
+     */
+    static final class FailWritesOnCommand implements BinStore {
+        private final BinStore delegate;
+        private volatile boolean failing;
+
+        FailWritesOnCommand(BinStore delegate) {
+            this.delegate = delegate;
+        }
+
+        void failEveryWriteFromNowOn() {
+            this.failing = true;
+        }
+
+        private void refuse(String op, String key) throws IOException {
+            if (failing) {
+                throw new IOException("injected: the store refused " + op + " on " + key);
+            }
+        }
+
+        @Override
+        public Optional<Version> putIfAbsent(String key, Body body) throws IOException {
+            refuse("putIfAbsent", key);
+            return delegate.putIfAbsent(key, body);
+        }
+
+        @Override
+        public Optional<Version> putIfMatch(String key, Body body, Version expected)
+                throws IOException {
+            refuse("putIfMatch", key);
+            return delegate.putIfMatch(key, body, expected);
+        }
+
+        @Override public Version put(String k, Body b) throws IOException {
+            refuse("put", k);
+            return delegate.put(k, b);
+        }
+
+        @Override public InputStream get(String k) throws IOException { return delegate.get(k); }
+
+        @Override
+        public InputStream getRange(String key, long start, long endIncl) throws IOException {
+            return delegate.getRange(key, start, endIncl);
+        }
+
+        @Override public Optional<ObjectStat> stat(String k) throws IOException {
+            return delegate.stat(k);
+        }
+
+        @Override public MultipartWriter multipart(String k) throws IOException {
+            return delegate.multipart(k);
+        }
+
+        @Override
+        public ListPage list(String prefix, String startAfter, int maxKeys) throws IOException {
+            return delegate.list(prefix, startAfter, maxKeys);
+        }
+
+        @Override public void delete(List<String> keys) throws IOException {
+            delegate.delete(keys);
+        }
+
+        @Override public Capabilities capabilities() { return delegate.capabilities(); }
+
+        @Override public void close() throws IOException { delegate.close(); }
+    }
 }

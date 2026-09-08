@@ -8,6 +8,7 @@ import binjava.ingest.DefaultIngest;
 import binjava.ingest.IngestConfig;
 import binjava.ingest.SubscriptionHub;
 import binjava.security.Principal;
+import binjava.sequencer.TestSequencers;
 import io.helidon.webclient.api.WebClient;
 import io.helidon.webserver.WebServer;
 import io.helidon.webserver.http.HttpRouting;
@@ -165,7 +166,7 @@ class MemoryFlatAtIntervalCeilingTest {
         IngestConfig config = IngestConfig.defaults("cluster-a");
 
         try (DefaultIngest ingest = new DefaultIngest(config, store, "bins/cluster-a", "pod1",
-                hub, clock, index -> logs)) {
+                TestSequencers.leased(store, "bins/cluster-a", "pod1"), hub, clock, index -> logs)) {
             server = WebServer.builder().port(0)
                     .routing(HttpRouting.builder().register(new BulkService(ingest, PRINCIPAL)))
                     .build().start();

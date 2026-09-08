@@ -35,6 +35,9 @@ dependencies {
     }
     "clusterTestImplementation"(project(":ingest"))
     "clusterTestImplementation"(project(":binstore-backends"))
+    // ⚠️ TEST ONLY, for `TestSequencers`: since M4.6d a `DefaultIngest` needs a
+    // Sequencer, and these ITs drive the real ingester over a real store.
+    "clusterTestImplementation"(testFixtures(project(":sequencer")))
 }
 
 // ⚠️ OpenSearch 3.x replaced the SecurityManager with a JAVA AGENT, and its test

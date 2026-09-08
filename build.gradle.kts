@@ -46,6 +46,14 @@ val licensesDirectory = layout.projectDirectory.dir("licenses")
 // artifacts they ship alongside. Folding them under `junit` would attribute
 // them to the wrong licence.
 val licenceMappings = mapOf(
+    // ⚠️ junit 4 IS NOT junit 5's LICENCE. `junit:junit:4.13.2` arrives
+    // transitively through `org.opensearch.test:framework`, and its bare
+    // artifactId does not match `^junit-.*`, so without this line it fell to the
+    // `junit` prefix and was labelled EPL-2.0. Its POM declares Eclipse Public
+    // License 1.0 -- a different licence, with a different Secondary Licenses
+    // clause and a different patent-defence trigger. The identifier is what the
+    // deny-list matches, so a wrong one is worse than a missing one.
+    "^junit$" to "junit4",
     "^junit-.*" to "junit",
     "^opentest4j$" to "opentest4j",
     "^apiguardian-api$" to "apiguardian",

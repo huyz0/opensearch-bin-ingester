@@ -13,10 +13,10 @@ import binjava.format.RunKey;
 import binjava.format.SegmentReader;
 import binjava.format.SegmentRecord;
 import binjava.ingest.Accumulator;
-import binjava.ingest.CommitLog;
 import binjava.ingest.IngestConfig;
 import binjava.ingest.SegmentPublisher;
 import binjava.ingest.SubscriptionHub;
+import binjava.sequencer.CommitLog;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -78,7 +78,7 @@ class EndToEndTest {
         TestClock clock = new TestClock();
         CountingBinStore store = new CountingBinStore(new LocalFsBinStore(dir.resolve("bucket")));
         SubscriptionHub hub = new SubscriptionHub();
-        CommitLog log = new CommitLog(store, "bins/cluster-a");
+        CommitLog log = new CommitLog(store, "bins/cluster-a", 0);
         SegmentPublisher publisher = new SegmentPublisher(store, "bins/cluster-a", "pod1");
         Accumulator accumulator =
                 new Accumulator(new IngestConfig(Duration.ofMillis(250), 8L << 20, "cluster-a"),
@@ -170,7 +170,7 @@ class EndToEndTest {
         TestClock clock = new TestClock();
         CountingBinStore store = new CountingBinStore(new LocalFsBinStore(dir.resolve("b")));
         SubscriptionHub hub = new SubscriptionHub();
-        CommitLog log = new CommitLog(store, "p");
+        CommitLog log = new CommitLog(store, "p", 0);
         SegmentPublisher publisher = new SegmentPublisher(store, "p", "pod1");
         Accumulator accumulator =
                 new Accumulator(new IngestConfig(Duration.ofMillis(250), 8L << 20, "c"), clock);

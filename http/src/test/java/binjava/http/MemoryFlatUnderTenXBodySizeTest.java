@@ -8,6 +8,7 @@ import binjava.ingest.DefaultIngest;
 import binjava.ingest.IngestConfig;
 import binjava.ingest.SubscriptionHub;
 import binjava.security.Principal;
+import binjava.sequencer.TestSequencers;
 import io.helidon.webclient.api.WebClient;
 import io.helidon.webserver.WebServer;
 import io.helidon.webserver.http.HttpRouting;
@@ -84,7 +85,8 @@ class MemoryFlatUnderTenXBodySizeTest {
         UUID logs = UUID.randomUUID();
 
         try (DefaultIngest ingest = new DefaultIngest(IngestConfig.defaults("cluster-a"),
-                store, "bins/cluster-a", "pod1", hub, Clock.systemUTC(), index -> logs)) {
+                store, "bins/cluster-a", "pod1", TestSequencers.leased(store, "bins/cluster-a", "pod1"), hub, Clock.systemUTC(),
+                index -> logs)) {
             server = WebServer.builder().port(0)
                     .routing(HttpRouting.builder().register(new BulkService(ingest, PRINCIPAL)))
                     .build().start();

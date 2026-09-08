@@ -1,11 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 package binjava.ingest;
 
+import binjava.binstore.BinStore;
 import binjava.binstore.CountingBinStore;
 import binjava.binstore.backend.MemoryBinStore;
 import binjava.format.OpType;
 import binjava.format.SegmentRecord;
 import binjava.security.Principal;
+import binjava.sequencer.LeaseManager;
+import binjava.sequencer.Sequencer;
+import binjava.sequencer.TestSequencers;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -36,6 +40,16 @@ final class IngestTestSupport {
     static final Principal PRINCIPAL =
             new Principal("cluster-a", "producer-1", Set.of("logs", "audit"));
 
+    /**
+     * ⚠️ RE-EXPORTED from the shared fixture, not redeclared: a second copy of
+     * the TTL is a second thing to change, and
+     * {@code closeReleasesTheLeaseSoASuccessorSequencesWithoutWaitingOutTheTtl}
+     * names it in its own failure message.
+     */
+    static final Duration LEASE_TTL = TestSequencers.TTL;
+
+    static final int SEAL_REDRIVE_BUDGET = TestSequencers.SEAL_REDRIVE_BUDGET;
+
     /** ⚠️ Long enough that the trigger never fires, so a test drives the flush. */
     static final Duration NEVER = Duration.ofHours(1);
 
@@ -51,7 +65,43 @@ final class IngestTestSupport {
     static DefaultIngest ingest(CountingBinStore store, SubscriptionHub hub,
             Duration flushInterval) throws IOException {
         return new DefaultIngest(pinnedIntervalConfig(flushInterval, 8L << 20),
-                store, PREFIX, "pod1", hub, Clock.systemUTC(), index -> LOGS);
+                store, PREFIX, "pod1", sequencer(store, "pod1"), hub, Clock.systemUTC(),
+                index -> LOGS);
+    }
+
+    /**
+     * A REAL sequencer, deliberately, not {@code FakeSequencer} — see
+     * {@link TestSequencers} for the narrow reason: THIS class's own request
+     * deltas. Five {@code isEqualTo(4)} assertions in {@code DefaultIngestTest}
+     * and one {@code isEqualTo(5)} in {@code IngestShutdownTest} count the commit
+     * delta among the objects a flush writes, and a fake writes nothing.
+     *
+     * <p>⚠️ NOT because of {@code IntervalPutRateTest}, which an earlier draft
+     * claimed: that test constructs no {@code Sequencer} and its own javadoc says
+     * a commit-log append is a separate request its table excludes.
+     *
+     * <p>⚠️ The lease object and the chain's opening CONTINUE are written HERE,
+     * at construction, so they land before any test captures its baseline. Every
+     * request assertion over ingest is a DELTA (`total() - base`) captured INSIDE
+     * the try block, which is what makes that safe; an absolute count would have
+     * to change.
+     */
+    static Sequencer sequencer(BinStore store, String podId) throws IOException {
+        return TestSequencers.leased(store, PREFIX, podId);
+    }
+
+    /** ⚠️ Exposed so a test can attempt a SECOND acquisition against the same store. */
+    static LeaseManager leases(BinStore store, String podId) {
+        return TestSequencers.leases(store, PREFIX, podId);
+    }
+
+    /**
+     * ⚠️ On a CALLER-SUPPLIED CLOCK, which any test asserting about expiry must
+     * use — a `Clock.fixed` challenger cannot see a held lease lapse, so its
+     * empty result means "held" rather than "the machine was quick".
+     */
+    static LeaseManager leases(BinStore store, String podId, Clock clock) {
+        return TestSequencers.leases(store, PREFIX, podId, clock);
     }
 
     /**

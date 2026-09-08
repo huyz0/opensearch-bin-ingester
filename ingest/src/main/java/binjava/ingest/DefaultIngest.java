@@ -7,6 +7,8 @@ import binjava.format.RunCommit;
 import binjava.format.RunKey;
 import binjava.format.SegmentRecord;
 import binjava.security.Principal;
+import binjava.sequencer.CommitRequest;
+import binjava.sequencer.Sequencer;
 import java.io.IOException;
 import java.time.Clock;
 import java.time.Duration;
@@ -50,7 +52,21 @@ public final class DefaultIngest implements Ingest {
     private final IngestConfig config;
     private final Accumulator accumulator;
     private final SegmentPublisher publisher;
-    private final CommitLog log;
+    private final Sequencer sequencer;
+    private final String podShortId;
+    /**
+     * ⚠️ Half the idempotency key, with {@code podId} (M4.10). A plain
+     * {@code long}, not an atomic, because every increment happens inside the
+     * drain that {@code lock} already serialises — an atomic here would imply a
+     * concurrency this class deliberately excludes.
+     */
+    private long flushSeq;
+    // ⚠️ ONCE PER INSTANCE, never per flush (ADR-0036). A new process is a new
+    // incarnation by construction -- no clock, no coordination -- which is what
+    // lets a replay be told from a restart when `flushSeq` restarts at 0 and
+    // `podShortId` does not. Minting this inside `flushLocked` compiles, keeps
+    // every sequencer-seam suite green, and makes dedup a no-op in production.
+    private final String incarnationId = java.util.UUID.randomUUID().toString();
     private final SubscriptionHub hub;
     private final StreamResolver streams;
 
@@ -125,30 +141,22 @@ public final class DefaultIngest implements Ingest {
     }
 
     public DefaultIngest(IngestConfig config, BinStore store, String prefix, String podShortId,
-            SubscriptionHub hub, Clock clock, StreamResolver streams) throws IOException {
+            Sequencer sequencer, SubscriptionHub hub, Clock clock, StreamResolver streams)
+            throws IOException {
         this.config = Objects.requireNonNull(config, "config");
         this.accumulator = new Accumulator(config, Objects.requireNonNull(clock, "clock"));
         this.publisher = new SegmentPublisher(Objects.requireNonNull(store, "store"),
                 Objects.requireNonNull(prefix, "prefix"),
                 Objects.requireNonNull(podShortId, "podShortId"));
-        this.log = new CommitLog(store, prefix);
+        this.sequencer = Objects.requireNonNull(sequencer, "sequencer");
+        this.podShortId = podShortId;
         this.hub = Objects.requireNonNull(hub, "hub");
         this.streams = Objects.requireNonNull(streams, "streams");
 
-        // ⚠️ RECOVER BEFORE ACCEPTING A WRITE. CommitLog.commit starts at
-        // sequence 0 and walks slot by slot on a lost putIfAbsent, so against an
-        // existing prefix of N deltas the first append would issue ~2N requests
-        // -- a rate that scales with commit-log HISTORY -- and would do it under
-        // the lock, stalling the pod.
-        //
-        // ⚠️ recover() is NOT "one LIST": it is one LIST per 1000 objects PLUS
-        // one GET per delta, run synchronously before this pod accepts a write.
-        // At the 250 ms interval that is ~14,400 deltas per retained hour, so a
-        // pod restarting against three hours of log issues ~43,000 sequential
-        // GETs in this constructor. The request COST is off the hot path and R2
-        // permits it; the STARTUP LATENCY is unbounded in log length, and an
-        // operator should not have to discover that from the code.
-        this.log.recover();
+        // ⚠️ NO RECOVERY HERE ANY MORE, and the startup-latency note that used
+        // to sit here moved WITH the responsibility to `LocalSequencer.start`.
+        // Establishing where a chain ended is the SEQUENCER's, because only it
+        // knows which epoch it may write to.
 
         this.pusher = Thread.ofVirtual().name("binstore-push").start(this::pushLoop);
         this.flusher = Thread.ofVirtual().name("binstore-flush").start(this::flushLoop);
@@ -344,7 +352,8 @@ public final class DefaultIngest implements Ingest {
             SegmentPublisher.Published published = publisher.publish(accumulator)
                     .orElseThrow(() -> new IOException(
                             "the accumulator produced no segment for a non-empty batch"));
-            CommitDelta delta = log.commit(published.key(), published.recordCounts());
+            CommitDelta delta = sequencer.commit(new CommitRequest(podShortId, incarnationId, flushSeq++,
+                    published.key(), published.recordCounts()));
 
             Map<RunKey, Long> firstOffsets = new HashMap<>();
             for (RunCommit run : delta.runs()) {
@@ -398,12 +407,21 @@ public final class DefaultIngest implements Ingest {
             lock.unlock();
         }
         flusher.interrupt();
+        // ⚠️ HELD so the `finally` can suppress against it rather than replace it;
+        // a bare `finally` cannot see the exception in flight. `Throwable`, not
+        // `IOException`, and the difference is reachable: an UncheckedIOException
+        // out of the flush would leave an IOException-typed field null and the
+        // release failure would replace it -- the same masking, one type narrower.
+        Throwable flushFailure = null;
         try {
             // ⚠️ The LAST flush goes through the same path as every other one; a
             // second copy of publish/commit/push here is how the shutdown path --
             // the one whose failure loses the final segment -- drifts out of
             // step with the path that is actually tested.
             flushNow();
+        } catch (Throwable failed) {
+            flushFailure = failed;
+            throw failed;
         } finally {
             // ⚠️ Anything that slipped in between is FAILED, never left waiting.
             // join() is uninterruptible, so a Pending nobody completes is a
@@ -420,6 +438,32 @@ public final class DefaultIngest implements Ingest {
                 lock.unlock();
             }
             drainPushes();
+            // ⚠️ RELEASES THE LEASE, and doing it here rather than leaving it to
+            // the caller is the point. The Sequencer contract calls close "the
+            // difference between a failover in milliseconds and one bounded by
+            // the lease TTL" (ADR-0007 puts that at ~10 s worst case) -- and
+            // this method IS the pod shutting down.
+            // ⚠️ AFTER the final flush, never before: that flush commits through
+            // the sequencer, and closing first would fail the very segment the
+            // shutdown path exists to save.
+            //
+            // ⚠️ SUPPRESSED, NEVER SUBSTITUTED. Everything else in this `finally`
+            // is non-throwing by construction -- `drainPushes()` declares no
+            // checked exception for exactly that reason, and its javadoc below
+            // records this class already paying for the defect once. A release is
+            // I/O and CAN fail (a stale CAS version after a self-fence, a 503 at
+            // shutdown), so bare here it would REPLACE `flushNow()`'s exception:
+            // "could not release the lease", reported for a pod that just lost
+            // its final segment. A lost segment always wins the report.
+            try {
+                sequencer.close();
+            } catch (IOException releaseFailed) {
+                if (flushFailure != null) {
+                    flushFailure.addSuppressed(releaseFailed);
+                } else {
+                    throw releaseFailed;
+                }
+            }
         }
     }
 
