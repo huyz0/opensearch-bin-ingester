@@ -44,6 +44,17 @@ public final class CommitLog {
     private final long epoch;
     private final LogKeys logKeys;
     private final Map<RunKey, Long> nextOffsets = new HashMap<>();
+
+    /**
+     * The distribution M7 chooses a compaction threshold from (M4.14, Q17).
+     *
+     * <p>⚠️ NOT A METRIC LABEL. observability.md rule 1 closes the allow-list
+     * because a per-stream label costs ~2,400,000 series and ~5.7 GiB, on a
+     * system whose purpose is cheap ingestion -- our telemetry would outweigh
+     * the traffic it describes. The histogram carries no identity; the top-K
+     * event carries a bounded number of them, which is rule 2.
+     */
+    private final CompactionObservable compaction = new CompactionObservable(10);
     private long nextSequence;
     /**
      * The SEAL this chain ended at, if recovery reached one.
@@ -131,6 +142,12 @@ public final class CommitLog {
         nextOffsets.clear();
         nextOffsets.putAll(r.offsets());
         nextSequence = r.nextSequence();
+        // ⚠️ SEEDED FROM THE REPLAY, so the distribution a recovered log reports
+        // is the one the LOG describes rather than one this process happened to
+        // observe. Without this a restart reported zero entries for every
+        // stream while the commit log was unchanged, and the same log yielded
+        // two different histograms depending on uptime.
+        compaction.seed(r.indexEntries());
         if (r.seal() != null) {
             sealedAt = r.seal();
         }
@@ -185,7 +202,21 @@ public final class CommitLog {
      */
     private void apply(ChainEntry entry) {
         switch (entry) {
-            case CommitDelta delta -> ChainReplay.fold(delta, nextOffsets);
+            case CommitDelta delta -> {
+                ChainReplay.fold(delta, nextOffsets);
+                // ⚠️ FED FROM `apply`, NOT FROM `commit`, AND THAT IS THE WHOLE
+                // POINT. `apply` runs on a live commit AND on every entry
+                // replayed during recovery, so the distribution is rebuilt FROM
+                // THE LOG rather than accumulated from process uptime. Counting
+                // in `commit` instead would make the same commit log yield a
+                // different histogram depending on how long the process had
+                // been running, and report 0 for every stream immediately after
+                // a restart -- which is not a quantity anyone can choose a
+                // compaction threshold from.
+                for (binjava.format.RunCommit run : delta.allRuns()) {
+                    compaction.recordIndexEntry(run.key());
+                }
+            }
             case Seal ignored -> { }
             case Continue ignored -> { }
         }
@@ -196,6 +227,11 @@ public final class CommitLog {
     private void crossFrom(long prevEpoch, long prevSeq) throws IOException {
         ChainReplay.inherited(store, prefix, prevEpoch, prevSeq)
                 .forEach((key, next) -> nextOffsets.merge(key, next, Math::max));
+    }
+
+    /** Commit-log index entries per stream, as this log currently holds them. */
+    public CompactionObservable compaction() {
+        return compaction;
     }
 
     /** The offset the next record of this stream will get. */

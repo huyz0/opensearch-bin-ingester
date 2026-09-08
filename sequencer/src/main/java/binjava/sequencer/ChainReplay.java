@@ -55,13 +55,32 @@ final class ChainReplay {
     }
 
     /** What a replay learned: offsets, this chain's next free slot, its seal. */
-    record Result(Map<RunKey, Long> offsets, long nextSequence, Seal seal) {
+    record Result(Map<RunKey, Long> offsets, long nextSequence, Seal seal,
+            Map<RunKey, Long> indexEntries) {
+
+        /**
+         * ⚠️ `indexEntries` IS HOW MANY CHAIN ENTRIES MENTION EACH STREAM, and
+         * it is carried here because a replay is the only walk that already
+         * visits every entry. Rebuilding it any other way costs a second pass
+         * over the chain, and deriving it from `offsets` is impossible -- an
+         * offset says how far a stream got, not across how many entries.
+         *
+         * <p>⚠️ IT IS SCOPED TO WHAT THE REPLAY READ, which after a checkpoint
+         * is the deltas since that checkpoint rather than all of history. That
+         * is the RIGHT quantity for M4.14: a compaction threshold is chosen
+         * against what the log still holds, and a checkpoint is precisely the
+         * thing that collapses what came before it.
+         */
+        Result(Map<RunKey, Long> offsets, long nextSequence, Seal seal) {
+            this(offsets, nextSequence, seal, Map.of());
+        }
     }
 
     private final BinStore store;
     private final String prefix;
     private final long ownEpoch;
     private final Map<RunKey, Long> offsets = new HashMap<>();
+    private final Map<RunKey, Long> indexEntries = new HashMap<>();
     private long nextSequence;
     private Seal seal;
 
@@ -75,7 +94,7 @@ final class ChainReplay {
     static Result replay(BinStore store, String prefix, long epoch) throws IOException {
         ChainReplay r = new ChainReplay(store, prefix, epoch);
         r.replayAncestry(epoch, Long.MAX_VALUE, true);
-        return new Result(r.offsets, r.nextSequence, r.seal);
+        return new Result(r.offsets, r.nextSequence, r.seal, Map.copyOf(r.indexEntries));
     }
 
     /**
@@ -432,6 +451,14 @@ final class ChainReplay {
 
     private void applyOffsets(ChainEntry entry) {
         fold(entry, offsets);
+        // ⚠️ COUNTED ON THE SAME WALK (M4.14). A replay already visits every
+        // entry, so counting here costs nothing; a second pass would cost one
+        // GET per delta on the recovery path, whose whole purpose is speed.
+        if (entry instanceof CommitDelta delta) {
+            for (binjava.format.RunCommit run : delta.allRuns()) {
+                indexEntries.merge(run.key(), 1L, Long::sum);
+            }
+        }
     }
 
     /**
