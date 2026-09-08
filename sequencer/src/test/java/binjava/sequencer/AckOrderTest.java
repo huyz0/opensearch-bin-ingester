@@ -198,12 +198,27 @@ class AckOrderTest {
                 AckOrderInvariants.AckEvent.acked(1, 1),
                 AckOrderInvariants.AckEvent.confirmed(1, 2),
                 AckOrderInvariants.AckEvent.acked(1, 2),
-                // epoch 2 acks its own sequence 2 having confirmed nothing.
-                AckOrderInvariants.AckEvent.acked(2, 2)));
+                // ⚠️ EPOCH 2, SEQUENCE 5, AND THE TWO MUST DIFFER. It was
+                // `acked(2, 2)`, where a message naming the epoch where the
+                // sequence belongs reads identically -- measured, the swap
+                // survived the whole suite behind an assertion that looked like
+                // it pinned the roles. Distinct values are what make the roles
+                // observable at all.
+                AckOrderInvariants.AckEvent.acked(2, 5)));
 
         assertThat(found).as("epoch 2's ack is unbacked by epoch 2's own confirmations")
                 .hasSize(1);
-        assertThat(found.get(0).detail()).contains("epoch 2");
+        // ⚠️ THE EPOCH AND THE SEQUENCE ARE ASSERTED IN THEIR OWN POSITIONS,
+        // which M4.13's notes deferred to whoever first consumed a violation
+        // message and review measured still open: swapping the two terms in the
+        // own-write arm -- so it names the epoch where the sequence belongs and
+        // vice versa -- left the whole suite green. Detection survived that;
+        // the REPORT sent whoever pins the regression to the wrong slot, and on
+        // a 1,000-seed sweep that string is the only route back to the defect.
+        assertThat(found.get(0).detail())
+                .as("the message must name epoch 2 as the EPOCH and 5 as the SEQUENCE, "
+                        + "in those roles")
+                .contains("epoch 2 acked sequence 5");
     }
 
     /**

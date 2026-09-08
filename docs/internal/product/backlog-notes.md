@@ -946,7 +946,37 @@ is the blind spot.
 
 | M4.13 | **SPLIT into M4.13a-e** -- the text below is the PRE-SPLIT row, kept because the reasoning in it is why the split happened, NOT because this row still owns the work. I3/I4 are M4.13a; the time-shaped fault classes M4.13b; partitioned leaders M4.13e; the withheld-write ambiguity M4.13c; per-class outcome evidence M4.13d. ⚠️ THIS ROW IS NOW THE SWEEP AND ITS BUDGET ONLY. | FR-11 | **split** |
 
-⚠️ M4.13i IS A DEPENDENCY, not a nice-to-have. `checkReader` returns NOT-JUDGED
+⚠️ LANDED, AND IT DOES NOT ON ITS OWN MEET THE COMPLETION CONDITION. The sweep
+runs inside the 60s budget -- the figure lives in `BUDGET_MILLIS`'s javadoc and is
+not restated here -- and its red names the
+failing seed -- verified by reverting M4.47, which reddens it with
+"seed 55: I2 -- resumes at 0 but the chain had assigned up to 2".
+
+⚠️ THREE CLAIMS IN AN EARLIER DRAFT OF THIS SECTION WERE FALSE, and review
+measured each: the slot-0 CONTINUE event was documented in three places and
+EMITTED NOWHERE (the edit did not apply and nothing read it back, so the ack
+floor sat at 1 in 424 of 424 traces); `-Dsweep.seeds` was advertised as a knob
+Gradle never forwards to the test JVM; and the anti-vacuity floors were
+`isPositive()`, which a run at 1/40th the workload satisfies. All three are
+fixed and the numbers that separate them are in the test.
+
+⚠️ WHAT A GREEN RUN PROVES IS NARROWER THAN "I1-I5", and the test javadoc
+enumerates it rather than leaving a reader to infer: `checkChain` carries I1, I2
+and I5's structural clause; `checkReader` carries I3 and I4's DROP clause;
+`checkAckOrder` carries I5's ack clause but CANNOT FAIL -- and NOT because
+`CommitLog` is serial, which is what an earlier draft said. The DRIVER
+synthesises both events from one `commit()` return, adjacently, so the trace is
+ordered by the driver's own construction and a pipelining writer would leave it
+green. That is **M4.50**. I4's REORDER clause has no arm at all -- M4.13f settled that as
+a conclusion, the residue being segment bytes no checker reads.
+
+⚠️ AND THE FAULT CLASSES ARE INCOMPLETE: acceptance criterion 1 names delayed
+writes, reordered completions and partitioned leaders, which are M4.13b and
+M4.13e, and per-class outcome evidence, which is M4.13d. `withheldPut` exists
+(M4.13c) but is not in the sweep's profile until M4.13d re-baselines the
+liveness bound it collides with.
+
+⚠️ M4.13i WAS A DEPENDENCY, not a nice-to-have. `checkReader` returns NOT-JUDGED
 for a chain that was never opened, and the natural sweep loop --
 `if (v.judged()) { assertThat(v.violations()).isEmpty(); }` -- SKIPS those
 seeds. Without M4.13i the condition "I1-I5 hold across 1,000 seeds" would be
@@ -1457,3 +1487,61 @@ CONSEQUENCE worth an ADR rather than a patch -- one seal PUT per burned epoch,
 and M4.16 records a run of burned epochs as the NORMAL case, so failover cost
 grows with the number of failed acquisitions.
 
+### M4.13e
+
+⚠️ THE ZOMBIE POPULATION IS NOW UNREACHABLE, and this row must RE-MEASURE rather
+than inherit. MEASURED over the sweep's own 1,000 seeds on the ROUGH profile:
+`zombieWrites=0` against `zombieAttempts=432`. M4.47's seal-the-run fences a
+zombie before it can commit, so no fenced writer's write lands at all.
+
+⚠️ THAT MATTERS BECAUSE `CommitProtocolSimulation`'s own javadoc calls a zombie
+"the ONLY thing that makes I5 reachable, because I5 is about what a fenced
+writer manages to acknowledge". The sweep emits ack events for zombie commits
+(M4.13), but that arm never executes -- it is a guard for when this row makes a
+landed zombie write reachable again.
+
+⚠️ AND TWO FILES NOW DISAGREE: `CommitProtocolSimulationTest` still records
+"round-2 review measured a seed that lands one today", which was true before
+M4.47 and is not now. Whichever way this row goes, that claim needs correcting
+with a fresh measurement rather than left as the older of two.
+
+
+### M0.89
+
+Two halves of one predicate, and they fail in opposite directions.
+
+**The forwarding can be deleted.** Gradle sets a command-line `-D` on the daemon
+JVM, not on the test JVM, so `-Dsweep.seeds=5` reaches
+`CommitProtocolSweepTest` only because `binjava.java-conventions.gradle.kts`
+forwards it explicitly. Deleting those two lines leaves `./gradlew -p buildSrc
+test` green and the sweep back at 1,000 seeds — MEASURED, `sweep: 1000 seeds`
+printed under `-Dsweep.seeds=5` — while M4.13's archive row still asserts the
+knob works. Review found that exact defect once already.
+
+**The property can be set.** M4.13's workload assertion is skipped when
+`sweep.seeds` is set, which is what keeps the knob usable for bisecting a
+failing seed. That guard assumes the property arrives at invocation time. It
+does not have to: MEASURED, one line of `systemProp.sweep.seeds=3` appended to
+the tracked `gradle.properties` gives `sweep: 3 seeds in 269 ms` and BUILD
+SUCCESSFUL, with `DEFAULT_SEEDS = 10` then surviving as a mutation. `ci.yml` has
+no test job today (M0.27); when one lands its `-D` is a tracked file too.
+
+⚠️ **Rung 1 for both halves**, and one script covers them: grep the tracked tree
+for the forwarding being present and for `sweep.seeds` being *set* anywhere.
+Neither half needs a GradleRunner test, and a GradleRunner test for the first
+half is what makes the second half easy to miss.
+
+### M4.51
+
+`ackFloorAlwaysZero` asks that every chain's acknowledged sequences are based at
+zero. `lowestAckedSequenceIn(epoch)` is what makes it a *per-chain* claim, and
+its filter is unconstrained: MEASURED, `filter(e -> e.epoch() == epoch)` →
+`filter(e -> true)` leaves the sweep green at 200 seeds. Without the filter the
+assertion means "some chain is based at 0", which one clean chain satisfies, so
+an emission defect that pins only the first takeover of each seed — the same
+shape as the slot-0 CONTINUE that was documented in three places and emitted
+nowhere — reads green.
+
+Blocked behind **M4.50**: the trace is synthesised by the driver today, so
+strengthening what reads it before fixing where it comes from pins the driver's
+construction rather than the protocol's.

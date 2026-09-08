@@ -3,6 +3,7 @@ package binjava.sequencer;
 
 import binjava.binstore.BinStore;
 import binjava.binstore.backend.MemoryBinStore;
+import binjava.format.CommitDelta;
 import binjava.format.RunKey;
 import java.io.IOException;
 import java.time.Duration;
@@ -75,7 +76,26 @@ public final class CommitProtocolSimulation {
             int zombieWrites, int zombieAttempts,
             List<FaultInjectingStore.Injected> faults,
             List<Issued> issued,
-            List<Invariants.Violation> violations) {
+            List<Invariants.Violation> violations,
+            List<AckOrderInvariants.AckEvent> acks,
+            int readersChecked) {
+
+        /**
+         * ⚠️ THE TRACE AND THE READER COUNT ARE PUBLISHED SO A TEST CAN SEE THEM
+         * FIRE, not for information. Review measured both arms unfalsifiable:
+         * neutralising every {@code acks.add} left 388 tests green, and deleting
+         * the {@code checkReader} loop left the whole suite green -- on the
+         * checker that carries I3 and I4's drop clause, which is half of what
+         * M4's completion condition claims, and which is the O(E-squared) loop
+         * anyone optimising against the 60s budget deletes first.
+         * ⚠️ THIS IS THE SHAPE THAT ALREADY SHIPPED ONCE HERE: the slot-0
+         * CONTINUE emission was documented in three places and present in none,
+         * and nothing could tell.
+         */
+        public long lowestAckedSequenceIn(long epoch) {
+            return acks.stream().filter(e -> e.epoch() == epoch)
+                    .mapToLong(AckOrderInvariants.AckEvent::sequence).min().orElse(-1L);
+        }
     }
 
     private CommitProtocolSimulation() {
@@ -119,10 +139,36 @@ public final class CommitProtocolSimulation {
      */
     public static Result run(long seed, int rounds, int pods,
             FaultInjectingStore.Faults faults, MemoryBinStore backing) throws IOException {
+        return run(seed, rounds, pods, faults, backing, ReaderInvariants.ReaderView::of);
+    }
+
+    /**
+     * The same, with the reader VIEW the checking loop judges supplied by the
+     * caller.
+     *
+     * <p>⚠️ A SEAM PURELY SO THE LOOP'S OWN WIRING CAN BE PINNED, and it exists
+     * because review measured the alternative failing: dropping the
+     * {@code addAll} while leaving the {@code checkReader} call in place -- so
+     * the verdict is computed and thrown away -- left the whole suite green.
+     * {@code readersChecked} counts ITERATIONS, and a test that calls
+     * {@code checkReader} itself shares no line with this loop, so neither can
+     * see it. Half of M4's completion condition, I3 and I4's drop clause, could
+     * be discarded by whoever optimises this O(E-squared) loop against the 60s
+     * budget, with the sweep still printing its reader count and passing.
+     *
+     * <p>⚠️ PRODUCTION'S READER IS CORRECT, which is why the broken view has to
+     * come from outside: no fault the injector can produce makes a real reader
+     * over- or under-apply, so there is no other way to make this loop report.
+     */
+    public static Result run(long seed, int rounds, int pods,
+            FaultInjectingStore.Faults faults, MemoryBinStore backing,
+            java.util.function.Function<CommitLog, ReaderInvariants.ReaderView> viewFor)
+            throws IOException {
         Random random = new Random(seed);
         SimulatedClock clock = new SimulatedClock(1_000_000L);
         FaultInjectingStore store = new FaultInjectingStore(backing, seed, faults);
 
+        List<AckOrderInvariants.AckEvent> acks = new ArrayList<>();
         LocalSequencer leader = null;
         String leaderPod = null;
         // ⚠️ FENCED LEADERS THAT DO NOT KNOW IT YET. Without these the seal
@@ -178,6 +224,19 @@ public final class CommitProtocolSimulation {
                     leader = won.get();
                     leaderPod = pod;
                     takeovers++;
+                    // ⚠️ THE SLOT-0 CONTINUE, EMITTED AS CONFIRMED, which M4.13's
+                    // notes require and an earlier draft of this file CLAIMED to
+                    // do while doing nothing -- the edit did not apply and three
+                    // documents asserted it anyway. `checkAckOrder` bases each
+                    // chain on the LOWEST sequence its trace shows, deliberately,
+                    // because inventing a base is how its first version reported
+                    // violations of a strictly serial writer. Without this the
+                    // floor is 1 in every trace -- measured, 424 of 424 -- so a
+                    // chain whose FIRST observed write is the lost one reads
+                    // clean. `open` writes the CONTINUE at slot 0 and `start`
+                    // returns only once it has landed, so confirming it here is
+                    // reporting a write that happened, not inventing one.
+                    acks.add(AckOrderInvariants.AckEvent.confirmed(leader.epoch(), 0L));
                 }
                 // ⚠️ A pod that could not acquire, or whose start threw an
                 // injected fault, simply does not lead this round. That is the
@@ -245,7 +304,26 @@ public final class CommitProtocolSimulation {
                             nextFlushSeq.merge(zombieInc, 1L, Long::sum) - 1,
                             "seg/zombie-" + round, counts(1 + random.nextInt(3)));
                     issued.add(record(zombieReq));
-                    zombies.get(z).commit(zombieReq);
+                    LocalSequencer zombie = zombies.get(z);
+                    CommitDelta zombieDelta = zombie.commit(zombieReq);
+                    // ⚠️ THE FENCED WRITER'S ACKNOWLEDGEMENTS BELONG IN THE
+                    // TRACE, and leaving them out contradicted this file's own
+                    // javadoc: "a zombie is the ONLY thing that makes I5
+                    // reachable, because I5 is about what a fenced writer
+                    // manages to acknowledge". The trace carried the leader's
+                    // acks alone, so the one population I5 is about was the one
+                    // population `checkAckOrder` never saw.
+                    // ⚠️ AND IT IS UNREACHED TODAY, stated rather than left to
+                    // look like coverage: MEASURED at 0 zombie writes over 200
+                    // ROUGH seeds, because M4.47's seal-the-run fences a zombie
+                    // before it can commit. `zombieAttempts` still fires. This
+                    // is a guard for when one does land -- M4.13e's partitioned
+                    // leaders is the row that makes it likely -- not a path the
+                    // sweep exercises now.
+                    acks.add(AckOrderInvariants.AckEvent.confirmed(
+                            zombie.epoch(), zombieDelta.sequence()));
+                    acks.add(AckOrderInvariants.AckEvent.acked(
+                            zombie.epoch(), zombieDelta.sequence()));
                     zombieWrites++;
                 } catch (IOException fenced) {
                     // correct: the zombie discovered it is fenced
@@ -261,7 +339,14 @@ public final class CommitProtocolSimulation {
                         nextFlushSeq.merge(leaderInc, 1L, Long::sum) - 1,
                         "seg/" + round, counts(1 + random.nextInt(3)));
                 issued.add(record(leaderReq));
-                leader.commit(leaderReq);
+                CommitDelta acked = leader.commit(leaderReq);
+                // ⚠️ CONFIRMED THEN ACKED, in that order, because that is what
+                // `commit` returning MEANS: the PUT was confirmed by the store
+                // and only then did the caller learn of it. I5's second clause
+                // is about that order, and it leaves no trace in the bytes --
+                // two runs producing byte-identical chains can differ in it.
+                acks.add(AckOrderInvariants.AckEvent.confirmed(leader.epoch(), acked.sequence()));
+                acks.add(AckOrderInvariants.AckEvent.acked(leader.epoch(), acked.sequence()));
                 commits++;
             } catch (IOException injected) {
                 // ⚠️ AMBIGUOUS. The commit may have landed. A leader that
@@ -275,6 +360,7 @@ public final class CommitProtocolSimulation {
 
         List<Invariants.Violation> violations = new ArrayList<>();
         long highest = 0;
+        int readersChecked = 0;
         // ⚠️ ONE WALK PER EPOCH. The second `checkChain` this loop used to make
         // was a provably DEAD disjunct -- every violation is raised inside the
         // walk over entries, so a non-empty violation list already implies a
@@ -285,8 +371,27 @@ public final class CommitProtocolSimulation {
             violations.addAll(Invariants.checkChain(backing, PREFIX, epoch));
             if (hasChain(backing, epoch)) {
                 highest = Math.max(highest, epoch);
+                // ⚠️ I3 AND I4's DROP CLAUSE, asked of PRODUCTION'S OWN READER
+                // at ITS OWN epoch (M4.13a). ⚠️ ONE CALL PER READER, NEVER SWEPT
+                // OVER A RANGE: `checkChain` is safe at every epoch in a range
+                // and this is not, which is why `ReaderView` carries the epoch.
+                CommitLog reader = new CommitLog(backing, PREFIX, epoch);
+                reader.recover();
+                violations.addAll(ReaderInvariants.checkReader(
+                        backing, PREFIX, viewFor.apply(reader)));
+                readersChecked++;
             }
         }
+        // ⚠️ AND I5's ACK-ORDERING CLAUSE, which no walk over the store can see.
+        // ⚠️ IT CANNOT FAIL, AND NOT BECAUSE `CommitLog` IS SERIAL -- an earlier
+        // draft of this comment said that and review refuted it. THIS DRIVER
+        // synthesises both events from one `commit()` return, adjacently, on one
+        // thread, so the order is the driver's construction and not the
+        // writer's. A pipelining writer would leave it green. The CONFIRMED
+        // event has to come from the store, which already sees every PUT, or
+        // from a production callback: M4.50 owns that, and until it lands this
+        // arm ASKS about I5's second clause without being able to answer.
+        violations.addAll(AckOrderInvariants.checkAckOrder(acks));
         // ⚠️ THE SCAN BOUND IS ASSERTED, NOT ASSUMED. `highest` is computed by
         // the loop above, so it can never report an epoch outside the range it
         // scanned -- a run that burned more epochs than the bound would report
@@ -298,7 +403,7 @@ public final class CommitProtocolSimulation {
                     + " -- chains past it were never checked");
         }
         return new Result(seed, commits, takeovers, highest, zombieWrites, zombieAttempts,
-                store.injected(), issued, violations);
+                store.injected(), issued, violations, acks, readersChecked);
     }
 
     private static boolean hasChain(BinStore store, long epoch) throws IOException {

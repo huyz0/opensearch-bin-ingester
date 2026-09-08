@@ -121,6 +121,14 @@ testing {
                     // testing.md rule 17: scratch under build/tmp, never the
                     // system temp directory. Enforced here so it is automatic.
                     systemProperty("java.io.tmpdir", scratch.absolutePath)
+                    // ⚠️ FORWARDED EXPLICITLY, because a Gradle CLI `-D` sets it
+                    // on the DAEMON and never reaches the test JVM. M4.13's
+                    // sweep advertised `-Dsweep.seeds` as a knob and review
+                    // measured it resolving to null in the fork -- a
+                    // configurable seed count that was not configurable, and a
+                    // claim already written into the archive row.
+                    providers.systemProperty("sweep.seeds").orNull
+                        ?.let { systemProperty("sweep.seeds", it) }
                     testLogging { events("failed") }
                 }
             }
