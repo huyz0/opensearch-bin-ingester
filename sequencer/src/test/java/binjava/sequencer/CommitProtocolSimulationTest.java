@@ -252,4 +252,60 @@ class CommitProtocolSimulationTest {
             }
         }
         assertThat(underRough).as("and under the mixed profile too").isEmpty();
-    }}
+    }
+
+    /**
+     * {@code lowestAckedSequenceIn} answers PER CHAIN, and this is what pins it
+     * (M4.51).
+     *
+     * <p>⚠️ MEASURED SURVIVING BEFORE THIS TEST EXISTED: replacing the filter
+     * {@code e -> e.epoch() == epoch} with {@code e -> true} left the whole
+     * 1,000-seed sweep green. The reason is that the sweep's own
+     * {@code ackFloorAlwaysZero} asks every chain for its floor and expects 0,
+     * and once every chain confirms its slot-0 CONTINUE the GLOBAL floor is 0
+     * as well -- so a function ignoring its argument returns the right answer
+     * for every question the sweep asks. Two quantities that agree everywhere
+     * cannot tell each other apart.
+     *
+     * <p>⚠️ SO THE QUESTION IS ASKED WHERE THEY DISAGREE: an epoch the run
+     * never reached has no events, and the honest answer is "no floor" rather
+     * than some other chain's. Sequence numbers RESTART per chain, so a floor
+     * borrowed across chains is not a weaker answer -- it is a wrong one, and
+     * it is the shape that lets one clean chain satisfy a bound another chain
+     * never met.
+     */
+    @Test
+    void aChainWithNoAcksHasNOFloorRatherThanSomeOtherChainsFloor() throws Exception {
+        MemoryBinStore backing = new MemoryBinStore();
+        var run = CommitProtocolSimulation.run(7L, 30, 3, ROUGH, backing);
+
+        long highest = run.acks().stream()
+                .mapToLong(AckOrderInvariants.AckEvent::epoch).max().orElse(0L);
+        long unreached = highest + 1_000L;
+
+        // ⚠️ BELOW THE RANGE AS WELL AS ABOVE, and review MEASURED why one
+        // side is not enough: mutating the filter from `== epoch` to
+        // `>= epoch` left the ENTIRE suite green, because a probe above every
+        // opened epoch sees no events either way. Epoch 0 is the unleased
+        // chain (M4.4b) and never carries acks, so under `>=` it returns the
+        // minimum over EVERY later chain -- exactly the cross-chain borrowing
+        // that lets one clean chain answer for a chain that produced nothing.
+        assertThat(run.lowestAckedSequenceIn(0L))
+                .as("epoch 0 is the unleased chain and acknowledges nothing -- a filter "
+                        + "that answered with a LATER chain's floor would report 0 here")
+                .isEqualTo(-1L);
+
+        assertThat(run.lowestAckedSequenceIn(unreached))
+                .as("epoch %s was never opened, so it has no acknowledged sequence -- "
+                        + "reporting another chain's floor would let one chain's evidence "
+                        + "answer for a chain that produced none", unreached)
+                .isEqualTo(-1L);
+
+        // ⚠️ AND THE POSITIVE HALF, or the assertion above is satisfied by a
+        // function that always returns -1.
+        assertThat(run.acks()).as("the run produced a trace at all").isNotEmpty();
+        assertThat(run.lowestAckedSequenceIn(highest))
+                .as("a chain that WAS opened reports its own floor")
+                .isNotEqualTo(-1L);
+    }
+}
