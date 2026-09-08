@@ -1,0 +1,37 @@
+{
+  "task": "M5.6d",
+  "role": "reviewer",
+  "diff_sha256": "81c42e232cc639a1058641c8c908c884e775c730e18dfb3ebe4ad1cb8b7df510",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/Leadership.java:96-110",
+      "summary": "When close() wins the race for a term the election has just published, sequencer() returns that already-closed sequencer to its caller instead of null, even though it has just read closed == true and knows the pod does not hold it.",
+      "failure_scenario": "A follower's commit is inside tryLead(); it wins epoch E and executes held.set(won). Before it reaches the re-read, SIGTERM runs close(): closed = true, held.getAndSet(null) returns won, and mine.close() releases the lease at epoch E. The election thread then evaluates the re-read: closed is true, but held.compareAndSet(won, null) FAILS because held is already null, so the && short-circuits and the method returns won -- a LocalSequencer that close() has just closed. The caller (FleetSequencer, M5.6) commits on it and LocalSequencer's closed branch raises a plain IOException, which is deliberately NOT a FencedException, so the caller's fenced branch does not match: per Sequencer#commit that IOException means AMBIGUOUS, and the producer's flush is failed and not forwarded, during a rolling restart, when the peer RPC would have carried it. The code has the information to answer correctly and does not use it -- the branch should be if (closed) { if (held.compareAndSet(won, null)) { giveBack(won); } return null; }, which costs nothing and cannot leak, since a failed CAS at that point can only mean close() took and closed the term."
+    },
+    {
+      "id": "R2",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/Leadership.java:71-96,131-151",
+      "summary": "A steady follower runs a full election on EVERY commit -- two lease-key store requests per commit, for the whole time a healthy leader exists elsewhere -- and the deferral that was supposed to narrow it is named in the tree only against M5.6c, which has no backlog row, so nothing owns it.",
+      "failure_scenario": "Steady state, pod-A holding the lease and healthy. On pod-B, held is null forever and closed is false, so every sequencer() call runs tryLead() -> LocalSequencer.start -> LeaseManager.tryAcquire, whose losing path is store.stat(leaseKey) + read() = 2 requests every time. At cost.md R1b's 5 s ceiling with 6 pods that is 2 GET/s = 5.2M requests/month ~ $2.1/mo against the $15.55/mo R1b quotes for the whole write path; at the 250 ms operating point it is 40 GET/s = 104M/month ~ $41/mo against $311/mo. About 13% added to the bill at either setting, spent entirely on asking a question whose answer is no. It does not breach the invariant -- it scales with nodes x flush interval, not with records, shards, partitions or indices -- which is why this is minor, and the tryLock usefully caps it at one in-flight election per pod. But it is unbudgeted and nothing counts it. The related point is checkable in the tree: review/verdicts/M5.6/2.reviewer.json and 2.test-reviewer.json, both staged by this commit, defer work to M5.6c, and grep of backlog.md returns M5.6, M5.6a, M5.6b and M5.6d only -- there is no M5.6c row and there never was one (git log -S\"M5.6c\" is empty). Deferred work pointing at an ID with no row is work that is lost."
+    },
+    {
+      "id": "R3",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/Leadership.java:87-91",
+      "summary": "Carried from rounds one and two, re-checked and agreed: the double-check inside the election lock is not reachable by the suite, so deleting it survives every test -- recorded rather than fixed, because BoundedLock is package-private and not injectable.",
+      "failure_scenario": "Mutation: delete Sequencer already = held.get(); if (already != null) { return already; }. All nine tests stay green. With a real Election backed by LocalSequencer.start the mutant makes B run a second election for a lease this pod already holds; acquireLocked reads it unexpired and returns empty, so B does held.set(null) over the live leader -- the pod silently loses its own term while that LocalSequencer's renewer keeps the lease unexpired, so no other pod can take over either. I re-verified there is no seam today to drive that window deterministically, so the honest statement stands: this branch is asserted by argument, not by a test."
+    },
+    {
+      "id": "R4",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/Leadership.java:189-201",
+      "summary": "Carried from round two, re-checked and agreed: close() returns without waiting for an election already inside the store, so the hand-back of a term won in that window happens on the electing thread and is lost if the process exits first -- degrading a released lease into a TTL-bounded one.",
+      "failure_scenario": "SIGTERM lands while a commit is inside tryLead(); close() sets closed, reads null, closes nothing and returns, so the shutdown sequence believes the term is handed back. The election then wins epoch E, publishes, sees closed, CASes back to null and calls giveBack(won). If the JVM exits before that virtual thread returns from the store, LeaseManager.release() never runs and the lease stays unexpired until the TTL lapses (~10 s, ADR-0007). I re-verified the ordering that makes this strictly bounded rather than round one's permanent leak: closed is volatile and written before held.getAndSet(null), and held is an AtomicReference, so if the election's re-read sees false then its held.set(won) precedes close()'s getAndSet in the synchronization order and close() closes it; if it sees true, either the CAS succeeds and giveBack closes it or close() already did. Nothing leaks in any interleaving -- only the timing of the release is at risk."
+    }
+  ],
+  "via": "record"
+}

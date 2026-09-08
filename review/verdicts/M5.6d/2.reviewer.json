@@ -1,0 +1,16 @@
+{
+  "task": "M5.6d",
+  "role": "reviewer",
+  "diff_sha256": "d9f754f4f39ba3fffe983704009b7143fa01ab9d9068e3b79af96ea608232513",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/Leadership.java:189-201",
+      "summary": "Round one's install-after-close hole is genuinely closed, but close() still returns without waiting for an election already inside the store, so the hand-back of a term won in that window happens on the electing thread and is lost if the process exits first -- degrading a released lease into a TTL-bounded one.",
+      "failure_scenario": "A follower's commit is inside tryLead() (LocalSequencer.start: tryAcquire + the burned-epoch seals + recover(), latency unbounded in chain length). SIGTERM lands; close() sets closed=true, held.getAndSet(null) reads null, closes nothing and returns immediately, so the shutdown sequence believes the term is handed back. The election then wins epoch E, publishes to held, reads closed==true (the volatile-write-before-getAndSet ordering makes that read reliable -- the round-one defect is fixed), CASes held back to null and calls giveBack(won). If the JVM exits before that virtual thread returns from the store, LocalSequencer.close() -- and therefore LeaseManager.release() -- never runs, so the lease at epoch E stays unexpired: every other pod's tryAcquire returns empty and the cluster has no leader until the TTL lapses (~10 s, ADR-0007), which is exactly the difference Sequencer#close is specified to buy. Strictly bounded, unlike round one's permanent leak, hence minor. A terminal close would take electing with a bounded wait (BoundedLock.takeOrFail with the ttl bound, the same argument LeaseManager.release makes for using ttl rather than renewInterval) so the hand-back happens before close returns."
+    }
+  ],
+  "via": "record"
+}

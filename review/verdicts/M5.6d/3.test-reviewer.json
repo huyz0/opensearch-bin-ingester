@@ -1,0 +1,30 @@
+{
+  "task": "M5.6d",
+  "role": "test-reviewer",
+  "diff_sha256": "81c42e232cc639a1058641c8c908c884e775c730e18dfb3ebe4ad1cb8b7df510",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/Leadership.java:88-91",
+      "summary": "Carried unchanged from rounds one and two: the double-check inside the election lock is still never exercised, so deleting it survives the whole suite -- and I agree with keeping it as a recorded minor rather than a blocker.",
+      "failure_scenario": "Mutation: delete Sequencer already = held.get(); if (already != null) { return already; } from sequencer(). All nine tests stay green: aSecondCallerMIDElection reaches only the !electing.tryLock() early return, and every other test runs a single election thread. With a real Election backed by LocalSequencer.start, the mutant makes B run a second election for a lease this pod already holds; tryAcquire reads it unexpired and returns empty, so won == null and B returns null having left a live leader in place that it now reports as absent -- one commit forwarded to a peer this pod could have written itself, plus a wasted stat/get pair. Minor stands: BoundedLock is package-private, electing is a private final field constructed inline, and there is no hook between B's top-of-method held.get() and its tryLock(), so the window is not drivable without adding a seam to production code for one branch whose worst outcome is a transient extra forward. Round two's findings ARE addressed: retiringASTRANGERLeavesTheLIVETermAlone kills the null-check mutant, and aTermWonWHILEClosing now constructs won with a throwing close so giveBack's catch arm is driven."
+    },
+    {
+      "id": "R2",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/Leadership.java:193-194",
+      "summary": "The ordering that makes close() terminal -- the volatile closed = true BEFORE held.getAndSet(null) -- is unconstrained: swapping the two statements survives every test, and that mutant reopens round one's install-after-close leak.",
+      "failure_scenario": "Mutation: reorder close() to Sequencer mine = held.getAndSet(null); closed = true;. All nine tests stay green, including aTermWonWHILEClosingIsGivenSTRAIGHTBack, because that test lets slow.close() return in full (the election is still parked on closed.await()) before the election thread ever reads the flag -- so it cannot tell the two orders apart. In production the order is load-bearing: a follower's commit is inside tryLead(), SIGTERM lands, the mutant's getAndSet reads null and closes nothing, the election then wins epoch E and does held.set(won), and only after that does close() publish closed = true -- the election's re-read can legitimately observe false, so it returns won and leaves an installed LocalSequencer with a live renewer that nothing will ever close. Every other pod's tryAcquire reads an unexpired lease and the fleet has no leader for the life of the process. Needs an interleaving with no seam to drive, so recorded rather than blocking -- but it should be recorded: the class's own comment is the only thing pinning it today."
+    },
+    {
+      "id": "R3",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/LeadershipTest.java:184-199",
+      "summary": "close() propagating a failed hand-back is untested -- swallowing the IOException from mine.close() survives the suite -- and unlike R1/R2 this one is killable today with the Stub the file already has.",
+      "failure_scenario": "Mutation: wrap mine.close() in Leadership.close() in try { ... } catch (IOException ignored) { }. Every test stays green, because closeGIVESTheTermBack is the only test whose close() has a term to release and its Stub closes cleanly. In production LocalSequencer.close() ends in leases.release(), a putIfMatch that can 503, and Leadership.close() is declared throws IOException precisely so the pod's shutdown path learns the lease was NOT handed back. Under the mutant a rolling restart that meets one transient store error reports a clean shutdown while the lease stays unexpired, so the successor waits out the TTL (~10 s, ADR-0007) rather than taking over in milliseconds -- and the failure is invisible to the operator instead of surfacing at the caller. Fix is three lines with the existing fixture."
+    }
+  ],
+  "via": "record"
+}

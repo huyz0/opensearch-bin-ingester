@@ -1,0 +1,30 @@
+{
+  "task": "M5.6d",
+  "role": "test-reviewer",
+  "diff_sha256": "d9f754f4f39ba3fffe983704009b7143fa01ab9d9068e3b79af96ea608232513",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/LeadershipTest.java:166-181",
+      "summary": "retire()'s identity guard is unconstrained: the test only ever retires a stranger while held is already null, so replacing the compare-and-set with a null check survives -- and that mutant silently drops a LIVE term, which is the failure the test's own comment claims to prevent.",
+      "failure_scenario": "Mutation: replace if (!held.compareAndSet(fenced, null)) { return; } with if (held.get() == null) { return; } held.set(null);. The whole suite stays green. retiringTWICERetiresONCE passes because at its second call held is already null, so the mutant returns early and other.closed is still false -- exactly the assertion made; and the race the test's comment describes (two threads retiring the SAME fenced sequencer) is also handled correctly by the mutant. No test ever calls retire with a sequencer that is not the one held. In production that is the reachable interleaving: thread A and thread B both hold reference A from sequencer() and both get fenced; A retires first (held -> null); thread C's commit then elects and installs B (held = B, a LocalSequencer with a running renewer); B's late retire(A, fence) now arrives. The real code CASes on A, fails, and correctly leaves B in place. The mutant sees held != null, does held.set(null) and closes A -- dropping the pod's live term B. isHeld() then reports false and every commit forwards, while B's renewer keeps the lease alive and unexpired, so no other pod's tryAcquire can win either: the fleet has no leader for the life of the process. Killing this needs no race and no new seam -- three lines: Stub a = new Stub(); Leadership held = new Leadership(() -> Optional.of(a)); held.retire(new Stub(), new FencedException(\"stale\")); then assert held.isHeld() is true, the stranger's closed is false, and a.closed is false."
+    },
+    {
+      "id": "R2",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/Leadership.java:87-91",
+      "summary": "Unchanged from round one: the double-check inside the election lock is still never exercised -- deleting it survives the whole suite, including the two new close-path tests.",
+      "failure_scenario": "Mutation: delete Sequencer already = held.get(); if (already != null) { return already; } from sequencer(). All eight tests stay green. aSecondCallerMIDElection reaches only the !electing.tryLock() early return, and aTermWonWHILEClosing runs a single election thread, so no test arranges the interleaving that reaches the branch. With a real Election backed by LocalSequencer.start, the mutant makes B run a second election for a lease this pod already holds; tryAcquire reads it unexpired and returns empty, so B returns null having left a live leader in place that it now reports as absent. Still minor for the reason round one gave: BoundedLock is package-private and not injectable, so there is no seam today to drive that window deterministically -- the honest statement is that this branch is asserted by argument, not by a test."
+    },
+    {
+      "id": "R3",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/LeadershipTest.java:221-257",
+      "summary": "giveBack()'s IOException arm is uncovered -- aTermWonWHILEClosingIsGivenSTRAIGHTBack uses a Stub that closes cleanly, so the one path where a term won during close fails to close is never driven.",
+      "failure_scenario": "Mutation: in Leadership.giveBack replace the catch body with throw new java.io.UncheckedIOException(closeFailed);. Every test stays green, because the only Stub that reaches giveBack closes without throwing. In production the election path is entered from a producer's commit: a SIGTERM lands mid-election, the pod wins epoch E, sees closed, and calls giveBack -- whose LocalSequencer.close does a putIfMatch to release the lease. One transient 503 on that release and the mutant throws an unchecked exception out of sequencer(), so a flush that should have been told \"not leading\" and forwarded instead fails its producer during a rolling restart. That is the same defect retire() is tested against on the sibling path, untested. One-character fix: construct that Stub as new Stub(new IOException(\"injected: the release PUT failed\")) and keep the existing assertions."
+    }
+  ],
+  "via": "record"
+}

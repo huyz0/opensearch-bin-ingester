@@ -1,0 +1,16 @@
+{
+  "task": "M5.6d",
+  "role": "reviewer",
+  "diff_sha256": "8aba41edb7c9f37e8a7b219d04c41bb42d6b5428ae5e2f4411f0e6de9364e4aa",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "major",
+      "file": "sequencer/src/main/java/binjava/sequencer/Leadership.java:70-89,154-160",
+      "summary": "close() is not terminal: it neither excludes an election already in flight nor stops a later one, so a closed Leadership can install or acquire a term that nothing will ever release -- the one race retire() guards with compare-and-set is left open on the election path, which uses a bare held.set(won).",
+      "failure_scenario": "Two interleavings, one root cause. (a) Install-after-close. A follower's commit calls sequencer(); held is null, electing.tryLock() succeeds, and tryLead() blocks inside LocalSequencer.start -- tryAcquire + seal + recover(), whose latency is unbounded in chain length. SIGTERM arrives; close() runs held.getAndSet(null), reads null, and closes nothing, reporting a clean shutdown. The election then wins epoch E, returns a LocalSequencer with a live lease-renewer virtual thread, and stores it into held. Nothing ever calls close() on it, so LeaseManager.release() never runs: every other pod's tryAcquire reads an unexpired lease and returns empty, and no pod can lead -- for the life of the process if the component is closed without process exit, or for a full TTL (~10 s, ADR-0007) if the JVM does exit, which is exactly the gap release() exists to eliminate. (b) Elect-after-close, needing no race at all: close() leaves held null and sets no closed flag, so a commit that arrives after close falls into the same election and re-acquires the lease the pod just voluntarily released, again with no owner to close it. LocalSequencer guards precisely this with its closed field, and Sequencer.close's contract states that a commit after close must fail rather than silently succeed. Fix is one volatile boolean closed set before getAndSet in close() and re-read under electing before the store (closing won if it lost the race), matching the compare-and-set discipline already used in retire()."
+    }
+  ],
+  "via": "record"
+}

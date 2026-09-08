@@ -1,0 +1,23 @@
+{
+  "task": "M5.6",
+  "role": "test-reviewer",
+  "diff_sha256": "4902daedde09be4b2d9f5436f5e2e846c6f7e1a036b3b0bd83def1f6ae34b085",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/FleetSequencerTest.java:233-261",
+      "summary": "Nothing pins that the pod KEEPS its term after a non-Fenced IOException -- the mutation local.close(); local = null; before letting the ambiguous failure escape FleetSequencer.commitAll leaves every test green.",
+      "failure_scenario": "Mutate the commit path so any IOException, not only FencedException, demotes the pod. anAMBIGUOUSLocalFailureIsPROPAGATED_NeverForwarded still passes -- it asserts only that an IOException carrying \"the reply was lost\" escapes, that transport.sentTo() is empty and that deltasCarrying(store, \"seg/b\") is zero, and it never re-reads mine.leading() after the throw. The other five tests never drive a non-Fenced local failure at all. In production that mutation means a leaseholder that hits one transient 503 on its delta PUT silently drops its LocalSequencer while the lease object still names it: leading() flips to false so the pod unpublishes its own endpoint, and its next commit re-elects -- burning an epoch and paying a fresh seal plus a full chain recover() for a store hiccup that LocalSequencer.renewForever deliberately refuses to fail over on. Adding assertThat(mine.leading()).isTrue() after the assertThatThrownBy kills it."
+    },
+    {
+      "id": "R2",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/FleetSequencer.java:88",
+      "summary": "Deleting local.close() from the FencedException branch survives the whole suite -- no assertion observes that the fenced local sequencer is shut down.",
+      "failure_scenario": "Make the close a no-op (keep local = null). aLeaderThatIsFENCEDFallsBackToForwardingRatherThanFailing still passes: the offset assertion, first.leading() false and deltasCarrying(store, \"seg/b\") == 1 all hold, and first.close() at the end takes the local == null path so it observes nothing either. The Refusing fake even carries a closed field that no assertion ever reads. The behaviour that goes unchecked is real: in that test the fence arrives from CommitLog's seal discovery, not from the renewer, so poda's LocalSequencer.fenced is never latched and its renewer thread is still parked on its tick -- with the close dropped it wakes and spends a stat, a get and a losing putIfMatch renewing a term podc already holds, and the LocalSequencer plus its LeaseManager belief are leaked once per fencing, all with the build green."
+    }
+  ],
+  "via": "record"
+}

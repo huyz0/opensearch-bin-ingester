@@ -1,0 +1,23 @@
+{
+  "task": "M5.6",
+  "role": "test-reviewer",
+  "diff_sha256": "0be50058664824970d97ddd1d98fde86ac7aa2921b357c345625ad1f3ff79bcb",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/FleetSequencerTest.java:272-300",
+      "summary": "Round one's two test findings are both fixed, but the production fix that landed with them -- retire() dropping the reference BEFORE the close and suppressing a close failure instead of substituting it for the fence -- has no test: no sequencer in this suite throws from close(), so the entire catch arm and the CAS-before-close ordering are unconstrained.",
+      "failure_scenario": "Mutation: in FleetSequencer.retire either (a) delete the try/catch and declare retire throws IOException so a failing close propagates, or (b) reorder to fenced.close(); local.compareAndSet(fenced, null);. All six tests stay green. Refusing.close() cannot throw, and in aLeaderThatIsFENCEDFallsBackToForwardingRatherThanFailing the real LocalSequencer.close() reaches LeaseManager.releaseLocked, whose store.putIfMatch against MemoryBinStore merely loses the CAS and returns Optional.empty rather than throwing. The behaviour left unpinned is exactly the failure the javadoc says it exists to prevent: pod-A is fenced by pod-C's takeover, retire calls LocalSequencer.close(), and LeaseManager.release() hits a store 503 on its putIfMatch. With mutation (a) the FencedException is replaced by a plain IOException that Sequencer.commit's contract defines as AMBIGUOUS, so the producer's flush is neither forwarded nor safely retryable and the write is dropped on every takeover that coincides with a store hiccup. With mutation (b) the same drop occurs and local is additionally left pointing at a closed LocalSequencer, whose later commits raise the deliberately non-Fenced close refusal, so the fenced branch is never reachable again. Killing both takes one test: a Refusing variant whose close() throws IOException, asserting the commit still lands through the holder at C and that mine.leading() is false. This is not among the behaviours the diff defers -- M5.6c covers commit-after-close, the self-fence, narrowing leading(), and gating tryLead(); the close-failure handling is in this commit."
+    },
+    {
+      "id": "R2",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/FleetSequencer.java:99-119",
+      "summary": "Re-adding synchronized to commitAll survives the whole suite -- nothing exercises two callers concurrently, so the no-monitor-across-I/O property the class javadoc argues at length is unconstrained.",
+      "failure_scenario": "Mutation: change public CommitDelta commitAll(...) to public synchronized CommitDelta commitAll(...). Every test passes -- all six are single-threaded, and no test wraps the elected leader in a BatchingSequencer or has two threads inside commitAll at once. In production that mutation restores exactly what the javadoc says it must not: the leader registered at its own endpoint serves peers through its own FleetSequencer, so with six pods forwarding, each forwarded commit takes the monitor, enters BatchingSequencer.commitAll, waits out a full 250 ms window alone and releases -- six sequential windows and six delta PUTs where the design demands one, the per-pod PUT rate non-negotiable 6 forbids by name, and no cost gate exists to see it. The monitor would also span election.tryLead(), so one hung store call parks every other caller with no timeout. A deterministic test is cheap: an Election returning a Sequencer whose commitAll rendezvouses on a CyclicBarrier of two, then two virtual threads calling commit -- under a monitor the barrier times out."
+    }
+  ],
+  "via": "record"
+}

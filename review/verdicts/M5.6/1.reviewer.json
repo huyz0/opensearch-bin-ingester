@@ -1,0 +1,23 @@
+{
+  "task": "M5.6",
+  "role": "reviewer",
+  "diff_sha256": "4902daedde09be4b2d9f5436f5e2e846c6f7e1a036b3b0bd83def1f6ae34b085",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "blocking",
+      "file": "sequencer/src/main/java/binjava/sequencer/FleetSequencer.java:84-92",
+      "summary": "If local.close() throws in the fenced-fallback branch, the fence is masked by the close failure, local is never nulled, and the pod is permanently unable to commit even though a healthy leader is reachable.",
+      "failure_scenario": "Normal takeover race: pod-A holds epoch E, pod-C acquires E+1 and seals chain E. pod-A's renewer has not ticked yet (renew 3s vs TTL 10s), so LeaseManager.belief is still non-null. pod-A commits, CommitLog.commitSubmissions loses the slot to the Seal and throws FencedException (CommitLog.java:404). FleetSequencer catches it and calls local.close(). LocalSequencer.close() sets closed = true first, then calls leases.release(), which with a live belief performs a real store.putIfMatch -- that PUT throws IOException on any store hiccup (or lock.takeOrFail(\"release\", ttl) times out). Two wrong results: (1) the FencedException is discarded and replaced by a plain IOException, which per Sequencer.commit's own contract is AMBIGUOUS and must not be resent -- so a commit that provably appended nothing is neither forwarded nor safely retryable, and the producer's records are dropped; (2) local is still non-null with closed == true, so every subsequent commitAll reaches LocalSequencer.commitAll, hits the closed branch which throws a plain IOException(\"this sequencer released its lease...\") -- not a FencedException -- so the catch never matches again and local is never nulled. The pod forwards nothing for the rest of the process's life. A single transient store error on the failover path turns a recoverable fence into a permanent, restart-only outage. local = null must happen before or independently of the close, and a close failure must be suppressed rather than replacing the fence. This failure mode is not among the three gaps the class javadoc defers to M5.6c."
+    },
+    {
+      "id": "R2",
+      "severity": "major",
+      "file": "sequencer/src/main/java/binjava/sequencer/FleetSequencer.java:74-93",
+      "summary": "commitAll is synchronized and holds the monitor across unbounded object-store I/O, which structurally defeats the BatchingSequencer composition the Election javadoc advertises as the reason its return type is widened.",
+      "failure_scenario": "The javadoc states the leader may be BatchingSequencer wrapping LocalSequencer, folding a window's flushes into ONE delta PUT. BatchingSequencer.commitAll enqueues and blocks the caller in pending.await() until the window closes (default 250 ms). Because FleetSequencer.commitAll is synchronized, only one caller can ever be inside it, so the batcher's window can never hold more than one request from this pod. Concretely, on a leader whose transport server serves peers through its own FleetSequencer: 6 pods, 5 forwarding, each forwarded commit takes the monitor, enqueues, waits a full 250 ms window, releases -- 6 sequential windows and 6 delta PUTs where the design demands 1, and the whole fleet's commit throughput is capped at 4/s. That is precisely the regression BatchingSequencer's javadoc names. Separately, the monitor is held across election.tryLead() (a stat + get, and on a win LocalSequencer.start's chain recovery, whose own javadoc calls its latency unbounded in log length), across local.commitAll (a PUT) and across remote.commitAll (a lease GET plus a peer RPC) -- so one hung PUT parks every other caller on an uninterruptible monitor with no timeout. That is the exact failure java-style.md rule 6 forbids and that LeaseManager's own javadoc cites as its reason for rejecting a monitor. The only state needing mutual exclusion is the local field."
+    }
+  ],
+  "via": "record"
+}

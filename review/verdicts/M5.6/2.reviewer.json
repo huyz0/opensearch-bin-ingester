@@ -1,0 +1,16 @@
+{
+  "task": "M5.6",
+  "role": "reviewer",
+  "diff_sha256": "0be50058664824970d97ddd1d98fde86ac7aa2921b357c345625ad1f3ff79bcb",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "major",
+      "file": "sequencer/src/main/java/binjava/sequencer/FleetSequencer.java:95,102,132-146",
+      "summary": "An IOException out of election.tryLead() is treated as fatal instead of as \"cannot lead\": it propagates out of commitAll (and out of the constructor) rather than falling through to remote.commitAll, so a pod that could forward perfectly well fails the producer's write -- the exact opposite of the class's stated \"leads when it can, forwards when it cannot\".",
+      "failure_scenario": "Steady follower pod-B, with pod-A holding the lease and reachable. Every commit on B takes the local == null path into elect(), which calls election.tryLead() -> LocalSequencer.start -> LeaseManager.tryAcquire. tryAcquire's first store call is store.stat(leaseKey), and before that lock.takeOrFail(\"acquire\", renewInterval), which throws IOException on contention. LocalSequencer.start's javadoc is explicit that empty means \"not the leader, never failed\" -- so every genuine wedge surfaces as a THROW, not Optional.empty(). One transient 503 on that per-commit stat, or a 403 from a misconfigured role, and elect() throws; commitAll never reaches return remote.commitAll(requests); DefaultIngest's flush fails even though the lease GET and the peer RPC to pod-A would both have succeeded. Two wrong results. (1) Availability: the follower's commit path is gated on an election it does not need, so its per-commit failure probability is the union of {election stat, lease GET, peer RPC} instead of {lease GET, peer RPC}. (2) Contract: per Sequencer.commit an IOException means AMBIGUOUS and a retry is documented as not yet safe -- yet here provably nothing was attempted. The caller is told the one thing that is false about this failure. The test meant to pin this models the wedge as Election never = Optional::empty and its comment names \"a permissions problem, say\" -- the one shape that never reaches this branch. The same defect sits at the constructor: this.local.set(election.tryLead().orElse(null)) is documented as \"Failing to win is not an error\", but failing to ASK is fatal -- a store hiccup on the lease stat during a rolling restart makes the constructor throw, so the pod cannot start at all and can never even forward, where the correct outcome is to boot as a follower. Fix is to catch IOException around both tryLead() calls, log it, and treat it as an empty result. Not among the gaps the class javadoc defers, nor among the three M5.6c names; note the third of those narrows how OFTEN the election is asked but leaves the throwing path intact."
+    }
+  ],
+  "via": "record"
+}

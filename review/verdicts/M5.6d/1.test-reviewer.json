@@ -1,0 +1,23 @@
+{
+  "task": "M5.6d",
+  "role": "test-reviewer",
+  "diff_sha256": "8aba41edb7c9f37e8a7b219d04c41bb42d6b5428ae5e2f4411f0e6de9364e4aa",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/LeadershipTest.java:242-370",
+      "summary": "Leadership.close() has zero coverage -- emptying its body leaves all five tests green, so nothing constrains the one path that gives the term back on shutdown.",
+      "failure_scenario": "Mutation: replace the body of Leadership.close() with nothing, or weaken held.getAndSet(null) to held.get(). Every test still passes: aVACANCYIsTakenOnDemand and aSecondCallerMIDElection call close() only in a finally block and assert nothing afterwards (the Stub won in aSecondCallerMIDElection already records closed and is never checked), while aFencedSequencerIsDROPPED and retiringTWICE call it when held is already null so it is a no-op regardless. In production the mutant means a pod that shuts down never closes its LocalSequencer: the lease is never voluntarily released and the renewer virtual thread keeps renewing it, so on a rolling restart every follower's takeover waits out the lease TTL (~10 s per ADR-0007) instead of milliseconds -- the exact difference Sequencer#close is specified to buy -- and isHeld()/sequencer() keep handing out a live leader after close. Fix is one line: after slow.close(), assert won.closed is true and slow.isHeld() is false."
+    },
+    {
+      "id": "R2",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/Leadership.java:79-82",
+      "summary": "The double-check inside the election lock is never exercised; deleting it survives the whole suite.",
+      "failure_scenario": "Mutation: delete Sequencer already = held.get(); if (already != null) { return already; } from sequencer(). All five tests stay green, because none of them arranges the interleaving that reaches the branch: thread B reads held.get() == null, thread A then takes electing, wins, does held.set(won) and unlocks, and only then does B's tryLock() succeed with held now non-null. With a real Election backed by LocalSequencer.start, the mutant makes B run a second election that asks for a lease this pod already holds; that comes back empty, so held.set(won) writes null over the live leader -- the pod silently loses its own term while the LocalSequencer and its renewer thread leak and keep renewing the lease, so no other pod can take over either. Recorded as minor rather than major because BoundedLock is package-private and not injectable, so there is no seam today to drive that nanosecond-wide interleaving deterministically."
+    }
+  ],
+  "via": "record"
+}
