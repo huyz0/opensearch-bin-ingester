@@ -1,0 +1,30 @@
+{
+  "task": "M0.100",
+  "role": "reviewer",
+  "diff_sha256": "7c4b647944b3943e09e8e7db7713120439c3eb5ecce8b4a19868866edbeb585b",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "major",
+      "file": "docs/internal/product/backlog.md:18-22",
+      "summary": "Both files present archive/m4 as the durable home of M4's history and evidence, but that branch exists only in this local clone -- git ls-remote origin returns refs/heads/main and nothing else, and the tag archive/m4-evidence is likewise unpushed.",
+      "failure_scenario": "A future agent clones the repository, reads that the 760 verdicts are 'the input to the harness rebuild', runs git checkout archive/m4 and gets 'pathspec did not match'. One rm -rf of this working copy destroys the only copy. The claim needs qualifying, or the refs need pushing before the record is true."
+    },
+    {
+      "id": "R2",
+      "severity": "major",
+      "file": "docs/internal/product/roadmap.md:13",
+      "summary": "'nothing on main implements it' is true only of the rewound LOCAL main; origin/main is c59943d, carries 50 M4 commits and the full sequencer implementation, and is an ancestor of archive/m4.",
+      "failure_scenario": "Committing this on local main and later pushing puts a file asserting 'nothing on main implements it' onto a branch that still contains BatchingSequencer.java, CheckpointWriter.java, ChainReplay.java and 48 more M4 commits. A reader who clones today sees M4 fully implemented while the backlog says it is not in the tree, and cannot tell which is stale."
+    },
+    {
+      "id": "R3",
+      "severity": "minor",
+      "file": "docs/internal/product/roadmap.md:13",
+      "summary": "'inheriting no ADR, spec or task row' is unqualified, but the same sentence requires I1-I5, CAS leases and write-once deltas -- defined by ADR-0002, ADR-0008 and ADR-0011, all still accepted on main; only ADR-0027-0037 are archive-only.",
+      "failure_scenario": "The agent re-specifying M4 treats ADR-0002, ADR-0008 and ADR-0011 as void and re-derives or contradicts the CAS-lease primitive, while architecture.md still defines I5 by citing ADR-0011."
+    }
+  ],
+  "via": "record"
+}

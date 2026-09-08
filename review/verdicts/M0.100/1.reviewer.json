@@ -1,0 +1,64 @@
+{
+  "task": "M0.100",
+  "role": "reviewer",
+  "diff_sha256": "c11139118335658915b747d81cc475a465b9c2cade83e585fe9f8263a9499c32",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "blocking",
+      "file": "docs/internal/product/backlog.md:18-52",
+      "summary": "The file now declares two different current milestones \u2014 line 18 says \"Current milestone: M0 (continued) \u2014 the harness rebuild\" and \"M1, M2 and M3 are complete\", while line 52 still says \"Current milestone: M2 \u2014 Segment format ... M1 (walking skeleton) is complete\" \u2014 in a file whose own header states it is the authoritative task list for the current milestone only.",
+      "failure_scenario": "An agent runs the `next-task` skill and reads backlog.md top-to-bottom. It hits the line-52 declaration, concludes M2 is the current milestone, and picks an open M2 row from the table at line 165 \u2014 starting work on a milestone the same file asserts eleven lines earlier is finished. Whichever declaration it reads first decides what gets built, and `check-commit-msg.sh` accepts the resulting commit either way because both IDs are present in the file."
+    },
+    {
+      "id": "R2",
+      "severity": "major",
+      "file": "docs/internal/product/backlog.md:37-43",
+      "summary": "Three of the new rows duplicate open rows already in this same file under new IDs: M0.106 (line 40) is the same task as M0.41 (\"A gate that verifies the STAGED TREE, not the working tree\", state todo), M0.103 (line 37) edits `check-mutants.sh` which open row M0.14 still owns creating, and M0.109 (line 43) restates open rows M0.25 (\"Run the commit-msg-stage gates in CI\") and M0.27 (\"CI job for L1 unit tests\").",
+      "failure_scenario": "An agent picks M0.41, builds the staged-tree gate, commits `M0.41 ...`. A later session picks M0.106, finds the gate already exists, and either commits a no-op that `check-commit-msg.sh` happily accepts because M0.106 is a real row, or reimplements it and conflicts with the first. The same happens for M0.14/M0.103: M0.14 says `check-mutants.sh` does not exist yet and must be written with `baselines/mutants.txt`, while M0.103 instructs deleting a `MUTANT_FLOOR` override and rewiring `baselines/mutants.txt` inside it \u2014 two open rows giving contradictory starting assumptions about one file. The note at line 27 guards against ID collision with the archive but nothing guards against content collision inside the file itself."
+    },
+    {
+      "id": "R3",
+      "severity": "major",
+      "file": "docs/internal/product/backlog.md:24-50",
+      "summary": "The intro asserts \"Every row below cites the archived measurement it answers\", but 10 of the 17 rows (M0.100, M0.101, M0.103, M0.105, M0.106, M0.108, M0.109, M0.110, M0.111, M0.116) cite no measurement at all, and no row anywhere gives a resolvable pointer \u2014 no commit SHA, no path under the `evidence/` directory the intro names \u2014 so even the rows carrying numbers cannot be traced.",
+      "failure_scenario": "The task M0.100 is \"these rows, AND the archived measurement each one answers\"; the file claims that pairing is complete. A future agent asked to confirm M0.114's premise (\"M4's spec listed 16\") or M0.102's (\"mean 3.14 rounds, worst 16\") has to check out `archive/m4` and grep six days of history by hand, and for M0.108/M0.110/M0.111 there is nothing to look for at all. A wrong premise \u2014 for instance M0.109's hook count, see R6 \u2014 therefore survives unchallenged into the implementing commit, which is the failure mode the citation requirement exists to prevent."
+    },
+    {
+      "id": "R4",
+      "severity": "major",
+      "file": "docs/internal/product/backlog.md:35",
+      "summary": "M0.101 is not one commit: it bundles a packet builder, a runner, a gate, a checklist, reviewer briefs and a test suite into a single row, violating non-negotiable 1 (one task = one commit = one green tree).",
+      "failure_scenario": "An agent starts M0.101 and produces a multi-hundred-line, multi-file commit covering six components. This is the exact situation recorded at the top of this same file for M-1.1: as one large commit it took five review rounds and every extra round found defects in the previous round's fix \u2014 and review.md rule 12 then caps the rounds at two, so the commit can neither be reviewed clean nor split without violating the cap. The decomposition task whose purpose is producing commit-sized rows has produced the one row that cannot be a commit."
+    },
+    {
+      "id": "R5",
+      "severity": "major",
+      "file": "docs/internal/product/backlog.md:19-22",
+      "summary": "The diff declares M4 abandoned and archived, but `docs/internal/product/roadmap.md:13` still lists M4 (\"Sequencer and commit log \u2014 CAS leases, epoch fencing, write-once deltas, checkpoints; I1\u2013I4 hold across 1,000 simulation seeds\") as a live milestone in execution order, with no note that it was abandoned.",
+      "failure_scenario": "An agent invokes the `milestone` skill, which reads roadmap.md for milestones in execution order. M3 is complete, so it selects M4 and begins building the sequencer and commit log from scratch \u2014 six days of abandoned work restarted, because the only statement that M4 was abandoned lives in a file the skill consults for tasks rather than for milestone order. Two authoritative product docs now disagree about whether M4 is next, and this commit introduced the disagreement."
+    },
+    {
+      "id": "R6",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:43",
+      "summary": "M0.109 says \"the three commit-msg-stage hooks never fire in CI\"; `.pre-commit-config.yaml` in this tree declares two hooks at `stages: [commit-msg]` \u2014 `check-commit-msg` (line 152) and `check-test-integrity` (line 160).",
+      "failure_scenario": "An agent implementing M0.109 loops over `git rev-list` invoking `--hook-stage commit-msg` and then checks its work against the row, finds only two hooks fired where the row promises three, and either hunts for a missing hook that does not exist on this branch or adds a third to match the row. The count was measured against the archived tree, not the one the row will be executed against."
+    },
+    {
+      "id": "R7",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:48",
+      "summary": "M0.114 bounds open rows at \"twice its SPEC's task count\", but the milestone these 17 rows belong to \u2014 M0 (continued) \u2014 has no SPEC: `docs/internal/product/milestones/` contains only M1, M2 and M3.",
+      "failure_scenario": "`check-backlog-width.sh` runs over backlog.md after M0.114 lands. For the M0 (continued) section it looks for `docs/internal/product/milestones/M0/SPEC.md`, finds nothing, and has no denominator \u2014 so it either exits non-zero on every commit or, in the more likely and worse case, skips the section and prints ok. The largest open-row group in the file, the one this commit just created, is then the one group the width gate cannot bound: a gate reporting success while checking nothing, the class this repo has repeatedly re-found."
+    },
+    {
+      "id": "R8",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:41-46",
+      "summary": "M0.112 and M0.107 give edit instructions for scripts absent from this branch \u2014 `scripts/check-backlog.sh` (\"fix the row recogniser\") and `scripts/check-diff-size.sh` (\"with no message file warns and exits 0\") are not in `scripts/`, and unlike M0.105 the rows do not say \"port\".",
+      "failure_scenario": "An agent starts M0.112, runs `scripts/check-backlog.sh`, gets \"No such file or directory\", and must decide unaided whether to write the gate from scratch or recover it from `archive/m4` \u2014 the row names neither a source nor a dependency on a porting row, so the two choices produce materially different commits and only one of them carries the measured defect the row was written to fix."
+    }
+  ]
+}
