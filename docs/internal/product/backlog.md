@@ -15,6 +15,24 @@ requires the subject to name a real task). M-1.2 carries the parser regression
 suite (M0.18), those tests are Java, and Java needs the build that M0.4 brings —
 so the build goes first.
 
+**M4 (sequencer and commit log) is complete** — see
+[milestones/M4/VERIFIED.md](milestones/M4/VERIFIED.md). It was delivered onto
+`main` from the `archive/m4` branch, with the three gaps that had kept its
+completion condition unmet closed first:
+
+| ID | Task | Serves | State |
+|---|---|---|---|
+| M0.101 | `tools/xreview/` -- an external reviewer that shares no code with `scripts/review*.sh`. Packet builder, runner, gate, checklist and both briefs, with its own suite in the same commit. ⚠️ It REFUSES a packet over 32 KB rather than truncating: the old packet was silently cut at ~37 KB and a reviewer once filed a major against code it was never shown. ⚠️ And the runner writes the verdict from what the agent RETURNED, because both reviewers once reported verdicts neither had recorded | — | done |
+| M0.102 | Raise the source-file cap from 500 to 700 lines, by decision, in the gate and in code-structure.md rule 1 -- whose text said "never raise the limit", an absolute that had to go: a threshold that may never move is one that gets SKIPPED instead, and a skip leaves no record. Raising it so a particular file fits stays forbidden | — | done |
+| M4.0 | M4's SPEC, and the port of the sequencer, commit log, checkpoints and their format types onto `main` from `archive/m4` -- 60 commits' worth of already-reviewed product code, unmodified. ⚠️ The port is one act because splitting it reproduces exactly what it is being brought over to fix; the CHANGES to it land as their own commits below | FR-11 | done |
+| M4.50 | Source I5's CONFIRMED events from the STORE, not the driver. ⚠️ Both halves of the ack trace came from one `commit()` return, adjacently, so the confirmation preceded the acknowledgement BY CONSTRUCTION and `checkAckOrder` could not fail however the writer behaved — a writer acking window N+1 before window N confirmed left the 1,000-seed sweep green. `AckTraceStore` sits below the fault injector so a landed-but-lost-response write still confirms. Verified falsifiable: acking `sequence() + 1` now turns the sweep red | FR-11 | done |
+| M4.51 | Make `lowestAckedSequenceIn`'s epoch filter falsifiable. ⚠️ `filter(e -> e.epoch() == epoch)` → `filter(e -> true)` left the whole sweep green, because once every chain confirms its slot-0 CONTINUE the global floor is 0 too — two quantities that agree everywhere cannot tell each other apart. Asked where they disagree: an epoch never opened has NO floor, not another chain's | FR-11 | done |
+| M4.13d | Every fault class must change an outcome in at least one seed, or the sweep proves the simulator. ⚠️ `withheldPut` shipped implemented, unit-tested and set to **0** in the sweep profile. `FaultClassEvidenceTest` now refuses a zero rate and demands per-class evidence. ⚠️ `duplicatePut` correctly changes nothing — write-once absorbs it — so its evidence is that the duplicate REACHED the store and the chain stayed byte-identical | FR-11 | done |
+| M4.13e | Partitioned leaders as an injectable fault. ⚠️ `unreachable` is a per-call coin flip with no notion of WHICH pod is calling, so it can never cut one pod off while another stays connected — the shape a lease fight takes. Pod identity threaded into the injector; a partition is a STATE with a duration, not a rate. Measured 6,224 partition faults over 120 seeds at 0.2, commits 789 → 437, no invariant violated | FR-11 | done |
+| M4.13b | Delayed writes and reordered completions. ⚠️ Every other class resolves inside the call that triggered it and the driver had nowhere to hold a pending operation. `deferredPut` holds the write and lands it at the round boundary in a seed-chosen order — one mechanism, both classes. Visible only because M4.50 made the trace store-sourced | FR-11 | done |
+| M4.14 | The compaction-trigger observable: histogram of commit-log index entries per stream plus a bounded top-K event, with no `stream` label. ⚠️ Q17 needs the DISTRIBUTION so M7 picks a threshold from data; a `stream` label costs ~2,400,000 series and ~5.7 GiB, which would make our telemetry heavier than the traffic it describes | FR-14 | done |
+| M4.15 | M4's `VERIFIED.md` — one evidence line per acceptance criterion, with what was NOT run named as such | — | done |
+
 **Current milestone: M2 — Segment format**, specified in [milestones/M2/SPEC.md](milestones/M2/SPEC.md). M1 (walking skeleton) is complete: all 10 acceptance criteria hold, per [milestones/M1/VERIFIED.md](milestones/M1/VERIFIED.md).
 
 | ID | Task | Serves | State |
