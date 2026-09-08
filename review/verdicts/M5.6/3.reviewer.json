@@ -1,0 +1,30 @@
+{
+  "task": "M5.6",
+  "role": "reviewer",
+  "diff_sha256": "39c3227aa1538104cb13ede7728547de362b463536e41fb11390e444346b8ec8",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "major",
+      "file": "sequencer/src/main/java/binjava/sequencer/FleetSequencer.java:56-62",
+      "summary": "The constructor ACQUIRES the term before it VALIDATES its other three arguments, so any argument-validation failure abandons a held-and-renewed lease with no live reference that could ever release it -- the exact ordering defect LocalSequencer.start's own comments say it was fixed for, twice.",
+      "failure_scenario": "new FleetSequencer(null, config, transport, election) -- or a null config or transport -- from the wiring M5.6b will add. new Leadership(election) calls held.set(tryLead()) in its constructor, which runs election.tryLead() -> LocalSequencer.start -> leases.tryAcquire(), taking epoch E, starting the renewForever thread, sealing the ancestor and running recover(). Only THEN does Objects.requireNonNull(store, \"store\") throw NPE. The half-constructed FleetSequencer is discarded, so the only reference to leadership -- and through it to the won LocalSequencer, its LeaseManager belief and its renewer thread -- is gone. Nothing can call Leadership.close(), which is the only path to LocalSequencer.close() -> leases.release(). Result: the lease object names this dead pod at epoch E and is renewed every 3 s forever, so it never expires. Every other pod's tryAcquire reads an unexpired lease and returns empty, so no pod can lead; and no pod can forward either, because the constructor threw and nothing serves this pod's endpoint. The whole fleet is unable to commit for the life of this JVM, from one null argument. LocalSequencer.java:250-259 carries two comments describing this identical failure and the fix there was to hoist every requireNonNull ABOVE tryAcquire. FleetSequencer reintroduces it one layer up. The fix is the same one line of reordering. It is not among the gaps deferred by the class javadoc or by the M5.6b/M5.6c rows."
+    },
+    {
+      "id": "R2",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/FleetSequencer.java:70-77",
+      "summary": "When the fenced fallback's forward fails, the FencedException is discarded rather than attached, so a commit that PROVABLY appended nothing is reported to the producer as a plain IOException -- which Sequencer.commit defines as ambiguous and unsafe to resend.",
+      "failure_scenario": "A takeover with a store hiccup: pod-C acquires epoch E+1 and seals chain E; pod-A's mine.commitAll loses the CAS and throws FencedException, proving nothing landed. The code retires the sequencer, then calls remote.commitAll(requests), whose FIRST action is currentLease() -- a store.get(leaseKey). The store 503s on that GET, before any peer RPC is attempted. The IOException propagates and fenced goes out of scope, never rethrown, never addSuppressed-ed, and never logged by this class. Two wrong results. (1) The caller is handed the one statement that is false about this failure: per Sequencer.commit an IOException means the commit may have landed and lost its reply, when in fact a fence plus a failed lease GET means nothing was attempted at either pod, so the request is trivially safe to resend. When M5.23 makes a safe retry possible, this path has already destroyed the evidence that would authorise it. (2) An operator debugging a stalled producer at a failover sees only \"could not GET the lease\" and no indication that a takeover fenced this pod at all. The sibling code guards against precisely this substitution and says so -- Leadership.retire's comment is REPORTED, NEVER SUBSTITUTED -- and attaches its close failure with why.addSuppressed(closeFailed). Minimum fix: catch the forward's IOException and attach the fence."
+    },
+    {
+      "id": "R3",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:40",
+      "summary": "M5.6 is marked done while still asserting \"the correctness hole closes here\", but the hole is demonstrably still open: the same row admits nothing in production constructs this class, and M5.6b -- the two-pod DefaultIngest proof that would actually close it -- is todo.",
+      "failure_scenario": "The original M5.6 row read \"Wire forwarding into DefaultIngest -- the correctness hole closes here\", where \"here\" meant the ingest path. The row is rewritten to name FleetSequencer instead, but the bolded closure claim is carried over verbatim and the status flips to done, while the referent moved to a class the same cell says is constructed nowhere -- and that is still true after this commit, since the only new FleetSequencer(...) in the tree is in FleetSequencerTest. A reader auditing M5 for readiness, or the milestone-completion check that reads statuses, sees the one row in the milestone that names the correctness hole marked done and claiming closure, and concludes a multi-pod deployment is now correct. It is not: DefaultIngest is still handed whatever a test constructs, so a non-leaseholder pod in a real deployment still cannot commit until M5.6b lands. The deferral itself is legitimately scoped by the M5.6b row; the defect is the retained closure claim on a row now marked done."
+    }
+  ],
+  "via": "record"
+}

@@ -1,0 +1,16 @@
+{
+  "task": "M5.6",
+  "role": "test-reviewer",
+  "diff_sha256": "39c3227aa1538104cb13ede7728547de362b463536e41fb11390e444346b8ec8",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/FleetSequencer.java:85-92",
+      "summary": "Both arms of close() beyond leadership.close() are unconstrained: deleting remote.close(), or replacing the try/finally with two sequential statements, leaves all seven tests green, so nothing pins that the transport is closed at all, let alone that it is closed when the lease release fails.",
+      "failure_scenario": "Mutation (a) delete remote.close();. Every test passes: theFIRSTPodLeadsAndTheSecondFORWARDSToIt and aFollowerDoesNotWriteTheCHAINItself assert only offsets and PUT counts after their pods close; aFOLLOWERIsPromotedWhenTheLeaderGoesAway does not rely on close clearing the routes because it calls transport.gone(A) explicitly right after first.close(); anElectionThatNeverWinsStillForwardsForever asserts only leader.leading() after stuck closes, which reads leadership.isHeld() and is unaffected. InProcessTransport.close() merely clears a map and no assertion ever reads peers or reacts to a stale route. Mutation (b) reorder to leadership.close(); remote.close(); -- same result, because no Sequencer reachable from any Election in this file throws from close(). What goes unpinned in production: a pod shutting down normally while the lease-release putIfMatch takes a 503 -- leadership.close() throws, and under mutation (b) RemoteSequencer.close() and therefore SequencerTransport.close() never run, so the peer transport (a real client and its connection pool in production, not the in-process fake) is leaked on exactly the failure path the try/finally exists for. This is not among the gaps the class javadoc defers to M5.6c, nor is it covered by LeadershipTest, which exercises Leadership.close() alone and knows nothing of the transport. One test kills both: an Election yielding a Sequencer whose close() throws IOException, asserting the IOException escapes FleetSequencer.close() and that the transport was closed anyway."
+    }
+  ],
+  "via": "record"
+}

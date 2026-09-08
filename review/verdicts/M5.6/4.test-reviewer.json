@@ -1,0 +1,16 @@
+{
+  "task": "M5.6",
+  "role": "test-reviewer",
+  "diff_sha256": "36c7334e9cf5b54facc25c14748594fa4fadcef7250c39e60f7d3039e46e7581",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/FleetSequencer.java:93-107",
+      "summary": "The second of this round's two production fixes -- attaching the fence when the forward fails -- is entirely unconstrained: no test in the suite ever enters commitAll's catch (IOException forwardFailed) arm, so deleting forwardFailed.addSuppressed(fence), or inverting its guard to if (fence == null), leaves all nine tests green.",
+      "failure_scenario": "Named surviving mutations, all in FleetSequencer.commitAll: (a) delete the whole if (fence != null) { forwardFailed.addSuppressed(fence); } block; (b) invert it to if (fence == null); (c) collapse the try/catch to a bare return remote.commitAll(requests); and delete the fence local. Every test still passes, because reaching that arm needs BOTH a FencedException from the local sequencer AND a failing forward, and no test produces the pair. aLeaderThatIsFENCEDFallsBackToForwarding fences, then forwards SUCCESSFULLY through the usurper at C. anAMBIGUOUSLocalFailureIsPROPAGATED and TWOCallersAreInsideCommitAllAtOnce throw plain IOExceptions, which are not FencedException and escape without reaching remote.commitAll. The four forwarding tests forward with fence == null and succeed. theTRANSPORTIsClosed and anINVALIDArgumentIsRefused never call commit. getSuppressed appears nowhere in FleetSequencerTest, and LeadershipTest pins only Leadership.retire's own suppression -- a different arm in a different class. Production behaviour left unpinned: pod-C takes epoch E+1 and seals chain E; pod-A's commitAll loses the CAS and throws FencedException, proving nothing was appended; retire drops it; remote.commitAll's first action is a store.get of the lease key, which 503s. Under any mutation the producer is handed a bare IOException whose contract says the commit MAY have landed -- the one statement provably false here -- and the FencedException that would authorise the safe resend M5.23 is to make possible is destroyed. One test kills all three, and this arm is drivable with the fakes already in this file. Round three's close() finding IS genuinely killed, and the argument-ordering fix IS pinned."
+    }
+  ],
+  "via": "record"
+}

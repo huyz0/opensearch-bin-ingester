@@ -1,0 +1,16 @@
+{
+  "task": "M5.6",
+  "role": "reviewer",
+  "diff_sha256": "36c7334e9cf5b54facc25c14748594fa4fadcef7250c39e60f7d3039e46e7581",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/FleetSequencer.java:115-122",
+      "summary": "close() puts remote.close() in a finally, so when both closes fail the transport's exception REPLACES the lease-release exception rather than being attached to it -- the same substitute-the-secondary-for-the-primary defect the sibling code (Leadership.retire, LocalSequencer.start's catch) explicitly guards against with addSuppressed.",
+      "failure_scenario": "Ordinary pod shutdown on a flaky store and a flaky peer client. leadership.close() -> LocalSequencer.close() -> LeaseManager.release() -> putIfMatch takes a 503, throwing IOException(\"the release PUT failed\") -- the fact that matters, because a term not handed back costs a successor a full TTL wait (~10 s, ADR-0007) instead of a millisecond failover. Control then enters the finally; remote.close() -> SequencerTransport.close() on a real peer HTTP client (both declare throws IOException, so this path exists by contract; only the InProcessTransport fake cannot take it) throws IOException(\"could not shut the connection pool\"). Java discards the in-flight exception from the try when the finally throws, so the caller and the shutdown log receive ONLY the pool-shutdown error. Two wrong results: (1) the operator is told a connection pool leaked and is never told the lease was not released, so a failover that will now sit out the TTL looks like a clean shutdown with a tidy-up warning; (2) the test that pins this arm, theTRANSPORTIsClosedEvenWhenGivingTheTermBackFAILS, asserts the release IOException escapes -- a property that silently stops holding the moment the transport's close can also fail, which is exactly the production transport it stands in for. Minimum fix is the shape used one file over: catch the release failure, run remote.close() inside its own try, and attach whichever came second with addSuppressed. Round three's three findings are all genuinely fixed, and rounds one and two are genuinely discharged by the split rather than lost in it -- each verified against Leadership.retire, Leadership.tryLead, the new argument-ordering test, and the CyclicBarrier test. I also checked the composition the class javadoc advertises actually works: PendingCommit.await unwraps an IOException cause without rewrapping, so a FencedException raised by LocalSequencer survives a BatchingSequencer wrapper and reaches the fenced catch."
+    }
+  ],
+  "via": "record"
+}
