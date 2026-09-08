@@ -107,6 +107,15 @@ public interface Sequencer extends AutoCloseable {
      *     ambiguous commit is never recorded as applied, because the record
      *     happens after the write RETURNS, so the retry commits the same
      *     records again. M4.10e owns that; see the failure-and-retry note
+     * @throws FencedException the ONE exception to the paragraph above: this
+     *     sequencer's term ended, the append was refused and NOTHING landed, so
+     *     the same request may be re-sent to whoever holds the term now. ⚠️ THE
+     *     PROMISE IS NOT UNIFORM ACROSS IMPLEMENTATIONS, and a caller has to
+     *     know that: a sequencer that writes the chain itself raises it, and one
+     *     that FORWARDS to a peer does not — a peer's refusal reaches it as a
+     *     transport-level failure it reports as a plain {@link IOException}.
+     *     So {@code instanceof FencedException} means "safe to re-send"; its
+     *     absence does not mean "unsafe from every implementation"
      */
     default CommitDelta commit(CommitRequest request) throws IOException {
         return commitAll(List.of(request));

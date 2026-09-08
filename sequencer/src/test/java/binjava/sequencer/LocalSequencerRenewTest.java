@@ -259,6 +259,12 @@ class LocalSequencerRenewTest {
         assertThat(refusal)
                 .as("and it says the LEASE went, not merely that the chain was sealed")
                 .hasMessageContaining("lease");
+        // ⚠️ AND IT IS THE TYPE A CALLER CAN ACT ON. The word "lease" appears in
+        // BOTH of this class's refusals -- the fenced one here and the one after
+        // close -- so a caller deciding whether a commit may be re-sent
+        // elsewhere cannot use the message. Only the fenced refusal promises
+        // that nothing was appended.
+        assertThat(refusal).isInstanceOf(FencedException.class);
         successor.close();
     }
 
@@ -469,6 +475,10 @@ class LocalSequencerRenewTest {
                 .as("a deliberate shutdown is reported as a close")
                 .hasMessageContaining("released its lease")
                 .as("never as a fence, which would name a takeover that did not happen")
-                .hasMessageNotContaining("fenced");
+                .hasMessageNotContaining("fenced")
+                // ⚠️ THE SAME REFUSAL, AT THE TYPE. A caller acts on the type
+                // rather than the words, so the message assertion above no
+                // longer covers the case it was written for.
+                .isNotInstanceOf(FencedException.class);
     }
 }

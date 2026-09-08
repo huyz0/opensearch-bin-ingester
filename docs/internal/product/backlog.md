@@ -39,6 +39,8 @@ completion condition unmet closed first:
 | M5.5 | Follow the lease when the target refuses or it moves | FR-11 | todo |
 | M5.6 | Wire forwarding into `DefaultIngest` — **the correctness hole closes here** ⚠️ Stated twice on purpose in M4's SPEC, and not safe until M5.1 and M5.2 land | FR-11 | todo |
 | M5.7 | Extend the commit-protocol simulation with pods that forward rather than lead | FR-11 | todo |
+| M5.6a | Tell a FENCED writer apart by TYPE, not by the word "lease" in its message ⚠️ `LocalSequencer` says "this sequencer RELEASED its lease" after close and "this sequencer LOST its lease" when fenced; both contain the word, so a caller matching on the text reads a deliberate shutdown as a fencing. `CommitLog` has a second, independent fence -- discovering a successor's seal on the write. Only a fenced commit is safe to re-send elsewhere, so the distinction has to be a type | FR-11 | **done** |
+| M5.6b | The ingest path proved end to end: two `DefaultIngest` pods over one store, one leading and one forwarding ⚠️ Split out of M5.6 because the external reviewer's packet cap refused the combined 43,646-byte diff -- the cap exists so a reviewer is never shown a prefix of what it is judging | FR-11 | todo |
 | M5.8 | The membership seam, static implementation, and the AZ-scoped ring | NFR-4 | todo |
 | M5.9 | Cross-AZ peer fetch not addressable by construction ⚠️ ADR-0012 measures a cross-AZ peer fetch at 419x the object-store GET it would replace and requires the rule "enforced in code, not just documented" | NFR-5 | todo |
 | M5.10 | ADR + `BinStore.presign` and `Capabilities.presignedUrls`, both backends, conformance, golden files (wire-format-change) | FR-6 | todo |

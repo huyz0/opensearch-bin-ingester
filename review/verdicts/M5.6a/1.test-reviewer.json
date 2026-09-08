@@ -1,0 +1,16 @@
+{
+  "task": "M5.6a",
+  "role": "test-reviewer",
+  "diff_sha256": "7d9da5d7c47f57a306ba53e7792d947d801349f8e2c98db19f6ac89fd7e55895",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/LocalSequencerRenewTest.java:259-268",
+      "summary": "The new tests pin only the positive arm of the fenced/close distinction -- that a fenced commit throws FencedException -- and no test anywhere asserts that the deliberate-close refusal is NOT a FencedException, so the exact confusion the task exists to remove survives once it moves from the message to the type.",
+      "failure_scenario": "Mutate LocalSequencer.commitAll's closed branch (LocalSequencer.java:417-422) to throw new FencedException(...) with the identical message. Every test stays green: LocalSequencerTest.committingAfterCloseFailsRatherThanSilentlySucceeding asserts only isInstanceOf(IOException.class) plus hasMessageContaining(\"released its lease at epoch 1\"), and the deliberate-close test in LocalSequencerRenewTest asserts isInstanceOf(IOException.class), hasMessageContaining(\"released its lease\") and hasMessageNotContaining(\"fenced\") -- a FencedException satisfies all four. No isNotInstanceOf/isExactlyInstanceOf assertion exists anywhere in sequencer/src/test. Concretely: pod1 is closed on SIGTERM, an in-flight commit hits the closed branch and under the mutation gets a FencedException; the M5.6 caller that forwards on exactly instanceof FencedException then treats a deliberate shutdown as a lost term and forwards/re-elects on the way out -- the defect the task names, reintroduced at the type level with the suite unable to see it. Killing it needs one assertion on the close refusal, e.g. isNotInstanceOf(FencedException.class)."
+    }
+  ],
+  "via": "record"
+}

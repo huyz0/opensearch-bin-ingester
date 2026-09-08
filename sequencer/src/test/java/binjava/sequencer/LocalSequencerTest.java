@@ -457,6 +457,13 @@ class LocalSequencerTest {
                 // and "refused because closed" and "refused because someone
                 // sealed the chain underneath me" need different operator
                 // responses.
-                .hasMessageContaining("released its lease at epoch 1");
+                .hasMessageContaining("released its lease at epoch 1")
+                // ⚠️ AND IT IS NOT A FENCE. The NEGATIVE arm has to be asserted
+                // too, or moving the distinction from the message to the type
+                // just relocates the confusion: a caller forwards a commit on
+                // `instanceof FencedException` and on nothing else, so a close
+                // refusal wearing that type makes a dying pod forward and
+                // re-elect on its way out. Nothing else in this suite refuses it.
+                .isNotInstanceOf(FencedException.class);
     }
 }

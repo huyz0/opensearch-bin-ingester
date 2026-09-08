@@ -82,7 +82,13 @@ class CommitLogSealTest {
         assertThatThrownBy(() -> fenced.commit("seg/1", counts(new RunKey(A, 0), 5)))
                 .as("a chain that has been sealed accepts no further commits, "
                         + "whether or not this writer lost a race to learn it")
-                .isInstanceOf(IOException.class)
+                // ⚠️ THE TYPE, because a caller has to ACT on this one. Discovering
+                // a successor's seal on the write means the append was refused and
+                // nothing landed -- safe to re-send elsewhere -- while an ordinary
+                // IOException from the same call may have landed and lost its
+                // reply. A reader that had to tell them apart by message would be
+                // matching on "fenced", a word the CLOSE refusal also uses.
+                .isInstanceOf(FencedException.class)
                 // ⚠️ The FIELDS, not just the word. Swapping `sequence()` and
                 // `continuedAt()` inside the shared helper left everything
                 // green when only "sealed" was matched.
@@ -128,7 +134,7 @@ class CommitLogSealTest {
 
         assertThatThrownBy(() -> fenced.commit("seg/0", counts(new RunKey(A, 0), 4)))
                 .as("sequence 0 is a slot like any other; a seal there fences the chain")
-                .isInstanceOf(IOException.class)
+                .isInstanceOf(FencedException.class)
                 .hasMessageContaining("sealed at seq 0");
         assertThat(store.stat(fenced.keyFor(1)))
                 .as("and nothing was written after it").isEmpty();

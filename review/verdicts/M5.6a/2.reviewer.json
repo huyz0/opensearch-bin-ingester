@@ -1,0 +1,16 @@
+{
+  "task": "M5.6a",
+  "role": "reviewer",
+  "diff_sha256": "a821b3006228c7078cfd1c6ca91d0dc76365f062fa0dd02dafeb347da3c62220",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/FencedException.java:9-17",
+      "summary": "The class javadoc's account of the bug it exists to fix is factually wrong: it lists three messages under a contains(\"lease\") predicate and says \"All three matched\", but CommitLog's fence message contains no occurrence of \"lease\", so that predicate MISSED it -- the opposite failure from the one the paragraph describes.",
+      "failure_scenario": "CommitLog.fenced (CommitLog.java:530-539) builds exactly \"chain sealed at seq 5, continued at epoch 2; this writer is fenced and must stop\". Apply the predicate the paragraph names: \"...must stop\".contains(\"lease\") == false. Only LocalSequencer.java:414 (\"lost its lease\") and :421 (\"released its lease\") match, and only one of those two is a fence. Concrete consequence: the implementer of M5.6/M5.6b, for whom this paragraph is the sole written justification, is told the old predicate over-matched, and cannot infer from it how the seal-discovery fence was classified. Verified against the tree: grep for \"lease\" in *.java matches Belief.java:39 and the two LocalSequencer throws only -- CommitLog's fence string is not among them."
+    }
+  ],
+  "via": "record"
+}

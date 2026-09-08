@@ -407,7 +407,11 @@ public final class LocalSequencer implements Sequencer {
             // trip, and only once the seal is visible. This node already KNOWS,
             // and spending a request to be told again is both slower and a
             // request that scales with a fenced pod's retry rate.
-            throw new IOException("this sequencer lost its lease at epoch " + log.epoch()
+            // ⚠️ A TYPE, NOT A MESSAGE. A caller re-sends on exactly this
+            // failure and on no other, because exactly this one appended
+            // nothing. Matching on the text does not work: the close refusal
+            // below names the lease too.
+            throw new FencedException("this sequencer lost its lease at epoch " + log.epoch()
                     + " and has been fenced; it must not commit again");
         }
         if (closed) {

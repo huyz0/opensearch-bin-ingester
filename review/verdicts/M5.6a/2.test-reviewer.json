@@ -1,0 +1,23 @@
+{
+  "task": "M5.6a",
+  "role": "test-reviewer",
+  "diff_sha256": "a821b3006228c7078cfd1c6ca91d0dc76365f062fa0dd02dafeb347da3c62220",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitLogTest.java:430-461",
+      "summary": "Round one's fenced/close arms are now both pinned, but CommitLog has TWO fence throw sites and only the recovered-past-a-seal one (CommitLog.java:354) is type-pinned; the lost-the-slot-to-a-seal site (CommitLog.java:404) -- the branch the task row literally names, \"discovering a successor's seal on the write\" -- is exercised only by tests that still assert bare IOException plus a message word, so its type is unconstrained.",
+      "failure_scenario": "Mutation: replace throw fenced(seal); at CommitLog.java:404 with an inline throw new IOException(\"chain sealed at seq \" + seal.sequence() + \", continued at epoch \" + seal.continuedAt() + \"; this writer is fenced and must stop\"), leaving the shared helper and site 354 untouched. The whole suite stays green: CommitLogTest:454-457 (losingASlotToASealStopsRatherThanWritingPastTheBarrier, the one dedicated test for this branch, untouched by this diff) asserts only .isInstanceOf(java.io.IOException.class).hasMessageContaining(\"sealed\"); LocalSequencerAncestorSealTest:156-157 and :359-360, the only other tests reaching site 404, assert only .isInstanceOf(IOException.class).hasMessageContaining(\"fenced\"); and neither of the two .isInstanceOf(FencedException.class) assertions added in CommitLogSealTest (lines 91 and 137) can reach it -- both fixtures deliberately assert fenced.nextSequence() is already past the seal, which forces the sealedAt != null branch at CommitLog.java:354 instead. Concretely under the mutation: a live leader at epoch 1 whose in-flight putIfAbsent loses slot N to a successor's Seal -- the fencing that happens in production BEFORE the renewer latches fenced, and the reason this second fence exists at all -- gets a plain IOException. The M5.6 caller branching on instanceof FencedException does not forward, so a commit that provably appended nothing is returned to the producer as an error instead of being re-sent to the new holder. One .isInstanceOf(FencedException.class) on CommitLogTest:456, or a CommitLogSealTest case whose writer genuinely loses the race, kills it."
+    },
+    {
+      "id": "R2",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/PendingCommit.java:41-69",
+      "summary": "The new type only means anything to a caller if it survives the one wrapper between the sequencer and that caller, and nothing in the tree asserts that a FencedException from the delegate reaches a BatchingSequencer caller as a FencedException -- every test in this change calls LocalSequencer or CommitLog directly.",
+      "failure_scenario": "Mutation: delete the if (cause instanceof IOException io) { throw io; } arm at PendingCommit.java:46-52 so an IOException cause falls through to throw new IOException(cause) at line 68. Every test stays green. The RuntimeException arm is pinned by type (BatchingSequencerLifecycleTest:139 isInstanceOf(IllegalStateException.class)) and the Error arm by type (:237 isInstanceOf(OutOfMemoryError.class)), but the IOException arm is pinned by nothing type-specific: BatchingSequencerLifecycleTest:115, :144 and :241 assert only isInstanceOf(IOException.class), which a wrapper satisfies, and their hasMessageContaining assertions still pass because new IOException(Throwable) takes cause.toString() as its message, which contains the original text. Concretely: DefaultIngest holds a Sequencer and commits through it; wired as BatchingSequencer over LocalSequencer, a window whose delegate raises FencedException is failed via BatchingSequencer -> PendingCommit.fail -> await, and under the mutation the caller receives a plain IOException. instanceof FencedException is then false on the only path M5.6 will actually use, so the type this task exists to introduce is silently inert and no test in the suite notices."
+    }
+  ],
+  "via": "record"
+}

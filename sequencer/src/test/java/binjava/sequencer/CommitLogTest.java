@@ -453,7 +453,15 @@ class CommitLogTest {
 
         assertThatThrownBy(() -> fenced.commit("seg/1", counts(new RunKey(A, 0), 2)))
                 .as("losing to a seal is proof of being fenced, not ordinary contention")
-                .isInstanceOf(java.io.IOException.class)
+                // ⚠️ THE SECOND FENCE SITE, AND IT IS THE EARLIER ONE. This
+                // branch fires while the writer still believes it leads -- its
+                // in-flight putIfAbsent loses the slot to a successor's seal,
+                // BEFORE any renewer could latch anything. A caller re-sends on
+                // the type and on nothing else, so leaving this one a bare
+                // IOException returns a commit that provably appended nothing
+                // (asserted below) to the producer as an error, instead of
+                // forwarding it to the pod that now holds the term.
+                .isInstanceOf(FencedException.class)
                 .hasMessageContaining("sealed");
         assertThat(store.stat(fenced.keyFor(2)))
                 .as("and nothing was written past the barrier")

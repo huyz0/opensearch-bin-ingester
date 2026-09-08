@@ -102,6 +102,36 @@ class BatchingSequencerLifecycleTest {
     }
 
     @Test
+    void aFENCEDDelegateReachesTheCallerSTILL_FENCED() throws Exception {
+        // ⚠️ THE TYPE HAS TO SURVIVE THE WRAPPER OR IT IS INERT. `DefaultIngest`
+        // holds a `Sequencer`, and the one this milestone wires is a batcher
+        // over the chain writer -- so every fenced commit a producer ever makes
+        // reaches it through `PendingCommit`. That class unwraps an IOException
+        // cause deliberately; wrapping instead (`new IOException(cause)`)
+        // satisfies every `isInstanceOf(IOException.class)` assertion in this
+        // file AND their message assertions, because `IOException(Throwable)`
+        // takes `cause.toString()` as its message. A caller branching on
+        // `instanceof FencedException` would then never forward, and the type
+        // would be silently dead on the only path that uses it.
+        Sequencer alwaysFenced = new Sequencer() {
+            @Override public CommitDelta commitAll(List<CommitRequest> requests)
+                    throws IOException {
+                throw new FencedException("this sequencer lost its lease at epoch 1");
+            }
+
+            @Override public void close() {
+            }
+        };
+        try (var batching = new BatchingSequencer(alwaysFenced, () -> { })) {
+            assertThatThrownBy(() -> batching.commit(from("pod0", 0)))
+                    .as("a batched caller learns its commit appended NOTHING, "
+                            + "which is what makes re-sending it safe")
+                    .isInstanceOf(FencedException.class)
+                    .hasMessageContaining("lost its lease at epoch 1");
+        }
+    }
+
+    @Test
     void aCommitAfterCloseFAILSRatherThanHanging() throws Exception {
         // ⚠️ The Sequencer contract says a commit after close must FAIL. A
         // batcher gets this wrong in a particular way: the caller is not

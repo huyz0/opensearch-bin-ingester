@@ -527,8 +527,13 @@ public final class CommitLog {
      * must redrive to N+2 rather than stop, or it surrenders sequencing
      * cluster-wide; that split needs the lease and is not this task's.
      */
-    private static IOException fenced(Seal seal) {
-        return new IOException("chain sealed at seq " + seal.sequence()
+    private static FencedException fenced(Seal seal) {
+        // ⚠️ TYPED, because this is the SECOND way a writer learns its term
+        // ended and the first thing to consume it could not tell the two apart.
+        // The renewer latching `fenced` is one; discovering a successor's seal
+        // on the write is the other, and it says the same thing -- the append
+        // was refused, nothing landed -- so a caller may re-send it elsewhere.
+        return new FencedException("chain sealed at seq " + seal.sequence()
                 + ", continued at epoch " + seal.continuedAt()
                 + "; this writer is fenced and must stop");
     }

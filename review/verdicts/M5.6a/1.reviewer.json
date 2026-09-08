@@ -1,0 +1,37 @@
+{
+  "task": "M5.6a",
+  "role": "reviewer",
+  "diff_sha256": "7d9da5d7c47f57a306ba53e7792d947d801349f8e2c98db19f6ac89fd7e55895",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "major",
+      "file": "sequencer/src/main/java/binjava/sequencer/LocalSequencer.java:404-423",
+      "summary": "The staged change pins only the positive arm of the fenced/closed split -- nothing in it asserts that the CLOSE refusal is not a FencedException, so the exact confusion the task exists to remove can be reintroduced with the suite green (the negative assertions exist in the working tree but are NOT staged).",
+      "failure_scenario": "Mutation: change line 421 from throw new IOException(\"this sequencer released its lease at epoch \" ...) to throw new FencedException(...). Every assertion in the staged commit still passes -- CommitLogSealTest and LocalSequencerRenewTest:262 only assert the FENCED paths are FencedException; the close-path assertions at HEAD are LocalSequencerTest:454 .isInstanceOf(IOException.class) plus hasMessageContaining(\"released its lease at epoch 1\") and LocalSequencerRenewTest:473-476 .isInstanceOf(IOException.class) plus hasMessageContaining(\"released its lease\") / hasMessageNotContaining(\"fenced\"), all of which hold for a FencedException carrying the unchanged message. The resulting state: a pod that called close() deliberately reports its refusal with the one type documented as safe to resend, and the M5.6 caller that forwards on instanceof FencedException re-sends a shutting-down pod's commit to the new holder -- the shutdown-read-as-fencing defect the task row describes, now wearing a type instead of a word."
+    },
+    {
+      "id": "R2",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/FencedException.java:8-14",
+      "summary": "The class javadoc's {@link FleetSequencer} names a type that exists nowhere in the repository, and the two comments added to CommitLog.java:535 and LocalSequencer.java:410 name it too.",
+      "failure_scenario": "grep -rn FleetSequencer over the whole tree matches only these three added lines -- no class, no backlog row, no spec mentions it. Measured: ./gradlew :sequencer:javadoc --offline fails with FencedException.java:10: error: reference not found, taking the module from 2 pre-existing javadoc errors to 3. Javadoc is not wired into check, so no gate stops the commit; the concrete result is that a reader following the link to learn who consumes this type finds nothing to open, and the javadoc task stays broken by one more error."
+    },
+    {
+      "id": "R3",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/Sequencer.java:104-110",
+      "summary": "The new subtype inverts the interface's stated contract for one case, and the interface -- which is what a caller programs against -- is not touched.",
+      "failure_scenario": "A caller holding a Sequencer (DefaultIngest does) reads only this contract and is told every IOException may have landed; nothing on the interface says a FencedException subtype exists or which implementations promise it. Concretely the promise is not uniform: with a RemoteSequencer whose remote leaseholder is fenced, RemoteSequencer.java:78 wraps NotTheLeaseholderException in a plain IOException, so a caller branching on instanceof FencedException gets the safe-to-resend signal from LocalSequencer/BatchingSequencer and never from RemoteSequencer -- an asymmetry the seam's own documentation does not record."
+    },
+    {
+      "id": "R4",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:42",
+      "summary": "The M5.6a row is added with state todo by the commit that implements it, so the file described as the authoritative task list reports this work as not started the moment it lands.",
+      "failure_scenario": "After this commit, next-task step 1 reads backlog.md and sees | M5.6a | ... | FR-11 | todo |; an agent that trusts the state column picks up a task whose FencedException, its two throw sites and its tests are already in the tree, and re-derives a change that exists. The neighbouring precedent in git history is the opposite: 4345299 deleted M4.13's row on completing it, and M4.0/M4.50/M4.51 carry done. No script parses the state column, so nothing else catches this."
+    }
+  ],
+  "via": "record"
+}
