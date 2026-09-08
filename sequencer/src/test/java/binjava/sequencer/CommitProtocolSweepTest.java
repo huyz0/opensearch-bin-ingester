@@ -66,6 +66,37 @@ import org.junit.jupiter.api.Timeout;
 class CommitProtocolSweepTest {
 
     /**
+     * The profile every seed runs under, all six classes live.
+     *
+     * <p>⚠️ EVERY NUMBER HERE WAS RE-MEASURED ON THIS TREE, and the previous
+     * version of this comment is why that matters: it justified its rate by
+     * citing "M4.13c measured that at 0.05 the seeds committing nothing reaches
+     * 3". Review re-ran it: the true figure for {@code (0.05, 0.05, 0.1, 0.05,
+     * 0.05, 0.05)} is <b>137 of 1,000</b>, 45x the quoted bound. A seed that
+     * commits nothing holds I1-I5 VACUOUSLY, so 13.7% of the seeds M4's
+     * completion condition is claimed over were proving nothing.
+     *
+     * <p>⚠️ AND THE OLD PROFILE WAS NOT INNOCENT EITHER: {@code (0.05, 0.05,
+     * 0.1, 0)} produced <b>47</b> zero-commit seeds, and three of its six
+     * classes were silently 0 because it used the four-argument convenience
+     * constructor. This profile is strictly better than that one on every axis
+     * measured over 1,000 seeds at 120 rounds and 3 pods:
+     *
+     * <pre>
+     *   profile                              zero-commit  commits  readers  takeovers
+     *   (0.05,0.05,0.1,0) -- three off               47     7.33    74.17     2.87
+     *   (0.05,0.05,0.1,0.05,0.05,0.05)              137     4.22    47.34     2.61
+     *   (0.03,0.03,0.1,0.02,0.02,0.02) -- this       12    11.11    85.45     4.81
+     * </pre>
+     *
+     * <p>⚠️ THE BOUND IS ASSERTED, NOT TRUSTED. `zeroCommitSeeds` below fails
+     * the sweep if vacuous seeds rise, because a rate is easy to raise and its
+     * cost is invisible in a green run.
+     */
+    static final FaultInjectingStore.Faults SWEEP_FAULTS =
+            new FaultInjectingStore.Faults(0.03, 0.03, 0.1, 0.02, 0.02, 0.02);
+
+    /**
      * The number M4's completion condition names. ⚠️ THIS IS ONLY THE FALLBACK,
      * so asserting it holds nothing: {@code SEEDS} is what the loop runs and
      * what every floor is scaled by. Review MEASURED a one-token rewrite of the
@@ -164,8 +195,7 @@ class CommitProtocolSweepTest {
                 + "first, and the dimension the floors alone do not hold").isEqualTo(120);
         assertThat(PODS).as("logical pods contending for the lease").isEqualTo(3);
 
-        FaultInjectingStore.Faults faults =
-                new FaultInjectingStore.Faults(0.05, 0.05, 0.1, 0);
+        FaultInjectingStore.Faults faults = SWEEP_FAULTS;
 
         List<String> failing = new ArrayList<>();
         long commits = 0;
@@ -175,9 +205,13 @@ class CommitProtocolSweepTest {
         long readersChecked = 0;
         boolean ackFloorAlwaysZero = true;
         long ackEvents = 0;
+        int zeroCommitSeeds = 0;
         long start = System.nanoTime();
         for (long seed = 0; seed < SEEDS; seed++) {
             var run = CommitProtocolSimulation.run(seed, ROUNDS, PODS, faults);
+            if (run.commits() == 0) {
+                zeroCommitSeeds++;
+            }
             commits += run.commits();
             takeovers += run.takeovers();
             epochsBurned += run.highestEpoch();
@@ -218,17 +252,17 @@ class CommitProtocolSweepTest {
         // takeovers and 80.2 epochs at 120 rounds, against 0.9, 0.9 and 1.3 at
         // 3 -- so these separate the two by a wide margin in both directions.
         assertThat(commits)
-                .as("mean commits per seed must stay near the measured 7.4, not collapse "
+                .as("mean commits per seed must stay near the re-measured 11.11, not collapse "
                         + "to the 0.9 a shallow run gives")
                 .isGreaterThan(SEEDS * 3L);
         assertThat(takeovers)
-                .as("and mean takeovers near the measured 2.87, against 0.97 shallow -- the "
+                .as("and mean takeovers near the re-measured 4.81, against 0.97 shallow -- the "
                         + "flattest of these floors, so it is set at 1.5 per seed rather than "
                         + "1: review measured 2,872 against a floor of 1,000, only 3.2% of "
                         + "the separation, with ROUNDS=4 already clearing it")
                 .isGreaterThanOrEqualTo(SEEDS * 3L / 2);
         assertThat(epochsBurned)
-                .as("and the epoch depth near the measured 80.2 per seed, against 1.3 -- "
+                .as("and the epoch depth near the re-measured 85.87 per seed, against 1.3 -- "
                         + "the dimension a shorter run collapses first")
                 .isGreaterThan(SEEDS * 10L);
         // ⚠️ THE FAULT PROFILE IS A THRESHOLD TOO, and `isPositive()` did not
@@ -268,6 +302,18 @@ class CommitProtocolSweepTest {
                         + "event exists to guarantee -- it was documented in three places and "
                         + "emitted nowhere until review measured the floor sitting at 1")
                 .isTrue();
+
+        // ⚠️ A SEED THAT COMMITS NOTHING HOLDS I1-I5 VACUOUSLY, and nothing was
+        // counting them. Measured on this tree: 47 under the old profile, 137
+        // under a first attempt at enabling every class, 12 under the profile
+        // above. The completion condition says "across 1,000 seeds"; seeds that
+        // never commit are not part of that thousand in any meaningful sense,
+        // so their number is bounded here rather than discovered later.
+        assertThat(zeroCommitSeeds)
+                .as("seeds that commit NOTHING prove nothing -- they hold every invariant "
+                        + "vacuously. Measured at 12 for this profile; the bound is where a "
+                        + "raised fault rate starts hollowing out the sweep")
+                .isLessThanOrEqualTo(SEEDS / 40);
 
         assertThat(failing)
                 .as("every FAILING SEED is named -- one line each, first violation plus a "

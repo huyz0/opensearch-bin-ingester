@@ -3,6 +3,7 @@ package binjava.sequencer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import binjava.binstore.backend.MemoryBinStore;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -251,5 +252,4 @@ class CommitProtocolSimulationTest {
             }
         }
         assertThat(underRough).as("and under the mixed profile too").isEmpty();
-    }
-}
+    }}

@@ -143,6 +143,23 @@ public final class CommitProtocolSimulation {
     }
 
     /**
+     * The same, with a METER between the injector and the store.
+     *
+     * <p>⚠️ FOR COUNTING REQUESTS THAT ACTUALLY REACHED A STORE. A caller that
+     * wants to know whether a fault issued a real write cannot learn it from
+     * {@code injected()}, which records the intent before the write is made --
+     * review measured a test passing after the write it claimed to count was
+     * deleted. The meter sits under the injector, so it sees what happened
+     * rather than what was intended.
+     */
+    public static Result run(long seed, int rounds, int pods,
+            FaultInjectingStore.Faults faults, MemoryBinStore backing,
+            binjava.binstore.CountingBinStore meter) throws IOException {
+        return run(seed, rounds, pods, faults, backing,
+                ReaderInvariants.ReaderView::of, meter);
+    }
+
+    /**
      * The same, with the reader VIEW the checking loop judges supplied by the
      * caller.
      *
@@ -163,6 +180,14 @@ public final class CommitProtocolSimulation {
     public static Result run(long seed, int rounds, int pods,
             FaultInjectingStore.Faults faults, MemoryBinStore backing,
             java.util.function.Function<CommitLog, ReaderInvariants.ReaderView> viewFor)
+            throws IOException {
+        return run(seed, rounds, pods, faults, backing, viewFor, null);
+    }
+
+    static Result run(long seed, int rounds, int pods,
+            FaultInjectingStore.Faults faults, MemoryBinStore backing,
+            java.util.function.Function<CommitLog, ReaderInvariants.ReaderView> viewFor,
+            binjava.binstore.CountingBinStore meter)
             throws IOException {
         Random random = new Random(seed);
         SimulatedClock clock = new SimulatedClock(1_000_000L);
@@ -191,7 +216,8 @@ public final class CommitProtocolSimulation {
         // because it never reaches here, a duplicated one confirms once
         // because the second putIfAbsent loses, and an unreachable one throws
         // before this layer is called at all.
-        AckTraceStore observed = new AckTraceStore(backing, acks::add);
+        AckTraceStore observed = new AckTraceStore(
+                meter == null ? backing : meter, acks::add);
         FaultInjectingStore faulty = new FaultInjectingStore(observed, seed, faults);
         BinStore store = faulty;
         LocalSequencer leader = null;
