@@ -56,7 +56,26 @@ final class ChainReplay {
 
     /** What a replay learned: offsets, this chain's next free slot, its seal. */
     record Result(Map<RunKey, Long> offsets, long nextSequence, Seal seal,
-            Map<RunKey, Long> indexEntries) {
+            Map<RunKey, Long> indexEntries, Map<String, Checkpoint.PodState> pods) {
+
+        /**
+         * ⚠️ `pods` IS THE IDEMPOTENCY WINDOW, REBUILT FROM THE CHAIN (M5.1).
+         * `IdempotencyWindow` is process-local, so a SUCCESSOR started with an
+         * empty one and a replay crossing a takeover was applied twice --
+         * {@link Sequencer}'s javadoc says so and names the fix as M4.10f, which
+         * was in no build and no backlog row. Forwarding is what makes it
+         * reachable: a forwarded commit whose reply is lost, retried after the
+         * lease moves, arrives at a pod that never saw the original.
+         *
+         * <p>⚠️ CARRIED HERE BECAUSE A REPLAY IS THE ONLY WALK THAT ALREADY
+         * VISITS EVERY ENTRY, exactly as `indexEntries` is. The data was put on
+         * the chain by M4.10c -- delta attribution and `Checkpoint.pods` -- and
+         * simply never read back.
+         */
+        Result(Map<RunKey, Long> offsets, long nextSequence, Seal seal,
+                Map<RunKey, Long> indexEntries) {
+            this(offsets, nextSequence, seal, indexEntries, Map.of());
+        }
 
         /**
          * ⚠️ `indexEntries` IS HOW MANY CHAIN ENTRIES MENTION EACH STREAM, and
@@ -72,7 +91,7 @@ final class ChainReplay {
          * thing that collapses what came before it.
          */
         Result(Map<RunKey, Long> offsets, long nextSequence, Seal seal) {
-            this(offsets, nextSequence, seal, Map.of());
+            this(offsets, nextSequence, seal, Map.of(), Map.of());
         }
     }
 
@@ -81,6 +100,12 @@ final class ChainReplay {
     private final long ownEpoch;
     private final Map<RunKey, Long> offsets = new HashMap<>();
     private final Map<RunKey, Long> indexEntries = new HashMap<>();
+    private final Map<String, Checkpoint.PodState> pods = new HashMap<>();
+
+    /** One idempotency slot: a pod AND the incarnation of it that wrote. */
+    private static String slot(String podId, String incarnationId) {
+        return podId + "\0" + incarnationId;
+    }
     private long nextSequence;
     private Seal seal;
 
@@ -94,7 +119,8 @@ final class ChainReplay {
     static Result replay(BinStore store, String prefix, long epoch) throws IOException {
         ChainReplay r = new ChainReplay(store, prefix, epoch);
         r.replayAncestry(epoch, Long.MAX_VALUE, true);
-        return new Result(r.offsets, r.nextSequence, r.seal, Map.copyOf(r.indexEntries));
+        return new Result(r.offsets, r.nextSequence, r.seal, Map.copyOf(r.indexEntries),
+                Map.copyOf(r.pods));
     }
 
     /**
@@ -107,11 +133,27 @@ final class ChainReplay {
      */
     static Map<RunKey, Long> inherited(BinStore store, String prefix, long prevEpoch,
             long prevSeq) throws IOException {
+        return inheritedWithPods(store, prefix, prevEpoch, prevSeq).offsets();
+    }
+
+    /**
+     * What a chain inherits: offsets AND the per-pod idempotency slots (M5.1).
+     *
+     * <p>⚠️ THE SUCCESSOR'S OWN `recover()` FINDS NOTHING, and that is why this
+     * exists. A new leader opens a NEW epoch, so recovering that chain walks an
+     * empty one; everything the predecessor applied arrives through the
+     * CONTINUE, on this path. Seeding the window from `recover` alone left it
+     * empty in exactly the case it is for -- measured: the successor assigned
+     * fresh offsets and appended a second delta for a segment already committed.
+     */
+    static Result inheritedWithPods(BinStore store, String prefix, long prevEpoch,
+            long prevSeq) throws IOException {
         ChainReplay r = new ChainReplay(store, prefix, Long.MIN_VALUE);
         if (prevEpoch >= 1) {
             r.replayAncestry(prevEpoch, prevSeq, false);
         }
-        return r.offsets;
+        return new Result(Map.copyOf(r.offsets), r.nextSequence, r.seal,
+                Map.copyOf(r.indexEntries), Map.copyOf(r.pods));
     }
 
     /**
@@ -270,6 +312,45 @@ final class ChainReplay {
         }
         checkpoint.streams().forEach(
                 (key, at) -> offsets.merge(key, at.nextOffset(), Math::max));
+        // ⚠️ THE CHECKPOINT'S OWN POD SLOTS (M5.1). Entries below a checkpoint
+        // are never read, so without this the window is rebuilt only from the
+        // uncheckpointed tail and a replay older than the newest checkpoint
+        // would be applied twice -- which is the bounded-answering property
+        // `Checkpoint.PodState`'s javadoc says the pointer exists to give.
+        // ⚠️ A BARE SLOT CANNOT SEED, and review measured that admitting one is
+        // WORSE than skipping the checkpoint entirely. A v0 checkpoint decodes
+        // to `PodState.bare(watermark)` with a null incarnation and no pointer,
+        // and v0 objects must keep decoding for the retention window -- so this
+        // is a supported state during any rolling upgrade. Merged on flushSeq
+        // alone, a bare slot at 100 evicted a valid pointered state at 3 and
+        // then seeded the literal key "pod\0null", which no request can ever
+        // match: the retry was treated as fresh and committed twice.
+        checkpoint.pods().forEach((pod, state) -> {
+            // ⚠️ A BARE SLOT CANNOT SEED, AND ITS POD IS THEN UNPROTECTED --
+            // a stated gap, not a solved problem. `Checkpoint.decode` yields
+            // `PodState.bare(watermark)` for a v0 object: a watermark with no
+            // incarnation and no pointer, which can neither be keyed (the
+            // window is keyed by pod AND incarnation) nor followed. Admitting
+            // it is strictly worse -- merged on flushSeq alone it evicts a real
+            // pointered slot and then seeds the literal key "pod\0null", which
+            // nothing can match -- so it is skipped.
+            //
+            // ⚠️ WHAT THAT LEAVES: for a pod whose only record is a bare slot,
+            // a replay crossing a takeover is treated as fresh and applied
+            // twice, exactly as it was before this change. Every other case
+            // improves; this one does not regress. Closing it means either
+            // giving up bounded recovery for that chain -- measured breaking
+            // `BoundedRecoveryCorrectnessTest`, i.e. M4's acceptance criterion
+            // 5 -- or teaching the window an unanswerable-watermark tier.
+            // M5.22 owns it. It lasts only until v0 checkpoints age out of
+            // retention.
+            if (!state.hasPointer() || state.incarnationId() == null) {
+                return;
+            }
+            pods.merge(slot(pod, state.incarnationId()), state,
+                    (prior, now) -> now.lastAppliedFlushSeq() > prior.lastAppliedFlushSeq()
+                            ? now : prior);
+        });
         if (chainEpoch == ownEpoch) {
             // ⚠️ `nextSequence` IS DERIVED FROM THE ENTRIES READ, so skipping
             // the ones a checkpoint covers would leave it short — at zero if the
@@ -422,7 +503,7 @@ final class ChainReplay {
                 if (entry.sequence() > hop.upTo()) {
                     return;
                 }
-                applyOffsets(entry);
+                applyOffsets(entry, hop.epoch());
                 // ⚠️ OFFSETS CROSS, SEQUENCE NUMBERS DO NOT. `nextSequence` is
                 // where THIS chain's next commit goes, so taking it from a
                 // predecessor would send the successor's first delta past its
@@ -449,7 +530,7 @@ final class ChainReplay {
         }
     }
 
-    private void applyOffsets(ChainEntry entry) {
+    private void applyOffsets(ChainEntry entry, long chainEpoch) {
         fold(entry, offsets);
         // ⚠️ COUNTED ON THE SAME WALK (M4.14). A replay already visits every
         // entry, so counting here costs nothing; a second pass would cost one
@@ -457,6 +538,28 @@ final class ChainReplay {
         if (entry instanceof CommitDelta delta) {
             for (binjava.format.RunCommit run : delta.allRuns()) {
                 indexEntries.merge(run.key(), 1L, Long::sum);
+            }
+            // ⚠️ KEYED ON (podId, incarnationId), NEVER ON podId ALONE, and
+            // review measured why. Comparing flushSeq ACROSS incarnations lets
+            // a DEAD one win: a producer that committed flushSeq 0..100 as i1,
+            // restarted, and committed flushSeq 0 as i2 would seed the window
+            // under i1 -- leaving i2, the only incarnation that can still
+            // retry, with no protection at all and duplicating on its first
+            // retry across a takeover. `CheckpointWriter` states the rule in as
+            // many words: "Math::max WITHIN AN INCARNATION, never across one".
+            // ⚠️ AND THE HIGHEST WINS WITHIN ONE, never the last seen: a chain
+            // replays in order today, but two requests in one batch may share a
+            // triple, so the last is not necessarily the highest.
+            for (binjava.format.SegmentCommit segment : delta.segments()) {
+                binjava.format.SegmentCommit.Attribution a = segment.attribution();
+                if (a == null) {
+                    continue;
+                }
+                pods.merge(slot(a.podId(), a.incarnationId()),
+                        new Checkpoint.PodState(a.incarnationId(), a.flushSeq(),
+                                chainEpoch, delta.sequence()),
+                        (prior, now) -> now.lastAppliedFlushSeq() > prior.lastAppliedFlushSeq()
+                                ? now : prior);
             }
         }
     }

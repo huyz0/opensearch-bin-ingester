@@ -73,6 +73,45 @@ final class IdempotencyWindow {
     }
 
     /**
+     * Rebuilds the window from what a chain replay found (M5.1).
+     *
+     * <p>⚠️ THIS IS THE HALF OF IDEMPOTENCY THAT DID NOT EXIST. Until now
+     * nothing seeded this map, so a SUCCESSOR began with an empty window and a
+     * replay crossing a takeover was applied twice -- {@link Sequencer}'s
+     * javadoc named the fix M4.10f and nothing owned it. Forwarding is what
+     * makes it reachable: a forwarded commit whose reply is lost, retried after
+     * the lease moves, arrives at a pod that never saw the original.
+     *
+     * <p>⚠️ MERGES, KEEPING THE HIGHEST, rather than replacing. The seed is the
+     * chain's view and anything already recorded is this process's; taking the
+     * lower of the two would re-admit a replay the running window had already
+     * answered.
+     *
+     * <p>⚠️ ONE INCARNATION PER POD, and that is a stated limit rather than an
+     * oversight: {@code Checkpoint.pods} is keyed by {@code podId}, so it
+     * remembers a pod's LATEST incarnation only. A replay from an incarnation
+     * that has since been superseded is therefore not answered, and lands
+     * twice. That window is narrow -- it needs a pod to restart between the
+     * original and its retry -- and it is the direction that duplicates rather
+     * than suppresses, which ADR-0036 records as the less damaging of the two.
+     */
+    void seed(Map<String, binjava.format.Checkpoint.PodState> fromChain) {
+        // ⚠️ THE KEYS ARRIVE ALREADY SLOTTED, `podId\0incarnationId`, which is
+        // this map's own key shape -- so they are used AS-IS. Re-keying them
+        // here produced `podb\0i1\0i1`, which nothing can ever match: the seed
+        // landed, the lookup missed, and every replay was treated as fresh
+        // while the window looked populated.
+        // ⚠️ `ChainReplay` builds them that way so two incarnations of one pod
+        // never compete on flushSeq -- a dead incarnation with a higher
+        // watermark would otherwise evict the live one and leave it unprotected.
+        fromChain.forEach((slot, state) -> byIncarnation.merge(slot,
+                new Applied(state.lastAppliedFlushSeq(), state.epoch(), state.sequence()),
+                (prior, seeded) ->
+                        seeded.lastAppliedFlushSeq() > prior.lastAppliedFlushSeq()
+                                ? seeded : prior));
+    }
+
+    /**
      * Where {@code request} has already been applied, or empty if it is fresh.
      *
      * <p>⚠️ {@code <=}, NOT {@code <}: the EXACT-EQUAL case is the retry this

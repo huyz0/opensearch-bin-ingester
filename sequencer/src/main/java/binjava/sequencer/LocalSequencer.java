@@ -355,9 +355,20 @@ public final class LocalSequencer implements Sequencer {
             // length, and an operator should not have to learn that from the
             // code. M4.9's bounded recovery is what fixes it.
             log.recover();
+            // ⚠️ `open` IS WHAT CROSSES FROM THE PREDECESSOR, so the window can
+            // only be seeded after it -- a successor's own chain is empty and
+            // `recover` finds nothing to inherit.
             log.open(prevEpoch, prevSeq);
             LocalSequencer sequencer =
                     new LocalSequencer(leases, log, ticker, store, prefix);
+            // ⚠️ SEEDED FROM THE CHAIN, AFTER `open` -- which is what crosses
+            // from the predecessor, so it is the only point at which there is
+            // anything to seed. The comment below has claimed the window is
+            // "inherited,
+            // not restarted" since M4.10d while nothing seeded it -- the
+            // documented-but-absent shape this codebase keeps producing. It is
+            // true as of this line.
+            sequencer.window.seed(log.recoveredPods());
             // ⚠️ THE WINDOW IS INHERITED, NOT RESTARTED (M4.10d). Without this
             // a successor knows nothing about what its predecessor applied, so
             // a retry that arrives across a takeover -- exactly when the store

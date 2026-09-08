@@ -55,6 +55,7 @@ public final class CommitLog {
      * event carries a bounded number of them, which is rule 2.
      */
     private final CompactionObservable compaction = new CompactionObservable(10);
+    private Map<String, binjava.format.Checkpoint.PodState> recoveredPods = Map.of();
     private long nextSequence;
     /**
      * The SEAL this chain ended at, if recovery reached one.
@@ -148,6 +149,11 @@ public final class CommitLog {
         // stream while the commit log was unchanged, and the same log yielded
         // two different histograms depending on uptime.
         compaction.seed(r.indexEntries());
+        // ⚠️ THE IDEMPOTENCY WINDOW, REBUILT FROM THE CHAIN (M5.1). Held here
+        // rather than applied here because the window belongs to the SEQUENCER,
+        // not to the log -- but the replay is the only walk that visits every
+        // entry, so this is where the data is.
+        recoveredPods = r.pods();
         if (r.seal() != null) {
             sealedAt = r.seal();
         }
@@ -225,8 +231,28 @@ public final class CommitLog {
 
     /** Merges in whatever this chain inherits from the slot its CONTINUE names. */
     private void crossFrom(long prevEpoch, long prevSeq) throws IOException {
-        ChainReplay.inherited(store, prefix, prevEpoch, prevSeq)
-                .forEach((key, next) -> nextOffsets.merge(key, next, Math::max));
+        ChainReplay.Result inherited =
+                ChainReplay.inheritedWithPods(store, prefix, prevEpoch, prevSeq);
+        inherited.offsets().forEach((key, next) -> nextOffsets.merge(key, next, Math::max));
+        // ⚠️ THE WINDOW CROSSES WITH THE OFFSETS (M5.1). A successor's own
+        // chain is empty, so everything its predecessor applied reaches it
+        // here and nowhere else.
+        java.util.Map<String, binjava.format.Checkpoint.PodState> merged =
+                new java.util.HashMap<>(recoveredPods);
+        inherited.pods().forEach((pod, state) -> merged.merge(pod, state,
+                (prior, now) -> now.lastAppliedFlushSeq() >= prior.lastAppliedFlushSeq()
+                        ? now : prior));
+        recoveredPods = Map.copyOf(merged);
+    }
+
+    /**
+     * Per-pod idempotency slots this chain and its ancestors already applied.
+     *
+     * <p>⚠️ EMPTY UNTIL {@link #recover()} RUNS, which is the order
+     * {@code LocalSequencer.start} uses: recover, then seed, then open.
+     */
+    Map<String, binjava.format.Checkpoint.PodState> recoveredPods() {
+        return recoveredPods;
     }
 
     /** Commit-log index entries per stream, as this log currently holds them. */
