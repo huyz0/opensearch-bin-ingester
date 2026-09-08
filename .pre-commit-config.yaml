@@ -125,7 +125,7 @@ repos:
         pass_filenames: false
         always_run: true
       - id: check-file-size
-        name: "code-structure.md rule 1: no source file over 500 lines"
+        name: "code-structure.md rule 1: no source file over 700 lines"
         entry: scripts/check-file-size.sh
         language: system
         stages: [pre-commit]

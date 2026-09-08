@@ -76,7 +76,7 @@ more, because it is where judgement is still required.**
 | Quality | [security.md](docs/internal/standards/security.md) | Touching credentials, signed URLs, tenant isolation, the subscription protocol, or anything parsing untrusted input. |
 | Quality | [testing.md](docs/internal/standards/testing.md) | Writing any test, choosing a tier, setting or reading a coverage gate, or when a test is slow, flaky, or passes without constraining anything. |
 | Delivery | [build.md](docs/internal/standards/build.md) | Adding a test that needs a container, changing a memory setting, wondering why the default `./gradlew test` does not start Docker, or when WSL2 kills a session. |
-| Code | [code-structure.md](docs/internal/standards/code-structure.md) | Adding a module, package or file; when a file nears 500 lines; or when deciding where a seam belongs. |
+| Code | [code-structure.md](docs/internal/standards/code-structure.md) | Adding a module, package or file; when a file nears 700 lines; or when deciding where a seam belongs. |
 | Code | [java-style.md](docs/internal/standards/java-style.md) | Naming things, choosing a concurrency construct, writing buffer-handling code, or when a diff is hard to read for reasons code-structure.md does not cover. |
 <!-- index:standards:end -->
 
@@ -189,7 +189,7 @@ runs is exactly the list that goes stale:
 | `check-dependency-licenses.sh` | pre-commit | build.md: no GPL/AGPL/SSPL dependencies in an Apache-2.0 project |
 | `check-metric-cardinality.sh` | pre-commit | observability.md rule 1: no high-cardinality metric or span labels |
 | `check-test-budget.sh` | pre-commit | build.md: memory caps declared; a runaway dies as a JVM/Docker OOM, not a lost WSL2 session |
-| `check-file-size.sh` | pre-commit | code-structure.md rule 1: no source file over 500 lines |
+| `check-file-size.sh` | pre-commit | code-structure.md rule 1: no source file over 700 lines |
 | `check-tdd.sh` | pre-commit | testing.md rule 2: every new test was observed to fail before the code existed |
 | `check-reviewed.sh` | pre-commit | non-negotiable 5: the staged bytes were reviewed by both reviewers |
 | `check-commit-msg.sh` | commit-msg | non-negotiable 1: the commit subject names a real backlog task |

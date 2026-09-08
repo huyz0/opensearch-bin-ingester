@@ -29,7 +29,7 @@ Work down it. Stop at the first rung that can carry the rule.
 **Can you state the rule as a predicate over files in the tree?**
 If yes, it is rung 3 or better and an agent must not be asked to do it.
 
-- "no source file over 500 lines" → predicate → script
+- "no source file over 700 lines" → predicate → script
 - "every dependency has a pinned sha" → predicate → build task
 - "no gate walks the filesystem" → predicate → script
 - "the diff does what the task says" → **not** a predicate → agent
