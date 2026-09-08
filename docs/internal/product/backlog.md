@@ -15,6 +15,8 @@ requires the subject to name a real task). M-1.2 carries the parser regression
 suite (M0.18), those tests are Java, and Java needs the build that M0.4 brings —
 so the build goes first.
 
+**Current milestone: M5 — subscription and client**, specified in [milestones/M5/SPEC.md](milestones/M5/SPEC.md). ⚠️ **It owns the commit forwarding M4 deferred, so a multi-pod deployment is incorrect until M5.4 lands.**
+
 **M4 (sequencer and commit log) is complete** — see
 [milestones/M4/VERIFIED.md](milestones/M4/VERIFIED.md). It was delivered onto
 `main` from the `archive/m4` branch, with the three gaps that had kept its
@@ -25,6 +27,28 @@ completion condition unmet closed first:
 | M0.101 | `tools/xreview/` -- an external reviewer that shares no code with `scripts/review*.sh`. Packet builder, runner, gate, checklist and both briefs, with its own suite in the same commit. ⚠️ It REFUSES a packet over 32 KB rather than truncating: the old packet was silently cut at ~37 KB and a reviewer once filed a major against code it was never shown. ⚠️ And the runner writes the verdict from what the agent RETURNED, because both reviewers once reported verdicts neither had recorded | — | done |
 | M0.102 | Raise the source-file cap from 500 to 700 lines, by decision, in the gate and in code-structure.md rule 1 -- whose text said "never raise the limit", an absolute that had to go: a threshold that may never move is one that gets SKIPPED instead, and a skip leaves no record. Raising it so a particular file fits stays forbidden | — | done |
 | M0.103 | Strip `GIT_*`, `GATE_SCOPE` and `CHECK_RANGE` before the harness suite runs, and name the failing tests from the JUnit XML instead of printing "BUILD FAILED". ⚠️ CI exports the two gate-scoping variables for the whole Gates step, and the harness tests spawn the real gate scripts against their OWN scratch repositories where that sha does not exist -- so the suite failed in CI and passed locally. It had never surfaced because `dependencyLicenses` failed earlier on every previous run | — | done |
+| M5.21 | Correct where three requirements live: NFR-9 to M8 with the `EndpointSlice` watch (M4's SPEC said "NFR-9 is met at M5", but M5 ships membership as static configuration and a static list never removes a member, so a lease challenge would have had no production trigger), NFR-7 to M9 with the latency harness, NFR-13 to M7 with retention -- and give the degraded `ctl/inbox/` path an owning milestone at last, having had none in any roadmap row, backlog row or ADR | — | todo |
+| M5.0 | This spec, the roadmap row corrected to name commit forwarding, and NFR-7/NFR-13 reassigned rather than silently claimed | — | todo |
+| M5.1 | Inherit the idempotency window across a takeover (the unowned M4.10f) ⚠️ `IdempotencyWindow` is process-local and `Sequencer`'s javadoc says a replay crossing a takeover commits twice -- "Inheriting it is M4.10f". **M4.10f is in the build nowhere and is a backlog row nowhere**, on this branch or the archive; forwarding is what makes it reachable | FR-11 | todo |
+| M5.2 | A retry reuses its triple: move `flushSeq` off the call site in `DefaultIngest` ⚠️ `DefaultIngest.java:355` writes `flushSeq++` at the commit call site, so a retry mints a DIFFERENT triple and the leaseholder's dedup cannot match it. The contract says "THIS GUARANTEE STOPS AT THIS SEAM and no production caller yet reaches it" -- M5.6 makes one reach it | FR-11 | todo |
+| M5.3 | `SequencerTransport` seam and its fake | FR-11 | todo |
+| M5.4 | `RemoteSequencer`: read the lease, forward, return the delta | FR-11 | todo |
+| M5.5 | Follow the lease when the target refuses or it moves | FR-11 | todo |
+| M5.6 | Wire forwarding into `DefaultIngest` — **the correctness hole closes here** ⚠️ Stated twice on purpose in M4's SPEC, and not safe until M5.1 and M5.2 land | FR-11 | todo |
+| M5.7 | Extend the commit-protocol simulation with pods that forward rather than lead | FR-11 | todo |
+| M5.8 | The membership seam, static implementation, and the AZ-scoped ring | NFR-4 | todo |
+| M5.9 | Cross-AZ peer fetch not addressable by construction ⚠️ ADR-0012 measures a cross-AZ peer fetch at 419x the object-store GET it would replace and requires the rule "enforced in code, not just documented" | NFR-5 | todo |
+| M5.10 | ADR + `BinStore.presign` and `Capabilities.presignedUrls`, both backends, conformance, golden files (wire-format-change) | FR-6 | todo |
+| M5.11 | `FetchMode` and the ingester-side selection policy, threshold configurable | FR-6 | todo |
+| M5.12 | `proxy`: stream through, memory flat in consumer count | FR-6 | todo |
+| M5.13 | `direct`: the grant, refused at startup without the capability, never logged | FR-6 | todo |
+| M5.14 | ADR + session and epoch on the subscription, read side first, golden files (wire-format-change) | FR-5 | todo |
+| M5.15 | Session resume, reset signal, and the two epochs kept distinct | FR-5 | todo |
+| M5.16 | Prefetch on **durability**, per segment per AZ through the ring owner ⚠️ On DURABILITY, not on commit: prefetching is cache warming with no visibility implication, so it starts 20-350 ms earlier. The PUSH still waits for the commit -- that is I4 | NFR-4 | todo |
+| M5.17 | The early-challenge path, so NFR-9 is met | NFR-9 | todo |
+| M5.18 | The fallback ladder, with tier 4 gated off every hot path | FR-10 | todo |
+| M5.19 | **Zero requests attributable to idle consumers at fan-out**, with a recorded red ⚠️ NOT by giving the consumer a `BinStore`: that is the regression ADR-0023 exists to prevent, and its gate (M1.16e) is a dependency check the client must keep passing. The count is the INGESTER's, plus grants issued | NFR-2 | todo |
+| M5.20 | M5's `VERIFIED.md` and the milestone review | — | todo |
 | M0.104 | `rm -rf` ON A FIXTURE DIRECTORY FAILS ON THE CI RUNNER with `Directory not empty` -- rm unlinks the children and finds the directory repopulated. Twice, in `FreshCheckoutTest`, which tars ~700 tracked files into /tmp, and once from `@TempDir`'s OWN cleanup. ⚠️ Cleanup is best-effort now so it cannot fail a test ABOUT THE GATE, but the CAUSE IS UNKNOWN and a fixture may be leaking on every run. It reproduces neither locally nor under CI's environment on a dev machine | — | **todo, cause unknown; symptom contained** |
 | M4.0 | M4's SPEC, and the port of the sequencer, commit log, checkpoints and their format types onto `main` from `archive/m4` -- 60 commits' worth of already-reviewed product code, unmodified. ⚠️ The port is one act because splitting it reproduces exactly what it is being brought over to fix; the CHANGES to it land as their own commits below | FR-11 | done |
 | M4.50 | Source I5's CONFIRMED events from the STORE, not the driver. ⚠️ Both halves of the ack trace came from one `commit()` return, adjacently, so the confirmation preceded the acknowledgement BY CONSTRUCTION and `checkAckOrder` could not fail however the writer behaved — a writer acking window N+1 before window N confirmed left the 1,000-seed sweep green. `AckTraceStore` sits below the fault injector so a landed-but-lost-response write still confirms. Verified falsifiable: acking `sequence() + 1` now turns the sweep red | FR-11 | done |
