@@ -71,7 +71,15 @@ class FaultInjectingStoreStreamsTest {
         // it to `ambiguousPut` would be the worst alias of the four -- the two
         // model the SAME lost response, so a run where they co-fire proves
         // nothing about which state the store was left in.
-        int[][] pairs = {{1, 2}, {1, 3}, {2, 3}, {1, 4}, {2, 4}, {3, 4}};
+        int[][] pairs = {{1, 2}, {1, 3}, {2, 3}, {1, 4}, {2, 4}, {3, 4},
+            // ⚠️ STREAM 5 IS `deferredPut` (M4.13b). Review MEASURED that
+            // without these pairs, wiring it to `scramble(seed, 4)` --
+            // phase-locking it to `withheldPut` -- left the whole suite
+            // green, and since `deferred` is tested BEFORE `withheld` in
+            // `putIfAbsent`, `withheldPut` would then never fire on any
+            // putIfAbsent in any seed while every aggregate assertion stayed
+            // green. A class added at the end is exactly where this recurs.
+            {1, 5}, {2, 5}, {3, 5}, {4, 5}};
         for (int[] pair : pairs) {
             for (int draw : new int[] {1, 2, 3, 20}) {
                 int both = 0;
@@ -124,12 +132,22 @@ class FaultInjectingStoreStreamsTest {
         List<Integer> ambiguous = callsWhereOnly(0, 0.9, 0, 0, "ambiguousPut");
         List<Integer> duplicate = callsWhereOnly(0, 0, 0.9, 0, "duplicatePut");
         List<Integer> withheld = callsWhereOnly(0, 0, 0, 0.9, "withheldPut");
+        // ⚠️ deferredPut (M4.13b) JOINS FOR THE SHARPEST REASON YET. It is
+        // tested BEFORE `withheld` inside putIfAbsent, so if the two shared a
+        // stream they would fire on exactly the same calls and `withheldPut`
+        // would never be injected on any putIfAbsent in any seed -- silently,
+        // with `injected()` still growing from the other classes and every
+        // aggregate assertion green. Review MEASURED that alias surviving the
+        // whole suite, because the decorrelation test above exercises
+        // `scramble` directly and cannot see which stream a FIELD was wired to.
+        List<Integer> deferred = callsWhereOnly(0, 0, 0, 0, 0.9, "deferredPut");
 
         assertThat(unreachable).as("every class must actually fire, or the comparison below "
                 + "is between empty lists").isNotEmpty();
         assertThat(ambiguous).isNotEmpty();
         assertThat(duplicate).isNotEmpty();
         assertThat(withheld).isNotEmpty();
+        assertThat(deferred).isNotEmpty();
 
         assertThat(unreachable).as("unreachable and ambiguousPut draw from DIFFERENT streams")
                 .isNotEqualTo(ambiguous);
@@ -144,12 +162,28 @@ class FaultInjectingStoreStreamsTest {
                 .isNotEqualTo(ambiguous);
         assertThat(withheld).as("withheldPut and duplicatePut draw from DIFFERENT streams")
                 .isNotEqualTo(duplicate);
+        assertThat(deferred).as("deferredPut and withheldPut draw from DIFFERENT streams -- "
+                + "the alias that would make withheldPut unreachable on putIfAbsent, because "
+                + "deferred is tested first").isNotEqualTo(withheld);
+        assertThat(deferred).as("deferredPut and unreachable draw from DIFFERENT streams")
+                .isNotEqualTo(unreachable);
+        assertThat(deferred).as("deferredPut and ambiguousPut draw from DIFFERENT streams")
+                .isNotEqualTo(ambiguous);
+        assertThat(deferred).as("deferredPut and duplicatePut draw from DIFFERENT streams")
+                .isNotEqualTo(duplicate);
     }
 
     private static List<Integer> callsWhereOnly(double unreachable, double ambiguous,
             double duplicate, double withheld, String kind) throws IOException {
+        return callsWhereOnly(unreachable, ambiguous, duplicate, withheld, 0, kind);
+    }
+
+    private static List<Integer> callsWhereOnly(double unreachable, double ambiguous,
+            double duplicate, double withheld, double deferred, String kind)
+            throws IOException {
         FaultInjectingStore store = new FaultInjectingStore(new MemoryBinStore(), 3L,
-                new FaultInjectingStore.Faults(unreachable, ambiguous, duplicate, withheld));
+                new FaultInjectingStore.Faults(unreachable, ambiguous, duplicate, withheld,
+                        0, deferred));
         List<Integer> at = new ArrayList<>();
         int seen = 0;
         for (int call = 0; call < 60; call++) {
@@ -253,11 +287,22 @@ class FaultInjectingStoreStreamsTest {
         quiet.list("", null, 10);
 
         assertThat(quiet.drawCounts())
-                .as("four conditional writes draw all four streams; the three read verbs draw "
-                        + "ONLY unreachable -- so the totals differ per class, and a read verb "
-                        + "pointed at another class's stream shows up here")
+                .as("four conditional writes draw every per-call stream; the three read verbs "
+                        + "draw ONLY unreachable -- so the totals differ per class, and a read "
+                        + "verb pointed at another class's stream shows up here")
+                // ⚠️ `deferredPut` JOINS THE PER-CALL STREAMS (M4.13b) and its
+                // count is 4 for the same reason the other three are: it is
+                // drawn on every conditional write and on no read verb. The
+                // asymmetry with `unreachable`'s 7 is what gives this
+                // assertion its teeth, and adding a class preserves it rather
+                // than blunting it -- a fifth stream drawn 7 times would mean
+                // a read verb had been pointed at it.
+                // ⚠️ `partition` IS DELIBERATELY ABSENT: it is a STATE, not a
+                // per-call draw, so it consumes no stream and must not appear
+                // here. If it ever does, it has been turned into a rate.
                 .containsExactlyInAnyOrderEntriesOf(Map.of("unreachable", 7,
-                        "ambiguousPut", 4, "duplicatePut", 4, "withheldPut", 4));
+                        "ambiguousPut", 4, "duplicatePut", 4, "withheldPut", 4,
+                        "deferredPut", 4));
 
         // ⚠️ AND ONE putIfMatch THAT ACTUALLY FIRES, so the branch is TAKEN. The
         // count above runs fault-free, so it cannot see draw-versus-BRANCH order:
@@ -271,10 +316,18 @@ class FaultInjectingStoreStreamsTest {
         assertThatThrownBy(() -> firing.putIfMatch("m", body("v3"), v2))
                 .isInstanceOf(IOException.class);
         assertThat(firing.drawCounts())
-                .as("even when the ambiguous branch is TAKEN and throws, all four streams were "
-                        + "already drawn -- the draws sit ABOVE the branch, not inside it")
+                .as("even when the ambiguous branch is TAKEN and throws, EVERY per-call stream "
+                        + "was already drawn -- the draws sit ABOVE the branch, not inside it")
+                // ⚠️ THE COUNT IS THE POINT, NOT THE MEMBERSHIP. A class whose
+                // draw sat inside its own branch would read 0 here while the
+                // classes above it read 1, and the run's whole fault schedule
+                // would shift the moment any earlier class fired -- which is
+                // the aliasing this file exists to prevent. Adding
+                // `deferredPut` extends that guarantee to the new class rather
+                // than relaxing it.
                 .containsExactlyInAnyOrderEntriesOf(Map.of("unreachable", 1,
-                        "ambiguousPut", 1, "duplicatePut", 1, "withheldPut", 1));
+                        "ambiguousPut", 1, "duplicatePut", 1, "withheldPut", 1,
+                        "deferredPut", 1));
     }
 
 

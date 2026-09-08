@@ -78,7 +78,7 @@ public final class CommitProtocolSimulation {
             List<Issued> issued,
             List<Invariants.Violation> violations,
             List<AckOrderInvariants.AckEvent> acks,
-            int readersChecked) {
+            int readersChecked, int midRunDrained) {
 
         /**
          * ⚠️ THE TRACE AND THE READER COUNT ARE PUBLISHED SO A TEST CAN SEE THEM
@@ -166,9 +166,34 @@ public final class CommitProtocolSimulation {
             throws IOException {
         Random random = new Random(seed);
         SimulatedClock clock = new SimulatedClock(1_000_000L);
-        FaultInjectingStore store = new FaultInjectingStore(backing, seed, faults);
-
         List<AckOrderInvariants.AckEvent> acks = new ArrayList<>();
+        // ⚠️ THE CONFIRMED HALF OF THE TRACE COMES FROM THE STORE (M4.50), and
+        // that is the whole reason this wrapper is here. Both halves used to be
+        // appended from one `commit()` return, adjacently, so the confirmation
+        // preceded the acknowledgement BY CONSTRUCTION and `checkAckOrder`
+        // could not fail however the writer behaved -- a writer acking window
+        // N+1 before window N confirmed left this sweep green. The store sees
+        // every PUT in real completion order and has no view of what the writer
+        // intends to tell its caller, so the two halves now have independent
+        // authors. A trace whose halves share an author cannot catch a
+        // disagreement between them.
+        // ⚠️ BELOW THE FAULT INJECTOR, AND A FIRST DRAFT PUT IT ABOVE.
+        // CONFIRMED means "this write is durable", not "the writer learned it
+        // was durable" -- I5 is about acknowledging past an unconfirmed write,
+        // and a write that reached the store IS confirmed whatever the caller
+        // was told. `FaultInjectingStore`'s ambiguousPut branch writes to its
+        // delegate and THEN throws, exactly modelling a landed write whose
+        // response was lost; with the observer above the injector that write
+        // emitted nothing, the chain's slot-0 CONTINUE went unconfirmed, and
+        // the sweep's ack floor moved off 0 in 13 of 60 seeds -- measured.
+        // Underneath, the layering does the discriminating for free: an
+        // ambiguous write confirms because it lands, a withheld one does not
+        // because it never reaches here, a duplicated one confirms once
+        // because the second putIfAbsent loses, and an unreachable one throws
+        // before this layer is called at all.
+        AckTraceStore observed = new AckTraceStore(backing, acks::add);
+        FaultInjectingStore faulty = new FaultInjectingStore(observed, seed, faults);
+        BinStore store = faulty;
         LocalSequencer leader = null;
         String leaderPod = null;
         // ⚠️ FENCED LEADERS THAT DO NOT KNOW IT YET. Without these the seal
@@ -215,10 +240,56 @@ public final class CommitProtocolSimulation {
         // this pair; against a reissued pair that dedup suppresses a genuine
         // commit, which is worse than the duplication it exists to prevent.
         Map<String, Long> nextFlushSeq = new HashMap<>();
+        java.util.Set<String> partitionedPods = new java.util.HashSet<>();
+        // ⚠️ COUNTS WHAT LANDED WHILE THE RUN WAS STILL GOING, which is the
+        // only thing separating a DELAYED write from one deferred to the end
+        // of the run. The final drain lands everything either way.
+        int midRunDrained = 0;
 
         for (int round = 0; round < rounds; round++) {
+            // ⚠️ PARTITIONS ARE A STATE WITH A DURATION (M4.13e), so they are
+            // decided per ROUND rather than per call. `unreachable` is a
+            // per-call coin flip applied to every pod equally, which models a
+            // flaky store; it can never keep one pod down while another stays
+            // up, and that asymmetry is the whole shape of a lease fight. A
+            // pod cut off here stops renewing, does not learn it was fenced,
+            // and -- once healed -- is a zombie, which is the one population
+            // I5's ack clause is actually about.
+            // ⚠️ DRAINED AT THE ROUND BOUNDARY (M4.13b), which is what makes a
+            // held write DELAYED rather than lost. A write issued in round N
+            // lands at the end of round N, after the caller has already been
+            // told it failed and has already decided what to do -- and lands in
+            // an order the seed picks, so several held writes complete out of
+            // the order they were issued in. That is both remaining fault
+            // classes from one mechanism.
+            // ⚠️ AND IT IS VISIBLE ONLY BECAUSE OF M4.50: the ack trace's
+            // CONFIRMED half comes from the store now, so a drained write
+            // confirms late and out of order, which is exactly the input I5's
+            // clause is written to judge. Under the old synthesised trace a
+            // reordered completion could not have been seen however faithfully
+            // it was injected.
+            midRunDrained += faulty.drainPending();
+            if (faults.partitionRate() > 0) {
+                for (int i = 0; i < pods; i++) {
+                    String pod = "pod" + i;
+                    if (partitionedPods.contains(pod)) {
+                        // ⚠️ HEALING IS NOT OPTIONAL. A partition that never
+                        // ends is a CRASH, and a crashed leader never returns
+                        // to discover its fencing -- so the seal protocol's
+                        // losing branch is never exercised from that side.
+                        if (random.nextDouble() < HEAL_RATE) {
+                            faulty.heal(pod);
+                            partitionedPods.remove(pod);
+                        }
+                    } else if (random.nextDouble() < faults.partitionRate()) {
+                        faulty.partition(pod);
+                        partitionedPods.add(pod);
+                    }
+                }
+            }
             if (leader == null) {
                 String pod = "pod" + random.nextInt(pods);
+                faulty.actingAs(pod);
                 Optional<LocalSequencer> won = tryStart(store, pod, clock);
                 if (won.isPresent()) {
                     leader = won.get();
@@ -236,7 +307,12 @@ public final class CommitProtocolSimulation {
                     // clean. `open` writes the CONTINUE at slot 0 and `start`
                     // returns only once it has landed, so confirming it here is
                     // reporting a write that happened, not inventing one.
-                    acks.add(AckOrderInvariants.AckEvent.confirmed(leader.epoch(), 0L));
+                    // ⚠️ NO LONGER APPENDED HERE. `open` writes the CONTINUE
+                    // at slot 0 through the store, so the observer emits its
+                    // confirmation as it lands -- from the layer that watched
+                    // it land, rather than from a driver asserting that it did.
+                    // The floor this pinned is pinned the same way, by a real
+                    // event instead of a stated one.
                 }
                 // ⚠️ A pod that could not acquire, or whose start threw an
                 // injected fault, simply does not lead this round. That is the
@@ -305,6 +381,7 @@ public final class CommitProtocolSimulation {
                             "seg/zombie-" + round, counts(1 + random.nextInt(3)));
                     issued.add(record(zombieReq));
                     LocalSequencer zombie = zombies.get(z);
+                    faulty.actingAs(zombiePods.get(z));
                     CommitDelta zombieDelta = zombie.commit(zombieReq);
                     // ⚠️ THE FENCED WRITER'S ACKNOWLEDGEMENTS BELONG IN THE
                     // TRACE, and leaving them out contradicted this file's own
@@ -320,8 +397,10 @@ public final class CommitProtocolSimulation {
                     // is a guard for when one does land -- M4.13e's partitioned
                     // leaders is the row that makes it likely -- not a path the
                     // sweep exercises now.
-                    acks.add(AckOrderInvariants.AckEvent.confirmed(
-                            zombie.epoch(), zombieDelta.sequence()));
+                    // ⚠️ ONLY THE ACK. The confirmation for this write was
+                    // emitted by the store when the PUT landed; appending one
+                    // here would restore exactly the synthesis M4.50 removed,
+                    // and for the one population I5 is actually about.
                     acks.add(AckOrderInvariants.AckEvent.acked(
                             zombie.epoch(), zombieDelta.sequence()));
                     zombieWrites++;
@@ -339,13 +418,16 @@ public final class CommitProtocolSimulation {
                         nextFlushSeq.merge(leaderInc, 1L, Long::sum) - 1,
                         "seg/" + round, counts(1 + random.nextInt(3)));
                 issued.add(record(leaderReq));
+                faulty.actingAs(leaderPod);
                 CommitDelta acked = leader.commit(leaderReq);
-                // ⚠️ CONFIRMED THEN ACKED, in that order, because that is what
-                // `commit` returning MEANS: the PUT was confirmed by the store
-                // and only then did the caller learn of it. I5's second clause
-                // is about that order, and it leaves no trace in the bytes --
-                // two runs producing byte-identical chains can differ in it.
-                acks.add(AckOrderInvariants.AckEvent.confirmed(leader.epoch(), acked.sequence()));
+                // ⚠️ THE ACK ONLY, AND THIS IS M4.50's WHOLE POINT. The old
+                // code appended the confirmation here too, one line above the
+                // ack, which made "confirmed before acked" a property of this
+                // file rather than of the system. The confirmation now arrives
+                // from `AckTraceStore` at the moment the PUT lands, so if a
+                // writer ever acknowledges ahead of its own durable write --
+                // or ahead of a lower-numbered one still outstanding -- the
+                // trace shows it and `checkAckOrder` reports it.
                 acks.add(AckOrderInvariants.AckEvent.acked(leader.epoch(), acked.sequence()));
                 commits++;
             } catch (IOException injected) {
@@ -367,6 +449,23 @@ public final class CommitProtocolSimulation {
         // non-empty chain -- and it cost a full second LIST plus one GET per
         // entry in the phase M4.13's <60s budget lives in.
         long scanTo = pods * (long) rounds;
+        // ⚠️ EVERYTHING HELD LANDS BEFORE ANYTHING IS JUDGED. A write still in
+        // the queue when the checkers run is a write that never landed, which
+        // is `withheldPut` -- a different class, already modelled. Draining
+        // here is what keeps `deferredPut` a DELAY.
+        faulty.drainPending();
+
+        // ⚠️ NOBODY IS ACTING WHILE THE CHECKERS RUN, and every partition is
+        // lifted first. The checkers read `backing` directly so they are
+        // already below the injector, but leaving an actor set would be a trap
+        // for the next person who points a checker at `store`: a checker that
+        // could be partitioned reports violations describing the harness.
+        for (String pod : partitionedPods) {
+            faulty.heal(pod);
+        }
+        partitionedPods.clear();
+        faulty.actingAs(null);
+
         for (long epoch = 1; epoch <= scanTo; epoch++) {
             violations.addAll(Invariants.checkChain(backing, PREFIX, epoch));
             if (hasChain(backing, epoch)) {
@@ -403,13 +502,16 @@ public final class CommitProtocolSimulation {
                     + " -- chains past it were never checked");
         }
         return new Result(seed, commits, takeovers, highest, zombieWrites, zombieAttempts,
-                store.injected(), issued, violations, acks, readersChecked);
+                faulty.injected(), issued, violations, acks, readersChecked, midRunDrained);
     }
 
     private static boolean hasChain(BinStore store, long epoch) throws IOException {
         return !store.list(new CommitLog(store, PREFIX, epoch).logPrefix(), null, 1)
                 .objects().isEmpty();
     }
+
+    /** How often a partitioned pod recovers, per round. */
+    private static final double HEAL_RATE = 0.25;
 
     private static Optional<LocalSequencer> tryStart(BinStore store, String pod,
             SimulatedClock clock) {

@@ -56,6 +56,82 @@ import java.util.Random;
 // added requests through a meter that cannot see them.
 public final class FaultInjectingStore implements BinStore {
 
+    /**
+     * Writes that were issued but have not landed yet (M4.13b).
+     *
+     * <p>⚠️ THE ONE CLASS WHOSE EFFECT OUTLIVES ITS CALL. Every other fault
+     * resolves before the caller returns -- the write fails, lands, lands
+     * twice, or is withheld. A DELAYED write happens afterwards, so it needs
+     * somewhere to live in the meantime, and the driver had nowhere to put one.
+     *
+     * <p>⚠️ ONE MECHANISM, TWO CLASSES. Holding a write and landing it later is
+     * a DELAYED write; holding several and landing them in another order is
+     * REORDERED COMPLETIONS. They are the same fact about the world seen once
+     * and seen twice.
+     *
+     * <p>⚠️ THE CALLER IS TOLD THE WRITE FAILED, which is the honest model: a
+     * request whose response never arrives is indistinguishable to the caller
+     * from one that failed, and the whole point of the class is that the world
+     * then changes underneath a caller who has already decided what to do.
+     */
+    private final java.util.List<Deferred> pending =
+            java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+
+    private record Deferred(String key, byte[] bytes) {
+    }
+
+    /** How many writes are held and have not landed. */
+    int pendingWrites() {
+        return pending.size();
+    }
+
+    /**
+     * Lands every held write, in an order the seed chooses, and says how many.
+     *
+     * <p>⚠️ IT RETURNS A COUNT SO A DELAY CAN BE TOLD FROM A DEFERRAL TO THE
+     * END. Review measured that deleting the driver's ROUND-BOUNDARY drain
+     * left every test green, because the final drain before judging still
+     * landed everything -- the writes arrived, so the invariants held, and
+     * nothing could see that they had all arrived at once instead of
+     * interleaved with the rounds that followed them. Interleaving is the
+     * whole fault: a write issued against one world landing in another.
+     *
+     * <p>⚠️ SHUFFLED, NOT REVERSED. A fixed permutation is a single scenario
+     * dressed as a fault class; the seed picks the order so a sweep covers
+     * many. ⚠️ AND A HELD WRITE STILL GOES THROUGH {@code putIfAbsent}, so it
+     * can LOSE -- a write issued against one world lands in another, which is
+     * the race a delay actually creates and the reason the class is worth
+     * having. I1 does not weaken because a write was slow.
+     */
+    int drainPending() throws IOException {
+        java.util.List<Deferred> batch;
+        synchronized (pending) {
+            batch = new java.util.ArrayList<>(pending);
+            pending.clear();
+        }
+        java.util.Collections.shuffle(batch, deferredOrder);
+        // ⚠️ A THROW MID-DRAIN MUST NOT SWALLOW THE TAIL. `pending` is cleared
+        // before anything is landed, so without this the writes after a
+        // failing one are gone from both the queue and the batch,
+        // `pendingWrites()` reports 0, and they become `withheldPut` writes
+        // that were never labelled as such -- the exact confusion this class
+        // was added to remove. Anything the drain could not land goes back on
+        // the queue for the next one.
+        int i = 0;
+        try {
+            for (; i < batch.size(); i++) {
+                Deferred d = batch.get(i);
+                delegate.putIfAbsent(d.key(),
+                        new Body(d.bytes().length, () -> new ByteArrayInputStream(d.bytes())));
+            }
+        } finally {
+            if (i < batch.size()) {
+                pending.addAll(0, batch.subList(i, batch.size()));
+            }
+        }
+        return i;
+    }
+
     /** The pod whose calls follow, until the next call to this method. */
     void actingAs(String podId) {
         this.actor = podId;
@@ -96,7 +172,25 @@ public final class FaultInjectingStore implements BinStore {
 
     /** What may go wrong, as probabilities in [0,1]. */
     public record Faults(double unreachable, double ambiguousPut, double duplicatePut,
-            double withheldPut) {
+            double withheldPut, double partitionRate, double deferredPut) {
+
+        /** The four per-call classes -- the shape before partitions or delays. */
+        public Faults(double unreachable, double ambiguousPut, double duplicatePut,
+                double withheldPut) {
+            this(unreachable, ambiguousPut, duplicatePut, withheldPut, 0, 0);
+        }
+
+        /**
+         * ⚠️ NO FIVE-ARGUMENT FORM, and review measured why one is a trap. With
+         * six components and a five-arg convenience overload, {@code
+         * Faults(a, b, c, d, 0.5)} written to mean "50% deferred" silently sets
+         * {@code partitionRate} instead and leaves {@code deferredPut} at 0 --
+         * the class is off while the author believes it is on, which is this
+         * record's own "a seed that silently injects nothing is a green test
+         * that proves the absence of testing". The four-arg form survives
+         * because it predates both new classes and reads unambiguously as
+         * "the original four"; anything richer names all six.
+         */
 
         /**
          * ⚠️ REJECTED, not clamped, and this is rung 1 of gate-design: the class
@@ -112,6 +206,8 @@ public final class FaultInjectingStore implements BinStore {
             check("ambiguousPut", ambiguousPut);
             check("duplicatePut", duplicatePut);
             check("withheldPut", withheldPut);
+            check("partitionRate", partitionRate);
+            check("deferredPut", deferredPut);
         }
 
         private static void check(String name, double p) {
@@ -122,7 +218,7 @@ public final class FaultInjectingStore implements BinStore {
         }
 
         public static Faults none() {
-            return new Faults(0, 0, 0, 0);
+            return new Faults(0, 0, 0, 0, 0, 0);
         }
     }
 
@@ -189,6 +285,13 @@ public final class FaultInjectingStore implements BinStore {
     private final Random ambiguousDraws;
     private final Random duplicateDraws;
     private final Random withheldDraws;
+    private final Random deferredDraws;
+    /**
+     * ⚠️ ITS OWN STREAM, LIKE EVERY CLASS. The drain order is a fault input,
+     * not a detail: a shared source would re-align it with whichever class
+     * fired last, which is the phase-locking the scramble below prevents.
+     */
+    private final Random deferredOrder;
     private final Faults faults;
     private final List<Injected> injected = new ArrayList<>();
     private final Map<String, Integer> drawCounts = new java.util.TreeMap<>();
@@ -199,6 +302,8 @@ public final class FaultInjectingStore implements BinStore {
         this.ambiguousDraws = new Random(scramble(seed, 2));
         this.duplicateDraws = new Random(scramble(seed, 3));
         this.withheldDraws = new Random(scramble(seed, 4));
+        this.deferredDraws = new Random(scramble(seed, 5));
+        this.deferredOrder = new Random(scramble(seed, 6));
         this.faults = faults;
     }
 
@@ -291,7 +396,8 @@ public final class FaultInjectingStore implements BinStore {
     private void countDraw(Random which) {
         String name = which == unreachableDraws ? "unreachable"
                 : which == ambiguousDraws ? "ambiguousPut"
-                : which == duplicateDraws ? "duplicatePut" : "withheldPut";
+                : which == duplicateDraws ? "duplicatePut"
+                : which == withheldDraws ? "withheldPut" : "deferredPut";
         drawCounts.merge(name, 1, Integer::sum);
     }
 
@@ -318,6 +424,7 @@ public final class FaultInjectingStore implements BinStore {
         boolean ambiguous = fires(ambiguousDraws, faults.ambiguousPut());
         boolean duplicate = fires(duplicateDraws, faults.duplicatePut());
         boolean withheld = fires(withheldDraws, faults.withheldPut());
+        boolean deferred = fires(deferredDraws, faults.deferredPut());
         // ⚠️ AFTER THE DRAWS, NOT BEFORE, and review MEASURED why. A guard that
         // returns before the four unconditional draws makes a partitioned call
         // consume no stream, which re-aligns every other class's fault
@@ -345,6 +452,15 @@ public final class FaultInjectingStore implements BinStore {
             delegate.putIfAbsent(key, new Body(bytes.length, () -> new ByteArrayInputStream(bytes)));
             injected.add(new Injected("ambiguousPut", key));
             throw new IOException("injected: the write landed but the response was lost");
+        }
+        if (deferred) {
+            // ⚠️ CAPTURED, NOT DELEGATED. The bytes are read now because the
+            // Body is the caller's and may not survive the call; the write
+            // lands on the next drain, in an order the seed picks.
+            byte[] held = read(body);
+            pending.add(new Deferred(key, held));
+            injected.add(new Injected("deferredPut", key));
+            throw new IOException("injected: deferred -- the write is held and has not landed");
         }
         if (withheld) {
             // ⚠️ THE OTHER HALF OF THE SAME AMBIGUITY, and it does NOT delegate.
@@ -420,6 +536,17 @@ public final class FaultInjectingStore implements BinStore {
         boolean ambiguous = fires(ambiguousDraws, faults.ambiguousPut());
         fires(duplicateDraws, faults.duplicatePut());
         boolean withheld = fires(withheldDraws, faults.withheldPut());
+        // ⚠️ DRAWN HERE BUT NOT ACTED ON, and the asymmetry is deliberate.
+        // Every class must draw on every faulting call or a class that fires
+        // shifts the streams of the classes after it -- that is what
+        // `everyClassDrawsOnEVERYFaultingCallSoNoClassCanBeSKIPPEDSilently`
+        // exists to catch, and it caught this. But DEFERRING a putIfMatch
+        // would model something else: the drain replays a conditional write
+        // whose expected version has since moved, which the store correctly
+        // rejects, so the effect is a LOST LEASE RENEW rather than a delayed
+        // write. That is a fault worth having and it is not this one; the
+        // queue holds chain writes only.
+        fires(deferredDraws, faults.deferredPut());
         // ⚠️ AFTER THE DRAWS, as on putIfAbsent -- and this is the verb that
         // matters most. `putIfMatch` is the LEASE RENEW: with no guard here a
         // partitioned leader keeps renewing, is never fenced, and never
