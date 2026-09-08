@@ -25,6 +25,7 @@ declare -A ALLOWED=(
   [tdd_scan.py]="reads build/test-results and locates test sources under */src/*/java"
   [build-index.sh]="globs .agents/skills and docs/internal/standards to generate the index"
   [check-harness-tests.sh]="counts testcases in buildSrc/build/test-results, which is untracked build output"
+  [harness_failures.py]="names the failing testcases in buildSrc/build/test-results, the same untracked build output check-harness-tests.sh counts -- and for the same reason: the suite runs under --console=plain -q, so its LOG holds no test names and only the XML can answer. ⚠️ The glob is anchored to that one directory and cannot reach a sibling checkout"
   [review_rounds.py]="reads .harness/review, which is gitignored BY DESIGN -- a verdict is machine-local evidence, so workspace_files cannot see it. ⚠️ The glob is anchored to that one directory and cannot reach a sibling checkout"
   [review_delta.py]="same: .harness/review is gitignored, and the prior round's findings live nowhere else"
   [coverage.py]="reads */build/classes and */build/reports/jacoco -- build output git cannot enumerate. ⚠️ The MODULE list is git-derived; only the search INSIDE a known module directory touches the filesystem, so it cannot wander into a sibling checkout"
