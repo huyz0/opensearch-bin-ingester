@@ -1,0 +1,34 @@
+{
+  "diff_sha256": "6e8b6b9b321a9a4d6019c3a1ae59f19a368665f1fad1c5106b583287d1c15e63",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "W5",
+      "severity": "blocking",
+      "file": ".pre-commit-config.yaml:65-70 (claim); scripts/check-module.sh:112 (cause)",
+      "summary": "The added hook comment says the gate builds \"all of them when the shared build moves\" and quotes 13.6 s / 30.4 s \"for a shared-build change that selects all eight\". As wired, that branch is dead. lib.sh sets `set -o pipefail`; `changed_files | grep -qE '^(buildSrc/|gradle/|settings.gradle.kts|build.gradle.kts|gradle.properties)'` exits 141 because grep -q closes the pipe on the first match and the producer while-loop dies of SIGPIPE, so the condition is false even when it matched. Measured in this tree: pipeline status 141 in 5/5 samples, else-branch taken in 20/20; with `set +o pipefail`, 20/20 take the shared-build branch. Confirmed end to end: this very commit stages buildSrc/build.gradle.kts, and `./scripts/check-module.sh` with the current index prints `ok no module changed` in 0.01 s -- that is the \"PASSED check-module.sh\" line in the packet, a vacuous pass on the exact change class the script's own comment calls \"precisely the change this gate must catch\". Also reproduced against a real buildSrc commit via CHECK_RANGE, 5/5 `no module changed`.",
+      "failure_scenario": "An author adds `implementation(\"io.helidon.webserver:helidon-webserver\")` to the buildSrc conventions plugin, which injects a `dependencies {}` block into all eight modules. The pre-commit hook this commit wires in prints `ok no module changed (changed files only)` in 0.01 s and exits 0. Helidon is now on `plugin`'s and `ingest`'s resolved classpath -- architecture.md rules 2 and 5, ADR-0019 -- inside the OpenSearch JVM, and the gate whose entire purpose is that check reported green having built nothing. Fix: capture the list first (`files=$(changed_files)`) and grep the variable, or `grep -qE ... <<<\"$(changed_files)\"`, so no producer can be killed by SIGPIPE."
+    },
+    {
+      "id": "W6",
+      "severity": "major",
+      "file": "docs/internal/standards/build.md:105-109",
+      "summary": "The replacement for the false \"~525 ms in both modes\" carries a new claim its own figures refute: \"Delta and full now differ by three orders of magnitude\" immediately after stating 1.4 s delta and 30.4 s full, a ratio of 22x -- one order of magnitude, not three. Separately, the 13.6 s / 30.4 s figures are attributed to \"a shared-build change selects all eight\", which per W5 the wired gate never does; that path measures 0.01 s and selects nothing. The numbers are consistent with a manual `GATE_SCOPE=full` run (I measured 17.4 s then 11.2 s warm here), so the measurement is real but the condition it is attributed to is not reachable through the hook.",
+      "failure_scenario": "A future author sizing the L0 budget or deciding whether a new gate needs delta routing reads the standard's stated 1000x delta/full ratio, measures 20x for their own gate, and concludes their delta selection is broken and rewrites it -- or trusts 1.4 s as the wired shared-build cost and is surprised by a 30 s pre-commit once W5 is fixed. build.md is the standard other gates are sized against, and it again carries a number the measurement does not support, which is the defect this round was opened to remove."
+    },
+    {
+      "id": "W7",
+      "severity": "minor",
+      "file": "scripts/check-module.sh:32-35",
+      "summary": "`--list-modules` exits 0 printing nothing when the settings file is absent or has no `include(` block. Verified: `./scripts/check-module.sh --list-modules /nonexistent.kts` prints `sed: can't read ...` on stderr and exits 0. Only ModuleListDerivationTest calls it today, and that test asserts the exact list, so nothing passes vacuously now; but the subcommand's contract is 'empty output means success', which is the same shape as the defect the two-way cross-check was added to close.",
+      "failure_scenario": "A later gate or CI step shells out to `--list-modules` to enumerate modules, the path is wrong after a directory move, it receives an empty list and iterates over nothing, reporting success for zero modules."
+    },
+    {
+      "id": "W8",
+      "severity": "minor",
+      "file": "scripts/check-module.sh:61-64",
+      "summary": "The filesystem-to-settings direction iterates an unquoted glob without nullglob, so in a tree with no module directories `_f` is the literal `*/build.gradle.kts` and the gate emits `FAIL * has a build.gradle.kts but is not in settings.gradle.kts`. Verified in a scratch tree. It still fails rather than passing -- the cross-check is not vacuous in any of the absent / empty / no-include / no-build-files cases I constructed -- but the operator is told to add a module named `*`.",
+      "failure_scenario": "Someone runs the gate from a partially-checked-out or freshly-scaffolded tree and gets an error naming a module `*`, which points at nothing and costs a debugging round before they realise the real state is 'settings.gradle.kts is unreadable'."
+    }
+  ]
+}

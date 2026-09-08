@@ -1,0 +1,30 @@
+{
+  "diff_sha256": "aae3b85c88ef958ba87ccf875292a704b9b54ea0905ce4174558a3200d45397a",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "M4.13-r6-1",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSweepTest.java:75-77,374-377",
+      "severity": "major",
+      "title": "the seed-count guard asserts DEFAULT_SEEDS, which does not govern the loop -- SEEDS does, and it is still unasserted",
+      "failure_scenario": "The assertion added this round to stop the completion condition's number being weakened silently pins DEFAULT_SEEDS, a constant whose only use is as the fallback argument of Integer.getInteger(\"sweep.seeds\", DEFAULT_SEEDS). The loop runs SEEDS times and all six anti-vacuity floors are SEEDS * k, so they scale down with it. MEASURED in a copy of the staged tree: changing line 77 to Integer.getInteger(\"sweep.seeds\", 10) -- one token, no other edit -- leaves ./gradlew :sequencer:test --tests binjava.sequencer.CommitProtocolSweepTest green, tests=\"2\" skipped=\"0\" failures=\"0\" errors=\"0\", printing 'sweep: 10 seeds in 457 ms, 840 readers judged, budget 60000 ms'. assertThat(DEFAULT_SEEDS).isEqualTo(1000) passes throughout. That is the round-5 defect (SEEDS 1000 -> 10 green at 1/100th of the stated workload) moved one line up: the guard now sits on the constant adjacent to the one that matters. Consequence: a future commit optimising the O(E-squared) checkChain/checkReader loops against the 60s budget can cut the sweep to 10 seeds and report 'I1-I5 hold across 1,000 deterministic seeds' met, with every assertion in the file green. Two comments become false with it -- line 362 'THE WORKLOAD IS ASSERTED, NOT MERELY DECLARED' and line 74 'Asserted below, not just used' -- because the number actually swept is asserted nowhere in the tree. Fix that keeps the bisect knob: assert the RESOLVED value when the property is absent, e.g. `if (System.getProperty(\"sweep.seeds\") == null) { assertThat(SEEDS).isEqualTo(1000); }`, which reddens on any committed weakening and stays silent under -Dsweep.seeds=N."
+    },
+    {
+      "id": "M4.13-r6-2",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSweepTest.java:68-77",
+      "severity": "minor",
+      "title": "the javadoc describing the -Dsweep.seeds knob is dangling and sits on the wrong field",
+      "failure_scenario": "Two javadoc blocks stack above DEFAULT_SEEDS; javac emits 'warning: [dangling-doc-comments] documentation comment is not attached to any declaration' at line 68 (MEASURED in the review tree's build output). The orphaned block documents the configurable knob, which is SEEDS at line 77 -- the field with no javadoc at all. A reader looking for what -Dsweep.seeds does finds its documentation attached to the constant it is NOT, which is the same DEFAULT_SEEDS/SEEDS confusion that produced finding M4.13-r6-1. Move the knob's javadoc onto SEEDS."
+    },
+    {
+      "id": "M4.13-r6-3",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSimulation.java:120-123",
+      "severity": "minor",
+      "title": "a public method exposes the package-private ReaderInvariants.ReaderView in its signature",
+      "failure_scenario": "run(...) is public static and its viewFor parameter is java.util.function.Function<CommitLog, ReaderInvariants.ReaderView>, where ReaderInvariants and its ReaderView record are both package-private. Any caller outside binjava.sequencer that resolves this overload cannot name the type it must supply; the overload is callable only from inside the package. It happens to be harmless because CommitProtocolSimulation is test scaffolding referenced only by four files in that same package (CommitProtocolSimulationFlushSeqTest, BatchedDeltaInvariantsTest, CommitProtocolSweepTest, CommitProtocolSimulationTest -- MEASURED by grep over the tree). Declare the overload package-private so the visibility states the truth, and import Function rather than fully qualifying it inline (java-style)."
+    }
+  ],
+  "task": "M4.13",
+  "role": "reviewer",
+  "staged_tree": "71bf873652d02cbc2c61b80f474af12ab7543284"
+}

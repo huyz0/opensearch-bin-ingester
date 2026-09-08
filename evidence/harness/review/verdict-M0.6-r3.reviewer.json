@@ -1,0 +1,41 @@
+{
+  "diff_sha256": "efbf290014ce2f482320ee9aabfe125b9ac1e219e0f96319bca161555f11c3ba",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "W9",
+      "severity": "major",
+      "file": "scripts/check-module.sh:59",
+      "summary": "The SIGPIPE defect is not fixed, only raised above the pipe buffer. `printf '%s\\n' \"$changed\" | grep -qE ...` under `set -o pipefail` still returns 141 once the changed-path list exceeds ~64 KiB, so the shared-build escalation dies silently exactly as before. Capturing before matching moved the producer from a `while read` loop to a builtin; it did not remove the pipe. `ModuleSelectionTest` cannot see this because every case passes exactly one path, so the new seam constrains the branch's logic but not the mechanism that killed it.",
+      "failure_scenario": "Demonstrated on this tree: `scripts/check-module.sh --select-modules \"<the eight>\" buildSrc/build.gradle.kts docs/.../file-1.md ... file-4000.md` prints ZERO modules and exits 0; the same call with 500 padding paths prints all eight. The break is at the pipe capacity (500 paths / 33 KB -> 8 selected; 900 paths / 59 KB -> 0 selected), and `printf | grep -qE` on that input is confirmed to exit 141 under `set -uo pipefail`. Consequence in the gate: a licence-header sweep, a mass rename, or a CI `CHECK_RANGE` spanning ~900+ files that also edits `buildSrc/` or `gradle/libs.versions.toml` selects nothing, and the hook prints `ok no module changed` over a Helidon dependency added to the conventions plugin -- the precise change class the comment at line 149 says the gate must catch. Use `case \"$changed\" in` or a herestring so no pipe exists."
+    },
+    {
+      "id": "W10",
+      "severity": "minor",
+      "file": "scripts/check-module.sh:155",
+      "summary": "The escalation predicate now exists twice: once inside the tested `select_modules` (line 60) and once verbatim in the gate to compute `WHY` (line 155), which no test reaches. This is the duplication the file's own comment at lines 24-26 condemns, re-introduced in the same commit. It also re-invokes `changed_files`, feeds it unquoted into `printf`, and carries the identical 141 hazard from W9.",
+      "failure_scenario": "Someone adds `gradle/wrapper/` or `gradlew` to the escalation set in `select_modules` and the suite stays green because no test reads `WHY`. The gate then builds all eight while printing `ok 8 module(s) checked (changed module directories)`; an operator reading the log concludes the change touched eight module directories and looks for a phantom edit. Under W9's >64 KiB case the two copies disagree in the other direction. Derive `WHY` from what `select_modules` returned, or have `select_modules` report the reason, so there is one predicate."
+    },
+    {
+      "id": "W11",
+      "severity": "minor",
+      "file": "scripts/check-module.sh:107",
+      "summary": "`check_drift` was inserted above the `[ -n \"$ALL\" ]` guard on line 110, making that guard unreachable whenever module directories exist. An empty derivation now reports N wrong things instead of the one right one. The derivation's two new anchors (`^include(` and `^)`) have no fixture -- all three settings-fixtures put both at column 0 -- so they are the same silent-drop class as the two anchors the fixtures were written for.",
+      "failure_scenario": "Demonstrated: a settings file whose `include(` is indented (valid Kotlin, and what an IDE reformat or a wrapping `if`/`apply` block produces) makes `derive_modules` return nothing; `--check-drift` on a tree with ingest/, http/ and format/ then prints three copies of `X has a build.gradle.kts but is not in settings -- it would be silently unchecked` and exits 1, while the accurate `no modules found in settings.gradle.kts` on line 110 is never reached. The operator is sent to look at three module directories that are correct, instead of at the one line that is not."
+    },
+    {
+      "id": "W12",
+      "severity": "minor",
+      "file": "scripts/check-module.sh:42",
+      "summary": "`for f in \"$root\"/*/build.gradle.kts` is a direct filesystem walk, and since line 107 it runs on every commit rather than only behind `--check-drift`. lib.sh's own doctrine is that a gate's scope is 'derived from git, never from a filesystem walk ... unreachable BY CONSTRUCTION'; this makes an untracked, gitignored directory decide the verdict, and check-gate-scope.sh evidently does not detect a glob. It also means a docs-only commit -- advertised in the new pre-commit comment as costing 0.0 s and checking nothing -- can now fail on drift it did not introduce.",
+      "failure_scenario": "A developer creates an untracked scratch module (`experiment/build.gradle.kts`), or unpacks a reference Gradle project into the repo root, or an IDE generates one. Every subsequent commit fails with `experiment has a build.gradle.kts but is not in settings` regardless of what is staged, and the only way to commit anything is to delete the directory. `workspace_files '*/build.gradle.kts'` gives the same check over tracked+staged files with none of that."
+    },
+    {
+      "id": "W13",
+      "severity": "minor",
+      "file": ".pre-commit-config.yaml:69",
+      "summary": "The timing numbers are not reproducible here and the budget conclusion drawn from them proves less than it claims. Measured on this tree, warm: the shared-build escalation path took 15.2 s against the claimed 11.0 s, and `GATE_SCOPE=full` took 11.0-11.8 s against the claimed 10.9 s. More importantly 'Inside build.md's 90 s L0 budget' is a statement about the whole L0 suite, supported only by a warm-daemon measurement of this one gate in isolation.",
+      "failure_scenario": "build.md's own opening section says WSL2 kills processes under the memory cap, and the Gradle daemon is the usual casualty. The first commit after a daemon death that touches `buildSrc/` pays 24 cold gradlew invocations (`:m:build` plus two `:m:dependencies` per module, eight modules); nothing in the diff measures that, `check-suite-time.sh` is not wired, so the 90 s L0 budget is asserted rather than held, and the first person to blow it discovers it as a hung commit. Either qualify the claim as warm-daemon-only, or measure cold."
+    }
+  ]
+}

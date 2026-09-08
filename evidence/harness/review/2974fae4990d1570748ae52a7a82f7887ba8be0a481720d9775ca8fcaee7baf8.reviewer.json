@@ -1,0 +1,57 @@
+{
+  "diff_sha256": "2974fae4990d1570748ae52a7a82f7887ba8be0a481720d9775ca8fcaee7baf8",
+  "task": "M4.10",
+  "role": "reviewer",
+  "round": 2,
+  "verdict": "changes-requested",
+  "summary": "Round-2 verification of five earlier findings. P1, P3 and P5 are fixed and verified against the source. P2 and P4 are fixed but were merged into ONE clause, and the merge attached the chain's KIND rule to the Checkpoint format, which has no kind and is explicitly not a chain entry (ADR-0033). That is the one major. Every source citation added this round was checked line by line and is accurate (SegmentKey.render's format string, SegmentPublisher.java:137, DefaultIngest.java:63/:349, Sequencer's segment-key settlement and its M4.10 @throws note, CheckpointWriterContentTest:118-128 and doesNotContainKey(\"poda\") with poda->42 at line 144, ADR-0028's 'version 1 IS a kinded entry', ADR-0031's lease-level scope, ADR-0033's discriminating-golden argument, and the three VERSION_KINDED=1 goldens). No object-store request rate is touched by this diff: it is prose, and the rates it discusses (one putIfAbsent per chain entry, one checkpoint per window) scale with commits and failovers, not with records, shards, partitions or indices.",
+  "verified": [
+    "P1 FIXED: backlog.md:123 now orders M4.10b to WEIGH the SegmentKey token before proposing a format change and to output the list of formats that change or the statement that none do; backlog.md:124 marks M4.10c conditional and possibly void with 'Do not start it before that ADR lands' (backlog-notes.md:217-218). The token claim is real: SegmentCommit carries segmentKey, SegmentKey.render emits timestampMillis-podShortId-sequence, so the chain already carries a per-pod token whose timestamp prefix is what flushSeq lacks.",
+    "P2 FIXED in substance: backlog-notes.md:220-226 names both CommitDelta (long sequence, List<SegmentCommit> segments) and Checkpoint (long sequence, Map<RunKey,StreamOffsets> streams, Map<String,Long> pods) -- both shapes verified against the records -- and spells out the concrete failure of changing only the delta. See the major for what the same sentence broke.",
+    "P3 FIXED: the preserved source row is now the first line under '### M4.10' (backlog-notes.md:178) and its state cell reads 'split'; the copy that sat under #m410d with state 'todo' is gone. This matches the precedent the M4.8 note states in its own words.",
+    "P4 FIXED for the chain, WRONG for the checkpoint: see the major.",
+    "P5 FIXED: backlog-notes.md:232-243 makes M4.10c own folding the recovered window into CheckpointWriter's pods map and inverting the doesNotContainKey(\"poda\") tripwire to assert poda -> 42, which is exactly the value the first leader commits at CheckpointWriterContentTest:144, and names deletion as the testing.md rule-5 inversion."
+  ],
+  "findings": [
+    {
+      "id": "P6",
+      "severity": "major",
+      "file": "docs/internal/product/backlog.md:124",
+      "also": "docs/internal/product/backlog-notes.md:228-230",
+      "title": "The P2 fix and the P4 fix were merged into one clause, and the chain's KIND rule now governs the Checkpoint, which has no kind",
+      "detail": "The row reads: 'Then BOTH formats change together -- CommitDelta and Checkpoint, whose Map<String, Long> pods cannot express a qualified key -- as a new KIND, not a version bump (ADR-0028).' The em-dash clause is parenthetical, so 'as a new KIND, not a version bump' attaches to BOTH formats. It is true only of the chain. Checkpoint is not a ChainEntry: it carries its own MAGIC 0x42434B50 and VERSION = 0 (Checkpoint.java:47-49), decode refuses any other version (Checkpoint.java:151), and there is no kind byte anywhere in its layout. ADR-0028 is about ChainEntry and says nothing about checkpoints; ADR-0033 says the opposite of what the row implies -- 'Its own object, at its own key, with its own magic (0x42434B50 -- BCKP) and version: a checkpoint is not a chain entry and must never decode as one.' backlog-notes.md:228-230 repeats the unqualified banner 'A NEW KIND, NOT A VERSION BUMP' immediately after the both-formats paragraph and cites only the three chain goldens, so the notes do not correct the row. Neither location mentions Checkpoint.VERSION or golden/checkpoint-v0.bin at all, even though the same paragraph orders the session to change CheckpointWriter's pods map, and checkpoint-v0.bin today decodes to pods {poda: 42, podb: 77} (GoldenCheckpointTest javadoc) -- so it is directly affected by a qualified pods key.",
+      "failure_scenario": "M4.10b's ADR concludes a new field is needed. A session picks M4.10c, reads the row that next-task loads, and must requalify Checkpoint.pods. The row forbids a version bump and demands a kind. The checkpoint format has no kind mechanism, so the session does one of two things. (a) It invents one -- a second discriminator inside a format ADR-0033 deliberately keeps separate from the chain -- and every checkpoint already in a bucket, plus checkpoint-v0.bin, either stops decoding or needs a compatibility path nobody planned; the wire-format-change skill's rollout rule (readers lag writers) has no version to hang off. (b) It obeys 'not a version bump' literally, leaves VERSION = 0, and writes a changed pods layout under version 0: a reader from an earlier build then parses the new bytes as v0 and reads a qualified key as a bare podId, which is exactly the 'bare pair compared against a qualified one' failure the same paragraph exists to prevent, now inside the format instead of between the two formats. Both outcomes are unreachable to every gate here, because the decomposition ships no code.",
+      "suggested_resolution": "Scope the KIND sentence to the chain entry and say what the checkpoint half is: its own version, and golden/checkpoint-v0.bin joining the atomic set that non-negotiable 8 requires. One clause in backlog.md:124 and one qualifier in backlog-notes.md:228."
+    },
+    {
+      "id": "P7",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:183-185",
+      "also": "docs/internal/product/backlog.md:122",
+      "title": "Two un-updated copies still assert the forced three-piece chain that the P1 fix dissolved",
+      "detail": "The '### M4.10' preamble still says 'Three things are separable and one of them is a wire-format change' and 'Order is forced: the key's shape (M4.10b) decides what the delta must carry (M4.10c), which is what makes the window recoverable at all (M4.10d).' backlog.md:122 repeats it: 'Three separable pieces and one of them is a wire-format change.' Both were true before this round and are now conditional: M4.10c 'MAY BE VOID' (backlog-notes.md:217) and M4.10d is 'Blocked by M4.10b' (backlog.md:125), not by M4.10c. If M4.10b concludes the segment key suffices, there are two pieces, none of them a wire-format change, and the window is recoverable without M4.10c -- so 'which is what makes the window recoverable at all' is then false. This is the failure the M4.8 note names in its own words: fixing one copy of a fact and missing its duplicate in the tables that decide what gets built.",
+      "failure_scenario": "M4.10b's ADR lands concluding no format changes. A session opens the parent M4.10 row, follows [notes](backlog-notes.md#m410), reads 'Order is forced ... M4.10c ... is what makes the window recoverable at all (M4.10d)', and defers M4.10d behind a task the M4.10c row two screens down declares void -- or re-derives the dependency by hand, which is the work the decomposition was supposed to have already done. Minor rather than major because the specific rows are unambiguous and a reader who reaches them wins.",
+      "suggested_resolution": "If touched at all, make the preamble conditional ('two pieces, plus a wire-format change only if M4.10b requires one') rather than rewriting it."
+    },
+    {
+      "id": "P8",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:223",
+      "also": "docs/internal/product/backlog.md:124",
+      "title": "'Map<String, Long> pods cannot express a qualified key' is stronger than true",
+      "detail": "A String can carry a composite key ('e7:poda'), and ADR-0033's total order -- 'pods by podId' -- still holds over the encoded form, as does the golden's ascending-order assertion. What is true, and is the load-bearing point the paragraph goes on to make, is that the delta and the checkpoint must agree on the key's shape, and that a checkpoint recovered under one shape compared against the other reintroduces the bug. 'Cannot express' is not needed for that argument and is not accurate as a statement about the record.",
+      "failure_scenario": "A session takes 'cannot' literally and changes the Checkpoint record's shape (Map<PodKey, Long>) when a string encoding would have required no shape change -- a larger format change than the ADR asked for, on a format whose whole justification (ADR-0033) is staying small and bounded. Combined with P6's 'not a version bump' it points the same session at the largest change with the weakest compatibility signal.",
+      "suggested_resolution": "'cannot express a qualified key as a typed pair' or 'carries a BARE podId today', if it is touched at all."
+    },
+    {
+      "id": "P9",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:233-235",
+      "title": "'the golden is hand-built ... the limit GoldenCheckpointTest records about itself' misattributes what that test records",
+      "detail": "GoldenCheckpointTest's javadoc says the fixture 'was generated once from the encoder, verified BY HAND against the layout, and committed' -- encoder-generated and hand-verified, not hand-built. The limit it records about itself is narrower than the note's paraphrase: 'THIS FILE DOES NOT PROVE THE ENCODER'S SORT ... nothing in this class builds a fixture -- it reads committed bytes', with the measured counterpart that it DOES pin the record's order-preserving copy. It never says anything about the commit path. The note's own conclusion -- a golden does not exercise CheckpointWriter, so M4.10c must own an end-to-end anchor -- is correct and stands without the misattribution, and the later 'delete-the-sort survives a read-from-disk golden' clause cites the same test accurately.",
+      "failure_scenario": "A session cites this note back as evidence that goldens in this tree are hand-built and skips the 'generated once from the encoder, verified by hand' discipline when producing the new golden M4.10c needs, producing a fixture that agrees with the encoder by construction -- the shape ADR-0033's discriminating-golden rule exists to refuse. This tree treats a measured statement quoted inaccurately as a defect in its own right (review.md's own two-round-cap rule is an essay about exactly that), which is why it is recorded rather than dropped.",
+      "suggested_resolution": "Attribute the sort limit, not a commit-path limit: 'GoldenCheckpointTest reads committed bytes and builds no fixture, which is why it does not constrain the encoder'."
+    }
+  ],
+  "staged_tree": "b7354a8a8638cd18f79b5d6431108c5bc9080c5c"
+}

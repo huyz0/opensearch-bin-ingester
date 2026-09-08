@@ -1,0 +1,22 @@
+{
+  "diff_sha256": "60c42f510162a211fb8dbabae607e72199e0b6cee3ebc874858bdb96dbb0c52d",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "R10",
+      "severity": "minor",
+      "location": "docs/internal/product/backlog.md:252 (M4.6a, clause (1) vs the closing clause)",
+      "title": "The row says the 'all 96 tests' counts were removed, and the row still contains one",
+      "failure_scenario": "The M4.6a row's closing sentence reads 'Three stale or unscoped counts were removed rather than corrected... \"all 96 tests\" named no scope and reconciled only against the sequencer module at one instant.' Clause (1), roughly 1,400 words earlier in the same cell, still reads '`return` -> `break` survived all 96 tests'. Two of the three sites were genuinely fixed (SmallPageStore.java:17 and CommitLogSealTest.java:161 both now say 'the whole sequencer suite'); `grep -rn '96 tests'` over the staged tree returns exactly one hit and it is this row. This is the same shape as R7 from round 2 -- a row asserting something about its own contents that the file contradicts -- and it is worse in one respect: R7's stale sentence was merely outdated, whereas this one claims the cleanup was complete, so a reader who trusts it will not grep. Concrete failure: someone reproducing the measurement runs the sequencer suite, gets a count that is not 96, and has no way to tell whether the tree moved or the scope differed -- which is precisely the re-checkability that removing the number was supposed to restore. Fix: delete 'all 96' from clause (1), leaving 'survived the whole sequencer suite' as the other two sites now say."
+    },
+    {
+      "id": "R11",
+      "severity": "minor",
+      "location": "docs/internal/product/backlog.md:252 (M4.6a, clause (2))",
+      "title": "Clause (2) still carries the seal-at-0 mechanism the same row later declares wrong",
+      "failure_scenario": "Clause (2) ends 'Representable and imminent: a leader fenced before committing anything is sealed at 0, and M4.6c writes those.' The row's own round-2 paragraph then states 'the comment justifying a seal at sequence 0 gave a mechanism that is WRONG -- a leader fenced after opening its chain seals at ONE, because its CONTINUE occupies slot 0. A seal at 0 needs a lease acquired and the holder dead before writing even the CONTINUE.' A leader that has written its CONTINUE and committed nothing has been 'fenced before committing anything' and is sealed at 1, so clause (2) is an instance of the statement the row later corrects. The test comment at CommitLogSealTest.java:106-113 was fixed properly and is now the accurate account; only the row's summary lags. Concrete failure: this row is the record a milestone review and the M4.6c author read, and clause (2) is where the [SEAL@0] fixture's representability is argued. A reader stopping there reconstructs the wrong window, concludes a seal at 0 arises whenever a leader is fenced early, and mis-sizes how often M4.6c must handle it. \u26a0\ufe0f Recorded, not asking for a fix: per review.md rule 11 the next round's surface would be the prose the fix just added, and this is already the third pass over this cell. Rule 13's milestone-boundary sweep is the right place, together with R10."
+    }
+  ],
+  "task": "M4.6a",
+  "role": "reviewer"
+}

@@ -1,0 +1,44 @@
+{
+  "diff_sha256": "9a50b5d0341f0812b671681ebeb17e110b5f1f84c150d7f79f7572178a42b3dd",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "R2-1",
+      "file": "docs/internal/product/backlog-notes.md:289",
+      "severity": "minor",
+      "finding": "M4.35's supporting sentence 'Before that reordering no caller was awake during the release' is false for the in-flight batch; only the QUEUED callers' wake-up moved.",
+      "failure_scenario": "drainLoop fails the batch it holds at BatchingSequencer.java:335 (interrupt branch) and :360 (Throwable branch) BEFORE it returns, i.e. before the finally whose order round 7 changed -- baselines/review.txt:14 (e) describes that reorder as 'the release was ordered BEFORE the queue was failed', which is the drainRemaining() net at :246, not the in-batch failAll. So a caller freed with the raw cause was already awake, and able to call close(), during the release in the pre-round-7 shape too. The row's conclusion (round 7 WIDENED rather than created the window) still holds, but a future implementer reading the sentence literally will conclude the pre-round-7 code had no such trigger and may look for the wrong reproduction. Correct form: 'no QUEUED caller was awake'. NOT VERIFIED by running the pre-round-7 code -- that draft is not in git; verified structurally from what the reorder touched."
+    },
+    {
+      "id": "R2-2",
+      "file": "docs/internal/product/backlog-notes.md:301",
+      "severity": "minor",
+      "finding": "M4.36's prescribed test ('pin the committer inside commitAll on a latch, queue a second caller, and have a helper interrupt the closing thread') omits that the pin must survive close()'s own committer.interrupt(), so followed literally it produces a test that is green with or without the mutation it is meant to kill.",
+      "failure_scenario": "close() calls committer.interrupt() at BatchingSequencer.java:424 BEFORE it joins at :443. If the pin is a plain CountDownLatch.await(), that interrupt releases the committer: commitAll unwinds, commitBatch fails the in-flight batch, the loop sees running==false, and the committer's own finally at :246 runs failAll(drainRemaining(), terminalFailure()) and frees the queued caller. The deleted net at :459 is then never the thing that frees anyone, so the mutation the row names survives the new test and the test pins nothing. The existing sibling fixture aQUEUEDCallerIsFailedWithoutWaitingForTheLeaseReleaseToFinish already pins commitAll with an interrupt-insensitive spin loop (Thread.onSpinWait) for a related reason; the row should say the pin must be interrupt-proof."
+    },
+    {
+      "id": "R2-3",
+      "file": "docs/internal/product/backlog-notes.md:305",
+      "severity": "minor",
+      "finding": "M4.37(c) and the M4.38 done row label the measured number as the wrong quantity: '...not of the FLOOR, which the test reviewer measured at 202ms against a 300ms floor' attaches the measurement to the floor (which is 300 ms), and backlog-done.md:105 calls 203,911,796 ns 'the margin'. 202/203.9 ms is the MUTANT'S ELAPSED TIME; the margin is ~90-100 ms.",
+      "failure_scenario": "Re-measured here: with sleepFor's body replaced by a constant '() -> Thread.sleep(200)' (the mutation the comment at BatchingSequencerTest.java:286-288 claims 400 ms of separation from), theRealClockTimerActuallyWaitsItsInterval failed at elapsed 210,625,821 ns against the 300,000,000 ns floor -- so the floor discriminates by ~89 ms here and ~96 ms in the number the done row quotes, not ~400 ms. The row's substance is correct and confirmed; the phrasing is not. The implementer who picks M4.37 up has to fix the comment's number and is told a figure that is neither the old claim nor the replacement, in the same clause-attachment family round 1 corrected in M4.35."
+    },
+    {
+      "id": "R2-4",
+      "file": "docs/internal/product/backlog-done.md:105",
+      "severity": "minor",
+      "finding": "'File the five minors M4.7's rounds 7 and 8 RECORDED RATHER THAN FIXED ... so they survive in the authoritative task list' is a completeness claim that is not met and, for round 8, not checkable.",
+      "failure_scenario": "The only round-7/8 minors recorded anywhere outside these rows are the two in baselines/review.txt:14 ('TWO MINORS ARE RECORDED AND NOT FIXED'): the drain-net/10s one, which M4.36 files, and 'awaitSet polls where a latch would be exact', which appears nowhere under docs/ after this commit and therefore does NOT survive in the task list. Round 8's findings exist in no file other than the three new rows, so 'five' cannot be reconciled by any reader: the rows carry seven distinguishable items (M4.35 defect + comment/baselines, M4.36 warning + drain net, M4.37 a/b/c). Mitigating: baselines itself says only 'the first ... belongs in a row', so dropping awaitSet may be deliberate -- in which case the sentence should say which minors it files rather than assert a count and a survival property that one of them does not have."
+    },
+    {
+      "id": "R2-5",
+      "file": "docs/internal/product/backlog-notes.md:289",
+      "severity": "minor",
+      "finding": "M4.35 UNDERSTATES the hazard by making it conditional on a backend that does not exist yet: 'On an NIO/S3 backend that write dies with ClosedByInterruptException'. The only BinStore backend in the tree is NIO already.",
+      "failure_scenario": "LocalFsBinStore.putIfMatch -- the write LeaseManager.releaseLocked issues -- goes through Files.createTempFile + Files.copy(InputStream, Path, ...) (binstore-backends/src/main/java/binjava/binstore/backend/LocalFsBinStore.java:248-254), and putIfAbsent through an explicit FileChannel.open at :206. FileChannel is an AbstractInterruptibleChannel, whose begin() closes the channel and yields ClosedByInterruptException when the calling thread's interrupt flag is already set on entry -- exactly the state closeDelegateQuietly leaves the committer in once close() interrupts it after the one-shot Thread.interrupted() at BatchingSequencer.java:300. A reader who takes 'NIO/S3 backend' as future tense will deprioritise a row that is live against today's only implementation. The row is not wrong (LocalFsBinStore IS NIO), only weaker than the tree supports."
+    }
+  ],
+  "task": "M4.38",
+  "role": "reviewer",
+  "staged_tree": "e4ea32a77fe4ae24756e7a550310980708509edc"
+}

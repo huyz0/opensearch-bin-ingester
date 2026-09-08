@@ -1,0 +1,34 @@
+{
+  "diff_sha256": "cb01ac2f8e59ecad545e93cf19d4557b0c9351c720c44ee0b6e413a9f6c8c273",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "HT7",
+      "severity": "major",
+      "file": "scripts/java_tests.py:27",
+      "summary": "TEST_ANN is unconstrained except for Test and ParameterizedTest. Four single mutations survive the whole 17-case suite: dropping RepeatedTest, dropping TestFactory, dropping TestTemplate, and removing the trailing `$` anchor. No fixture uses @RepeatedTest, @TestFactory, @TestTemplate, or a Test-prefixed non-test annotation.",
+      "failure_scenario": "Delete `RepeatedTest|` from TEST_ANN: suite stays 17/17 green. check-tdd then cannot see any @RepeatedTest method, and the scan_checked cross-check cannot catch it because `detected` and `annotated` both resolve through TEST_ANN and agree on a self-consistent zero -- the exact failure the module's own comment says the shared vocabulary does not detect. Result: a new @RepeatedTest lands with no red record and the gate prints 'ok no new tests in this diff'. Separately, removing the `$` anchor also stays green, yet in real source `@TestInstance(Lifecycle.PER_CLASS)` would then match, inflating `annotated` and hard-refusing an ordinary test class. Both directions are closed by one fixture holding @RepeatedTest, @TestFactory, @TestTemplate and a class-level @TestInstance with the expected id list asserted."
+    },
+    {
+      "id": "HT8",
+      "severity": "major",
+      "file": "scripts/java_tests.py:187",
+      "summary": "The parser's `body` field -- the sole input to test_integrity.strength() and therefore to the gate that detects a weakened assertion -- is not observable through any command the suite runs. tdd_scan.py `scan` prints only `<id> DISABLED|enabled`, so JavaTestParserTest.java:84 constrains the disabled flag and nothing else about the returned record.",
+      "failure_scenario": "Change `'body': src[start:t.end()]` to `'body': ''`: suite stays 17/17 green. Every method then scores strength 0 in test_integrity.test_methods, before and after, so check-test-integrity can never see an assertion drop from .isEqualTo() to .isNotNull() or to nothing. The gate that exists to catch 'production changed to satisfy the test' goes blind and still reports ok. Needs an observable seam (e.g. `scan` also printing the body's strength, or a case driving test_integrity.test_methods directly) plus one fixture whose body-strength change is asserted."
+    },
+    {
+      "id": "HT9",
+      "severity": "minor",
+      "file": "scripts/java_tests.py:139",
+      "summary": "The iface-off note is accurate -- I reproduced all three variants (scan branch alone, counter skip alone, both together) and each survives -- but its wording 'UNCONSTRAINED by the suite, like the annotation-argument loop below' reads as an exhaustive pair, and it is not. At least three further branches also survive single mutation.",
+      "failure_scenario": "Three more surviving single mutations, none of them noted anywhere: (a) delete `and name not in NOT_A_METHOD` at line 159; (b) delete the `classes and` guard at line 159; (c) replace UNICODE_ESC with a naive `\\\\u([0-9a-fA-F]{4})` that ignores the even-backslash rule the docstring spends a paragraph justifying. All three leave 17/17 green. A future reader trusting the two in-place warnings will assume the rest of the parser is fixture-backed. Either soften the wording to 'two of several' or extend the note."
+    },
+    {
+      "id": "HT10",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/JavaTestParserTest.java:41",
+      "summary": "one-line-class.java is inert: it is strictly subsumed by nested-classes.java and constrains nothing on its own.",
+      "failure_scenario": "Across 33 single mutations, one-line-class.java failed only under two shotgun mutations (pkg-off, overload-collapse) that eleven other cases also caught. Its stated property -- class declaration and method body on one line -- is already exercised by nested-classes.java lines 7-8 (`@Nested class Alpha { @Test void same() { ... } }`). No mutation exists that this case catches and no other does, so it adds a maintenance surface and a coverage impression without a constraint."
+    }
+  ]
+}

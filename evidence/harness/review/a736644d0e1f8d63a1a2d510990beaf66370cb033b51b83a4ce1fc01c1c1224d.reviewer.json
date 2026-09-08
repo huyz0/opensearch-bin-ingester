@@ -1,0 +1,15 @@
+{
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "M0.31-r5-1",
+      "severity": "minor",
+      "file": "baselines/review.txt",
+      "summary": "The argued entry's own precondition (\"two rounds is the cap\") is being violated by the entry's existence: this is round 5 on a single task ID, and M0.32 (added in this same diff) documents that the round cap and the staged-baseline requirement are structurally in tension. The entry argues round 3 alone was within bounds, but says nothing about rounds 4-5, which is the review sequence that actually produced this diff.",
+      "failure_scenario": "A future reader of baselines/review.txt sees an entry that argues '2 real rounds, 1 clean round, cap respected' for a task whose verdict file is literally named r5 -- the entry is accurate about round 3 but silently stops accounting once rounds 4-5 (scope-creep removal, baseline self-reference fix, four-vs-five reconciliation) happened, so the argued rationale under-reports how many rounds this task actually consumed. Not blocking because M0.32 already exists to fix the structural cause, and the entry is honest about what it does cover."
+    }
+  ],
+  "diff_sha256": "a736644d0e1f8d63a1a2d510990beaf66370cb033b51b83a4ce1fc01c1c1224d",
+  "task": "M0.31",
+  "role": "reviewer"
+}

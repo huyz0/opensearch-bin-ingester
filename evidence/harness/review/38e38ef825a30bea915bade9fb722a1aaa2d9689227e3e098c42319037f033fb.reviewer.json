@@ -1,0 +1,22 @@
+{
+  "diff_sha256": "38e38ef825a30bea915bade9fb722a1aaa2d9689227e3e098c42319037f033fb",
+  "findings": [
+    {
+      "id": "M0.13-1",
+      "severity": "major",
+      "file": "scripts/check-coverage.sh",
+      "summary": "Delta-scope skip predicate uses `changed_files`, whose `git diff --diff-filter=ACMR` excludes Deleted files, so a commit that deletes a test file (e.g. exactly the non-negotiable-2 case: 'delete a test to make a check pass') is invisible to the 'relevant' check and the gate takes the ok/not-re-measured fast path instead of regenerating coverage.",
+      "failure_scenario": "A commit stages only `git rm path/to/SomeTest.java` (no other .java/.kt/.kts/gradle file touched). `changed_files '*.java' ... | head -1` is empty because --diff-filter=ACMR omits D, so check-coverage.sh prints `ok no code change; coverage not re-measured` and exits 0 without ever invoking Gradle -- even though deleting a test is precisely the change coverage.py's own docstring says must never be reported as 'ok' ('the characteristic failure of a threshold gate is reporting success while measuring nothing'). Verified empirically: `git diff --cached --name-only --diff-filter=ACMR -- '*.java'` prints nothing for a staged deletion, while the unfiltered diff shows the file. CI's GATE_SCOPE=full path does not have this hole, and check-coverage.sh is not yet wired to pre-commit, but the script is written to be run standalone with the default GATE_SCOPE=delta ('invoke by hand'), and that is exactly where this silently passes."
+    },
+    {
+      "id": "M0.13-2",
+      "severity": "major",
+      "file": "buildSrc/src/test/java/binjava/CoverageGateTest.java",
+      "summary": "The regression test that is supposed to prove the 'test jacocoTestReport, not jacocoTestReport alone' fix (usesTheRegeneratedReportRatherThanOneAlreadyOnDisk) fakes gradlew with a shell stub that regenerates the report purely by string-matching the literal argument \" test \" on the command line. It never runs real Gradle, so it cannot detect the layer of staleness that matters here: whether Gradle's own up-to-date/incremental-build check actually re-executes the `test` task's action, as opposed to merely including `test` in the requested task graph. Real Gradle can mark `test` UP-TO-DATE (skip its action, exec file untouched) whenever its declared inputs (compiled test/main classes, declared system properties/env) are unchanged -- which is usually true for a genuine source edit (bytecode hash differs) but is not guaranteed for behavior driven by inputs Gradle does not track (undeclared environment variables, external file state, JVM/toolchain drift).",
+      "failure_scenario": "Someone reverts the `dependsOn`/explicit `test jacocoTestReport` invocation, or a future edit reintroduces `jacocoTestReport` alone while `test` is separately assumed to have already run in the same invocation; CoverageGateTest's stub does not distinguish 'Gradle decided the real test task is up-to-date and skipped its action' from 'test genuinely re-ran and produced identical output', because the stub always regenerates whenever the literal token `test` appears in argv, regardless of whether real Gradle would have executed it. So the one thing this commit's comments claim to have fixed -- 'a module compiled after its last report was written stays green forever' -- is proven against a fake process substitute, not against Gradle's real incremental-build engine, and a regression at that lower layer would ship silently green through this exact test."
+    }
+  ],
+  "verdict": "changes-requested",
+  "task": "M0.13",
+  "role": "reviewer"
+}

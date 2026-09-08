@@ -1,0 +1,42 @@
+{
+  "verdict": "changes-requested",
+  "summary": "Three of the four round-1 fixes are real and I measured each: -Dsweep.seeds reaches the fork (0.95s at 25 seeds vs 15.3s at the 1000 default), the slot-0 CONTINUE is emitted at the takeovers++ site and CommitLog.open writes it unconditionally so it is truthful, the epoch/sequence swap in checkAckOrder's own-write arm now reddens AckOrderTest, and ROUNDS=3 now reddens the sweep. Round-1 finding 4 is NOT fixed: the false 'a pipelining writer is caught the day it arrives' claim was corrected only in backlog-notes.md and still stands in both Java files, which now contradict the notes the same commit adds. And the honesty enumeration is still incomplete in the way I named last round: a fenced writer's acknowledgements are absent from the trace while the same file says a zombie is the ONLY thing that makes I5 reachable.",
+  "findings": [
+    {
+      "id": "M4.13-r-1",
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSweepTest.java",
+      "line": 31,
+      "title": "The refuted pipelining claim survives in both Java files and now contradicts the notes this same commit writes",
+      "failure_scenario": "CommitProtocolSweepTest.java:31-37 states '{@code CommitLog} is strictly serial, so I5's ack clause holds by construction ... They are here so that a pipelining writer, or a reader that starts applying discarded suffixes, is caught the day it arrives.' CommitProtocolSimulation.java:321-327 states the same thing again: '`CommitLog` is strictly serial, so it satisfies the clause by construction and this trace is ordered by the same construction ... a pipelining writer -- which is what would break it -- would be caught the day it arrives rather than the day someone remembers to check.' backlog-notes.md, added by this commit, says the opposite in as many words: 'checkAckOrder carries I5's ack clause but CANNOT FAIL -- and NOT because CommitLog is serial, which is what an earlier draft said. The DRIVER synthesises both events from one commit() return, adjacently, so the trace is ordered by the driver's own construction and a pipelining writer would leave it green.' Both statements cannot be true. The correction landed in the document nobody reads before touching the checker and not in the two files that sit on top of the checker. Concrete failure: someone lands a BatchingSequencer that acks window N+1 before window N is confirmed, runs the sweep, sees green, and reads CommitProtocolSweepTest.java:34-37 as the affirmative evidence that the ack ordering was checked -- which is exactly the reading M4.50 exists to prevent. The trace is built at CommitProtocolSimulation.java:288-289 from one commit() return, confirmed then acked adjacently on the same thread, so no writer-side interleaving can ever reach it. Neither file mentions M4.50, so there is no pointer from the code to the row that owns the hole."
+    },
+    {
+      "id": "M4.13-r-2",
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSimulation.java",
+      "line": 134,
+      "title": "Fenced writers' acknowledgements are absent from the ack trace, and the same file says a zombie is the ONLY thing that makes I5 reachable",
+      "failure_scenario": "Answering the question put to this round directly: yes, the excluded zombie acknowledgements must be in the record, and for a stronger reason than the other two omissions -- this file asserts the opposite of what it does, in the same function. CommitProtocolSimulation.java:133-136: 'A zombie is the ONLY thing that makes I5 reachable, because I5 is about what a fenced writer manages to acknowledge.' The zombie commit path is :255-270 and emits no AckEvent at all: on success it does `zombies.get(z).commit(zombieReq); zombieWrites++;` and moves on, and on IOException it removes the zombie. The only AckEvents in the run are confirmed(epoch,0) at the takeover (:193) and the confirmed/acked pair on the LEADER's success path (:288-289). So the trace fed to checkAckOrder contains, by construction, zero acknowledgements from a fenced writer -- the exact population the file names as the reason I5 is reachable at all. A zombie write that lands past a seal and is acknowledged is I5's own worked example, it is a class the injector produces on purpose (zombieWrites is counted at :264), and checkAckOrder cannot see it. The consequence compounds finding 1: the sweep's javadoc lists 'I5's ACK-ORDERING clause' as an asserted item with no statement that the trace covers only the writer that was leading, so a green run reads as covering fenced acks and covers none. It also leaves the zombie's own epoch with a truncated trace -- its post-fencing sequences never appear -- and checkAckOrder judges only what it is shown, so those slots are silently unjudged rather than reported."
+    },
+    {
+      "id": "M4.13-r-3",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/AckOrderTest.java",
+      "line": 219,
+      "title": "The assertion description for the message fix carries the number the fix removed",
+      "failure_scenario": "The fixture is now acked(2, 5) and the assertion is contains(\"epoch 2 acked sequence 5\"), which I verified kills the epoch/sequence swap. The .as() description still reads 'the message must name epoch 2 as the EPOCH and 2 as the SEQUENCE, in those roles' -- the sequence is 5. The check is correct; only the text a failure prints is wrong, and it prints the pre-fix pair that made the roles indistinguishable in the first place."
+    }
+  ],
+  "measurements": [
+    "Review tree /tmp/binjava-review-trees/reviewer.cKCOc51k, staged bytes. ./gradlew -p buildSrc test: BUILD SUCCESSFUL in 35s. The check-harness-tests.sh failure reported in the packet does NOT reproduce in an isolated tree -- NoSuchFileException on buildSrc/build/test-results/test/binary/in-progress-results-generic.bin is the shared-build-directory collision M0.88 already records, not this diff.",
+    "-Dsweep.seeds forwarding WORKS: CommitProtocolSweepTest ran in 0.948s with -Dsweep.seeds=25 and 15.307s at the default 1000 (test XML), against the 60s budget. A daemon-only -D would have given 15s in both.",
+    "Slot-0 CONTINUE is truthful, not invented: CommitLog.open (CommitLog.java:364-381) writes the CONTINUE at keyFor(0) unconditionally, including for a first leader with prevEpoch 0, so confirmed(epoch, 0L) at CommitProtocolSimulation.java:193 reports a write that happened.",
+    "Message-content assertion is falsifiable: swapping e.epoch() and e.sequence() in checkAckOrder's own-write Violation (AckOrderInvariants.java:117-118) turned AckOrderTest RED in 3s.",
+    "Anti-vacuity floors are falsifiable: ROUNDS 120 -> 3 turned CommitProtocolSweepTest RED.",
+    "Object-store request rate: no production file is staged. The added per-epoch CommitLog.recover() + checkReader at CommitProtocolSimulation.java:310-317 is driver-side against MemoryBinStore and scales with epochs, which is the dimension a sweep is allowed to scale in; the 15.3s measurement bounds it."
+  ],
+  "diff_sha256": "28bc2c0e61877ca0bf8c6938c0d477f8f437c6455f5b85821af01a2ce3c6350a",
+  "task": "M4.13",
+  "role": "reviewer",
+  "staged_tree": "a66e57123b2f3f68a092af8cfb0abcc6364b4ece"
+}

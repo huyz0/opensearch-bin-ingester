@@ -1,0 +1,14 @@
+{
+  "diff_sha256": "76da298d65ed6e4f3f4f2e13fa45c96d497896a8f225df548ec6b4a42d214a0e",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "severity": "major",
+      "file": "buildSrc/src/test/java/binjava/TddPlanScopeTest.java:34",
+      "finding": "SURVIVING MUTATION: plan() stops calling task_for and reverts to the pre-fix inline logic, while task_for stays exactly as staged. All three tests pass. Verified by running the mutant: `plan binjava.binstore.VersionTest#x binjava.CoverageGateTest#y` emits ':binstore-spi:test ...' as staged and 'test ...' under the mutation, and every test is green both ways, because all three reach task_for only through the new `task-for` CLI branch (tdd_scan.py:252-258) and nothing asserts over plan's output. Round one's fix moved the rule into a pure transform and constrained it well -- the four named mutations plus a fifth all die (see below) -- but the wiring from the only production consumer to that transform is now unconstrained. tdd-red.sh:31 shells `tdd_scan.py plan`, never `task-for`, so the seam under test is not the path that ships. Task criterion 'tdd_scan.py must scope the Gradle task to the owning module' has no test that fails without it; criterion 'the rule must be a pure transform' does. Closing it is one assertion over plan() using two ids that already exist in the tree (binjava.binstore.VersionTest, binjava.CoverageGateTest), which also pins the buildSrc-vs-module distinction on the shipped path.",
+      "failure_scenario": "An agent refactoring plan() -- or a partial revert, or a merge resolving toward the old body -- inlines the task computation again and drops the task_for call. task_for survives as a correct, fully tested, dead function; plan() emits the bare root task `test`; `./gradlew test --tests <one class>` fans out across all eight modules at org.gradle.parallel=true; the M1.0 defect returns verbatim (2 of 7 ids recorded) with the harness suite green and TddPlanScopeTest still asserting the transform nobody calls."
+    }
+  ],
+  "task": "M0.49",
+  "role": "test-reviewer"
+}

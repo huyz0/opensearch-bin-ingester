@@ -1,0 +1,23 @@
+{
+  "diff_sha256": "78d5eaa61415b9fadf2960c097780d80c0d5eecb54059c52334a0f76127fca96",
+  "verdict": "pass",
+  "summary": "Round eleven delta reviewed: the absent-LINE guard in scripts/coverage.py, the two new CoverageGateTest cases, and the two backlog rows. Nothing blocking or major. The LINE/BRANCH asymmetry is sound: reproduced the -g:none report shape (INSTRUCTION+BRANCH, no LINE) against the real coverage.py and it exits 1 with a named remedy; nothing in buildSrc/src/main/kotlin or build.gradle.kts turns debug info off, so there is no false-fail path in this tree. Both new tests kill their named mutations by construction. Two minors recorded, neither to be fixed under review.md rule 11.",
+  "findings": [
+    {
+      "id": "R1",
+      "file": "docs/internal/product/backlog.md:48",
+      "severity": "minor",
+      "title": "M0.42 states a verified test count that this same commit made stale",
+      "failure_scenario": "The row claims 'delete the clause and all 14 CoverageGateTest cases stay green'. The file now holds 17 @Test methods, two of them added in this commit. The substance still holds (neither new fixture nests a module two levels deep, so the p.count('/') == 1 clause remains uncovered), but a reader auditing the claim counts 17, cannot reconcile it with 14, and has to re-derive whether the row is describing today's tree or a prior round. A number stated as verified and then left behind is the shape of a claim nobody re-ran."
+    },
+    {
+      "id": "R2",
+      "file": "scripts/coverage.py:150",
+      "severity": "minor",
+      "title": "the new LINE guard precedes the exclusion check, so a baselined module cannot be excused from it",
+      "failure_scenario": "Reproduced: a module with classes, a report carrying INSTRUCTION and BRANCH but no LINE, and a well-formed 'format  no product code yet; M1 lands the SPI' entry in baselines/coverage.txt exits 1 and never prints its EXCLUDED line. This is the same asymmetry M0.44 records for the missing-report path (missing.append runs before m in skips), but M0.44's wording names only the absent-report case, so the absent-LINE case is not covered by the row a future reader would consult. It fails closed and is consistent with the c == {} and c is None guards that already precede skips, so it is not a defect in behaviour -- only in what the backlog says is known."
+    }
+  ],
+  "task": "M0.13",
+  "role": "reviewer"
+}

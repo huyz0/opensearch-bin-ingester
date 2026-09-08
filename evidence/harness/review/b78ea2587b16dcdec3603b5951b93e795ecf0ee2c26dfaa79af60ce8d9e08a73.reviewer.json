@@ -1,0 +1,28 @@
+{
+  "verdict": "pass",
+  "diff_sha256": "b78ea2587b16dcdec3603b5951b93e795ecf0ee2c26dfaa79af60ce8d9e08a73",
+  "summary": "Round-2 verification. Both round-1 majors are genuinely fixed: the arm is named `order`, and the I4 entry now states a conclusion the code agrees with. The `order` name is TRUE -- production's commitSubmissions assigns offsets strictly ascending in segment list order per stream (CommitLog.java:300-313), so the arm cannot false-positive, and every record in a delta is uncommitted until it lands (DefaultIngest.java:355 commits, :375 completes), which is I4's permitted half. The 'I2 plus append-only' argument is sound at the granularity the chain carries: sorting each stream's runs by offset before the fold detects every overlap and every hole exactly once (verified by construction and by the new both-names fixture), so nothing is lost by no longer mislabelling a permutation. MEASURED: skipping the offset-order fold for a stream that already reported `order` leaves 374 of 375 sequencer tests green and reports [\"order\"] alone -- exactly the surviving mutation the new fixture's javadoc claims, and the new fixture is the only test that kills it. The header's 'Seven kinds' matches the seven distinct Violation names this class emits (I1, I2, I5, chain, gap, link, order); checkChain no longer emits I4 anywhere, and ReaderInvariants.java:190 is the only I4 emitter, which the list says. No object-store request is added or moved: the change is string renames plus an in-memory sort inside a walk whose LIST-plus-GET-per-entry rate is unchanged.",
+  "findings": [
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/Invariants.java:88",
+      "severity": "minor",
+      "title": "The completeness claim covers run order, not record order inside a run",
+      "failure_scenario": "'an offset that is never reassigned, in entries that are never rewritten, is an order that cannot change' is sound for RUNS, because a run's first offset and count are in the chain entry and chain entries are putIfAbsent-written. It does not cover the order of records WITHIN a committed run: which record sits at offset 4 versus 5 lives in the segment object, not in the chain. A segment object whose bytes are replaced under a committed key with the same record count in permuted order reorders records that are already committed, and checkChain returns [] (it never opens a segment) and checkReader returns [] (it folds high-water marks per stream). ReaderInvariants.java:91-98 still names this residue -- 'a reader that emitted records out of order WITHIN a correct fold would need a per-record consumer trace' -- so the family is honest about it in one file and silent in the other, and this list is the one a future reader consults. One clause naming the residue would keep the conclusion and drop the overclaim. Not blocking: the conclusion it supports is correct for everything the chain bytes can express, and the residue needs a rewritten segment object, which nothing in the tree does."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/BatchedDeltaInvariantsTest.java:217",
+      "severity": "minor",
+      "title": "Two javadocs still say I4 where the assertion under them now says `order`",
+      "failure_scenario": "Line 217 reads 'exactly one I4 must be reported and it must name RA' while the assertion at line 238 is isEqualTo(\"order\"); line 247 reads 'calling it I4 as well would report one defect under two names' while its as() message at line 264 was updated to `order`. The as() messages in both tests were rewritten in this diff and the javadocs above them were not. A reader grepping I4 to find which arm reports it lands on two test descriptions naming an arm that no longer exists -- the same prose-versus-code contradiction round 1 raised about Invariants.java, surviving in the test file."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/Invariants.java:191",
+      "severity": "minor",
+      "title": "The corrected detail message is asserted by nothing",
+      "failure_scenario": "The round-1 minor was that ': segment ' + r indexed the stream's run list rather than the delta's segments. The fix replaced it with 'a run starting at X follows one starting at Y', but the only detail() assertion in the suite (BatchedDeltaInvariantsTest.java:239) checks that the text contains RA and not RB. Reverting the message to 'segment ' + r keeps every test green, so the misleading-position defect can return without a gate noticing. Diagnostic text only, no wrong verdict."
+    }
+  ],
+  "task": "M4.13f",
+  "role": "reviewer",
+  "staged_tree": "3d85e70a59801cfc45c5693d99fee35ac19fe343"
+}

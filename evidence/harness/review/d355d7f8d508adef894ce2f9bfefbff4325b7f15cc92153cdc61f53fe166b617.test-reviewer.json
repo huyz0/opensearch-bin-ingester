@@ -1,0 +1,49 @@
+{
+  "diff_sha256": "d355d7f8d508adef894ce2f9bfefbff4325b7f15cc92153cdc61f53fe166b617",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "severity": "major",
+      "location": "sequencer/src/test/java/binjava/sequencer/AckOrderTest.java:113",
+      "title": "The lower-write scan is exercised only at distance 1, so 'check only sequence-1' survives",
+      "failure_scenario": "A writer pipelining at depth 3 whose PUTs confirm in the order 1, 2, 0 and which acks 2 is the naive implementation this row exists to catch. checkAckOrder catches it today because it scans EVERY lower sequence from 0. No test in AckOrderTest ever presents an ack whose unconfirmed lower is more than one below it with the intervening sequence confirmed: naivePipelined() uses only {0,1}, and in EVERYOutOfOrderAckIsReportedNotJustTheFirst every ack's immediate predecessor is itself unconfirmed. A regression narrowing the scan therefore ships green while the depth-3 case goes unreported into M4.13, which consumes exactly these counts.",
+      "mutation": "Invariants.java:132 `for (long lower = 0; lower < e.sequence(); lower++)` -> `for (long lower = Math.max(0, e.sequence() - 1); lower < e.sequence(); lower++)`. MEASURED: all six AckOrderTest tests pass (BUILD SUCCESSFUL). It is not an equivalent mutant -- on the trace confirmed(1), confirmed(2), acked(2) the staged checker returns 1 violation and the mutant returns 0, measured with a temporary test in the reviewer tree.",
+      "fix": "Add a case whose unconfirmed lower is not the immediate predecessor, e.g. confirmed(1), confirmed(2), acked(2) -> exactly one I5 violation naming 0."
+    },
+    {
+      "severity": "major",
+      "location": "sequencer/src/test/java/binjava/sequencer/AckOrderTest.java:88",
+      "title": "aSerialWriterViolatesNOTHING holds only for a trace based at 0; the checker false-positives on any other base and no test says which is intended",
+      "failure_scenario": "checkAckOrder scans lowers from literal 0, so it treats sequence 0 as necessarily part of every chain. MEASURED in the reviewer tree: the strictly serial, perfectly ordered trace confirmed(1), acked(1), confirmed(2), acked(2) returns TWO I5 violations, both 'sequence N was ACKED while the lower-numbered write 0 was still unconfirmed'. That is the numbering CommitLog actually produces -- CommitLog.apply advances nextSequence past a CONTINUE (CommitLog.java:192), so in an epoch whose slot 0 is the CONTINUE the first COMMIT is at sequence 1. serial(n) only ever starts at 0, so the suite asserts 'a serial writer violates nothing' precisely in the one base where it is true, and M4.13 will feed a real trace into a checker whose contract on trace base is untested and undocumented.",
+      "mutation": "Invariants.java:132 `for (long lower = 0; ...)` -> compute `long base = trace.stream().mapToLong(AckEvent::sequence).min().orElse(0L);` and loop `for (long lower = base; lower < e.sequence(); lower++)`. MEASURED: all six tests pass (BUILD SUCCESSFUL), yet this is the opposite contract from the staged code for every trace not based at 0.",
+      "fix": "Decide whether the trace must contain every chain slot from 0 (including CONTINUE/SEAL confirms) or is base-relative, state it on checkAckOrder, and add the serial-at-base-1 test that pins it."
+    },
+    {
+      "severity": "minor",
+      "location": "sequencer/src/test/java/binjava/sequencer/AckOrderTest.java:104",
+      "title": "The detail assertion cannot tell the acked sequence from the unconfirmed lower one",
+      "failure_scenario": "assertThat(found.get(0).detail()).contains(\"1\").contains(\"0\") is satisfied by any message mentioning both digits, in either role. An operator or a failing M4.13 seed reading 'sequence 0 was ACKED while the lower-numbered write 1 was still unconfirmed' would be told the exact inverse of what happened, and the suite stays green.",
+      "mutation": "Invariants.java:135-137, swap the two arguments: `\"sequence \" + lower + \" was ACKED while the lower-numbered write \" + e.sequence()`. MEASURED: SURVIVED, all six tests pass. Iterating the lower loop downward (reporting the HIGHEST unconfirmed lower rather than the lowest) likewise goes unnoticed, since no test asserts the detail of the multi-gap ack in EVERYOutOfOrderAckIsReportedNotJustTheFirst.",
+      "fix": "Assert the whole detail string, or assert it starts with 'sequence 1' and contains 'write 0'."
+    },
+    {
+      "severity": "minor",
+      "location": "sequencer/src/test/java/binjava/sequencer/AckOrderTest.java:121",
+      "title": "The never-confirmed case uses sequence 0, where the lower loop is empty, so double-counting one ack survives",
+      "failure_scenario": "ackingAWriteThatWasNEVERConfirmedIsAVIOLATION feeds acked(0). Because the lower loop `lower < 0` never runs, the test cannot observe whether the self-unconfirmed branch stops there. A trace acking a never-confirmed sequence that ALSO has unconfirmed lowers would then report two violations for one ack event, inflating exactly the counts the class comment says M4.13 pins.",
+      "mutation": "Invariants.java:130, delete the `continue;` after the 'its own write was unconfirmed' violation. MEASURED: SURVIVED, all six tests pass.",
+      "fix": "Use acked(2) with nothing confirmed and assert hasSize(1), or add that case beside the existing one."
+    }
+  ],
+  "verified": [
+    "pipeliningThatWAITSToAckIsPERMITTED is uniquely load-bearing, verified in a stronger form than the author's claim. The author's 'reject every ack' mutation (`if (!confirmed.contains(e.sequence()))` -> `if (true)`) is killed by FOUR tests, so it does not demonstrate uniqueness. The mutation that does: add a second rule flagging two confirmed events with no intervening ack -- i.e. forbid pipelining outright while keeping the existing logic. MEASURED: the ONLY failing test is pipeliningThatWAITSToAckIsPERMITTED. Without it the checker could collapse into 'be serial', which ADR-0011 forbids.",
+    "The class comment's 'FROM 0, not from the last ack' is genuinely constrained. Mutation: track the last acked sequence and scan lowers from it. MEASURED: KILLED by EVERYOutOfOrderAckIsReportedNotJustTheFirst.",
+    "Temporal order of the trace is constrained: pre-collecting every confirmed sequence before checking acks would make naivePipelined clean, and aNAIVEPipeliningWriterVIOLATESI5 asserts hasSize(1) on it.",
+    "Constant-return (empty list) KILLED by three tests; report-only-the-first KILLED by EVERYOutOfOrderAckIsReportedNotJustTheFirst; negating isAck KILLED by five.",
+    "Tier is correct: T0, no clock, socket, store, sleep, port or system temp. testing.md rules 1, 15-17 satisfied.",
+    "No existing assertion was weakened. The only change to Invariants.java outside checkAckOrder is javadoc moving I5's second clause from NOT-RUN to checked, and no test or gate reads that list."
+  ],
+  "task": "M4.11",
+  "role": "test-reviewer",
+  "staged_tree": "778ca6e102e343bcbfe0df4cd7a1b61dcc9c50e8"
+}

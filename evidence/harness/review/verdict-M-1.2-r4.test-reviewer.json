@@ -1,0 +1,20 @@
+{
+  "diff_sha256": "d73dc905bf6f26e268011e5716371bc6dacf1fbec432f868d553cede19920fa1",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "HT11",
+      "severity": "minor",
+      "file": "buildSrc/src/test/resources/java-fixtures/annotation-type.java:7",
+      "summary": "Fixture comment claims the @interface branch is 'load-bearing here' for this nested case; it is not. Mutating `if last == 'interface':` to `if False:` leaves all 19 tests green, and `tdd_scan.py ids annotation-type.java` still prints exactly `p.HolderTest#realTest`. This directly contradicts the (correct) HT9-revised note in scripts/java_tests.py, which now states the branch is unconstrained.",
+      "failure_scenario": "A future agent trims the parser, reads this comment, believes annotation-type.java guards the @interface branch, and leaves the fixture in place as proof while deleting or altering the branch. The suite stays green and the composed-annotation handling regresses undetected. The comment is the only remaining place in the diff that overstates what a fixture constrains."
+    },
+    {
+      "id": "HT10",
+      "severity": "minor",
+      "file": "buildSrc/src/test/resources/java-fixtures/one-line-class.java:3",
+      "summary": "Carried forward, accepted: the fixture adds a case without adding discrimination. Its shape (class + @Test method + body on one line) is already exercised by nested-classes.java:7. No mutation is caught by it that is not caught elsewhere. Recommendation is to KEEP it -- it costs milliseconds and documents the shape -- but it must not be counted as coverage.",
+      "failure_scenario": "No mutation survives because of it; the risk is only that suite size is read as suite strength."
+    }
+  ]
+}

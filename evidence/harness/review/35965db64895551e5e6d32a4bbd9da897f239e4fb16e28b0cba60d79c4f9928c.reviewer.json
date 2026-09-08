@@ -1,0 +1,31 @@
+{
+  "diff_sha256": "35965db64895551e5e6d32a4bbd9da897f239e4fb16e28b0cba60d79c4f9928c",
+  "verdict": "changes-requested",
+  "summary": "The four earlier open findings are resolved: the archive row and the notes now say `order` and not I4, the class javadoc enumerates seven kinds including `order`, the hand-carried fixture count is gone rather than corrected, and the early-pair fixture closes the last-pair-only mutation (starts 5, 3, 7 -- the last adjacent pair 3 then 7 ascends, so a last-pair-only comparison reports nothing and the test fails). No object-store request was added or moved: checkChain still reads chain entries and segment objects are never opened, so the rate is unchanged in segments, AZs and nodes. One major remains, and it is the defect class this task's own argued entry says has been remedied: two of the new fixtures' javadocs state offsets the fixtures do not have.",
+  "findings": [
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/BatchedDeltaInvariantsTest.java:298,300,375,376",
+      "severity": "major",
+      "title": "two new fixtures' javadocs state offsets the fixtures do not have, and one of them contradicts the assertion four lines below it",
+      "failure_scenario": "RunCommit is (key, recordCount, firstOffset). aStreamOutOfOrderOnlyInALATERPairIsStillCaught builds, at sequence 2, RunCommit(RA,3,3), RunCommit(RA,2,8), RunCommit(RA,2,6) -- segment starts 3, 8, 6, covering 3..9 -- while its javadoc at line 298 says 'the segments start at 0, then 5, then 3' and line 300 says 'they cover 0..6 exactly once'. Those are exactly the numbers of the pre-shift fixture (each start +3), stale since the method's own inline comment at 308-313 moved the permuted delta from sequence 1 to sequence 2. The same method then ASSERTS the real numbers at 323 ('3..9 covered exactly once') and 328-331 ('at sequence 2', 'a run starting at 6', 'follows one starting at 8'), so the file documents one fixture and pins another. The concrete failure: a maintainer reconciling the code with the doc drops the clean delta and rebases the permuted one to starts 0, 5, 3 at sequence 1 -- which the inline comment records as MEASURED re-opening a surviving mutation, replacing e.sequence() with the literal 1L while the whole suite stays green. The new fixture added this round has the same defect: aStreamOutOfOrderOnlyInANEARLYPairIsStillCaught builds RunCommit(RA,2,5), RunCommit(RA,2,3), RunCommit(RA,2,7) -- starts 5, 3, 7 covering 3..8 -- while line 375 says 'start at 5, then 3, then 8' and line 376 says 'the records cover 3..9 exactly once'; its own as() at 394 says '3..8'. Aligning the fixture with that javadoc (RunCommit(RA,2,8)) leaves offset 7 unassigned, so the checker reports gap as well as order and the test's containsExactly fails -- the doc names a shape that would not be silent, which is the property the fixture exists to demonstrate. No verdict from checkChain is wrong today; the false statements are in the deliverable's documentation, which is what rounds 1, 3 and 4 each blocked on in this same task. Measured by reading the fixtures against RunCommit's component order and against each test's own assertions, not by running the suite.",
+      "remedy": "Correct the four numbers to 3/8/6 and 3..9 (LATER) and 5/3/7 and 3..8 (EARLY), or delete the offset recitals and let each javadoc state the SHAPE only -- the fixtures and the as() messages already carry the numbers, and this task's own remedy is fewer copies of a fact rather than more care with them."
+    },
+    {
+      "file": "baselines/review.txt:35",
+      "severity": "minor",
+      "title": "the round history omits that round 2 was a clean PASS from BOTH roles",
+      "failure_scenario": "The entry says 'ROUNDS 1-3 EACH FOUND A REAL DEFECT IN CODE OR IN A CLAIM THE TREE DID NOT SUPPORT', which is literally true of round 2 -- .harness/review/b78ea2587b16... records the RUNS-versus-records overclaim -- but that round was `pass` from reviewer AND `pass` from test-reviewer, with three and two minors respectively and nothing blocking. Under review.md rule minors-land the commit was landable there, so rounds 3, 4 and 5 follow from electing to fix minors, which the same rule calls permitted and usually wrong. The sibling entries disclose exactly this: M4.11 says 'Round 3 found nothing new in the delta and both reviewers PASSED', M4.10d says 'Round 4 was PASS / changes-requested on ONE major'. A reader of this entry cannot tell that a landable verdict was declined, which is the single fact a round-cap argument is read for. Round 3 then found a major that would have shipped permanently false, so the extra round was justified in hindsight -- say that, rather than omitting the pass.",
+      "remedy": "One clause: 'round 2 passed both roles on minors; round 3 exists because I fixed them, and it found the false archive row.'"
+    },
+    {
+      "file": "baselines/review.txt:35",
+      "severity": "minor",
+      "title": "'Past the cap of four' names no cap that exists",
+      "failure_scenario": "review.md rule two-round-cap sets the cap at TWO and check-reviewed.sh:213 fails with 'exceeds review.md rule two-round-cap's cap of 2'. Four is review.sh:129's default REVIEW_ROUND_BUDGET, a per-session interrupt, not a cap -- which is why the M4.10c and M4.10d entries in this same file say 'Past the BUDGET of four' and the M4.11, M4.7a and M0.53 entries say 'the cap of two'. As written the entry tells a reader auditing the argued list that this task ran one round past a cap of four, when it ran three rounds past the cap the gate enforces.",
+      "remedy": "'Past the cap of two and the budget of four', matching the wording the neighbouring entries already use."
+    }
+  ],
+  "task": "M4.13f",
+  "role": "reviewer",
+  "staged_tree": "bbda1cf3740cab57f0da5c453ea5db25c99947fb"
+}

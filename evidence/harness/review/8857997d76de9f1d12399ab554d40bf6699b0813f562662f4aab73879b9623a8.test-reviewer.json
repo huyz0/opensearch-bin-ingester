@@ -1,0 +1,49 @@
+{
+  "diff_sha256": "8857997d76de9f1d12399ab554d40bf6699b0813f562662f4aab73879b9623a8",
+  "verdict": "pass",
+  "summary": "Round 2, tests. All three arms of checkReader's new split are pinned in BOTH directions, measured by mutation in a copy of the staged tree. Round-1 major (empty arm judged only in the clean direction) is FIXED: re-adding `if (entries.isEmpty()) return found;` now kills anEMPTYOwnChainInheritsNOTHINGAndProductionAgrees. The author's five claimed mutations reproduce as killed, and the 'wrong epoch instead of none' probe the author asked for is killed too. One minor: the depth>1000 guard in Invariants.inheritedOffsets -- named load-bearing by the comment this commit ADDS at Invariants.java:274 -- is itself unconstrained; deleting it leaves the whole suite green.",
+  "findings": [
+    {
+      "id": "T1",
+      "file": "sequencer/src/test/java/binjava/sequencer/Invariants.java:274",
+      "severity": "minor",
+      "title": "The depth guard this commit calls 'the guard that matters' is pinned by no test",
+      "failure_scenario": "The staged comment at Invariants.java:274-281 deletes offsetsSealedInto's own depth guard and justifies it: 'The guard that matters is on the recursion, which is `inheritedOffsets`', and `depth` is threaded through to reach it.' MEASURED in a copy of the staged tree: deleting `if (depth > 1000) { return inherited; }` from inheritedOffsets (Invariants.java:205-207) leaves `./gradlew :sequencer:test` BUILD SUCCESSFUL. So the surviving claim rests on prose only. The recursion it bounds is real: inheritedOffsets -> offsetsSealedInto(startFrom = opening.prevEpoch(), depth) -> inheritedOffsets(prior, from, depth+1), and unlike production's ChainReplay.replayAncestry (which THROWS on `opening.prevEpoch() >= chainEpoch`, its javadoc citing a measured two-object cycle that 'recursed until the stack went'), Invariants never checks that the link decreases -- checkLink reports the violation but the walk continues. A hand-built chain whose CONTINUE names its own epoch therefore recurses until StackOverflowError, and no test says so. Not major: no chain production can write reaches it, so the surviving mutant produces no wrong verdict on any input M4.13's sweep can generate today. A test feeding checkChain/checkReader a self-referencing Continue(0, epoch, seq) and asserting it terminates would close it.",
+      "surviving_mutation": "delete `if (depth > 1000) { return inherited; }` from Invariants.inheritedOffsets -- suite stays green"
+    },
+    {
+      "id": "T2",
+      "file": "sequencer/src/test/java/binjava/sequencer/ReaderInvariantsScopeTest.java:153",
+      "severity": "minor",
+      "title": "Truncated first sentence left in the rewritten javadoc",
+      "failure_scenario": "The javadoc of theZOMBIEOnANeverOpenedChainIsReportedOnBOTHSides opens with the half-sentence 'THE WRITER'S SIDE OF THAT SAME HISTORY STAYS VISIBLE, which bounds how' and then restarts with a second warning marker on the next line. The old sentence's tail was replaced but its head was not deleted. No behaviour is affected and no mutation survives because of it; the cost is that the file whose stated job is recording WHY a case exists now carries a sentence that stops mid-clause, which is the artifact a later reader trusts.",
+      "surviving_mutation": "none -- documentation defect, no test weakened"
+    }
+  ],
+  "verified_from_round_1": [
+    {
+      "finding": "empty-epoch arm judged only in the clean direction; re-adding `if (entries.isEmpty()) return found;` survived",
+      "status": "fixed",
+      "evidence": "Inserting `if (entries.isEmpty()) { return found; }` before the branch in checkReader -> ReaderInvariantsScopeTest > anEMPTYOwnChainInheritsNOTHINGAndProductionAgrees() FAILED. The third assertion (ReaderView(9, {RA=3}) must be I3) is what kills it."
+    }
+  ],
+  "mutations_measured": [
+    "empty arm walks back via offsetsSealedInto(epoch-1) [the false I4] -> anEMPTYOwnChainInheritsNOTHINGAndProductionAgrees FAILED",
+    "empty arm declines: `if (entries.isEmpty()) return found;` -> anEMPTYOwnChainInheritsNOTHINGAndProductionAgrees FAILED",
+    "sealed-at-0 arm inherits nothing: expected = new HashMap<>() -> anEpochSEALEDBeforeItsCONTINUEIsNOWJudgedAgainstItsInheritedBase FAILED, theWalkSTEPSOVERSeveralAbandonedEpochsNotJustOne FAILED",
+    "sealed-at-0 arm never taken: `else if (false && Invariants.neverOpened(entries))` -> same two FAILED",
+    "walk collapsed to a single decrement: `while` -> `if` in offsetsSealedInto -> theWalkSTEPSOVERSeveralAbandonedEpochsNotJustOne FAILED, InvariantsAcrossChainsTest.offsetsAreINHERITEDAcrossAChainThatWasNeverOPENED FAILED",
+    "empty arm inherits from a WRONG epoch rather than from none: offsetsSealedInto(store, prefix, 1, ...) -> anEMPTYOwnChainInheritsNOTHINGAndProductionAgrees FAILED (every startFrom >= 1 in that fixture walks to epoch 1 and yields RA=3; startFrom <= 0 is an equivalent mutant, since offsetsSealedInto returns {} for from < 1)",
+    "empty-arm boundary widened: `entries.isEmpty()` -> `entries.size() <= 1` -> anEpochSEALEDBeforeItsCONTINUE... FAILED, theWalkSTEPSOVER... FAILED",
+    "walk stops at an EMPTY mid-ancestry chain: `while (from >= 1 && !prior.isEmpty() && neverOpened(prior))` -> InvariantsAcrossChainsTest.offsetsAreINHERITEDAcrossAChainThatWasNeverOPENED FAILED (its epoch 2 is empty, so that fixture does pin the mid-ancestry step-over the origin arm deliberately does not do)",
+    "depth guard in inheritedOffsets deleted -> BUILD SUCCESSFUL (finding T1)"
+  ],
+  "notes": [
+    "Three-case split, both directions per case: EMPTY -- clean pinned by ReaderView.of(reader) plus an independent assertion that production's own reader.offsets() is empty, broken pinned by ReaderView(9, {RA=3}) -> I3. SEALED-AT-0 -- correct/dropped/wild pinned to clean/I4/I3, with reader.offsets() containsEntry(RA,3) pinning the base value so an off-by-one in the walk shows as I3. CONTINUE arm -- broken pinned by aColdStartChainOpeningWithADELTAIsSTILLJudged, clean by ReaderInvariantsTest.aReaderThatSTOPSAtTheSealViolatesNothing and productionsOwnReader...",
+    "The empty arm cannot false-positive against a real reader: CommitLog.open (CommitLog.java:364) PUTs the CONTINUE before crossFrom sets offsets, so a reader never carries inherited offsets while its own chain is still empty. checkReader's origin/mid-ancestry asymmetry matches ChainReplay.neverOpened(first, atOrigin) exactly.",
+    "The removed `Verdict.judged()` assertions in ReaderInvariantsTest are not a weakened assertion: the type they read was deleted in the same commit and the claim could not go false. Not treated as the test-inversion check-test-integrity.sh is about."
+  ],
+  "task": "M4.13i",
+  "role": "test-reviewer",
+  "staged_tree": "626a16ed31d2265a3655e9c84efb7a5c8c6f1252"
+}

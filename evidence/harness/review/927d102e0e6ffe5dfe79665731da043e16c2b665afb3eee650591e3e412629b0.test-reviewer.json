@@ -1,0 +1,66 @@
+{
+  "task": "M4.8a",
+  "role": "test-reviewer",
+  "verdict": "pass",
+  "summary": "Round 6, NARROW scope: the delta is four files and the only executable code it touches is nothing -- both test-file hunks are comment/javadoc-only (verified by stripping comment lines from `git diff --cached` for the two test files: zero non-comment changed lines). No assertion was added, removed or weakened, so the round-5 mutation matrix is carried forward unchanged and was NOT re-run: 45/51 killed, 88.2%, six survivors all argued in baselines/mutants.txt. Checkpoint.java is byte-identical to the hash I passed. The four requested items check out: (1) the corrected `requireNonNull` entry states my measurement accurately -- I re-confirmed by reading the compact constructor that `requireNonNull(streams)`/`requireNonNull(pods)` precede the `sequence < 0` check, so deleting the parameter check makes `new Checkpoint(-1, null, Map.of())` an IllegalArgumentException, and the `argued rather than killed` conclusion still holds because decodeBody constructs both maps itself and can never hand a null through the `catch (IllegalArgumentException)` wrap, so the type change is unreachable on the decode path; (2) the partitionId splice is now described as a splice in both files, and the splice really does leave the object ending at its last field (one byte replaced by ten, nothing appended); (3) the fixture javadoc now matches the fixture -- 8 streams (6 + idx(3)/9 + idx(3)/4) and 3 pods -- and the `do not cut it back` warning is correct: `twoCheckpointsDifferingONLYInInsertionOrderEncodeIdentically` is what makes the tiebreak non-tautological, since `theENCODERSorts...`'s `isSorted()` would use a mutated `RunKey.compareTo` as its own oracle; the claim that the golden file is a separate six-stream artifact is true (GoldenCheckpointTest asserts hasSize(6) and exactly poda/podb from committed bytes, builds no fixture); (4) the cap argument's figures are correct and correctly attributed to the test review -- BUT it draws the percentage comparison I explicitly cautioned against. Two minors, neither blocking, and neither worth a seventh round.",
+  "findings": [
+    {
+      "id": "M4.8a-tr-17",
+      "file": "baselines/review.txt:20",
+      "severity": "minor",
+      "finding": "THE CAP ARGUMENT DRAWS THE COMPARISON I CAUTIONED AGAINST, one round further back than the one I named. `rounds:M4.8a` reads `45 of 51 mutants killed, 88.2%, with zero unargued survivors -- against 73.7% at round 3.` Every figure is accurate and attributed to the right role: 45/51 = 88.2% and `zero unargued survivors` are verbatim from my round-5 verdict, and 73.7% is from my round-3 finding M4.8a-tr-13 (28 of 38), so `measured by the test review rather than by me` is correct for both. The defect is the juxtaposition. My round-5 verdict's matrix note says `88.2% (45/51) is NOT comparable by arithmetic to the 78.9% (30/38) of round 4 -- the same error baselines/mutants.txt now warns about. What IS comparable across both is the survivor SET.` Round 3's 73.7% comes from the SAME 38-mutant matrix as round 4's 78.9%, differing only in how many of it were killed, so the caution applies identically -- the 51-mutant matrix is independently derived (it adds the `< 0` halves as separate mutants, the crafted-object kills, the swap and Map.copyOf probes), and a percentage over a different mutant population is not a delta. The staged baselines/mutants.txt in the SAME commit says so in its own footer: `deriving the new figure by arithmetic is exactly the error that put two false arguments in this file's first draft.` The comparable claim is already in the sentence -- zero unargued survivors now against ten survivors and no mutants.txt at all at round 3 -- and it carries the whole point without the percentages needing to line up. Second, smaller: that same mutants.txt footer says `Two have been measured by review: 73.7% (28/38), then 78.9% (30/38)`, which is stale at its own hash, because a third measurement (88.2%) exists in review.txt one file over and is the only one that DOES include the crafted-object tests the footer says the other two omit.",
+      "failure_scenario": "A later session reads baselines/review.txt with only `.harness` available, takes `88.2% against 73.7%` as a 14.5-point improvement produced by rounds 4-6, and reasons about a future task's rounds from it -- when the two numbers share no denominator and the honest statement is about the survivor set. This is the same shape as the M4.43 entry's own confession that a figure was reported without the derivation being checkable, in the file whose entire worth is that its entries are checkable.",
+      "mutation_that_survives": "n/a -- prose in a baseline record, not a test. No mutant is affected: the survivor set (s4, s5, c4, l4, r6, r7) and the 45 kills are unchanged by this wording."
+    },
+    {
+      "id": "M4.8a-tr-18",
+      "file": "baselines/mutants.txt:14",
+      "severity": "minor",
+      "finding": "THE CORRECTED HEADER STILL GENERALISES FROM THE ONE OBJECT THAT LITERALLY ENDS AFTER ITS FIELD TO ALL THREE. mutants.txt now reads `Three are killed by objects built by hand to END exactly after the field under test`, and CheckpointDecodeRefusalTest.java:248-250 says the same of `THE FIRST THREE OBJECTS`. Measured by reading the bytes: only `negPodCount` = raw(0x01, 0x00, wideNeg) actually ends at the field under test. `negStreamCount` = raw(0x01, wideNeg, 0x00) carries a trailing 0x00 that the mutant reads as a zero pod count, and `negPodLen` = raw(0x01, 0x00, 0x01, wideNeg, 'p', 0x07) carries two trailing bytes that the mutant consumes as a one-byte podId and its flushSeq. THE PROPERTY THAT MATTERS IS INTACT AND IS STATED CORRECTLY IN THE NEXT CLAUSE -- without its guard each object decodes to COMPLETION with nothing left over, so `decode` returns normally and `assertThatThrownBy` fails on no-throw rather than on message text, which is what makes these kills message-independent. The test file's own second bullet even spells the podLen case out (`narrows to 1 and takes one byte of the next field as a podId`), contradicting its headline sentence four lines above. So this is a precision defect in a sentence, not a wrong kill claim: I measured s1/c1/l1/p1 all KILLED last round and nothing in this delta changes the code. \u26a0\ufe0f DO NOT FIX THIS IN A SEVENTH ROUND -- the correct phrasing is `each object decodes to completion without its guard`, and the next round's surface would be that sentence.",
+      "failure_scenario": "Someone shortening `negPodLen` to make it 'end exactly after the field under test' as the comment claims it does would delete the 'p' and 0x07, and the mutant would then be refused by the trailing-bytes/short-read path instead of accepting -- turning a kill-by-acceptance back into the exact indistinguishable-refusal defect that finding M4.8a-tr-14 was raised about.",
+      "mutation_that_survives": "None. `streamCount < 0`, `podCount < 0`, `podLen < 0` and `partitionId < 0` were each measured KILLED individually at round 5 against :format:test --rerun-tasks, and the objects are unchanged in this delta."
+    }
+  ],
+  "resolved": [
+    {
+      "id": "M4.8a-tr-16",
+      "status": "resolved",
+      "evidence": "baselines/mutants.txt now states the exception TYPE change rather than a message-only difference, and states it as I measured it: `new Checkpoint(1, null, Map.of())` NPEs either way, `new Checkpoint(-1, null, Map.of())` becomes IllegalArgumentException once the parameter check is gone. Re-verified by reading Checkpoint.java's compact constructor -- both requireNonNull calls precede the `sequence < 0` throw, so the ordering claim is right. The conclusion holds: nothing is ACCEPTED in either world, and the one caller that DOES branch on IllegalArgumentException (decode's wrap to IOException) cannot be reached with a null map, because decodeBody builds both LinkedHashMaps itself."
+    },
+    {
+      "id": "M4.8a-tr-1",
+      "status": "resolved",
+      "evidence": "Carried from round 5 and re-checked against the corrected javadoc rather than re-run. The fixture is 8 streams and 3 pods as the javadoc now says, and the two load-bearing entries are idx(3)/partition 9 and idx(3)/partition 4, inserted higher-partition-first. The javadoc's warning is right for a reason it does not spell out: `theENCODERSortsWhateverOrderTheCallerHandedIn` asserts `isSorted()` over decoded RunKeys, which would use a mutated `RunKey.compareTo` as its own oracle -- it is `twoCheckpointsDifferingONLYInInsertionOrderEncodeIdentically` that actually kills the dropped tiebreak, because a stable sort under a partial order preserves the two differing insertion orders and the byte arrays diverge. Round 5 measured 5 of 198 :format tests failing when the partitionId leg is dropped."
+    },
+    {
+      "id": "M4.8a-tr-10",
+      "status": "resolved",
+      "evidence": "Both files now describe the partitionId case as the splice it is, and explain why the splice still works (one byte replaced by ten, so the object still ends at its last field and the trailing-bytes check cannot mask the guard). Verified against spliceAt at CheckpointDecodeRefusalTest.java:216-224: it allocates original.length + replacement.length - 1 and copies the tail, appending nothing. The four kills stand as measured at round 5."
+    },
+    {
+      "id": "M4.8a-tr-2",
+      "status": "resolved",
+      "evidence": "Carried unchanged from round 5; header, magic and version guards untouched by this delta."
+    },
+    {
+      "id": "M4.8a-tr-7",
+      "status": "resolved",
+      "evidence": "Carried unchanged from round 5; the repeat-stream and repeat-pod tests are untouched."
+    },
+    {
+      "id": "M4.8a-tr-8",
+      "status": "partially-resolved",
+      "evidence": "Unchanged from round 5 and not re-opened. One new datum: the staged rounds:M4.8a entry asserts the route count `(it is six)` while the code comment deliberately carries none. Six is CORRECT and checkable by reading -- StreamOffsets throws on nextOffset<0, oldestRetainedOffset<0 and oldest>next, and the Checkpoint constructor throws on sequence<0, a blank podId and a negative flushSeq; all six are reachable from decodeBody, and the partitionId route is preempted by the decoder's own bound. Not raised as a finding: unlike the three counts that were wrong, this one resolves."
+    }
+  ],
+  "mutation_matrix": {
+    "scope": "CARRIED FORWARD from round 5, not re-run. format/src/main/java/binjava/format/Checkpoint.java is byte-identical at this hash -- the delta touches only comments in two test files and two baseline records.",
+    "killed": 45,
+    "total": 51,
+    "score": "88.2%",
+    "survivors_all_argued": true,
+    "note": "Re-running would produce the same figure and cost a build; the packet scopes this round to what changed. This figure is NOT arithmetically comparable to the 38-mutant matrices of rounds 3 and 4, which is the substance of finding M4.8a-tr-17."
+  },
+  "diff_sha256": "927d102e0e6ffe5dfe79665731da043e16c2b665afb3eee650591e3e412629b0",
+  "staged_tree": "99df6a2f9ab8d4798b6cad48cc2cbab411992798"
+}

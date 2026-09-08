@@ -1,0 +1,15 @@
+{
+  "diff_sha256": "a736644d0e1f8d63a1a2d510990beaf66370cb033b51b83a4ce1fc01c1c1224d",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "TR5-1",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java:212,270",
+      "summary": "Fixture scratch dirs (Files.createTempDirectory(\"fresh\")) still land under the JVM's system temp directory, not build/tmp -- testing.md rule 17. This is the same fact TR4-1 measured last round; the tmpdir pin that would fix it has correctly been reverted out of this diff into M0.33, since it fixes a different finding (buildSrc's Gradle build never applying binjava.java-conventions) and has no bearing on the quarantine assertion this task is about. Recorded here only so the tracked-not-fixed status is visible against this specific hash.",
+      "failure_scenario": "No assertion in FreshCheckoutTest reads java.io.tmpdir or checks a fixture path is under build/tmp, so nothing in this file would fail if a future change left fixtures under system temp permanently. Not actionable in this diff -- M0.33 already exists with the correct cause and this same measurement recorded against it. Not blocking: splitting was reviewed and confirmed correct (see below)."
+    }
+  ],
+  "task": "M0.31",
+  "role": "test-reviewer"
+}

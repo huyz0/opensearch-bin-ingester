@@ -1,0 +1,30 @@
+{
+  "diff_sha256": "9aa60742013c082cd9e5f85589cc08815f47fda22a050e0dfa552c2e154a17ca",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "M4.13-r11-1",
+      "severity": "major",
+      "file": "docs/internal/product/backlog.md:159",
+      "summary": "M0.91's repair advice was replaced with a FALSE statement, MEASURED false in both directions. The row now says: \"The `remove()` belongs in the CALLERS, not in `packet()`: a sibling test SETS the variable.\" The premise is true and the conclusion does not follow, because ORDER decides it: `packet()` (buildSrc/src/test/java/binjava/ReviewRoundBudgetTest.java:72-80) builds the ProcessBuilder, then applies the varargs `env` pairs -- so a `remove(\"REVIEW_ROUND_BUDGET\")` placed BEFORE that loop strips the inherited value and `theBudgetIsOVERRIDABLESoItIsAPromptRatherThanAWall`'s explicit `put` still lands on top of it. MEASURED in a review tree, `env REVIEW_ROUND_BUDGET=20 ./gradlew -p buildSrc test --tests binjava.ReviewRoundBudgetTest`: with `b.environment().remove(\"REVIEW_ROUND_BUDGET\");` inserted as the line after the ProcessBuilder is constructed, BUILD SUCCESSFUL, 4/4 green INCLUDING the overridable sibling; with the line removed and nothing else changed, `thePacketREFUSESToOpenAnotherRoundPastTheBudget(Path) FAILED at ReviewRoundBudgetTest.java:138`, `4 tests completed, 1 failed`. Worse, the location the row now names does not exist: the three callers are `@Test` methods that call `packet(dir, rc)` and hold no ProcessBuilder, so there is nowhere in a caller to put a `remove()` without first changing `packet()`'s signature. The PREVIOUS text of this row -- \"Fix is `b.environment().remove(\\\"REVIEW_ROUND_BUDGET\\\")`\" -- was correct, and this round replaced correct advice with incorrect advice.",
+      "failure_scenario": "`check-harness-tests.sh` is RED in this repository right now, for exactly the reason M0.91 describes: `scripts/review.sh context` runs the gate loop in its own environment, so the `REVIEW_ROUND_BUDGET=20` override that `review.sh` itself instructs an over-budget reviewer to set is inherited by `ReviewRoundBudgetTest`. Whoever picks up M0.91 reads this row, goes looking for a `remove()` site in the three caller `@Test` methods, finds none, and either widens `packet()`'s signature to thread an opt-out through three call sites or concludes the row's own recommendation is unimplementable -- when the one-line fix inside `packet()` that the row explicitly forbids is measured green. The cost is a wrong turn on a row whose whole purpose is to un-red a pre-commit gate that today blocks every review packet from printing its diff."
+    },
+    {
+      "id": "M4.13-r11-2",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSweepTest.java:92-99",
+      "summary": "The javadoc that declares itself \"THE ONE PLACE THE MEASUREMENT LIVES\" is inconsistent about the measurements it consolidates. It lists the drifted copies as \"14.6s, 15.2s, 16.4s, 17.1s, in four files\" and then gives the authoritative spread as \"14.6s on this harness, 15.1s and 15.4s in two review trees\" -- so 15.2s, which the deleted comment at the old line 270 attributed to a real review measurement (\"Review measured 15.2s on 20 cores\"), appears only as a drifted copy and is absent from the consolidated list. Separately, the count is off: `git grep` over the prior reviewed tree 924876a7 finds FIVE occurrences, not four -- 14.6s twice (this file's old line 91 and backlog-done.md:177), plus 15.2s (this file's old line 270), 16.4s (backlog.md:160) and 17.1s (backlog-notes.md:950). Four distinct values, five copies, in four files.",
+      "failure_scenario": "The next person to re-measure the sweep compares against this javadoc, sees a 14.6-15.4s band, and cannot reconcile it with the 15.2s the same paragraph names three lines earlier -- so they cannot tell whether 15.2s was a superseded restatement or a fourth genuine measurement that the consolidation dropped. That is the same ambiguity the consolidation exists to remove, reintroduced inside the single field it moved everything into."
+    },
+    {
+      "id": "M4.13-r11-3",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSweepTest.java:280 and docs/internal/product/backlog.md:160",
+      "summary": "Both new sentences say the dead band is measured \"against the run time recorded on `BUDGET_MILLIS`\", but `BUDGET_MILLIS`'s VALUE is 60_000 -- the budget, not a run time. The run time lives only in that field's javadoc. Read literally, the test comment's ratio is 60s/60s = 1x rather than the stated ~4x, and M0.90's is 300s/60s = 5x rather than the stated ~20x. The arithmetic the sentences intend (60/~15 and 300/~15) is right; the referent named for it is not.",
+      "failure_scenario": "A reader checking M0.90's 20x claim before wiring `check-suite-time.sh` follows the pointer to `BUDGET_MILLIS`, reads 60_000, computes 5x, and either concludes the row is wrong or wires a per-suite budget derived from the wrong base. Naming the javadoc rather than the field (\"the run time recorded in `BUDGET_MILLIS`'s javadoc\") removes it."
+    }
+  ],
+  "task": "M4.13",
+  "role": "reviewer",
+  "staged_tree": "aefce8ac2038e1379b4dc33a164cc8513a822416"
+}

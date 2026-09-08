@@ -1,0 +1,36 @@
+{
+  "diff_sha256": "f55329ad528afdcc828acf9d312b3e42dd729f13461327b3de1a84e95235d12d",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "file": "format/src/test/java/binjava/format/BatchedCommitDeltaTest.java",
+      "line": 192,
+      "severity": "major",
+      "what": "aSegmentCountLargerThanTheOBJECTIsRefusedRatherThanAllocated writes the kind, sequence and count and then NOTHING, so c.remaining() is exactly 0 at the guard. The test therefore cannot distinguish 'count > remaining' from 'the object is exhausted', and pins none of the bound. SURVIVING MUTATION, verified with the whole :format:test suite green: `if (count > c.remaining())` -> `if (c.remaining() == 0)`. Two more survive: `Cursor.remaining()` -> `return a.length;` (position ignored, in a method whose entire purpose is the position), and `count > c.remaining() * 1000L`. Killing all three costs one line -- give the fixture a few trailing bytes, and add a modest count (e.g. 1000 segments with 30 bytes left) so the comparison itself is exercised.",
+      "failure_scenario": "Under the surviving `c.remaining() == 0` form -- the natural weaker reading of the same idea, and what a later refactor of this guard would plausibly produce -- a torn object claiming 0x7FFFFFFF segments with 8 trailing bytes was measured in the review tree to throw OutOfMemoryError: Requested array size exceeds VM limit, straight past CommitLog.recover's own `throws IOException` and every caller catching it. A truncated PUT does not land exactly on the count boundary, so that is the common shape rather than the rare one. The round-1 major is fixed in production and remains unfalsified by the test that was added to close it: the suite stays green while recovery OOMs."
+    },
+    {
+      "file": "format/src/test/java/binjava/format/BatchedCommitDeltaTest.java",
+      "line": 33,
+      "severity": "major",
+      "what": "Every batched fixture in the tree carries EXACTLY TWO segments -- batched() here, the golden chain-delta-batched-v1.bin (GoldenChainEntryTest:60), both new SubscriptionHubTest deltas, and CommitLogTest's recoveryFoldsOffsetsFromEVERYSegmentOfABatchedDelta. So the encoded segment count is pinned only at the value 2. SURVIVING MUTATION, verified with :format:test, :ingest:test and :sequencer:test all green: in CommitDelta.encode, `SegmentWriter.putUvarint(out, segments.size())` -> `SegmentWriter.putUvarint(out, 2)` -- a literal return-a-constant, and nothing in the tree observes a delta of any other cardinality. Making batched() carry three segments kills it.",
+      "failure_scenario": "M4.7's batcher puts three or more pod flushes into one commitBatchInterval window -- the case this whole format change exists for, and the one ADR-0032 reasons about at six pods. Under the surviving mutation every such entry is written with a count of 2; measured in the review tree, decoding a 3-segment delta then fails with IOException: chain entry has bytes after its last field. The entry is unreadable by every reader forever, so recovery of that chain fails permanently, and no test in this commit would have gone red. Cardinality 2 is the only arity this change verifies while claiming 'a delta carries MANY segments'."
+    },
+    {
+      "file": "ingest/src/test/java/binjava/ingest/SubscriptionHubTest.java",
+      "line": 52,
+      "severity": "minor",
+      "what": "everyRunIsDeliveredUnderITSOWNSegmentNotTheFirstInTheBatch asserts the segmentKey and firstOffset of each Push but never its payload, so the safety argument the new publish(CommitDelta) javadoc rests on -- 'with no bytes attached there is nothing to mis-pair' -- is unasserted. SURVIVING MUTATION, :ingest:test green: `publishRun(committed.segmentKey(), run, new byte[0])` -> `publishRun(committed.segmentKey(), run, new byte[] {9})`. One line kills it: assert p.segment() is empty in both satisfies blocks.",
+      "failure_scenario": "The batched-safe overload starts attaching a byte[] that is not the run's own segment. Push carries the segment INLINE, so the consumer parses those bytes: a subscriber whose stream is absent throws inside the sink and is swallowed as slow-or-dead (silent record loss), and where two pods committed the same RunKey it decodes the wrong records under its own offsets. That is exactly the corruption the sibling overload now refuses, and the only reason this overload is safe is a property no assertion holds."
+    },
+    {
+      "file": "format/src/main/java/binjava/format/CommitDelta.java",
+      "line": 222,
+      "severity": "minor",
+      "what": "PRE-EXISTING and byte-identical to HEAD, so not this commit's defect and named only because this commit's prose now generalises past it: readSegment's `int runCount = (int) c.uvarint(); new ArrayList<>(runCount)` is the second repeat count in the same decode path and has no remaining() bound. Measured in the review tree on the UNMUTATED staged bytes: a v0 delta body with runCount 0x7FFFFFFF throws OutOfMemoryError: Requested array size exceeds VM limit out of ChainEntry.decode. Cursor.remaining()'s new javadoc says 'the length-prefixed case was already closed; the repeat-count case was not', and BatchedCommitDeltaTest:192's comment cites Cursor's class-wide promise -- but only one of the two repeat counts is bounded, and the v0 path that carries every delta in every bucket today is the unbounded one. A backlog row plus a test at the run-count field, not a widening of this commit.",
+      "failure_scenario": "A truncated PUT or foreign writer leaves a v0 delta whose run count is large. CommitLog.recover dies with an unchecked OutOfMemoryError past its own `throws IOException`, identically to the segment-count case this commit fixed -- and because the new test and the new Cursor javadoc both read as though the repeat-count class is now closed, the next reader will not look."
+    }
+  ],
+  "task": "M4.7a",
+  "role": "test-reviewer"
+}

@@ -1,0 +1,85 @@
+{
+  "diff_sha256": "3e54067dd50c6acbed3f20237d9035778dd45fe318b9de10e57778d2606f6b14",
+  "verdict": "changes-requested",
+  "round": 1,
+  "role_note": "test-reviewer. Every claim below was produced by patching the source, running ./gradlew :sequencer:test --rerun-tasks, and reading the JUnit XML. No mutation was reasoned about only on paper.",
+  "verified_good": [
+    "The author's reported mutation reproduces EXACTLY: keying nextOffsets on a single global RunKey instead of per-stream fails 2 tests, eachStreamHasItsOwnOffsetSpace and partitionsOfTheSameIndexAreSeparateStreams. Backlog row's claim is accurate.",
+    "The strengthening of the two initially-passing tests is genuine, not cosmetic. Mutating nextOffsets.put(key, first + count) to nextOffsets.put(key, first) -- the 'returns 0 for everything' stub the author says the weak versions survived -- now fails 4 tests. The continuation halves are load-bearing.",
+    "commitsFromDifferentNodesShareOneStreamsOffsetSpace is NOT just two commits with different string literals. Keying the offset map on (podId, RunKey) -- the exact bug M5's forwarding would introduce -- fails this test and ONLY this test. It carries unique discriminating weight.",
+    "CommitRequestTest is strong. Boundary flips all die: flushSeq '< 0' -> '< -1' fails aNegativeFlushSeqIsRefused; 'value <= 0' -> 'value < 0' fails anEmptyOrNonPositiveRecordCountIsRefused; dropping the '-' half of the podId grammar guard fails aPodIdContainingADashOrSlashIsRefused; Map.copyOf -> Collections.unmodifiableMap (an aliasing view) fails theRecordCountsAreCopied....",
+    "theSequenceNumberIsMonotonicAndGapless kills both a constant sequence and 'nextSequence += 2'. Asserting the exact value per iteration, rather than isGreaterThan, is what buys the second kill.",
+    "hasMessageContaining hazard (the M3.1 shape) checked guard by guard: no masking exists. 'podId' also appears in the dash/slash guard's message, but the input '  ' cannot reach it; 'recordCounts' appears in BOTH the empty guard and the positive guard, but Map.of() cannot reach the loop. Each assertion is reachable by exactly one guard.",
+    "Tier is right: T0, no store, no clock, no socket, no sleep, no port, no temp dir. Every test builds its own FakeSequencer in try-with-resources, so there is no shared state and no ordering dependence. Names describe behaviour. Tests are annotated with org.junit.jupiter.api.Test directly, so neither check-tdd nor check-test-integrity is blinded by the M0.17 composed-annotation hole.",
+    "Not pinning the fake's CURRENT lack of (podId, flushSeq) idempotency is the right call, not an omission: a test asserting that a replay is assigned fresh offsets would have to be deleted at M4.10, which testing.md rule 5 makes expensive. The javadoc naming it as a deliberate non-goal is the correct instrument."
+  ],
+  "findings": [
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/FakeSequencerTest.java:38-129",
+      "severity": "major",
+      "summary": "Every one of the six tests commits a request holding exactly ONE run. The multi-run commit -- the seam's entire reason to exist -- is never exercised, and three independent mutations survive because of it.",
+      "mutations_that_survive": [
+        "Delete '.sorted(Map.Entry.comparingByKey())' at FakeSequencer.java:48 -> 0 tests fail. The fake's own comment claims the sort is what makes two replays of a commit produce byte-identical deltas; nothing holds it.",
+        "Replace 'new RunCommit(e.getKey(), e.getValue(), first)' at FakeSequencer.java:51 with 'new RunCommit(e.getKey(), 1, first)' -> 0 tests fail. RunCommit.recordCount() is never read by any assertion; only firstOffset() is, via the firstOffsetOf helper. The fake may report any record count it likes.",
+        "Insert '.limit(1)' after the sort at FakeSequencer.java:48, so the fake SILENTLY DROPS every run but the first in a multi-run commit -> 0 tests fail."
+      ],
+      "failure_scenario": "FakeSequencer is testFixtures: it is shipped for other modules' tests. The normal shape of a commit in this system is many streams bundled into one segment -- that is the product's premise and why recordCounts is a Map rather than a pair. A downstream author writes a test that commits three streams at once, asserts on the offsets or the record counts the fake hands back, and gets a green test whose subject is unverified: the fake could be dropping runs, mis-reporting recordCount, or emitting them unsorted, and this suite would still be green. The third mutation is silent data loss in a fixture other tests will trust. One test that commits two or three RunKeys in a single request and asserts each run's key, recordCount, firstOffset AND their order kills all three.",
+      "suggested_fix": "Add a test committing a request with at least two RunKeys (ideally out of natural sort order in the LinkedHashMap, e.g. METRICS before LOGS, or partition 1 before partition 0) that asserts delta.runs() has the expected size, is ordered by RunKey, and that each RunCommit carries the recordCount and firstOffset it was asked for."
+    },
+    {
+      "file": "sequencer/src/testFixtures/java/binjava/sequencer/FakeSequencer.java:58",
+      "severity": "minor",
+      "summary": "The public accessor nextOffset(RunKey) is part of the shipped fixture's API and has no test at all.",
+      "mutations_that_survive": [
+        "Replace the body of nextOffset with 'return 0L;' -> 0 tests fail."
+      ],
+      "failure_scenario": "A downstream test writes assertThat(fake.nextOffset(key)).isEqualTo(3) as its assertion about what the code under test committed. If the accessor is wrong -- reading a different map, ignoring its argument, off by one -- that downstream test passes regardless and the fixture's own suite says nothing. Confined in blast radius because the map it reads IS constrained through commit(), which is why this is minor rather than major.",
+      "suggested_fix": "One assertion in offsetsAreContiguousPerStreamAcrossCommits: after the two commits, assert nextOffset(key) is 7 and nextOffset(an untouched key) is 0."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitRequestTest.java:33-88",
+      "severity": "minor",
+      "summary": "Nothing asserts that podId and flushSeq survive construction. The rationale given for deleting aWellFormedRequestKeepsEveryFieldItWasGiven -- 'a Java record keeps its fields by construction' -- does not hold for a record with a compact constructor, and this one has a compact constructor that already REASSIGNS a component.",
+      "mutations_that_survive": [
+        "Append 'podId = \"constant\";' to the compact constructor after CommitRequest.java:75 -> 0 tests fail.",
+        "Append 'flushSeq = 0L;' to the compact constructor after CommitRequest.java:75 -> 0 tests fail."
+      ],
+      "failure_scenario": "podId and flushSeq are the idempotency key M4.10 keys on and the identity M5's forwarding depends on -- the backlog row makes carrying them the headline reason this record has the shape it does. The compact constructor is the natural place a future author adds normalisation (a trim, a lowercase, a default) to podId, and CommitRequest.java:75 already establishes that reassigning a component here is idiomatic in this file. Such a change would silently alter half the idempotency key with no test failing. The record's SHAPE is pinned by compilation, since the tests pass four arguments; the FIDELITY of the values is not. Deleting the old test was defensible -- it asserted a tautology for three of four fields -- but the reason given was the wrong one, and the resulting gap is real.",
+      "suggested_fix": "Fold two accessor assertions into an existing test (e.g. theRecordCountsAreCopied...), or into FakeSequencerTest where a request already exists. Not a restored round-trip test for every field."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitRequestTest.java:85",
+      "severity": "minor",
+      "summary": "The copy test pins that the request does not ALIAS the caller's map, but not that the map it exposes is immutable.",
+      "mutations_that_survive": [
+        "Replace 'Map.copyOf(recordCounts)' at CommitRequest.java:75 with 'new java.util.HashMap<>(recordCounts)' -> 0 tests fail."
+      ],
+      "failure_scenario": "The javadoc says this record 'crosses a seam and, from M5, a network'. Under the surviving mutation a caller that holds the CommitRequest can still mutate request.recordCounts() directly after the fact -- a different route to the same corruption the test was written to prevent, and the one that stays open once the map is no longer the caller's own. Strictly the javadoc only claims 'COPIED, not aliased', which the mutation satisfies, so this is a gap in the claim as much as in the test.",
+      "suggested_fix": "assertThatThrownBy(() -> r.recordCounts().put(k, 1)).isInstanceOf(UnsupportedOperationException.class), one line in the same test."
+    },
+    {
+      "file": "docs/internal/product/backlog.md:M4.1",
+      "severity": "minor",
+      "summary": "The row's account of the weak-test episode is accurate on the two strengthened tests but omits the third, and its test count is one too high -- by exactly the omitted test.",
+      "mutations_that_survive": [
+        "n/a -- verified by measurement, not mutation: ./gradlew test then counting <testcase> elements across all eight modules' build/test-results gives 427 passing, 0 failing. The row claims 428. sequencer contributes 12 (6 + 6); with the deleted aWellFormedRequestKeepsEveryFieldItWasGiven it would have been 13, i.e. 428. The number appears to predate the deletion."
+      ],
+      "failure_scenario": "The row narrates the weak-test episode explicitly and in detail, which makes the omission of the DELETED test a partial account rather than a silent one -- a later reader auditing why the fake has the tests it has learns about the two that were strengthened and not about the one that was removed, which is the case with the live consequence (finding 3). And a stated count that nobody re-derives is the shape non-negotiable 4 exists to forbid: it is checkable in one command and it is off by one. testing.md rule 5's 'a removed test names its own removal' does not strictly bite here, since the test never existed in a commit -- which is precisely why the backlog row, and not the gate, is the only place it can be recorded.",
+      "suggested_fix": "Say 'a third, aWellFormedRequestKeepsEveryFieldItWasGiven, also passed against the skeleton and was deleted rather than strengthened', and correct 428 to 427."
+    }
+  ],
+  "acceptance_criteria_coverage": {
+    "podId blank/null refused": "covered, mutation-verified",
+    "podId containing '-' or '/' refused": "covered, mutation-verified (both halves independently)",
+    "negative flushSeq refused": "covered, boundary-verified",
+    "blank segmentKey refused": "covered",
+    "empty recordCounts refused": "covered",
+    "non-positive recordCounts refused": "covered, boundary-verified",
+    "recordCounts COPIED so a caller reusing its map cannot alter a commit already made": "covered against aliasing; see minor finding 4 on immutability",
+    "(podId, flushSeq) carried from the first commit for M5/M4.10": "shape pinned by compilation only; value fidelity untested -- minor finding 3",
+    "fake honours the same contract the interface states": "PARTIAL -- the multi-run commit, which is the seam's primary case, is untested; major finding 1",
+    "interface contract prose (durability, visibility, IOException retry, lost CAS race)": "not testable at this commit -- no implementation exists and the fake models none of it, correctly so"
+  },
+  "task": "M4.1",
+  "role": "test-reviewer"
+}

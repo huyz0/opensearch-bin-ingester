@@ -1,0 +1,8 @@
+{
+  "verdict": "pass",
+  "summary": "M0.46 (name the task, not just the ID, when reporting to a person) stages no code and no tests: one bullet in AGENTS.md section Never and one backlog row marked done. No test findings, and none invented. The single question asked -- is the 'no script can enforce this' claim honest for the scope actually staged -- resolves true. The rule as written governs what an agent says to a person in conversation. Agent conversational output is persisted nowhere in the tree: .harness/ holds gate logs, TDD red records and review verdicts only, and is gitignored; no transcript or session artifact exists; grep across scripts/ and .agents/ finds no transcript-capturing machinery. With no artifact to read, the rule cannot be stated as a predicate over files, so non-negotiable 9 rungs 1-5 cannot carry it and the unscriptable claim is not an excuse for skipping a feasible gate. The bullet also obeys itself, citing M0.37 with its name. Judged against the staged scope only, as instructed.",
+  "findings": [],
+  "diff_sha256": "bb0629dca7ed0d7ff4ba768aea78fc64a4b048c3d4c8cef694c682abbdc5d3a4",
+  "task": "M0.46",
+  "role": "test-reviewer"
+}

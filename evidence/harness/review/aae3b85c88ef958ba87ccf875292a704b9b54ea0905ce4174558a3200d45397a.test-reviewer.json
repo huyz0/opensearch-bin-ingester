@@ -1,0 +1,26 @@
+{
+  "diff_sha256": "aae3b85c88ef958ba87ccf875292a704b9b54ea0905ce4174558a3200d45397a",
+  "verdict": "pass",
+  "summary": "Round 6, tests. Both round-5 majors verified fixed BY MUTATION in my own tree. (1) CommitProtocolSimulation.java:376 addAll dropped while keeping the checkReader call -> aBrokenReaderViewREACHESTheSweepsVerdict FAILED; substituting ReaderView.of(reader) for viewFor.apply(reader) also FAILED, so the seam itself is pinned, not just present. (2) DEFAULT_SEEDS 1000->10 with ROUNDS 120->60 -> theInvariantsHoldAcrossEverySeed FAILED. The sweep also has real teeth on production, not only on its own plumbing: ChainReplay.java:456 lastOffset()+1 -> lastOffset() reddens it at 60 seeds in 3s with 'seed 0: I2 -- ... resumes at 1 but the chain had assigned up to 2', so criterion 'every violation names the seed' is measured, not asserted. Dropping the slot-0 CONTINUE emission (CommitProtocolSimulation.java:237) reddens ackFloorAlwaysZero. AckOrderTest.java:221 is a STRENGTHENING, not a weakening: contains(\"epoch 2\") -> contains(\"epoch 2 acked sequence 5\") with the two operands made distinct, which is the M4.13-notes deferral discharged. Two minors below, both measured, neither producing a wrong result today.",
+  "findings": [
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSimulation.java:95",
+      "severity": "minor",
+      "title": "lowestAckedSequenceIn's epoch filter is unconstrained -- the per-chain floor assertion degrades to a global min with no test noticing",
+      "failure_scenario": "ackFloorAlwaysZero is documented as 'every chain's ack trace is based at 0', and it is the only assertion that pins the slot-0 CONTINUE emission. The helper's filter is what makes it PER CHAIN. If it stops filtering, the assertion becomes 'SOME chain is based at 0', which any run with one clean chain satisfies. A future emission defect that pins only some chains -- e.g. emitting the CONTINUE on the first takeover but not on subsequent ones, which is the same shape as the original 'documented in three places, emitted nowhere' defect -- would then read green while 424-of-424-style residue sits in the trace.",
+      "mutation": "filter(e -> e.epoch() == epoch) -> filter(e -> true) at CommitProtocolSimulation.java:96. MEASURED: :sequencer:test --tests CommitProtocolSweepTest -Dsweep.seeds=200 BUILD SUCCESSFUL. Nothing else in the tree calls lowestAckedSequenceIn (grep: two hits, the definition and the one call site), so no other test constrains it.",
+      "suggestion": "One extra assertion that reads a floor from a chain the run did NOT base at 0, or drop the helper and inline a per-epoch min in the test where the loop already exists."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSweepTest.java:77",
+      "severity": "minor",
+      "title": "the asserted constant is DEFAULT_SEEDS, not the resolved SEEDS, and every anti-vacuity floor is SEEDS*k -- so -Dsweep.seeds=1 is a fully green sweep that proves one seed",
+      "failure_scenario": "All six floors are proportional to SEEDS, so they scale down with the knob and cannot notice it; the constant assertion reads the DEFAULT, deliberately, so it cannot either. MEASURED in my tree: -Dsweep.seeds=1 gives 'sweep: 1 seeds in 172 ms, 87 readers judged' and BUILD SUCCESSFUL -- a green run of M4's completion condition over 1/1000th of it, reported as success, with the archive row asserting 1,000. This commit's buildSrc forwarding is what makes the property reach the test JVM at all, so the reach is new here. Nothing in the tree sets it today (grep: only the test, the conventions file and the docs), which is why this is minor and not major -- one line in CI or gradle.properties makes it permanent and silent.",
+      "mutation": "No source mutation needed: set sweep.seeds=1 in gradle.properties or a CI step. The suite stays green and the sweep test still passes its own DEFAULT_SEEDS == 1000 assertion.",
+      "suggestion": "Either print-and-fail when SEEDS != DEFAULT_SEEDS unless an explicit bisect flag is also set, or make the floors absolute at the default and proportional only below it. M0.89 covers the FORWARDING guard, not this."
+    }
+  ],
+  "task": "M4.13",
+  "role": "test-reviewer",
+  "staged_tree": "71bf873652d02cbc2c61b80f474af12ab7543284"
+}

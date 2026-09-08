@@ -1,0 +1,127 @@
+=== TASK M0.5 ===
+| M0.5 | `scripts/check-module.sh` — compile, test, and assert the module's dependency surface | — | todo |
+
+=== STANDARDS THE REVIEWER MUST READ (selected from paths, not by the author) ===
+docs/internal/standards/git.md
+docs/internal/standards/sdd.md
+
+=== WHAT TO LOOK AT (selected from paths, not improvised per commit) ===
+
+### Lens: a gate that reports success while checking nothing
+This change touches enforcement. Every defect of this class found in this
+repository so far looked green: a deny-list that could never match its own input,
+two gates that printed FAIL and exited 0, a budget that summed a key the runtime
+does not read, a parser blinded by one char literal.
+- Construct the input each check must REJECT and confirm it rejects it.
+- Confirm the check is wired (a task nothing depends on is a preference).
+- Confirm it cannot pass vacuously: empty input set, absent report, missing file.
+- Check the exit status actually propagates.
+
+### Out of scope for this review
+- Anything the packet lists as already passed -- a script owns it.
+- Any path outside this repository. `../` and `.tmp/` are not ours.
+- Lenses not listed above: the change does not touch them.
+
+=== ROUNDS ===
+review.md rule 12: TWO rounds. Round one finds, round two verifies.
+If round two still carries a blocking finding, the commit is too big --
+the author splits it. Do not expect a round three.
+
+=== GATES THAT ALREADY PASSED (do not re-check these) ===
+  PASSED  check-dependency-licenses.sh
+  PASSED  check-file-size.sh
+  PASSED  check-gate-scope.sh
+  PASSED  check-harness-tests.sh
+  PASSED  check-license-headers.sh
+  PASSED  check-links.sh
+  PASSED  check-metric-cardinality.sh
+  PASSED  check-portability.sh
+  PASSED  check-tdd.sh
+  PASSED  check-terminology.sh
+  PASSED  check-test-budget.sh
+  PASSED  build-index.sh --check
+
+=== STAGED FILES BY STATUS ===
+  A    1
+
+=== STAGED DIFF (sha256 bfc11788fb2a8b7598d7220b24d0100351b7c5c968a2762519bbc88a0a61192d) ===
+diff --git a/scripts/check-module.sh b/scripts/check-module.sh
+new file mode 100755
+index 0000000..9f4ccc4
+--- /dev/null
++++ b/scripts/check-module.sh
+@@ -0,0 +1,74 @@
++#!/usr/bin/env bash
++# SPDX-License-Identifier: Apache-2.0
++# code-structure.md + architecture.md: one module compiles, tests, and stays
++# inside its declared dependency surface.
++#
++#   scripts/check-module.sh            every module
++#   scripts/check-module.sh format     one module
++#
++# The dependency-surface half is the part no other gate can see.
++# architecture.md rule 5 says "no module below `http` may reference HTTP,
++# asserted by a gate once the build exists" -- this is that gate. A Helidon type
++# leaking into `ingest` compiles perfectly and passes every test; it is only
++# wrong against ADR-0019, which says the in-process API and the HTTP endpoint
++# are two front doors over one implementation.
++source "$(dirname "$0")/lib.sh"
++cd "$ROOT"
++hdr "check-module"
++
++[ -x ./gradlew ] || { fail "no ./gradlew -- the build lands in M0.4"; finish; }
++
++ALL="binstore-spi binstore-backends format sequencer ingest http client plugin"
++if [ $# -gt 0 ]; then
++  MODULES="$*"
++elif [ "$GATE_SCOPE" = "full" ]; then
++  MODULES="$ALL"
++else
++  # Only the modules this change touches. A module nothing touched cannot have
++  # broken its own dependency surface.
++  MODULES=$(changed_files | sed -n 's|^\([a-z-]*\)/.*|\1|p' | sort -u \
++            | while read -r m; do case " $ALL " in *" $m "*) echo "$m" ;; esac; done)
++  [ -n "$MODULES" ] || { ok "no module changed$(scope_note)"; finish; }
++fi
++
++# Groups that mean "this module can speak HTTP". `http` is the only module
++# allowed to resolve them; `plugin` is separately forbidden the cloud SDKs.
++HTTP_GROUPS='io\.helidon|org\.eclipse\.jetty|io\.netty|jakarta\.servlet|org\.apache\.httpcomponents|com\.squareup\.okhttp3'
++CLOUD_GROUPS='software\.amazon\.awssdk|com\.google\.cloud|com\.azure'
++
++for m in $MODULES; do
++  case " $ALL " in *" $m "*) ;; *) fail "unknown module: $m"; continue ;; esac
++
++  mkdir -p .harness
++  if ! ./gradlew ":$m:build" --console=plain -q > ".harness/check-module-$m.log" 2>&1; then
++    fail "$m: build failed -- see .harness/check-module-$m.log"
++    tail -15 ".harness/check-module-$m.log" | sed 's/^/           /'
++    continue
++  fi
++
++  deps=$(./gradlew ":$m:dependencies" --configuration runtimeClasspath --console=plain -q 2>/dev/null)
++
++  if [ "$m" != "http" ]; then
++    hits=$(printf '%s\n' "$deps" | grep -oE "($HTTP_GROUPS):[a-z0-9.-]+" | sort -u || true)
++    if [ -n "$hits" ]; then
++      fail "$m resolves an HTTP dependency (architecture.md rule 5, ADR-0019):"
++      printf '%s\n' "$hits" | sed 's/^/           /'
++      echo "         Two front doors, one implementation. If this module needs HTTP,"
++      echo "         the decision it is making belongs in \`ingest\` and the adapter"
++      echo "         belongs in \`http\`."
++    fi
++  fi
++
++  if [ "$m" = "plugin" ] || [ "$m" = "client" ]; then
++    hits=$(printf '%s\n' "$deps" | grep -oE "($CLOUD_GROUPS):[a-z0-9.-]+" | sort -u || true)
++    if [ -n "$hits" ]; then
++      fail "$m resolves a cloud SDK (architecture.md rule 2):"
++      printf '%s\n' "$hits" | sed 's/^/           /'
++      echo "         This code runs inside someone else's JVM. Its dependency surface"
++      echo "         is a liability, not a convenience."
++    fi
++  fi
++done
++
++[ "$FAILED" -eq 0 ] && ok "$(echo $MODULES | wc -w) module(s) build, test, and stay inside their dependency surface"
++finish

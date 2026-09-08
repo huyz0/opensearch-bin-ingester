@@ -1,0 +1,48 @@
+{
+  "diff_sha256": "283b5e7846c09a1532ab2dca2f04d4785d32f6b9d2d77e09b2025fef3f3bb1df",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "W33",
+      "severity": "minor",
+      "file": "scripts/check-harness-tests.sh:47",
+      "summary": "the new printTestInputs guard redirects stderr into .harness/ without creating it; .harness/ is gitignored, so on a fresh checkout the redirect itself fails and the gate reports a Gradle failure that never happened",
+      "failure_scenario": "Fresh clone, GATE_SCOPE=full -- the exact CI invocation the AGENTS.md row this commit adds prescribes. Reproduced against a stub tree containing only scripts/ and an executable gradlew: 'line 47: .harness/print-inputs.err: No such file or directory', then 'FAIL printTestInputs failed -- cannot confirm the suite reruns on the changes it guards', then 'head: cannot open .harness/print-inputs.err', exit 1 -- all before ./gradlew is consulted. An operator debugs printTestInputs and finds nothing wrong with it. Nothing earlier in .pre-commit-config.yaml creates .harness (check-portability, check-gate-scope do not; check-module does, at line 305, but runs after). The failure class is pre-existing -- the old '> .harness/harness-tests.log' had it too -- but this commit moves the first .harness write earlier and attaches a message that names the wrong cause. Fix is one line: mkdir -p .harness above line 47."
+    },
+    {
+      "id": "W34",
+      "severity": "minor",
+      "file": "scripts/check-module.sh:63",
+      "summary": "check_drift conflates 'candidate list is empty' with 'candidate list not supplied', so the fixture doors silently change subject to the real repository",
+      "failure_scenario": "[ -n \"$candidates\" ] || candidates=$(workspace_files ...) fires whenever the caller passed an EMPTY list, which is exactly what lines 129 and 175 produce for a fixture root holding no depth-1 build.gradle.kts. Verified: scripts/check-module.sh --check-drift <root whose settings lists 'alpha' and which has no build files> prints one true FAIL for alpha followed by eight false ones -- 'binstore-backends has a build.gradle.kts but is not in settings', 'format ...', 'plugin ...' -- naming THIS repository's modules against the fixture's settings. It cannot pass vacuously today, because an empty candidate list implies every settings entry also lacks a build file and the first half of check_drift always fails first; that is why this is minor. But the comment at line 55 ('--check-drift scans the fixture root and says so') is untrue in that case, and the next drift fixture written to exercise the orphan direction inherits a check pointed at a different tree -- the class check-gate-scope.sh exists to prevent, and invisible to it because the reach happens through workspace_files rather than a glob. A sentinel argument separates 'empty' from 'unset'."
+    },
+    {
+      "id": "W35",
+      "severity": "minor",
+      "file": "scripts/check-harness-tests.sh:68",
+      "summary": "the input guard hardcodes three absolute sentinel paths, two of which stand in for a glob, so a rename fails the guard with a statement that is false and a mutation of the glob survives it",
+      "failure_scenario": "buildSrc/build.gradle.kts declares fileTree(scripts){include(\"*.py\",\"*.sh\")}. Rename or delete scripts/check-module.sh -- M0.20 and M0.23 both land in this area -- and the guard prints 'buildSrc's test task does not declare /.../scripts/check-module.sh as an input -- the suite would go UP-TO-DATE across the change it guards'. The second clause is false: the declaration is intact and the suite still reruns on every other script. The operator is sent to build.gradle.kts where nothing is wrong. It also does not constrain what it claims: narrowing the include to (\"*.py\",\"check-module.sh\",\"java_tests.py\") leaves every other .sh undeclared and the guard green -- the same 'constrained a copy' shape the file's own comment says it was written to escape. The derived form (every scripts/*.sh and scripts/*.py on disk must appear as a whole line in the printTestInputs output) is gate-design rung 2 against a source of truth rather than rung 3 with three magic constants, and is no more code than the loop that is there."
+    },
+    {
+      "id": "W36",
+      "severity": "minor",
+      "file": "AGENTS.md:217",
+      "summary": "M0.6 names two deliverables -- .pre-commit-config.yaml and CI -- and only the first is delivered, while the CI-capability row added here states the second in the present tense and the M0.6 backlog row records no deferral",
+      "failure_scenario": ".github/ does not exist in this repository and M0.7, the task that creates the workflow, is still todo; yet the new row reads 'CI sets GATE_SCOPE=full to build all eight' inside the table whose own header calls itself 'the honest answer to what actually runs'. The requirement was written into M0.7's row instead, and the M0.6 row is left byte-identical, so nothing in the backlog records that half of M0.6 was deferred. A future session reading AGENTS.md concludes check-module is enforced on push, does not look for the workflow, and lands a rule-5 violation on a branch believing CI covered it. Rated minor only because neighbouring pre-existing rows make the same present-tense claim about a CI that does not exist ('CI runs SKIP=check-reviewed'); the M0.6 row is the one place the deferral belongs and it is silent."
+    },
+    {
+      "id": "W37",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:23",
+      "summary": "the diff is dominated by work that belongs to M0.5, which already landed as cc8ceb2 and whose backlog row this diff leaves reading 'todo' in the same table it edits",
+      "failure_scenario": "M0.6 reads 'wire check-module.sh into .pre-commit-config.yaml and CI'. The wiring is 13 lines of YAML and two AGENTS.md rows. The rest -- 246 added lines in check-module.sh introducing five CLI doors, a plan() composition and a NEW enforcement behaviour (a tracked top-level build.gradle.kts absent from settings now blocks every commit), 763 lines of new test, 10 fixtures, a new Gradle task and a rewritten input guard -- is 'assert the module's dependency surface', which is M0.5 verbatim. git.md rule 8. The consequence review.md rule 12 predicts is already visible in the artefact: two rounds is the cap, this is round ten, and the standard's own remedy for that state ('a blocking finding in round two does not buy a round three -- it means the commit is too big; split it') was never applied. Not blocking, because most of the added logic closes demonstrable false greens in a script this commit is about to put on every developer's git commit, and because the backlog row for M0.5 was already stale before this diff -- but the split is what should have happened around round three, and M0.20 exists in this same diff precisely to catch rows like M0.5's."
+    },
+    {
+      "id": "W38",
+      "severity": "minor",
+      "file": "docs/internal/standards/build.md:105",
+      "summary": "the gate now on every commit makes one gradlew client JVM per module per configuration -- 24 invocations at shared-build escalation -- and the diff edits build.md to declare the cold case unmeasured against the 90 s L0 budget rather than to measure it",
+      "failure_scenario": "The escalation set includes buildSrc/*, gradle/*, settings.gradle.kts, build.gradle.kts and gradle.properties. Any commit touching those -- including this one -- selects all eight modules, and the loop spends ':m:build' plus ':m:dependencies --configuration runtimeClasspath' plus ':m:dependencies --configuration compileClasspath' per module: 24 separate ./gradlew invocations, 24 client JVMs and daemon round trips, where ':build' for all eight is one invocation. build.md's new prose reports 11 s and 15 s warm on two machines and then says the cold-daemon case after a WSL2 session kill 'has not been measured -- treat the budget as unverified'. So the change puts an unmeasured worst case on the blocking L0 path, which is the condition build.md itself names as how a gate stops being run. Honest documentation is better than a silent number, and it is under budget warm, so this is minor -- but 'unverified' on the blocking layer is a measurement owed, not a note, and collapsing the per-module ':build' calls into one is the obvious first cut."
+    }
+  ]
+}

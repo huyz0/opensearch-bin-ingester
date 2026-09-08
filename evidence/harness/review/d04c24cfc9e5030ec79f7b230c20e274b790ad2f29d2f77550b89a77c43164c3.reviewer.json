@@ -1,0 +1,29 @@
+{
+  "diff_sha256": "d04c24cfc9e5030ec79f7b230c20e274b790ad2f29d2f77550b89a77c43164c3",
+  "verdict": "pass",
+  "findings": [
+    {
+      "file": "format/src/main/java/binjava/format/FilterCandidates.java",
+      "line": 28,
+      "severity": "minor",
+      "summary": "The Bloom sizing constants (4.79 bits/item, k=3) are re-declared here, duplicating the identical private constants already in BloomConstructionTest (M2.5) with no shared source of truth.",
+      "failure_scenario": "A future revision of the FPR target updates one file's constant and misses the other -- FilterCandidates keeps sizing Bloom filters to the old target while the property test keeps passing against the new one, silently drifting apart."
+    },
+    {
+      "file": "format/src/main/java/binjava/format/SegmentKey.java",
+      "line": 93,
+      "severity": "minor",
+      "summary": "The canonical constructor only catches IOException from MembershipFilter.decode() to produce a friendly IllegalArgumentException; RunLength.decode can throw an unchecked IndexOutOfBoundsException on a pathological uvarint run causing int overflow in BitSet.set(from, to), which would propagate uncaught.",
+      "failure_scenario": "new SegmentKey(..., \"R\" + base64url(bytes encoding two uvarint runs near Integer.MAX_VALUE)) overflows pos+run to negative inside RunLength.decode, throwing IndexOutOfBoundsException instead of the intended IllegalArgumentException. Unreachable via any call site this diff adds (SegmentPublisher always passes a freshly-encoded, trusted filter string), but becomes reachable once M2.7 constructs SegmentKey from a previously-persisted, untrusted key string."
+    },
+    {
+      "file": "plugin/src/clusterTest/java/binjava/plugin/SearchableIT.java",
+      "line": 190,
+      "severity": "minor",
+      "summary": "The backlog's 'verified against a real OpenSearch node' claim is substantiated by OffsetMonotonicityIT/RestartResumeIT/DeleteAndVersionIT (which do use the real DefaultIngest->SegmentPublisher path), not by SearchableIT, which builds its SegmentKey via the legacy 5-arg constructor and never exercises chooseFilter/FilterCandidates/registeredCount.",
+      "failure_scenario": "A regression in SegmentPublisher.chooseFilter that only manifests against a running node would not be caught by SearchableIT, since that test never constructs a key through the changed code path."
+    }
+  ],
+  "task": "M2.6",
+  "role": "reviewer"
+}

@@ -1,0 +1,23 @@
+{
+  "diff_sha256": "dc2475dbd4127da3902f91720cc4ec3539625c471062e8282e5b27d83c7f1caa",
+  "verdict": "pass",
+  "task": "M4.8a",
+  "role": "reviewer",
+  "findings": [
+    {
+      "id": "M4.8a-r2-1",
+      "severity": "minor",
+      "file": "format/src/main/java/binjava/format/Checkpoint.java:181-182",
+      "summary": "The F3 fix narrowed its scope to the pod length and left the identical narrowing on the field one line earlier. `new RunKey(..., (int) c.uvarint())` still truncates a 64-bit wire value with no bound, and it is the field that says WHICH stream the offsets belong to. Measured in the review tree against the staged bytes: a hand-built checkpoint carrying partitionId `0x1_0000_0004` (a five-byte uvarint) decodes as `RunKey[indexId=11112222-3333-4444-0000-000000000001, partitionId=4]` with `nextOffset=90, oldestRetainedOffset=10` and is returned as a VALID Checkpoint -- no exception, no diagnostic. Only values that narrow to a NEGATIVE int (e.g. 0x80000000) are refused, and those are refused by RunKey rather than by the decoder. The new comment at line 200-203 -- 'THE LENGTH IS 64-BIT ON THE WIRE and this cast is where it stops being' -- reads as if the codec no longer narrows a wire value; it still does, on the field where a silent misread is worst. The pod-length guard added at 205-208 is the correct shape and could be applied verbatim here (`long partitionId = c.uvarint(); if (partitionId < 0 || partitionId > Integer.MAX_VALUE) throw new IOException(...)`).",
+      "failure_scenario": "M4.9 reads the newest checkpoint. A torn or foreign object whose partitionId varint carries an extra continuation byte -- the exact bit pattern F3 was raised about -- is accepted rather than refused, and the offsets of one stream are attributed to a real, different stream (index X, partition 4). Recovery then resumes that partition from another partition's nextOffset: records are skipped or replayed, with no checksum in the format and no IOException for `CommitLog.recover`/`ChainReplay.read`'s `catch (IOException)` to see. Same class and same consequence as F3, one field earlier."
+    },
+    {
+      "id": "M4.8a-r2-2",
+      "severity": "minor",
+      "file": "format/src/main/java/binjava/format/Checkpoint.java:80-83,194-197,205-212",
+      "summary": "Three of the four production guards the round-1 fixes ADDED are unconstrained, plus one that pre-dated them. Each mutation was applied to the staged Checkpoint.java in an isolated tree and `./gradlew :format:test --rerun-tasks` run to completion; all four BUILD SUCCESSFUL. (1) Delete the streams entry null-check loop (80-83, the F2 fix) -- green; no test hands a null key or value in `streams`. (2) Delete the podCount bound (194-197) -- green. (3) Delete the podLen bound (205-208, the F3 fix) -- green; `Cursor.bytes` still refuses the huge case, so nothing observes the guard. (4) Replace `if (pods.put(pod, c.uvarint()) != null) throw` with a plain `pods.put(...)` (210-212, the pod half of the F2 fix) -- green. For contrast the same procedure KILLS the F1 fix (removing the IllegalArgumentException wrap), the magic check, both delete-the-sort mutations, an indexId-only comparator, `Map.copyOf` for the LinkedHashMap copy, and the consistent nextOffset/oldestRetainedOffset swap -- so the harness is capable, these four are simply unasserted. Two comments overstate what is pinned: `aREPEATEDStreamOrPodIsRefusedRatherThanLastWinning` (CheckpointTest.java:275) names both and exercises only the stream half, and `aCOUNTThatCannotFitInTheRemainingBytesIsRefusedBeforeAnyLoop` says 'Both counts are bounded; both bounds were unconstrained' (CheckpointTest.java:218-219) while asserting only on 'streams but only', twice.",
+      "failure_scenario": "This is round-1 finding M4.8a-tr-2 ('decode guard branches added by this commit are unconstrained') reproduced by the fixes for M4.8a-r1-2 and -r1-3, on the pod side of the same decoder. A later refactor -- M4.8b adding a v1 field, or collapsing the two decode loops -- drops the pod-length bound or the pod duplicate refusal and the whole suite stays green. A checkpoint that repeats a podId then decodes last-wins to a LOWER lastAppliedFlushSeq, and M4.8b/M7 re-apply flushes already applied; a pod length of 0x1_0000_0004 again narrows to 4 and the object is misread as valid. testing.md rule 9's 80%-killed floor is not met on the code this round changed (4 survivors of 11 measured mutations); `check-mutants.sh` does not exist, so nothing but this review sees it."
+    }
+  ],
+  "staged_tree": "cc962e915578f4569ecc53f78e1e54ba13c2aa91"
+}

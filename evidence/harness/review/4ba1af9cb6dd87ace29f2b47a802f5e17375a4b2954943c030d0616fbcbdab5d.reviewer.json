@@ -1,0 +1,52 @@
+{
+  "diff_sha256": "4ba1af9cb6dd87ace29f2b47a802f5e17375a4b2954943c030d0616fbcbdab5d",
+  "verdict": "changes-requested",
+  "summary": "The seal-at-0 arm is correct and the extraction is faithful. The EMPTY-chain arm is not: the checker's neverOpened treats an empty own chain as never-opened unconditionally, production's ChainReplay.neverOpened deliberately does not (first == null returns !atOrigin), so checkReader now reports a spurious I4 against production's own recovered reader. MEASURED. Separately, Invariants' class javadoc -- the invariant list this family exists to keep honest -- still records I3/I4 as NOT-JUDGED on a never-opened chain and names M4.13i as the open fix.",
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "blocking",
+      "file": "sequencer/src/test/java/binjava/sequencer/ReaderInvariants.java:131-146",
+      "title": "The empty-chain arm reports a false I4 against production's own reader, because the checker's `neverOpened` and `ChainReplay.neverOpened` disagree exactly at the reader's own epoch",
+      "failure_scenario": "MEASURED in a copy of the staged tree. Fixture: epoch 1 = Continue(0,0,0), delta(3 records), Seal(2, continuedAt=2); epoch 2's chain completely empty. Then `CommitLog reader = new CommitLog(store, PREFIX, 2); reader.recover();` yields `reader.offsets() == {}` -- and `ReaderInvariants.checkReader(store, PREFIX, ReaderView.of(reader))` now returns `[Violation[I4, \"reader applied stream RunKey[...aa, 0] up to 0, dropping records the chain committed up to 3\"]]`. Same result for the diff's own epoch-9 fixture (epoch 1 committed, epochs 2-8 nonexistent): production's reader at 9 holds {} and checkReader returns that same I4. Nothing was dropped: production is behaving as designed. `ChainReplay.neverOpened(ChainEntry first, boolean atOrigin)` returns `!atOrigin` when `first == null`, so an empty chain AT THE START of the walk is deliberately not walked past (ChainReplay.java:292-296, and its javadoc plus `firstInheritableAncestor`'s call it M4.23's gap). `Invariants.neverOpened(List)` returns true for an empty list unconditionally (Invariants.java:383-388). Until this commit that divergence was harmless because the checker's predicate was only ever applied to a PREDECESSOR chain; this commit applies it to the reader's OWN chain and then walks. The shape is not exotic -- ChainReplay.java:122-128 records that `LocalSequencer.start` calls `recover()` BEFORE `open()`, so an empty own chain with offsets {} is the normal state at that point, and a leader that dies before its opening PUT lands (ChainReplay.java:184-187: \"reachable through THIS commit's own error path -- `start` releases the lease when the opening PUT fails\") leaves it permanently. M4.13's 1,000-seed sweep injects exactly that fault, so it will report I4 on correct behaviour -- the outcome ReaderInvariants' own javadoc names as fatal: \"A checker that cries I3 at correct behaviour gets silenced, and silencing it is how I3 goes back to unchecked with the invariant list still claiming otherwise.\" The seal-at-0 arm does NOT have this problem: measured, production's reader at epoch 4 over three abandoned seals derives {RA=3} and checkReader returns []. The test for the empty arm (ReaderInvariantsScopeTest.java:41-56) hides the disagreement by hand-feeding `new ReaderView(9, Map.of(RA, 3L))`, while the sibling seal-at-0 test uses `ReaderView.of(reader)` -- and the version this diff replaced asserted production agreement explicitly (\"production DOES derive the base -- so the checker's decline is a gap, not a law\"). Either the empty arm keeps declining (and the row closes only the seal-at-0 arm, saying so), or the checker adopts production's `atOrigin` rule for its own epoch, or the disagreement is reported as the production defect M4.23 rather than as I4 against the reader. Whichever, the empty arm must be pinned with `ReaderView.of(reader)`, not a hand-made map."
+    },
+    {
+      "id": "F2",
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/Invariants.java:76-90",
+      "title": "The invariant list still records I3/I4 as NOT-JUDGED on a never-opened chain and names M4.13i as the open fix",
+      "failure_scenario": "The class javadoc of `Invariants` is the register of what is and is not checked -- the artifact the whole M4.13x family exists to keep honest, and the one every note in this diff cites as \"the invariant list still claiming otherwise\". It is untouched by this diff and still says, for I3: \"\u26a0\ufe0f EXCEPT ON A CHAIN THAT WAS NEVER OPENED -- no objects at all, or a SEAL at slot 0 -- where that checker returns NOT-JUDGED rather than a verdict, and this list says so instead of reading CHECKED without qualification ... **M4.13i** closes it\", and for I4: \"\u26a0\ufe0f AND IT CARRIES I3'S NEVER-OPENED EXCEPTION TOO (**M4.13i**), because {@code checkReader} declines before evaluating either invariant.\" After this commit `checkReader` never declines and no `Verdict`/NOT-JUDGED exists, while the same commit marks M4.13i `done` in backlog-done.md. The next agent to pick up M4.13 (the sweep, still `todo`) reads this list, believes never-opened seeds are unexamined, and either skips them or writes `if (v.judged())` against a type that no longer compiles -- or re-opens a row already closed. Every other piece of prose about this hole was rewritten in this diff (ReaderInvariants' javadoc, three test javadocs, backlog.md, backlog-notes.md); this is the one that outranks them and it was missed."
+    },
+    {
+      "id": "F3",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/Invariants.java:274-276",
+      "title": "`offsetsSealedInto`'s `depth > 1000` guard is dead by construction",
+      "failure_scenario": "MEASURED: deleting the guard leaves the whole `:sequencer` suite green (364 tests). It is not a test gap, it is unreachable-as-true: the only two callers are `inheritedOffsets`, which already returned at Invariants.java:203-205 when `depth > 1000` and then passes the SAME depth (line 247), and `checkReader`, which passes literal 0. It reads as if the new entry point were depth-capped; it is not, it inherits a cap a caller already applied. Given M4.13l files this exact cap as a defect (silent truncation, and MEASURED WRONG at 1,002 legitimate terms in production's `ChainReplay`), duplicating it in a form that can never fire adds a second copy of a rule the tree already wants removed."
+    },
+    {
+      "id": "F4",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/ReaderInvariants.java:153-156",
+      "title": "The \"\u26a0\ufe0f DISCARDED\" comment is now orphaned from the calls it explains",
+      "failure_scenario": "It explains why `new ArrayList<>()` is passed as `found`, but the calls that pass it moved up to lines 145-149 and the comment stayed put, now sitting immediately above `for (ChainEntry e : entries)`. A reader arriving at the fold loop takes the comment to be about the fold, and the reason the `inheritedOffsets`/`offsetsSealedInto` violations are thrown away -- that `checkChain` already raises them, so a caller running both would double-count -- is attached to the wrong statement."
+    },
+    {
+      "id": "F5",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/ReaderInvariantsScopeTest.java:19-28",
+      "title": "The scope test's class javadoc still describes a distinction the file no longer contains",
+      "failure_scenario": "Line 19 still reads \"What {@link ReaderInvariants#checkReader} will and will NOT judge (M4.13a)\", and the paragraph below still justifies the split by \"an unexamined chain that returns an empty violation list is silent, and a sweep counting it as a seed that passed is how I3 and I4 go back to NOT-RUN with the invariant list still claiming CHECKED\". After this commit there is no unexamined chain and no empty-list-means-unexamined case, so the file's stated reason for existing no longer matches any test in it, and the next person to touch it cannot tell which of the two the file is now for."
+    },
+    {
+      "id": "F6",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/AckOrderInvariants.java:7,10,53",
+      "title": "Unrelated cleanup in a file M4.13i does not touch",
+      "failure_scenario": "Two unused imports (`HashSet`, `Set` -- unused at HEAD too, since the body uses fully-qualified `java.util.Set`/`java.util.HashSet`) removed and `public static AckEvent acked` narrowed to package-private. None of it is M4.13i, none of it is mentioned in the row, and it belongs to M4.13g's move. Harmless in itself, but it makes the commit's diff no longer answer \"one task, one change\": a later bisect or blame on `acked`'s visibility lands on a row about never-opened chains."
+    }
+  ],
+  "task": "M4.13i",
+  "role": "reviewer",
+  "staged_tree": "c73d87734bd102dad7aae46585f07aea0bcc0707"
+}

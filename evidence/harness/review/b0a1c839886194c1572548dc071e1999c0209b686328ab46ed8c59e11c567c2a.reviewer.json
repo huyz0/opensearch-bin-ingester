@@ -1,0 +1,23 @@
+{
+  "diff_sha256": "b0a1c839886194c1572548dc071e1999c0209b686328ab46ed8c59e11c567c2a",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "M4.43-R3a",
+      "file": "docs/internal/product/backlog-done.md:105",
+      "severity": "minor",
+      "summary": "The done-row still says the M4.42 error is 'a false claim corrected in one copy while its duplicate stood' -- singular -- in the same commit that corrects the M4.42 summary to TWO duplicates. The R2a fix moved two clauses of this row and left a third counting the superseded number.",
+      "failure_scenario": "backlog-done.md is the permanent copy and M4.42 is `todo`, so once M4.42 is fixed its row is rewritten and the M4.43 done-row is the surviving narrative of what was filed. It will say one duplicate stood where two did -- and it will say it inside the row whose own thesis is 'named rather than counted, because M4.38 records counting as the thing that goes stale'. The count that went stale a third time is in the sentence describing the error of one-copy-fixed-duplicate-missed. Harm is bounded because the actionable copy (backlog.md M4.42 + its notes) is now correct and is where a fix session goes; nothing points a session at a wrong location. One word: `its duplicates stood`."
+    },
+    {
+      "id": "M4.43-R3b",
+      "file": "docs/internal/product/backlog-done.md:105",
+      "severity": "minor",
+      "summary": "The R2a replacement names M4.41 and M4.44 as 'two instances of one error', and defines that error as 'a number read from ONE run and reported as a measurement'. M4.44's own notes say the opposite of 'read from one run': 'the third distinct comment in this milestone stating a measurement nobody ran'.",
+      "failure_scenario": "The count that went stale was replaced by a description, so the description now carries the row's whole accounting. For M4.44 it is the wrong description: the twenty-second-deadline claim in `tickAndAwaitProcessed`'s drainPermits justification was never measured at all (both roles measured ~5s), it was not under-sampled. The gloss attached to the error -- '(the 2x mutant is bimodal at 3/4 and kills only ~40% of the time)' -- is purely M4.41's, so a reader of the permanent record gets no signal about what M4.44 is. The class both actually share is the one M4.44's notes name: a claim stated without being run. A future session reading the done-row to decide whether M4.44 is a duplicate of M4.41 would conclude it is."
+    }
+  ],
+  "task": "M4.43",
+  "role": "reviewer",
+  "staged_tree": "b7992942bee2d5f90eea9065dc678648b7236833"
+}

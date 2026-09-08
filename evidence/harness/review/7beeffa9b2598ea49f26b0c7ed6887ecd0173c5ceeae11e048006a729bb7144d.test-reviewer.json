@@ -1,0 +1,20 @@
+{
+  "diff_sha256": "7beeffa9b2598ea49f26b0c7ed6887ecd0173c5ceeae11e048006a729bb7144d",
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitLogSealTest.java:169",
+      "title": "`lists() == 1` is the same observation as 'the fixture never had a second page', so the guard on major 1 disarms silently if SmallPageStore stops clamping",
+      "failure_scenario": "The new pagination test's discriminating assertion, `counting.counts().lists() == 1`, is satisfied by two different worlds: recovery correctly stopped after page one of two, and there was only ever one page. Nothing in the test asserts the fixture actually paginates. Measured: change `SmallPageStore.list`'s `Math.min(m, pageSize)` to `m` -- one token, in a brand-new test-only decorator that has no test of its own -- and (a) all 98 tests stay green, and (b) the round-1 `return` -> `break` mutation this whole test exists to catch SURVIVES all 98 again. Both halves run. The same happens if the page size is ever raised from 2 to 3, since the fixture is 3 objects. The missing piece is a control varying exactly one conjunct: the identical 3-object fixture with the seal replaced by an ordinary delta, asserting `lists() == 2`. Measured on a probe: 2 lists with the clamp intact, 1 without -- so that control fails loudly the moment the decorator stops working, which is what would make `lists() == 1` mean something. Three objects, no runtime cost. Recorded rather than fixed here: the guard does hold at this hash and a third round spent on a control test is the spiral rule 11 warns about."
+    },
+    {
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitLogSealTest.java:116",
+      "title": "The seal-at-sequence-0 test does not pin WHICH guard refused -- the same defect just fixed next door in test 1",
+      "failure_scenario": "Round 1's minor 4 was that `commit`'s two refusals emit a byte-identical message, so a test asserting only the message cannot tell the new recovered-seal guard from the pre-existing lost-race guard. Test 1 was fixed by pinning `nextSequence() == 2` after `recover()`. The new seal-at-0 test was not given the equivalent. Measured: under the mutation that stops at the seal WITHOUT remembering or applying it, three tests fail and `aSealAtSequenceZeroFencesTheChainExactlyAsOneAtAnyOtherSlot` is NOT among them -- because `nextSequence` stays 0, `commit` races slot 0, loses to the seal, and throws 'sealed at seq 0' from the old branch. The test passes while never having recovered past a seal, which is what its name claims. Not a live hole (the mutation dies on three other tests, and the mutation the test was written for, `if (seal.sequence() > 0)`, does die here -- verified). One line closes it: `assertThat(fenced.nextSequence()).isEqualTo(1)` before the commit, mirroring test 1."
+    }
+  ],
+  "task": "M4.6a",
+  "role": "test-reviewer"
+}

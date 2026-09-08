@@ -1,0 +1,40 @@
+{
+  "diff_sha256": "5e92482fbb493c03fa6ad3e7068072c716d7a937dc8dd26b40916d6172f5d9e2",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "TR4-1",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java:143,161,200,225,248",
+      "summary": "testing.md rule 17 says scratch goes under build/tmp, never the system temp directory. Five new @TempDir sites resolve to java.io.tmpdir. Deferred by agreement in r3 alongside ModuleGateTest's 13 existing sites; recorded here so the deferral is written down against this diff rather than only in a conversation.",
+      "failure_scenario": "Not a false green: no mutation survives because of it. The cost is a suite that is not self-contained -- on a machine with a restrictive or full /tmp all five tests fail at the tar step with a message about the fixture, not about the environment, and the failure is read as a gate regression. Measured: the tracked tree is 1.5M, so five fixtures cost ~7.5M -- the rule violation is real, the disk pressure is not. Belongs in one repo-wide task with the 13 ModuleGateTest sites, not here."
+    },
+    {
+      "id": "TR3-5",
+      "severity": "minor",
+      "file": "buildSrc/build.gradle.kts:46-52",
+      "summary": "Carried forward unchanged from r3 and not blocking. The rootGitignore input declaration is production configuration this commit's freshness claim rests on, and no test constrains it. VERIFIED THIS ROUND that the declaration itself is correct: back-to-back runs give ':test UP-TO-DATE', appending a line to .gitignore gives ':test' executed. So the code is right; nothing stops it being deleted.",
+      "failure_scenario": "Delete the three inputs.file(rootGitignore) lines. All 66 harness tests stay green. The regression surfaces only later, as gateScopeRefusesWhenTmpIsNotIgnored / gateScopeRefusesAPatternThatDoesNotCoverAReferenceClone silently not running on the exact edit they exist to catch -- a gate printing ok having executed nothing. Already scoped to M0.24 (printTestInputs); a second member for that task, not new work here."
+    }
+  ],
+  "mutations_verified": [
+    {"mutation": "case anchor widened from '.gitignore:*)' to '.gitignore:*|*ignore:*)'", "result": "KILLED by gateScopeIgnoresTheDevelopersPersonalIgnoreFile", "note": "TR3-1 closed; the split is what buys this -- the info/exclude plant no longer shadows the personal-ignore case"},
+    {"mutation": "'${_tmp_rule%%<TAB>*}' replaced by the literal 'a personal ignore file'", "result": "KILLED by gateScopeRefusesWhenTmpIsNotIgnored", "note": "TR3-2 closed; the source is asserted, not the label"},
+    {"mutation": "probe path reverted to '.tmp/probe'", "result": "KILLED by gateScopeRefusesAPatternThatDoesNotCoverAReferenceClone", "note": "R8 closed; narrowing .gitignore to 'probe' is refused"},
+    {"mutation": "probe path reverted to bare '.tmp' (the original M0.29 bug)", "result": "KILLED by gateScopeDoesNotAccuseAFreshCheckoutOfNotIgnoringTmp and gateScopeRefusesWhenTmpIsNotIgnored"},
+    {"mutation": "the whole .tmp/ quarantine block deleted", "result": "KILLED by all three refusal tests"},
+    {"mutation": "'mkdir -p .harness' deleted (the original M0.29 bug)", "result": "KILLED by harnessTestsCreatesItsLogDirectoryBeforeRedirecting"},
+    {"mutation": "mkdir kept, log truncated with ': >', Gradle redirected to /dev/null", "result": "KILLED by harnessTestsCreatesItsLogDirectoryBeforeRedirecting", "note": "TR3-4 closed; the content assertion is what kills it"},
+    {"mutation": "'2>&1' dropped from the log redirect", "result": "KILLED by harnessTestsCreatesItsLogDirectoryBeforeRedirecting", "note": "the stub writing to stderr pins the stream merge"}
+  ],
+  "notes": [
+    "Full harness suite: 66 tests, 0 failures, 2.89s. FreshCheckoutTest is 5 tests in 0.97s.",
+    "Each of the four previously-open mutations is now killed by exactly ONE test, and each refusal test kills a mutation no sibling kills -- none of the four is redundant.",
+    "Each refusal test was confirmed to fail for the RIGHT reason, not incidentally: the '*ignore:*' widening makes gateScopeIgnoresTheDevelopersPersonalIgnoreFile pass, proving its match source really is the personal ignore file; reverting the probe to .tmp/probe makes gateScopeRefusesAPatternThatDoesNotCoverAReferenceClone pass, proving it refuses on the unmatched payload path and not on some unrelated gate failure.",
+    "run()'s javadoc claim is now true: scrub(pb, home) sets HOME and XDG_CONFIG_HOME at all three call sites (run, trackedIn, gate). TR3-3 closed.",
+    "No existing assertion was weakened: the diff touches one test file and it is new (A), plus backlog.md, build.gradle.kts and the two scripts.",
+    "Both acceptance criteria have a test that fails without the change -- measured, not asserted: M4 (bare .tmp probe) and M6 (no mkdir) each turn the corresponding test red.",
+    "Tier: T2-by-necessity. The subject IS a shell gate, so there is no lower tier to move it to; this is not a signal that production logic sits in the wrong layer.",
+    "Scope note, not a finding: freshCheckout() tars the WORKING TREE, so a green run is about working-tree bytes rather than the staged bytes the verdict hash binds. For this commit they are identical for both scripts. The alternative (checkout-index) was measured worse -- it made every mutation invisible -- so this is the right trade, but it means the suite cannot certify the index on its own."
+  ]
+}

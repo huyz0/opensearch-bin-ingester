@@ -1,0 +1,64 @@
+{
+  "diff_sha256": "a20abb12c862fa9b479cf2fb6346126655c906180b9d3bafb832c2fd55f4606c",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "start-holds-lease-and-cannot-retry",
+      "severity": "blocking",
+      "title": "LocalSequencer.start acquires the lease and, on any failure after that, neither releases it nor can be re-entered -- it reports 'not the leader' while holding it",
+      "where": "sequencer/src/main/java/binjava/sequencer/LocalSequencer.java:46-66",
+      "failure_scenario": "MEASURED. Chain 1 is live; pod2 calls start(); tryAcquire wins epoch 2; predecessor.seal() writes the SEAL on chain 1; the putIfAbsent that OPENS chain 2 hits a transient store IOException. Observed state afterwards: 'pod2 still holds lease = true', 'predecessor chain 1 sealed = true', 'chain 2 opened = false'. Chain 1 is now fenced and chain 2 does not exist, so nothing in the cluster can sequence. pod2's retry of start() against a healthy store returns EMPTY -- LeaseManager.tryAcquire returns an empty Optional when THIS instance already holds the lease, and its javadoc names that case explicitly ('THIS INSTANCE ALREADY HOLDS IT ... A caller that reads empty as stand down makes a healthy leader abandon a live term ... Gate on held()'), while start() converts that empty straight into 'another node holds the lease'. pod3's takeover also returns EMPTY because the lease is unexpired. So sequencing is surrendered cluster-wide for a full TTL while this node holds the lease -- the exact outage seal()'s redrive branch exists to prevent, arriving through the front door -- and it then unwinds only by the pod taking over from itself and burning an epoch, the failure LeaseManager's M4.3g note says was eliminated. The same path is reached by the tested seal-budget-exhaustion throw and by any IOException out of recover/seal/open. start()'s own javadoc line 'Empty means not the leader, never failed: nothing has been written and nothing needs undoing' is false at exactly this moment: something HAS been written (the predecessor's SEAL) and something DOES need undoing (the lease). Remedy: gate on leases.held() as LeaseManager instructs, and/or release the lease on any throw after acquisition; and if start becomes re-enterable it must also refuse when its own chain recovered a SEAL."
+    },
+    {
+      "id": "offsets-restart-at-zero-on-takeover",
+      "severity": "major",
+      "title": "The first production Sequencer reassigns offsets from 0 on every takeover -- I2 and the interface's own contract -- and the file says nothing about it",
+      "where": "sequencer/src/main/java/binjava/sequencer/LocalSequencer.java:57-66",
+      "failure_scenario": "MEASURED. Leader 1 commits 100 records for RunKey(A,0) at offsets 0..99 and acks the producer; leader 1 closes; leader 2 takes over via start(); leader 2's first commit returns firstOffset=0 for the same RunKey. The new CommitLog is constructed at the new epoch and recover() lists only its OWN epoch prefix, which is empty, so nextOffsets starts empty. Sequencer's javadoc promises the opposite in as many words -- 'the offsets in the returned CommitDelta are final and will never be reassigned (I2, and NFR-11 across a failover)' -- and M4 SPEC acceptance criterion 4 and its test-plan row ('fails first against an implementation that re-assigns after failover') say the same. Under all_active two OpenSearch replicas then disagree about which record is at offset N, which is the SPEC's own stated reason I2 is load-bearing. The behaviour is recorded in M4.6d's backlog row inside this very commit, so it is known and deferred to M4.6e -- but LocalSequencer.java, which carefully warns about the M5 forwarding gap and about what an empty Optional means, carries no warning about the invariant it breaks on every failover, and the M4.6c row this commit rewrites does not mention it either while making a point of stating what moved OUT to M4.6e. A reader wiring this class has no way to see it. Remedy: state it at the seam (class javadoc + the M4.6c row) with the M4.6e pointer."
+    },
+    {
+      "id": "seal-ignores-its-own-recovered-seal",
+      "severity": "major",
+      "title": "seal() has no sealedAt guard: on a chain whose recover() already found a SEAL it writes a SECOND seal PAST the barrier and returns the wrong boundary -- the M4.6a hole, one method over",
+      "where": "sequencer/src/main/java/binjava/sequencer/CommitLog.java:336-371",
+      "failure_scenario": "MEASURED. Chain 1 is sealed at seq 1. A fresh CommitLog on the same chain calls recover() -- apply(seal) advances nextSequence to 2 and sets sealedAt -- then seal(3, 5). putIfAbsent at slot 2 is UNCONTENDED, so it WINS: a second SEAL lands at seq 2, beyond the barrier at seq 1, and seal() returns sequence=2, continuedAt=3. commit() in the identical state refuses on exactly this (the sealedAt check M4.6a added, whose comment says 'this writer recovered a sealed chain and would win an empty slot beyond the barrier without ever racing anyone'); seal() does not, and its own adopt branch states the principle it then contradicts -- 'NOT a failure. The chain is closed, which is what was asked for ... Adopt THEIR seal'. Two consequences that bite the moment finding 1 is fixed and start() becomes retryable: (a) the retried takeover computes prevSeq = sealSeq+1, so the CONTINUE it writes names a slot PAST the real boundary, which is precisely what M4.6e's crossing reader will follow; (b) open()'s advertised idempotence -- 'a caller may legitimately re-run this after a partial start' -- is defeated, because the retry's Continue(0, E-1, sealSeq+1) does not equal the Continue(0, E-1, sealSeq) already at slot 0, so open() throws 'opened by something else' against this node's own earlier write. Remedy: return sealedAt when it is set, the same way the adopt branch returns the seal it lost to."
+    },
+    {
+      "id": "takeover-gets-scale-with-predecessor-term-length",
+      "severity": "major",
+      "title": "A takeover issues one GET per delta of the predecessor's ENTIRE term, and discards every one of them -- only nextSequence is consumed",
+      "where": "sequencer/src/main/java/binjava/sequencer/LocalSequencer.java:58-62",
+      "failure_scenario": "MEASURED with a counting store: a takeover over a 51-entry predecessor chain costs 52 GETs, 2 LISTs, 3 PUTs and 1 stat. 51 of those GETs are predecessor.recover() reading and decoding every delta of the previous term to build a nextOffsets map that is dropped when the local variable goes out of scope -- start() uses only .seal(...).sequence() from that object. The cost and the failover latency therefore grow without bound with the predecessor's term length: under M4.7 commit batching a day-long term is O(1e5) deltas, so a leader election becomes O(1e5) GETs and minutes of blocking I/O, on the path whose whole purpose is to restore sequencing quickly. Nothing bounds it and no test asserts a request count for it. The chain end -- the only value needed -- is available from the LIST alone, because keyFor/logPrefix zero-pad to 16 hex digits precisely so 'LEXICOGRAPHIC ORDER IS NUMERIC ORDER'; detecting an already-sealed predecessor needs one GET of the tail entry, not N. This also makes the takeover a second unbounded-recovery call site that M4.8's acceptance criterion 5 ('at most K delta GETs') will have to fix twice. Note the related inaccuracy in the new test comment at LocalSequencerTest:338, which contrasts the redrive with 'one LIST': the recovered path measurably costs one LIST plus one GET per entry."
+    },
+    {
+      "id": "no-renewal-and-no-thread-safety-statement",
+      "severity": "minor",
+      "title": "LocalSequencer owns the lease on the release side but nothing renews it, and the concurrent seam has no locking and a non-volatile closed flag",
+      "where": "sequencer/src/main/java/binjava/sequencer/LocalSequencer.java:26-91",
+      "failure_scenario": "close() releases the lease, so the class owns the term's end, but nothing renews it and no javadoc says who must: wired as-is a leader is fenced after one TTL (~10 s per ADR-0007), and each churn burns an epoch and (per finding 2) resets every offset. Separately, Sequencer's contract says 'virtual threads make a blocking call the concurrent API' and FakeSequencer's javadoc defers concurrency to 'the real implementation's locking, ... the real one is M4.2 onward' -- the real one has none. commit() delegates straight into CommitLog, whose nextOffsets HashMap and nextSequence long are mutated with no synchronisation, and `closed` is a plain boolean written by close() on a shutdown thread and read on the commit path with no happens-before. Today DefaultIngest happens to serialise every call under its own ReentrantLock, so nothing breaks yet; M5's forwarding endpoint is the second caller by construction, and a Helidon virtual thread entering commit() while the flush loop is inside it corrupts the offset map. Remedy: state the caller's obligation, or take the lock."
+    },
+    {
+      "id": "open-cannot-tell-self-from-a-co-leader",
+      "severity": "minor",
+      "title": "open()'s equality check cannot distinguish this node from a co-leader at the same epoch, because Continue carries no writer identity",
+      "where": "sequencer/src/main/java/binjava/sequencer/CommitLog.java:278-307",
+      "failure_scenario": "MEASURED. Two CommitLog instances at epoch 2 that read the same store compute the same prevSeq and encode a byte-identical Continue(0, 1, 0); both open() calls return normally and both report having opened the chain. The refusal branch only fires when the co-opener computed a DIFFERENT prevSeq, which two nodes reading the same predecessor chain will not do -- the new test builds that difference by hand (99 vs 5). So 'losing slot 0 to an identical CONTINUE is success, not contention' is true only when the co-opener is this node, and the check is idempotence rather than the fork guard the javadoc and the new test comment present it as. Safety still rests on the lease, and the harm is bounded because CommitLog.commit is multi-writer-safe by design -- measured, the second writer loses slot 1, folds the winner's offsets in and gets firstOffset=10, not 0, which is also the mechanism the new test comment at CommitLogSealWriteTest:163 states incorrectly ('both assign offsets from 0'). Remedy: say what the check actually buys, or put the holder in the CONTINUE."
+    },
+    {
+      "id": "unvalidated-redrive-budget",
+      "severity": "minor",
+      "title": "maxRedrives is unvalidated; a negative budget silently behaves as zero",
+      "where": "sequencer/src/main/java/binjava/sequencer/CommitLog.java:336-365, LocalSequencer.java:46",
+      "failure_scenario": "seal(epoch, -1) takes the redrives >= maxRedrives branch on the first lost race and throws 'did not converge ... within -1 redrive(s)'. An operator deriving the budget from the renew interval by arithmetic that underflows or by a misconfigured negative gets a takeover that surrenders on the first contended slot, with a message quoting a nonsensical bound. Every other numeric input in this module refuses at the boundary (CommitLog's own epoch < 0 check three methods up, LeaseConfig for the durations); this one does not."
+    },
+    {
+      "id": "unscoped-test-count-114",
+      "severity": "minor",
+      "title": "'left all 114 tests green' names no scope and reconciles against nothing",
+      "where": "sequencer/src/test/java/binjava/sequencer/CommitLogSealWriteTest.java:163",
+      "failure_scenario": "MEASURED: the sequencer module runs 121 tests with this commit applied and 99 without it (this commit adds 22). 114 is neither, and no scope is named, so a reader cannot reconcile it and the next person to touch the file cannot tell whether the claim went stale or was always wrong. This is the exact shape M4.6a's backlog row records as deliberately corrected one commit ago -- 'Three stale or unscoped counts were removed rather than corrected, per the rule that a number which can go stale without changing the claim is liability' -- reintroduced. The mutation claim itself is worth keeping; only the tally is liability. Same for 'all 96 tests' if it recurs."
+    }
+  ],
+  "task": "M4.6c",
+  "role": "reviewer"
+}

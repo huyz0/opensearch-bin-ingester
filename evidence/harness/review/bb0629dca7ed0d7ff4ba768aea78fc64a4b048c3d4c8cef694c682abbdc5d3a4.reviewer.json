@@ -1,0 +1,15 @@
+{
+  "diff_sha256": "bb0629dca7ed0d7ff4ba768aea78fc64a4b048c3d4c8cef694c682abbdc5d3a4",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "major",
+      "file": "AGENTS.md:244-246",
+      "title": "The rule's worked example cites M0.37 and M0.38, which exist in no backlog or roadmap row",
+      "failure_scenario": "The exemplar 'M0.37 (cap review rounds and dispatch reviewers by context)' and the status line 'M0.37, M0.38 and M0.9 are queued' are the only occurrences of those two IDs in the whole repository; grep -rn 'M0\\.37|M0\\.38' matches nothing but the staged lines themselves. M0.9 is real, so a reader sees a mixed list and takes all four as real. Concretely: (a) AGENTS.md is loaded into every session, so an agent taking the exemplar at face value can refer a person to M0.37 as a queued task that does not exist -- the rule about IDs that name nothing is illustrated with an ID that resolves to nothing; (b) backlog.md M0.46 records the same two IDs as a quotation from a real session, so the authoritative task list now carries a false record; (c) backlog M0.20 specifies check-cross-refs.sh as 'every M<n> and R<n> cited anywhere resolves to a roadmap row', so the day that gate lands it refuses these three citations and AGENTS.md Never must be edited to make it pass. Fix is one substitution to a real ID/name pair, e.g. M0.28 (teach review-lenses.sh and which-standards.sh that .github/workflows is executable enforcement)."
+    }
+  ],
+  "task": "M0.46",
+  "role": "reviewer"
+}

@@ -1,0 +1,36 @@
+{
+  "diff_sha256": "10441732ea385b4f648e8e516f443006d965e32dc1de6e38c2b5bd432769f851",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "blocking",
+      "location": "binstore-spi/src/main/java/binjava/binstore/Body.java:31-44",
+      "summary": "checkedStream()'s javadoc is untouched and still states the pre-fix contract. M1.1b names that javadoc explicitly ('its javadoc REFUSES a body whose length disagrees is overstated') and the row is flipped to done in this same commit.",
+      "failure_scenario": "The doc says 'A stream that REFUSES, AT END OF INPUT, a body whose length disagrees' and 'The check fires at EOF and again on close'. After this change (a) an over-long body throws from an ordinary read() long before EOF, so a backend author reading this javadoc does not wrap read() for that error; (b) close() now issues an extra read on the delegate, which the doc never mentions; (c) on the very path the fix exists for -- a content-length-driven backend reading exactly `length` and stopping -- the refusal arrives from close(), i.e. AFTER the PUT request body has already been sent, so the truncated object may already be committed and the caller must treat a close() failure as a possibly-committed write. None of that is documented, and the count() comment asserts the opposite ('waiting for EOF lets a content-length-driven backend commit the truncated object first') without saying the probe path is exactly that wait."
+    },
+    {
+      "id": "R2",
+      "severity": "major",
+      "location": "binstore-spi/src/main/java/binjava/binstore/Body.java:85",
+      "summary": "The close-time probe performs an unbounded blocking read on the delegate, and nothing in the Body contract requires the supplied stream to reach EOF promptly after `length` bytes.",
+      "failure_scenario": "M1.9 hands a segment to a store as a stream fed by a producer thread (a PipedInputStream, a socket, or any stream whose end-of-input is signalled asynchronously). The consumer reads exactly `length` bytes and calls close(); verify() then calls in.read(), which blocks until the writer side closes the pipe or the peer closes the connection. If the writer thread is itself waiting for the PUT to return, close() never returns and the upload deadlocks -- with no timeout and no way for the caller to interrupt, because the block is inside close(). The same read also CONSUMES one byte past `length` from the delegate, a side effect no caller can currently know about from the record's javadoc ('@param open opens a fresh stream positioned at zero'). Fix is cheap: state on Body.open / checkedStream that the stream must signal EOF after `length` bytes without blocking and that checkedStream may read one byte past `length`."
+    },
+    {
+      "id": "R3",
+      "severity": "minor",
+      "location": "binstore-spi/src/main/java/binjava/binstore/Body.java:129-147",
+      "summary": "M1.1c states the defect as mark/reset being inherited 'without adjusting seen'; the diff removes the capability instead of adjusting the counter, and nothing in the tree records the substitution.",
+      "failure_scenario": "A backend that would have marked at 0 and reset to retry in place now gets markSupported()==false and an IOException from reset(). That is defensible -- the record javadoc does say the supplier may be called more than once -- but it is an observable contract change chosen over the fix the row describes, and saving `seen`/`sawEof` at mark and restoring them at reset would have satisfied the row literally. Should be disclosed in the commit body or argued in baselines/review.txt rather than left implicit."
+    },
+    {
+      "id": "R4",
+      "severity": "minor",
+      "location": "binstore-spi/src/main/java/binjava/binstore/Body.java:117-121",
+      "summary": "skip() counts the delegate's return value, but some delegates skip past end of input.",
+      "failure_scenario": "FileInputStream.skip is documented as able to skip beyond the end of the file and return the full count. A body declared 8 MiB whose file holds 4 MiB, consumed by skip(8Mi), reports seen == length; close() then probes, gets -1, and the SHORT body is accepted -- the exact false-accept this class exists to prevent. Narrow (an upload path reads rather than skips), but the skip counter is new in this diff and cannot distinguish 'skipped' from 'skipped past the end'."
+    }
+  ],
+  "task": "M1.1b",
+  "role": "reviewer"
+}

@@ -1,0 +1,47 @@
+{
+  "diff_sha256": "ac8782b383013351db268bb5eaeaa225a48f9a03ed21501067b2788d046340f6",
+  "verdict": "pass",
+  "summary": "Independently re-mutated Invariants.checkChain in an issued review tree; 12 of 13 hand mutations on the M4.13f logic were killed by the six fixtures, each by the fixture whose javadoc claims it. The rename of aBatchedDeltaWhoseSECONDSegmentREWINDS's expectation from containsExactlyInAnyOrder(gap,I2) to containsExactly(I4) is not a weakening: it stays an exact match, and the I4/I2/gap separation it asserts is killed independently by the OVERLAP, SKIPS and SAME-OFFSET fixtures. Findings are the three shapes no fixture reaches.",
+  "findings": [
+    {
+      "severity": "minor",
+      "location": "sequencer/src/test/java/binjava/sequencer/BatchedDeltaInvariantsTest.java:167-205",
+      "title": "No fixture combines a permutation with an overlap, so suppressing I2 for a permuted stream survives the suite",
+      "failure_scenario": "Every new fixture exercises exactly one defect: aBatchWhoseSegmentsOVERLAPIsStillI2NotAReorder is permutation-free and aBatchedDeltaWhoseSECONDSegmentREWINDSIsStillCaught is overlap-free. A batch that is both -- seg/A RunCommit(RA,3,4) covering 4..6, seg/B RunCommit(RA,6,0) covering 0..5, so segment order is reversed AND offset 4 and 5 are each handed to two records -- is reported by the staged code as [I4, I2], which is the right set, but nothing pins it. An implementation that treated I4 as terminal for that stream would report only I4 and lose the genuine reassignment, which is the exact conflation this row exists to prevent, and it would also skip the nextOffset update for the stream so every later delta is judged against a stale high-water mark.",
+      "mutation": "MEASURED SURVIVING: insert before the inOffsetOrder fold, at Invariants.java:189, `if (found.stream().anyMatch(v -> v.invariant().equals(\"I4\") && v.detail().contains(stream.getKey().toString()))) { continue; }`. Whole :sequencer suite green. Verified live, not equivalent: with the mutant, the permuted+overlapping batch above reports only [I4] where the staged code reports [I4, I2]. Adding that batch as a seventh fixture asserting containsExactly(\"I4\",\"I2\") kills it."
+    },
+    {
+      "severity": "minor",
+      "location": "sequencer/src/test/java/binjava/sequencer/BatchedDeltaInvariantsTest.java:83",
+      "title": "The same permutation spanning TWO deltas is still reported gap+I2, and no test records that scope boundary",
+      "failure_scenario": "MEASURED: put RunCommit(RA,3,4) in the delta at sequence 1 and RunCommit(RA,4,0) in the delta at sequence 2 -- the identical coverage, 0..6 exactly once in the wrong order -- and checkChain returns [gap 'resumes at 4, skipping 4', I2 'resumes at 0 but the chain had assigned up to 7']. The sort is per-entry, so the cross-entry case keeps the label the row's own argument rejects for the in-batch case. This is defensible (one shared cursor cannot rewind BETWEEN commits, so a later-entry rewind really is a reassignment) and the notes scope the row to the batch, but the suite does not say so, so a future maintainer reading only the tests cannot tell the boundary from an oversight and may lift the sort to chain scope.",
+      "mutation": "Not a surviving mutation on the staged behaviour -- a scope boundary with no pin. Lifting the sort from per-delta to per-chain (collect all runs of every CommitDelta before folding) changes this shape from [gap, I2] to [I4] and leaves the whole :sequencer suite green, so the boundary is unconstrained in both directions."
+    },
+    {
+      "severity": "minor",
+      "location": "sequencer/src/test/java/binjava/sequencer/BatchedDeltaInvariantsTest.java:191-205",
+      "title": "The gap detail's skip count is unconstrained",
+      "failure_scenario": "aBatchThatSKIPSOffsetsIsStillAGapNotAReorder extracts Violation::invariant only, so the arithmetic that tells an operator HOW MANY records are missing is never read. A gap reported as 'skipping 1' when 2 offsets are missing reads as a rounding artefact rather than a hole, and this is the branch that fires on every severed CONTINUE.",
+      "mutation": "MEASURED SURVIVING: at Invariants.java:208 replace `+ \", skipping \" + (run.firstOffset() - from)` with `+ \", skipping 1\"`. Whole :sequencer suite green. Pre-existing (the arithmetic only moved in this diff); the fixture at line 191 is the natural place to assert the detail, as ONEStreamPermutedInABatchDoesNotIndictTheOTHER already does for I4."
+    }
+  ],
+  "verified": [
+    "break removed (Invariants.java:176) -> killed by aStreamOutOfOrderTWICEIsStillONEViolation",
+    "I4 comparison '<' -> '<=' (line 170) -> killed by TWOSegmentsStartingAtTheSAMEOffsetIsI2Alone",
+    "I4 compares get(r) against get(0) instead of get(r-1) (lines 170,175) -> killed by aStreamOutOfOrderOnlyInALATERPairIsStillCaught",
+    "I4 loop starts at r=2 (line 168) -> killed by aBatchedDeltaWhoseSECONDSegmentREWINDS and ONEStreamPermuted",
+    "I4 compares against the previous run's END rather than its firstOffset (line 170) -> killed by aBatchWhoseSegmentsOVERLAPIsStillI2NotAReorder and TWOSegmentsStartingAtTheSAMEOffset",
+    "offset-order sort deleted (line 190) -> killed by four fixtures",
+    "sort comparator reversed (line 190) -> killed",
+    "I4 loop deleted entirely (lines 168-178) -> killed by four fixtures",
+    "I4 detail replaced by a constant string -> killed by ONEStreamPermutedInABatchDoesNotIndictTheOTHER",
+    "I4 check reads delta.allRuns() ungrouped instead of the per-stream list -> killed",
+    "I2 boundary '<' -> '<=' (line 202) -> killed",
+    "Math.max dropped from the nextOffset update (line 212) -> killed by InvariantsTest#theHIGHWATERMARKNEVERGOESBACKWARDSAfterARewind",
+    "LinkedHashMap -> HashMap (line 154) -> survives, but changes only the ORDER of the returned violations and no fixture yields more than one; reported as an observation, not a finding",
+    "containsExactly brittleness: every new fixture asserts a single element and the one multi-element assertion in the file became single, so the order-sensitivity of containsExactly creates no pressure to weaken anything"
+  ],
+  "task": "M4.13f",
+  "role": "test-reviewer",
+  "staged_tree": "771daecd9e88f316acb7917df1d3640a7adfd433"
+}

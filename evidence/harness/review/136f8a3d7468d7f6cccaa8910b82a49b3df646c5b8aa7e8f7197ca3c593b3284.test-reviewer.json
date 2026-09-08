@@ -1,0 +1,40 @@
+{
+  "diff_sha256": "136f8a3d7468d7f6cccaa8910b82a49b3df646c5b8aa7e8f7197ca3c593b3284",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "T1",
+      "file": "buildSrc/src/test/java/binjava/ReviewTreeTest.java:200",
+      "line": 200,
+      "severity": "major",
+      "what": "The SHELL-side GIT_* strip is pinned only by the three keys the fixture exports; round 4 fixed the identical weakness on the Java side only",
+      "failure_scenario": "SURVIVING MUTATION, measured in the tree this script issued: replace review-tree.sh:129 `for v in $(env | sed -n ...); do unset \"$v\"; done` with `unset GIT_INDEX_FILE GIT_DIR GIT_WORK_TREE` -- 11/11 ReviewTreeTest green, 238/238 buildSrc green. Those are exactly the three keys theTreeIsMaterialisedFromTheCALLERSPrivateIndex... exports (lines 198-200), so the loop is only ever asked about its own enumeration. Round 4 fixed precisely this shape on the Java side by seeding GIT_ZZZ_UNKNOWN_TO_ANY_LIST at line 105, and the shell loop -- the one that actually protects the caller's repository -- did not get the same treatment, while review-tree.sh:800-804 and check-harness-tests.sh both argue by name that a three-key list is insufficient because GIT_OBJECT_DIRECTORY alone redirects the new repository's objects into the caller's store. NOT AN EQUIVALENT MUTANT; measured in a scratch repo with GIT_OBJECT_DIRECTORY exported at the caller's own objects dir (the shape git itself exports during a quarantine/hook run): shipped -> tree has 6 objects of its own, caller's object store unchanged at 4. Mutated -> the tree's .git has NO objects/ directory at all, the caller's store grew 4 -> 6, and once GIT_OBJECT_DIRECTORY leaves the environment the tree is not a repository any more: `git log` says `fatal: not a git repository`, `git diff --cached` errors with `unknown option 'cached'`. That is the vacuous-gate failure this row exists to prevent, plus pollution of the caller's object store, with every test green. FIX, and it is cheap because I built it: in the one non-hermetic test, also export GIT_OBJECT_DIRECTORY=<repo>/.git/objects and an arbitrary GIT_ZZZ_* key, then assert the materialised tree's .git/objects is non-empty and the caller's object count is unchanged."
+    },
+    {
+      "id": "T2",
+      "file": "scripts/check-harness-tests.sh:53",
+      "line": 53,
+      "severity": "major",
+      "what": "The `env -u GIT_*` wrapper added to the gate has NO test at all; reverting it leaves the entire harness suite green",
+      "failure_scenario": "SURVIVING MUTATION, measured: replace check-harness-tests.sh:53-54 with the pre-diff line `if ./gradlew -p buildSrc test --console=plain -q > .harness/harness-tests.log 2>&1; then` and run the whole buildSrc suite -- 238 tests, 0 failed. Nothing in the diff or in the tree constrains it. This is not a nice-to-have: GitEnv.stripped covers ReviewTreeTest's own children only, and GitEnv's javadoc says in terms that ReviewRolesTest, FreshCheckoutTest and the rest still shell out to git with the caller's index inherited -- so this one line is the ONLY thing standing between `review.sh context` under a private index and the destruction the row measures (566 entries to 3, once to a reviewer mid-review, exit 0, BUILD SUCCESSFUL). A silent revert of it re-opens exactly that, and no gate or test would notice. IT IS ALSO CHEAPLY TESTABLE and FreshCheckoutTest already owns the idiom: harnessTestsCreatesItsLogDirectoryBeforeRedirecting stubs ./gradlew and asserts on .harness/harness-tests.log. I built the falsifying fixture in six lines -- stub gradlew to `env | grep -E '^GIT_' || echo NO_GIT_VARS; exit 1`, run the gate with GIT_INDEX_FILE and GIT_OBJECT_DIRECTORY exported, read the log. Shipped: `NO_GIT_VARS`. Mutated: `GIT_INDEX_FILE=/tmp/decoy.idx`, `GIT_OBJECT_DIRECTORY=/tmp/decoy.obj`, `GIT_EDITOR=true`. The same fixture also pins the `EVERY GIT_*, not the three obvious ones` claim the comment makes."
+    },
+    {
+      "id": "T3",
+      "file": "buildSrc/src/test/java/binjava/ReviewTreeTest.java:161",
+      "line": 161,
+      "severity": "minor",
+      "what": "The packet-wiring grep still survives deletion of the block it guards -- and the reason given for keeping it a grep is measurably false",
+      "failure_scenario": "SURVIVING MUTATION re-confirmed at this hash: delete the whole `=== YOUR OWN TREE TO MUTATE IN ===` echo block from review.sh and leave one comment line `# the review-tree.sh block was deleted` -- 11/11 green. The packet stops issuing the tree and reviewers revert to the per-scratchpad improvisation the row exists to replace. I am re-raising it not to re-litigate the severity (two rounds have landed it as a minor) but because the justification shipped in the comment is wrong, and a wrong claim in the tree is what the next reader will act on: `the behavioural version runs review.sh context, which runs the whole gate loop including the Gradle suites, and cannot be built in a scratch repository that has neither`. MEASURED FALSE. The block is printed at review.sh:31-64, BEFORE review_rounds.py, review_delta.py and the gate loop, and stdout is already flushed when the script later exits 1. I ran `review.sh context --task M0.57` in a scratch repository containing four scripts (lib.sh, review.sh, which-standards.sh, review-lenses.sh) and a one-line backlog.md, using this test class's own `run()` idiom: the full tree block appeared on stdout. A behavioural assertion is available for about ten lines of fixture; either take it or correct the comment, but the stated impossibility is not one."
+    },
+    {
+      "id": "T4",
+      "file": "scripts/review-tree.sh:134",
+      "line": 134,
+      "severity": "minor",
+      "what": "The empty base commit is unconstrained, and I could not find any behaviour that distinguishes it -- so either it is inert or its stated purpose is untested",
+      "failure_scenario": "SURVIVING MUTATION: delete `git commit -q --allow-empty -m \"empty base, so HEAD resolves\"` from review-tree.sh:134 -- 11/11 green. The comment claims the commit is there `so HEAD still resolves for the gates that read it`, and that claim has no test. I then tried to find the distinguishing behaviour and could not: I materialised two full trees of this repository, one with and one without the commit, and ran check-file-size, check-license-headers, check-terminology, check-links, check-reviewed, check-metric-cardinality, check-gate-scope, check-module, check-portability, check-test-budget, check-tdd and check-test-integrity in both. Output was byte-identical (check-tdd raises the same tdd_scan traceback in BOTH, for the unrelated reason that .harness/ is gitignored and so absent from any materialised tree). test_integrity.py and tdd_scan.py only reach their `HEAD:` before-ref for a MODIFIED path, and in a tree staged against an empty base every path is `A`, so the ref is never read. Recorded as minor rather than major because I cannot rule out that it is an equivalent mutant: the honest statement is that the commit either does nothing or does something no test and no gate I can run will show, and the comment asserts the stronger of the two."
+    }
+  ],
+  "task": "M0.57",
+  "role": "test-reviewer"
+}

@@ -1,0 +1,16 @@
+{
+  "diff_sha256": "14369e35de0723a266c59e1d65e23edd9cc5d1d0bd778021aff6f9a85a0d5b46",
+  "verdict": "pass",
+  "summary": "Round 3, verified by mutation in a private copy of the staged bytes. Both round-2 minors are fixed. The three message mutations the author claims killed ARE killed, each by aStreamOutOfOrderOnlyInALATERPairIsStillCaught and each pinned to a distinct assertion. The .doesNotContain(\"segment\") assertion does real work: it is the SOLE killer of a mutation that adds a segment index while leaving every contains() substring intact. The comment-only trim of Invariants.java changed no behaviour -- five logic mutations (< to <=, break removal, sort removal, order arm no-op, order comparison negated) and a sixth that collapses the streams together are all still killed, and the full :sequencer:test suite is green at baseline. The one assertion that changed shape (extracting/containsExactly to singleElement/satisfies) was strengthened, not weakened: both forms pin exactly one violation named order, and the new form additionally pins the message.",
+  "findings": [
+    {
+      "severity": "minor",
+      "location": "sequencer/src/test/java/binjava/sequencer/BatchedDeltaInvariantsTest.java:326-331",
+      "title": "The message assertion pins prose phrasing, not only the semantic payload",
+      "failure_scenario": "contains(\"a run starting at 3\") and contains(\"follows one starting at 5\") couple the test to the exact English of the diagnostic, not just to the numbers and their order. A maintainer rewording the message to 'run at offset 3 comes after run at offset 5' -- semantically identical, both offsets still present in the right order -- fails this test and is invited to delete the message assertions rather than re-pin them, which would restore all three of the mutations measured killed here. The pressure is bounded: only one of the six fixtures pins the message, and the comment beside it says why, so the cost of re-pinning is one edit. Not blocking, and fixing it by loosening to contains(\"3\") and contains(\"5\") would be strictly worse -- the offsets-transposed mutation would then survive."
+    }
+  ],
+  "task": "M4.13f",
+  "role": "test-reviewer",
+  "staged_tree": "ef90b676a127810a13e83049852591d1a08e1384"
+}

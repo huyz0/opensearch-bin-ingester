@@ -1,0 +1,24 @@
+{
+  "diff_sha256": "969a4f0d9fb4c4573246f272fb0a315dc7500ad093a1780648fb5f4823917b51",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "file": "docs/internal/product/backlog-notes.md:1332",
+      "severity": "major",
+      "failure_scenario": "The record says 'SIX FIXTURES, AND FOUR OF THEM EXIST BECAUSE HAND MUTATION FOUND THE GAP'. The commit adds SEVEN new @Test methods to BatchedDeltaInvariantsTest: the pre-image blob ee209e3 has 4 test methods, the staged file has 11. The seven are aBatchWhoseSegmentsOVERLAPIsStillI2NotAReorder, aBatchThatSKIPSOffsetsIsStillAGapNotAReorder, ONEStreamPermutedInABatchDoesNotIndictTheOTHER, TWOSegmentsStartingAtTheSAMEOffsetIsI2Alone, aStreamOutOfOrderTWICEIsStillONEViolation, aStreamOutOfOrderOnlyInALATERPairIsStillCaught, aPermutationThatALSOOverlapsReportsBOTHNames. The seventh is also mutation-driven -- its own javadoc says 'MEASURED SURVIVING WITHOUT IT' -- so 'FOUR OF THEM' is five of seven. backlog-notes.md is the permanent record of what this row built and its evidence; an auditor who counts the tests against the claim finds a number that does not reconcile, which is the same class of defect as the I4/order mislabel: one copy of a fact updated, its duplicate left stale. Remedy: SIX -> SEVEN, FOUR -> FIVE (or name which fixture is excluded and why)."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/Invariants.java:184",
+      "severity": "minor",
+      "failure_scenario": "SURVIVING MUTATION, MEASURED: replacing 'for (int r = 1; r < inSegmentOrder.size(); r++)' with a loop that examines only the LAST adjacent pair (r = size-1) leaves the whole :sequencer suite green -- ./gradlew :sequencer:test exits 0. The escaping shape is a stream permuted only in an EARLY pair, e.g. three segments carrying RA at 5, 3 then 8 with the chain at 3: coverage is 3..9 exactly once, so no gap and no I2 fire, and the mutant reports nothing at all. This is the exact mirror of the case the notes say hand mutation found ('a stream out of order only in a LATER pair is caught, which a check anchored on the first segment misses') -- the fixtures close the late-only case and leave the early-only case open. Production code is correct; the fixture set has a hole. Nine other mutations I applied were all killed: dropped break, < to <=, anchor on get(0), sort removed, e.sequence() to 1L, message offsets transposed, skip-fold-when-order-reported."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/ReaderInvariantsTest.java:36",
+      "severity": "minor",
+      "failure_scenario": "'The reorder clause is M4.13f.' is a third copy of the fact this round exists to keep true, and it was not updated. It is not false -- M4.13f does own the clause -- but it is the only remaining sentence in the tree that reads as OPEN work, while Invariants.java:88-107 now records the conclusion (no arm of its own, carried by the I2 arm plus append-onlyness at run granularity, with the segment-bytes residue named). A reader of ReaderInvariantsTest alone concludes the clause is still unanswered and re-opens it. One clause -- 'is M4.13f, which concluded it has no arm of its own' -- closes it."
+    }
+  ],
+  "task": "M4.13f",
+  "role": "reviewer",
+  "staged_tree": "cf498a1846b39c0871200e1867ed5fd1b8aebc74"
+}

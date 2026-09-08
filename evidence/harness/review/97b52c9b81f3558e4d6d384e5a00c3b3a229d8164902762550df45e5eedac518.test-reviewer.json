@@ -1,0 +1,15 @@
+{
+  "diff_sha256": "97b52c9b81f3558e4d6d384e5a00c3b3a229d8164902762550df45e5eedac518",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "MT14",
+      "severity": "minor",
+      "file": "scripts/check-module.sh:31",
+      "summary": "ALL is single-source but the regex requires a trailing comma and rejects digits, so three legal edits to settings.gradle.kts still drop a module silently while the gate prints a count.",
+      "failure_scenario": "Append `\"wal\"` as the last include() entry WITHOUT a trailing comma (or name it `binstore-v2`, or write `include(\"format\", \"wal\")` on one line). The derivation regex yields the other modules only, so the [ -n \"$ALL\" ] guard still passes. GATE_SCOPE=full then checks 7 and prints `7 module(s) checked`; the delta path never maps `wal/` to a module; and `check-module.sh wal` still fails loudly with `unknown module: wal` -- a silent-skip-plus-loud-CLI asymmetry. Widening to '^[[:space:]]*\"[a-z][a-z0-9-]*\",?' or deriving from `./gradlew -q projects` closes it. Carried forward unchanged from 81996e91; check-module.sh is byte-identical."
+    }
+  ],
+  "task": "M0.5",
+  "role": "test-reviewer"
+}

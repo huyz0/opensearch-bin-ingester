@@ -1,0 +1,87 @@
+{
+  "diff_sha256": "bb454df826db4c8c2aba84a7dbaca02c551e2226c8e8279f509608e1effdfa09",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "M4.10d-tr-9",
+      "severity": "blocking",
+      "title": "the ambiguous-PUT tests use a ONE-REQUEST batch only, and a TWO-REQUEST batch from one incarnation commits twice",
+      "location": "sequencer/src/test/java/binjava/sequencer/SequencerDedupTest.java:252",
+      "failure_scenario": "MEASURED in my own worktree, whole :sequencer suite otherwise green. Both new ambiguous tests submit commitAll(List.of(flush)) -- a single CommitRequest. I ran the same fixture with TWO requests from ONE incarnation: a=(podx,i1,0,seg/a,3 records), b=(podx,i1,1,seg/b,4 records), store.armNextDeltaPut(), commitAll(List.of(a,b)) throws, then the byte-identical retry commitAll(List.of(a,b)). Result: seg/a carried by 1 delta, seg/b carried by 2. Four records got two sets of committed offsets, one leader, one epoch, no takeover. The cause is that IdempotencyWindow.resolveAmbiguous clears the per-incarnation marker in its finally block after resolving the FIRST request, so b then sees isAmbiguous()==false, replayOf(b) empty (a's resolve set lastAppliedFlushSeq=0 and 1>0), and b is committed as fresh. Sequencer.java's new javadoc publishes the opposite as a guarantee: 'A retry carrying the SAME (podId, incarnationId, flushSeq) is safe (M4.10d): it is answered with the offsets that already apply and appends nothing.' The same file's own aBatchOfReplaysPointingAtONEDeltaReadsItONCE proves a 3-request batch from one incarnation is the shape the author considers reachable, so this is not a hypothetical batch.",
+      "surviving_mutation": "Two, both measured. (1) With the code as staged, no test distinguishes per-REQUEST from per-BATCH marker clearing: the mutation that would have to be caught IS the shipped behaviour. (2) In the other direction, deleting `ambiguousFrom.remove(k)` from resolveAmbiguous's finally block (IdempotencyWindow.java:152) leaves the ENTIRE :sequencer suite green -- so nothing constrains the marker's lifecycle either way, and the javadoc's cost claim ('leaving it set would re-scan the same range on every later flush by that incarnation', up to SCAN_BUDGET=64 stat/get per flush) is prose, not an assertion.",
+      "remedy": "A test that arms the ambiguity on a batch of two requests from the SAME incarnation and asserts each segment key is carried by exactly one delta, plus a test that a later flush by a reconciled incarnation issues no scan requests (CountingBinStore gets/stats unchanged)."
+    },
+    {
+      "id": "M4.10d-tr-10",
+      "severity": "major",
+      "title": "thePodsMapIsBOUNDED is the only test of checkpoint eviction and constrains neither the bound's value nor the ordering's PRIMARY key",
+      "location": "sequencer/src/test/java/binjava/sequencer/CheckpointWriterContentTest.java:389",
+      "failure_scenario": "MEASURED, both mutations run against the whole :sequencer suite, green. The fixture builds 5000 slots as new Checkpoint.PodState(\"inc\"+i, i, 1L, i) -- every slot at epoch 1 -- and asserts size <= 4097 plus containsKey(\"pod4999\")/doesNotContainKey(\"pod0\"). Because epoch never varies, the comparator's FIRST key is inert, and because the size bound is an inequality with no lower edge, the constant is unpinned. Consequence of the first: eviction across a real takeover orders by sequence alone, and sequence restarts per epoch, so a live pod's fresh slot at epoch 7 sequence 1 is evicted before a dead pod's stale slot at epoch 1 sequence 900 -- the exact inversion of the policy CheckpointWriter.java:126 states ('the oldest pointer is the one least likely to have a flush still in flight'). Consequence of the second: a successor's checkpoint carries ONE predecessor pod slot, so every other pod loses idempotency at every takeover -- the harm the fold exists to prevent -- with the suite green. No other test inherits more than ONE pod across a takeover (theFirstCheckpointAfterATakeoverCARRIESThePredecessorsPods and theSuccESSORSFirstCheckpointCarriesThePredecessorsPodsThroughSTART each inherit exactly one).",
+      "surviving_mutation": "(a) CheckpointWriter.java:135 `.comparingLong((Map.Entry<String, Checkpoint.PodState> e) -> e.getValue().epoch())` replaced by `-> 0L` -- whole module green (PIT's own report agrees: PrimitiveReturnsMutator on that lambda, SURVIVED). (b) CheckpointWriter.java:91 `MAX_PODS = 4096` changed to `MAX_PODS = 1` -- whole module green.",
+      "remedy": "Vary epoch in the eviction fixture so the primary key discriminates (slots at epoch 1 with HIGH sequences must be evicted before slots at epoch 9 with sequence 0), and assert a takeover that inherits several pods keeps all of them."
+    },
+    {
+      "id": "M4.10d-tr-11",
+      "severity": "major",
+      "title": "IdempotencyWindow's own eviction bound has NO test -- its body is never executed",
+      "location": "sequencer/src/main/java/binjava/sequencer/IdempotencyWindow.java:259",
+      "failure_scenario": "MEASURED: replacing evictOldestBeyond's guard with `if (true) { return; }` -- the bound made a total no-op -- leaves the whole :sequencer suite green. PIT's own report on these staged bytes agrees and is stronger: IdempotencyWindow lines 264, 265, 266 and 267 are NO_COVERAGE, i.e. no test executes the eviction body at all, and the VoidMethodCallMutator removing the `evictOldestBeyond()` call at line 243 is recorded SURVIVED. This bound was added to answer a round-1 finding about unbounded growth, so the fix for that finding ships unverified. It also fails silently in a second way no test can see: evictOldestBeyond() is called only from inherited(), never from applied(), so on the path where the map actually grows -- one permanent entry per RESTART, which is what the method's own javadoc says at IdempotencyWindow.java:249 -- the bound never fires. A test would have caught that, because a test would have had to drive growth through the live commit path to reach 4096.",
+      "surviving_mutation": "IdempotencyWindow.java:259-268 body replaced with `return;` (the bound removed entirely) -- whole :sequencer suite green.",
+      "remedy": "Drive MAX_SLOTS+1 distinct incarnations through the path that grows the map and assert the window's size, and assert which slot survives with epochs that VARY (the same primary-key hole as tr-10)."
+    },
+    {
+      "id": "M4.10d-tr-12",
+      "severity": "minor",
+      "title": "aRetryAfterAFailureThatDidNOTLandStillCommits does not check that nothing landed -- it passes verbatim against the LANDING arm",
+      "location": "sequencer/src/test/java/binjava/sequencer/SequencerDedupTest.java:284",
+      "failure_scenario": "MEASURED: changing LandThenThrowStore.armNextDeltaPutLost (LandThenThrowStore.java:55) from `lost = true` to `lost = false` -- so the 'lost' arm actually LANDS -- leaves the whole :sequencer suite green. The test's two assertions (firstOffsetOf == 0 and deltasCarrying == 1) hold identically whether the first attempt landed and the retry was ANSWERED or nothing landed and the retry COMMITTED, so the assertions cannot tell the two histories apart and the test is observationally a duplicate of aRetryAfterAnAMBIGUOUSPutIsAnsweredNotCommittedTwice. The branch it names is genuinely reached today, so this is not a vacuous test -- but it does not pin its own fixture, which is the shape that produced the round-2 test that asserted nothing.",
+      "surviving_mutation": "LandThenThrowStore.java:55 `lost = true` -> `lost = false`, whole module green.",
+      "remedy": "One line before the retry: assert deltasCarrying(store, \"seg/0\") == 0 in the lost test and == 1 in the landing test. That pins the arm and makes the pair discriminate."
+    }
+  ],
+  "verified_from_earlier_rounds": [
+    {
+      "id": "M4.10d-tr-1",
+      "status": "fixed, verified by measurement",
+      "note": "Rewriting CheckpointWriter.inherit's `pods.putAll(inherited)` to store `Checkpoint.PodState.bare(v.lastAppliedFlushSeq())` now fails 2 tests (was green at round 1). aReplayIsAnsweredAfterTWOTakeoversNotJustOne drives three leaders and kills it."
+    },
+    {
+      "id": "M4.10d-tr-2",
+      "status": "fixed; the new wording is true",
+      "note": "baselines/mutants.txt now argues equivalence from 'every request in one applyFresh is recorded with the SAME log.epoch() and delta.sequence()'. Checked against LocalSequencer.applyFresh: the loop calls window.applied(request, log.epoch(), delta.sequence()) with both values constant across the batch, so on the equal case `>=` writes an Applied field-identical to the one `>` keeps. The entry also now states, correctly, that the equal case DOES arrive via split() classifying the whole batch before recording any of it. PIT still reports the boundary at IdempotencyWindow.java:205 SURVIVED, which is what the argued entry is for."
+    },
+    {
+      "id": "M4.10d-tr-3",
+      "status": "fixed",
+      "note": "theSuccESSORSFirstCheckpointCarriesThePredecessorsPodsThroughSTART asserts lastAppliedFlushSeq == 5, not 0."
+    },
+    {
+      "id": "M4.10d-tr-4",
+      "status": "fixed",
+      "note": "aSegmentMatchingOnlyPARTOfTheTripleAnswersNOTHING varies podId, incarnationId and flushSeq one at a time against a fourth exact case; T0, no store."
+    },
+    {
+      "id": "M4.10d-tr-5",
+      "status": "fixed",
+      "note": "inheritAll now guards on hasPointer() alone."
+    },
+    {
+      "id": "M4.10d-tr-6",
+      "status": "fixed",
+      "note": "anAllReplayBatchReportsTheHIGHESTSequenceInvolved uses two pods at two distinct slots and asserts the higher; Math.max -> Math.min dies."
+    },
+    {
+      "id": "M4.10d-tr-7",
+      "status": "fixed",
+      "note": "aBatchOfReplaysPointingAtONEDeltaReadsItONCE asserts an exact GET count of 1 for three replays."
+    },
+    {
+      "id": "M4.10d-tr-8",
+      "status": "fixed",
+      "note": "Four new FakeSequencerTest cases; each dies under the mutation it names (segments.addAll(answered) removed, nextSequence-1 -> nextSequence)."
+    }
+  ],
+  "task": "M4.10d",
+  "role": "test-reviewer",
+  "staged_tree": "33e72860bc289bfd6a7e19144fb80dbe3610355a"
+}

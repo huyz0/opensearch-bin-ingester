@@ -1,0 +1,14 @@
+{
+  "diff_sha256": "acc6bb7b86a1dcb96da77252ba9340cb3ac814b44690f9fd7857f42483523566",
+  "verdict": "pass",
+  "findings": [
+    {
+      "file": "plugin/src/clusterTest/java/binjava/plugin/OffsetMonotonicityIT.java",
+      "line": 256,
+      "severity": "minor",
+      "failure_scenario": "readOffsetsInDocOrder() assumes reader.leaves() yields segments in creation/insertion order, which Lucene does not formally guarantee; if a merge ever reordered segments between the two flushes and the final searcher acquisition, this could produce a spurious (false) failure on otherwise-correct production code. Not reproduced in 3 stability runs; recorded as a design note, not a defect."
+    }
+  ],
+  "task": "M1.15d",
+  "role": "test-reviewer"
+}

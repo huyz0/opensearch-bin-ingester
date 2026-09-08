@@ -1,0 +1,40 @@
+{
+  "diff_sha256": "06cde515361676aa15292f3345faabae26e2251408f1c61e16cff6d4f4dbd726",
+  "verdict": "pass",
+  "summary": "Round 2, tests only. Both round-1 majors are killed on the current bytes, measured by mutation in an issued tree (302 sequencer tests green at baseline). Round-1 major 1 (recording built from sibling locals): `new Issued(` now appears exactly once, at CommitProtocolSimulation.java:81, inside `record(CommitRequest)` reading only the request's accessors -- reverting ONLY the leader request's flushSeq argument to `commits` now fails BOTH tests (FlushSeqTest:76 and :112) where it was green at round 1. Round-1 major 2 (per-pod unpinned): a single fleet-wide per-attempt counter (constant allocator key) now fails the density test at FlushSeqTest:112. Twelve of thirteen mutations killed; the surviving one is recorded below as a minor and should NOT be fixed this round. Neither test can pass vacuously: dropping the recording entirely fails both on their anti-vacuity guards (:81, :127), and collapsing every pod name to pod0 -- byPod with a single entry -- fails both (:85, :127), because density from 0 plus two issuing pods forces a shared value by construction. Red records are honest: red.log shows the density test red at line 112 (its own density equality, not a compile error and not the sibling's assertion) and the uniqueness test red at line 76 (its own segment-mismatch assertion); the recorded source sha256 matches the staged file byte for byte. No existing assertion was weakened -- the only change to an existing assertion in the diff is the `.as(...)` description on the pods-size guard, the predicate `hasSizeGreaterThan(1)` is unchanged. Tier is right (T1, MemoryBinStore + SimulatedClock, no socket, no sleep, no fixed port, no system temp); @Timeout(120, SEPARATE_THREAD) is present and the pair runs in ~4s.",
+  "measured": {
+    "tree": "/tmp/binjava-review-trees/test-reviewer.Uc78aTvS",
+    "baseline": "sequencer:test --rerun -> BUILD SUCCESSFUL, 302 tests, 0 failures; FlushSeqTest pair green",
+    "killed": [
+      "revert both paths to the fleet-global on-success counters (the original defect) -> both red (:76, :112)",
+      "revert ONLY the leader request's flushSeq argument to `commits` (round-1 major 1's exact mutation) -> both red (:76, :112)",
+      "single fleet-wide per-attempt counter, constant allocator key (round-1 major 2) -> density red (:112)",
+      "swap podId/segmentKey inside record() (round-1 F3) -> density red (:112)",
+      "record() returns a constant podId -> both red (:76, :112)",
+      "drop the `- 1`, so the per-pod sequence starts at 1 -> density red (:112)",
+      "zombies keep a SECOND per-pod counter, colliding on podId with the leader's -> both red (:76, :112)",
+      "per-pod allocator advanced only on SUCCESS (per-pod but not per-attempt) -> both red (:76, :112)",
+      "zombie issues never recorded while the allocator still consumes the value -> density red (:112)",
+      "leader issues never recorded -> both red (:83 issuedCount>landed guard, :112)",
+      "record moved AFTER commit, so only successful attempts are recorded -> both red (:83, :112)",
+      "drop the recording side effect entirely, issued stays empty -> both red on the anti-vacuity guards (:81, :127)",
+      "collapse every pod name to pod0, byPod has ONE entry -> both red (:85, :127)"
+    ],
+    "survived": [
+      "record() returns a CONSTANT segmentKey -> both tests green"
+    ]
+  },
+  "findings": [
+    {
+      "severity": "minor",
+      "location": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSimulation.java:81 (read by sequencer/src/test/java/binjava/sequencer/CommitProtocolSimulationFlushSeqTest.java:70-76)",
+      "title": "The segmentKey field of the Issued triple is unconstrained: replacing it with a constant survives both tests",
+      "mutation": "In `record(CommitRequest)`, change `request.segmentKey()` to a literal, e.g. `return new Issued(request.podId(), request.flushSeq(), \"seg/constant\");`. MEASURED: both tests stay green, BUILD SUCCESSFUL.",
+      "failure_scenario": "The uniqueness test's core assertion (FlushSeqTest:72-76) only executes when a `(podId, flushSeq)` pair repeats, which never happens once the allocator is correct, so under the fixed harness the third field of the triple is never read. If a later change made the segment recording constant or otherwise unfaithful -- and grep confirms nothing else in the tree reads `Issued.segmentKey()` -- the reissue detector would compare a constant against a constant and report agreement, i.e. it would go blind exactly when a genuine reissue was reintroduced, and the failure would look like a passing test.",
+      "why_not_blocking": "Low consequence and probably should NOT be fixed this round. The density test does not read segmentKey at all, so every allocator regression I could construct (including the reissue shapes) is still caught at FlushSeqTest:112 independently of this field; the blindness needs TWO simultaneous defects. The structural fix from round 1 -- one `new Issued(` call site reading only the request's accessors -- is what makes the divergence implausible in the first place. Killing it would require a negative control that deliberately reissues a pair and asserts the detector fires, i.e. a test of the harness's detector rather than of the protocol, and that is more surface than the risk warrants."
+    }
+  ],
+  "task": "M4.10a",
+  "role": "test-reviewer",
+  "staged_tree": "e63855ef69c4fabbf08b1a7df7df9bcba417b506"
+}

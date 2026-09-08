@@ -1,0 +1,78 @@
+{
+  "diff_sha256": "5c8b2ad85d4d1f3b60d962a41b53ffe99abd37fc6dbe654ec576b451d7633f4c",
+  "verdict": "pass",
+  "summary": "Round 1's MAJOR is fixed and I killed the exact mutation that survived it: with `private int drains;` + `if (++drains >= 13) { currentInterval = config.intervalFloor(); return; }` as adaptInterval's first statement, the new per-window assertion FAILED at MemoryFlatAtIntervalCeilingTest.java:347 -- 3.17 files/s over a 10105 ms window (32 files) vs the 2.0 bound -- in 1m10s, with a real JUnit <failure> element. Reverted; `git diff` on Accumulator.java is empty and the staged hash is unchanged. Clean path re-run with --rerun (the first attempt came back UP-TO-DATE): BUILD SUCCESSFUL, tests=1 skipped=0 failures=0 errors=0, time=199.277 s. The 2.0 threshold is well-chosen against FLAKE -- at the ceiling the rate is structurally capped at 4*(floor(S/T)+1)/S with T~5.15 s and S>=10 s, i.e. <=1.18 files/s, and the 8 MiB size trigger is unreachable at 24 x ~223 KB -- and I independently confirmed the interval-invariance argument the fix rests on: the clean run and the mutated run left the SAME 166 files in the store, so only elapsed time differed, exactly as the row claims. Six MINOR findings, none blocking; the largest is that this commit newly puts filesystem I/O in the sampler thread, and Files.walk can die on the store's own put*.tmp rename, silently truncating every assertion.",
+  "verification_performed": [
+    "Re-applied round 1's exact mutation to ingest/src/main/java/binjava/ingest/Accumulator.java (drains counter + floor jump at >=13 as adaptInterval's first statement). `./gradlew :http:memoryBoundCeilingTest --rerun` -> FAILED in 1m10s at MemoryFlatAtIntervalCeilingTest.java:347, message 'files/s over a 10105ms window during the load (32 files) ... Expecting actual 3.1667491340920337 to be less than 2.0'. The NEW assertion kills what the old average passed green.",
+    "Reverted the mutation: `git diff ingest/src/main/java/binjava/ingest/Accumulator.java` is empty (0 lines); `git status --short` shows only the three staged files; `git diff --cached | sha256sum` still 5c8b2ad8...3f4c.",
+    "Clean path: first `./gradlew :http:memoryBoundCeilingTest` returned UP-TO-DATE from the author's run, so I forced `--rerun`. BUILD SUCCESSFUL in 3m20s; TEST-binjava.http.MemoryFlatAtIntervalCeilingTest.xml reports tests=1 skipped=0 failures=0 errors=0 time=199.277.",
+    "Interval-invariance of the flush COUNT (the premise of the round-1 major) independently confirmed: the clean run's store dir holds 166 files and the mutated run's holds 166 files. ~41 flushes x 4 files, one flush per ~5 s -> 0.79 files/s, matching the author's stated median 0.790.",
+    "tmpdir fix confirmed EMPIRICALLY: both runs created their store under http/build/tmp/binstore-memflat-ceiling* (166 files, 175 MB each) and `find /tmp -maxdepth 1 -name 'binstore*'` returns nothing. memoryBoundTest (M1.18) still sets no java.io.tmpdir in http/build.gradle.kts -- pre-existing, untouched by this commit, not a regression it introduced.",
+    "Sleep removal safety checked at the source: DefaultIngest's javadoc line 44 states append is BLOCKING until records are DURABLE, and Accumulator.drain() calls adaptInterval BEFORE the segment is published and the waiters released -- so the 202 does prove the drain, and therefore adaptInterval, ran. The failure mode of a wrong assumption here would have been a FALSE RED (probe returns 250 ms), not a false green; the clean run passed.",
+    "check-tdd's failure verified as structural, not evaded: scripts/tdd_scan.py task_for() maps by the /src/<sourceSet>/java/ path segment to ':http:test', and http/build.gradle.kts:38-40 excludes MemoryFlatAtIntervalCeilingTest.class from that task, so the scanner runs nothing. Matches the packet's statement and M0.52's row.",
+    "CI checked directly: .github/workflows/ci.yml runs only `./gradlew dependencyLicenses` and `pre-commit run --all-files` -- neither memoryBoundTest nor memoryBoundCeilingTest runs anywhere automatically. Round 1's minor stands and is project-wide, not introduced here.",
+    "Files.walk race PROVEN with a standalone probe rather than argued: a writer doing only createTempFile-in-root + ATOMIC_MOVE (exactly LocalFsBinStore.put, lines 186/191) against a concurrent `Files.walk(root).filter(Files::isRegularFile).count()` produced 10 UncheckedIOException/NoSuchFileException failures in 306 walks, naming the vanished put*.tmp. A variant that also deleted files gave 155 in 446."
+  ],
+  "findings": [
+    {
+      "file": "http/src/test/java/binjava/http/MemoryFlatAtIntervalCeilingTest.java:220",
+      "severity": "minor",
+      "finding": "The sampler thread now does filesystem I/O (countFiles), and a walk that races the store's own put*.tmp rename kills it silently, truncating ALL THREE assertions from that moment on. This risk is NEW in this commit -- M1.18's sampler reads only the MemoryMXBean and cannot throw.",
+      "failure_scenario": "LocalFsBinStore.put creates put*.tmp in the SAME root the sampler walks and ATOMIC_MOVEs it away (LocalFsBinStore.java:186,191). I measured Files.walk throwing UncheckedIOException/NoSuchFileException on exactly that pattern (10 failures in 306 walks under rename-only churn). If it fires, countFiles' `catch (Exception e) -> throw new IllegalStateException` kills the daemon sampler; `sampling` stays true, `sampler.join()` (line 296) returns at once, and the test runs on and PASSES with samples frozen at the death point. hasSizeGreaterThan(10) only catches a death inside the first ~10 s of load.",
+      "surviving_mutation": "Any regression appearing after the truncation point. Concretely: the round-1 `if (++drains >= 13) currentInterval = config.intervalFloor();` mutation would survive a sampler death occurring before drain 13 -- the cadence loop then sees only ceiling-regime windows and returns green, and the peak-heap and 10x bounds likewise stop constraining the rest of the 200 MB.",
+      "suggested_fix_not_for_this_round": "One line: after sampler.join(), assert the last sample's timestamp is within ~2 sampling periods of the load end (or route the sampler's exception into `failures`). Not fixed now per review.md rule 11/12."
+    },
+    {
+      "file": "http/src/test/java/binjava/http/MemoryFlatAtIntervalCeilingTest.java:336",
+      "severity": "minor",
+      "finding": "The window walk has no unchecked TAIL -- with ~1 s samples every sample is an endpoint of some evaluated window, and the last window starts at index n-11 and ends at the final sample -- but a SHORT floor-regime burst is diluted below 2.0 inside any 10 s window.",
+      "failure_scenario": "Arithmetic from the two rates I measured (ceiling 0.79 files/s, floor 3.17-4.33 files/s): a window of 10.1 s containing d seconds of floor regime reads (0.79*(10.1-d) + R*d)/10.1, which stays under 2.0 for d < ~3.4 s at R=4.33 and d < ~5.1 s at R=3.17. So a shortening confined to roughly the last 3 s -- about the final 5% of the 200 MB -- is invisible.",
+      "surviving_mutation": "Gate the floor jump on the drain count near the END of the run instead of the start, e.g. `if (++drains >= 43) currentInterval = config.intervalFloor();` in adaptInterval (~44 drains per run), so only the last flush or two run at the floor. Derived from the two measured rates, not from a run; a full run is 3.5 min and this is a minor.",
+      "why_not_higher": "Every realistic 'the interval regressed' bug is persistent, and the fix catches those at the first floor second. This names the residual gap for the milestone harvest."
+    },
+    {
+      "file": "http/src/test/java/binjava/http/MemoryFlatAtIntervalCeilingTest.java:347",
+      "severity": "minor",
+      "finding": "2.0 files/s is safe against FLAKE but its vacuity margin is machine-dependent, and the backlog row states one machine's figure as if it were stable.",
+      "failure_scenario": "The ceiling side is structural: rate <= 4*(floor(S/T)+1)/S with T~5.15 s and S>=10 s gives <=1.18 files/s, and the size trigger cannot fire (24 x ~223 KB = ~5.35 MB against 8 MiB), so a legitimate ceiling window cannot reach 2.0. The FLOOR side is throughput-bound (rate ~ 4 * throughput / bytes-per-flush), not timer-bound: I measured the same round-1 mutation at 3.17 files/s where the author measured 4.33 -- a 27% swing on the same machine, mine under I/O load from another process. On hardware ~1.6x slower, or under contention, a genuinely floored run lands under 2.0 and the check goes vacuous while the run still passes green (the ceiling regime, being timer-bound, is unaffected and the test still completes).",
+      "surviving_mutation": "The round-1 drains>=13 mutation itself, run on a machine whose aggregate throughput is ~1.6x lower than this one: ~2.0 files/s in the floor windows, under the bound.",
+      "note": "Not asking for a change -- a normalised discriminator (files per MB written) separates the regimes by only ~1.9x and would be no better. Recording so the row's '2.2x below the real floor regime' is read as a single-machine measurement."
+    },
+    {
+      "file": "http/src/test/java/binjava/http/MemoryFlatAtIntervalCeilingTest.java:324",
+      "severity": "minor",
+      "finding": "The probe (>2000 ms) plus the cadence bound (<2.0 files/s) together pin the effective interval only to 'roughly >= 2 s', not to the 5 s ceiling.",
+      "failure_scenario": "Halve the configured ceiling: IngestConfig.intervalCeiling() 5 s -> 2.5 s. The probe waits ~2.5 s and clears 2000 ms; the cadence becomes 4 files per ~2.65 s = ~1.5 files/s and clears 2.0. Both assertions pass with the interval at half its specified value.",
+      "surviving_mutation": "IngestConfig's ceiling constant 5 s -> 2.5 s.",
+      "why_not_higher": "M3.4's IntervalPutRateTest pins the PUT rate to +/-20% of 1/intervalCeiling, so the constant is owned there; this test's job is NFR-6 at the ceiling, and a looser one-sided bound is the right shape for it. Recorded so the harvest knows which test owns which constraint."
+    },
+    {
+      "file": "http/src/test/java/binjava/http/MemoryFlatAtIntervalCeilingTest.java:356",
+      "severity": "minor",
+      "finding": "The two memory assertions -- the ones that carry NFR-6 -- stop constraining anything after ~25 MB of the 200 MB body, and a 20x increase in retained memory survives both.",
+      "failure_scenario": "bound = max(128 MiB, 10 * written). Once written > 25.6 MB the bound exceeds the 256 MiB heap ceiling, so `heap <= bound` cannot fail -- a violating heap OOMs first, and per AGENTS.md an OOM is recorded as a crash with no <failure> element. For ~87% of the run the effective assertion is 'did not OOM', plus peak < 220 MiB which is itself nearly implied by not OOMing under -Xmx256m.",
+      "surviving_mutation": "Make the writer retain the last 20 drained segments (~20 x 5.2 MB = ~104 MB live). Every sample then reads heap ~104 MiB: <= max(128 MiB, 10*written) at every point INCLUDING the early samples, and peak 104 MiB < 220 MiB. Green, with the live set 20x what the test exists to bound.",
+      "why_not_higher": "Inherited verbatim from M1.18 and from testing.md rule 21's own phrasing; changing it here would re-litigate an accepted commit and widen this task's scope. The ceiling-specific value M3.5 adds is carried by the probe and the per-window cadence, both of which I confirmed falsifiable."
+    },
+    {
+      "file": "docs/internal/product/backlog.md:53",
+      "severity": "minor",
+      "finding": "The row is honest per non-negotiable 4 -- it states the round-1 major, the measured threshold rationale, the tmpdir and sleep fixes, and the SKIP=check-tdd with M0.52 as the fix -- but one measured figure in it is stale.",
+      "failure_scenario": "The row says '~152 files are written either way'. I measured 166 files in the clean run's store and 166 in the mutated run's. The CLAIM the figure supports (the flush count is interval-invariant) is confirmed exactly -- 166 = 166 -- so the argument stands; only the number is from an earlier shape of the test, and a reader checking it against a fresh run finds a 9% discrepancy in a row whose whole point is that its numbers were measured.",
+      "surviving_mutation": "n/a -- prose, not an assertion."
+    }
+  ],
+  "round1_minors_reconfirmed": [
+    "Sampler has no uncaught-exception capture: UPGRADED from opinion to demonstrated mechanism above, still minor.",
+    "`written >= TARGET_BYTES - PRODUCERS*512` (line 426) cannot fail independently of `failures.isEmpty()` (line 425), which is asserted first: a producer that dies mid-stream lands in `failures`. Dead but harmless; correctly not fixed.",
+    "CI runs neither memory-bound task: confirmed from .github/workflows/ci.yml. Project-wide and pre-existing (CI runs no Gradle test task at all), not blocking this commit."
+  ],
+  "not_findings_checked_and_cleared": [
+    "Thread.sleep(1_000) at line 234 is the sampler's measurement cadence, not a wait-for-condition -- a real-heap soak has no clock to inject, and M1.18 does the same. Not a testing.md rule 15 violation in substance.",
+    "The two warm-up Thread.sleep(300) calls ARE gone; no sleep remains in the warm-up or probe path.",
+    "isFailOnNoMatchingTests = true on the new task means a class rename breaks it loudly instead of silently running nothing.",
+    "No existing assertion was weakened: the diff adds a file, a Gradle task and one exclude line; the exclude follows the M1.18 tier precedent and is documented in place."
+  ],
+  "task": "M3.5",
+  "role": "test-reviewer"
+}

@@ -1,0 +1,34 @@
+{
+  "diff_sha256": "aec77ea579972c77f20d4e218f7b19b9c97bc824aa4cb5c42b0325382f0d05ea",
+  "verdict": "changes-requested",
+  "summary": "The new attributionLen bound is correct and I measured it refusing both narrowing shapes. Two things are not landable as staged: the deleted count test was deleted on a MEASURED claim I measured false -- with `count <= 0 ||` removed the attributed reader raises OutOfMemoryError past `throws IOException` with the whole :format: suite green -- and the sign half of the new attributionLen guard has no case at all, its removal ACCEPTING a spliced object. Both fixes are one test each; no production behaviour is wrong today.",
+  "findings": [
+    {
+      "file": "format/src/test/java/binjava/format/AttributedDeltaTest.java:115-121",
+      "severity": "major",
+      "title": "A test was deleted on a measurement that is false for values other than the one tried, and the false conclusion is now recorded in the tree as MEASURED",
+      "failure_scenario": "The surviving javadoc states, as measured, that the `count <= 0` half of CommitDelta.java:214 'needs no case of its own' because a negative count 'narrows to 4, the loop then runs zero times' and the empty-delta guard refuses it -- so a test 'would constrain nothing'. That holds only for a negative value whose low 32 bits are small. MEASURED in a review tree at the staged bytes, splicing the segment count of an attributed delta with the uvarint for 0xFFFFFFFF7FFFFFFF (negative as a long, so `count > c.remaining()` is FALSE; narrows to Integer.MAX_VALUE): at the staged bytes -> `IOException: delta claims -2147483649 segments`; with `count <= 0 ||` deleted -> `java.lang.OutOfMemoryError: Requested array size exceeds VM limit` out of `new ArrayList<>((int) count)` at CommitDelta.java:217, past ChainReplay's `throws IOException`, and `./gradlew :format:test` still BUILD SUCCESSFUL. So the mutation the javadoc calls unobservable is the exact OOM this whole guard exists to prevent, the deleted test's own name (`aNegativeReadingSegmentCountIsREFUSEDNotNarrowed`) describes it, and a red for it was available from the value, not from a different test. The consequence of landing as staged is not a defect today but the next session reading that javadoc deletes the half on the tree's own written authority. Non-negotiable 2 (never delete a test to make a check pass) and non-negotiable 4 (never claim a measurement not made). Fix: restore the negative case with a value narrowing to a large positive int, and correct the javadoc -- or, if it stays deleted, the javadoc must say the deletion was based on ONE value and name which."
+    },
+    {
+      "file": "format/src/main/java/binjava/format/CommitDelta.java:204",
+      "severity": "major",
+      "title": "The `len < 0` half of the new attributionLen guard -- the half the round exists for -- is unconstrained; deleting it ACCEPTS the spliced object",
+      "failure_scenario": "MEASURED in a review tree at the staged bytes: replacing `if (len < 0 || len > c.remaining())` with `if (len > c.remaining())` leaves `./gradlew :format:test` BUILD SUCCESSFUL, and a delta whose podId length prefix is spliced to the uvarint for 0xFFFFFFFF00000004 (negative as a long, so the remaining-bytes half never fires; narrows to 4) decodes as VALID -- `ACCEPTED pod=poda` -- instead of the `IOException: a delta claims a -4294967292-byte podId but only 11 bytes remain` the staged code produces. That is precisely the silent misread the new comment at CommitDelta.java:220-226 says the guard prevents, and precisely the case the same commit DOES pin for the sibling field in Checkpoint (CheckpointDecodeRefusalTest.java, `negativeNarrowingToThree`). The two new cases in AttributedDeltaTest both use POSITIVE wide values (0x7FFFFFFF and 0x1_0000_0004) and pin only the `> remaining` half. One test, mirroring the Checkpoint one, closes it."
+    },
+    {
+      "file": "format/src/main/java/binjava/format/CommitDelta.java:314",
+      "severity": "minor",
+      "title": "The third length-prefixed field on the same reader -- the segment key -- is still `c.bytes((int) c.uvarint())`, while the new comment reads as though the reader is now closed",
+      "failure_scenario": "MEASURED at the staged bytes: splicing the segment key length of an attributed delta to 0x1_0000_0005 or to 0xFFFFFFFF00000005 both decode as VALID -- `ACCEPTED key=seg/a` -- with no exception for a caller's `catch (IOException)`. Pre-existing and reachable from the v0 and KIND_DELTA paths too, so fixing it here would widen this row's scope; but the new comment at CommitDelta.java:220 says 'BOUND BEFORE THE CAST, both fields' three lines below a call to `readSegment` whose own length prefix is not bounded, which is how the next reader concludes the class is closed. A backlog row plus one clause in the comment naming readSegment as still open."
+    },
+    {
+      "file": "format/src/main/java/binjava/format/Checkpoint.java:319",
+      "severity": "minor",
+      "title": "The archive row records an ENUMERATED {0,1} presence flag; the decoder tests `== 1` and treats every other value as absent (carried from round 3, restated because the row now claims it as shipped)",
+      "failure_scenario": "backlog-done.md's M4.10c row says the pod state is 'decoded from an ENUMERATED {0,1}'. `if (version == VERSION_ATTRIBUTED && c.uvarint() == 1)` decodes a flag of 2 or 7 as 'no pointer' rather than refusing it, then reads the following incarnation bytes as the NEXT pod's length prefix and watermark. On a multi-pod checkpoint that can yield a decode that succeeds carrying a pod nobody wrote, with the real pod's pointer silently dropped -- the empty idempotency window ADR-0036 exists to close. The trailing-bytes check catches only the single-pod case. Either refuse a flag outside {0,1} as this class does for `version`, or drop the enumerated claim from the row."
+    }
+  ],
+  "task": "M4.10c",
+  "role": "reviewer",
+  "staged_tree": "33e57afa250d36334c3636ea1e8e74df3cdc2b42"
+}

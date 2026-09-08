@@ -1,0 +1,38 @@
+{
+  "diff_sha256": "f0dee8c72c74bb56488d945cc8bd5fb913e7776074df40a5cc2715df8e695022",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "WT44",
+      "severity": "minor",
+      "file": "scripts/check-module.sh:55",
+      "title": "the sentinel's discriminating state -- explicit-and-EMPTY candidate list -- has no fixture; ${3--} -> ${3:--} survives all 61 tests",
+      "detail": "Measured, not argued. Applying the mutation `local root=\"$1\" all=\"$2\" candidates=\"${3:--}\"` and running `./gradlew -p buildSrc test` gives 61 tests / 0 failures, identical to baseline. Both BRANCHES are constrained -- the sentinel path by ModuleGateTest#aTrackedOrphanFails (ModuleGateTest.java:337) and #anUntrackedOrphanIsIgnored (:329), the explicit-list path by ModuleDriftTest's missing-settings-entry row and ModulePlanTest#planPropagatesDriftFailure. What is unconstrained is the third state the sentinel was introduced to separate from the other two: a caller that passes a candidate list which is legitimately EMPTY. All three drift fixtures and both --root fixtures have at least one depth-1 build.gradle.kts, so `ls */build.gradle.kts` is never empty and the colon never gets the chance to substitute. Observable difference, demonstrated on a scratch root holding only an empty `include()` and no depth-1 build file: `--check-drift` prints `ok no module drift` exit 0 under ${3--}, and 8 x `<module> has a build.gradle.kts but is not in settings` exit 1 under ${3:--}, naming this repository's modules against a fixture containing none of them -- the exact defect the commentary above the line says the sentinel exists to remove.",
+      "kill": "A fourth drift fixture, e.g. buildSrc/src/test/resources/drift-fixtures/no-modules/ containing only settings.gradle.kts with an empty include(), plus one ModuleDriftTest CsvSource row `no-modules | 0 | no module drift`. It fails under ${3:--} because the empty candidate list falls through to the repo's tracked set, and passes under ${3--}.",
+      "non_blocking_because": "No false-GREEN path exists. The production door always passes the literal \"-\" (plan() default; `plan $(changed_files)` at check-module.sh:216), so the empty-candidate state is reachable only through the --check-drift and --plan --root test doors. The mutation's failure mode is a loud false FAIL on a hypothetical future fixture, not a gate that passes while checking nothing. Recorded under review.md rule 11; belongs alongside M0.24, which already carries the sibling untested-hardening class.",
+      "failure_scenario": "A future maintainer adds a drift fixture whose root has no depth-1 build.gradle.kts (or a real module tree is temporarily emptied). check_drift receives an empty candidate list, the colon form rewrites it to the sentinel, and the gate scans THIS repository's tracked files instead -- printing eight FAILs naming format, plugin and binstore-backends against a fixture that contains none of them, and blocking the commit for a reason that is nowhere in the input. Nothing in the suite would have warned that the one-character fix made in this commit had been undone."
+    },
+    {
+      "id": "WT45",
+      "severity": "minor",
+      "file": "scripts/check-harness-tests.sh:20, buildSrc/build.gradle.kts:36",
+      "title": "the surviving one-line pathspec and the two input declarations are still executed by no test -- already recorded as M0.24",
+      "detail": "Confirming the removal question directly: grep across buildSrc/src/test/ finds no reference to check-harness-tests.sh, so nothing that remains in the suite ever constrained it, and removing the ~50 lines of hardening could not have weakened a remaining test. The residue is symmetrical, though: reverting `'settings.gradle.kts'` from the delta pathspec, reverting `include(\"*.py\", \"*.sh\")` to `include(\"*.py\")`, or deleting the `rootSettings` inputs.file declaration each leave 61 green, because the only witness for a stale-input bug is a Gradle UP-TO-DATE decision that no assertion reads. Raised only to confirm it is the same finding, not a new one: M0.24 names it and cites WT39/WT40 as rationale. No action in this commit.",
+      "failure_scenario": "Someone renames a module, or the Java-test parser in scripts/*.sh changes, and the Gradle test task is judged UP-TO-DATE because an input declaration was dropped or the pathspec narrowed. check-harness-tests.sh prints 'ok N harness test(s) pass' or 'ok no harness change' having run nothing on the change the suite exists to catch, and the whole 61-test suite stays green because no assertion observes Gradle's up-to-date decision."
+    },
+    {
+      "id": "WT46",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/RuleListTest.java",
+      "title": "stale red record for a test dropped before staging; not a weakening",
+      "detail": ".harness/tdd/red.json carries binjava.RuleListTest#theGateAppliesBothRulesToTheRealTree, which is absent from the staged file (only everyModuleNamedByARuleStillExists and theRuleListsDoNotOverlap remain). RuleListTest.java is status A, so no committed assertion was loosened and check-test-integrity has no baseline to compare -- this is within-commit churn, not the production-changed-to-satisfy-the-test inversion. The behaviour it named is now covered more strongly by ModuleGateTest#theRuleCounterCountsRatherThanRestates (:267) and #theRuleCountersAreNotSatisfiedByAnyConstant (:305), which pin two distinct non-zero counts per rule against fixtures rather than one count against the real tree, whose value was a function of the index. Noted so the stale key is not mistaken for a missing test later.",
+      "failure_scenario": "A later reviewer greps red.json, sees theGateAppliesBothRulesToTheRealTree, cannot find it in RuleListTest.java, and concludes a test was silently deleted to make a check pass -- or, worse, assumes the real-tree rule-application assertion still exists and does not notice that rules 2/4/5 are asserted only against fixtures (M0.23)."
+    }
+  ],
+  "confirmations": {
+    "harness_hardening_removal": "clean -- no remaining test referenced check-harness-tests.sh (grep over buildSrc/src/test/), so nothing was weakened by its removal; git diff --cached --diff-filter=D is empty",
+    "sentinel_both_branches": "branches yes, discriminating state no -- see WT44, mutation run and demonstrated",
+    "drift_test_red_record": "honest -- sha256(buildSrc/src/test/java/binjava/ModuleDriftTest.java) = 6d4bff226fdb89c4954dc0f7663b493ed7b9f8bf1dc75f17bde1e98cb412773a, byte-identical to the red record, and its timestamp 1788117328 is the latest of all 25 records, later than every ModuleGateTest record -- so it was re-observed after the javadoc edit rather than carried over",
+    "baseline_verified": "61 tests / 0 failures on the staged tree; scripts/check-module.sh restored byte-identical to the index after the mutation experiment; staged sha256 unchanged at f0dee8c7"
+  }
+}

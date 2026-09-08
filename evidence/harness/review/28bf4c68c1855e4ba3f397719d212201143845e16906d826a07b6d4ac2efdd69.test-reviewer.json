@@ -1,0 +1,23 @@
+{
+  "diff_sha256": "28bf4c68c1855e4ba3f397719d212201143845e16906d826a07b6d4ac2efdd69",
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "location": "ingest/src/main/java/binjava/ingest/Accumulator.java:146,154 (adaptInterval), no covering test in ingest/src/test/java/binjava/ingest/AccumulatorTest.java",
+      "description": "No fixture drives lastFillRatio to exactly 0.4 or exactly 0.9 (the low/high fillRatio comparison operators themselves, as opposed to the delay comparisons, which ARE tested at their exact boundary). Every low fixture lands well under 0.4 (ratios ~0.0001-0.12) and every high fixture lands well over 0.9 (~0.9538-0.969); the middle-band fixture is deliberately kept strictly inside (0.4, 0.9) at ~0.5723.",
+      "failure_scenario": "Mutating `lastFillRatio >= config.fillRatioHighThreshold()` to `lastFillRatio > config.fillRatioHighThreshold()`, or `lastFillRatio <= config.fillRatioLowThreshold()` to `lastFillRatio < config.fillRatioLowThreshold()`, survives every test in this diff, because none of them constructs a segment whose fillRatio equals exactly 0.4 or exactly 0.9. The spec text itself says \"sustains \u22640.4\" / \"\u22650.9\", so this is the literal boundary the acceptance criterion names, and it is unconstrained. (The delay-side `>=` in the same method IS correctly boundary-tested, by theIntervalLengthensToTheCeilingOnceFillRatioSustainsLowForTheFullDelay at exactly 2 minutes and theIntervalDoesNotLengthenBeforeTheSustainedDelayElapses at one millisecond short.)"
+    }
+  ],
+  "notes": [
+    "Direction-swap mutation (swap which branch shortens vs. lengthens, or swap which of intervalFloor/intervalCeiling each branch targets) is reliably killed by theIntervalLengthensToTheCeilingOnceFillRatioSustainsLowForTheFullDelay (AccumulatorTest.java:324-340): under either swap variant, currentInterval never leaves the floor when the assertion expects the ceiling, so the test fails. theIntervalShortensToTheFloorImmediatelyOnceFillRatioReachesTheHighThreshold also fails at its own setup assertion under the same mutation.",
+    "Verified the byte arithmetic the task asked to double-check by hand against SegmentWriter's real framing (32-byte preamble + 49-byte directory entry + 8-byte block header + per-record flags/uvarint/id/version/payload + 24-byte footer): the corrected 1_000_000-byte high fixture in theIntervalNeverExceedsTheCeilingNorDropsBelowTheFloorUnderOscillation (line 333) genuinely computes to fillRatio ~0.9538 against the 1 MiB target (>= 0.9), and the previously-buggy 900_000-byte fixture the author's own comment references genuinely only reaches ~0.858 (< 0.9), confirming the fix is real and not just asserted. The 850-byte fixture against a 1000-byte target in theIntervalShortensToTheFloorImmediatelyOnceFillRatioReachesTheHighThreshold (line 369) computes to ~0.969, and the 600_000-byte middle-band fixture against 1 MiB in aMiddleBandFillRatioResetsTheLengthenStreakWithoutChangingTheInterval (line 397) computes to ~0.5723 -- both genuinely land in their intended bands.",
+    "Every low/high fixture in the suite also carries a self-checking assertion on a.lastFillRatio() immediately verifying the intended band, so even if the arithmetic above were wrong the test would fail loudly on that assertion rather than silently passing for the wrong reason.",
+    "theIntervalNeverExceedsTheCeilingNorDropsBelowTheFloorUnderOscillation does assert the [floor, ceiling] band on currentInterval() inside the loop body every iteration (not only after the loop), satisfying the specific ask. Its marginal kill power beyond the other five tests is limited, though, because adaptInterval only ever assigns currentInterval literally config.intervalFloor() or config.intervalCeiling() (a binary jump, per the method's own javadoc) -- there is no intermediate value a bug could produce that this test's per-iteration bound would catch but the direction/streak-reset tests would not. Not a defect; noted so its value is not overstated.",
+    "No Thread.sleep or System.currentTimeMillis anywhere in the new tests; all timing goes through the same TestClock fake already established for the rest of AccumulatorTest.java, matching the M1.16c precedent the task names.",
+    "Each new test constructs its own TestClock/IngestConfig/Accumulator locally; no shared mutable state or ordering dependency across the six new test methods.",
+    "No existing assertion in AccumulatorTest.java was touched or weakened by this diff -- it is a pure addition of six new @Test methods after the existing suite."
+  ],
+  "task": "M3.3",
+  "role": "test-reviewer"
+}

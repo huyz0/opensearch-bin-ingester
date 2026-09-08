@@ -1,0 +1,15 @@
+{
+  "diff_sha256": "29cfff5809044e287571de25170714a94eca957902143ef5154dc6091c87ddb7",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "minor",
+      "file": "docs/internal/product/decisions/0030-re-minting-epoch-one-is-the-object-paths-problem-not-the-leases.md:127-128",
+      "summary": "The unsealed-case bullet calls the abandoned-unsealed-chain mechanism 'itself the M4.16/ADR-0029 defect class, now closed by M4.32' and hedges only for chains written before that fix. But the backlog's own M4.32 row says its fix shares `neverOpened`'s origin caveat and explicitly leaves 'an immediate predecessor that is WHOLLY empty (no CONTINUE, no Seal at all)' unwalked, tracked as M4.23 -- still `todo`. So M4.32 narrowed the M4.16 defect class, it did not close it: a new (not merely pre-existing) unsealed-and-undetected ancestor is still producible going forward through the M4.23 gap. 'now closed' overstates what the tree's own tracked state supports.",
+      "failure_scenario": "A future reader relying on this ADR to reason about how much residual exposure the unsealed-adoption gap carries concludes the M4.16 mechanism itself is fully retired and stops looking for it, when M4.23 (todo) describes a live, different route to the same unsealed-ancestor shape that M4.32 does not cover."
+    }
+  ],
+  "task": "M4.3j",
+  "role": "reviewer"
+}

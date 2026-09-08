@@ -1,0 +1,23 @@
+{
+  "diff_sha256": "1c20ff4167aa4de85722ab22172cd52b2ea01aec9c6ac372426ad71d195996f0",
+  "verdict": "pass",
+  "summary": "Round 6, re-verification only. Sequencer section of the staged diff hashes to 8df2008228325c9b82cc9a477640abea6f227dd6776cadddbbe4d55b68b5383d, identical to the a7446a99 packet, so no Java changed and the round-5 production pass stands. R5-1 is fixed: M4.3d now states the bound as NEARLY A FULL TTL, explicitly retracts the round-4 TTL-minus-renewInterval claim and names the reasoning (renew() lets the IOException from putIfMatch escape with held/heldVersion untouched, so the retry cadence is the caller's and the node can conclude it is fenced at T+epsilon while the landed lease runs to T+TTL). Verified against the code: renew() has no catch, and no Java or ADR file carries a competing copy of the bound. No contradiction with M4.3b's 'up to a full TTL', which is a valid non-tight upper bound over 'nearly a full TTL'. M4.3d's owner correction is right -- every M4.10 reference in sequencer/ is about commit idempotency on (podId, flushSeq), none about the lease CAS. Backlog IDs M4.3b/M4.3c/M4.3d/M4.3e are unique (no duplicates in the whole file) and every ID and ADR reference in the new rows resolves (ADR-0007 exists, M4.10 has a row, FR-11/NFR-9 are in use). Cost unchanged: the lease is one conditional PUT per renewInterval per slot with no read, scaling with slots and leaders, never with records, shards, partitions or indices; M4.3d's proposed remedy adds a GET only on the rare ambiguous path and does not change that.",
+  "findings": [
+    {
+      "severity": "minor",
+      "title": "M4.3c cites StoreFakes.GatedCommit, which sequencer cannot reach and which cannot park a thread in the takeover cycle",
+      "location": "docs/internal/product/backlog.md, row M4.3c",
+      "failure_scenario": "GatedCommit lives in ingest's plain test sources rather than testFixtures, so sequencer has no compile path to it, and it gates putIfAbsent only behind one shared release latch -- it cannot hold a thread inside the read-decide-CAS cycle on the putIfMatch takeover path. Whoever picks up M4.3c follows the pointer, finds it uncompilable, and either re-derives the mechanism or, worse, narrows the test to the one path the fake can gate and reports the property pinned. The row's substantive claim (a deterministic T1 interleave is achievable) survives; only the named precedent is wrong -- StatBlindStore, added by this very commit, is the right one. Not blocking: M4.3c is a todo row, no code depends on it, and the round-4 finding it records is already correct in substance.",
+      "recommendation": "Record in the commit body; when M4.3c is picked up, write a call-selective gated decorator in sequencer's own test sources with StatBlindStore as the precedent."
+    },
+    {
+      "severity": "minor",
+      "title": "M4.3c's 'all four sites' over-promises the deliverable",
+      "location": "docs/internal/product/backlog.md, row M4.3c",
+      "failure_scenario": "The measurement quoted (removing synchronized from all four sites leaves the suite green) is true of the current suite, but read as a deliverable it demands killing a mutant that may be equivalent: held() is a two-field read whose synchronized removal no deterministic T1 test can distinguish, absent a data-race detector. M4.3c is then either closed with a test that does not constrain held(), while the row claims it does, or left open forever chasing an unkillable mutant. Not blocking, same reasons as the finding above.",
+      "recommendation": "Record in the commit body; scope M4.3c to the three CAS-cycle sites and state held()'s monitor as a consistency argument rather than a mutation target."
+    }
+  ],
+  "task": "M4.3b",
+  "role": "reviewer"
+}

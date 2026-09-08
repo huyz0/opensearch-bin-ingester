@@ -1,0 +1,29 @@
+{
+  "diff_sha256": "c065ee7a5c220e2f1dca425b1b14da8e956cb0667119a3f2e93a3817baa9fb8c",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "file": "scripts/test_integrity.py",
+      "line": 90,
+      "severity": "major",
+      "what": "The `sources` drop-list keys on `TEST_PATH.search(dest)`, but the loop below reads a path only when `p.endswith('.java') and TEST_PATH.search(p)`. The two predicates are not the same, so a rename whose destination sits inside a test source set but does NOT end in `.java` has its SOURCE removed from `paths` while its DESTINATION is never read -- the file vanishes from the gate entirely. `departed` cannot recover it either, because its guard is `not TEST_PATH.search(dest)`, which is false here. The adjacent comment 'ONLY WHERE THE DESTINATION IS ALSO READ' asserts exactly the property the code does not have.",
+      "failure_scenario": "Measured on the staged bytes, in a fixture built the way RenameBlindnessTest builds them, under BOTH diff.renames settings. Repo: mod/src/main/java/binjava/Foo.java and mod/src/test/java/binjava/FooTest.java (two @Test methods, strength 6 and 3), committed. Then staged together: `git mv mod/src/test/java/binjava/FooTest.java mod/src/test/java/binjava/FooTest.java.bak` (or `...FooTest.kt`, the in-place Kotlin conversion -- same predicate) plus Foo.n() changed 3 -> 4. Git scores it R100. The staged gate prints `ok no test weakened, disabled or removed alongside the production change`, exit 0, with diff.renames on AND off. HEAD's test_integrity.py on the identical fixture with diff.renames=false prints two `FAIL ... removed alongside a production change` lines and exits 1 -- so this is a weakening of the gate relative to HEAD on that configuration (non-negotiable 2), not merely an uncovered case. The route it opens is the one the gate exists to close: rename a test file's extension in place and every assertion in it leaves the tier unreported alongside a production change. Fix is to make both `sources` and `departed` key on the same predicate the loop uses -- `dest.endswith('.java') and TEST_PATH.search(dest)` -- and to add the fixture, since no test in RenameBlindnessTest constrains a non-.java destination."
+    },
+    {
+      "file": "scripts/test_integrity.py",
+      "line": 78,
+      "severity": "major",
+      "what": "review.md rule 12: this is round 4, and rounds 1-3 each closed with a real major. The finding above is a fourth, and it is in the block round 4 itself added (`sources`/`departed`/`touched`), not in the original change -- the signature rule 12 names: 'every extra round found defects in the previous round's fix rather than in the original change'. The commit has also outgrown its task row. M0.53 states one fix -- 'teach both scanners to follow renames via --name-status -M, taking the SOURCE blob as before for a renamed path' -- and the diff now additionally carries three separable defect classes: a test that DEPARTS the test tier (`departed`), a production file that DEPARTS src/main defeating the short-circuit (`touched`), and package re-qualification of test ids across a module move (`java_tests.rekey` + `package_of`, used by both scanners). This commit should be SPLIT rather than reviewed a fifth time, or the cap argued with a staged `rounds:M0.53` line in `baselines/review.txt`.",
+      "failure_scenario": "Concretely: the rename-following core (git_renames.py + `renamed.get(p, p)` in both scanners) is verifiable on its own; `rekey`/`package_of` is a second, independent behaviour with its own two fixtures; `departed` and `touched` are a third, and are where the surviving bypass above lives. Reviewed together, each round's reviewer spends its budget re-reading the two already-verified parts, which is how the `sources`/`departed` predicate mismatch survived three rounds of attention. Split as-is, the third piece would be a ~30-line diff whose only question is 'which paths does the loop actually read', and the mismatch is unmissable at that size."
+    },
+    {
+      "file": "docs/internal/product/backlog.md",
+      "line": 1,
+      "severity": "minor",
+      "what": "The staged set is six files and does not include `docs/internal/product/backlog.md`, so the M0.53 row stays `todo` after this commit. Every one of the last three commits (2953b5a, 67606ab, d1f6eb7) flips its row in the same commit.",
+      "failure_scenario": "The next session runs `next-task`, reads M0.53 as `todo`, and either re-does the work or spends a session establishing from `git log` that it is already done -- the exact waste next-task/SKILL.md's 'has it already been done?' step exists to prevent."
+    }
+  ],
+  "task": "M0.53",
+  "role": "reviewer"
+}

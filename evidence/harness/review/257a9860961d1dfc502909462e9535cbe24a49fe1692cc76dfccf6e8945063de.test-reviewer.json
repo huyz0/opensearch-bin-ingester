@@ -1,0 +1,26 @@
+{
+  "diff_sha256": "257a9860961d1dfc502909462e9535cbe24a49fe1692cc76dfccf6e8945063de",
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/LocalSequencerTest.java:355",
+      "detail": "The REPLACEMENT justification is also false, and it is falsifiable by grep. It says this is 'the only test asserting the SEAL ENTRY, slot and continuation, at the end of a multi-entry chain through LocalSequencer'. Four tests in this file do exactly that: takingOverSealsThePredecessorsChainBeforeOpeningItsOwn (Seal(2,2), 3-entry chain), aTakeoverRedrivesPastTheFencedLeadersInFlightCommit (Seal(3,2), 4 entries), aThirdTermSealsItsImmediatePredecessor (Seal(2,3), 3 entries) and this one (Seal(5,2), 6 entries). \u26a0\ufe0f I SUPPLIED THAT WORDING in round 3 and it is my error as much as the author's -- I framed it as a contrast with aTakeoverReads and wrote it as a superlative. \u26a0\ufe0f The deeper point stands and is the reason this is worth saying at all: across ~35 mutations over four rounds no unique kill has ever been demonstrated for this test, so ANY 'the only test that...' justification for it should be about assertion CONTENT, which is checkable by grep, not about kill sets. A true and checkable form: 'unlike aTakeoverReads, which asserts only the epoch and the GET count, this asserts the seal ENTRY -- slot and continuation -- at a redrive budget of 1.' The test still earns its place; only the sentence is wrong.",
+      "failure_scenario": "The third attempt at this comment repeats the pattern: a reader checks the superlative, finds four counterexamples by grep, and now distrusts the whole comment block including the accurate first half about the name being drift. Two consecutive false justifications for one test is the signal that a superlative is the wrong shape here, not that the wording needs a third pass."
+    },
+    {
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/CommitLog.java:363",
+      "detail": "CARRIED UNCHANGED from a6a8d2cf, recorded not fixed, and I stand by minor. Surviving mutation: 'return new Seal(sealedAt.sequence(), continuedAt);' -- 126/126 green, because both tests reaching the guard seal with 9 and then propose 9. Answering the direct question: the third recurrence does NOT outweigh the reasoning, because a recurrence count is a frequency argument and not a consequence argument -- the property is still pinned on the sibling adopt branch and no production caller reads the returned continuedAt. What the recurrence DOES argue is that the root cause is the fixture convention rather than the assertions: three rounds of one-token fixes to three different coinciding-value sites says the fixtures are the source. The durable fix is a convention -- in seal fixtures, never let a proposed continuation equal the real one -- not a fourth one-token edit.",
+      "failure_scenario": "The guard is later changed to synthesise its answer from the caller's argument rather than returning the seal on the chain. The two sibling branches go red, this route does not, and the first consumer of the guard's return value follows a continuation epoch that names a chain nobody opened."
+    },
+    {
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitLogSealWriteTest.java:290",
+      "detail": "CARRIED UNCHANGED from a6a8d2cf, recorded not fixed, and I agree with the judgement call. Measured: with SmallPageStore's clamp deleted AND the paging loop collapsed, the only test that fires is M4.6a's theSamePaginatedChainWithoutASealTakesBothPages, one class over and about a different method. So the guard holds today and this is not urgent; the new test simply contributes nothing to defending the decorator it depends on. Self-sufficient form when someone is next in this file: CountingBinStore(new SmallPageStore(backing, 2)) asserting lists() == 2 alongside nextSequence() == 3.",
+      "failure_scenario": "M4.6a's control is deleted by someone who believes it only guards recover()'s test. The clamp becomes deletable with the suite green and two paging tests stop constraining paging at once."
+    }
+  ],
+  "task": "M4.6c",
+  "role": "test-reviewer"
+}

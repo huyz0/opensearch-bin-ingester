@@ -1,0 +1,50 @@
+{
+  "diff_sha256": "adb9cd7002df19a73e8376a1e4b46fc07a9c1be3dc2ce0e292d1883b3e42eef9",
+  "verdict": "pass",
+  "summary": "Round 9, tests. The only code change since round 8 is the seed-count guard, and it is MEASURED to have teeth in a default run: Integer.getInteger(\"sweep.seeds\", 10) -> 2 tests completed, 1 failed; DEFAULT_SEEDS = 10 -> 2 tests completed, 1 failed; unmutated -> BUILD SUCCESSFUL in 22s; and the guard did not break the red path -- ChainReplay.java:456 run.lastOffset() + 1 -> run.lastOffset() with 60 seeds still reddens theInvariantsHoldAcrossEverySeed in 5s. My round-8 minor is filed as M4.51 with the measurement intact. ANSWERING THE QUESTION PUT TO THIS ROUND: accepting the invocation-time hole is right, but the sentence justifying it is too strong. The property-set route is NOT only invocation-time -- MEASURED: one line `systemProp.sweep.seeds=3` appended to the tracked gradle.properties makes the sweep run 3 seeds, skip the workload assertion and report BUILD SUCCESSFUL in 4s, and with DEFAULT_SEEDS = 10 as well it is still green. That half IS a predicate over tracked files (gradle.properties, .github/workflows/ci.yml -- which today has no test job at all, M0.27), so rung 1 can express it and the javadoc/notes should not say nothing can. Minors only, none producing a wrong result today.",
+  "findings": [
+    {
+      "id": "M4.13-r9-1",
+      "severity": "minor",
+      "title": "the accepted hole has a FILE-BORNE half, so rung 1 does reach it: one line in the tracked gradle.properties disables the workload assertion, green in 4s",
+      "location": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSweepTest.java:142-147",
+      "failure_scenario": "Someone lands `systemProp.sweep.seeds=N` in the tracked gradle.properties (or a `-Dsweep.seeds=N` in the CI test job M0.27 will add), and every subsequent run of the sweep -- local pre-commit and CI alike -- skips the workload assertion entirely and reports a green 'M4 completion condition' over N seeds. MEASURED in a copy of the staged tree: appending `systemProp.sweep.seeds=3` to gradle.properties gives `sweep: 3 seeds in 269 ms, 284 readers judged` and BUILD SUCCESSFUL in 4s, with every anti-vacuity floor satisfied because all six are SEEDS * k.",
+      "surviving_mutation": "With `systemProp.sweep.seeds=10` present in gradle.properties, `DEFAULT_SEEDS = 1000` -> `DEFAULT_SEEDS = 10` is GREEN (MEASURED, BUILD SUCCESSFUL in 3s) -- the exact mutation the guard was added to kill. Two cheap remedies, neither needing a new abstraction: (a) a rung-1 grep predicate over tracked files for `sweep.seeds` being SET (gradle.properties, .github/workflows/**), which is what the javadoc currently says cannot exist; (b) `Assumptions.abort(...)` at the end of the test when the property is set, so a shrunken run is reported ABORTED rather than PASSED and cannot be read as a completion-condition run."
+    },
+    {
+      "id": "M4.13-r9-2",
+      "severity": "minor",
+      "title": "negating the guard makes the workload assertion inert in EVERY run, whole sequencer suite green",
+      "location": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSweepTest.java:142",
+      "failure_scenario": "A later edit inverts or drops the guard while tidying the test (or a merge resolves it wrongly). The workload assertion then never executes on any run, the seed count is free again, and nothing in the tree notices -- this is the third shape of the same defect the previous six rounds found, one level up from the constant.",
+      "surviving_mutation": "MEASURED: `if (System.getProperty(\"sweep.seeds\") == null)` -> `!= null` together with `DEFAULT_SEEDS = 10` leaves the ENTIRE :sequencer suite green (`./gradlew :sequencer:test --rerun-tasks` -> BUILD SUCCESSFUL in 11s, the sweep having run 10 seeds). No test asserts a test's own guard, so this is inherent to a self-asserting constant and is the reason remedy (a) in M4.13-r9-1 -- a predicate outside the file -- is the deterministic form. Recorded so it is not rediscovered as a fourth shape."
+    },
+    {
+      "id": "M4.13-r9-3",
+      "severity": "minor",
+      "title": "the staged rounds:M4.13 entry claims a pattern the recorded verdicts do not support, in two places",
+      "location": "baselines/review.txt:37",
+      "failure_scenario": "The entry is the argued escape from the round cap and is read later as the record of what these nine rounds cost and found. Two of its sentences are checkable against .harness/review and are false, so a reader deciding whether the escape was justified is given a tidier story than the verdicts hold -- which is precisely the failure mode rounds 4-8 of THIS task kept finding in this task's own prose. (1) 'EVERY ROUND PAST THE CAP FOUND THE SAME DEFECT WEARING A DIFFERENT SHAPE -- an assertion that cannot fail': round 4 (28bc2c0e6187) is a counterexample -- its two majors are M4.13-r-1, a refuted pipelining claim surviving verbatim in two javadocs, and M4.13-r-2, fenced writers absent from the ack trace, plus minor r-3, an `.as()` description carrying the pre-fix number. Those are false sentences and a coverage gap, not unfalsifiable assertions. Round 3 (322f180de44e) is only half the claimed shape too: two of its four majors are a knob Gradle never forwarded and a CONTINUE event documented in three places and emitted nowhere. (2) 'both reviewers measured a one-token rewrite of the `Integer.getInteger` line green at 10 seeds': the reviewer did (aae3b85c88ef.reviewer.json, M4.13-r6-1). The test-reviewer did not -- aae3b85c88ef.test-reviewer.json records `-Dsweep.seeds=1` giving 'sweep: 1 seeds in 172 ms, 87 readers judged' and BUILD SUCCESSFUL. Same defect, different measurement; the attribution as written is not what is on disk.",
+      "surviving_mutation": "None -- this is a claim in the record, not an assertion, and it is checkable: the two sentences above are contradicted by 28bc2c0e6187.reviewer.json and aae3b85c88ef.test-reviewer.json. The honest repair is the narrower true sentence (both reviewers independently found the guard sitting on the fallback, each by its own measurement) or deletion, which this gate's own remedy text prefers to correcting prose again."
+    },
+    {
+      "id": "M4.13-r9-4",
+      "severity": "minor",
+      "title": "check-session-load FAILS on staged content: the new M4.51 row is 611 bytes against the 600 cap",
+      "location": "docs/internal/product/backlog.md:157",
+      "failure_scenario": "pre-commit refuses this commit. The row is otherwise the correct disposition of my round-8 minor (the measurement `filter(e -> e.epoch() == epoch)` -> `filter(e -> true)` green at 200 seeds is preserved verbatim), so the fix is to move the trailing reasoning under `### M4.51` in backlog-notes.md and link it, not to weaken the row.",
+      "surviving_mutation": "None -- a deterministic gate already owns this and reports it (`check-session-load.sh`: 'M4.51 row is 611 bytes, cap 600'). Recorded only so it is not read as review noise and skipped with --no-verify."
+    },
+    {
+      "id": "M4.13-r9-5",
+      "severity": "minor",
+      "title": "PRE-EXISTING, not this change: ReviewRoundBudgetTest inherits REVIEW_ROUND_BUDGET, so the packet handed to this round printed a FALSE gate failure",
+      "location": "buildSrc/src/test/java/binjava/ReviewRoundBudgetTest.java:126-140",
+      "failure_scenario": "The packet for any over-budget task instructs the reviewer to re-run with `REVIEW_ROUND_BUDGET=N` (review.sh:138). That variable is inherited by `packet(...)`, whose fixture has 5 rounds recorded and expects review.sh to refuse round 6 at the default budget of 4 (review.sh:129). With N >= 6 in the environment the refusal correctly does not happen and the test fails, so `check-harness-tests.sh` reports FAIL on a tree whose harness is green -- which is what the 'GATES THAT ALREADY PASSED' section of THIS round's packet showed me. A gate that reports FAIL for a reason the tree does not contain trains reviewers to skip gate output, which is the same cost as a gate that reports ok while checking nothing.",
+      "surviving_mutation": "MEASURED in a copy of the staged tree, `./gradlew -p buildSrc test --rerun-tasks --tests binjava.ReviewRoundBudgetTest`: with REVIEW_ROUND_BUDGET=8 -> '4 tests completed, 1 failed', BUILD FAILED; with the variable unset -> BUILD SUCCESSFUL. Conversely the test cannot distinguish 'review.sh lost its refusal' from 'the caller raised the budget', so its assertion is decided by ambient state in both directions. One-line repair, compatible with the sibling test at :143-155 which sets the variable explicitly: `b.environment().remove(\"REVIEW_ROUND_BUDGET\")` at the top of `packet(...)`."
+    }
+  ],
+  "task": "M4.13",
+  "role": "test-reviewer",
+  "staged_tree": "2de2179fcff3dc887736ef82d544b185e743f9fb"
+}

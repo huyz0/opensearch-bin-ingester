@@ -1,0 +1,29 @@
+{
+  "diff_sha256": "4f1aa573b4f22ccfea5e88ac360ea59b9d7f2c77e9e3dfcf4b6ab362d1961bec",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "file": "ingest/src/main/java/binjava/ingest/SubscriptionHub.java",
+      "line": 115,
+      "severity": "major",
+      "what": "publish(CommitDelta, byte[]) was updated for the KEY but not for the PAYLOAD. It now iterates every SegmentCommit and hands each run a correct segmentKey -- while passing the SAME single `segment` byte[] to every one of them (line 125 -> publishRun -> Push). ADR-0032's Consequences section says this reader 'is updated in this same commit, as non-negotiable 8 requires', but a reader that pairs the right key with the wrong bytes is not updated, it is made to compile. Push carries the segment bytes INLINE (ADR-0004: the consumer issues no object-store request), so `segment` is what the consumer actually decodes -- the key is only a label. The commit applies 'refuse rather than answer' to CommitDelta.segmentKey()/runs() precisely because answering silently is the corruption path, and then does not apply it here, where the identical silent path now exists. The new test at SubscriptionHubTest:29 uses the 1-arg publish overload (new byte[0] for both segments) so it asserts the key pairing and cannot see the payload at all.",
+      "failure_scenario": "M4.7 lands the batcher and a delta carries pod A's and pod B's segments. Whatever supplies the bytes (or a caller that keeps DefaultIngest's current shape and passes its own published.segment()) reaches publish with one byte[]. Pod B's subscriber gets Push(key=B, segmentKey='seg-from-pod-b', segment=<pod A's bytes>). ConsumerClient.decodeInto does SegmentReader.open(A's bytes) and find(B) -> IOException 'segment seg-from-pod-b carries no run for B' -> UncheckedIOException -> swallowed by publishRun's `catch (RuntimeException slowOrDeadSubscriber)`. The delivery vanishes with no throw, no log and no metric, offsets have advanced, and M1.6d's log fallback does not exist: silent record loss. In the worse case the Sequencer contract itself names -- two pods committing the same RunKey in one batch window -- A's segment DOES contain B's stream, so the consumer decodes pod A's records under pod B's assigned offsets: silent data corruption, exactly the failure ADR-0032 says it exists to prevent. Today it is unreachable only because DefaultIngest:353 throws at delta.runs() first, in a different module, and nothing links the two -- delete that throw in M4.7 and this fires with no gate, no test and no exception. Minimum consistent fix: make publish(CommitDelta, byte[]) refuse a multi-segment delta with the same IllegalStateException discipline, or take the bytes per segment; and give the new hub test non-empty, distinguishable bytes so it constrains the payload."
+    },
+    {
+      "file": "format/src/main/java/binjava/format/ChainEntry.java",
+      "line": 22,
+      "severity": "minor",
+      "what": "The interface's own class javadoc still states the pre-ADR-0032 rule: 'A delta therefore still writes v0 -- nothing about a delta changed, and re-encoding one would churn bytes and golden files to say the same thing. See ADR-0028.' That is now false for a multi-segment delta, which writes VERSION_KINDED with KIND_DELTA. The KIND_DELTA field comment 20 lines below says the opposite, so the file contradicts itself in the one place a second implementer would read first.",
+      "failure_scenario": "Someone writing a second reader (the plugin's own decoder, a debugging tool, or a future compaction pass) reads the class javadoc, concludes v1 never carries a delta, and dispatches v1 to a seal/continue-only switch. Every batched delta from M4.7 onwards is then rejected as 'unsupported chain entry kind' or mis-decoded, and the chain looks corrupt to that reader while being valid."
+    },
+    {
+      "file": "format/src/main/java/binjava/format/CommitDelta.java",
+      "line": 198,
+      "severity": "minor",
+      "what": "`new ArrayList<>((int) count)` sizes an allocation directly from an unvalidated wire field. Cursor's own class javadoc states the invariant this breaks: 'BOUNDS-CHECKED BEFORE ALLOCATING: the commit log is untrusted input too. A length field read out of a corrupt object must not become an array size.' The count is guarded only for <= 0; nothing bounds it against the bytes remaining, although a segment costs at least ~3 bytes so `count > remaining` is provably impossible and the check is one line. The same shape already exists at line 209 for runCount, so this is a second instance of an existing gap rather than a new class of bug -- which is why it is minor and not major.",
+      "failure_scenario": "A torn or zero-filled commit-log object decodes a segment count of 0x7FFFFFFF. `new ArrayList<>(2147483647)` allocates an 8 GiB Object[] before a single segment is read, and the recovering sequencer dies with an OutOfMemoryError -- an Error, not the IOException that recover() and every caller catching malformed objects are written around. Recovery cannot make progress past that slot, and it fails as a crash rather than as 'this object is corrupt'."
+    }
+  ],
+  "task": "M4.7a",
+  "role": "reviewer"
+}

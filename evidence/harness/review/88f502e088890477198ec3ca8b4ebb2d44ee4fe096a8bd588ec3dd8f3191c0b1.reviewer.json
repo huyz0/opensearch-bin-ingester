@@ -1,0 +1,45 @@
+{
+  "diff_sha256": "88f502e088890477198ec3ca8b4ebb2d44ee4fe096a8bd588ec3dd8f3191c0b1",
+  "verdict": "changes-requested",
+  "summary": "The decomposition itself is sound and nothing from the old row was dropped, but the pre-split M4.13 row survives verbatim in backlog-notes.md at state todo, and it is the FIRST row review.sh prints for M4.13 -- so the next session and its reviewer are served the bundle the split exists to break. Separately M4.13b is three fault classes over two unrelated mechanisms and is the row most likely to reproduce the multi-round failure this split is meant to prevent.",
+  "findings": [
+    {
+      "id": "R1",
+      "file": "docs/internal/product/backlog-notes.md:864",
+      "severity": "major",
+      "title": "The pre-split M4.13 row survives at state `todo` and is what the packet serves first",
+      "failure_scenario": "The full pre-decomposition row is still inside the `### M4.13` section, unchanged, ending `| FR-11 | todo |`, and still says M4.13 'OWNS THE TWO FAULT CLASSES M4.12 DOES NOT MODEL', 'AND THE WITHHELD-WRITE AMBIGUITY', and 'Criterion 1 requires each class to have at least one seed where it CHANGES THE OUTCOME'. review.sh context selects rows with `grep -hE \"^\\| *M4\\.13 *\\|\" docs/internal/product/backlog*.md`, and backlog-notes.md sorts before backlog.md in that glob, so this stale row is printed BEFORE the new sweep row -- and then printed a second time by the section awk. That is what this review received. Concretely: the next session runs next-task, picks M4.13, reads backlog.md's 'this row is the SWEEP and its budget', follows [notes](backlog-notes.md#m413), and the last line of the section it lands on is a todo row telling it to also build the three fault classes, the LOST arm and the per-class outcome-change report -- rebuilding the bundle, or its reviewer failing a sweep-only diff for not delivering four things another row owns. The precedent is in this same file: when M4.10 was split its parent row was kept with its State column changed from `todo` to `split`, and backlog.md carries `M4.10 | SPLIT into M4.10b/c/d`. Fix: change line 864's state to `split`, or replace its text with the new summary."
+    },
+    {
+      "id": "R2",
+      "file": "docs/internal/product/backlog.md:143",
+      "severity": "major",
+      "title": "M4.13b is three fault classes over two unrelated mechanisms, and is not one commit",
+      "failure_scenario": "Delayed writes and reordered completions need the injector to hold an operation and land it at a later, seed-chosen point; `FaultInjectingStore` delegates inline on every verb and `CommitProtocolSimulation.run` is a synchronous act-or-fail loop with no pending-operation queue, so a deferral mechanism and its drain policy have to be designed, and every invariant checker then sees writes appearing at points no current test produces. Partitioned leaders shares none of that: it needs pod identity threaded into the store plus an `unreachable` arm on `putIfMatch` (FaultInjectingStore.java:296-303 draws `unreachableDraws` and discards the result today). The row's own summary names only the second mechanism ('needs the store to know WHICH pod is calling and `putIfMatch` to be able to fail cleanly'), so whoever picks it up discovers the first half-way in -- which next-task names as the thing to avoid ('Is it one commit's worth? If not, split it now rather than discovering it half-way'). Evidence that this exceeds one commit: M4.12 (backlog-done.md:142) delivered ONE decorator with three SIMPLER classes, was '1,327 lines of five separable things', and split at round 2. Split into a time row (delayed writes + reordered completions) and an identity row (partitioned leaders + `unreachable` on `putIfMatch`)."
+    },
+    {
+      "id": "R3",
+      "file": "docs/internal/product/backlog.md:146",
+      "severity": "minor",
+      "title": "The <60s budget stays on M4.13 while three sibling rows enlarge what it must cover, and the sentence lost what the 60s is for",
+      "failure_scenario": "The new row says 'a stated budget of <60s and a configurable seed count'; the old row said '<60s for 1,000 seeds'. With 'configurable seed count' in the same sentence and the qualifier gone, <60s no longer states what it bounds. Worse, three sibling rows now change the work inside that bound and none of them mentions it: M4.13d's clean-vs-faulted pairing is 2 runs per seed if applied across the sweep (the row does not say whether it is over 1,000 seeds or a handful), M4.13a adds two more checkers per seed, and M4.24 (backlog.md:132) records `checkChain` at O(E-squared), measured 4,999 LISTs for one examination at epoch 5000, against a tens-of-epochs-per-seed workload (M4.16 records 73 epochs burned for 3 takeovers). The sweep is then written to a budget nobody can evaluate, and the way that gets resolved under time pressure is by moving the threshold -- non-negotiable 2. Restore 'for 1,000 seeds' and add one sentence to the M4.13 note saying which sub-rows' work the budget covers."
+    },
+    {
+      "id": "R4",
+      "file": "sequencer/src/test/java/binjava/sequencer/FaultInjectingStore.java:299",
+      "severity": "minor",
+      "title": "Two in-tree comments name M4.13 as the owner of work M4.13 no longer owns",
+      "failure_scenario": "FaultInjectingStore.java:299 says the lease CAS's missing clean-failure fault is 'a documented gap in the row, owned by M4.13'; CommitProtocolSimulation.java:47 says 'M4.13 owns delayed writes, reordered completions, partitioned leaders and the withheld-write ambiguity'. After this split M4.13's row owns none of those -- M4.13b and M4.13c do. Both IDs still resolve, so nothing is unresolvable, but a reader following either comment lands on a sweep row that disclaims the work and has to re-derive the owner from the a-d list. Left unfixed here it is correct to defer (touching them turns a docs-only commit into a code commit and changes the review lens), but it belongs in the commit body or a row rather than nowhere."
+    },
+    {
+      "id": "R5",
+      "file": "docs/internal/product/backlog-notes.md:800",
+      "severity": "minor",
+      "title": "The discarded `duplicatePut` draw on `putIfMatch` is recorded as evidence under partitioned leaders but is owned by no row's title",
+      "failure_scenario": "M4.13b's partitioned-leaders paragraph ends 'its `duplicatePut` draw is taken and DISCARDED, so that class does not reach the lease path at all'. duplicatePut is a different fault class -- SPEC criterion 1's 'duplicated in-flight PUTs' -- and is not one of 'the three fault classes M4.12 does not model' that the row is titled for. Built as titled, M4.13b closes the `unreachable` gap on `putIfMatch` and leaves the duplicatePut one open, and the observation then sits in a note under a row that has been marked done. M4.13d is still satisfiable (duplicatePut fires on `putIfAbsent`), so this does not endanger criterion 1 -- it is an orphaned observation, not an unmet criterion. Name it in M4.13b's summary or drop it from the paragraph."
+    }
+  ],
+  "task": "M4.13",
+  "role": "reviewer",
+  "staged_tree": "51014bfc2c780107c8ba297c0bf7b727f39744b1"
+}

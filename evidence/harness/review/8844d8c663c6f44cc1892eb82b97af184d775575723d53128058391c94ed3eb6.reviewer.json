@@ -1,0 +1,43 @@
+{
+  "verdict": "changes-requested",
+  "diff_sha256": "8844d8c663c6f44cc1892eb82b97af184d775575723d53128058391c94ed3eb6",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "major",
+      "summary": "ReviewRoundCapTest.java:29 says the first draft counted 'three' from 'the three that called themselves first, second and third' -- only TWO of the nine SKIP commits carry an ordinal and none says 'first'. review.md:53-56, added by this same commit, states the corrected version. The commit contains both the correction and the sentence it corrects.",
+      "failure_scenario": "Measured: `git log --grep=SKIP=check-reviewed` returns nine commits; grepping their bodies for first|second|third|fourth finds an ordinal on the skip in exactly two -- 2953b5a (M4.19, 'AND THIS IS THE SECOND TIME') and 2e0f1d9 (M4.20, 'THE THIRD TIME'). No commit calls its skip the first. review.md line 54 says 'only two of the nine carry an ordinal at all'; the test javadoc says three. review.md line 60 points a reader at this class ('-> ReviewRoundCapTest') as the artifact behind the escape, so the next agent re-deriving the nine hits two mutually exclusive accounts in one commit and cannot tell which was measured -- the same 'the tree contradicts itself' state this diff spends review.md:96-110 recording for 8-vs-7. It is also the shape round 6 was faulted for ('AND THE FIRST FIX ONLY MOVED IT'), on this very number.",
+      "file": "buildSrc/src/test/java/binjava/ReviewRoundCapTest.java:29"
+    },
+    {
+      "id": "R2",
+      "severity": "major",
+      "summary": "backlog.md:278 (M4.31) attributes its TOO-LOOSE measurement to a reproduction that does not fire: 'measured by inserting one `reviewer:` entry above it, after which the gate WARNed ARGUED at round 4'. An insertion above leaves the rounds: line rendered as CONTEXT, so the awk does not match and the cap is not argued. The re-arming trigger is a MOVE (sorting), which the row also names -- the measurement is attached to the wrong one.",
+      "failure_scenario": "Measured in a scratch repo with the staged awk verbatim, in three shapes -- a one-line file, the real baselines/review.txt header plus a rounds: line, and a file with no trailing newline. In all three, committing `rounds:M9.1  argued earlier` and then staging a `reviewer:R1` line ABOVE it produces `+reviewer:R1 ...` followed by ` rounds:M9.1 ...` as context, and the guard exits 1: not argued. Only a genuine reorder re-arms it: committing `rounds:M9.1` then `zz:R2`, then staging `aa:R1`/`zz:R2`/`rounds:M9.1`, renders `-rounds:M9.1` ... `+rounds:M9.1` and the guard exits 0: ARGUED. The consequence is concrete because M4.31 is a todo row whose whole content is the recipe: whoever implements it writes the regression test from the cited example, sees the gate correctly refuse, concludes the too-loose arm does not exist, and drops it -- leaving the re-arm-by-sort hole in the replacement primitive. It is also the third wrong worked example in this diff's own accounting (M4.26 records `git show :` and `NF > 1` as the first two), and 'measured' is the word non-negotiable 4 governs.",
+      "file": "docs/internal/product/backlog.md:278"
+    },
+    {
+      "id": "R3",
+      "severity": "minor",
+      "summary": "backlog.md:277 (M4.30) says the packet read 'This is round 1 of 2 for M4.21' 'four lines above' '=== THIS IS NOT ROUND ONE ==='. The two are 15 output lines apart, and review.sh has not changed since the harness commit, so the distance was the same at round 3.",
+      "failure_scenario": "review.sh emits the round line at :43, then 14 further lines (rule-12 text, blank, the rule-11 block, blank, the two 'report severity honestly' lines, blank) before invoking review_delta.py at :60, whose first print is '=== THIS IS NOT ROUND ONE ==='. `git log -- scripts/review.sh` shows one commit (9e51b04), so the layout at round 3 was this layout. The row's substance is unaffected -- both stated causes verify (review.sh:42 still carries `|| echo 0`, and rounds_for resolves the task from verdicts for the current hash) -- but the adjacency is the same class of citation M4.26 retired one row earlier as 'a citation with a half-life', reproduced here against files this commit does not even touch.",
+      "file": "docs/internal/product/backlog.md:277"
+    },
+    {
+      "id": "R4",
+      "severity": "minor",
+      "summary": "backlog.md:268 (M4.21) describes the new key as 'matched against the INDEX rather than the worktree', while backlog.md:278 (M4.31), added by the same commit, exists to say the primitive asks a third question -- 'does this text sit on an added line' -- which is neither 'is it staged' nor 'is it new'. M4.26 (backlog.md:273) records a draft that read 'the INDEX' as literally as `git show :` and calls that the wrong worked example.",
+      "failure_scenario": "A reader of the done row for M4.21 takes 'matched against the INDEX' at face value and expects `git show :baselines/review.txt` semantics -- under which a committed, unmoved argument still counts. The gate does the opposite (aROUNDSLineALREADYCOMMITTED pins the refusal), and M4.31 is filed precisely to move to the index read. Three rows in one commit therefore give three different accounts of one nine-line awk block, and the loosest of them is the one on the row a future reader consults first because it is marked done.",
+      "file": "docs/internal/product/backlog.md:268"
+    },
+    {
+      "id": "R5",
+      "severity": "minor",
+      "summary": "review.md:126 adds 'A fourth was lost' to 12b's existing 'Three were lost that way in one session', making the running total four, while backlog M0.21 (backlog.md:74, untouched) says rule 12b 'was broken five times in one session'.",
+      "failure_scenario": "The new sentence makes the arithmetic explicit where it previously was not: three plus a fourth from a different session cannot be reconciled with five in one session, so the standard and the row that owns its fix now disagree about how often the rule has been broken. It is the same tree-contradicts-itself shape the same paragraph block records for 8-vs-7 at review.md:96-100, but without the disclosure that makes that one honest. Either measure it or record the split the way the 8-vs-7 sentence does.",
+      "file": "docs/internal/standards/review.md:126"
+    }
+  ],
+  "task": "M4.21",
+  "role": "reviewer"
+}

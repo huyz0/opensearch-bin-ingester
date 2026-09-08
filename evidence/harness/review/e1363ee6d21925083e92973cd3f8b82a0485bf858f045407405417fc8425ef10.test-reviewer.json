@@ -1,0 +1,46 @@
+{
+  "diff_sha256": "e1363ee6d21925083e92973cd3f8b82a0485bf858f045407405417fc8425ef10",
+  "verdict": "changes-requested",
+  "summary": "No code and no tests changed; this reviews the acceptance criteria as tests-to-be. The cuts removed nothing load-bearing and every measurable claim I checked against the tree is true (ChainReplay's Math::max fold at ChainReplay.java:441, CommitLog returning the object it PUT, Invariants using delta.runs() with no duplicate-segment arm, CommitDelta carrying no pod attribution, Checkpoint.pods, the 9-then-4 test, DefaultIngest as sole issuance site, SegmentPublisher's instance AtomicLong, Checkpoint.decode's single-constant version check escaping through CheckpointCursor.newest, ADR-0031's scope). The one place that does not hold is the moved anchor itself: as prescribed it asserts the WRITE side of the fold, so the mutation that ships duplicates across every takeover survives it, and the sentence telling M4.10d to strengthen the fixture is false as written -- I measured it. Fix is a rewrite of one paragraph (notes 257-269) plus the matching clause in the M4.10d row; no new design round is implied.",
+  "findings": [
+    {
+      "severity": "major",
+      "file": "docs/internal/product/backlog-notes.md:257",
+      "also": "docs/internal/product/backlog.md:125",
+      "title": "The end-to-end anchor asserts the write side of the fold, so the takeover-duplicates mutation survives it",
+      "detail": "The prescribed anchor is 'fold the recovered window into the successor's CheckpointWriter pods map and INVERT CheckpointWriterContentTest's tripwire doesNotContainKey(\"poda\")'. That assertion observes only what the successor PUTs into its own checkpoint. CheckpointWriter.pods (CheckpointWriter.java:78) is a private bookkeeping map fed by capture(); wherever the dedup window lives it is a different map. The row names the harm as 'duplicates ship across every takeover' -- and the assertion cannot see that harm, because it never asks the successor to refuse anything.",
+      "failure_scenario": "MUTATION THAT SURVIVES THE PRESCRIBED ANCHOR: seed only CheckpointWriter.pods from the newest ancestor checkpoint (a carry-forward at write time), and leave the dedup window empty after a takeover. The inverted assertion goes green -- the successor's checkpoint now contains poda=42 -- while a replayed (poda, 42) arriving at the new leader is accepted and the flush is committed twice. That is precisely the parent row's harm, at exactly the moment CheckpointWriter.java:52's own javadoc says duplicates are likeliest. Remedy: state the anchor as behaviour on the CONSUMPTION side -- the successor, having recovered nothing in-process, REFUSES a replay of a flushSeq only its predecessor observed (and answers it per the return-contract paragraph) -- and keep the checkpoint-content inversion as the corroborating half rather than the anchor. Naming Checkpoint.pods as the existence proof that this needs no format change is fine; naming it as the assertion is what leaves the mutation alive."
+    },
+    {
+      "severity": "major",
+      "file": "docs/internal/product/backlog-notes.md:266",
+      "title": "The everyDeltas=1 warning is false as written, and the strengthening it mandates is unreachable in this row",
+      "detail": "MEASURED, in a copy of the staged tree: I replaced CheckpointWriterContentTest.java:155-156's doesNotContainKey(\"poda\") with containsEntry(\"poda\", 42L), changed nothing else, and ran :sequencer:test --tests CheckpointWriterContentTest. It FAILS: 'Expecting map: {\"podb\"=0L} to contain entries: [\"poda\"=42L]' at CheckpointWriterContentTest.java:156. With everyDeltas=1 the successor writes its own checkpoint on its first delta (CheckpointWriter.java:157), and without a fold that checkpoint holds podb only. So the inverted assertion does NOT go green without the fold; the paragraph's stated direction is backwards. Under the only reading that makes it useful -- 'a fold that reads the newest checkpoint and nothing after it passes' -- the prescribed remedy still does not work: the mandate is 'that setting must change, and the asserted value must be one only a post-checkpoint commit could supply', and no such value can reach a successor, because CommitDelta is (sequence, segments) with no pod attribution (CommitDelta.java:28) and Checkpoint.pods is the only durable carrier.",
+      "failure_scenario": "An M4.10d session follows this instruction, raises everyDeltas so the predecessor's last flushSeq lands after its newest checkpoint, and finds the value unrecoverable without a delta-level field -- i.e. without M4.10c, the row that may be void. The two outcomes are both bad: the anchor is dragged back under the conditional row that round 6 moved it out of, or the assertion is weakened until it passes, which is the testing.md rule 5 inversion this same section warns about for doesNotContainKey. Remedy: delete both sentences and say instead what is true -- everyDeltas=1 is what makes the anchor satisfiable with no format change, and the residual (a flushSeq committed after the newest checkpoint cannot survive a takeover) is M4.10d's stated BOUND, pinned by a test asserting that such a replay is accepted, not refused."
+    },
+    {
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:257",
+      "title": "The anchor mandate hard-codes a carrier M4.10b may not choose",
+      "detail": "M4.10b says the key's shape is the ADR's finding and that SegmentKey is 'A FACT TO WEIGH, NOT A CONCLUSION'. But M4.10d instructs the fold into Checkpoint.pods and the inversion of that specific assertion as settled work. One live alternative needs no new field at all: the deltas already carry segment keys, CommitDelta's constructor already refuses a repeated key, and a retried flush reuses its segment key -- so detection over the replayed window keyed on the segment key both detects AND answers with the original offsets, which the pods map cannot do (it carries a flushSeq, never an offset).",
+      "failure_scenario": "M4.10b picks a segment-key window; the M4.10d author still owes 'fold into CheckpointWriter.pods and invert doesNotContainKey', writes it, and lands an assertion over a map nothing consults -- a durable value with no reader, which is the same no-op shape the row's own third mutation warns about, one layer up. Stating the anchor as a property with Checkpoint.pods named as the existence proof keeps the unconditionality without pre-empting the ADR."
+    },
+    {
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:242",
+      "title": "No criterion covers a window recovered from a checkpoint written BEFORE the change",
+      "detail": "M4.10c requires that old objects still decode, and GoldenCheckpointTest (golden/checkpoint-v0.bin, pods poda=42/podb=77) already enforces exactly that. Decoding is not interpreting: nothing requires that a pre-change checkpoint's pod entries still MATCH under the post-change key.",
+      "failure_scenario": "MUTATION SURVIVING THE WHOLE STATED SET: qualify the key inside the existing String field ('poda#7' instead of 'poda'), leaving the wire shape and Checkpoint.VERSION untouched. GoldenCheckpointTest still passes (bytes unchanged, decode unchanged), the M4.10d anchor passes (both sides written by post-change code), the pod-restart test passes -- and every checkpoint written before the upgrade silently stops matching, so replays across a rolling upgrade are accepted and duplicated. Add one line: either the recovered window matches across the change, or the one-time hole is stated and pinned by a test."
+    },
+    {
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:248",
+      "title": "The assertion-churn warning names the weaker of the two assertions a pods-key shape change breaks",
+      "detail": "The row budgets for the Math::max-over-bare-podId test (CheckpointWriterContentTest.java:115-129, the 9-then-4 one), but not for golden/checkpoint-v0.bin, whose committed tail '04 70 6f 64 61 2a' is the pods entry and whose own javadoc says 'Do NOT regenerate this file to make the test pass'.",
+      "failure_scenario": "A pods-key shape change breaks GoldenCheckpointTest, and the cheapest way to green is regenerating the golden -- the testing.md rule 5 inversion this section flags for doesNotContainKey but not for the file where it is likelier, and where check-test-integrity.sh cannot see it because the change is to a binary resource rather than to an assertion. Naming golden/checkpoint-v0.bin and its 'another version and another golden file' successor is the whole fix."
+    }
+  ],
+  "task": "M4.10",
+  "role": "test-reviewer",
+  "staged_tree": "59702a2f0e719c96f0b44503739b1076e6675ff6"
+}

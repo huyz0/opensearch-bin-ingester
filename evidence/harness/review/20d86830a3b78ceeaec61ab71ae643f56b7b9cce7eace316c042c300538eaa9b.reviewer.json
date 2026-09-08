@@ -1,0 +1,42 @@
+{
+  "diff_sha256": "20d86830a3b78ceeaec61ab71ae643f56b7b9cce7eace316c042c300538eaa9b",
+  "verdict": "changes-requested",
+  "summary": "The rename map is correct and both new tests are falsifiable, but the fix only covers renames that PRESERVE the qualified test id. A module move -- the rename this task was created by (M4.2) -- changes the package and therefore every id, so check-test-integrity now reports every moved test method as 'removed alongside a production change' where HEAD printed ok, and check-tdd still demands a fresh red record for each. The only escape is the Test-removed: trailer, which is a whole-body regex, so the trailer a legitimate move forces also downgrades a genuine deletion in the same commit to WARN, exit 0. Measured, not argued.",
+  "findings": [
+    {
+      "severity": "major",
+      "title": "The fix covers only id-preserving renames; a module move (M4.2, the motivating case) becomes a false FAIL, and the trailer it forces masks real removals",
+      "where": "scripts/test_integrity.py:92, scripts/tdd_scan.py:106, buildSrc/src/test/java/binjava/RenameBlindnessTest.java",
+      "failure_scenario": "Test ids come from the source's `package` declaration (java_tests.PKG), and in this repo module == top-level package (8 modules, 8 packages -- verified). So every module move changes every id. Replaying M4.2's shape in a scratch repo (ingest/CommitLog{,Test}.java -> sequencer/, package line changed, git scores R088/R060): with the STAGED scripts, check-test-integrity prints 'FAIL ... binjava.ingest.CommitLogTest#appliesDelta removed alongside a production change' for every moved method, exit 1 -- where HEAD prints 'ok no test weakened, disabled or removed', exit 0; and tdd_scan.py check still prints 'FAIL 2 new test(s) staged but no red record', i.e. the second half of the task ('check-tdd also reads HEAD:<destination> ... so every moved test reads as new') is unfixed for this input. The consequence is worse than the false positive: `has('Test-removed')` is a regex over the whole commit body, so the trailer a pure move now forces is blanket. Measured on a fixture combining the module move with one genuinely deleted test method in an unrelated file: without the trailer, 3 FAILs, exit 1; with 'Test-removed: the module move changes the package', all three become WARN and the gate exits 0 -- including binjava.ingest.OtherTest#reallyImportantGuard, which really was deleted. So the change converts a silent false negative into a false accusation whose standard workaround is a broader false negative, on the commit shape this milestone keeps producing. Direction: for a rename destination, re-qualify the before-ids into the destination's package (or compare on SimpleClass#method when source and destination packages differ) before diffing, so a pure move is id-stable in both scanners; and state the residual limit where AGENTS.md records the other two check-tdd blind spots -- nothing in the diff mentions it."
+    },
+    {
+      "severity": "minor",
+      "title": "RenameBlindnessTest's javadoc claims the fixture is M4.2's shape; it is the one rename shape M4.2 is not",
+      "where": "buildSrc/src/test/java/binjava/RenameBlindnessTest.java (class javadoc)",
+      "failure_scenario": "The javadoc says 'THE FIXTURE IS M4.2'S OWN SHAPE -- a test moved between source sets with its package and class name intact, which is what a module move looks like.' M4.2's own backlog row says the only content change in either file was the package line, and module == top-level package here, so a module move never keeps the package intact. The sentence is the justification for the fixture being representative, and it is the sentence that hides finding 1: a reader who believes it concludes the M4.2 case is covered. The fixture itself (test -> integrationTest, same package) is a real and worthwhile case; only the claim about what it stands for is wrong."
+    },
+    {
+      "severity": "minor",
+      "title": "git_renames.py's docstring attaches a measured rename score to the wrong input",
+      "where": "scripts/git_renames.py (module docstring)",
+      "failure_scenario": "The docstring says 'A test moved between source sets with six assertions deleted and one isEqualTo(3) -> isNotNull() was scored R091 by git'. That input is the M4.2-derived one, which the M0.53 backlog row and RenameBlindnessTest's own javadoc both score R095; R091 is this commit's four-method/one-gutted fixture -- reproduced and measured as R091. A number carried over onto a different input is the kind of drift the milestone rows keep correcting, and here it sits in the file a future reader will use to judge whether the map's similarity threshold is adequate."
+    },
+    {
+      "severity": "minor",
+      "title": "The '-M is explicit, not config' rationale is applied to the map but not to the path list it is joined against",
+      "where": "scripts/git_renames.py (rename_map docstring and args), scripts/test_integrity.py:72,75, scripts/tdd_scan.py:90,93",
+      "failure_scenario": "rename_map passes -M explicitly so the map does not depend on diff.renames, but the callers still get their paths from `git diff --name-only`, which does obey it. Measured with `git config diff.renames false` on the module-move fixture: --name-only lists both the source and the destination, the map still pairs them, and check-test-integrity reports each moved method twice -- once against the destination and once as a deletion of the source. It still fails closed, so this is not an inversion, but the config-independence the docstring claims is only half-bought. Passing -M (or --no-renames consistently) on the callers' --name-only would make the two views agree by construction rather than by the reader's git config."
+    }
+  ],
+  "verified_no_finding": [
+    "Parsing shapes: git C-quotes any path containing a tab even under core.quotePath=false (measured), so splitting on tab and requiring exactly 3 fields cannot mis-slice a path; -z is unnecessary. C (copy) lines are excluded by startswith('R') and fall back to the pre-fix new-file behaviour; unmerged U lines are 2 fields and skipped. --name-only and --name-status quote identically, so map keys match caller tokens. Paths containing a literal space are already broken by names.split() and by `git show <ref>:` in both callers -- pre-existing, unchanged by this diff.",
+    "CHECK_RANGE path: rename_map's [base,'HEAD'] matches the callers' `--name-only base HEAD` in order and endpoints. Verified end-to-end on a committed rename scored R084: integrity printed 'binjava.FooTest#a: assertion strength fell 3 -> 1' exit 1, tdd_scan printed 'no new tests in this diff' exit 0.",
+    "Non-rename cases: renamed.get(p, p) is identity for added, deleted and modified paths, and a path cannot carry a rename-destination status and another status simultaneously without --find-copies-harder, which is not passed. A genuine deletion is still reported (measured).",
+    "Fixture coupling: RedRecordWiringTest is the only fixture that copies the scanner, and it is patched in this diff; RenameBlindnessTest copies tolerantly but still fails loudly (ImportError -> non-zero exit -> its contains() assertion fails), so the new import cannot make a fixture pass vacuously.",
+    "Falsifiability: reverting both `renamed.get(p, p)` call sites to `p` in the review tree fails both new tests (2 tests completed, 2 failed); unmutated they pass.",
+    "rename_map returning {} on non-zero git exit degrades to the pre-fix blind behaviour, but the callers' own `git diff --name-only` fails on the same inputs and yields an empty path list, at which point check-test-integrity already prints 'ok no production change in this commit'. The vacuity is pre-existing and not made worse here.",
+    "No object-store request-rate surface: this change is harness-only."
+  ],
+  "task": "M0.53",
+  "role": "reviewer"
+}

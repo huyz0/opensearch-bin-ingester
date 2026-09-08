@@ -1,0 +1,34 @@
+{
+  "diff_sha256": "28cb9bb5308bc890549b9a0acaafba76d5c2f617f544fccf287ed0fd4ea62410",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "D16",
+      "severity": "major",
+      "file": "docs/internal/product/milestones/M1/SPEC.md:77",
+      "summary": "The D12 fix defers the adaptive flush interval to milestone \"M3b\", which exists nowhere. `M3b` appears exactly once in the whole staged tree, is not in roadmap.md, is not in backlog.md, and violates sdd.md rule 4's `M<n>.<k>` / `M<n>` ID format. roadmap.md:12 assigns the adaptive interval to M3.",
+      "failure_scenario": "The row exists to justify M1 knowingly accepting the rejected 250 ms operating point ($311/mo against $15.55/mo) on the promise that a named later milestone fixes it. A reader following that promise searches for M3b, finds no such milestone, and the deferral is unschedulable. check-links.sh cannot catch it because `M3b` is bare prose, not a markdown link, so no gate sees it. The correct target is M3."
+    },
+    {
+      "id": "D17",
+      "severity": "major",
+      "file": "docs/internal/product/backlog.md:47",
+      "summary": "M0.15 is still inside the `## Completed` table (heading at line 35) while its own State cell reads \"**lands inside M-1.2**\" and explains that the Gradle/JUnit-XML wiring has not been done. The table's membership says done; the cell says not done. The analogous task M0.18, deferred into M-1.2 for the same reason, is handled correctly in the todo table at line 32 with State `todo`.",
+      "failure_scenario": "AGENTS.md calls backlog.md authoritative and the next-task skill reads it to pick work. A later session opening M-1.2 sees M0.15 listed under Completed, omits the tdd-red.sh Gradle wiring from M-1.2's scope, and the gate that AGENTS.md non-negotiable 3 depends on ships still recording any non-zero Gradle exit as a red run -- the exact defect review finding T1 raised."
+    },
+    {
+      "id": "D18",
+      "severity": "minor",
+      "file": "docs/internal/standards/sdd.md:20",
+      "summary": "sdd.md rule 9 requires a spec to state \"which of rules R1-R18 in cost.md\" it touches, but cost.md:10-11 now declares R1b a member of the same R<n> namespace. R1b falls outside the range as written, so M1/SPEC.md:77's R1b citation satisfies no clause of the rule that demanded it.",
+      "failure_scenario": "A future spec author reads rule 9 literally, treats R1b as outside the citable namespace, and omits the adaptive-interval rule from a cost-impact section where it is the governing rule."
+    },
+    {
+      "id": "D19",
+      "severity": "minor",
+      "file": "docs/internal/product/decisions/0013-fast-mode-wal-and-quorum.md:65",
+      "summary": "The rejected-alternatives section uses R1 and R2 as record labels (\"Suppose R1 (durable) takes offset 100 and R2 (fast) takes 101\") 29 lines after line 36 of the same ADR discusses the `R<n>` cost-rule namespace. cost.md:10-11 declares that namespace binding for ADRs.",
+      "failure_scenario": "A reader scanning the ADR for cost-rule citations reads R1 (bundling) and R2 (never LIST on a hot path) into a paragraph about record ordering. Renaming the labels to A/B removes the collision at zero cost."
+    }
+  ]
+}

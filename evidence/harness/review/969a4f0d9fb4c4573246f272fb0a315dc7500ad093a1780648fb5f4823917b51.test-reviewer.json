@@ -1,0 +1,17 @@
+{
+  "diff_sha256": "969a4f0d9fb4c4573246f272fb0a315dc7500ad093a1780648fb5f4823917b51",
+  "verdict": "pass",
+  "summary": "Round 4, tests. Re-measured the fixture move in aStreamOutOfOrderOnlyInALATERPairIsStillCaught against the full :sequencer:test suite (375 tests). The move strengthened the fixture and weakened nothing: compare-against-first (get(r-1) -> get(0)), the pre-M4.13f 'segment ' + r wording, and the transposed message offsets are each killed by this test ALONE. The break in the order loop is killed only by aStreamOutOfOrderTWICEIsStillONEViolation and the < / <= boundary only by TWOSegmentsStartingAtTheSAMEOffsetIsI2Alone, so the added clean delta at sequence 1 made no other fixture redundant -- each of the three is the sole killer of a different mutation. One correction to the claim I was asked to verify: the sequence-constant mutation is NOT killed for the constant equal to the fixture's own sequence. Recorded as minor.",
+  "findings": [
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/BatchedDeltaInvariantsTest.java:335",
+      "severity": "minor",
+      "finding": "The surviving sequence-constant mutation moved from 1L to 2L rather than dying. The detail assertion is pinned by exactly one fixture, so it cannot distinguish e.sequence() from the one literal equal to that fixture's sequence.",
+      "mutation": "Invariants.java:193, replace `+ e.sequence() +` with `+ 2L +` in the `order` Violation message.",
+      "failure_scenario": "MEASURED on the staged bytes: with `+ 2L +` the whole :sequencer:test suite is GREEN (375 tests, 0 failures, --rerun-tasks). The harness is not blind -- the same edit with 99L fails aStreamOutOfOrderOnlyInALATERPairIsStillCaught, 375 tests completed 1 failed. So a checkChain that reported a hardcoded sequence 2 for every `order` violation would ship undetected: on a failing CommitProtocolSimulation seed the detail string is the only pointer to which chain entry is malformed, and it would send the debugger to entry 2 for a permutation at entry 57. The remedy is one line, not a fixture move: add `.contains(\"at sequence 1\")` to the detail of a second `order` fixture whose delta sits at sequence 1 (aStreamOutOfOrderTWICEIsStillONEViolation is already there and asserts only the name), after which no literal survives. NOTE FOR THE COMMIT BODY: the claim 'the sequence-constant mutation is killed for 2L' is false as measured; the in-code comment at BatchedDeltaInvariantsTest.java:308-312 does NOT make that claim -- it says only that any fixture sequence other than 1 makes the 1L mutation observable, which is true -- so the comment is accurate and only a body claiming 2L dies would not be."
+    }
+  ],
+  "task": "M4.13f",
+  "role": "test-reviewer",
+  "staged_tree": "cf498a1846b39c0871200e1867ed5fd1b8aebc74"
+}

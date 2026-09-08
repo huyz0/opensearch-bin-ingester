@@ -1,0 +1,29 @@
+{
+  "diff_sha256": "bea445cde9f977069d251060f7f72baad9d027918d3b908e77e392608579b839",
+  "verdict": "pass",
+  "findings": [
+    {
+      "file": "scripts/check-reviewed.sh",
+      "line": 82,
+      "severity": "minor",
+      "what": "SURVIVING MUTATION: delete the whole `case \"$ROUNDS\" in ''|*[!0-9]*) fail ...; finish ;; esac` block (check-reviewed.sh:82-87). All 16 new tests stay green. This is new production code in this diff whose own comment says it exists to close a MEASURED fail-open, and nothing pins it. The sibling half of the same fix -- keeping stderr out of the value (`2>\"$ERRS\"`) -- IS pinned: rewriting it to `2>&1` is killed by verdictsDISAGREEINGAboutTheTaskAreREFUSEDRatherThanResolved, which asserts the output contains 'disagree'. Only the numeric guard is unconstrained. Rated minor rather than major because the shipped code is correct and fail-closed, and with the stderr channel pinned the remaining trigger is interpreter stdout pollution rather than anything reachable from review_rounds.py, which always prints an int.",
+      "failure_scenario": "MEASURED in a scratch repo built to the fixtures' own shape (5 recorded rounds for M9.1, both roles, no argument) with review_rounds.py stubbed to print one line of stdout noise before the count. SHIPPED CODE: `FAIL review_rounds.py printed a non-numeric round count`, exit 1. MUTANT with the case block deleted: `scripts/check-reviewed.sh: line 119: [: integer expected`, then `ok staged bytes reviewed by reviewer test-reviewer (round warning: something on stdout 5 of 2)`, exit 0 -- the cap block skipped entirely at round 5. lib.sh sets `set -uo pipefail` and NOT `-e`, so `[ \"$ROUNDS\" -gt 2 ]` returning 2 is silently a false branch. A later author reads the case block as dead code ('python only ever prints an integer') and removes it; the suite stays green and the cap fails open again on any environment whose python3 wrapper writes to stdout."
+    },
+    {
+      "file": "buildSrc/src/test/java/binjava/ReviewRoundCapTest.java",
+      "line": 111,
+      "severity": "minor",
+      "what": "SURVIVING MUTATION: in review_rounds.py's counting loop, narrow `if d.get('task') == task and d.get('diff_sha256'):` to `... and d.get('verdict') == 'pass':`. All 16 tests stay green. The reason is fixture shape, not gate shape: every prior round in both scratch() helpers (ReviewRoundCapTest.java:111 and ReviewRoundCapArgumentValidityTest.java:96) is written by verdict(), which hardcodes `\"verdict\": \"pass\"` -- the opposite of what a prior round actually is. A second, weaker survivor from the same helper: widening the filter to `if d.get('diff_sha256'):` (count every task's hashes as rounds for this one) is also green, because .harness/review in the fixture never contains a second task. That one over-counts, so it fails closed; the pass-only one fails open.",
+      "failure_scenario": "Someone tidies rounds_for to 'count completed reviews' -- verdicts that returned pass. Real rounds 1..n-1 are changes-requested, so under that edit the count for a spiralling task stays at 1 and the cap never fires; rule 12 is unenforced again and the suite reports 16/16. One-word fixture fix: give at least one of the deadbeef rounds `\"verdict\": \"changes-requested\"` (and, for the second survivor, drop one verdict file naming an unrelated task into .harness/review)."
+    },
+    {
+      "file": "buildSrc/src/test/java/binjava/ReviewRoundCapTest.java",
+      "line": 45,
+      "severity": "minor",
+      "what": "The new fixtures run `git init && git add -A && git commit` in a @TempDir without removing GIT_INDEX_FILE (and GIT_DIR/GIT_WORK_TREE) from the child environment. Two files in the same package already do exactly that -- FreshCheckoutTest.java:89-91 and CoverageGateTest.java:94-95 -- so the two-line remedy is the established pattern here. The same omission is in ReviewRoundCapArgumentValidityTest.java:30/39/113. The protection currently shipped for this is a prose warning in the review packet ('RUN THE BUILD WITH THE INDEX UNSET, ALWAYS'), which is gate-design rung 7 where rung 1 is available. Rated minor, not major, because the hazard is pre-existing suite-wide (ModuleGateTest.java:88 and ReviewRolesTest.java:58 have it too), so fixing only these two files does not close it -- it wants a row over the whole harness suite.",
+      "failure_scenario": "MEASURED just now in the review tree: with GIT_INDEX_FILE pointing at a copy of the tree's own index (565 entries), `./gradlew -p buildSrc test --tests 'binjava.ReviewRoundCap*' --rerun-tasks` printed BUILD SUCCESSFUL and left that index with 5 entries -- the fixtures' paths. So the suite destroys the index it is pointed at AND reports green while doing it, and the gate under test is being driven against a foreign index rather than the fixture's. On this repository the index holds the only copy of some staged work; the packet records this happening twice on this very task."
+    }
+  ],
+  "task": "M4.21",
+  "role": "test-reviewer"
+}

@@ -1,0 +1,38 @@
+{
+  "diff_sha256": "0c9a821c6bb525e3cc11baa03656e02a66566440e1b853524730e3a250f9381b",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "severity": "blocking",
+      "file": "buildSrc/src/test/java/binjava/TddPlanScopeTest.java:36",
+      "finding": "Both tests FAIL on the staged tree. binjava.ingest.security.CredentialSourceTest does not exist -- ingest/ holds only README.md and build.gradle.kts, no src/. source_of() returns None, plan() hits the bad path at tdd_scan.py:125-127 and prints the FAIL block with exit 1. Verified: ./scripts/check-harness-tests.sh -> FAIL, '107 tests completed, 2 failed', the 2 being these. The packet's 'check-harness-tests.sh PASSED' is not true of these bytes. Non-negotiable: never commit a tree you know is broken.",
+      "failure_scenario": "Commit lands, pre-commit is bypassed or the gate list is stale, and main is red: `./gradlew -p buildSrc test` fails for every subsequent agent, who now has to decide whether the two failures are theirs. Every gate downstream that shells out to the harness suite (check-harness-tests.sh) blocks unrelated work."
+    },
+    {
+      "severity": "blocking",
+      "file": "buildSrc/src/test/java/binjava/TddPlanScopeTest.java:36",
+      "finding": "The red record is vacuous. bad.append(i); continue at tdd_scan.py:126 runs BEFORE the changed line at :144, so plan output is byte-identical with and without the fix. Verified by running git show HEAD:scripts/tdd_scan.py against both id sets: same FAIL block, exit 1 both ways. SURVIVING MUTATION: reverting the entire fix (delete the elif branch, emit bare 'test') changes neither test's result. That is the one mutation the task exists to kill.",
+      "failure_scenario": "The bare root task `test` is reinstated tomorrow -- by a revert, a merge, or an agent 'simplifying' the elif -- and both tests stay exactly as red as they are now, so nothing signals it. M1 then repeats the original defect verbatim: red records unobtainable for every module test, testing.md rule 2 unsatisfiable, and the harness reports 'did not run' with no test pointing at the cause."
+    },
+    {
+      "severity": "blocking",
+      "file": "buildSrc/src/test/java/binjava/TddPlanScopeTest.java:51",
+      "finding": "SURVIVING MUTATION even on a tree where the id resolves: replacing tdd_scan.py:144 with the constant task = ':ingest:test' produces byte-identical output for BOTH tests (verified in a fabricated tree). Structural cause: the elif branch is exercised by exactly ONE id in both tests; the CoverageGateTest id takes the buildSrc branch at :132 and never reaches the changed code. The comment at :51-56 claiming this test 'fails unless the module is DERIVED from each id's source path' is false and is recorded in the tree. Kill it with a second NON-buildSrc module.",
+      "failure_scenario": "Once the ids resolve, someone refactors plan() and collapses the derivation to a constant or a stale variable -- `task = ':ingest:test'`, or a module name captured from the first id and reused for the rest. Every id from every other module then names ingest's task, `--tests` matches nothing there, tdd-red.sh reports 'did not run', and the suite is green throughout."
+    },
+    {
+      "severity": "major",
+      "file": "scripts/tdd_scan.py:120",
+      "finding": "Design: the module-scoping rule is only reachable through source_of(), which globs the live working tree, so a pure string transform (src path -> gradle task) is testable only if a real .java file exists in a module that has none. Testing.md rule 1 / non-negotiable 7. Extract task_for(src) or let plan() take a resolver, and the four mutations become T0 assertions over path strings -- including ones no on-disk tree can express today. ModuleSelectionTest and FreshCheckoutTest already build scratch trees rather than asserting against the live one.",
+      "failure_scenario": "The path-splitting logic gains an edge case nobody can express on disk -- a module with a dot in its name, a nested source root, a test id whose source lives two directories deep -- because writing the test requires first committing a real .java file into a module to serve as a fixture. The cheap response is to skip the case, so the transform stays constrained only where the tree happens to have files."
+    },
+    {
+      "severity": "major",
+      "file": "buildSrc/src/test/java/binjava/TddPlanScopeTest.java:51",
+      "finding": "The removed buildSrc-only test: the rule-2 reasoning for removing it is sound, and containsExactly's 'buildSrc:test' (no leading colon) does kill the drop-the-buildSrc-branch mutant -- verified, it yields ':buildSrc:test'. But that assertion is unreachable on the real tree because the ingest id short-circuits into the FAIL path first, so the buildSrc prefix is currently constrained by nothing. Also: testing.md rule 5 requires a removed test to name its own removal in the commit body; verify it does.",
+      "failure_scenario": "The buildSrc special-case at tdd_scan.py:132 is deleted or reordered as dead-looking code. buildSrc:test becomes :buildSrc:test, which the root build cannot resolve, and every harness test loses its red path -- with the one test that pinned the distinction sitting green because it never got past the FAIL block."
+    }
+  ],
+  "task": "M0.49",
+  "role": "test-reviewer"
+}

@@ -1,0 +1,62 @@
+{
+  "diff_sha256": "5ee5f14201d6ed133ba0b986d765bcf97ac1345f7d9a8990e8f9db6ddb628b92",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "H6",
+      "severity": "major",
+      "file": "AGENTS.md:216",
+      "summary": "H2 is not fixed: the row now asserts the OPPOSITE of the behaviour. It says check-reviewed 'fails in a fresh checkout'. Reproduced with a temp index at HEAD and again in a fresh clone: it prints 'ok nothing staged' and exits 0. The word 'vacuous' appears nowhere in the staged diff. Same false sentence in .pre-commit-config.yaml:25-26.",
+      "failure_scenario": "CI runs `pre-commit run --all-files` as the config header prescribes. check-reviewed is a pre-commit-stage hook, so it IS invoked, nothing is staged, and it prints a green ok line having verified nothing. CHECK_RANGE is not set on that run -- .pre-commit-config.yaml:17-18 says the commit-msg hooks that need it are invoked separately -- so the failure the row describes never occurs and SKIP=check-reviewed suppresses nothing. An operator reads the row, concludes the gate is deliberately skipped and that non-negotiable 5 is otherwise enforced; in fact a commit pushed with --no-verify produces the same green line."
+    },
+    {
+      "id": "H7",
+      "severity": "major",
+      "file": ".pre-commit-config.yaml:19-21",
+      "summary": "H3 was fixed in one of the two copies. AGENTS.md:214 now says check-tdd CANNOT run in CI because red records live in gitignored .harness/. The config header still says 'check-tdd and check-test-integrity read the STAGED diff ... CI sets CHECK_RANGE=<base-ref> so they compare against the base', which is the claim H3 asked to retract.",
+      "failure_scenario": "A CI author reads the file CI actually consumes, sets CHECK_RANGE on the --all-files run, and check-tdd fails every build. Verified in a fresh clone with this commit applied: CHECK_RANGE=HEAD~1 scripts/check-tdd.sh exits 1 with 'no red record at .harness/tdd/red.json' for all three new test methods. The two documents now prescribe opposite CI configurations."
+    },
+    {
+      "id": "H9",
+      "severity": "major",
+      "file": "buildSrc/src/test/resources/java-fixtures/unicode-escape.java:5",
+      "summary": "The unicode fixture contains no unicode escape. `git show :...unicode-escape.java | od -c` shows a literal LF where \\u000a should be, and `grep -c '\\\\u'` on the staged blob is 0 -- the escape was resolved when the file was written (it is also the source of one of the four trailing-whitespace warnings the patch carries). The H4 audit claim that `unicode` is now covered is false.",
+      "failure_scenario": "Mutation run against the real script with the bytecode cache cleared between runs: replacing decode_unicode_escapes with `return src` leaves all 16 cases green. A future edit that drops or breaks JLS 3.3 escape translation -- the thing the fixture is named for, and the thing whose absence once rejected two real OpenSearch files per java_tests.py:62-67 -- ships with no test failing."
+    },
+    {
+      "id": "H10",
+      "severity": "major",
+      "file": "buildSrc/src/test/resources/java-fixtures/text-block-in-comment.java:4",
+      "summary": "The fixture comment claims it 'constrains the ORDER of NOISE's alternatives (textblock before string)'. It does not. Moving (?P<string>...) ahead of (?P<textblock>...) in scripts/java_tests.py leaves all 16 cases green. The honest half of the comment (deletion is unreachable) is right; the half asserting order coverage is wrong, and it is the half a future reader will rely on.",
+      "failure_scenario": "Under the reordered regex the real text block in parses() survives normalisation intact -- normalise() returns `var body = \"\"\"\\n {\"\":{\"\":\"\"}}\\n \"\"\";` with the JSON braces still present -- and the suite passes because those braces and quotes happen to balance. To constrain the order the text block body needs unbalanced content (a lone `{` or a single `\"`). As staged, a refactor that reorders NOISE reintroduces the class of bug java_tests.py:45-50 was written to prevent, silently."
+    },
+    {
+      "id": "H11",
+      "severity": "major",
+      "file": "scripts/java_tests.py:241",
+      "summary": "Two of three fail-closed refusals are constrained, not three. `if False and annotated != detected:` leaves all 16 cases green; the brace-balance and quote-parity refusals are correctly killed by refused/unbalanced-braces.java and refused/unpaired-quote.java. The count cross-check -- the one scan_checked's docstring calls the reason the class exists -- has no fixture.",
+      "failure_scenario": "This is the only check that fires when the brace walk loses its place while the delimiters still balance, i.e. exactly the 'gate reports success on tests it never saw' mode. It can be deleted, inverted, or blinded (making `detected` never increment is caught only because it also trips the other two on other fixtures) with the suite green. A fixture is cheap: `@Test int field;` in a balanced class gives annotated=1, detected=0 with braces and quotes balanced."
+    },
+    {
+      "id": "H8",
+      "severity": "minor",
+      "file": ".pre-commit-config.yaml:23-24",
+      "summary": "The header says check-reviewed's evidence lives in `build/review/`. It lives in `.harness/review/` (scripts/check-reviewed.sh:17). AGENTS.md:216 has the right path, so the two disagree.",
+      "failure_scenario": "Someone debugging a check-reviewed failure greps for build/review, finds nothing, and concludes the directory was never created rather than that the hash did not match."
+    },
+    {
+      "id": "H12",
+      "severity": "minor",
+      "file": "scripts/check-gate-scope.sh:38-39",
+      "summary": "The new empty-list rule catches the reported shape but is keyed on a literal variable name and on a per-file grep, not on the property. Verified by probe scripts dropped into scripts/ and removed: an unguarded `grep -rniE \"foo\" $FILES` IS failed (good); `grep -rniE \"foo\" \"${SRC[@]}\"` is NOT, because \\$[A-Za-z_]+ cannot match ${...}; a script that guards $FILES and then greps a second, unguarded $OTHER list is NOT; and a correctly guarded script whose list is named $SRC IS failed.",
+      "failure_scenario": "check-terminology.sh gains a second scoped list, or a new gate uses the idiomatic bash array form with an empty array -- `grep -r` with no operands recurses the working directory again and reads .tmp/ and sibling checkouts, with check-gate-scope green. Matching on `grep -r` + an unguarded expansion in the same script, rather than on the string `if [ -z \"$FILES\" ]`, closes both."
+    },
+    {
+      "id": "H13",
+      "severity": "minor",
+      "file": "scripts/check-gate-scope.sh:26",
+      "summary": "H5 removed the waivers for scripts this commit does not add, but the ALLOWED entry for test_budget.py waives nothing: the script trips none of the three patterns (no grep -r, no find/glob.glob/os.walk, no ../ or /home path). It reads fixed relative paths through open().",
+      "failure_scenario": "Same class as H5 one level down -- the waiver is granted ahead of the condition. If test_budget.py later reaches for glob.glob to find docker-compose files, the gate stays silent because permission was already recorded, and the review that granted it could not see what it was permitting."
+    }
+  ]
+}

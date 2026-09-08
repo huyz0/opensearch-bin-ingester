@@ -1,0 +1,15 @@
+{
+  "diff_sha256": "d2436b0da5e7a612855274fda6e04dba672d361c43f224ab534f08f5167bcf5e",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "TR4-1",
+      "severity": "minor",
+      "file": "buildSrc/build.gradle.kts:33",
+      "summary": "The java.io.tmpdir pin does take effect for buildSrc's test task -- measured directly, not inferred: a temporary probe test read System.getProperty(\"java.io.tmpdir\") inside the forked buildSrc test JVM and it printed the buildSrc/build/tmp path, not /tmp (probe removed after measuring; repo restored and re-diffed to confirm the staged hash was unchanged by the measurement). No open finding on the pin's correctness -- your rule-17 fix is confirmed to take effect for buildSrc.",
+      "failure_scenario": "But no test in FreshCheckoutTest constrains this fact, so the fix rule 17 exists to make is not guarded going forward. Mutation performed: comment out the systemProperty(\"java.io.tmpdir\", ...) line entirely (the exact regression this commit fixes, i.e. buildSrc reverting to unpinned). Result: all 13 FreshCheckoutTest cases still pass (verified with --rerun, tests=13 failures=0 errors=0). None of the 13 tests reads java.io.tmpdir or asserts a fixture path is under build/tmp rather than the system temp dir, so a future accidental deletion of this one line would go undetected by this suite and rule 17 would silently regress. Minor, not blocking: it is a coverage gap on a config line rather than a wrong assertion in a staged test, and review.md rule 12 / the M0.32 round-cap circularity already recorded argue against spending another round on a non-regression gap this round. Recommend a follow-up task asserting System.getProperty(\"java.io.tmpdir\") is under the project's build/tmp when running under buildSrc's own test task."
+    }
+  ],
+  "task": "M0.31",
+  "role": "test-reviewer"
+}

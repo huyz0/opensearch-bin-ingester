@@ -1,0 +1,19 @@
+{"diff_sha256": "d73dc905bf6f26e268011e5716371bc6dacf1fbec432f868d553cede19920fa1",
+ "verdict": "pass",
+ "findings": [
+  {"id": "H14", "severity": "minor", "file": "AGENTS.md:216",
+   "summary": "The H6 repair states CI behaviour in the present indicative -- 'CI runs SKIP=check-reviewed so the skip is visible in the log' (also .pre-commit-config.yaml:31-33, and 'CI sets CHECK_RANGE' at :20) -- but there is no .github/ in the tree and M0.7 is still todo in the backlog. Unchanged since r3.",
+   "failure_scenario": "The author of M0.7 reads AGENTS.md, sees the SKIP already accounted for, and writes the plain workflow. Without CHECK_RANGE, check-reviewed prints a green 'ok nothing staged' on every CI run; with CHECK_RANGE set globally to rescue check-test-integrity, check-reviewed hard-fails every push and the next person weakens a gate to get CI green. Fix is one word of mood: 'CI must run SKIP=check-reviewed (M0.7)'."},
+  {"id": "H15", "severity": "minor", "file": "AGENTS.md:218",
+   "summary": "'Gates run in delta mode by default ... and print which mode they used', and scripts/lib.sh:49 '⚠️ Every gate PRINTS its mode'. Only 7 of the 22 scripts reference scoped_files or scope_note; check-portability, check-gate-scope, check-dependency-licenses, check-test-budget, check-tdd and check-reviewed print no mode. Unchanged since r3.",
+   "failure_scenario": "A reader takes a green line from check-gate-scope or check-portability as a delta pass and re-runs with GATE_SCOPE=full expecting a stronger statement; the two runs are identical because those gates ignore the variable. A gate author reads lib.sh as a framework contract and assumes mode printing is handled for them."},
+  {"id": "H16", "severity": "minor", "file": "scripts/tdd_scan.py:64",
+   "summary": "The no-red-record failure message says 'N new test(s) staged' unconditionally, including in CHECK_RANGE mode where nothing is staged. Unchanged since r3.",
+   "failure_scenario": "An operator debugging the documented CI failure greps git diff --cached, finds it empty, and concludes the gate is broken rather than that red records are gitignored -- the exact confusion the H7 prose was added to remove."},
+  {"id": "H18", "severity": "minor", "file": "scripts/java_tests.py:150",
+   "summary": "New in this round. The rewritten @interface note names three further unconstrained branches (NOT_A_METHOD, the `classes` guard, UNICODE_ESC's even-backslash rule) and says 'Closing them properly is backlog M0.17'. M0.17 (backlog.md:29) is scoped to recognising project-defined composed test annotations -- it does not cover any of the three. Three untracked gaps are presented as tracked.",
+   "failure_scenario": "M0.17 lands, adds a composed-annotation fixture, and is marked done. A later reader follows the pointer, sees a closed task, and believes NOT_A_METHOD and the even-backslash rule are now constrained. No fixture in java-fixtures/ contains a doubled backslash before \\u (verified by grep), so the rule stays mutable to `(?<!\\\\)\\\\u+` with the suite green. Fix: cite a new backlog row, or say the gaps are unracked."},
+  {"id": "H19", "severity": "nit", "file": "scripts/java_tests.py:86",
+   "summary": "New in this round. The annotation-argument note now says 'see the note on the `@interface` branch above'; that note is at line 140, below it. The r3 text had the mirror-image error at line 140 ('like the annotation-argument loop below', which is above). The inversion moved rather than went away.",
+   "failure_scenario": "A reader searching upward from normalise() for the @interface note does not find it and concludes the cross-reference is stale, or that a third note was deleted."}
+ ]}

@@ -1,0 +1,13 @@
+{
+  "diff_sha256": "a71b17bf64a49f012facaee5305078be7ca35d6a06410ae3e79f9ab46d12efba",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "M2.1-1",
+      "severity": "minor",
+      "failure_scenario": "The backlog M2.1 row's done-description says CapabilitiesTest proves the failure message 'names ADR-0008', but the assertion only checks hasMessageContaining(\"conditional writes\") -- a message that dropped the ADR-0008 citation while keeping 'conditional writes' would still pass. Not a functional gap in the guard itself (throw/no-throw logic independently mutation-verified), just an unenforced part of the stated claim."
+    }
+  ],
+  "task": "M2.1",
+  "role": "test-reviewer"
+}

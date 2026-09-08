@@ -1,0 +1,33 @@
+{
+  "diff_sha256": "126b69d540b416fb07937bf574ce9162a1a904f2fbc00a8bb6a0179b9fd05b04",
+  "verdict": "changes-requested",
+  "summary": "Round-1 majors are genuinely fixed: the toString assertion is now positive and kills both named mutations, and theSecretAccessorHandsOutACopy kills the aliasing mutation. Four surviving mutations remain, each verified by compiling and running the suite: the accessor's CONTENT is unconstrained; hashCode's claimed constant-ness is unconstrained; Principal.trustDomain/subject are never read by any test; and ClientCertificate is never constructed. All four are additions to one test file, not a signal the commit is too big.",
+  "findings": [
+    {
+      "file": "format/src/test/java/binjava/security/CredentialSourceTest.java:81",
+      "severity": "major",
+      "title": "theSecretAccessorHandsOutACopy constrains the aliasing but not the contents",
+      "failure_scenario": "VERIFIED SURVIVING MUTATION: change Credential.java:33 to `public byte[] secret() { return new byte[secret.length]; }`. All 9 tests pass (ran :format:test, exit 0). The accessor may return an all-zero array of the right length and nothing fails, because matches(), equals() and toString() all read the FIELD, never the accessor. The test fills the returned array with zeros and asserts the credential is unchanged -- an accessor that always returns zeros satisfies that exactly. The outbound half is still effectively untested for the thing it exists to do: hand out the secret. Add `assertThat(bearer.secret()).isEqualTo(bytes(\"hunter2\"))` before the fill, which also kills `return new byte[0]` and `return other.clone()`."
+    },
+    {
+      "file": "format/src/test/java/binjava/security/CredentialSourceTest.java:105",
+      "severity": "major",
+      "title": "assertThat(a.hashCode()).isEqualTo(c.hashCode()) does not constrain the constant, and is already redundant",
+      "failure_scenario": "Answer to the explicit question: it is weak. VERIFIED SURVIVING MUTATION: change Credential.java:73 to `return Arrays.hashCode(secret);`. All 9 tests pass (exit 0). The assertion pins only the equals/hashCode CONTRACT (equal objects hash equally), which any secret-derived hash satisfies -- and that contract is already killed independently by the HashSet.contains assertion two lines below, so this line adds nothing. The property the production javadoc claims (CONSTANT, deliberately, because any hash of the secret is a weak oracle that leaks through anything printing a hash code) has zero coverage. Unlike the disclosed constant-time gap, this one is testable in one line and not flaky: assert a Bearer over a DIFFERENT secret has the same hashCode, e.g. `assertThat(new Credential.Bearer(bytes(\"hunter2\")).hashCode()).isEqualTo(new Credential.Bearer(bytes(\"a-completely-different-secret\")).hashCode())`. A disclosed-but-testable gap is not the same as an untestable one."
+    },
+    {
+      "file": "format/src/test/java/binjava/security/CredentialSourceTest.java:29",
+      "severity": "major",
+      "title": "No test ever reads Principal.trustDomain() or subject() -- ADR-0021's headline claim is unconstrained",
+      "failure_scenario": "VERIFIED SURVIVING MUTATION: replace both requireNonNull lines in Principal.java's canonical constructor with `trustDomain = \"\"; subject = \"\";`. All 9 tests pass (exit 0). ADR-0021 rule 1 and FR-20 are 'the credential resolves the trust domain', and the trust domain selects the bucket prefix, the object-store identity, the ordinal registry and the segment stream -- yet no assertion in the file reads either accessor. `contains(configured)` cannot catch it: record equality compares a mutated Principal against the same mutated instance, so both sides blank together. The null-rejection failure path (requireNonNull on trustDomain/subject) is likewise untested, so deleting both guards is invisible. Assert the accessor directly on the value returned from authenticate(): `assertThat(source.authenticate(...).orElseThrow().trustDomain()).isEqualTo(\"cluster-a\")`."
+    },
+    {
+      "file": "format/src/test/java/binjava/security/CredentialSourceTest.java:24",
+      "severity": "major",
+      "title": "Credential.ClientCertificate is never constructed; the source's credential-independence is untested",
+      "failure_scenario": "VERIFIED SURVIVING MUTATION: change StaticCredentialSource.java:26 to `return presented instanceof Credential.Bearer ? Optional.of(principal) : Optional.empty();`. All 9 tests pass (exit 0). A producer presenting a client certificate would get an empty Optional -- a 401 per ADR-0021 -- and no test notices. The whole second arm of the sealed type, which ADR-0021 names as one of the two shapes the SPI must cover, is never instantiated. The test's own `as()` string claims 'M1 has no authentication, but it must still yield the trust domain'; only one credential shape is exercised, so the claim is not checked. Add a second authenticate() call with `new Credential.ClientCertificate(\"CN=producer-1\")` asserting the same principal."
+    }
+  ],
+  "task": "M1.0",
+  "role": "test-reviewer"
+}

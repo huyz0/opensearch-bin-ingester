@@ -1,0 +1,45 @@
+{
+  "diff_sha256": "eaae807ca9a8cb0b5583bd00d06765ff5f1aeef30c85e5eb14364d1b7b93923d",
+  "verdict": "changes-requested",
+  "summary": "R1a's argument is sound and I would not have required the fix; R1b, R1c and R1e are answered, R1d is acceptably recorded. But TR-M4.17-1 is still open in substance: making sleepFor package-private pinned the seam and not the WIRING, and the mutation the new javadoc cites as its own motivation still leaves the whole suite green -- measured. Four minors, all prose-accuracy.",
+  "findings": [
+    {
+      "id": "M4.17-R2a",
+      "severity": "major",
+      "file": "sequencer/src/main/java/binjava/sequencer/LocalSequencer.java:152",
+      "title": "The 4-arg start's wiring of leases.renewInterval() is still unpinned -- the mutation the new javadoc names as its motivation survives, measured",
+      "failure_scenario": "MEASURED, not argued. Replacing line 152-153's `sleepFor(leases.renewInterval())` with `sleepFor(java.time.Duration.ofDays(1))` leaves `./gradlew test --rerun-tasks` at BUILD SUCCESSFUL in 2m02s with failures=0 in every test-result XML, including the new theSHIPPINGTickerWaitsTheCONFIGUREDRenewIntervalNotSomeOtherOne (ran, 0.148s, passed). That test calls LocalSequencer.sleepFor directly and never constructs a LeaseConfig, so it bounds the seam and bypasses the call site; every other test injects its own ticker through the 5-arg start. So a later refactor that replaces renewInterval() with ttl, with a constant, or that drops the argument, ships a leader that renews once a day against a ten-second TTL -- M4.17's own defect, restored with the fix in place and the suite green. The same hole runs the other way and is a cost defect: `leases.renewInterval().dividedBy(100)` multiplies the lease PUT rate 100x against ADR-0008's ~0.33/s budget, also green. Two claims in the diff read as though this were closed and are not true: the sleepFor javadoc (line 157-163) cites `sleepFor(Duration.ofDays(1)) left the whole build green` as the reason for the seam, and the test's name says CONFIGURED renew interval when nothing configured reaches it -- verbatim the overstatement baselines/review.txt already records against BatchingSequencer (`both its bounds bypass the constructor`). REMEDY MEASURED, NOT HYPOTHESISED: ~30 lines, 0.34s, no new seam and no new production member. Build a LeaseConfig with renewInterval=150ms (LeaseConfig refuses only zero, negative and >= ttl, so this is legal), call the PUBLIC 4-arg start, advance the TestClock, and poll the stored lease expiry under a 2s deadline. I ran it in my review tree: green on the staged bytes (0.34s), failures=1 on the ofDays(1) mutant. This does NOT mean the commit is too big -- it is one added test, not a split."
+    },
+    {
+      "id": "M4.17-R2b",
+      "severity": "minor",
+      "file": "docs/internal/product/decisions/0027-one-refresh-attempt-is-the-accepted-bound-on-ambiguous-renew.md:1",
+      "title": "ADR-0027 is left stating a quantity this commit makes false, while the new WARNING points operators at it by name",
+      "failure_scenario": "The log line added at LocalSequencer.java:106 tells an operator the node `self-fenced after an ambiguous write (ADR-0027)`. They open ADR-0027 and read `The quantities`: the stall is `exactly the remainder of the TTL, unshortenable`, resting on acquireLocked retaking the lease at expiry. With the tick, nothing retakes it -- fenced is a one-way latch, log and epoch are final, nothing re-runs start -- so the true quantity is the process lifetime. The ADR stays Status: accepted with no banner. M4.39 defers the amendment to M5, but the document is wrong today and the code cites it today; the tree's own convention (research revision banners, 'the banner wins') is a five-line amendment in this commit. Second half: ADR-0027's rejected alternative 'Make a lost CAS inconclusive while ambiguous, and re-refresh' was rejected explicitly `against a saving of one bounded failover` -- the term of trade this commit changes -- and it is the mechanism that WOULD distinguish a false empty from a true one (stat + the existing isOwnTerm check, on the fence path only, so no rate scales). Neither the baselines entry nor M4.39 says so; both say recovery `requires tryAcquire, i.e. M5's supervisor tick`, which sends whoever picks up M4.39 past the cheaper option that already has a written rejection to reopen. A row is a prescription a future session acts on -- the lesson baselines/review.txt already records for M4.38."
+    },
+    {
+      "id": "M4.17-R2c",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/LocalSequencer.java:281",
+      "title": "The rewritten close() comment claims an I2 resurrection the same commit's test file says cannot happen",
+      "failure_scenario": "close()'s new comment says the interrupt-before-release ordering `stops an in-flight renew landing after the lease is handed back and resurrecting it -- the I2 fork BatchingSequencer's committer joins to prevent`. LocalSequencerRenewTest.java:313-315, added by this same commit, says the opposite and is right: `a resurrected lease (never happens -- release() nulls the belief, so a late renew returns empty rather than writing)`. Checked against the code: renewLocked and releaseLocked both read `belief` under the same BoundedLock, so a renew serialised after the release reads null and writes nothing whether or not anyone was interrupted. There is no I2 fork here to close. Two smaller untruths in the same block: `a renewer already past its closed check takes takeOrFail's interrupt branch instead of reaching renewLocked` is false when the renewer already holds the lock -- which is exactly the precondition of the R1d hazard this commit records but does not fix, so the comment asserts that hazard is unreachable; and `logs a fence at every graceful shutdown` if reversed is a race that essentially never wins, as M4.40's own row states. The consequence is a maintainer who cannot tell which of two adjacent files in one commit is true, and who keeps interrupting a renewer that may be inside putIfMatch because a comment told them that interrupt is safety-critical. The ORDER does still buy the narrow anti-spurious-fence property; only the reason given for it is wrong. Round 1 asked for this comment to be corrected -- please trim it rather than re-argue it."
+    },
+    {
+      "id": "M4.17-R2d",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSimulation.java:249",
+      "title": "The never-firing tick fixes one of the three harms its own comment names, and the comment does not say so",
+      "failure_scenario": "The comment justifies the injected ticker by three harms: the harness javadoc's `nothing here reads a wall clock or sleeps` becoming false, `holding its MemoryBinStore live`, and wall-clock concurrency. `() -> Thread.sleep(Long.MAX_VALUE)` addresses only the third. It is still a real sleep on a real thread, so the javadoc claim is still false; and every zombie (never closed) and every leader abandoned after an injected commit IOException (`leader = null` with no close) still parks a virtual thread that keeps its LocalSequencer, CommitLog and that seed's store reachable for the life of the JVM -- retention is unchanged, not fixed. A reader at M4.13's 1,000 seeds takes this sentence as saying retention was dealt with and never counts what a sweep retains. One sentence fixes the claim; releasing the parked tickers at the end of run() would fix the thing."
+    },
+    {
+      "id": "M4.17-R2e",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/LocalSequencer.java:106",
+      "title": "Log severity is inverted between renewForever's two terminal exits",
+      "failure_scenario": "The renewer dying is logged at ERROR (line 131) for an outcome its own comment calls `survivable, and exactly the behaviour that existed before this task` -- the term lapses at the TTL and a successor takes over. The fence is logged at WARNING (line 106) for the outcome M4.39 describes as cluster ingestion stopping until the process is restarted, and the message itself says the node `must be restarted to rejoin`. An operator alerting on ERROR is paged for the recoverable case and not for the terminal one."
+    }
+  ],
+  "task": "M4.17",
+  "role": "reviewer",
+  "staged_tree": "862c1c9ae2b95f8c5a0a1daed6028740dd501ddc"
+}

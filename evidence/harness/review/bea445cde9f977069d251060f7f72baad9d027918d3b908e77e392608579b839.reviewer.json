@@ -1,0 +1,32 @@
+{
+  "diff_sha256": "bea445cde9f977069d251060f7f72baad9d027918d3b908e77e392608579b839",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "M4.21-R13-1",
+      "file": "baselines/review.txt",
+      "line": 2,
+      "severity": "minor",
+      "what": "This commit introduces a SECOND key shape for this file -- rounds:<task>  <reason> -- and does not document it in the file's own header, which still says the format is '<role>:<finding-id>  <why it is not a defect>' and nothing else. The header is the one place an author editing this file will look. Deferred to M4.26, but M4.26's subject is the OLDER <role>:<finding-id> key (read the index, require a reason), so the new key's documentation is entangled with a row about a different key.",
+      "failure_scenario": "An author at round 3 reads the header of baselines/review.txt, sees only <role>:<finding-id>, and either invents a finding id to key the round-cap exception on (which the gate will not match, so they conclude the escape does not work and reach for SKIP=check-reviewed -- the exact state M4.21 exists to end), or edits the header themselves in a later commit, splitting the format documentation across two commits. The gate's failure message does print the correct key, but only after the author has already decided how to spell it."
+    },
+    {
+      "id": "M4.21-R13-2",
+      "file": "baselines/review.txt",
+      "line": 11,
+      "severity": "minor",
+      "what": "The argued entry's own round numbers do not match the counter the gate reads. Measured: .harness/review holds 12 distinct diff_sha256 values carrying task M4.21 (d7070ba, e229dac, 42a3fb4, b141fbf, 71021ff, 694f155, 8da566e, 8844d8c, 9b2e9d1, 31deea9, d2ed2b6, 78d13e9), and review_rounds.py returns 13 once a verdict for these bytes is recorded -- simulated against a copy of the review dir. The entry opens 'Fourteen rounds against the cap of two', attributes defects to 'Rounds 3-13', and closes 'Round 14 passed both roles clean' -- but round 14 has not happened; the last both-roles-pass round is hash 78d13e9, which is round 12 by the counter. The same +2 numbering appears in ReviewRoundCapArgumentValidityTest's javadoc ('M4.21 round 14') and across the new backlog rows. Not raised higher because the counting basis is genuinely ambiguous (rounds whose verdicts were refused or never recorded -- M4.27, M4.34 -- are real reviews the counter cannot see), no gate behaviour depends on the number, and .harness/review is gitignored so neither figure is checkable from the tree.",
+      "failure_scenario": "The gate's own WARN line for this commit will read 'review round 13 exceeds the cap of 2, ARGUED as rounds:M4.21' and its ok line '(round 13 of 2)', directly beside a staged entry saying fourteen. A future reader auditing whether the escape is being used proportionately -- which is the entire purpose of 'a growing list is itself a signal' -- reads the first quantity in the first rounds: entry ever written and gets a number the mechanism does not produce, in the same commit whose review.md addition says the number 'is measured here rather than remembered'."
+    },
+    {
+      "id": "M4.21-R13-3",
+      "file": "docs/internal/product/backlog.md",
+      "line": 278,
+      "severity": "minor",
+      "what": "Three test-count claims are stale against the tree as staged. There are 16 tests (10 in ReviewRoundCapTest, 6 in ReviewRoundCapArgumentValidityTest). M4.31 says widening the awk selector to /^[-+]/ 'leaves all fifteen tests green' -- I reproduced the surviving mutation, but the count is 16. ReviewRoundCapTest.java:175 says a substring mutation 'left all fourteen other tests green' and ReviewRoundCapArgumentValidityTest.java:124 and :169 each say 'all thirteen other tests' -- 'other' is 15 in every case. Related: review.md:62's only pointer is '\u2192 ReviewRoundCapTest', but the file-scoping, no-task, disagreement, decoy-filename, history and diff-context requirements it enumerates live in ReviewRoundCapArgumentValidityTest (this was round 12's recorded minor R1 and is unchanged).",
+      "failure_scenario": "Whoever implements M4.31 builds the regression harness from the row, mutates the selector, sees 16 green instead of the fifteen the row promises, and cannot tell whether the extra test is one the row did not know about or one that should have killed the mutation -- so the row's measurement stops being reproducible exactly when someone tries to reproduce it. This is the stale-count-in-prose recurrence the same commit's review.md paragraphs document twice."
+    }
+  ],
+  "task": "M4.21",
+  "role": "reviewer"
+}

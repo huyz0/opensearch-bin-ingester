@@ -1,0 +1,48 @@
+{
+  "diff_sha256": "2853f985dd1cc83782033a1804ab54819cf7db591653be428528cff36fea3d12",
+  "verdict": "pass",
+  "summary": "Three backlog rows recording M4.7 review findings. I verified the substantive claims against HEAD and by mutation in a review tree: the interleaving in M4.35, the two message defects in M4.36, and all three measured surviving mutations (terminalFailure body, catch(Throwable)->catch(Exception), deleting close()'s failAll) reproduce exactly as written; the '~400 ms of slack' overstatement in the real-clock test is real (floor margin is 100 ms). M4.35 does not repeat the flat takeOrFail claim it exists to correct. Three minors: M4.36's stated root cause does not survive its own text, one clause in M4.35 attaches to the wrong antecedent, and the commit is filed under an ID it does not implement.",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:293",
+      "title": "M4.36's merge justification contradicts its own earlier sentence, and the named root cause does not fix the defect it claims to",
+      "detail": "The row says 'THE ROOT CAUSE IS THAT Duration.ofSeconds(10) IS A LITERAL' and 'Making the timeout injectable closes the message defect and the untestable-net finding together'. Injecting the timeout changes neither message defect: the WARNING is inaccurate because the close is gated on claimDelegateClose() (BatchingSequencer.java:473) and because the InterruptedException catch leaves stopped==false (BatchingSequencer.java:444-446). A seam only makes that branch cheap to reach. The row also states 'no test can reach it without waiting ten real seconds' two sentences after correctly naming the interrupt path, which reaches the identical !stopped branch in milliseconds -- a second thread interrupting the closing thread while it is in committer.join gives stopped==false with queued callers present, so the drain net can be pinned today with no production change at all.",
+      "failure_scenario": "The implementer of M4.36 follows the row literally: injects the timeout, writes the drain-net test against a short timeout, and closes the row. The WARNING still claims 'closing the delegate' when claimDelegateClose() will refuse, and still says 'did not stop within 10s' on an interrupted join -- the two defects the row opens with go unfixed, and the row is gone. Alternatively the seam is added for a test that never needed it."
+    },
+    {
+      "id": "R2",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:289",
+      "title": "M4.35's closing clause names the wrong antecedent, inverting the fact in the sentence whose job is to correct an overstatement",
+      "detail": "'...a qualification close()'s own comment carries and which baselines/review.txt inherited verbatim.' The nearest antecedent for 'which' is 'a qualification', but baselines/review.txt inherited the FLAT claim, not the qualification: its M4.7 entry reads 'leases.release() reaches BoundedLock.takeOrFail, whose tryLock(bound, NANOSECONDS) throws immediately when the flag is set', with no mention of release()'s uncontended tryLock() fast path (LeaseManager.java:419-421). The row's substance is right -- close()'s comment at BatchingSequencer.java:479-482 does carry the qualification and closeDelegateQuietly's at :294-296 does not -- only this clause reads backwards.",
+      "failure_scenario": "A reader of M4.35 concludes baselines/review.txt already states the qualified form, does not look, and the flat claim stays in the argued record as the only surviving copy of the overstatement M4.35 exists to retire."
+    },
+    {
+      "id": "R3",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:137",
+      "title": "The commit is filed under M4.35, an ID whose row describes a production fix this diff does not make",
+      "detail": "The diff adds three rows and nothing else; M4.35's row asks for a change to BatchingSequencer.close() and stays 'todo'. Every prior review-finding row in this tree entered inside the commit whose review found it (M4.17/M4.18 in d1f6eb7, M4.22 in 2953b5a, M4.26/33/34 in 3e34ca8, M4.7c in f2b6d3c); the one backlog-only commit, c0066b8, was filed under M4.3n, a row whose task WAS the bookkeeping. Note the commit subject is not part of the reviewed bytes, so nothing about this finding is bound by the verdict hash.",
+      "failure_scenario": "When M4.35 is actually implemented it produces a second commit with the same subject ID, so git log -S'M4.35' returns one commit that changed no production code and one that did the work, and git.md rule 2 (one task, one commit) no longer holds for that ID. A reader auditing which commit closed M4.35 cannot tell them apart from the subject."
+    }
+  ],
+  "verified": [
+    "M4.35 interleaving: close() interrupts unconditionally (BatchingSequencer.java:424); closeDelegateQuietly's Thread.interrupted() is a one-shot clear (:300); the finally fails the queue before closeDelegateQuietly (:246 before :263); release() takes an interrupt-insensitive tryLock() first and only then takeOrFail (LeaseManager.java:419-421); close() skips the delegate on a lost CAS and returns without exception (:473). LocalFsBinStore writes through FileChannel/Files, which are interruptible, so the hazard is not confined to a future S3 backend.",
+    "M4.36 both message defects reproduce by reading BatchingSequencer.java:441-456 and :473.",
+    "M4.37(a) measured in a review tree: terminalFailure() replaced by 'new IOException(\"this sequencer is closed\")' -- javap confirms the mutated bytecode -- and :sequencer:test is green. The two tests that reach it with a queued caller (aCallerQUEUEDBehindADyingCommitterIsFailedEvenWithNoCloseAtAll, closingFailsTheQUEUEDCallersTooNotOnlyTheOneInFlight) assert only thread liveness and outcome count, and aCommitterThatDIEDDoesNotTELLTheNextCallerItWasCLOSED goes through submit()'s inline message (:178), not terminalFailure().",
+    "M4.37(b) measured: catch (Throwable releaseFailed) -> catch (Exception releaseFailed) compiles to an Exception handler (javap) and :sequencer:test is green.",
+    "M4.36 measured: deleting failAll(drainRemaining(), terminalFailure()) from close() leaves :sequencer:test green. Only the sequencer module references BatchingSequencer, so this is the discriminating subset of './gradlew test'.",
+    "M4.37(c): the real-clock test bounds are 300 ms floor / 700 ms ceiling, so a 200 ms constant clears the floor by ~100 ms, not ~400 ms. The comment's claim is overstated as the row says.",
+    "IDs M4.35-M4.37 appear nowhere in backlog-done.md or elsewhere; the three summaries are 390/261/340 characters, each with a matching notes entry; no overlap with the open review-finding rows M4.22-M4.34, which are about the invariant checker and the review harness."
+  ],
+  "not_verified": [
+    "Round numbering ('round-7', 'round-8', 'the major round 6 raised') -- I did not open the review artifacts to confirm which round raised what, only that baselines/review.txt's M4.7 entry describes matching findings.",
+    "'./gradlew test green across every module' -- I ran :sequencer:test only, on the grounds that no other module compiles against BatchingSequencer.",
+    "The historical claim that the pre-round-7 order released the lease before failing the queue -- corroborated by the in-tree comment at BatchingSequencer.java:238-245 and by baselines/review.txt, not by reading the old code."
+  ],
+  "task": "M4.35",
+  "role": "reviewer",
+  "staged_tree": "188c1bfeeb0d94ac9224f8151105453a1543fe21"
+}

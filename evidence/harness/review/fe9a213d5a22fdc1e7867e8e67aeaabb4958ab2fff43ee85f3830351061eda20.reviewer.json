@@ -1,0 +1,50 @@
+{
+  "diff_sha256": "fe9a213d5a22fdc1e7867e8e67aeaabb4958ab2fff43ee85f3830351061eda20",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "file": "scripts/review-tree.sh",
+      "line": 105,
+      "severity": "major",
+      "what": "The `git commit` makes the issued tree's staged diff EMPTY, so every gate that resolves its input through the STAGED diff -- which is lib.sh's DEFAULT mode, plus check-tdd and check-reviewed which have no full mode -- passes vacuously inside the tree. The claim made here (line 82-87), in review.sh's packet (line 63-65), in the backlog row and in the staged baselines/review.txt argument -- that being a real repository stops per-file gates 'passing having examined nothing' -- is measured false for the mode a reviewer actually gets.",
+      "failure_scenario": "Measured in the tree this script issued for this review (/tmp/binjava-review-trees/reviewer.akOeFrkd, 571 files, one commit): `git diff --cached --name-only` -> 0 lines, because `git add -A && git commit` leaves index == HEAD. Then `./scripts/check-file-size.sh` prints the exact vacuous string this script's own comment quotes -- 'ok 0 source file(s) within 500 lines' -- and after appending 700 lines to sequencer/src/main/java/binjava/sequencer/LocalSequencer.java (863 lines) it STILL prints 'ok 0 source file(s)', exit 0; only GATE_SCOPE=full rejects it. Same run: check-terminology 'no markdown or Java in scope', check-links '0 relative markdown links resolve', check-license-headers '0 source file(s)', check-metric-cardinality 'no Java sources yet (build lands in M0.4)' in a tree holding 287 Java files, check-tdd 'ok nothing staged', check-reviewed 'ok nothing staged'. Sharpest instance: `./scripts/check-harness-tests.sh` inside the tree prints 'ok no harness change; suite not run' -- so a reviewer verifying THIS commit's own change to check-harness-tests.sh the intended way, by mutating it in the issued tree, gets green for every mutation. In the real repository the same gate in the same default mode examines the 5 staged files. Remedy direction, measured: stop at `git add -A` without committing -- `git diff --cached --name-only` then lists every file (verified in a scratch repo with no HEAD), and in a hand-built staged-not-committed copy of this same tree check-file-size saw 287 files and FAILED on the 863-line mutation."
+    },
+    {
+      "file": "scripts/review-tree.sh",
+      "line": 58,
+      "severity": "major",
+      "what": "The containment guard compares a PHYSICAL path against a LOGICAL one: TMPROOT is `pwd -P` (line 55) but ROOT comes from lib.sh line 5, which is plain `pwd`. When the repository is reached through a symlinked path the two never share a prefix and the guard is walked past -- the same physical/logical hole round 2 closed on the TMPDIR side, left open on the ROOT side.",
+      "failure_scenario": "Reproduced: repo at /tmp/symtest/real, symlink /tmp/symtest/link -> it, invoked from the link so lib.sh computes ROOT=/tmp/symtest/link; `TMPDIR=/tmp/symtest/link/inside-tmp bash scripts/review-tree.sh reviewer` exits 0 and prints /tmp/symtest/real/inside-tmp/binjava-review-trees/reviewer.Q3DRZYZt -- 32 files plus a nested .git materialised physically INSIDE the working tree, which is exactly what this guard exists to refuse (the same input under a non-symlinked path is correctly refused with 'TMPDIR resolves inside ...'). Consequence is the one the test theTreeLivesOUTSIDETheRepository names: check-terminology.sh and check-metric-cardinality.sh grep -r over the copy, tdd-red.sh does `find . -delete`, and a stale second copy of every source file sits in the tree for a human or a grep to read as the real one. Fix is one token: physicalise ROOT for the comparison, e.g. `case \"$TMPROOT/\" in \"$(cd \"$ROOT\" && pwd -P)\"/*)`."
+    },
+    {
+      "file": "scripts/review-tree.sh",
+      "line": 67,
+      "severity": "major",
+      "what": "`DEST=$(cd \"$DEST\" && pwd -P)` is the one command in this script whose failure is NOT checked, in a file whose comment two lines below says '\u26a0\ufe0f CHECKED ... lib.sh sets set -uo pipefail, NOT set -e'. On failure the command substitution yields the EMPTY string, `set -u` does not fire (DEST is set, just empty), and the next line runs `git checkout-index -a --prefix=/` -- materialising the whole staged index into the filesystem root. The line is also redundant: TMPROOT is already `pwd -P`, so DEST is already physical.",
+      "failure_scenario": "Reproduced with `bash -x` and a mktemp whose directory is gone before the cd (the reaper this script explicitly delegates cleanup to is the realistic trigger): the trace shows `DEST=/tmp/binjava-review-trees/reviewer.Hcx7DlkY` then `DEST=` then `git checkout-index -a --prefix=/`. As an unprivileged user this fails on permissions and the script exits 1 -- with the unactionable message 'review-tree: could not materialise the index into ' naming no path. As root (a container-sandboxed agent, a root CI image) checkout-index writes 571 tracked files across `/` and the following block runs `git init` and `git add -A` in `/`. Round 1's own R1 finding was this same class in this same file; three of the four call sites were checked and the fourth, the one with the worst blast radius, was not."
+    },
+    {
+      "file": "scripts/check-harness-tests.sh",
+      "line": 45,
+      "severity": "minor",
+      "what": "`env -u GIT_INDEX_FILE -u GIT_DIR -u GIT_WORK_TREE` is exactly the three-key list that this same commit argues elsewhere is insufficient: review-tree.sh lines 93-98 say 'A three-key list here, while the test next door says three keys are not enough, was one claim contradicted inside one commit', and ReviewTreeTest.strippingRemovesEveryInheritedGitVariable asserts GIT_OBJECT_DIRECTORY specifically. One claim contradicted inside one commit, in the direction the commit warns against.",
+      "failure_scenario": "With GIT_OBJECT_DIRECTORY (or GIT_ALTERNATE_OBJECT_DIRECTORIES) exported, the ~238 harness tests that shell out to `git init`/`git add -A` in their own temp repositories write their objects into the caller's object store and leave temp `.git`s with no objects/ -- the precise hazard named in review-tree.sh's comment -- while this gate reports the suite green. Lower probability than GIT_INDEX_FILE (git does not set it for pre-commit hooks), which is why this is minor rather than major; the fix is the same GIT_* sweep the script next door already uses."
+    },
+    {
+      "file": "scripts/review.sh",
+      "line": 59,
+      "severity": "minor",
+      "what": "The same measurement is quoted with two different pairs of numbers inside one commit: scripts/review.sh:59 and scripts/check-harness-tests.sh:42 say 'a private index went from 566 entries to 3', while the backlog row and the staged baselines/review.txt:12 argument both say 'measured taking a 565-entry index to 5'. Both texts present it as one event ('measured on M0.57' / 'measured at ... silently, exit 0').",
+      "failure_scenario": "A reader checking the claim against the evidence cannot tell which pair was measured, and per non-negotiable 4 the cheapest reading is that at least one was not. The numbers are the whole justification for the `env -u` half of the change and for the packet's 'ALWAYS' instruction; a number that moves between files is how a measured claim quietly becomes a remembered one."
+    },
+    {
+      "file": "scripts/review-tree.sh",
+      "line": 30,
+      "severity": "minor",
+      "what": "'NOT RECLAIMED, deliberately ... trees share one parent so the platform's temp reaper can take them' rests on a premise that does not hold on this project's documented platform. On WSL2 /tmp is tmpfs (RAM-backed) and nothing reaps it before a reboot, while the packet instructs each reviewer to run every build and test inside its tree.",
+      "failure_scenario": "Measured on this machine: /tmp is tmpfs (23G), /tmp/binjava-review-trees already holds 433M across 192 directories, and one freshly issued tree is 9.0M before any build and 14M after only `./gradlew -p buildSrc test`. A full-project suite is far larger, two roles run concurrently, and this repo has tasks that reached eleven rounds -- so a long task can hold a multi-GB RAM-resident residue against build.md's 8 GiB per-session budget, on the platform whose failure mode build.md describes as 'WSL2 does not kill the offending process; it kills whatever it likes'. The no-`rm -rf` decision is right; what is unsupported is the sentence claiming something else collects them."
+    }
+  ],
+  "task": "M0.57",
+  "role": "reviewer"
+}

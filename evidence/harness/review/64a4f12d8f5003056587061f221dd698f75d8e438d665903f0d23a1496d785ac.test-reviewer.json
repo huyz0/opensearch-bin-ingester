@@ -1,0 +1,55 @@
+{
+  "diff_sha256": "64a4f12d8f5003056587061f221dd698f75d8e438d665903f0d23a1496d785ac",
+  "verdict": "changes-requested",
+  "summary": "Round 2, test review. VERIFIED BY MUTATION, every run forced with --rerun-tasks and read from the result XML. TR-2 CLOSED: an extra leases.renew() per tick dies on the CountingBinStore assertion (expected 2L, was 4L). TR-3 CLOSED: the rendezvous is correct for its call sites and fence-on-IOException now dies (it survived the 50ms sleep it replaced). TR-M4.17-1 HALF CLOSED: sleepFor(Duration.ofDays(1)) in the 4-arg start now dies (20.28s), and dividedBy(100) dies at 583 renews/s -- but sleepFor(interval.multipliedBy(4)) and a constant Thread.sleep(200ms) BOTH still leave the whole class green, and the 4x one is the M4.17 defect itself. TR-4: the deletion was right and the M4.40 row's premise reproduces (the double mutation leaves 711 tests green), but its conclusion is wrong: a deterministic detector exists and is measured below. NOTE: the staged bytes MOVED while this review was running (review.md rule 12b) -- the packet's tree lacked thePUBLICStartWIRES...; this verdict is bound to 64a4f12d, which I re-reviewed and re-mutated in full.",
+  "findings": [
+    {
+      "id": "TR-M4.17-2",
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/LocalSequencerRenewTest.java:288-311,364-366",
+      "title": "A ticker scaled UP off the configured interval survives both ticker tests -- which is the M4.17 defect, reinstated with the fix in place",
+      "failure_scenario": "A refactor writes sleepFor(interval.multipliedBy(4)) at LocalSequencer.java:170, or a constant Thread.sleep(Duration.ofMillis(200)) that ignores its argument. Both leave LocalSequencerRenewTest green. In production the config contract is renewInterval < ttl (LeaseConfig:63), and these tests run 3s/10s: 4x makes the renew due at 12s against a 10s TTL, so every pod loses its lease at every TTL and the cluster fails over for no reason, burning an epoch each time -- verbatim the defect this task exists to remove, with all five tests passing. The constant runs the other way: whatever an operator configures, the pod renews every 200ms, 5 lease PUTs/s against the ~0.33/s ADR-0008 budget the new test's own comment cites (15x), which is the sibling cost defect baselines/review.txt already records against BatchingSequencer round 7.",
+      "surviving_mutations": [
+        "LocalSequencer.java:170 `return () -> Thread.sleep(interval);` -> `Thread.sleep(interval.multipliedBy(4));` MEASURED GREEN on the staged bytes: :sequencer:test --tests LocalSequencerRenewTest --rerun-tasks, tests=5 failures=0 (seam test 0.488s vs 0.128s baseline, wiring test 1.879s vs 1.384s). The seam test's ceiling is 4s against a 120ms interval, so it admits up to 33x; the wiring test's only bounds are a 20s liveness deadline and a one-sided rate ceiling of 30/s, and a 600ms mutant interval satisfies both.",
+        "LocalSequencer.java:170 -> `return () -> Thread.sleep(java.time.Duration.ofMillis(200));` (argument ignored entirely) MEASURED GREEN: tests=5 failures=0. The assertion whose description reads 'and THAT interval, not a multiple of it or a constant' (line 309) does not exclude either."
+      ],
+      "remedy_measured": "Two changes, both inside the test that already exists, costing no extra suite time because they share the one 1000ms window. (1) Give the rate bound a FLOOR: assertThat(renewsInOneSecond).isBetween(3L, 30L) -- measured honest rate at a 150ms interval is 6, the 4x mutant is 1, so it dies on the floor while dividedBy(100) still dies at 583 on the ceiling. (2) Start a SECOND sequencer in the same window on its own CountingBinStore with renewInterval 600ms and assert its rate isLessThan(3L) -- two configured intervals with disjoint expected rates, which no single constant can satisfy: the 200ms constant is measured at 5 there and dies. I ran exactly this: production tests=5 failures=0 (wiring test 1.436s); mult4 fails 'Expecting actual: 1L to be between [3L, 30L]'; const200 fails 'Expecting actual: 5L to be less than 3L'; the ofDays(1) wiring mutation still fails at 20.28s.",
+      "notes": "The wiring half the author added in this round genuinely works and is the right shape -- sleepFor(Duration.ofDays(1)) at LocalSequencer.java:158 now dies, where before it left the FULL build green (measured: ./gradlew test --rerun-tasks, 711 tests, 0 failures, BUILD SUCCESSFUL in 2m23s). This finding is only that the new test bounds the too-often direction and not the too-seldom one, and the too-seldom one is the defect."
+    },
+    {
+      "id": "TR-M4.17-3",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/LocalSequencerRenewTest.java:102-109",
+      "title": "The rendezvous is correct today, but goes silently vacuous if any plain tick() ever precedes it, and its 20s bounds sit 2.4s from the class timeout",
+      "failure_scenario": "ManualTicker.awaitNextRenew releases `parked` once per completed loop, and permits accumulate. tickAndAwaitProcessed takes exactly ONE permit before releasing the tick, so it is only a rendezvous when `parked` holds exactly one -- true today because it is the first tick issued in its test. Add any earlier ticker.tick() to that test (the natural way to extend it) and the second tryAcquire consumes a stale permit and returns before the renewer has processed anything: the method silently degrades into the Thread.sleep(50) it replaced, and `fenced = true;` added to the IOException catch at LocalSequencer.java:116 survives again -- today it dies at LocalSequencerRenewTest.java:107 (measured).",
+      "surviving_mutations": [
+        "Not a surviving mutation today -- verified: fence-on-IOException dies. The mutation that would survive AFTER a future edit adding a tick() before tickAndAwaitProcessed is `catch (IOException transientFailure) { fenced = true; ... }` at LocalSequencer.java:116."
+      ],
+      "remedy_measured": "One line: parked.drainPermits() between the first tryAcquire and due.release(). Separately, when the rendezvous does fire it burns 20s per tryAcquire -- the fence-on-IOException mutant run reported the test at 57.6s against the class's @Timeout(60), i.e. 2.4s before the named assertion degrades into a bare TimeoutException. 5s bounds would leave the diagnosis intact."
+    },
+    {
+      "id": "TR-M4.17-4",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md (M4.40), sequencer/src/test/java/binjava/sequencer/LocalSequencerRenewTest.java:372-390",
+      "title": "Deleting the close/renewer test was right, and M4.40's premise reproduces -- but its conclusion that no reliable detector exists is false, and I have a measured one",
+      "failure_scenario": "M4.40 tells the next session that the red for this property cannot be reproduced on demand, so the next attempt will either repeat the three dead ends or skip the property. Meanwhile the property is unpinned: deleting BOTH `if (closed) { return; }` (LocalSequencer.java:89-91) and `renewer.interrupt()` (:301) leaves the FULL build green -- measured, ./gradlew test --rerun-tasks, 711 tests, 0 failures, 2m00s -- and the production consequence is a WARNING at every graceful shutdown announcing a fence that never happened, plus every post-close commit blaming a successor that does not exist.",
+      "surviving_mutations": [
+        "The double mutation above: MEASURED GREEN across the whole build (711 tests, 0 failures). Each single mutation is also green, correctly -- the property survives either one alone, so those are refactors, not regressions."
+      ],
+      "remedy_measured": "A deterministic detector, measured on these staged bytes: kills the double mutation in 0.061s with 'this sequencer lost its lease at epoch 1 and has been fenced' where 'released its lease' is owed, and passes 3/3 under production here (and 5/5 plus both single mutations on the previous round's bytes). It needs one package-private seam, no smaller than the sleepFor one already added: `boolean awaitRenewerStopped(long millis) { renewer.join(millis); return !renewer.isAlive(); }`. The test: start with a ManualTicker; assert parked.tryAcquire(20s) FIRST -- this is load-bearing and my first draft passed vacuously without it, because the loop header's own `!closed` check retires the renewer before it ever reaches the tick; then close(); then tick() (a tick the renewer must ignore); then awaitRenewerStopped; then assert the commit refusal contains 'released its lease' and NOT 'fenced'. WHY THE AUTHOR'S OBSERVABLE (b) LOOKED LIKE A RACE AND IS NOT: `fenced` is written before the renew thread terminates, so Thread.join is a happens-before edge -- joining converts the three-second polling window into an exact one. Land it here (12 lines) or amend M4.40; either way the row should stop saying no detector exists. RESIDUAL, which does belong in M4.40: this does not pin the interrupt-BEFORE-release ORDER that the new comment at LocalSequencer.java:286-300 calls load-bearing, because reaching that window needs the renewer parked between its `closed` check and leases.renew(), and there is no seam there."
+    },
+    {
+      "id": "TR-M4.17-5",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/LocalSequencerRenewTest.java:339-366",
+      "title": "testing.md rule 15 deviation argued in a code comment rather than in the commit body",
+      "failure_scenario": "The new wiring test adds a fixed Thread.sleep(1000) plus a 20s Thread.sleep(5) poll loop. The deviation is defensible -- a real-clock ticker's RATE cannot be measured without wall time, and the comment says so -- but rule 15 is unqualified and the argument lives only in a comment, so a future reader deletes or copies it without knowing it was a considered exception. It is also the class's most expensive test (1.4s of the suite). The remedy in TR-M4.17-2 reuses the same window rather than adding a second one.",
+      "surviving_mutations": [
+        "None -- this is a standards deviation, not a weak assertion. The rate bound itself is real: dividedBy(100) dies at 583 renews/s against the 30 bound (measured)."
+      ]
+    }
+  ],
+  "task": "M4.17",
+  "role": "test-reviewer",
+  "staged_tree": "1fbebf6ab08ef453a7ae46f7653f7eca150a3749"
+}

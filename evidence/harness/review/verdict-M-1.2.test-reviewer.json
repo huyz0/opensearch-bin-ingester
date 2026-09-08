@@ -1,0 +1,62 @@
+{
+  "diff_sha256": "5b805231aa3b534c32d57084d1c1363f978ddc4623d366175682c332c02cbd59",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "HT1",
+      "severity": "blocking",
+      "file": "buildSrc/build.gradle.kts:25",
+      "summary": "The Gradle `test` task declares no input on scripts/*.py, so the ONE artifact this whole suite exists to constrain can change without the suite re-running. check-harness-tests.sh then reports success for a run that did not happen.",
+      "failure_scenario": "Reproduced end to end. (1) `./gradlew -p buildSrc test` -> BUILD SUCCESSFUL; run again -> `> Task :test UP-TO-DATE`. (2) Mutate ONLY scripts/java_tests.py:156, `'$'.join(c[0] for c in classes)` -> `classes[0][0]` (nested @Nested ids collapse: p.OuterTest$Alpha#same and p.OuterTest$Beta#same both become p.OuterTest#same). (3) `GATE_SCOPE=full scripts/check-harness-tests.sh` prints `ok   8 harness test(s) pass`. The gate even has a scope guard that recognises scripts/*.py as relevant, then Gradle no-ops the task and the stale XML from the previous green run satisfies the >0 test count. Forcing `--rerun-tasks` shows the case DOES fail: `[6] nested-classes.java ... FAILED`. So the eight fixtures give real signal only on the first run after a buildSrc source change, and none at all on a parser-only change -- which is the only change they were written for. Fix: `inputs.files(...scripts/*.py).withPropertyName(\"harnessParser\")` on the Test task (or `outputs.upToDateWhen { false }`), and re-verify by repeating steps 1-3."
+    },
+    {
+      "id": "HT2",
+      "severity": "major",
+      "file": "buildSrc/src/test/resources/java-fixtures/text-block-in-comment.java:4",
+      "summary": "The fixture does not reproduce its own bug. Its comment carries a BALANCED pair of triple quotes (`written as \"\"\" ... \"\"\" these days`), which self-pairs under every ordering, so the comment/text-block interaction is never exercised. It killed none of the seven mutations aimed at it.",
+      "failure_scenario": "Surviving mutations, each leaving all 8 fixtures green: (a) make normalise() sequential with strings/text blocks stripped BEFORE comments -- the exact ordering hazard java_tests.py:76-83 documents; (b) delete the `textblock` alternative from NOISE (java_tests.py:52) entirely; (c) move the `string` alternative BEFORE `textblock` in NOISE -- the precise tie-break the comment at java_tests.py:45-50 calls load-bearing; (d) drop re.S from NOISE; (e) substitute textblock with '' instead of '\"\"'; (f) replace the textblock regex with the naive `\\\"{3}.*?\\\"{3}`; (g) delete the `line` comment alternative. Proof the fixture is inert rather than the bug being unreachable: an otherwise identical file whose comment holds a SINGLE `\"\"\"` (`// the bulk body is a \"\"\" text block`) raises, under mutation (a), `UnparseableJava: braces do not balance after normalisation (3 open, 5 close)`, while the committed fixture returns p.SegTest#parses;p.SegTest#hidden and exits 0. Change the fixture's comment to contain an odd number of `\"\"\"` and it becomes a real regression test."
+    },
+    {
+      "id": "HT3",
+      "severity": "major",
+      "file": "buildSrc/src/test/resources/java-fixtures/value-source.java:8",
+      "summary": "The fixture does not constrain the annotation-argument collapsing pass it is named for. The `{1, 2, 3}` braces are balanced and no method-signature token precedes them, so the brace walk is unaffected whether or not the pass runs.",
+      "failure_scenario": "Delete the whole `while prev != src: ... re.sub(r'(@[A-Za-z_$][\\w$]*)\\s*\\([^()]*\\)', r'\\1', src)` loop at java_tests.py:91-94 -- the pass whose own comment cites `@ValueSource(ints = {1, 2, 3})` and `@ExtendWith(Foo.class)` as the bugs it fixes -- and all 8 fixtures stay green, including this one. I could not construct ANY input that distinguishes collapse from no-collapse under the current TOKEN ordering (probed @ExtendWith(X.class) on a class, @CsvSource with braces inside strings, @Timeout(value=5), nested @ArgumentsSources, @MethodSource), which means the fixture also fails to document why the pass must stay: a future author deleting it as dead code gets a green suite. The fixture is not worthless -- it does kill `TEST_ANN` losing `ParameterizedTest` -- but it is filed under the wrong bug. Either give it an input that dies without the collapse pass, or rename it for the @ParameterizedTest recognition it actually pins."
+    },
+    {
+      "id": "HT4",
+      "severity": "major",
+      "file": "buildSrc/src/test/java/binjava/JavaTestParserTest.java:44",
+      "summary": "No fixture asserts the failure path. scan_checked's three fail-closed refusals -- brace imbalance, unpaired quote, annotated!=detected -- are the mechanism that turns every parser bug from a silent green into a refusal, and none of them is asserted. testing.md rule 14.",
+      "failure_scenario": "Replace the body of scan_checked (java_tests.py:188-238) with `return _scan(src)[0]`, deleting all three `raise UnparseableJava` paths, and all 8 fixtures stay green. Consequence: check-tdd.sh:50 and check-test-integrity lose their `Refusing to certify a file the parser cannot read` branch, so the next parser bug reports `ok   no new tests in this diff` on a file whose tests it never saw -- the exact defect class the packet's first lens names. Note also that two fixtures (brace-char-literal, annotation-type) currently detect their bug ONLY via a non-zero exit from this uncaught exception, and the test asserts merely `waitFor()==0`; it never asserts which refusal fired or that a refusal is expected. Add fixtures whose expectation is `UnparseableJava` (one with an odd `\"\"\"` in a comment, one with a stray quote, one where the annotation count and the brace walk disagree) and assert the exit code and message, not just non-zero."
+    },
+    {
+      "id": "HT5",
+      "severity": "major",
+      "file": "buildSrc/src/test/java/binjava/JavaTestParserTest.java:49",
+      "summary": "The suite asserts only the id SET. The other two fields scan_checked returns -- `disabled` and `body` -- are what check-test-integrity is built on, and neither has a fixture. No fixture contains @Disabled at method or class level.",
+      "failure_scenario": "Two mutations, each surviving all 8 fixtures: (a) java_tests.py:139, `disabled_here = True` -> `disabled_here = False` in the `@Disabled` branch -- check-test-integrity then reports `no test weakened, disabled or removed` for a commit that disables every test in a class, which is non-negotiable 2's gate going blind; (b) java_tests.py:172, `'body': src[start:t.end()]` -> `'body': ''` -- test_integrity.strength() then scores every method 0, so every weakening nets to zero and the gate is green by construction. Add a fixture with `@Disabled` on a method and on a @Nested class (asserting the flag, and that class-level @Disabled propagates to members via the `any(c[2] for c in classes)` path at java_tests.py:145), and one asserting the captured body spans the method's braces."
+    },
+    {
+      "id": "HT6",
+      "severity": "minor",
+      "file": "buildSrc/src/test/resources/java-fixtures/:1",
+      "summary": "No fixture covers overloaded same-name test methods -- the single case the `detected` counter at java_tests.py:104-107 exists for.",
+      "failure_scenario": "Mutate the cross-check at java_tests.py:233 to compare `len(found)` instead of the pre-collapse `detected` (`detected = len(found)` inserted before the comparison). All 8 fixtures stay green, while a legal file with two `@Test void a(...)` overloads raises `UnparseableJava: found 1 test method(s) but 2 test annotation(s)` -- a hard block on valid Java, verified. A file with two @Test overloads expecting exactly one id and exit 0 kills it."
+    },
+    {
+      "id": "HT7",
+      "severity": "minor",
+      "file": "buildSrc/src/test/resources/java-fixtures/:1",
+      "summary": "No fixture covers the JLS 3.3 unicode-escape decoding, whose docstring (java_tests.py:62-68) records that an earlier version rejected two real OpenSearch test files.",
+      "failure_scenario": "Make `decode_unicode_escapes` (java_tests.py:71-72) `return src` and all 8 fixtures stay green. A file containing `assertEquals(\"\\u0022\", q());` (an escape that really does terminate the string) and one containing `\"\\\\u0022\"` (a literal backslash-u, which must NOT) would separate the two -- and the even/odd backslash rule in UNICODE_ESC is a boundary nothing currently tests."
+    },
+    {
+      "id": "HT8",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/JavaTestParserTest.java:30",
+      "summary": "The red record covers the @ParameterizedTest METHOD, not its eight cases, so seven of the eight fixtures were never observed failing -- and HT2/HT3 show that for two of them this is structural, not incidental.",
+      "failure_scenario": "record_one (tdd_scan.py:164-174) counts any testcase whose `classname` is binjava.JavaTestParserTest, so one failing parameter mints the record for the whole method; red.json holds exactly one entry, `binjava.JavaTestParserTest#findsExactlyTheseTestIds`. Confirmed consistent with the reported 1-of-8 red run: under a sequential-normalise parser only url-in-string.java fails, matching my mutation M3 exactly. But the same mechanism means value-source.java and text-block-in-comment.java could be committed as fixtures that cannot go red for their own bug and still satisfy check-tdd. Also, the comment at line 27-29 justifying default display naming is factually wrong about the mechanism: the JUnit XML `name` is `[1] brace-char-literal.java, ...` with no method name in it, and record_one matches on `classname` precisely because of that (its own docstring says so). Either drop the misleading rationale or state the real one."
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "diff_sha256": "cf0286e7b8e7fa32dd7bc780a3dbc816f1a47089037055f18e8e2931989232f8",
+  "verdict": "pass",
+  "summary": "R1a, R1b and R1c are fixed and I verified the fix rather than accepted it. The seal-return break is sound: Seal.sequence() > 0 on a crossed epoch is equivalent to 'slot 0 held a CONTINUE', and because start() runs its crossed-seal loop BEFORE CommitLog.open (the only production caller of open), a CONTINUE at slot 0 proves that epoch's own leader had already sealed everything below it -- so 'everything below it is that ancestor's business' holds by induction, and the epochs skipped by the break are not left unsealed. The downward walk order also prevents the mirror case: a live intermediate epoch is always sealed at slot 0 before the loop can reach a lower one. Two minors, both measured, neither producing a wrong result today.",
+  "findings": [
+    {
+      "id": "M4.47-R2a",
+      "file": "sequencer/src/main/java/binjava/sequencer/LocalSequencer.java:323",
+      "severity": "minor",
+      "title": "KEEP burned.recoverChainEnd() -- the surviving VoidMethodCallMutator is a test gap, not an equivalent mutant",
+      "failure_scenario": "MEASURED in my own tree, not inferred. I wrote the round-1 race test with the stalled epoch-3 leader committing 12 entries instead of 2 (still sealRedriveBudget=8) and ran it twice. WITH recoverChainEnd: green, epoch 4 continues from 3 and resumes at offset 15. WITH `burned.recoverChainEnd()` commented out: `java.io.IOException: seal did not converge at seq 8 within 8 redrive(s); a writer is still originating commits on a chain this node is trying to close` thrown from CommitLog.seal:452 via LocalSequencer.start:324 -- start() then releases the lease and the cluster has no sequencer until the next acquisition, which is the NFR-9 outage the redrive branch exists to prevent. It is also a cost defect: without the probe the seal proposes at slot 0 and walks up one slot at a time, issuing one PUT plus one GET per ENTRY of the racing chain -- a request count scaling with records committed, which rule R1 forbids. So the mutant is not equivalent and removing the call is wrong; what is missing is the test. The existing race test's stalled leader commits 2 entries, well under the budget, so nothing distinguishes the two. Add a case with a racing chain longer than sealRedriveBudget, or record the survivor in baselines/mutants.txt with this measurement."
+    },
+    {
+      "id": "M4.47-R2b",
+      "file": "sequencer/src/main/java/binjava/sequencer/ChainReplay.java:373",
+      "severity": "minor",
+      "title": "the break makes firstInheritableAncestor's RETURN VALUE dead -- the seal loop rediscovers the same epoch, so every takeover probes each burned epoch twice",
+      "failure_scenario": "MEASURED: I replaced `return chainEpoch;` with `return 0;` and ran the whole sequencer suite in my review tree -- 378 tests, 0 failures, including CommitProtocolSimulationTest, InvariantsAcrossChainsTest and ReaderInvariantsTest. PIT agrees: PrimitiveReturnsMutator on ChainReplay:373 is one of the ten survivors in the report. The reason is that the break subsumes the walk. With prevEpoch=0 the loop runs down from epoch-1 and stops at the first epoch whose seal lands above slot 0 -- which is exactly the epoch the walk stops at, because Seal.sequence()>0 and 'slot 0 is a CONTINUE' are the same predicate -- and it sets prevEpoch/prevSeq to the same pair the `prevSeq == 0 && prevEpoch >= 1` branch would have set. So today every takeover pays one stat per burned epoch in the walk (plus a GET on the ancestor) and then re-reads each of those same epochs with a LIST in the loop. Not a wrong result and not a rate that scales with records/shards/indices -- it scales with the burned run, mean 1.56 and max 7 per ADR-0037 -- so it is failover latency and request count roughly doubled on the crossed run, not an architecture violation. This is R1d with the measurement attached. Deleting the walk is a behaviour-preserving simplification but it is a second change; it belongs in a backlog row, not in this commit. Whichever way it goes, ChainReplay:373 currently has no test that pins the return value at all."
+    }
+  ],
+  "task": "M4.47",
+  "role": "reviewer",
+  "staged_tree": "51706eda78791999f293c4fb8a0e371959fa4998"
+}

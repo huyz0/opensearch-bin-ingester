@@ -1,0 +1,36 @@
+{
+  "diff_sha256": "a6a8d2cf60e79466def0d065e4ef00be0064251686429d0a91919a3dc329fe76",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "start-precondition-do-not-pre-acquire",
+      "severity": "minor",
+      "title": "A caller that acquires the lease itself before calling start() is told it is not the leader, and the round-1 outage shape returns -- the precondition is nowhere stated",
+      "where": "sequencer/src/main/java/binjava/sequencer/LocalSequencer.java:53-62",
+      "failure_scenario": "MEASURED: 'PROBEH loop won epoch 1; start returned EMPTY (reports not-the-leader) ; lease still held = true ; chain 1 opened = false' and 'another pod = EMPTY (lease unexpired)'. An election loop that owns the LeaseManager -- it must, because nothing else renews it, which is one of the carried rows -- wins the term, then calls start to build the sequencer. start's tryAcquire sees this instance's own unexpired lease and returns empty, so the caller reads 'not the leader', stands down, and the node holds a term with no open chain that no other pod can take over until the TTL expires. That is the round-1 blocking shape reached by a different door. Removing the held() fallback is nonetheless RIGHT and I am not asking for it back: measured, the fallback's only reachable effect was the duplicate-sequencer case, and its removal costs nothing (see the verification below). The residual is a documented-precondition gap, not a code defect: start acquires the lease itself, so a caller must not acquire before calling, and nothing says so. The @return sentence -- 'Empty means not the leader, never failed: nothing has been written and nothing needs undoing' -- is measurably false in exactly this case, the third round in which that one sentence's truth value has moved. Remedy is one sentence beside it, not a code change, which is why this is minor and not major."
+    },
+    {
+      "id": "recoverchainend-must-not-commit-is-prose-only",
+      "severity": "minor",
+      "title": "'THIS LOG MUST NOT THEN COMMIT' is still enforced by a javadoc sentence and nothing else",
+      "where": "sequencer/src/main/java/binjava/sequencer/CommitLog.java, recoverChainEnd javadoc",
+      "failure_scenario": "Carried unchanged from round 2 and restated because verdicts are bound to a diff and the round-2 one no longer describes any staged bytes. recoverChainEnd leaves nextOffsets empty and says a commit through it would reassign offsets from 0 -- I2 -- but the object is an ordinary CommitLog and commit() will do exactly that. Unreachable today: the only caller seals immediately, and on the tested budget-exhaustion path seal() throws, start releases and drops the object. M4.6d and M4.6e add callers. Per non-negotiable 9 this is rung 7 where rung 1 is available -- a probe flag commit() refuses on, or returning the end sequence instead of mutating state."
+    },
+    {
+      "id": "start-succeeds-on-an-already-sealed-own-chain",
+      "severity": "minor",
+      "title": "start() returns a healthy-looking sequencer on a chain a successor already sealed",
+      "where": "sequencer/src/main/java/binjava/sequencer/LocalSequencer.java, after log.recover()",
+      "failure_scenario": "Carried unchanged from round 2, restated for the same reason. Measured then: start SUCCEEDED at epoch 1 on a chain sealed underneath it, and the first commit threw 'chain sealed at seq 2, continued at epoch 2'. log.recover() sets sealedAt and open() adopts this node's own CONTINUE, so start hands back something the class javadoc calls 'anything a caller can commit through', which it is not. Fails closed, and in-protocol unreachable because sealing chain E requires acquiring E+1, which requires this node's lease to have lapsed. A sealedAt accessor plus a refusal is a few lines."
+    },
+    {
+      "id": "carried-rows-agreed",
+      "severity": "minor",
+      "title": "The three agreed rows are the right disposition, and open()'s identity blindness is now genuinely standalone",
+      "where": "sequencer/src/main/java/binjava/sequencer/",
+      "failure_scenario": "No renewal and no locking, recoverChainEnd and recover disagreeing about where a chain ends when content sits past a SEAL, and the unvalidated maxRedrives all belong in rows rather than this commit -- agreed. My round-2 caveat is now withdrawn on measurement: open()'s inability to tell this node from a co-opener was load-bearing only because the held() fallback manufactured the second opener, and with the fallback gone the duplicate-start path does not exist, so that minor is once again ordinary defence-in-depth against something the lease already prevents. Whatever row carries it should say that, so a future reader does not re-derive the round-2 chain."
+    }
+  ],
+  "task": "M4.6c",
+  "role": "reviewer"
+}

@@ -1,0 +1,18 @@
+{
+  "diff_sha256": "55abf5a8d10c94f0bb753f7be43f97e6d99b6ca33d82dec2b318838ff669813a",
+  "verdict": "pass",
+  "task": "M4.13f",
+  "role": "test-reviewer",
+  "summary": "Round 6, tests only. THE JAVADOC-ONLY CLAIM IS VERIFIED, NOT TAKEN: my round-5 verdict recorded staged_tree bbda1cf3740cab57f0da5c453ea5db25c99947fb, and `git diff bbda1cf3 $(git write-tree)` is two files -- baselines/review.txt (one prose line) and BatchedDeltaInvariantsTest.java, +17/-10, every changed line inside the two javadoc blocks of aStreamOutOfOrderOnlyInALATERPairIsStillCaught and aStreamOutOfOrderOnlyInANEARLYPairIsStillCaught. Invariants.java, ReaderInvariantsTest.java and every fixture body, assertion and production line are byte-identical to the tree I passed. MUTATION COVERAGE RE-MEASURED IN MY OWN COPY OF THE STAGED BYTES, full :sequencer:test each time, baseline 376 green: last-pair-only (r starts at Math.max(1, size-1)) KILLED by exactly one fixture, aStreamOutOfOrderOnlyInANEARLYPairIsStillCaught; first-pair-only (r < Math.min(2, size)) KILLED by exactly one fixture, aStreamOutOfOrderOnlyInALATERPairIsStillCaught -- so the twins still neither subsume each other nor share a kill; dropping the `break` KILLED only by aStreamOutOfOrderTWICEIsStillONEViolation; `<` to `<=` KILLED only by TWOSegmentsStartingAtTheSAMEOffsetIsI2Alone; deleting the offset-order sort KILLED by six fixtures (both twins, TWICE, ONEStreamPermutedInABatchDoesNotIndictTheOTHER, aBatchedDeltaWhoseSECONDSegmentREWINDSIsStillCaught, aPermutationThatALSOOverlapsReportsBOTHNames). Identical to round 5 -- no fixture lost its unique kill. My round-5 minor is RESOLVED: the '3..9' prose is gone and the surviving coverage statement, the assertion description at line 401, reads '3..8', which the fixture's runs (3..4, 5..6, 7..8) confirm. Tree restored after every mutation; `git diff` in the review tree is empty.",
+  "findings": [
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/Invariants.java",
+      "line": 193,
+      "severity": "minor",
+      "title": "carried forward unchanged from rounds 4 and 5: the sequence field in the `order` message is still not separated from the constant 2L",
+      "failure_scenario": "Re-measured this round, not carried on trust: replacing `+ e.sequence()` with `+ 2L` in the \"runs out of order within the delta at sequence \" message leaves all 376 sequencer tests green. Both fixtures that assert that string place the permuted delta at sequence 2, so a single asserted string cannot tell the field from a literal equal to it (1L is killed, by aStreamOutOfOrderOnlyInALATERPairIsStillCaught). Consequence if the field really were a constant: a failing simulation seed reporting 'the delta at sequence 2' for a permutation at any other sequence -- the exact string the fixture's own comment says is how a pinned seed gets debugged. Killing it needs the sequence asserted in a SECOND fixture at a different sequence. Not blocking, produces no wrong result today, and belongs in the commit body or a backlog row -- NOT a seventh round.",
+      "surviving_mutation": "+ 2L in place of + e.sequence() at Invariants.java:193. Whole sequencer suite green, 376/376, measured in this round."
+    }
+  ],
+  "staged_tree": "9bc76121080bcdeb64298135775bb601f4c0d906"
+}

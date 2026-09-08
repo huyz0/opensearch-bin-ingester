@@ -1,0 +1,38 @@
+{
+  "diff_sha256": "0d4477142acfcf134518ca47f808a085811f4d90a3513815c27e772c74ffaaf0",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "M4.43-R2a",
+      "severity": "major",
+      "file": "docs/internal/product/backlog-done.md:105",
+      "summary": "The M4.43 done-row was edited in ONE clause and two dependent claims in the SAME row were left stale, both now contradicted by rows in this very commit. (a) It still says 'Round-1 review measured them -- the mutant is 7, not 6 --', which is exactly the sentence M4.41 retracts three lines away in backlog-notes.md:309: 'SO THE MUTANT IS 6 OR 7, BIMODAL AT 2000ms TOO ... an earlier draft of THIS sentence reported \"7, not 6\" from three runs in one tree, reproducing the row's own subject'. The done-row is that earlier draft's claim, preserved and attributed to a measurement. (b) It still says 'BOTH ROWS ARE ABOUT THE SAME AUTHOR ERROR' in a row whose opening clause now reads 'File as M4.41, M4.42 and M4.44' -- three rows, and M4.44 is an instance of the first error class the sentence enumerates, so 'both' is not a stylistic count but a wrong one.",
+      "failure_scenario": "backlog-done.md is the permanent record; M4.41 is `todo` and will be rewritten the moment it is fixed, so the surviving copy of this number is the done-row's. A session doing M4.15 (M4's VERIFIED.md and milestone review), or picking up M4.41, reads two statements from the same commit about the same measurement -- 'the mutant is 7, not 6' and 'the mutant is 6 or 7' -- and has no way to tell which is current, with the false one carrying the stronger provenance ('Round-1 review measured them'). The row whose stated subject is 'a false claim corrected in one copy while its duplicate stood' reaches that failure mode inside itself, on the line this diff touched: the author changed 'the two minors' to 'the four minors ... and M4.44' in this line and left the two claims that depend on it unchanged.",
+      "remedy": "In the same line: replace 'the mutant is 7, not 6' with the bimodal figure M4.41 now carries (6 or 7 at 2000ms, 2000/300 = 6.67), and replace 'BOTH ROWS' with a count or naming that matches the three rows the row now files."
+    },
+    {
+      "id": "M4.43-R2b",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:309",
+      "summary": "R1c's replacement fixed the low edge of the band and carried a stale high edge. 0.56x is derivable (the slow sequencer renews ~1.67/s at 600ms, and `isLessThan(3L)` binds at 1.67/3 = 0.556). 2.22x is derivable only from an inclusive floor of THREE (6.67/3 = 2.22) -- the floor the same row says is now FOUR, where the deterministic edge is 6.67/4 = 1.67x. The test comment at LocalSequencerRenewTest.java:384-390 states 0.56x-2.22x expressly as the band that existed when the mutant 'survived an inclusive floor of 3'; the row quotes it unqualified as the band today. It is also inconsistent with the sentence immediately before it: if the surviving band really ran to 2.22x, `multipliedBy(2)` would survive 100% of the time, not the ~40%-kill bimodality the row's own headline measures. Two smaller things at the same clause: 'derived there' claims a derivation the test comment does not show (it asserts the two figures), and the ground for rejecting 0.75x -- 'not expressible as a `multipliedBy`/`dividedBy` mutation at all' -- is a criterion 0.56x and 2.22x fail equally, since band edges are boundaries of a continuous region and not mutations.",
+      "failure_scenario": "A session picking M4.41 to strengthen the detector chooses a new floor from the stated band, believing anything up to 2.22x currently survives against a floor of 4. It does not: 2.22x renews 3 times in the window and dies deterministically, and the only thing above 1.67x that survives is 2x, and only in its lucky mode. The row's whole subject is a figure carried forward without being re-derived for the tree it describes."
+    },
+    {
+      "id": "M4.43-R2c",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:313",
+      "summary": "R1b's third copy is quoted correctly -- LocalSequencer.java:110-112 says verbatim 'Another node holds the term now, and it has sealed this chain; committing on would reassign offsets a successor has already issued, which is I2.', the branch does latch `fenced` at :113, and :114 does contradict it with 'NOT NECESSARILY A TAKEOVER, and an earlier draft of this line said it was'. But the sentence that judges it reads 'That is the corrected claim intact', and 'the corrected claim' is the wrong adjective: this is the PRE-correction claim, standing intact where it was never corrected. The row uses 'the identical pre-correction sentence' for the test-file copy two clauses earlier, so the two duplicates are described with opposite words.",
+      "failure_scenario": "A session fixing M4.42 reads 'That is the corrected claim intact' as 'the production comment already carries the correction', skips it, and closes the row with the production comment still false -- which is the outcome the next sentence of the same row exists to prevent. The next sentence does say so, so the misreading is recoverable in two clauses, which is why this is minor and not major."
+    },
+    {
+      "id": "M4.43-R2d",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:142",
+      "summary": "The M4.42 SUMMARY row was not updated alongside its notes. It still reads 'A CORRECTED CLAIM SURVIVES VERBATIM IN ITS DUPLICATE' (singular) and 'left the identical sentence standing in the test file' -- naming exactly one survivor, the claim the notes row now says was wrong. Compare M4.44, whose summary row added in the same diff does name both halves of its finding.",
+      "failure_scenario": "AGENTS.md routes a session to the notes for the ONE task it picks, so the notes' third copy will normally be read and the production comment will normally be fixed -- which caps this at minor. But the summary is what is loaded into every session, and it is now the one place in the tree that still asserts a count of duplicates the same commit disproves: 'one copy of a fact fixed and its duplicate missed', applied to the row about that failure mode, one file over from where it was fixed."
+    }
+  ],
+  "task": "M4.43",
+  "role": "reviewer",
+  "staged_tree": "a2addfb65902138eefbe6bee8e6026e278c076be"
+}

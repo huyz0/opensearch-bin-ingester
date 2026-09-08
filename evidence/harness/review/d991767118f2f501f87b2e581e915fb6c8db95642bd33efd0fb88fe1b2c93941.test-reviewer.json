@@ -1,0 +1,15 @@
+{
+  "diff_sha256": "d991767118f2f501f87b2e581e915fb6c8db95642bd33efd0fb88fe1b2c93941",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "MT14",
+      "severity": "minor",
+      "file": "scripts/check-module.sh:31",
+      "summary": "The NO_HTTP/NO_CLOUD denylists are hand-written group prefixes, not a derivation from architecture.md rule 5, so the gate is a floor rather than a proof: a banned dependency whose coordinates match no listed group (e.g. a non-netty, non-httpcomponents HTTP client such as org.eclipse.jetty or a repackaged shaded client) passes silently.",
+      "failure_scenario": "Add a jetty-client or square.okhttp dependency to the `ingest` module: the module-boundary rule is violated, the build compiles, every test passes, and check-module.sh reports ok because neither coordinate appears in the denylisted group prefixes. Nothing in the gate fails and no other check covers it."
+    }
+  ],
+  "task": "M0.5",
+  "role": "test-reviewer"
+}

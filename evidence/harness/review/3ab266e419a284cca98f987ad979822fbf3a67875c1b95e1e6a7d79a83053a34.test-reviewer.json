@@ -1,0 +1,8 @@
+{
+  "verdict": "pass",
+  "findings": [],
+  "notes": "Staged diff is documentation only: AGENTS.md (+13, a new bullet under Never) and docs/internal/product/backlog.md (+1, the M0.46 row). No source files, no test files, no build files, no fixtures or golden files. Nothing executable changed, so there is no production behaviour for a test to constrain and no existing assertion that could have been weakened. Round-two delta versus bb0629dc is confined to the worked example's IDs (M0.37/M0.38 -> M0.20/M0.28) and an added paragraph recording that failure; both are prose. Empty findings list is the correct outcome, not an omission.",
+  "diff_sha256": "3ab266e419a284cca98f987ad979822fbf3a67875c1b95e1e6a7d79a83053a34",
+  "task": "M0.46",
+  "role": "test-reviewer"
+}

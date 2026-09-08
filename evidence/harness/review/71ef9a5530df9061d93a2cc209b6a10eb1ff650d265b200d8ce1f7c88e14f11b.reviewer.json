@@ -1,0 +1,38 @@
+{
+  "diff_sha256": "71ef9a5530df9061d93a2cc209b6a10eb1ff650d265b200d8ce1f7c88e14f11b",
+  "verdict": "pass",
+  "summary": "Round 15 verified against the staged bytes, not the account. The truncated saturation-clause line is gone: `grep -n 'saturation clause'` on the staged SPEC.md returns exactly one hit (line 462) and the sentence now completes ('...\"unchanged\" alone is / not true of a correct batcher at trickle rates'). The numbered criteria parse 1..12 with no duplicate and no gap. The two new/changed matrix rows do not contradict criterion 9's GET bound or each other: criterion 9 bounds 'at most one GET per distinct (epoch, sequence) per commitAll', the shared-delta row collapses six pointers to one distinct pair and demands EXACTLY ONE, which is a legal, strictly stronger instance of that bound, and the 'exactly' is what excludes the always-refuse dedup its mutation column names. The ambiguous-commit row occupies a disjoint case: an ambiguous commit sits ABOVE lastAppliedFlushSeq (observe never ran), so criterion 6's 'refusal is permitted ONLY when the pointed delta does not carry the triple' -- which is scoped by 'Below that watermark' -- does not license refusing it, and there is no contradiction between the row and the criterion. Criterion 6's factual claim about the tree is true as staged: LocalSequencer.java:346-353 calls log.commitAll first and writer.observe only after it returns, so an IOException skips observe. Four minors, none blocking; the first is new this round and the other three are the carried-over F2/F3/F4, recorded here so the record for this hash is complete.",
+  "findings": [
+    {
+      "file": "docs/internal/product/milestones/M4/SPEC.md:496",
+      "severity": "minor",
+      "title": "The new ambiguous-commit row demands a chain read and bounds its request count nowhere",
+      "failure_scenario": "The row demands the ambiguous replay be 'detected and answered from the CHAIN', and its only mutation is 'a dedup that consults only the in-memory window'. In that case the pod's slot points at the PREVIOUS delta, so there is no pointer to the object that must be read; detection has to scan chain entries above the watermark. Criterion 9's new clause bounds only 'at most one GET per distinct (epoch, sequence) per commitAll' -- a scan of M distinct entries reads each exactly once and satisfies that verbatim, and its sibling row at line 497 carries a request-count assertion while this one carries none. So M4.10d can satisfy this row with a per-replaying-pod scan of the uncheckpointed tail: six restarting pods each walking the tail is pods x depth GETs, N GETs of what M4.7 made one shared object, which is the pod axis returning as reads that ADR-0036 pins for the pointer path ('AT MOST ONE GET per distinct (epoch, sequence) per batch') and leaves unpinned here. Criterion 9's headline still forbids it, but the headline is not what an M4.10d session writes a test against -- the matrix row is. One clause on the row ('at most one GET per commitAll; the ambiguity is per BATCH, not per pod') closes it, and F3 below is why the criterion alone will not.",
+      "blocking": false
+    },
+    {
+      "file": "docs/internal/product/decisions/0036-the-idempotency-key-carries-an-explicit-pod-incarnation.md:73",
+      "severity": "minor",
+      "title": "Carried F2: the criterion headline is stronger than the ADR on divergent pointers",
+      "failure_scenario": "Unfixed by design and recorded for the commit body. Related and newly measured this round: the ADR at :73 attributes to criterion 6 the phrase 'ALWAYS answered', and `grep -n 'ALWAYS answered'` on the staged SPEC.md returns nothing -- criterion 6 says only that a replay of a pod's most recent observed flushSeq is answered, and explicitly permits refusal below the watermark. A reader chasing the M7 retention obligation the ADR raises there will look for a guarantee in SPEC.md that is not written in those terms and may conclude the obligation is weaker than it is.",
+      "blocking": false
+    },
+    {
+      "file": "docs/internal/product/milestones/M4/SPEC.md:457",
+      "severity": "minor",
+      "title": "Carried F3: the fold's price -- check-session-load reads numbered criteria, never the matrix",
+      "failure_scenario": "Unfixed by design and recorded for the commit body. Finding 1 above is the first concrete instance of the price: the GET bound lives in criterion 9's prose, the demanded test lives in the matrix, and nothing keeps the two in step when one moves.",
+      "blocking": false
+    },
+    {
+      "file": "docs/internal/product/decisions/0036-the-idempotency-key-carries-an-explicit-pod-incarnation.md:189",
+      "severity": "minor",
+      "title": "Carried F4: 32 bytes per pod measured against a 1,600-stream, zero-pod body",
+      "failure_scenario": "Unfixed by design and recorded for the commit body. The 38 KiB CheckpointTest body varies streams, not pods, so the headroom argument is sound for its own workload and untested at high pod counts; a fleet large enough for the per-pod term to matter has no measurement behind the 64 KiB claim.",
+      "blocking": false
+    }
+  ],
+  "task": "M4.10b",
+  "role": "reviewer",
+  "staged_tree": "ec7e821d4001add74877bdfe09b94d9dfcd1cada"
+}

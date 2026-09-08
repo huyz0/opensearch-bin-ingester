@@ -1,0 +1,34 @@
+{
+  "diff_sha256": "94a61ead50ea4d47cf327867eeb27baf70fc502db70b502bf613c26d60bcfcaf",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "R12",
+      "severity": "blocking",
+      "file": "buildSrc/build.gradle.kts:46-49",
+      "summary": "The comment justifying the new rootGitignore input states a MEASUREMENT about a test that is not in this tree: 'FreshCheckoutTest asserts check-gate-scope refuses when .gitignore stops ignoring .tmp/. Measured: without this, removing that line left `test` UP-TO-DATE and the gate printed ok having not run the test that fails on exactly that edit.' FreshCheckoutTest as staged contains exactly one @Test, about .harness/ and check-harness-tests.sh; nothing in buildSrc/src asserts anything about check-gate-scope or about .tmp/ being ignored (grep for 'gitignore' and 'check-gate-scope' in buildSrc/src returns only comments). The declaration itself is defensible on a DIFFERENT and unstated ground -- freshCheckout() runs `git add -A` inside the fixture, which honours the copied .gitignore, so a new pattern matching a tracked path breaks the trackedIn(fixture)==trackedIn(source) post-condition -- but that is not what the comment says. AGENTS.md non-negotiable 4 makes an unearned 'Measured:' the one claim this project cannot carry. Secondary: inserting the block at line 50 orphaned the lines 41-45 comment ('three suites assert against the module list derived from settings.gradle.kts') from the settings.gradle.kts declaration it explains, which now sits at 53-55.",
+      "failure_scenario": "A maintainer preparing M0.31 greps for the test the comment names, finds no assertion about check-gate-scope or about .tmp/ anywhere in buildSrc/src, concludes rootGitignore is a leftover from the reverted half and deletes it. The real dependency -- the fixture's `git add -A` honouring the copied .gitignore -- is undocumented, so the deletion looks safe. A later commit adds a .gitignore pattern matching a tracked path; Gradle reports the buildSrc test task UP-TO-DATE, check-harness-tests.sh prints 'ok N harness test(s) pass', and the fixture post-condition that would have caught it never runs. Independently, anyone verifying the 'Measured:' claim against this tree cannot reproduce it, because no staged test fails on that edit."
+    },
+    {
+      "id": "R13",
+      "severity": "major",
+      "file": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java:133-137",
+      "summary": "gate() carries a comment describing the removed half as delivered -- 'the personal ignore file, which decides check-gate-scope's answer: a developer whose ~/.config/git/ignore lists .tmp/ would make this test pass over a repository that had stopped ignoring it' -- and the two statements it justifies (lines 136-137) are byte-identical duplicates of what scrub(pb, dir) already set one line earlier (scrub sets HOME=home and XDG_CONFIG_HOME=home/xdg; gate passes dir as home). No code path in this file consults a personal ignore file for check-gate-scope any more. The javadoc's own account of the split is honest (it names M0.31 explicitly), which makes this comment the only place that still asserts the removed assertion exists.",
+      "failure_scenario": "The comment is the only documentation of why HOME/XDG are pinned. A maintainer deduplicating gate() reads it, sees it names a gate this class no longer invokes, deletes the duplicated puts AND the scrub() lines as dead, and the fixture's own `git add -A` in run() then honours the developer's ~/.config/git/ignore -- the environment deciding the answer in the test whose stated thesis is that it must not. On a machine with a personal ignore matching a tracked path the fixture post-condition fails; on every other machine it passes, so the breakage lands as a per-developer flake with no comment left to explain it."
+    },
+    {
+      "id": "R14",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java:57-59,69,62-65",
+      "summary": "Three residues of the reverted half in freshCheckout(). (a) The tar sanity anchor asserts scripts/check-gate-scope.sh exists -- an arbitrary file this commit does not touch -- where scripts/check-harness-tests.sh, the script actually under test, is the correct anchor. (b) Line 69 asserts .tmp/ does not exist with the message 'that is the point'; .tmp/ is not the point of any staged assertion, .harness/ on the next line is. (c) The symlink rationale is stated twice, nearly word for word, at 47-55 and again at 62-65 ('dropped the tracked SYMLINK .claude/skills silently -- a fixture that is not the checkout it claims to be, in a test about what a checkout looks like').",
+      "failure_scenario": "M0.31 renames or restructures check-gate-scope.sh; this test fails at line 57 with 'sanity: the tar copy must have produced the tree', pointing the reader at the tar pipeline rather than at the rename, in a test that has nothing to do with that script. The duplicated paragraph and the 'that is the point' message cost a future reader a round of reconciling two accounts that are the same account."
+    },
+    {
+      "id": "R15",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:36 (M0.31 row)",
+      "summary": "The M0.31 row ends 'Fixture and four tests are built and held'. Nothing in the tree holds them: buildSrc/src/test/java/binjava/ contains no gate-scope fixture, git status shows no untracked or unstaged candidate, and the staged FreshCheckoutTest has one @Test. The rest of the row is accurate and genuinely valuable -- all three false greens including the negative-pattern case are recorded in prose, which is the part that survives -- but the closing sentence promises artifacts a future reader cannot locate. M0.29's row is correctly narrowed to the .harness/ mkdir and its State cell follows the M0.5 precedent of a done row in the live table.",
+      "failure_scenario": "Whoever picks up M0.31 reads 'built and held', spends a session looking for the fixture in branches, stashes and .harness/, finds nothing because it lived only in a session that has ended, and either rebuilds it from the prose anyway or -- worse -- assumes the four tests exist somewhere and writes fewer."
+    }
+  ]
+}

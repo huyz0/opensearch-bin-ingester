@@ -1,0 +1,27 @@
+{
+  "diff_sha256": "581192305abcb69129bd891233db6a3c82f37de23a42c9ea20d3fd58ab8bbc84",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "M0.13-TR-07",
+      "severity": "blocking",
+      "file": "scripts/coverage.py:78-84",
+      "summary": "The `if c == {}: ... failed = True` guard -- the exact fix the production reviewer added this round for 'a well-formed report with zero <counter> elements scored 100%' -- has no test in CoverageGateTest.java. All 8 fixtures either supply real counters, omit the report entirely, or supply content ('' ) that fails XML *parsing* (hits the `c is None` branch, not `c == {}`). Empirically verified: deleting the `if c == {}` block and re-running it against a fixture report containing a `<report>` root with zero `<counter>` children flips the gate from FAIL/exit-1 to 'ok 100.0%'/exit-0, and every one of the 8 existing CoverageGateTest cases still passes unchanged because none of them constructs that fixture.",
+      "failure_scenario": "Someone reverts or refactors the `c == {}` check (e.g. merges it into the `c is None` branch and drops the explicit empty-dict comparison). A real JaCoCo report that is well-formed XML but carries no <counter> element (module with no instrumented classes, or a report generator quirk) is again scored 100% line / 100% branch and the gate prints 'ok' and exits 0 -- reporting success while measuring nothing, which is the one defect class this entire gate exists to refuse -- and none of the 8 committed tests would go red."
+    },
+    {
+      "id": "M0.13-TR-08",
+      "severity": "minor",
+      "file": "scripts/coverage.py:12-19,95-98",
+      "summary": "`excluded()` (parsing baselines/coverage.txt) and the `if m in skips:` WARN/continue branch are exercised by none of the 8 tests -- no fixture writes baselines/coverage.txt. Verified: deleting the whole `if m in skips:` block does not flip any existing test (it makes the gate stricter, not laxer -- a legitimately-excluded module would start failing instead of being skipped), so this is the safe direction to be wrong in, not a false-success risk. Flagging only because rule 7 (testing.md) names the exclusion mechanism as in-scope for this gate and it currently has zero coverage in either direction.",
+      "failure_scenario": "A future change to the baseline-parsing logic (e.g. matching by substring instead of exact module name, or reading the wrong path) would go unnoticed until it silently over-excludes a module that should be measured -- which IS the dangerous direction -- because no test constrains what `excluded()` matches or what happens when a listed module is below floor."
+    }
+  ],
+  "notes": {
+    "delta_scope_removal": "Agree with removing the delta-scope branch rather than patching it in a fifth round. Verified the remaining check-coverage.sh has no delta-mode code path left (comment block confirms it always runs full). An active branch with zero tests protecting it, in a gate whose entire purpose is 'catch reports-success-while-measuring-nothing', is a worse state than not having the optimisation -- the cost (a Gradle run per commit) is bounded and admitted in the comment, and M0.39 is the honest place to reintroduce it with tests for both directions.",
+    "m0.13-tr-06_requeue": "No objection to M0.40. Confirmed by re-reading CoverageGateTest.java: every test stubs ./gradlew, so mustRunAfter/dependsOn wiring in binjava.java-conventions.gradle.kts is untestable by this suite by construction -- that's a real-Gradle-only concern and belongs where it landed.",
+    "remaining_8_tests": "Re-verified each of the five previously-named surviving mutations (deleting the missing-report failure, NOT-MEASURED->ok, or->and on the floor check, dropping exit-status capture, hardcoding pct() to 100) is now caught by at least one of the 8 tests -- confirmed by tracing failsWhenAModuleHasClassesButNoReport, reportsNotMeasuredRatherThanOkWhenNoModuleHasClasses, failsBelowEitherFloorIndependently, and failsBelowTheFloors respectively. The one gap found (M0.13-TR-07) is a NEW branch added this round, not one of the five, so it was never in scope of the fixes already made."
+  },
+  "task": "M0.13",
+  "role": "test-reviewer"
+}

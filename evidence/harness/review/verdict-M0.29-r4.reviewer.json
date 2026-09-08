@@ -1,0 +1,27 @@
+{
+  "diff_sha256": "5e92482fbb493c03fa6ad3e7068072c716d7a937dc8dd26b40916d6172f5d9e2",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "R10",
+      "severity": "major",
+      "file": "scripts/check-gate-scope.sh:137",
+      "summary": "The rewrite discards check-ignore's exit status and inspects only the source name, so a NEGATIVE match satisfies the gate. `git check-ignore -v` exits 0 and prints the rule even when the last match is a `!` pattern and the path is therefore NOT ignored (plain `check-ignore -q` exits 1 on the same input). The pre-diff code asserted ignored-ness; this code asserts only 'some rule in .gitignore mentioned this path'.",
+      "failure_scenario": "Reproduced against the staged script on a tar fixture of the tracked tree. With .gitignore containing exactly `!.tmp/ourclone/README` and `build/`, `git add -A` stages `.tmp/ourclone/README`, `.tmp/ourclone/pom.xml` and `.tmp/ourclone/src/Main.java` -- the whole reference clone -- while `bash scripts/check-gate-scope.sh` prints `ok 27 gate scripts judge this repository only` and exits 0. No test in FreshCheckoutTest fails on that .gitignore, so the mutation 'add a negation covering the probe path' survives. Fix: also require the matched pattern to be positive and to be a `.tmp` directory pattern, e.g. match on the third colon field rather than only the first, or keep a `check-ignore -q` conjunct alongside the source anchor."
+    },
+    {
+      "id": "R11",
+      "severity": "major",
+      "file": "scripts/check-gate-scope.sh:137",
+      "summary": "The R8 narrowing hole is relocated, not closed. The probe is still a single fixed literal path; it just moved from `.tmp/probe` to `.tmp/ourclone/README`. Any pattern that covers that one literal while leaving its siblings unignored still passes. The comment at line 135 claims 'only a real `.tmp/` directory pattern covers the payload', and that claim is false.",
+      "failure_scenario": "Reproduced against the staged script. With .gitignore containing exactly `README` and `build/`, the gate prints `ok 27 gate scripts judge this repository only` and exits 0, while `git add -A` stages `.tmp/ourclone/pom.xml` and `.tmp/ourclone/src/Main.java` -- the upstream checkout minus its READMEs. `.tmp/ourclone/` and `.tmp/**/README` produce the same green. gateScopeRefusesAPatternThatDoesNotCoverAReferenceClone only pins the three historical strings (`probe`, `.tmp/probe`, `*probe*`) that the new literal happens to escape, so it constrains the previous round's fix rather than the class. Fix: assert the shape of the matched pattern (it must exclude the `.tmp` directory itself), or probe two unrelated paths under .tmp/ whose only common cover is a `.tmp` directory rule."
+    },
+    {
+      "id": "R12",
+      "severity": "minor",
+      "file": "scripts/check-gate-scope.sh:100-136",
+      "summary": "37 lines of comment over 10 lines of code, layered so that two paragraphs contradict each other: one says `-c core.excludesFile=/dev/null` is present and why, a later one says it 'was here and is gone'. A reader arriving at the first paragraph looks in the code for a flag that is not there.",
+      "failure_scenario": "A future editor reading top to bottom concludes the personal-ignore hole is closed by the flag named in the first paragraph, does not reach the retraction 20 lines later, and removes the `.gitignore:` source anchor as redundant -- reintroducing the exact vacuous pass the block documents. Collapse the history to the two invariants that are still true: the probe must be a path inside .tmp/, and the match must come from this repository's .gitignore."
+    }
+  ]
+}

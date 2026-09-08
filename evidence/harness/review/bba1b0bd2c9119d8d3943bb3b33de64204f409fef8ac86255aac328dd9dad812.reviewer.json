@@ -1,0 +1,18 @@
+{
+  "diff_sha256": "bba1b0bd2c9119d8d3943bb3b33de64204f409fef8ac86255aac328dd9dad812",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "M2.5-R3-1",
+      "severity": "minor",
+      "failure_scenario": "Bloom.of(ordinals, m, k) does not validate m before use: with m<=0 and a non-empty ordinals collection, Math.floorMod(combined, m) throws a raw ArithmeticException instead of the canonical constructor's IllegalArgumentException(\"m is a positive multiple of 8: ...\") -- the same bypass-the-canonical-constructor pattern round 1 fixed for k, not extended to m. Low current risk: m is always test-supplied and positive today; M2.6 hasn't landed to compute it from a real budget yet."
+    },
+    {
+      "id": "M2.5-R3-2",
+      "severity": "minor",
+      "failure_scenario": "Bloom.of() does not reject negative ordinals even though mightContain() now does: Bloom.of(Set.of(-1,2,3), 32, 3) succeeds silently, but a later mightContain(-1) on that same filter throws instead of returning true for a value that was a member at construction time -- a write/read asymmetry this round's own fix introduced. Low current risk: ordinals only ever come from the non-negative IndexOrdinalRegistry today."
+    }
+  ],
+  "task": "M2.5",
+  "role": "reviewer"
+}

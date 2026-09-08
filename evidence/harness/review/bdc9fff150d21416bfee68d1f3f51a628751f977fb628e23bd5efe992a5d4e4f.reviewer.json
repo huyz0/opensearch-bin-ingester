@@ -1,0 +1,42 @@
+{
+  "diff_sha256": "bdc9fff150d21416bfee68d1f3f51a628751f977fb628e23bd5efe992a5d4e4f",
+  "verdict": "pass",
+  "summary": "ADR-0036 decides the key the task asked for, names both formats, and every round-10 major is repaired against the staged bytes: the cost claim is now conditioned on a stated coalescing rule (ADR-0036 'No commit-path request scales with pods'); 'both encodings change' is reconciled with byte-identical goldens by a NEW VERSION, verified against GoldenChainEntryTest:55-56/82-83 and ChainEntry.java:18-21, with the ADR-0028/0032 reserved-kind sentence restored; and the M4.10c data requirement is kept on a corrected premise -- SegmentCommit.java:25 carries no podId, so no fixture varies by pod today, and three segments sharing one triple do pass isEqualTo(original) under encode-once/fan-out-on-decode. I verified every citable claim in the ADR and the notes: firstAppendMillis via SegmentPublisher.java:110/133, the instance AtomicLong at :53, the put-not-putIfAbsent comment at :136, unconditional flushSeq++ at DefaultIngest.java:349, CheckpointWriter.java:126-129, Checkpoint.java:151 strict equality, CheckpointDecodeRefusalTest:117, CheckpointTest:158/169, ChainReplay.java:50 and :362-385, SegmentKey.MAX_KEY_BYTES=1024, the golden's bins/a.seg, BatchingSequencerTest:261 (hasSize(2) is the only assertion on that delta) and :145-190 (the three-pod per-segment fixture), the eleven java grep sites plus the Sequencer.java:48-50 sentence the grep misses, SPEC.md:55/501/511, review.sh:129 (budget 4), and the M3.0 quote. All hold. Four minors, none blocking.",
+  "findings": [
+    {
+      "file": "docs/internal/product/decisions/0036-the-idempotency-key-carries-an-explicit-pod-incarnation.md",
+      "line": 431,
+      "severity": "minor",
+      "title": "The cost heading is categorical; the coalescing it is conditioned on covers only the shared-pointer case",
+      "failure_scenario": "Consequences says '**No commit-path request scales with pods** -- but only with the coalescing stated here', and the coalescing stated is 'AT MOST ONE GET per distinct (epoch, sequence) per batch'. That bound collapses N GETs of ONE object (the correlated case: one ambiguous batched PUT, every caller in the window retrying against the same pointer) but says nothing about N DISTINCT pointers. Reachable: a store degradation spanning several batch windows leaves pods A, B, C with last-applied deltas in three different objects; jittered backoff lands their retries in one window; each replay must be resolved by reading ITS pointed delta to decide answer-vs-refuse, so one commitAll issues three GETs, and the count rises with the number of replaying pods. An M4.10d author implementing exactly the stated rule, and an M4.10d reviewer citing this heading as authority, both conclude the property holds. The residual is on the retry path and scales with nodes rather than with records/shards/partitions/indices, so it is not the axis non-negotiable 6 forbids -- which is why this is minor and not a block -- but the heading as written promises more than the mechanism delivers. One clause fixes it: state the real bound (one GET per distinct pointed delta among the replays in a batch) and either accept it with the reason, or require M4.10d to cap the per-batch GETs and take the refuse branch beyond the cap.",
+      "recommendation": "Replace the categorical heading with the bound the mechanism actually gives, or add the per-batch cap to the sentence that already mandates the coalescing."
+    },
+    {
+      "file": "docs/internal/product/decisions/0036-the-idempotency-key-carries-an-explicit-pod-incarnation.md",
+      "line": 320,
+      "severity": "minor",
+      "title": "'flushSeq is dense and monotone' is true of ISSUED flushes; the <= rule therefore also catches a flush that never applied",
+      "failure_scenario": "The Decision grounds the replay test on density: 'A replay is flushSeq <= lastAppliedFlushSeq for the same (podId, incarnationId). flushSeq is dense and monotone within an incarnation, so one number gives an unbounded-depth window.' DefaultIngest.java:349 evaluates flushSeq++ as the commit argument, so the number is consumed even when the commit throws -- density is over ISSUED flushes, which this same commit's M4.10d note states and the ADR does not. Consequence: flush 5 fails and is never applied, flush 6 applies, lastApplied=6; the commit-level retry of 5 that this ADR requires M4.10d to add then satisfies 5 <= 6, is classified as a replay, the single pointer names 6's delta, it does not carry 5, and the rule refuses it. A commit that never applied is refused permanently -- suppressing a real commit, this ADR's own stated primary harm, in a narrower form inside one incarnation. SPEC.md criterion 6 as amended here does not exclude it either: it says 'refusing otherwise', and its exemption covers only a restarted pod's flushSeq 0. The handoff is correct where it exists -- the M4.10d note names both indistinguishable histories and warns that blanket refuse-then-re-flush is unsafe -- but the ADR and the SPEC are what an M4.10d author cites, and neither says the refuse branch is not proof of duplication.",
+      "recommendation": "Add one clause to the Decision: <= catches replays AND flushSeqs issued but never applied, so the refuse branch is not evidence of duplication; point at the M4.10d note that owns the resolution."
+    },
+    {
+      "file": "docs/internal/product/backlog-notes.md",
+      "line": 204,
+      "severity": "minor",
+      "title": "The premise this commit measured false survives unedited in the section it belongs to",
+      "failure_scenario": "The '### M4.10b' section is left as written before the ADR and still says 'podShortId is stable and the timestamp advances' as a fact to weigh in favour of the segment key. ADR-0036 and the new M4.46 note in this same diff measure that false -- the timestamp is Accumulator.firstAppendMillis, not a publish stamp, 200/200 identical keys under a frozen clock. Leaving done sections behind is this repo's convention (### M4.9, ### M4.8c), but the surviving sentence is not stale tense, it is a falsified claim, sitting eleven lines above '### M4.10c', which is the next section a session opens; the section also still ends 'Whether any of that suffices is this ADR's finding', with no line saying the finding came back negative. This is the duplicate-survives-its-correction shape the M4.10a baselines entry, M4.42 and M4.45 each record.",
+      "recommendation": "Either strike the falsified clause and add one line pointing at ADR-0036's Context, or delete the now-orphaned section (nothing links to it: the archived M4.10b row carries no notes link)."
+    },
+    {
+      "file": "docs/internal/product/backlog-notes.md",
+      "line": 120,
+      "severity": "minor",
+      "title": "The notes say 'BOTH DELTA ENCODINGS CHANGE' without the constraint the ADR puts on how",
+      "failure_scenario": "ADR-0036's load-bearing constraint is that both paths carry the field BY A NEW VERSION, not by changing either existing layout, because GoldenChainEntryTest asserts encode() is byte-identical to both goldens (:55-56, :82-83) and ChainEntry.java:18-21 states a version IS a layout. The M4.10c note reproduces most of the ADR verbatim but renders this as 'BOTH DELTA ENCODINGS CHANGE -- VERSION_DELTA for a single segment and the kinded batch. Both paths, or neither', which reads as an instruction to edit the two existing layouts. A session that reads its one row's notes (as AGENTS.md directs) and edits VERSION_DELTA's and VERSION_KINDED's layouts breaks GoldenChainEntryTest; it is then one step from regenerating the goldens, which the very next paragraph forbids. The gate catches the break, so this costs a wasted cycle rather than a bad landing.",
+      "recommendation": "Carry the ADR's 'by a new version, not by changing either existing layout; a delta carrying no triple encodes exactly as today' into the M4.10c note, beside the do-not-regenerate paragraph."
+    }
+  ],
+  "task": "M4.10b",
+  "role": "reviewer",
+  "staged_tree": "bded7a27fcdbb2623261a98230d3382f319cf829"
+}

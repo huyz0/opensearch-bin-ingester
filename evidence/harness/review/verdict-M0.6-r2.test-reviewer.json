@@ -1,0 +1,27 @@
+{
+  "diff_sha256": "6e8b6b9b321a9a4d6019c3a1ae59f19a368665f1fad1c5106b583287d1c15e63",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "WT5",
+      "severity": "major",
+      "file": "scripts/check-module.sh:54-66",
+      "summary": "The both-ways settings/filesystem cross-check -- the hardening added in this round, and the only thing that turns a future short module list back into a loud failure -- has no test at all. It is 100% failure path (its happy path is a no-op), so nothing constrains any of its behaviour. The derivation is now tested; its guard is not.",
+      "failure_scenario": "MUTATION VERIFIED SURVIVING: delete lines 54-66 (or change the two `fail` calls to `warn`). `./gradlew -p buildSrc test --rerun-tasks` -> rc=0, 22 tests green; `GATE_SCOPE=full ./scripts/check-module.sh` -> rc=0, prints `ok 8 module(s) checked`. Nothing in the repository goes red. Consequence: with the cross-check gone, a single further edit to derive_modules that the three fixtures cannot see -- e.g. `grep -oE '\"[a-z][a-z-]{4,}\"'`, which passes all three fixtures because binstore-spi/ingest/plugin are all >=5 chars but silently drops `http` from the real settings.gradle.kts -- restores exactly the round-one blocking symptom: `ok 7 module(s) checked` over an unchecked module. Today that mutation IS killed, but only by the cross-check, not by the suite. Fix: extend the existing seam (`--check-drift <settings-file> <dir>`, or let --list-modules take a root) and add two fixture trees: a settings entry with no build.gradle.kts, and a build.gradle.kts with no settings entry."
+    },
+    {
+      "id": "WT6",
+      "severity": "minor",
+      "file": "scripts/check-module.sh:52",
+      "summary": "The test reaches the derivation only through the `--list-modules` front door; nothing asserts that the gate itself uses it. The duplicated *implementation* is gone, but the duplicated *call site* is still unconstrained.",
+      "failure_scenario": "MUTATION VERIFIED SURVIVING: replace line 52 with a literal restatement, `ALL=\"binstore-spi binstore-backends format sequencer ingest http client plugin \"`. buildSrc suite rc=0; `GATE_SCOPE=full ./scripts/check-module.sh` rc=0, `ok 8 module(s) checked`. That is precisely the 'third hardcoded copy of the module list' the comment at lines 41-45 says the derivation exists to prevent, and it lands green. It only becomes visible when a ninth module is added, and then only via the cross-check of WT5, which is itself untested."
+    },
+    {
+      "id": "WT7",
+      "severity": "minor",
+      "file": "scripts/check-module.sh:115-118",
+      "summary": "This commit is what makes the delta module-selection branch load-bearing on every developer's every commit, and that branch -- the one vacuous-pass path in the gate -- has no test. Unchanged lines, but their blast radius is created here.",
+      "failure_scenario": "MUTATION VERIFIED SURVIVING: replace the `MODULES=$(changed_files | cut -d/ -f1 ...)` pipeline with `MODULES=\"\"`. buildSrc suite rc=0; `./scripts/check-module.sh` rc=0, prints `ok no module changed`. The pre-commit hook then builds nothing forever, for every commit, while printing a green line -- the exact defect class the packet's lens names -- and only a GATE_SCOPE=full run would notice. A T0-style test over `changed_files` output (fake diff list in, module names out) would kill it."
+    }
+  ]
+}

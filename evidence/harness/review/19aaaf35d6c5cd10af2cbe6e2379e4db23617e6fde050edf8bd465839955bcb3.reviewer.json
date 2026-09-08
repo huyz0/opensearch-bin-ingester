@@ -1,0 +1,40 @@
+{
+  "diff_sha256": "19aaaf35d6c5cd10af2cbe6e2379e4db23617e6fde050edf8bd465839955bcb3",
+  "verdict": "pass",
+  "summary": "Round 2 verify. F1 (major, round 1) is genuinely closed: the price of reserving epoch 0 is now stated at the site (CommitLog's 2-arg javadoc), and owned by the two rows that can act on it -- M4.6 must REMOVE the single production 2-arg call site (verified: DefaultIngest.java:135 is the only non-test `new CommitLog(store, prefix)`), M4.5 may not use prevEpoch=0 as an absent-sentinel. Verified by ordering as well as by prose: nothing between M4.4b and M4.6 puts a production writer on a nonzero epoch, so the owner sits at the earliest point the fork could exist rather than after it. F2/F3/F4 verified; three residual epoch-0 comments remain (minor). No request-rate change: the diff adds no store call, and epoch prefixes scale with terms (failovers), not records.",
+  "findings": [
+    {
+      "id": "F5",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/LeaseManagerTest.java:302",
+      "summary": "Three comments outside the touched tests still name epoch 0 as the first term, which the code can no longer produce: LeaseManagerTest:302 ('two ingesters on a fresh prefix both holding epoch 0'), LeaseManagerTest:310 ('the loser gets empty, not a second epoch 0'), and StatBlindStore.java:16 ('both be told they hold epoch 0'). LeaseManagerTest:451 ('an expired epoch-0 lease') is the same class, weaker. All would now read epoch 1.",
+      "failure_scenario": "Under the mutation those comments describe (putIfAbsent replaced by an unconditional put) both contenders now mint epoch 1, not 0. A future reader debugging a double acquisition, or reasoning about StatBlindStore's purpose, reads 'both holding epoch 0' and concludes the first leadership term is 0 -- the exact belief M4.4b exists to remove, and the one that would make a revert of `new Lease(1, ...)` to `new Lease(0, ...)` look endorsed by a comment. Same class as F4, which was fixed only where the diff already touched.",
+      "suggestion": "Leave it. Rule 11: fixing a minor makes the next round's surface the prose the fix just added. Record it in the commit body or sweep it in whichever task next touches these files."
+    },
+    {
+      "id": "F6",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/CommitLog.java:60",
+      "summary": "The javadoc says 'M4.5/M4.6 must REMOVE the unleased production commit path', naming both tasks jointly for an obligation the backlog assigns to M4.6 alone (M4.5 is format-only and touches no call site). The sentence's second clause is M4.5's, so the mapping is recoverable, but the subject is joint.",
+      "failure_scenario": "M4.5 is an ADR plus wire-format commit that touches no `new CommitLog` call site. If its implementer reads the joint subject as shared ownership and M4.6's implementer reads the javadoc rather than the backlog row, each can assume the other removes DefaultIngest.java:135 -- and the fork runs with an owner named twice and acted on never. Blast radius is small because both backlog rows carry their own unambiguous instruction and the backlog is authoritative.",
+      "suggestion": "Leave it; if ever touched, the first clause's subject is M4.6."
+    }
+  ],
+  "verified": [
+    "F1 -- CommitLog.java:44-67 opens with 'THIS CHAIN IS A FORK, and the wiring commit must END it', and states all three consequences: never listed by a reader at epoch 1 so records are acked and never visible; offsets re-issued; cannot be sealed, with the reason ('commit does the opposite by construction, folding the winner's offsets in and retrying at the next sequence forever. There is no leader here to fence'). Checked against the code rather than taken on trust: CommitLog.commit's while(true) loop applies the winner's delta and retries at nextSequence with no fencing signal, so the claim is true.",
+    "F1 -- backlog M4.6 carries 'CARRIES M4.4b'S PRICE ... this task must REMOVE the unleased production commit path (DefaultIngest's 2-arg new CommitLog), not merely pass lease.epoch() to it'. The named call site is exact and exhaustive: `new CommitLog(` outside src/test appears once, at ingest/src/main/java/binjava/ingest/DefaultIngest.java:135 (the two other hits are plugin clusterTest fixtures).",
+    "F1 -- backlog M4.5 carries the prevEpoch=0 prohibition. Checked M4/SPEC.md:310-318, which specifies CONTINUE as {prevEpoch, prevSeq} and does NOT pre-adopt 0 as a sentinel, so the row constrains rather than contradicts the spec.",
+    "F1 -- the M4.4b row's 'straight in' overreach is gone and replaced by the full price naming both owners, and the row no longer claims the wiring is free.",
+    "F1 owned rather than parked -- verified by ORDER, not only by prose: M4.5 is format-only and M4.6 is the first row that puts a production writer on a leased epoch, so the fork window never opens before the row obliged to close it. The obligation sits at the earliest point harm is possible.",
+    "F2 -- Lease.java:56-64 now permits 0 while stating it is never a lease's epoch, names M4.4b, and records why the record does not refuse it. This is the right call, and for a stronger reason than the comment gives: no path can adopt a decoded epoch-0 lease as a HELD term -- LeaseManager.adopt receives only `new Lease(1, ...)` (cold start) or `current.takenOverBy(...)` = prev+1 >= 1 (takeover), and renewedUntil preserves an already-held epoch >= 1. So permissive parsing buys no collision, while refusing would turn a legacy or hand-edited object into a permanent acquisition stall, since tryAcquire propagates a decode failure as IOException rather than treating the lease as absent. Layering agrees: Lease is in `format` and the reservation is a `sequencer` mint-time policy.",
+    "F3 -- LeaseManager.java:36-41 now says 'start again at the first term' with '(The first term is 1, not 0: epoch 0 is reserved for the unleased chain, M4.4b)'. Accurate.",
+    "F4 -- CommitLogTest.java:247 and the LeaseManagerTest assertions no longer call the collision open. Residue elsewhere is F5.",
+    "Test-removed trailer -- the proposed text satisfies the point-4 caveat. check-test-integrity's parser (scripts/test_integrity.py:118) only requires ^Test-removed:\\s*\\S, so the content is for the reader, and the named replacement `theFirstAcquisitionStartsAtEpochOneBecauseZeroMeansNoLease` matches the method actually added at LeaseManagerTest.java:461... (the renamed one is at :72). The trailer now says RENAMED and names the replacement, which is what makes it a rename record rather than a removal excuse.",
+    "Scope -- six files, all in-scope for M4.4b: one production constant (new Lease(0 -> 1)), comments, the backlog rows, and the tests that pinned the old value. No widening.",
+    "Cost -- no object-store request added, removed or moved. The lease path is unchanged in shape (stat + one conditional write); recover() still lists one prefix per epoch, and epochs are terms, so the rate scales with failovers and nodes, never with records, shards, partitions or indices. Idle paths issue nothing new.",
+    "Nothing pre-empts M4.5/M4.6/M4.8: the diff records constraints derived from the reservation and chooses no mechanism -- no CONTINUE shape, no seal branch, no checkpoint discovery.",
+    "NOT verified by me, and not claimed: the 491/0 suite figure. I did not run the suite. It is arithmetically consistent with M4.4's recorded 490 plus the one test added here, and the Test-removed rename keeps the count net +1."
+  ],
+  "task": "M4.4b",
+  "role": "reviewer"
+}

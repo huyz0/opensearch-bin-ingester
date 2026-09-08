@@ -1,0 +1,37 @@
+{
+  "diff_sha256": "fb36be7f99bcf7e753e6104828d0a1801bb3c966838ebe61159e04972f236199",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "M4.13c-R2a",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSimulationTest.java:78-93",
+      "severity": "minor",
+      "title": "enabledIn() narrows the vacuity hole but does not close it, and the comment claims it does",
+      "failure_scenario": "enabledIn is still a hand-written if-chain naming all four class strings, so a fifth class added to Faults and enabled in ROUGH is not in the derived set. MEASURED in my own tree by deleting the withheldPut branch from enabledIn (standing in for 'author forgot to update it') and setting ROUGH's fourth rate: at 1e-4 the class fires somewhere in the 30-seed sweep, kinds gains a name the expected set lacks, and containsExactlyInAnyOrderElementsOf goes RED (BUILD FAILED, 1 test failed) -- so the common case is caught. At 1e-12 the class is enabled but never fires, both sides omit it, and the test is GREEN (BUILD SUCCESSFUL). The residual hole is a class that is enabled at a real rate yet structurally cannot record an Injected -- a live shape in this file already, since putIfMatch draws unreachable and duplicatePut and discards both, and M4.13e is the row that will act on one of them. In that case the sweep reports 'every ENABLED class fired' while the new class fires nowhere, which is exactly the failure the test is named for. The comment at line 126 ('deriving it means the next class cannot be forgotten either, which is rung 2 of gate-design') and the same sentence in backlog-notes.md are therefore overclaims. Rung 2 here is deriving over Faults.class.getRecordComponents() and invoking each accessor, which no future component can evade; the staged version is the same list of four literals relocated from the assertion into a helper, plus genuine new sensitivity to the RATE."
+    },
+    {
+      "id": "M4.13c-R2b",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSimulationFlushSeqTest.java:56",
+      "severity": "minor",
+      "title": "the two ROUGH profiles agree by coincidence again, not by construction",
+      "failure_scenario": "R1a was that the sibling ROUGH literals disagreed about withheldPut. Both are now new FaultInjectingStore.Faults(0.05, 0.05, 0.1, 0), so the values agree -- but they remain two independent literals in two files with nothing binding them, which is the state they were in when they drifted. The next hand tuning one profile (for instance M4.13d, which the backlog now tells to turn withheldPut on and re-baseline) edits CommitProtocolSimulationTest's copy, leaves CommitProtocolSimulationFlushSeqTest's at 0, and the flushSeq sweep silently runs a different fault model than the one M4.13d measured -- reproducing R1a with the roles reversed and no test able to see it. One shared constant makes the divergence unrepresentable; a restored equality does not."
+    },
+    {
+      "id": "M4.13c-R2c",
+      "file": "docs/internal/product/backlog-notes.md (M4.13c table) vs sequencer/src/test/java/binjava/sequencer/CommitProtocolSimulationTest.java:181-186",
+      "severity": "minor",
+      "title": "the new measurement table contradicts the numbers the stall bound is justified by, 20 lines away",
+      "failure_scenario": "I reproduced the staged table exactly in my own tree over seeds 0..29 at 120 steps and 3 pods: w=0 -> commits=175 takeovers=68 starved=1; w=0.01 -> 135/66/2; w=0.02 -> 124/65/3; w=0.05 -> 120/61/3. The table is honest and the deferral argument holds: isLessThan(3) fails at both 0.02 and 0.05, and only 0.01 survives, which is the parameter-fitting the notes correctly refuse. But aFAULTEDSWEEPKeepsCOMMITTINGRatherThanSTALLING's own comment still says 'Measured 208' and 'commits 208 -> 171, takeovers 77 -> 57' for that identical sweep. Those numbers went stale before this commit, but this commit is what makes them visibly wrong by publishing 175/68 for the same run. A reader auditing M4.13d's required re-baseline compares against 208, finds a 33-commit gap that no change explains, and either re-derives the whole baseline or concludes the table is wrong. The starved figures (1 healthy) do still agree, which is the number the bound actually rests on."
+    },
+    {
+      "id": "M4.13c-R2d",
+      "file": "docs/internal/product/backlog-done.md:172",
+      "severity": "minor",
+      "title": "the archive row does not say the class ships disabled in both sweeps",
+      "failure_scenario": "The row describes withheldPut as landed -- own scrambled stream, drawn unconditionally, losing to LANDED -- and omits the one caveat that changes what a reader does: no sweep enables it, so nothing above FaultInjectingStore's own unit tests exercises it. check-commit-msg.sh reads this file, and a later agent scanning the archive for 'is the withheld arm covered by the simulation' answers yes from this row alone. The obligation is recorded in M4.13d's open row and in backlog-notes, so it is not lost; the summary a reader hits first is what omits it."
+    }
+  ],
+  "task": "M4.13c",
+  "role": "reviewer",
+  "staged_tree": "fa9f216df50a3560dc3d6569194245182d9010b4"
+}

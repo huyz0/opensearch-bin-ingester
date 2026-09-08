@@ -1,0 +1,50 @@
+{
+  "diff_sha256": "4f1aa573b4f22ccfea5e88ac360ea59b9d7f2c77e9e3dfcf4b6ab362d1961bec",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "file": "format/src/test/java/binjava/format/BatchedCommitDeltaTest.java",
+      "line": 123,
+      "severity": "major",
+      "what": "The new segment COUNT is a length field read from untrusted bytes, and the only test of it is the zero case. Nothing pins an upper bound, and production allocates on it: `new ArrayList<>((int) count)` (CommitDelta.java:198) runs before a single segment byte is read. MEASURED in the review tree with a 15-byte object {BDLT, v1, kind 0, seq 5, count 0x7FFFFFFF}: `java.lang.OutOfMemoryError: Requested array size exceeds VM limit`, a 158 MB heap dump, and the test executor down -- not an IOException. ChainEntryTest.aHugeLengthFieldIsRefusedRatherThanAllocated is the existing test for exactly this defect class on the KEY length, and Cursor's own javadoc claims 'a length field read out of a corrupt object must not become an array size'; the new length field this commit adds has no equivalent test and does not honour that claim.",
+      "failure_scenario": "A truncated PUT or a foreign writer leaves a chain object whose segment count is large. CommitLog.recover dies with an unchecked OutOfMemoryError straight past its own `throws IOException` and every caller catching it -- the precise failure mode ChainEntryTest.aValueTheWireCanCarryButARecordRefusesIsAnIoFailure and aHugeLengthFieldIsRefusedRatherThanAllocated exist to prevent -- and a recovering leader crashes instead of reporting a corrupt entry."
+    },
+    {
+      "file": "format/src/test/java/binjava/format/BatchedCommitDeltaTest.java",
+      "line": 123,
+      "severity": "major",
+      "what": "ADR-0032's Decision says 'Decoding accepts both', and the backlog row says in as many words that 'a single-segment v1 entry decodes but is never written'. That acceptance is untested. SURVIVING MUTATION, verified against the full `./gradlew test`: CommitDelta.java:192 `if (count <= 0)` -> `if (count <= 1)`. BUILD SUCCESSFUL. The decoder can be hardened into refusing every single-segment kind-0 entry and no test in the tree notices -- the zero test still passes (0 <= 1 with the same message), and every other batched test uses two segments. The deliberate encode/decode asymmetry the ADR spends four paragraphs buying is therefore unfalsified in the direction that matters.",
+      "failure_scenario": "A future or mixed-version writer emits a kind-0 entry carrying one segment -- exactly what the ADR promises is readable. Every reader refuses it as corrupt bytes, recovery stops at that slot, and the chain is unreadable from that point on. Nothing in the suite would have caught the decoder losing that acceptance."
+    },
+    {
+      "file": "sequencer/src/main/java/binjava/sequencer/ChainReplay.java",
+      "line": 371,
+      "severity": "major",
+      "what": "The ChainReplay half of this commit has no test at all. TWO SURVIVING MUTATIONS, both verified against the full `./gradlew test` (BUILD SUCCESSFUL): (1) revert `delta.allRuns()` to `delta.runs()`, i.e. undo the production change entirely; (2) `delta.segments().get(0).runs()`, folding only the first segment. No test anywhere replays a chain that CONTAINS a batched delta -- BatchedCommitDeltaTest exercises `allRuns()` as a bare accessor, which kills an accessor mutation but says nothing about the caller the accessor was added for. The commit changes a recovery path and ships no test that would fail if the change were absent (testing.md rule 13).",
+      "failure_scenario": "Once M4.7 writes a batched delta, recovery over that chain either throws IllegalStateException ('this delta batches N segments') out of ChainReplay.fold and no leader can recover, or -- under the get(0) variant -- silently folds only the first pod's runs, so every other stream's nextOffset stays behind and the next leader reassigns offsets already acked. That is I2, and the suite stays green through both."
+    },
+    {
+      "file": "format/src/main/java/binjava/format/CommitDelta.java",
+      "line": 34,
+      "severity": "major",
+      "what": "The empty-delta guard lost its only test in this commit, without any assertion text changing -- so check-test-integrity cannot see it. SURVIVING MUTATION, verified against the full `./gradlew test`: CommitDelta.java:34 `if (segments.isEmpty())` -> `if (false)`. BUILD SUCCESSFUL. Before this change, CommitDeltaTest.aDeltaWithNoRunsIsRefused (`new CommitDelta(0, \"seg\", List.of())`) reached CommitDelta's own guard; it now routes through SegmentCommit's new guard instead and never touches CommitDelta's. Nothing constructs `new CommitDelta(seq, List.of())` -- the list-taking constructor M4.7's batcher will actually call -- and decodeBatchedBody's `count <= 0` shields the decode path, so the guard is unreachable from every test. This is the exact defect recorded in CommitDeltaTest's own class javadoc: 'a validation reachable only through a caller that pre-validates is untested'.",
+      "failure_scenario": "M4.7's batcher builds a delta from a commit window that turned out to carry no flushes. With the guard broken the empty delta is written, consumes a sequence number and commits nothing, and a replay meets a gap it cannot explain -- which stalls every consumer of the partition, per the guard's own comment. Nothing in the tree fails."
+    },
+    {
+      "file": "format/src/test/java/binjava/format/BatchedCommitDeltaTest.java",
+      "line": 23,
+      "severity": "minor",
+      "what": "SURVIVING MUTATION, verified against the full `./gradlew test`: CommitDelta.java:33 `segments = List.copyOf(...)` -> `segments = new java.util.ArrayList<>(...)`. BUILD SUCCESSFUL. CommitDeltaTest.theRunsListIsCopiedSoALaterMutationCannotChangeTheDelta (line 53) pins exactly this property for the INNER runs list; the new outer segments list has no equivalent, so neither the defensive copy nor the immutability of `segments()` is constrained.",
+      "failure_scenario": "A batcher that keeps building into the list it handed to `new CommitDelta` mutates a delta that has already been encoded and published, or a caller calls `delta.segments().add(...)` and it succeeds. Both are silent, and no test fails."
+    },
+    {
+      "file": "format/src/test/java/binjava/format/GoldenChainEntryTest.java",
+      "line": 13,
+      "severity": "minor",
+      "what": "The class javadoc still reads 'THREE FILES, ONE PER SHAPE' in the same commit that adds the fourth golden file and the test that reads it. The comment two lines below the new test correctly calls it 'THE FOURTH FILE', so the file contradicts itself.",
+      "failure_scenario": "A later reader regenerating or auditing the golden set works from a count that is one short and misses chain-delta-batched-v1.bin -- the file whose whole purpose is to refuse a silent re-generation."
+    }
+  ],
+  "task": "M4.7a",
+  "role": "test-reviewer"
+}

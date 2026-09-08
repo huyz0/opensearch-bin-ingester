@@ -1,0 +1,44 @@
+{
+  "diff_sha256": "8c8a19833c40f026b48dafefd8a6d31d2f769b668ce013933cbf2e38456ced49",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitLogSealTest.java:75",
+      "title": "Nothing pins that recovery STOPS the LIST at the seal; `return` -> `break` survives all 96 tests and applies a discarded suffix past a page boundary",
+      "failure_scenario": "Mutate CommitLog.recover's seal branch from `sealedAt = seal; return;` to `sealedAt = seal; break;`. All 96 sequencer tests stay green, because every fixture in the suite has fewer than 1000 chain objects, so `page.nextStartAfter()` is empty and `break` and `return` are indistinguishable. Measured on a probe chain of [delta@0, SEAL@1, delta@2..1100]: under the mutation recovery pages on past the barrier and reports nextOffset=1201 / nextSequence=1101 where the sealed prefix ended at 3 / 2. That is invariant I3 -- applying a discarded suffix -- which is the exact half this task exists to close, plus the second LIST the production comment claims to save (cost.md). The task row states the criterion in words (\"Stopping also ends the LIST: everything past a seal is discarded, so paging on spends requests reading bytes that must not be applied\") and testing.md rule 13 requires every acceptance criterion to have a test that would fail without the change. It has none. A test with a seal early in a chain longer than one page, or a CountingBinStore asserting exactly one list call, closes it."
+    },
+    {
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitLogSealTest.java:59",
+      "title": "Every seal in the suite sits at sequence 1; a boundary mutation that forgets a seal at sequence 0 survives and lets an acknowledged commit land past it (I5)",
+      "failure_scenario": "Mutate recover's seal branch to `if (seal.sequence() > 0) { sealedAt = seal; }`. All 96 tests stay green: CommitLogSealTest, CommitLogTest.recoveryAdvancesPastASealWithoutApplyingIt and CommitLogTest.losingASlotToASealStopsRatherThanWritingPastTheBarrier all place the seal at sequence 1. Measured on a probe with the chain [SEAL@0] only: under the mutation `commit` returns successfully at seq 1 -- an ACKNOWLEDGED commit beyond a seal in its own chain, which is I5, the invariant the corpus singles out. Against the real code the same probe refuses with \"chain sealed at seq 0, continued at epoch 2\". The shape is not hypothetical: Seal's own constructor permits sequence 0, its javadoc describes the new leader recovering the old chain through seq=N and racing for N+1 (N+1 = 0 when the predecessor never committed), and M4.5 already records that a first leader writes prevSeq=0 \"truthfully saying that chain was EMPTY\". M4.6c will write exactly these seals. One test with the seal as the chain's only entry at sequence 0 closes it."
+    },
+    {
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitLogSealTest.java:101",
+      "title": "The control test kills no mutation that three other tests -- one of them pre-existing and untouched -- do not already kill",
+      "failure_scenario": "Mutate recover to `throw new IOException(\"sealed at \" + seal.sequence());` instead of remembering the seal -- the mutation the row says this control earned its red against. Measured: FOUR tests fail, CommitLogSealTest's other two AND the pre-existing, untouched CommitLogTest.recoveryAdvancesPastASealWithoutApplyingIt, which calls `reader.recover()` unguarded on the same fixture shape and additionally pins nextSequence==2. Test 3's assertions (recover does not throw; nextOffset==4 for a 4-record delta) are a strict subset of that test's (recover does not throw; nextOffset==3 for a 3-record delta; nextSequence==2), and no production branch reads the record count, so no mutation is killed uniquely by it. Its red therefore establishes that the mutation is detectable, not that this test detects anything the tree did not already detect. Not harmful, but it is not the load-bearing control the row claims; the honest control against \"refuse everything touching a seal\" already shipped in M4.5."
+    },
+    {
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitLogSealTest.java:67",
+      "title": "`hasMessageContaining(\"sealed\")` cannot tell the new recovered-seal guard from the pre-existing lost-race guard, so test 1 can pass without ever recovering past a seal",
+      "failure_scenario": "The diff extracts both refusals into one `fenced(Seal)` helper, so the two guards now emit a byte-identical message. Mutate recover to stop at the seal WITHOUT applying or remembering it (`if (entry instanceof Seal) { return; }` placed before `apply(entry)`): nextSequence stays at 1, so `fenced.commit` races for slot 1, LOSES it to the seal, and throws from `commit`'s old lost-race branch with the same \"chain sealed at seq 1...\" text. Measured: aWriterThatRecoveredPastASealRefusesToCommitRatherThanWritingBeyondIt PASSES under that mutation -- passing for a reason its own name denies. It is killed only by test 2's `nextSequence()==2`. Test 1 would pin its own name by asserting `fenced.nextSequence()` is 2 after `recover()`, i.e. that this writer really did recover PAST the barrier before being refused."
+    },
+    {
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitLogSealTest.java:67",
+      "title": "Test 1 does not assert that nothing was written past the barrier, unlike its sibling forty lines away",
+      "failure_scenario": "Move the `if (sealedAt != null) throw fenced(sealedAt);` check from before the retry loop to inside `if (written.isPresent())`, after the PUT lands. Measured: all 96 tests green. Under that mutation the fenced writer PUTs a delta into slot 2 of the sealed chain and only then throws -- an object past the seal that M4.6c's cross-boundary reader and any GC must now reason about, plus a wasted PUT. CommitLogTest.losingASlotToASealStopsRatherThanWritingPastTheBarrier pins exactly this for the lost-race branch with `assertThat(store.stat(fenced.keyFor(2))).isEmpty()`; the new test covering the other branch of the same invariant omits it."
+    },
+    {
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/CommitLog.java:280",
+      "title": "The fields of the fencing message are pinned by nothing; an argument swap in the new `fenced()` helper survives",
+      "failure_scenario": "Swap `seal.sequence()` and `seal.continuedAt()` inside the new `fenced(Seal)` helper so it renders \"chain sealed at seq 2, continued at epoch 1\". Measured: all 96 tests green. Both call sites assert only `hasMessageContaining(\"sealed\")`. The message is the only signal an operator gets that a leader was fenced and where the chain continued; a swapped pair points at the wrong epoch. Pre-existing gap, but the diff is what turned two independent messages into one shared helper worth pinning once."
+    }
+  ],
+  "task": "M4.6a",
+  "role": "test-reviewer"
+}

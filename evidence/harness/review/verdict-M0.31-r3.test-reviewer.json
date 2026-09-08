@@ -1,0 +1,13 @@
+{
+  "diff_sha256": "69fdc65cece6cd42e65eb5c6641b1235b89025e05964926bf9c54a3e2d16f0ed",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "M0.31-R3-TR-1",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java:213,262",
+      "summary": "gateScopeRefusesAnythingShortOfAQuarantine and gateScopeIgnoresIgnoreFilesThatAreNotThisRepositorys call Files.createTempDirectory(\"fresh\") directly instead of @TempDir. Measured: this JVM's java.io.tmpdir is /tmp (no Gradle/JUnit config in this repo redirects it to build/tmp), so both this call and the pre-existing @TempDir usage in the same file resolve to the system temp directory, contrary to testing.md rule 17 (\"Scratch under build/tmp, never the system temp directory\").",
+      "failure_scenario": "Not a mutation-survival risk -- it does not weaken what the test constrains. It is a standards violation worth naming because these two methods are new in this diff and manage their own try/finally rm -rf, which @TempDir would give for free; rule 17 has no wired script yet (a preference per AGENTS.md), and the same gap already exists in harnessTestsCreatesItsLogDirectoryBeforeRedirecting from M0.29, so this is not a regression introduced by this commit, just an opportunity not taken."
+    }
+  ]
+}

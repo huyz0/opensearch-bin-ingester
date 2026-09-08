@@ -1,0 +1,16 @@
+{
+  "diff_sha256": "b0a1c839886194c1572548dc071e1999c0209b686328ab46ed8c59e11c567c2a",
+  "task": "M4.43",
+  "role": "test-reviewer",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "TR-M4.43-2",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:309",
+      "summary": "CARRIED FORWARD, UNCHANGED FROM ROUND 2, deliberately not fixed. M4.41 says '\u26a0\ufe0f THE BAND IS THE TEST COMMENT'S 0.56x-2.22x, derived there; an earlier draft of this row said 0.75x, which is not derivable'. Two problems, neither of which touches the row's actionable conclusion. (1) 'derived there' credits the test comment (LocalSequencerRenewTest.java:384-390) with a derivation it does not perform: the comment states the band as a bare figure. The HIGH edge is reconstructible -- 6.67/3 = 2.22 -- but the LOW edge 0.56x follows from nothing stated: the ceiling of 30 against an honest ~6.67/s gives 0.22x, not 0.56x. So the rejection criterion the row applies to 0.75x ('not derivable') is one half of the band it endorses fails as well. (2) The production reviewer's related point, which I agree with and do not think blocks: 2.22x is the floor-3 edge, and the code's floor is 4, so against the tree as it stands the surviving band's high edge is 6.67/4 = 1.67x. The row quotes the figure as the test comment's, and the comment does state it in its floor-of-3 sentence, so it is attributed rather than asserted -- but a session picking up M4.41 could read 2.22x as today's band. Non-blocking because the row's operative claim is measured and correct independently of the band: 2x is bimodal at 3/4 against an INCLUSIVE floor of 4, so it survives about 60% of the time, and the row states the actual bound `isBetween(4L, 30L)` verbatim elsewhere.",
+      "failure_scenario": "A session picks M4.41, takes 0.56x-2.22x as the band against the shipped floor of 4, and sizes a new bound to close a band that is really 0.22x-1.67x -- or tries to reproduce 0.56x, finds no arithmetic that yields it, and cannot tell whether the band was measured or copied. The same row rejects 0.75x for exactly that property, so the criterion it applies to the draft it corrects is not met by the correction."
+    }
+  ],
+  "staged_tree": "b7992942bee2d5f90eea9065dc678648b7236833"
+}

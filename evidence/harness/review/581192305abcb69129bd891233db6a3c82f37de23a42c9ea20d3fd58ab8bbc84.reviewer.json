@@ -1,0 +1,22 @@
+{
+  "diff_sha256": "581192305abcb69129bd891233db6a3c82f37de23a42c9ea20d3fd58ab8bbc84",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "M0.13-5",
+      "severity": "blocking",
+      "file": ".pre-commit-config.yaml",
+      "summary": "scripts/check-coverage.sh is never invoked: no hook entry was added to .pre-commit-config.yaml, and .github/workflows/ci.yml only runs `pre-commit run --all-files`, so the new gate is unreachable from either path.",
+      "failure_scenario": "Confirmed by running `pre-commit run --all-files` and `pre-commit run --files <the 6 changed files>` in this checkout: neither invocation's output contains 'check-coverage', unlike the two other Gradle-invoking gates (check-harness-tests.sh, check-module.sh), which are registered with stages:[pre-commit], pass_filenames:false, always_run:true. The packet's own 'GATES THAT ALREADY PASSED' list -- which is generated from the same config -- omits check-coverage.sh, and AGENTS.md's generated Gates table (build-index.sh --check passed) does not list it either. The backlog marks M0.13 'done', but the 95%-line/90%-branch floor is enforced by nothing: a commit that deletes or guts a test suite tomorrow drops coverage to 0% and both `git commit` locally and CI's `pre-commit run --all-files` print green, because the script that would catch it is never invoked. This is exactly the 'a task nothing depends on is a preference' case the review packet names as a lens to check."
+    },
+    {
+      "id": "M0.13-6",
+      "severity": "major",
+      "file": "scripts/coverage.py",
+      "summary": "The exact fix for the previously-reported defect (a well-formed report with zero <counter> elements scoring 100%) has no regression test in CoverageGateTest, so a future edit could silently reintroduce it.",
+      "failure_scenario": "Mutation-tested directly: deleted the `if c == {}:` branch in scripts/coverage.py (the block whose comment says 'pct()'s (0,0) default would score that 100%') and reran `./gradlew :buildSrc:test --tests binjava.CoverageGateTest` -- all 8 cases still passed, 0 failures. None of the 8 fixtures constructs a valid `<report>` element with zero `<counter>` children: the closest case, aMalformedReportFailsWithAReasonRatherThanATraceback, uses an empty string, which raises ET.ParseError and exercises the separate `c is None` path, not `c == {}`. The fix this task's narrowing explicitly cites as resolved ('a report that measured nothing is not full coverage') is therefore unprotected: reverting or refactoring it lands a coverage gate that scores an empty JaCoCo report as 100% pass, and no test in this repository will notice. (Change reverted after the mutation test; coverage.py restored, diff is byte-identical to the reviewed version -- confirmed via `git diff`.)"
+    }
+  ],
+  "task": "M0.13",
+  "role": "reviewer"
+}

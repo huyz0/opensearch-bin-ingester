@@ -1,0 +1,48 @@
+{
+  "diff_sha256": "5ee5f14201d6ed133ba0b986d765bcf97ac1345f7d9a8990e8f9db6ddb628b92",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "HT1",
+      "severity": "resolved",
+      "file": "buildSrc/build.gradle.kts:36",
+      "summary": "Original blocking Gradle-inputs finding is FIXED. Re-ran the repro end to end: two consecutive no-change runs give ':test' then ':test UP-TO-DATE'; appending a line to scripts/java_tests.py gives ':test' (re-ran); restoring gives ':test' again; touching a fixture gives ':test'. And with the char-literal alternative deleted from NOISE, scripts/check-harness-tests.sh now prints FAIL and exits 1, where in r1 it printed ok. Baseline suite: 16 tests, 0 failures.",
+      "failure_scenario": "n/a - verified fixed in both directions"
+    },
+    {
+      "id": "HT2",
+      "severity": "major",
+      "file": "buildSrc/src/test/resources/java-fixtures/text-block-in-comment.java:4",
+      "summary": "The fixture comment states 'This constrains the ORDER of NOISE's alternatives (textblock before string)'. It does not. I reordered NOISE so that <string> precedes <textblock> (scripts/java_tests.py:51-57) and all 16 tests still pass. Verified twice: once through the real Gradle task (test-results XML rewritten, 16/0 failures) and once through a standalone fixture runner. The order is the single reason java_tests.py:45-50 gives for the one-alternation design, and no fixture holds it.",
+      "failure_scenario": "Mutation that survives: move the (?P<textblock>...) alternative below (?P<string>...) in NOISE. The fixture's text block contains {\"index\":{\"_id\":\"1\"}} - an even number of quotes and balanced braces - so when the text block is not consumed as a unit the leftover quotes still pair and the leftover braces still balance, both scan_checked guards stay quiet, and ids come out identical. Fix: make the text-block body brace-unbalanced or quote-odd, e.g. body = \"\"\"\\n  {\"index\":{\"_id\":\"1\"}\\n  \"\"\"; then the mutation raises 'braces do not balance' and the case goes red."
+    },
+    {
+      "id": "HT3",
+      "severity": "major",
+      "file": "buildSrc/src/test/resources/java-fixtures/unicode-escape.java:5",
+      "summary": "The fixture contains no unicode escape. The staged bytes hold a literal LF where the \\u000A was meant to be - od -c of the blob shows '/ /  J L S  3 . 3 :  \\n  e n d s ...'. grep for 'u000' in the file returns nothing. So the fixture is a plain two-line comment followed by ordinary tokens, behaviourally identical to a fixture with no escape at all, and decode_unicode_escapes / UNICODE_ESC (scripts/java_tests.py:62-72) has zero coverage. This was listed as new coverage for a named gap; it covers nothing.",
+      "failure_scenario": "Mutation that survives: replace the body of decode_unicode_escapes with 'return src' (i.e. delete UNICODE_ESC entirely). All 16 tests pass. Fix: write the escape as the six characters backslash-u-0-0-0-A inside the // comment; then with decoding removed the comment swallows the rest of the line and the method count changes."
+    },
+    {
+      "id": "HT4",
+      "severity": "minor",
+      "file": "scripts/java_tests.py:241",
+      "summary": "Two of the three fail-closed paths in scan_checked are now constrained (deleting the brace-balance guard kills refused/unbalanced-braces.java, deleting the quote-parity guard kills refused/unpaired-quote.java - both verified). The third, the 'annotated != detected' cross-check, has no fixture. The message about the added refusal fixtures is not itself overstated, but 'the fail-closed behaviour' is now only two-thirds covered and the uncovered third is the one the module docstring calls the reason the parser refuses.",
+      "failure_scenario": "Mutation that survives: change 'if annotated != detected:' to 'if False:'. All 16 tests pass, and the parser goes back to silently reporting a self-consistent wrong answer. A fixture that reaches it: a class with '@Test' on a field ('@Test int notAMethod = 1;') followed by a real '@Test void a() { }' - braces balance, quotes pair, annotated=2 but detected=1."
+    },
+    {
+      "id": "HT5",
+      "severity": "minor",
+      "file": "scripts/java_tests.py:180",
+      "summary": "Nothing in the suite asserts the 'body' field of a scan result, although scripts/test_integrity.py:60 feeds exactly that field to strength() - it is the input to the assertion-weakening gate. Both the ids command and the new scan command project the body away, so the whole extraction is unconstrained. Not necessarily this task's scope, but the boundary flip below is the kind the brief asks for and it survives.",
+      "failure_scenario": "Three surviving mutations: (a) 'found[ident] = {..., \\'body\\': \\'\\'}'; (b) 'body': src (whole file); (c) the boundary flip 'if open_method and open_method[2] == depth' -> '>= depth', which closes a method at the first nested closing brace and truncates every body. All 16 tests pass under each."
+    },
+    {
+      "id": "HT6",
+      "severity": "minor",
+      "file": "buildSrc/src/test/resources/java-fixtures/annotation-arg-braces.java:7",
+      "summary": "I agree with shipping the annotation-argument collapse loop documented as unconstrained rather than deleting it - my audit reproduces yours: deleting the loop passes all 16 tests, and the reason is right (the 'ann' token consumes @Name, so the following '(' has no preceding identifier and cannot become a phantom call). The part to reconsider is the fixture: across 27 mutations it never failed alone, and every mutation it caught was caught by the ten other ids cases too. It is a third fixture that adds a case without adding discrimination.",
+      "failure_scenario": "Mutation that survives: delete the 'while prev != src' loop at scripts/java_tests.py:99-102. Its @CsvSource({\"a,1\", \"b,2\"}) has its strings erased by NOISE first, leaving '{, }' - balanced - so the loop never has anything to do. Either drop the fixture or give it annotation arguments whose braces survive NOISE unbalanced; if no such construct exists, that is itself the evidence the loop is unreachable and the fixture should go."
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "diff_sha256": "a216363e6179cb2b997396ef75b50b3c68d244b006bcd876c6b5296f5b704e48",
+  "verdict": "pass",
+  "findings": [
+    {
+      "file": "sequencer/src/main/java/binjava/sequencer/CommitLog.java",
+      "line": 278,
+      "severity": "minor",
+      "what": "The batch-level duplicate-key guard in commitSubmissions is no longer falsifiable by any test, because the new CommitDelta constructor refuses the same state with a message that also contains the asserted phrase \"same segment\". Measured in a copy of the staged tree: replacing the throw with a bare `keys.add(s.segmentKey())` leaves all 211 sequencer tests green, including `twoSubmissionsNamingTheSameSegmentAreRefused`. This is the exact hazard the neighbouring `anEmptyBatchIsRefused` names in capitals (\"THE MESSAGE NAMES THE LAYER, and it has to\") -- applied to the empty case and not to the duplicate one.",
+      "failure_scenario": "A later refactor deletes the batch guard as redundant. `commitAll` still refuses a colliding batch, but reports a DELTA-layer message (\"a delta names the same segment twice\") for a BATCH-layer mistake, so an operator reading the log looks for a corrupt entry rather than for the caller that submitted the same segment key twice. No test fails."
+    },
+    {
+      "file": "docs/internal/product/decisions/0032-a-batched-delta-carries-many-segments-under-the-reserved-kind.md",
+      "line": 51,
+      "severity": "minor",
+      "what": "The decoder now rejects a byte sequence it previously accepted -- a v1 delta whose segment list names one key twice -- but ADR-0032, which defines this layout and states \"Decoding accepts both\", does not record the uniqueness constraint. No bytes in any bucket are affected (the only writer never emitted duplicates), and `ChainEntry.decode` wraps the IllegalArgumentException as IOException \"corrupt chain entry of kind 0\", verified by decoding hand-patched bytes -- so the fail-closed behaviour is right; only the recorded contract is missing.",
+      "failure_scenario": "M4.8/M4.9, or any later code that merges two windows' segment lists into one entry, is written from the ADR rather than from the record and emits a delta naming one segment key twice. The entry is written once, and from then on every reader's recover() of that epoch fails permanently with \"corrupt chain entry\" -- there is no skip path -- with nothing in the recorded format saying the writer was at fault."
+    }
+  ],
+  "task": "M4.7b",
+  "role": "reviewer"
+}

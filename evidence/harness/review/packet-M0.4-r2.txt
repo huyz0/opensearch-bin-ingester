@@ -1,0 +1,3791 @@
+=== TASK M0.4 ===
+| M0.4 | Gradle build, JDK 25 toolchain, module skeleton per `architecture.md` | — | todo |
+
+=== STANDARDS THE REVIEWER MUST READ (selected from paths, not by the author) ===
+docs/internal/standards/git.md
+docs/internal/standards/sdd.md
+docs/internal/standards/java-style.md
+docs/internal/standards/code-structure.md
+docs/internal/standards/testing.md
+docs/internal/standards/cost.md
+docs/internal/standards/performance.md
+docs/internal/standards/security.md
+
+=== GATES THAT ALREADY PASSED (do not re-check these) ===
+  PASSED  check-dependency-licenses.sh
+  PASSED  check-file-size.sh
+  PASSED  check-gate-scope.sh
+  PASSED  check-license-headers.sh
+  PASSED  check-links.sh
+  PASSED  check-metric-cardinality.sh
+  PASSED  check-portability.sh
+  PASSED  check-tdd.sh
+  PASSED  check-terminology.sh
+  PASSED  check-test-budget.sh
+  PASSED  build-index.sh --check
+
+=== STAGED DIFF (sha256 8b3099f38da54edc6660993ddc835754941c6ed76a95c08006beef9ca3f0907a) ===
+diff --git a/.gitignore b/.gitignore
+new file mode 100644
+index 0000000..cab2403
+--- /dev/null
++++ b/.gitignore
+@@ -0,0 +1,5 @@
++.tmp/
++build/
++.gradle/
++*.class
++__pycache__/
+diff --git a/binstore-backends/README.md b/binstore-backends/README.md
+new file mode 100644
+index 0000000..2464114
+--- /dev/null
++++ b/binstore-backends/README.md
+@@ -0,0 +1,10 @@
++# binstore-backends
++
++Implementations of `BinStore`: in-memory, local filesystem, and later S3, GCS and
++Azure.
++
++**Depends on:** `binstore-spi`.
++
++⚠️ Nothing in `plugin` may depend on this module. Keeping cloud SDKs out of the
++OpenSearch JVM is a stated architectural property, not an accident —
++[architecture.md](../docs/internal/product/architecture.md) § Dependency rules.
+diff --git a/binstore-backends/build.gradle.kts b/binstore-backends/build.gradle.kts
+new file mode 100644
+index 0000000..911e494
+--- /dev/null
++++ b/binstore-backends/build.gradle.kts
+@@ -0,0 +1,7 @@
++// SPDX-License-Identifier: Apache-2.0
++
++plugins { id("binjava.java-conventions") }
++
++dependencies {
++    api(project(":binstore-spi"))
++}
+diff --git a/binstore-spi/README.md b/binstore-spi/README.md
+new file mode 100644
+index 0000000..5358b1f
+--- /dev/null
++++ b/binstore-spi/README.md
+@@ -0,0 +1,13 @@
++# binstore-spi
++
++The object-store seam. `BinStore`, `Version`, `Capabilities`, and the decorators
++that wrap any backend: retry, rate-limit, and **counting**.
++
++**Depends on:** nothing. That is deliberate — it is the one interface both the
++ingester and the conformance suite compile against, and a dependency here would
++be inherited by every module in the build.
++
++The counting decorator is why this module exists as a seam rather than as an
++S3 client: every object-store request in the project passes through one type, so
++`docs/internal/standards/cost.md` can be asserted in a test rather than reviewed
++by eye.
+diff --git a/binstore-spi/build.gradle.kts b/binstore-spi/build.gradle.kts
+new file mode 100644
+index 0000000..8ab9fa7
+--- /dev/null
++++ b/binstore-spi/build.gradle.kts
+@@ -0,0 +1,3 @@
++// SPDX-License-Identifier: Apache-2.0
++
++plugins { id("binjava.java-conventions") }
+diff --git a/build.gradle.kts b/build.gradle.kts
+new file mode 100644
+index 0000000..96d7ab7
+--- /dev/null
++++ b/build.gradle.kts
+@@ -0,0 +1,75 @@
++// SPDX-License-Identifier: Apache-2.0
++
++import binjava.DependencyLicensesTask
++import binjava.UpdateShasTask
++
++// The root project holds no code. Modules apply `binjava.java-conventions`
++// from buildSrc; this file names the build and owns the licence gate.
++description = "Bundled object-store ingestion for OpenSearch pull-based ingest"
++
++// ---------------------------------------------------------------------------
++// Dependency licences, modelled on OpenSearch's own precommit task.
++//
++// Every dependency jar has a pinned SHA-1 and a committed licence under
++// licenses/. Both live in the tree, so accepting a dependency is a diff someone
++// reads rather than a line in a report regenerated on every build.
++//
++// ⚠️ One configuration, at the root, built from the version catalogue. Gradle 9
++// forbids resolving another project's configuration, and every module takes its
++// dependencies from the catalogue, so this is the complete set --
++// scripts/check-catalog-only.sh keeps that true.
++// ---------------------------------------------------------------------------
++val licenseCheck = configurations.create("licenseCheck") {
++    isCanBeConsumed = false
++    isCanBeResolved = true
++}
++
++val libs = extensions.getByType<VersionCatalogsExtension>().named("libs")
++libs.libraryAliases.forEach { alias ->
++    libs.findLibrary(alias).ifPresent { dependencies.add(licenseCheck.name, it) }
++}
++
++val licensesDirectory = layout.projectDirectory.dir("licenses")
++
++// A family of artifacts shares one licence file: every junit-* is `junit`.
++// ⚠️ opentest4j and apiguardian are Apache-2.0, NOT EPL-2.0 like the junit-*
++// artifacts they ship alongside. Folding them under `junit` would attribute
++// them to the wrong licence.
++val licenceMappings = mapOf(
++    "^junit-.*" to "junit",
++    "^opentest4j$" to "opentest4j",
++    "^apiguardian-api$" to "apiguardian",
++    "^assertj-.*" to "assertj",
++    "^byte-buddy.*" to "byte-buddy",
++)
++
++tasks.register<DependencyLicensesTask>("dependencyLicenses") {
++    group = "verification"
++    description = "Every dependency jar has a pinned sha and a committed licence"
++    dependencies.from(licenseCheck)
++    licensesDir.set(licensesDirectory)
++    mappings.set(licenceMappings)
++    // build.md rule 2, as EXACT SPDX identifiers matched against licenses/SPDX.txt.
++    // Enumerated rather than matched by substring: "GPL-2.0" as a substring also
++    // hits LGPL-2.0, and LGPL is a licence this project has not ruled out.
++    denied.set(setOf(
++        "GPL-1.0-only", "GPL-1.0-or-later", "GPL-2.0-only", "GPL-2.0-or-later",
++        "GPL-3.0-only", "GPL-3.0-or-later", "GPL-2.0", "GPL-3.0",
++        "AGPL-1.0-only", "AGPL-1.0-or-later", "AGPL-3.0-only", "AGPL-3.0-or-later", "AGPL-3.0",
++        "SSPL-1.0", "EUPL-1.0", "EUPL-1.1", "EUPL-1.2",
++        "CDDL-1.0", "BUSL-1.1",
++    ))
++    stamp.set(layout.buildDirectory.file("dependency-licenses.stamp"))
++}
++
++tasks.register<UpdateShasTask>("updateShas") {
++    group = "verification"
++    description = "Write missing licenses/*.jar.sha1 pins for new dependencies"
++    dependencies.from(licenseCheck)
++    licensesDir.set(licensesDirectory)
++}
++
++// It runs with `check`, not as a separate step someone has to remember. The old
++// script-based gate needed `./gradlew licenseReport` first, so a fresh clone
++// failed its first commit.
++tasks.register("check") { dependsOn("dependencyLicenses") }
+diff --git a/buildSrc/build.gradle.kts b/buildSrc/build.gradle.kts
+new file mode 100644
+index 0000000..3e8315a
+--- /dev/null
++++ b/buildSrc/build.gradle.kts
+@@ -0,0 +1,7 @@
++// SPDX-License-Identifier: Apache-2.0
++
++// Convention plugins live here rather than in `subprojects {}` blocks: cross-
++// project configuration is what makes a build resist ever being split up.
++plugins { `kotlin-dsl` }
++
++repositories { mavenCentral() }
+diff --git a/buildSrc/settings.gradle.kts b/buildSrc/settings.gradle.kts
+new file mode 100644
+index 0000000..72cf8ed
+--- /dev/null
++++ b/buildSrc/settings.gradle.kts
+@@ -0,0 +1,9 @@
++// SPDX-License-Identifier: Apache-2.0
++rootProject.name = "build-conventions"
++
++dependencyResolutionManagement {
++    repositories { mavenCentral() }
++    versionCatalogs {
++        create("libs") { from(files("../gradle/libs.versions.toml")) }
++    }
++}
+diff --git a/buildSrc/src/main/kotlin/binjava.java-conventions.gradle.kts b/buildSrc/src/main/kotlin/binjava.java-conventions.gradle.kts
+new file mode 100644
+index 0000000..b4b93a7
+--- /dev/null
++++ b/buildSrc/src/main/kotlin/binjava.java-conventions.gradle.kts
+@@ -0,0 +1,175 @@
++// SPDX-License-Identifier: Apache-2.0
++
++// Everything every module of this project agrees on: the toolchain, the test
++// tiers, and the memory caps. Applied by each module's build.gradle.kts, which
++// then declares only its own dependencies.
++//
++// Rationale: docs/internal/standards/build.md and java-style.md.
++
++import java.time.Duration
++
++plugins {
++    `java-library`
++    `jvm-test-suite`
++    // testing.md rule 19: the store conformance suite runs against every
++    // backend, so it needs a home shared by T1 and T3 rather than a copy each.
++    `java-test-fixtures`
++}
++
++// JDK 25 LTS. OpenSearch 3.8 bundles 25.0.3+9, so one toolchain serves both the
++// ingester and the plugin -- java-style.md rule 1. JEP 491 removed the
++// `synchronized` pinning that made JDK 21 the wrong target for a service built
++// on virtual threads.
++java {
++    toolchain { languageVersion = JavaLanguageVersion.of(25) }
++}
++
++val libs = extensions.getByType<VersionCatalogsExtension>().named("libs")
++// Resolved once, at configuration time. Reading `layout` from inside a task
++// action instead would capture the Project, which the configuration cache
++// cannot serialise -- and a build that silently drops its configuration cache
++// is a build nobody notices getting slower.
++val scratch = layout.buildDirectory.dir("tmp").get().asFile.also { it.mkdirs() }
++
++tasks.withType<JavaCompile>().configureEach {
++    options.encoding = "UTF-8"
++    options.compilerArgs.add("-Xlint:all,-serial,-processing")
++
++    // build.md: the compile daemon's heap is set HERE, because
++    // `org.gradle.java.compile-daemon.jvmargs` in gradle.properties is not a
++    // key Gradle reads -- the string does not occur anywhere in the 9.7.0
++    // distribution. It was declared, counted in the budget, and enforcing
++    // nothing: exactly the failure build.md is written against.
++    options.isFork = true
++    options.forkOptions.memoryMaximumSize = "512m"
++
++    // -Werror because a warning nobody fails on is a warning nobody reads --
++    // but on PRODUCTION code only. A test legitimately exercises a deprecated
++    // path or ignores a resource, and -Werror there pushes an author toward a
++    // weaker test or toward switching the lint off for everyone.
++    if (name == "compileJava") {
++        options.compilerArgs.add("-Werror")
++    }
++}
++
++// The three tiers of docs/internal/standards/testing.md map onto three Gradle
++// tasks, and only the first is wired into `check`:
++//
++//   ./gradlew test             T0-T2, no container      every commit
++//   ./gradlew integrationTest  T3,    MinIO             on demand + CI
++//   ./gradlew clusterTest      T4,    OpenSearch        on demand + CI
++//
++// The default task starting no container is the point. A developer, or an agent
++// running /milestone, gets a fast light loop; the heavy tiers are explicit.
++testing {
++    suites {
++        withType<JvmTestSuite>().configureEach {
++            useJUnitJupiter(libs.findVersion("junit").get().requiredVersion)
++            dependencies {
++                implementation(libs.findLibrary("assertj-core").get())
++            }
++            targets.configureEach {
++                testTask.configure {
++                    // build.md: set where the runtime enforces it, so a runaway
++                    // dies as a JVM OutOfMemoryError rather than as WSL2 killing
++                    // an unrelated session.
++                    maxHeapSize = "512m"
++                    jvmArgs("-XX:+HeapDumpOnOutOfMemoryError", "-XX:HeapDumpPath=$scratch")
++                    // A hung test holds its memory until something reclaims it.
++                    timeout.set(Duration.ofMinutes(10))
++                    // testing.md rule 17: scratch under build/tmp, never the
++                    // system temp directory. Enforced here so it is automatic.
++                    systemProperty("java.io.tmpdir", scratch.absolutePath)
++                    testLogging { events("failed") }
++                }
++            }
++        }
++        // The built-in `test` suite already sees the production classes. The
++        // registered ones do not, and adding it to all three put both
++        // build/classes and the module jar on the default test classpath --
++        // harmless for JaCoCo, a mutant-loading hazard for PIT at M0.14.
++        register<JvmTestSuite>("integrationTest") {
++            dependencies { implementation(project()) }
++        }
++        register<JvmTestSuite>("clusterTest") {
++            dependencies { implementation(project()) }
++        }
++    }
++}
++
++// ---------------------------------------------------------------------------
++// licenseData -- this module's half of the dependency-licence gate.
++//
++// It lives here, per module, because Gradle 9 refuses cross-project
++// configuration resolution: a root task walking `subprojects` and resolving
++// their classpaths fails with "attempted without an exclusive lock". The root
++// `licenseReport` task merges what these produce.
++//
++// `com.github.jk1.dependency-license-report` would do this, but it is
++// configuration-cache-incompatible and already deprecated for Gradle 10, and
++// the job is small enough to own.
++// ---------------------------------------------------------------------------
++tasks.register("licenseData") {
++    group = "verification"
++    description = "Write this module's resolved dependency licences"
++    val out = layout.buildDirectory.file("reports/licenses/module.json")
++    outputs.file(out)
++    outputs.upToDateWhen { false }
++    notCompatibleWithConfigurationCache("resolves this module's classpaths at execution time")
++
++    doLast {
++        // Production and test classpaths are both reported, tagged by scope: a
++        // copyleft test dependency is not a distribution problem, but "we never
++        // looked" and "we looked and it was fine" are different answers.
++        val found = sortedMapOf<String, MutableSet<String>>()
++        val scopes = sortedMapOf<String, MutableSet<String>>()
++        configurations
++            .filter { it.isCanBeResolved && it.name.endsWith("RuntimeClasspath") }
++            .forEach { conf ->
++                val scope = if (conf.name == "runtimeClasspath") "runtime" else "test"
++                conf.incoming.resolutionResult.allComponents.forEach { component ->
++                    val id = component.moduleVersion ?: return@forEach
++                    if (id.group.isEmpty()) return@forEach   // this project itself
++                    val coord = "${id.group}:${id.name}:${id.version}"
++                    found.getOrPut(coord) { linkedSetOf() }
++                    scopes.getOrPut(coord) { sortedSetOf() }.add(scope)
++                }
++            }
++        found.keys.forEach { coord ->
++            val names = try {
++                val pom = configurations
++                    .detachedConfiguration(dependencies.create("$coord@pom"))
++                    .resolve().firstOrNull()
++                if (pom == null) emptyList()
++                else Regex("<licenses>(.*?)</licenses>", RegexOption.DOT_MATCHES_ALL)
++                    .find(pom.readText())
++                    ?.let { block ->
++                        Regex("<name>(.*?)</name>", RegexOption.DOT_MATCHES_ALL)
++                            .findAll(block.groupValues[1])
++                            .map { it.groupValues[1].trim() }.toList()
++                    } ?: emptyList()
++            } catch (e: Exception) {
++                logger.warn("licenseData: cannot read POM for $coord: ${e.message}")
++                emptyList()
++            }
++            found[coord]!!.addAll(names)
++        }
++        val json = found.entries.joinToString(",\n") { (coord, lics) ->
++            // A POM that declares no licence is reported as UNKNOWN rather than
++            // omitted: the gate must be able to tell unreviewed from clean.
++            val names = if (lics.isEmpty()) listOf("UNKNOWN") else lics.toList()
++            """    { "module": "$coord", "scope": "${scopes[coord]!!.joinToString("+")}", """ +
++                """"licenses": [""" + names.joinToString(", ") { "\"" + it.replace("\"", "'") + "\"" } + "] }"
++        }
++        val f = out.get().asFile
++        f.parentFile.mkdirs()
++        f.writeText(json)
++    }
++}
++
++// `check` runs the T0-T2 suite only, but it must still COMPILE the slower tiers:
++// otherwise broken integration- or cluster-test code commits green and is not
++// discovered until CI runs a tier nobody triggered.
++tasks.named("check") {
++    dependsOn("compileIntegrationTestJava", "compileClusterTestJava")
++}
+diff --git a/buildSrc/src/main/kotlin/binjava/DependencyLicensesTask.kt b/buildSrc/src/main/kotlin/binjava/DependencyLicensesTask.kt
+new file mode 100644
+index 0000000..c491843
+--- /dev/null
++++ b/buildSrc/src/main/kotlin/binjava/DependencyLicensesTask.kt
+@@ -0,0 +1,171 @@
++// SPDX-License-Identifier: Apache-2.0
++package binjava
++
++import org.gradle.api.DefaultTask
++import org.gradle.api.GradleException
++import org.gradle.api.file.ConfigurableFileCollection
++import org.gradle.api.file.DirectoryProperty
++import org.gradle.api.file.RegularFileProperty
++import org.gradle.api.provider.MapProperty
++import org.gradle.api.tasks.CacheableTask
++import org.gradle.api.tasks.Classpath
++import org.gradle.api.tasks.Input
++import org.gradle.api.tasks.InputDirectory
++import org.gradle.api.tasks.Optional
++import org.gradle.api.tasks.OutputFile
++import org.gradle.api.tasks.PathSensitive
++import org.gradle.api.tasks.PathSensitivity
++import org.gradle.api.tasks.TaskAction
++import java.io.File
++import java.security.MessageDigest
++
++/**
++ * Every dependency jar has a pinned SHA-1 and a committed licence, both in the
++ * tree and both reviewable in a diff.
++ *
++ * Modelled on OpenSearch's `DependencyLicensesTask`, deliberately. The version
++ * this replaced scraped POM `<licenses>` over the network at build time and was
++ * wrong in five ways at once: it emitted POM prose ("Eclipse Public License
++ * v2.0") while the gate grepped SPDX ids, so the deny-list could essentially
++ * never match; it never followed `<parent>`, so byte-buddy came back UNKNOWN;
++ * an unresolvable POM was indistinguishable from a licence-less one; it saw
++ * only runtime classpaths, so a `compileOnly` OpenSearch SPI would never be
++ * examined; and it could not be cached at all.
++ *
++ * The difference that matters is where the truth lives. Scraped metadata is a
++ * claim re-fetched on every build. A `licenses/` directory is a fact, committed
++ * once, changed only by a diff someone reads.
++ */
++@CacheableTask
++abstract class DependencyLicensesTask : DefaultTask() {
++
++    /** The jars to account for. `@Classpath` so order and timestamps do not matter. */
++    @get:Classpath
++    abstract val dependencies: ConfigurableFileCollection
++
++    @get:InputDirectory
++    @get:PathSensitive(PathSensitivity.RELATIVE)
++    abstract val licensesDir: DirectoryProperty
++
++    /**
++     * Regex -> licence-file prefix, so a family of artifacts shares one licence:
++     * `junit-jupiter-api`, `junit-jupiter-engine` and `junit-platform-commons`
++     * are all `junit`. Same idea as OpenSearch's `mapping` block.
++     */
++    @get:Input
++    @get:Optional
++    abstract val mappings: MapProperty<String, String>
++
++    /** A stamp, so the task has an output and Gradle can call it up to date. */
++    @get:OutputFile
++    abstract val stamp: RegularFileProperty
++
++    /**
++     * SPDX identifiers this project cannot ship (build.md rule 2), matched
++     * EXACTLY against the id declared in licenses/SPDX.txt.
++     *
++     * ⚠️ Not matched against licence prose. EPL-2.0's text names "GNU General
++     * Public License" in its Secondary License clause, so a prose scan rejects
++     * JUnit -- and a substring scan for "GPL-2.0" also rejects LGPL-2.0, which
++     * is a different licence. The declared identifier is the claim; the text is
++     * attribution.
++     */
++    @get:Input
++    abstract val denied: org.gradle.api.provider.SetProperty<String>
++
++    @TaskAction
++    fun check() {
++        val dir = licensesDir.get().asFile
++        if (!dir.isDirectory) {
++            throw GradleException(
++                "$dir does not exist. Every dependency needs a pinned sha and a " +
++                    "committed licence; run `./gradlew updateShas` to create the shas, " +
++                    "then add <prefix>-LICENSE.txt for each new dependency."
++            )
++        }
++
++        // prefix -> SPDX id. Adding a dependency means adding a line here, which
++        // is a decision someone makes and a reviewer sees.
++        val manifestFile = File(dir, "SPDX.txt")
++        if (!manifestFile.exists()) {
++            throw GradleException("$manifestFile is missing. It declares the SPDX id of each licence.")
++        }
++        val manifest = manifestFile.readLines()
++            .map { it.substringBefore('#').trim() }
++            .filter { it.isNotEmpty() }
++            .associate { line ->
++                val parts = line.split(Regex("\\s+"), limit = 2)
++                if (parts.size != 2) throw GradleException("SPDX.txt: expected '<prefix> <SPDX-ID>', got: $line")
++                parts[0] to parts[1]
++            }
++
++        val problems = mutableListOf<String>()
++        val usedPrefixes = mutableSetOf<String>()
++        val seenSha = mutableSetOf<String>()
++        val seenLicence = mutableSetOf<String>()
++
++        for (jar in dependencies.files.filter { it.name.endsWith(".jar") }.sortedBy { it.name }) {
++            val shaFile = File(dir, jar.name + ".sha1")
++            if (!shaFile.exists()) {
++                problems += "missing sha for ${jar.name} -- run ./gradlew updateShas"
++            } else {
++                seenSha += shaFile.name
++                val actual = sha1(jar)
++                val expected = shaFile.readText().trim()
++                if (actual != expected) {
++                    // The artifact changed under a version we already reviewed.
++                    problems += "sha mismatch for ${jar.name}: expected $expected, got $actual. " +
++                        "The published artifact changed. Do NOT run updateShas until you know why."
++                }
++            }
++
++            val prefix = prefixFor(jar.name)
++            usedPrefixes += prefix
++            val licence = File(dir, "$prefix-LICENSE.txt")
++            if (!licence.exists()) {
++                problems += "missing ${licence.name} for ${jar.name} -- commit the licence text"
++            } else {
++                seenLicence += licence.name
++            }
++            val spdx = manifest[prefix]
++            if (spdx == null) {
++                problems += "SPDX.txt has no entry for '$prefix' (needed by ${jar.name}). " +
++                    "Add: $prefix <SPDX-ID>"
++            } else if (spdx in denied.get()) {
++                problems += "${jar.name} is $spdx, which this project cannot ship -- build.md rule 2. " +
++                    "Replace the dependency, or record an exception in baselines/licenses.txt."
++            }
++        }
++
++        // A sha with no jar means a dependency was removed and its pin left
++        // behind. Harmless today, and the reason a stale pin survives a version
++        // bump unnoticed tomorrow.
++        dir.listFiles { f: File -> f.name.endsWith(".sha1") }?.forEach {
++            if (it.name !in seenSha) problems += "unused sha file ${it.name} -- delete it"
++        }
++        manifest.keys.forEach {
++            if (it !in usedPrefixes) problems += "SPDX.txt names '$it', which no dependency uses -- delete it"
++        }
++
++        if (problems.isNotEmpty()) {
++            throw GradleException(
++                "dependency licences (${problems.size} problem(s)):\n" +
++                    problems.joinToString("\n") { "  - $it" }
++            )
++        }
++        stamp.get().asFile.apply { parentFile.mkdirs() }
++            .writeText("ok ${dependencies.files.count { it.name.endsWith(".jar") }} jar(s)\n")
++    }
++
++    private fun prefixFor(jarName: String): String {
++        val base = jarName.removeSuffix(".jar").replace(Regex("-\\d+(\\.\\d+)*.*$"), "")
++        for ((pattern, name) in mappings.getOrElse(emptyMap())) {
++            if (Regex(pattern).matches(base)) return name
++        }
++        return base
++    }
++
++    private fun sha1(f: File): String =
++        MessageDigest.getInstance("SHA-1").digest(f.readBytes())
++            .joinToString("") { "%02x".format(it) }
++}
+diff --git a/buildSrc/src/main/kotlin/binjava/UpdateShasTask.kt b/buildSrc/src/main/kotlin/binjava/UpdateShasTask.kt
+new file mode 100644
+index 0000000..9dd5401
+--- /dev/null
++++ b/buildSrc/src/main/kotlin/binjava/UpdateShasTask.kt
+@@ -0,0 +1,45 @@
++// SPDX-License-Identifier: Apache-2.0
++package binjava
++
++import org.gradle.api.DefaultTask
++import org.gradle.api.file.ConfigurableFileCollection
++import org.gradle.api.file.DirectoryProperty
++import org.gradle.api.tasks.Classpath
++import org.gradle.api.tasks.TaskAction
++import java.io.File
++import java.security.MessageDigest
++
++/**
++ * Write the missing `.jar.sha1` pins. The sanctioned way to accept a new
++ * dependency, so accepting one is a visible diff rather than a silent resolve.
++ *
++ * ⚠️ It writes only MISSING pins. It will not overwrite one that exists and
++ * disagrees -- that case is a published artifact changing under a version we
++ * already reviewed, and the right response is to find out why, not to re-pin.
++ */
++abstract class UpdateShasTask : DefaultTask() {
++
++    @get:Classpath
++    abstract val dependencies: ConfigurableFileCollection
++
++    @get:org.gradle.api.tasks.Internal
++    abstract val licensesDir: DirectoryProperty
++
++    @TaskAction
++    fun update() {
++        val dir = licensesDir.get().asFile.apply { mkdirs() }
++        var written = 0
++        for (jar in dependencies.files.filter { it.name.endsWith(".jar") }) {
++            val sha = File(dir, jar.name + ".sha1")
++            if (sha.exists()) continue
++            sha.writeText(
++                MessageDigest.getInstance("SHA-1").digest(jar.readBytes())
++                    .joinToString("") { "%02x".format(it) } + "\n"
++            )
++            logger.lifecycle("pinned ${sha.name}")
++            written++
++        }
++        if (written == 0) logger.lifecycle("updateShas: nothing missing")
++        else logger.lifecycle("updateShas: wrote $written pin(s) -- review them, then add any missing <prefix>-LICENSE.txt")
++    }
++}
+diff --git a/client/README.md b/client/README.md
+new file mode 100644
+index 0000000..910a654
+--- /dev/null
++++ b/client/README.md
+@@ -0,0 +1,9 @@
++# client
++
++The consumer: subscription, fetch-mode dispatch, coalescing and decode. Bundled
++into the plugin and running inside the OpenSearch process.
++
++**Depends on:** `format` only.
++
++That single dependency is the point. This code runs in someone else's JVM, so its
++dependency surface is a liability rather than a convenience.
+diff --git a/client/build.gradle.kts b/client/build.gradle.kts
+new file mode 100644
+index 0000000..217e105
+--- /dev/null
++++ b/client/build.gradle.kts
+@@ -0,0 +1,7 @@
++// SPDX-License-Identifier: Apache-2.0
++
++plugins { id("binjava.java-conventions") }
++
++dependencies {
++    api(project(":format"))
++}
+diff --git a/format/README.md b/format/README.md
+new file mode 100644
+index 0000000..982b289
+--- /dev/null
++++ b/format/README.md
+@@ -0,0 +1,10 @@
++# format
++
++Pure encode and decode: segment layout, the key grammar, membership filters and
++commit-log records. No I/O, no clock, no configuration.
++
++**Depends on:** nothing, and it must stay that way. This is where T0 tests live,
++and its purity is what makes them cheap enough to run on every commit.
++
++A change to anything here is a wire-format change: see
++[`wire-format-change`](../.agents/skills/wire-format-change/SKILL.md).
+diff --git a/format/build.gradle.kts b/format/build.gradle.kts
+new file mode 100644
+index 0000000..8ab9fa7
+--- /dev/null
++++ b/format/build.gradle.kts
+@@ -0,0 +1,3 @@
++// SPDX-License-Identifier: Apache-2.0
++
++plugins { id("binjava.java-conventions") }
+diff --git a/gradle.properties b/gradle.properties
+new file mode 100644
+index 0000000..cf434c0
+--- /dev/null
++++ b/gradle.properties
+@@ -0,0 +1,18 @@
++# Memory caps live here because this is where the runtime enforces them.
++# docs/internal/standards/build.md: WSL2 does not kill the offending process,
++# it kills whatever it likes -- so a runaway must die as a JVM OutOfMemoryError
++# or a Docker OOM-kill, never as a lost session.
++#
++# Budget (build.md): daemon 1 GiB + compile daemon 512 MiB + test JVM 512 MiB,
++# two workers, leaving headroom inside the 8 GiB per-session share of 32 GiB.
++# scripts/check-test-budget.sh asserts these are present and sum below the ceiling.
++#
++# ⚠️ The COMPILE DAEMON's heap is not set here. `org.gradle.java.compile-daemon.jvmargs`
++# looks like a Gradle property and is not one -- the string appears nowhere in the
++# 9.7.0 distribution. It lives in the conventions plugin as
++# `options.forkOptions.memoryMaximumSize`, where the runtime actually reads it.
++org.gradle.jvmargs=-Xmx1g -XX:MaxMetaspaceSize=512m
++org.gradle.workers.max=2
++org.gradle.parallel=true
++org.gradle.caching=true
++org.gradle.configuration-cache=true
+diff --git a/gradle/libs.versions.toml b/gradle/libs.versions.toml
+new file mode 100644
+index 0000000..cfe37b2
+--- /dev/null
++++ b/gradle/libs.versions.toml
+@@ -0,0 +1,11 @@
++# Version catalogue. One place a version is written, so an upgrade is one edit
++# and a divergence between modules is impossible rather than merely unlikely.
++[versions]
++junit = "5.14.0"
++assertj = "3.27.3"
++
++[libraries]
++junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
++junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
++junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
++assertj-core = { module = "org.assertj:assertj-core", version.ref = "assertj" }
+diff --git a/gradle/wrapper/gradle-wrapper.jar b/gradle/wrapper/gradle-wrapper.jar
+new file mode 100644
+index 0000000..eddabd2
+Binary files /dev/null and b/gradle/wrapper/gradle-wrapper.jar differ
+diff --git a/gradle/wrapper/gradle-wrapper.properties b/gradle/wrapper/gradle-wrapper.properties
+new file mode 100644
+index 0000000..69dd0d0
+--- /dev/null
++++ b/gradle/wrapper/gradle-wrapper.properties
+@@ -0,0 +1,9 @@
++distributionBase=GRADLE_USER_HOME
++distributionPath=wrapper/dists
++distributionUrl=https\://services.gradle.org/distributions/gradle-9.7.0-bin.zip
++networkTimeout=10000
++retries=0
++retryBackOffMs=500
++validateDistributionUrl=true
++zipStoreBase=GRADLE_USER_HOME
++zipStorePath=wrapper/dists
+diff --git a/gradlew b/gradlew
+new file mode 100755
+index 0000000..249efbb
+--- /dev/null
++++ b/gradlew
+@@ -0,0 +1,248 @@
++#!/bin/sh
++
++#
++# Copyright © 2015 the original authors.
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#      https://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++#
++# SPDX-License-Identifier: Apache-2.0
++#
++
++##############################################################################
++#
++#   gradlew start up script for POSIX generated by Gradle.
++#
++#   Important for running:
++#
++#   (1) You need a POSIX-compliant shell to run this script. If your /bin/sh is
++#       noncompliant, but you have some other compliant shell such as ksh or
++#       bash, then to run this script, type that shell name before the whole
++#       command line, like:
++#
++#           ksh gradlew
++#
++#       Busybox and similar reduced shells will NOT work, because this script
++#       requires all of these POSIX shell features:
++#         * functions;
++#         * expansions «$var», «${var}», «${var:-default}», «${var+SET}»,
++#           «${var#prefix}», «${var%suffix}», and «$( cmd )»;
++#         * compound commands having a testable exit status, especially «case»;
++#         * various built-in commands including «command», «set», and «ulimit».
++#
++#   Important for patching:
++#
++#   (2) This script targets any POSIX shell, so it avoids extensions provided
++#       by Bash, Ksh, etc; in particular arrays are avoided.
++#
++#       The "traditional" practice of packing multiple parameters into a
++#       space-separated string is a well documented source of bugs and security
++#       problems, so this is (mostly) avoided, by progressively accumulating
++#       options in "$@", and eventually passing that to Java.
++#
++#       Where the inherited environment variables (DEFAULT_JVM_OPTS, JAVA_OPTS,
++#       and GRADLE_OPTS) rely on word-splitting, this is performed explicitly;
++#       see the in-line comments for details.
++#
++#       There are tweaks for specific operating systems such as AIX, CygWin,
++#       Darwin, MinGW, and NonStop.
++#
++#   (3) This script is generated from the Groovy template
++#       https://github.com/gradle/gradle/blob/3d91ce3b8caaf77ad09f381f43615b715b53f72c/platforms/jvm/plugins-application/src/main/resources/org/gradle/api/internal/plugins/unixStartScript.txt
++#       within the Gradle project.
++#
++#       You can find Gradle at https://github.com/gradle/gradle/.
++#
++##############################################################################
++
++# Attempt to set APP_HOME
++
++# Resolve links: $0 may be a link
++app_path=$0
++
++# Need this for daisy-chained symlinks.
++while
++    APP_HOME=${app_path%"${app_path##*/}"}  # leaves a trailing /; empty if no leading path
++    [ -h "$app_path" ]
++do
++    ls=$( ls -ld "$app_path" )
++    link=${ls#*' -> '}
++    case $link in             #(
++      /*)   app_path=$link ;; #(
++      *)    app_path=$APP_HOME$link ;;
++    esac
++done
++
++# This is normally unused
++# shellcheck disable=SC2034
++APP_BASE_NAME=${0##*/}
++# Discard cd standard output in case $CDPATH is set (https://github.com/gradle/gradle/issues/25036)
++APP_HOME=$( cd -P "${APP_HOME:-./}" > /dev/null && printf '%s\n' "$PWD" ) || exit
++
++# Use the maximum available, or set MAX_FD != -1 to use that value.
++MAX_FD=maximum
++
++warn () {
++    echo "$*"
++} >&2
++
++die () {
++    echo
++    echo "$*"
++    echo
++    exit 1
++} >&2
++
++# OS specific support (must be 'true' or 'false').
++cygwin=false
++msys=false
++darwin=false
++nonstop=false
++case "$( uname )" in                #(
++  CYGWIN* )         cygwin=true  ;; #(
++  Darwin* )         darwin=true  ;; #(
++  MSYS* | MINGW* )  msys=true    ;; #(
++  NONSTOP* )        nonstop=true ;;
++esac
++
++
++
++# Determine the Java command to use to start the JVM.
++if [ -n "$JAVA_HOME" ] ; then
++    if [ -x "$JAVA_HOME/jre/sh/java" ] ; then
++        # IBM's JDK on AIX uses strange locations for the executables
++        JAVACMD=$JAVA_HOME/jre/sh/java
++    else
++        JAVACMD=$JAVA_HOME/bin/java
++    fi
++    if [ ! -x "$JAVACMD" ] ; then
++        die "ERROR: JAVA_HOME is set to an invalid directory: $JAVA_HOME
++
++Please set the JAVA_HOME variable in your environment to match the
++location of your Java installation."
++    fi
++else
++    JAVACMD=java
++    if ! command -v java >/dev/null 2>&1
++    then
++        die "ERROR: JAVA_HOME is not set and no 'java' command could be found in your PATH.
++
++Please set the JAVA_HOME variable in your environment to match the
++location of your Java installation."
++    fi
++fi
++
++# Increase the maximum file descriptors if we can.
++if ! "$cygwin" && ! "$darwin" && ! "$nonstop" ; then
++    case $MAX_FD in #(
++      max*)
++        # In POSIX sh, ulimit -H is undefined. That's why the result is checked to see if it worked.
++        # shellcheck disable=SC2039,SC3045
++        MAX_FD=$( ulimit -H -n ) ||
++            warn "Could not query maximum file descriptor limit"
++    esac
++    case $MAX_FD in  #(
++      '' | soft) :;; #(
++      *)
++        # In POSIX sh, ulimit -n is undefined. That's why the result is checked to see if it worked.
++        # shellcheck disable=SC2039,SC3045
++        ulimit -n "$MAX_FD" ||
++            warn "Could not set maximum file descriptor limit to $MAX_FD"
++    esac
++fi
++
++# Collect all arguments for the java command, stacking in reverse order:
++#   * args from the command line
++#   * the main class name
++#   * -classpath
++#   * -D...appname settings
++#   * --module-path (only if needed)
++#   * DEFAULT_JVM_OPTS, JAVA_OPTS, and GRADLE_OPTS environment variables.
++
++# For Cygwin or MSYS, switch paths to Windows format before running java
++if "$cygwin" || "$msys" ; then
++    APP_HOME=$( cygpath --path --mixed "$APP_HOME" )
++
++    JAVACMD=$( cygpath --unix "$JAVACMD" )
++
++    # Now convert the arguments - kludge to limit ourselves to /bin/sh
++    for arg do
++        if
++            case $arg in                                #(
++              -*)   false ;;                            # don't mess with options #(
++              /?*)  t=${arg#/} t=/${t%%/*}              # looks like a POSIX filepath
++                    [ -e "$t" ] ;;                      #(
++              *)    false ;;
++            esac
++        then
++            arg=$( cygpath --path --ignore --mixed "$arg" )
++        fi
++        # Roll the args list around exactly as many times as the number of
++        # args, so each arg winds up back in the position where it started, but
++        # possibly modified.
++        #
++        # NB: a `for` loop captures its iteration list before it begins, so
++        # changing the positional parameters here affects neither the number of
++        # iterations, nor the values presented in `arg`.
++        shift                   # remove old arg
++        set -- "$@" "$arg"      # push replacement arg
++    done
++fi
++
++
++# Add default JVM options here. You can also use JAVA_OPTS and GRADLE_OPTS to pass JVM options to this script.
++DEFAULT_JVM_OPTS='"-Xmx64m" "-Xms64m"'
++
++# Collect all arguments for the java command:
++#   * DEFAULT_JVM_OPTS, JAVA_OPTS, and optsEnvironmentVar are not allowed to contain shell fragments,
++#     and any embedded shellness will be escaped.
++#   * For example: A user cannot expect ${Hostname} to be expanded, as it is an environment variable and will be
++#     treated as '${Hostname}' itself on the command line.
++
++set -- \
++        "-Dorg.gradle.appname=$APP_BASE_NAME" \
++        -jar "$APP_HOME/gradle/wrapper/gradle-wrapper.jar" \
++        "$@"
++
++# Stop when "xargs" is not available.
++if ! command -v xargs >/dev/null 2>&1
++then
++    die "xargs is not available"
++fi
++
++# Use "xargs" to parse quoted args.
++#
++# With -n1 it outputs one arg per line, with the quotes and backslashes removed.
++#
++# In Bash we could simply go:
++#
++#   readarray ARGS < <( xargs -n1 <<<"$var" ) &&
++#   set -- "${ARGS[@]}" "$@"
++#
++# but POSIX shell has neither arrays nor command substitution, so instead we
++# post-process each arg (as a line of input to sed) to backslash-escape any
++# character that might be a shell metacharacter, then use eval to reverse
++# that process (while maintaining the separation between arguments), and wrap
++# the whole thing up as a single "set" statement.
++#
++# This will of course break if any of these variables contains a newline or
++# an unmatched quote.
++#
++
++eval "set -- $(
++        printf '%s\n' "$DEFAULT_JVM_OPTS $JAVA_OPTS $GRADLE_OPTS" |
++        xargs -n1 |
++        sed ' s~[^-[:alnum:]+,./:=@_]~\\&~g; ' |
++        tr '\n' ' '
++    )" '"$@"'
++
++exec "$JAVACMD" "$@"
+diff --git a/gradlew.bat b/gradlew.bat
+new file mode 100644
+index 0000000..8508ef6
+--- /dev/null
++++ b/gradlew.bat
+@@ -0,0 +1,82 @@
++@rem
++@rem Copyright 2015 the original author or authors.
++@rem
++@rem Licensed under the Apache License, Version 2.0 (the "License");
++@rem you may not use this file except in compliance with the License.
++@rem You may obtain a copy of the License at
++@rem
++@rem      https://www.apache.org/licenses/LICENSE-2.0
++@rem
++@rem Unless required by applicable law or agreed to in writing, software
++@rem distributed under the License is distributed on an "AS IS" BASIS,
++@rem WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++@rem See the License for the specific language governing permissions and
++@rem limitations under the License.
++@rem
++@rem SPDX-License-Identifier: Apache-2.0
++@rem
++
++@if "%DEBUG%"=="" @echo off
++@rem ##########################################################################
++@rem
++@rem  gradlew startup script for Windows
++@rem
++@rem ##########################################################################
++
++@rem Set local scope for the variables, and ensure extensions are enabled
++setlocal EnableExtensions
++
++set DIRNAME=%~dp0
++if "%DIRNAME%"=="" set DIRNAME=.
++@rem This is normally unused
++set APP_BASE_NAME=%~n0
++set APP_HOME=%DIRNAME%
++
++@rem Resolve any "." and ".." in APP_HOME to make it shorter.
++for %%i in ("%APP_HOME%") do set APP_HOME=%%~fi
++
++@rem Add default JVM options here. You can also use JAVA_OPTS and GRADLE_OPTS to pass JVM options to this script.
++set DEFAULT_JVM_OPTS="-Xmx64m" "-Xms64m"
++
++@rem Find java.exe
++if defined JAVA_HOME goto findJavaFromJavaHome
++
++set JAVA_EXE=java.exe
++%JAVA_EXE% -version >NUL 2>&1
++if %ERRORLEVEL% equ 0 goto execute
++
++echo. 1>&2
++echo ERROR: JAVA_HOME is not set and no 'java' command could be found in your PATH. 1>&2
++echo. 1>&2
++echo Please set the JAVA_HOME variable in your environment to match the 1>&2
++echo location of your Java installation. 1>&2
++
++"%COMSPEC%" /c exit 1
++
++:findJavaFromJavaHome
++set JAVA_HOME=%JAVA_HOME:"=%
++set JAVA_EXE=%JAVA_HOME%/bin/java.exe
++
++if exist "%JAVA_EXE%" goto execute
++
++echo. 1>&2
++echo ERROR: JAVA_HOME is set to an invalid directory: %JAVA_HOME% 1>&2
++echo. 1>&2
++echo Please set the JAVA_HOME variable in your environment to match the 1>&2
++echo location of your Java installation. 1>&2
++
++"%COMSPEC%" /c exit 1
++
++:execute
++@rem Setup the command line
++
++
++
++@rem Execute gradlew
++@rem endlocal doesn't take effect until after the line is parsed and variables are expanded
++@rem which allows us to clear the local environment before executing the java command
++endlocal & "%JAVA_EXE%" %DEFAULT_JVM_OPTS% %JAVA_OPTS% %GRADLE_OPTS% "-Dorg.gradle.appname=%APP_BASE_NAME%" -jar "%APP_HOME%\gradle\wrapper\gradle-wrapper.jar" %* & call :exitWithErrorLevel
++
++:exitWithErrorLevel
++@rem Use "%COMSPEC%" /c exit to allow operators to work properly in scripts
++"%COMSPEC%" /c exit %ERRORLEVEL%
+diff --git a/http/README.md b/http/README.md
+new file mode 100644
+index 0000000..d47b805
+--- /dev/null
++++ b/http/README.md
+@@ -0,0 +1,11 @@
++# http
++
++The Helidon adapter. Parses `_bulk` as a stream, maps errors to status codes, and
++delegates to `ingest`. It owns no decision of its own.
++
++**Depends on:** `ingest`.
++
++Nothing depends on `http`
++([architecture.md](../docs/internal/product/architecture.md) § Dependency rules,
++rule 4). It is a front door, and a front door that something else depends on has
++stopped being one.
+diff --git a/http/build.gradle.kts b/http/build.gradle.kts
+new file mode 100644
+index 0000000..aaea78c
+--- /dev/null
++++ b/http/build.gradle.kts
+@@ -0,0 +1,7 @@
++// SPDX-License-Identifier: Apache-2.0
++
++plugins { id("binjava.java-conventions") }
++
++dependencies {
++    api(project(":ingest"))
++}
+diff --git a/ingest/README.md b/ingest/README.md
+new file mode 100644
+index 0000000..b783890
+--- /dev/null
++++ b/ingest/README.md
+@@ -0,0 +1,12 @@
++# ingest
++
++The library: accumulators, the flush trigger, the writer, the reader, subscription
++fan-out and GC. Everything an ingester node does, expressed with no HTTP on the
++classpath.
++
++**Depends on:** `binstore-spi`, `format`, `sequencer`.
++
++⚠️ **No HTTP dependency, ever.** Two delivery surfaces share one implementation
++([ADR-0019](../docs/internal/product/decisions/0019-two-delivery-surfaces.md)):
++the in-process API is this module, and `http` is a thin adapter over it. If a
++routing or flush decision can be made in `http`, it is in the wrong module.
+diff --git a/ingest/build.gradle.kts b/ingest/build.gradle.kts
+new file mode 100644
+index 0000000..49d972d
+--- /dev/null
++++ b/ingest/build.gradle.kts
+@@ -0,0 +1,9 @@
++// SPDX-License-Identifier: Apache-2.0
++
++plugins { id("binjava.java-conventions") }
++
++dependencies {
++    api(project(":binstore-spi"))
++    api(project(":format"))
++    api(project(":sequencer"))
++}
+diff --git a/licenses/SPDX.txt b/licenses/SPDX.txt
+new file mode 100644
+index 0000000..309961b
+--- /dev/null
++++ b/licenses/SPDX.txt
+@@ -0,0 +1,13 @@
++# The declared SPDX identifier of each licence in this directory.
++#
++# This file, not the licence prose, is what the deny-list is matched against.
++# EPL-2.0's text names "GNU General Public License" in its Secondary License
++# clause, so a prose scan rejects JUnit; and a substring scan for "GPL-2.0"
++# also rejects LGPL-2.0, which is a different licence. The identifier is the
++# claim, the text is the attribution.
++#
++#   <licence-file-prefix>  <SPDX-ID>
++junit        EPL-2.0
++assertj      Apache-2.0
++byte-buddy   Apache-2.0
++opentest4j   Apache-2.0
+diff --git a/licenses/assertj-LICENSE.txt b/licenses/assertj-LICENSE.txt
+new file mode 100644
+index 0000000..d645695
+--- /dev/null
++++ b/licenses/assertj-LICENSE.txt
+@@ -0,0 +1,202 @@
++
++                                 Apache License
++                           Version 2.0, January 2004
++                        http://www.apache.org/licenses/
++
++   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
++
++   1. Definitions.
++
++      "License" shall mean the terms and conditions for use, reproduction,
++      and distribution as defined by Sections 1 through 9 of this document.
++
++      "Licensor" shall mean the copyright owner or entity authorized by
++      the copyright owner that is granting the License.
++
++      "Legal Entity" shall mean the union of the acting entity and all
++      other entities that control, are controlled by, or are under common
++      control with that entity. For the purposes of this definition,
++      "control" means (i) the power, direct or indirect, to cause the
++      direction or management of such entity, whether by contract or
++      otherwise, or (ii) ownership of fifty percent (50%) or more of the
++      outstanding shares, or (iii) beneficial ownership of such entity.
++
++      "You" (or "Your") shall mean an individual or Legal Entity
++      exercising permissions granted by this License.
++
++      "Source" form shall mean the preferred form for making modifications,
++      including but not limited to software source code, documentation
++      source, and configuration files.
++
++      "Object" form shall mean any form resulting from mechanical
++      transformation or translation of a Source form, including but
++      not limited to compiled object code, generated documentation,
++      and conversions to other media types.
++
++      "Work" shall mean the work of authorship, whether in Source or
++      Object form, made available under the License, as indicated by a
++      copyright notice that is included in or attached to the work
++      (an example is provided in the Appendix below).
++
++      "Derivative Works" shall mean any work, whether in Source or Object
++      form, that is based on (or derived from) the Work and for which the
++      editorial revisions, annotations, elaborations, or other modifications
++      represent, as a whole, an original work of authorship. For the purposes
++      of this License, Derivative Works shall not include works that remain
++      separable from, or merely link (or bind by name) to the interfaces of,
++      the Work and Derivative Works thereof.
++
++      "Contribution" shall mean any work of authorship, including
++      the original version of the Work and any modifications or additions
++      to that Work or Derivative Works thereof, that is intentionally
++      submitted to Licensor for inclusion in the Work by the copyright owner
++      or by an individual or Legal Entity authorized to submit on behalf of
++      the copyright owner. For the purposes of this definition, "submitted"
++      means any form of electronic, verbal, or written communication sent
++      to the Licensor or its representatives, including but not limited to
++      communication on electronic mailing lists, source code control systems,
++      and issue tracking systems that are managed by, or on behalf of, the
++      Licensor for the purpose of discussing and improving the Work, but
++      excluding communication that is conspicuously marked or otherwise
++      designated in writing by the copyright owner as "Not a Contribution."
++
++      "Contributor" shall mean Licensor and any individual or Legal Entity
++      on behalf of whom a Contribution has been received by Licensor and
++      subsequently incorporated within the Work.
++
++   2. Grant of Copyright License. Subject to the terms and conditions of
++      this License, each Contributor hereby grants to You a perpetual,
++      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
++      copyright license to reproduce, prepare Derivative Works of,
++      publicly display, publicly perform, sublicense, and distribute the
++      Work and such Derivative Works in Source or Object form.
++
++   3. Grant of Patent License. Subject to the terms and conditions of
++      this License, each Contributor hereby grants to You a perpetual,
++      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
++      (except as stated in this section) patent license to make, have made,
++      use, offer to sell, sell, import, and otherwise transfer the Work,
++      where such license applies only to those patent claims licensable
++      by such Contributor that are necessarily infringed by their
++      Contribution(s) alone or by combination of their Contribution(s)
++      with the Work to which such Contribution(s) was submitted. If You
++      institute patent litigation against any entity (including a
++      cross-claim or counterclaim in a lawsuit) alleging that the Work
++      or a Contribution incorporated within the Work constitutes direct
++      or contributory patent infringement, then any patent licenses
++      granted to You under this License for that Work shall terminate
++      as of the date such litigation is filed.
++
++   4. Redistribution. You may reproduce and distribute copies of the
++      Work or Derivative Works thereof in any medium, with or without
++      modifications, and in Source or Object form, provided that You
++      meet the following conditions:
++
++      (a) You must give any other recipients of the Work or
++          Derivative Works a copy of this License; and
++
++      (b) You must cause any modified files to carry prominent notices
++          stating that You changed the files; and
++
++      (c) You must retain, in the Source form of any Derivative Works
++          that You distribute, all copyright, patent, trademark, and
++          attribution notices from the Source form of the Work,
++          excluding those notices that do not pertain to any part of
++          the Derivative Works; and
++
++      (d) If the Work includes a "NOTICE" text file as part of its
++          distribution, then any Derivative Works that You distribute must
++          include a readable copy of the attribution notices contained
++          within such NOTICE file, excluding those notices that do not
++          pertain to any part of the Derivative Works, in at least one
++          of the following places: within a NOTICE text file distributed
++          as part of the Derivative Works; within the Source form or
++          documentation, if provided along with the Derivative Works; or,
++          within a display generated by the Derivative Works, if and
++          wherever such third-party notices normally appear. The contents
++          of the NOTICE file are for informational purposes only and
++          do not modify the License. You may add Your own attribution
++          notices within Derivative Works that You distribute, alongside
++          or as an addendum to the NOTICE text from the Work, provided
++          that such additional attribution notices cannot be construed
++          as modifying the License.
++
++      You may add Your own copyright statement to Your modifications and
++      may provide additional or different license terms and conditions
++      for use, reproduction, or distribution of Your modifications, or
++      for any such Derivative Works as a whole, provided Your use,
++      reproduction, and distribution of the Work otherwise complies with
++      the conditions stated in this License.
++
++   5. Submission of Contributions. Unless You explicitly state otherwise,
++      any Contribution intentionally submitted for inclusion in the Work
++      by You to the Licensor shall be under the terms and conditions of
++      this License, without any additional terms or conditions.
++      Notwithstanding the above, nothing herein shall supersede or modify
++      the terms of any separate license agreement you may have executed
++      with Licensor regarding such Contributions.
++
++   6. Trademarks. This License does not grant permission to use the trade
++      names, trademarks, service marks, or product names of the Licensor,
++      except as required for reasonable and customary use in describing the
++      origin of the Work and reproducing the content of the NOTICE file.
++
++   7. Disclaimer of Warranty. Unless required by applicable law or
++      agreed to in writing, Licensor provides the Work (and each
++      Contributor provides its Contributions) on an "AS IS" BASIS,
++      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
++      implied, including, without limitation, any warranties or conditions
++      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
++      PARTICULAR PURPOSE. You are solely responsible for determining the
++      appropriateness of using or redistributing the Work and assume any
++      risks associated with Your exercise of permissions under this License.
++
++   8. Limitation of Liability. In no event and under no legal theory,
++      whether in tort (including negligence), contract, or otherwise,
++      unless required by applicable law (such as deliberate and grossly
++      negligent acts) or agreed to in writing, shall any Contributor be
++      liable to You for damages, including any direct, indirect, special,
++      incidental, or consequential damages of any character arising as a
++      result of this License or out of the use or inability to use the
++      Work (including but not limited to damages for loss of goodwill,
++      work stoppage, computer failure or malfunction, or any and all
++      other commercial damages or losses), even if such Contributor
++      has been advised of the possibility of such damages.
++
++   9. Accepting Warranty or Additional Liability. While redistributing
++      the Work or Derivative Works thereof, You may choose to offer,
++      and charge a fee for, acceptance of support, warranty, indemnity,
++      or other liability obligations and/or rights consistent with this
++      License. However, in accepting such obligations, You may act only
++      on Your own behalf and on Your sole responsibility, not on behalf
++      of any other Contributor, and only if You agree to indemnify,
++      defend, and hold each Contributor harmless for any liability
++      incurred by, or claims asserted against, such Contributor by reason
++      of your accepting any such warranty or additional liability.
++
++   END OF TERMS AND CONDITIONS
++
++   APPENDIX: How to apply the Apache License to your work.
++
++      To apply the Apache License to your work, attach the following
++      boilerplate notice, with the fields enclosed by brackets "[]"
++      replaced with your own identifying information. (Don't include
++      the brackets!)  The text should be enclosed in the appropriate
++      comment syntax for the file format. We also recommend that a
++      file or class name and description of purpose be included on the
++      same "printed page" as the copyright notice for easier
++      identification within third-party archives.
++
++   Copyright [yyyy] [name of copyright owner]
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
+diff --git a/licenses/assertj-core-3.27.3.jar.sha1 b/licenses/assertj-core-3.27.3.jar.sha1
+new file mode 100644
+index 0000000..ccd05cb
+--- /dev/null
++++ b/licenses/assertj-core-3.27.3.jar.sha1
+@@ -0,0 +1 @@
++31f5d58a202bd5df4993fb10fa2cffd610c20d6f
+diff --git a/licenses/byte-buddy-1.15.11.jar.sha1 b/licenses/byte-buddy-1.15.11.jar.sha1
+new file mode 100644
+index 0000000..db27b6a
+--- /dev/null
++++ b/licenses/byte-buddy-1.15.11.jar.sha1
+@@ -0,0 +1 @@
++f61886478e0f9ee4c21d09574736f0ff45e0a46c
+diff --git a/licenses/byte-buddy-LICENSE.txt b/licenses/byte-buddy-LICENSE.txt
+new file mode 100644
+index 0000000..d645695
+--- /dev/null
++++ b/licenses/byte-buddy-LICENSE.txt
+@@ -0,0 +1,202 @@
++
++                                 Apache License
++                           Version 2.0, January 2004
++                        http://www.apache.org/licenses/
++
++   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
++
++   1. Definitions.
++
++      "License" shall mean the terms and conditions for use, reproduction,
++      and distribution as defined by Sections 1 through 9 of this document.
++
++      "Licensor" shall mean the copyright owner or entity authorized by
++      the copyright owner that is granting the License.
++
++      "Legal Entity" shall mean the union of the acting entity and all
++      other entities that control, are controlled by, or are under common
++      control with that entity. For the purposes of this definition,
++      "control" means (i) the power, direct or indirect, to cause the
++      direction or management of such entity, whether by contract or
++      otherwise, or (ii) ownership of fifty percent (50%) or more of the
++      outstanding shares, or (iii) beneficial ownership of such entity.
++
++      "You" (or "Your") shall mean an individual or Legal Entity
++      exercising permissions granted by this License.
++
++      "Source" form shall mean the preferred form for making modifications,
++      including but not limited to software source code, documentation
++      source, and configuration files.
++
++      "Object" form shall mean any form resulting from mechanical
++      transformation or translation of a Source form, including but
++      not limited to compiled object code, generated documentation,
++      and conversions to other media types.
++
++      "Work" shall mean the work of authorship, whether in Source or
++      Object form, made available under the License, as indicated by a
++      copyright notice that is included in or attached to the work
++      (an example is provided in the Appendix below).
++
++      "Derivative Works" shall mean any work, whether in Source or Object
++      form, that is based on (or derived from) the Work and for which the
++      editorial revisions, annotations, elaborations, or other modifications
++      represent, as a whole, an original work of authorship. For the purposes
++      of this License, Derivative Works shall not include works that remain
++      separable from, or merely link (or bind by name) to the interfaces of,
++      the Work and Derivative Works thereof.
++
++      "Contribution" shall mean any work of authorship, including
++      the original version of the Work and any modifications or additions
++      to that Work or Derivative Works thereof, that is intentionally
++      submitted to Licensor for inclusion in the Work by the copyright owner
++      or by an individual or Legal Entity authorized to submit on behalf of
++      the copyright owner. For the purposes of this definition, "submitted"
++      means any form of electronic, verbal, or written communication sent
++      to the Licensor or its representatives, including but not limited to
++      communication on electronic mailing lists, source code control systems,
++      and issue tracking systems that are managed by, or on behalf of, the
++      Licensor for the purpose of discussing and improving the Work, but
++      excluding communication that is conspicuously marked or otherwise
++      designated in writing by the copyright owner as "Not a Contribution."
++
++      "Contributor" shall mean Licensor and any individual or Legal Entity
++      on behalf of whom a Contribution has been received by Licensor and
++      subsequently incorporated within the Work.
++
++   2. Grant of Copyright License. Subject to the terms and conditions of
++      this License, each Contributor hereby grants to You a perpetual,
++      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
++      copyright license to reproduce, prepare Derivative Works of,
++      publicly display, publicly perform, sublicense, and distribute the
++      Work and such Derivative Works in Source or Object form.
++
++   3. Grant of Patent License. Subject to the terms and conditions of
++      this License, each Contributor hereby grants to You a perpetual,
++      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
++      (except as stated in this section) patent license to make, have made,
++      use, offer to sell, sell, import, and otherwise transfer the Work,
++      where such license applies only to those patent claims licensable
++      by such Contributor that are necessarily infringed by their
++      Contribution(s) alone or by combination of their Contribution(s)
++      with the Work to which such Contribution(s) was submitted. If You
++      institute patent litigation against any entity (including a
++      cross-claim or counterclaim in a lawsuit) alleging that the Work
++      or a Contribution incorporated within the Work constitutes direct
++      or contributory patent infringement, then any patent licenses
++      granted to You under this License for that Work shall terminate
++      as of the date such litigation is filed.
++
++   4. Redistribution. You may reproduce and distribute copies of the
++      Work or Derivative Works thereof in any medium, with or without
++      modifications, and in Source or Object form, provided that You
++      meet the following conditions:
++
++      (a) You must give any other recipients of the Work or
++          Derivative Works a copy of this License; and
++
++      (b) You must cause any modified files to carry prominent notices
++          stating that You changed the files; and
++
++      (c) You must retain, in the Source form of any Derivative Works
++          that You distribute, all copyright, patent, trademark, and
++          attribution notices from the Source form of the Work,
++          excluding those notices that do not pertain to any part of
++          the Derivative Works; and
++
++      (d) If the Work includes a "NOTICE" text file as part of its
++          distribution, then any Derivative Works that You distribute must
++          include a readable copy of the attribution notices contained
++          within such NOTICE file, excluding those notices that do not
++          pertain to any part of the Derivative Works, in at least one
++          of the following places: within a NOTICE text file distributed
++          as part of the Derivative Works; within the Source form or
++          documentation, if provided along with the Derivative Works; or,
++          within a display generated by the Derivative Works, if and
++          wherever such third-party notices normally appear. The contents
++          of the NOTICE file are for informational purposes only and
++          do not modify the License. You may add Your own attribution
++          notices within Derivative Works that You distribute, alongside
++          or as an addendum to the NOTICE text from the Work, provided
++          that such additional attribution notices cannot be construed
++          as modifying the License.
++
++      You may add Your own copyright statement to Your modifications and
++      may provide additional or different license terms and conditions
++      for use, reproduction, or distribution of Your modifications, or
++      for any such Derivative Works as a whole, provided Your use,
++      reproduction, and distribution of the Work otherwise complies with
++      the conditions stated in this License.
++
++   5. Submission of Contributions. Unless You explicitly state otherwise,
++      any Contribution intentionally submitted for inclusion in the Work
++      by You to the Licensor shall be under the terms and conditions of
++      this License, without any additional terms or conditions.
++      Notwithstanding the above, nothing herein shall supersede or modify
++      the terms of any separate license agreement you may have executed
++      with Licensor regarding such Contributions.
++
++   6. Trademarks. This License does not grant permission to use the trade
++      names, trademarks, service marks, or product names of the Licensor,
++      except as required for reasonable and customary use in describing the
++      origin of the Work and reproducing the content of the NOTICE file.
++
++   7. Disclaimer of Warranty. Unless required by applicable law or
++      agreed to in writing, Licensor provides the Work (and each
++      Contributor provides its Contributions) on an "AS IS" BASIS,
++      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
++      implied, including, without limitation, any warranties or conditions
++      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
++      PARTICULAR PURPOSE. You are solely responsible for determining the
++      appropriateness of using or redistributing the Work and assume any
++      risks associated with Your exercise of permissions under this License.
++
++   8. Limitation of Liability. In no event and under no legal theory,
++      whether in tort (including negligence), contract, or otherwise,
++      unless required by applicable law (such as deliberate and grossly
++      negligent acts) or agreed to in writing, shall any Contributor be
++      liable to You for damages, including any direct, indirect, special,
++      incidental, or consequential damages of any character arising as a
++      result of this License or out of the use or inability to use the
++      Work (including but not limited to damages for loss of goodwill,
++      work stoppage, computer failure or malfunction, or any and all
++      other commercial damages or losses), even if such Contributor
++      has been advised of the possibility of such damages.
++
++   9. Accepting Warranty or Additional Liability. While redistributing
++      the Work or Derivative Works thereof, You may choose to offer,
++      and charge a fee for, acceptance of support, warranty, indemnity,
++      or other liability obligations and/or rights consistent with this
++      License. However, in accepting such obligations, You may act only
++      on Your own behalf and on Your sole responsibility, not on behalf
++      of any other Contributor, and only if You agree to indemnify,
++      defend, and hold each Contributor harmless for any liability
++      incurred by, or claims asserted against, such Contributor by reason
++      of your accepting any such warranty or additional liability.
++
++   END OF TERMS AND CONDITIONS
++
++   APPENDIX: How to apply the Apache License to your work.
++
++      To apply the Apache License to your work, attach the following
++      boilerplate notice, with the fields enclosed by brackets "[]"
++      replaced with your own identifying information. (Don't include
++      the brackets!)  The text should be enclosed in the appropriate
++      comment syntax for the file format. We also recommend that a
++      file or class name and description of purpose be included on the
++      same "printed page" as the copyright notice for easier
++      identification within third-party archives.
++
++   Copyright [yyyy] [name of copyright owner]
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
+diff --git a/licenses/junit-LICENSE.txt b/licenses/junit-LICENSE.txt
+new file mode 100644
+index 0000000..78756b5
+--- /dev/null
++++ b/licenses/junit-LICENSE.txt
+@@ -0,0 +1,80 @@
++Eclipse Public License - v 2.0
++THE ACCOMPANYING PROGRAM IS PROVIDED UNDER THE TERMS OF THIS ECLIPSE PUBLIC LICENSE (“AGREEMENT”). ANY USE, REPRODUCTION OR DISTRIBUTION OF THE PROGRAM CONSTITUTES RECIPIENT'S ACCEPTANCE OF THIS AGREEMENT.
++
++1. DEFINITIONS
++“Contribution” means:
++
++a) in the case of the initial Contributor, the initial content Distributed under this Agreement, and
++b) in the case of each subsequent Contributor:
++i) changes to the Program, and
++ii) additions to the Program;
++where such changes and/or additions to the Program originate from and are Distributed by that particular Contributor. A Contribution “originates” from a Contributor if it was added to the Program by such Contributor itself or anyone acting on such Contributor's behalf. Contributions do not include changes or additions to the Program that are not Modified Works.
++“Contributor” means any person or entity that Distributes the Program.
++
++“Licensed Patents” mean patent claims licensable by a Contributor which are necessarily infringed by the use or sale of its Contribution alone or when combined with the Program.
++
++“Program” means the Contributions Distributed in accordance with this Agreement.
++
++“Recipient” means anyone who receives the Program under this Agreement or any Secondary License (as applicable), including Contributors.
++
++“Derivative Works” shall mean any work, whether in Source Code or other form, that is based on (or derived from) the Program and for which the editorial revisions, annotations, elaborations, or other modifications represent, as a whole, an original work of authorship.
++
++“Modified Works” shall mean any work in Source Code or other form that results from an addition to, deletion from, or modification of the contents of the Program, including, for purposes of clarity any new file in Source Code form that contains any contents of the Program. Modified Works shall not include works that contain only declarations, interfaces, types, classes, structures, or files of the Program solely in each case in order to link to, bind by name, or subclass the Program or Modified Works thereof.
++
++“Distribute” means the acts of a) distributing or b) making available in any manner that enables the transfer of a copy.
++
++“Source Code” means the form of a Program preferred for making modifications, including but not limited to software source code, documentation source, and configuration files.
++
++“Secondary License” means either the GNU General Public License, Version 2.0, or any later versions of that license, including any exceptions or additional permissions as identified by the initial Contributor.
++
++2. GRANT OF RIGHTS
++a) Subject to the terms of this Agreement, each Contributor hereby grants Recipient a non-exclusive, worldwide, royalty-free copyright license to reproduce, prepare Derivative Works of, publicly display, publicly perform, Distribute and sublicense the Contribution of such Contributor, if any, and such Derivative Works.
++b) Subject to the terms of this Agreement, each Contributor hereby grants Recipient a non-exclusive, worldwide, royalty-free patent license under Licensed Patents to make, use, sell, offer to sell, import and otherwise transfer the Contribution of such Contributor, if any, in Source Code or other form. This patent license shall apply to the combination of the Contribution and the Program if, at the time the Contribution is added by the Contributor, such addition of the Contribution causes such combination to be covered by the Licensed Patents. The patent license shall not apply to any other combinations which include the Contribution. No hardware per se is licensed hereunder.
++c) Recipient understands that although each Contributor grants the licenses to its Contributions set forth herein, no assurances are provided by any Contributor that the Program does not infringe the patent or other intellectual property rights of any other entity. Each Contributor disclaims any liability to Recipient for claims brought by any other entity based on infringement of intellectual property rights or otherwise. As a condition to exercising the rights and licenses granted hereunder, each Recipient hereby assumes sole responsibility to secure any other intellectual property rights needed, if any. For example, if a third party patent license is required to allow Recipient to Distribute the Program, it is Recipient's responsibility to acquire that license before distributing the Program.
++d) Each Contributor represents that to its knowledge it has sufficient copyright rights in its Contribution, if any, to grant the copyright license set forth in this Agreement.
++e) Notwithstanding the terms of any Secondary License, no Contributor makes additional grants to any Recipient (other than those set forth in this Agreement) as a result of such Recipient's receipt of the Program under the terms of a Secondary License (if permitted under the terms of Section 3).
++3. REQUIREMENTS
++3.1 If a Contributor Distributes the Program in any form, then:
++
++a) the Program must also be made available as Source Code, in accordance with section 3.2, and the Contributor must accompany the Program with a statement that the Source Code for the Program is available under this Agreement, and informs Recipients how to obtain it in a reasonable manner on or through a medium customarily used for software exchange; and
++b) the Contributor may Distribute the Program under a license different than this Agreement, provided that such license:
++i) effectively disclaims on behalf of all other Contributors all warranties and conditions, express and implied, including warranties or conditions of title and non-infringement, and implied warranties or conditions of merchantability and fitness for a particular purpose;
++ii) effectively excludes on behalf of all other Contributors all liability for damages, including direct, indirect, special, incidental and consequential damages, such as lost profits;
++iii) does not attempt to limit or alter the recipients' rights in the Source Code under section 3.2; and
++iv) requires any subsequent distribution of the Program by any party to be under a license that satisfies the requirements of this section 3.
++3.2 When the Program is Distributed as Source Code:
++
++a) it must be made available under this Agreement, or if the Program (i) is combined with other material in a separate file or files made available under a Secondary License, and (ii) the initial Contributor attached to the Source Code the notice described in Exhibit A of this Agreement, then the Program may be made available under the terms of such Secondary Licenses, and
++b) a copy of this Agreement must be included with each copy of the Program.
++3.3 Contributors may not remove or alter any copyright, patent, trademark, attribution notices, disclaimers of warranty, or limitations of liability (‘notices’) contained within the Program from any copy of the Program which they Distribute, provided that Contributors may add their own appropriate notices.
++
++4. COMMERCIAL DISTRIBUTION
++Commercial distributors of software may accept certain responsibilities with respect to end users, business partners and the like. While this license is intended to facilitate the commercial use of the Program, the Contributor who includes the Program in a commercial product offering should do so in a manner which does not create potential liability for other Contributors. Therefore, if a Contributor includes the Program in a commercial product offering, such Contributor (“Commercial Contributor”) hereby agrees to defend and indemnify every other Contributor (“Indemnified Contributor”) against any losses, damages and costs (collectively “Losses”) arising from claims, lawsuits and other legal actions brought by a third party against the Indemnified Contributor to the extent caused by the acts or omissions of such Commercial Contributor in connection with its distribution of the Program in a commercial product offering. The obligations in this section do not apply to any claims or Losses relating to any actual or alleged intellectual property infringement. In order to qualify, an Indemnified Contributor must: a) promptly notify the Commercial Contributor in writing of such claim, and b) allow the Commercial Contributor to control, and cooperate with the Commercial Contributor in, the defense and any related settlement negotiations. The Indemnified Contributor may participate in any such claim at its own expense.
++
++For example, a Contributor might include the Program in a commercial product offering, Product X. That Contributor is then a Commercial Contributor. If that Commercial Contributor then makes performance claims, or offers warranties related to Product X, those performance claims and warranties are such Commercial Contributor's responsibility alone. Under this section, the Commercial Contributor would have to defend claims against the other Contributors related to those performance claims and warranties, and if a court requires any other Contributor to pay any damages as a result, the Commercial Contributor must pay those damages.
++
++5. NO WARRANTY
++EXCEPT AS EXPRESSLY SET FORTH IN THIS AGREEMENT, AND TO THE EXTENT PERMITTED BY APPLICABLE LAW, THE PROGRAM IS PROVIDED ON AN “AS IS” BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED INCLUDING, WITHOUT LIMITATION, ANY WARRANTIES OR CONDITIONS OF TITLE, NON-INFRINGEMENT, MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE. Each Recipient is solely responsible for determining the appropriateness of using and distributing the Program and assumes all risks associated with its exercise of rights under this Agreement, including but not limited to the risks and costs of program errors, compliance with applicable laws, damage to or loss of data, programs or equipment, and unavailability or interruption of operations.
++
++6. DISCLAIMER OF LIABILITY
++EXCEPT AS EXPRESSLY SET FORTH IN THIS AGREEMENT, AND TO THE EXTENT PERMITTED BY APPLICABLE LAW, NEITHER RECIPIENT NOR ANY CONTRIBUTORS SHALL HAVE ANY LIABILITY FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING WITHOUT LIMITATION LOST PROFITS), HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OR DISTRIBUTION OF THE PROGRAM OR THE EXERCISE OF ANY RIGHTS GRANTED HEREUNDER, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
++
++7. GENERAL
++If any provision of this Agreement is invalid or unenforceable under applicable law, it shall not affect the validity or enforceability of the remainder of the terms of this Agreement, and without further action by the parties hereto, such provision shall be reformed to the minimum extent necessary to make such provision valid and enforceable.
++
++If Recipient institutes patent litigation against any entity (including a cross-claim or counterclaim in a lawsuit) alleging that the Program itself (excluding combinations of the Program with other software or hardware) infringes such Recipient's patent(s), then such Recipient's rights granted under Section 2(b) shall terminate as of the date such litigation is filed.
++
++All Recipient's rights under this Agreement shall terminate if it fails to comply with any of the material terms or conditions of this Agreement and does not cure such failure in a reasonable period of time after becoming aware of such noncompliance. If all Recipient's rights under this Agreement terminate, Recipient agrees to cease use and distribution of the Program as soon as reasonably practicable. However, Recipient's obligations under this Agreement and any licenses granted by Recipient relating to the Program shall continue and survive.
++
++Everyone is permitted to copy and distribute copies of this Agreement, but in order to avoid inconsistency the Agreement is copyrighted and may only be modified in the following manner. The Agreement Steward reserves the right to publish new versions (including revisions) of this Agreement from time to time. No one other than the Agreement Steward has the right to modify this Agreement. The Eclipse Foundation is the initial Agreement Steward. The Eclipse Foundation may assign the responsibility to serve as the Agreement Steward to a suitable separate entity. Each new version of the Agreement will be given a distinguishing version number. The Program (including Contributions) may always be Distributed subject to the version of the Agreement under which it was received. In addition, after a new version of the Agreement is published, Contributor may elect to Distribute the Program (including its Contributions) under the new version.
++
++Except as expressly stated in Sections 2(a) and 2(b) above, Recipient receives no rights or licenses to the intellectual property of any Contributor under this Agreement, whether expressly, by implication, estoppel or otherwise. All rights in the Program not expressly granted under this Agreement are reserved. Nothing in this Agreement is intended to be enforceable by any entity that is not a Contributor or Recipient. No third-party beneficiary rights are created under this Agreement.
++
++Exhibit A – Form of Secondary Licenses Notice
++“This Source Code may also be made available under the following Secondary Licenses when the conditions for such availability set forth in the Eclipse Public License, v. 2.0 are satisfied: {name license(s), version(s), and exceptions or additional permissions here}.”
++
++Simply including a copy of this Agreement, including this Exhibit A is not sufficient to license the Source Code under Secondary Licenses.
++
++If it is not possible or desirable to put the notice in a particular file, then You may include the notice in a location (such as a LICENSE file in a relevant directory) where a recipient would be likely to look for such a notice.
++
++You may add additional accurate notices of copyright ownership.
+diff --git a/licenses/junit-jupiter-5.14.0.jar.sha1 b/licenses/junit-jupiter-5.14.0.jar.sha1
+new file mode 100644
+index 0000000..6e2a556
+--- /dev/null
++++ b/licenses/junit-jupiter-5.14.0.jar.sha1
+@@ -0,0 +1 @@
++0df30c385c7c8ea0e74e3b63d8c6c0fc2b0ecb55
+diff --git a/licenses/junit-jupiter-api-5.14.0.jar.sha1 b/licenses/junit-jupiter-api-5.14.0.jar.sha1
+new file mode 100644
+index 0000000..0bd191c
+--- /dev/null
++++ b/licenses/junit-jupiter-api-5.14.0.jar.sha1
+@@ -0,0 +1 @@
++4cc3acff995a4ce56ebf735a485800ddede31cb0
+diff --git a/licenses/junit-jupiter-engine-5.14.0.jar.sha1 b/licenses/junit-jupiter-engine-5.14.0.jar.sha1
+new file mode 100644
+index 0000000..a0c1f02
+--- /dev/null
++++ b/licenses/junit-jupiter-engine-5.14.0.jar.sha1
+@@ -0,0 +1 @@
++9da8a108759444556e759f30e663a416a80f402c
+diff --git a/licenses/junit-jupiter-params-5.14.0.jar.sha1 b/licenses/junit-jupiter-params-5.14.0.jar.sha1
+new file mode 100644
+index 0000000..3c6caff
+--- /dev/null
++++ b/licenses/junit-jupiter-params-5.14.0.jar.sha1
+@@ -0,0 +1 @@
++3027dc3529237b2285b261640134daa217068c96
+diff --git a/licenses/junit-platform-commons-1.14.0.jar.sha1 b/licenses/junit-platform-commons-1.14.0.jar.sha1
+new file mode 100644
+index 0000000..e504247
+--- /dev/null
++++ b/licenses/junit-platform-commons-1.14.0.jar.sha1
+@@ -0,0 +1 @@
++e7e1bbf2044652efc5a2a21f6b8c21173a9b91a1
+diff --git a/licenses/junit-platform-engine-1.14.0.jar.sha1 b/licenses/junit-platform-engine-1.14.0.jar.sha1
+new file mode 100644
+index 0000000..696baae
+--- /dev/null
++++ b/licenses/junit-platform-engine-1.14.0.jar.sha1
+@@ -0,0 +1 @@
++77386b812c0e3ba96cdd7c018d2a2f61940ccd8f
+diff --git a/licenses/junit-platform-launcher-1.14.0.jar.sha1 b/licenses/junit-platform-launcher-1.14.0.jar.sha1
+new file mode 100644
+index 0000000..b92705b
+--- /dev/null
++++ b/licenses/junit-platform-launcher-1.14.0.jar.sha1
+@@ -0,0 +1 @@
++b61418170bd0b204429b9ae77af681a1ac74579d
+diff --git a/licenses/opentest4j-1.3.0.jar.sha1 b/licenses/opentest4j-1.3.0.jar.sha1
+new file mode 100644
+index 0000000..8d276b9
+--- /dev/null
++++ b/licenses/opentest4j-1.3.0.jar.sha1
+@@ -0,0 +1 @@
++152ea56b3a72f655d4fd677fc0ef2596c3dd5e6e
+diff --git a/licenses/opentest4j-LICENSE.txt b/licenses/opentest4j-LICENSE.txt
+new file mode 100644
+index 0000000..d645695
+--- /dev/null
++++ b/licenses/opentest4j-LICENSE.txt
+@@ -0,0 +1,202 @@
++
++                                 Apache License
++                           Version 2.0, January 2004
++                        http://www.apache.org/licenses/
++
++   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
++
++   1. Definitions.
++
++      "License" shall mean the terms and conditions for use, reproduction,
++      and distribution as defined by Sections 1 through 9 of this document.
++
++      "Licensor" shall mean the copyright owner or entity authorized by
++      the copyright owner that is granting the License.
++
++      "Legal Entity" shall mean the union of the acting entity and all
++      other entities that control, are controlled by, or are under common
++      control with that entity. For the purposes of this definition,
++      "control" means (i) the power, direct or indirect, to cause the
++      direction or management of such entity, whether by contract or
++      otherwise, or (ii) ownership of fifty percent (50%) or more of the
++      outstanding shares, or (iii) beneficial ownership of such entity.
++
++      "You" (or "Your") shall mean an individual or Legal Entity
++      exercising permissions granted by this License.
++
++      "Source" form shall mean the preferred form for making modifications,
++      including but not limited to software source code, documentation
++      source, and configuration files.
++
++      "Object" form shall mean any form resulting from mechanical
++      transformation or translation of a Source form, including but
++      not limited to compiled object code, generated documentation,
++      and conversions to other media types.
++
++      "Work" shall mean the work of authorship, whether in Source or
++      Object form, made available under the License, as indicated by a
++      copyright notice that is included in or attached to the work
++      (an example is provided in the Appendix below).
++
++      "Derivative Works" shall mean any work, whether in Source or Object
++      form, that is based on (or derived from) the Work and for which the
++      editorial revisions, annotations, elaborations, or other modifications
++      represent, as a whole, an original work of authorship. For the purposes
++      of this License, Derivative Works shall not include works that remain
++      separable from, or merely link (or bind by name) to the interfaces of,
++      the Work and Derivative Works thereof.
++
++      "Contribution" shall mean any work of authorship, including
++      the original version of the Work and any modifications or additions
++      to that Work or Derivative Works thereof, that is intentionally
++      submitted to Licensor for inclusion in the Work by the copyright owner
++      or by an individual or Legal Entity authorized to submit on behalf of
++      the copyright owner. For the purposes of this definition, "submitted"
++      means any form of electronic, verbal, or written communication sent
++      to the Licensor or its representatives, including but not limited to
++      communication on electronic mailing lists, source code control systems,
++      and issue tracking systems that are managed by, or on behalf of, the
++      Licensor for the purpose of discussing and improving the Work, but
++      excluding communication that is conspicuously marked or otherwise
++      designated in writing by the copyright owner as "Not a Contribution."
++
++      "Contributor" shall mean Licensor and any individual or Legal Entity
++      on behalf of whom a Contribution has been received by Licensor and
++      subsequently incorporated within the Work.
++
++   2. Grant of Copyright License. Subject to the terms and conditions of
++      this License, each Contributor hereby grants to You a perpetual,
++      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
++      copyright license to reproduce, prepare Derivative Works of,
++      publicly display, publicly perform, sublicense, and distribute the
++      Work and such Derivative Works in Source or Object form.
++
++   3. Grant of Patent License. Subject to the terms and conditions of
++      this License, each Contributor hereby grants to You a perpetual,
++      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
++      (except as stated in this section) patent license to make, have made,
++      use, offer to sell, sell, import, and otherwise transfer the Work,
++      where such license applies only to those patent claims licensable
++      by such Contributor that are necessarily infringed by their
++      Contribution(s) alone or by combination of their Contribution(s)
++      with the Work to which such Contribution(s) was submitted. If You
++      institute patent litigation against any entity (including a
++      cross-claim or counterclaim in a lawsuit) alleging that the Work
++      or a Contribution incorporated within the Work constitutes direct
++      or contributory patent infringement, then any patent licenses
++      granted to You under this License for that Work shall terminate
++      as of the date such litigation is filed.
++
++   4. Redistribution. You may reproduce and distribute copies of the
++      Work or Derivative Works thereof in any medium, with or without
++      modifications, and in Source or Object form, provided that You
++      meet the following conditions:
++
++      (a) You must give any other recipients of the Work or
++          Derivative Works a copy of this License; and
++
++      (b) You must cause any modified files to carry prominent notices
++          stating that You changed the files; and
++
++      (c) You must retain, in the Source form of any Derivative Works
++          that You distribute, all copyright, patent, trademark, and
++          attribution notices from the Source form of the Work,
++          excluding those notices that do not pertain to any part of
++          the Derivative Works; and
++
++      (d) If the Work includes a "NOTICE" text file as part of its
++          distribution, then any Derivative Works that You distribute must
++          include a readable copy of the attribution notices contained
++          within such NOTICE file, excluding those notices that do not
++          pertain to any part of the Derivative Works, in at least one
++          of the following places: within a NOTICE text file distributed
++          as part of the Derivative Works; within the Source form or
++          documentation, if provided along with the Derivative Works; or,
++          within a display generated by the Derivative Works, if and
++          wherever such third-party notices normally appear. The contents
++          of the NOTICE file are for informational purposes only and
++          do not modify the License. You may add Your own attribution
++          notices within Derivative Works that You distribute, alongside
++          or as an addendum to the NOTICE text from the Work, provided
++          that such additional attribution notices cannot be construed
++          as modifying the License.
++
++      You may add Your own copyright statement to Your modifications and
++      may provide additional or different license terms and conditions
++      for use, reproduction, or distribution of Your modifications, or
++      for any such Derivative Works as a whole, provided Your use,
++      reproduction, and distribution of the Work otherwise complies with
++      the conditions stated in this License.
++
++   5. Submission of Contributions. Unless You explicitly state otherwise,
++      any Contribution intentionally submitted for inclusion in the Work
++      by You to the Licensor shall be under the terms and conditions of
++      this License, without any additional terms or conditions.
++      Notwithstanding the above, nothing herein shall supersede or modify
++      the terms of any separate license agreement you may have executed
++      with Licensor regarding such Contributions.
++
++   6. Trademarks. This License does not grant permission to use the trade
++      names, trademarks, service marks, or product names of the Licensor,
++      except as required for reasonable and customary use in describing the
++      origin of the Work and reproducing the content of the NOTICE file.
++
++   7. Disclaimer of Warranty. Unless required by applicable law or
++      agreed to in writing, Licensor provides the Work (and each
++      Contributor provides its Contributions) on an "AS IS" BASIS,
++      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
++      implied, including, without limitation, any warranties or conditions
++      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
++      PARTICULAR PURPOSE. You are solely responsible for determining the
++      appropriateness of using or redistributing the Work and assume any
++      risks associated with Your exercise of permissions under this License.
++
++   8. Limitation of Liability. In no event and under no legal theory,
++      whether in tort (including negligence), contract, or otherwise,
++      unless required by applicable law (such as deliberate and grossly
++      negligent acts) or agreed to in writing, shall any Contributor be
++      liable to You for damages, including any direct, indirect, special,
++      incidental, or consequential damages of any character arising as a
++      result of this License or out of the use or inability to use the
++      Work (including but not limited to damages for loss of goodwill,
++      work stoppage, computer failure or malfunction, or any and all
++      other commercial damages or losses), even if such Contributor
++      has been advised of the possibility of such damages.
++
++   9. Accepting Warranty or Additional Liability. While redistributing
++      the Work or Derivative Works thereof, You may choose to offer,
++      and charge a fee for, acceptance of support, warranty, indemnity,
++      or other liability obligations and/or rights consistent with this
++      License. However, in accepting such obligations, You may act only
++      on Your own behalf and on Your sole responsibility, not on behalf
++      of any other Contributor, and only if You agree to indemnify,
++      defend, and hold each Contributor harmless for any liability
++      incurred by, or claims asserted against, such Contributor by reason
++      of your accepting any such warranty or additional liability.
++
++   END OF TERMS AND CONDITIONS
++
++   APPENDIX: How to apply the Apache License to your work.
++
++      To apply the Apache License to your work, attach the following
++      boilerplate notice, with the fields enclosed by brackets "[]"
++      replaced with your own identifying information. (Don't include
++      the brackets!)  The text should be enclosed in the appropriate
++      comment syntax for the file format. We also recommend that a
++      file or class name and description of purpose be included on the
++      same "printed page" as the copyright notice for easier
++      identification within third-party archives.
++
++   Copyright [yyyy] [name of copyright owner]
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
+diff --git a/plugin/README.md b/plugin/README.md
+new file mode 100644
+index 0000000..09375db
+--- /dev/null
++++ b/plugin/README.md
+@@ -0,0 +1,9 @@
++# plugin
++
++The OpenSearch `IngestionConsumerPlugin` implementation: the factory, the shard
++consumer, the pointer type and the message type.
++
++**Depends on:** `client`, and through it `format`. Never on `binstore-backends`.
++
++Built against the OpenSearch 3.8 pull-based ingestion SPI —
++[docs/research/20-opensearch/01-pull-based-ingestion-spi.md](../docs/research/20-opensearch/01-pull-based-ingestion-spi.md).
+diff --git a/plugin/build.gradle.kts b/plugin/build.gradle.kts
+new file mode 100644
+index 0000000..fae25c8
+--- /dev/null
++++ b/plugin/build.gradle.kts
+@@ -0,0 +1,7 @@
++// SPDX-License-Identifier: Apache-2.0
++
++plugins { id("binjava.java-conventions") }
++
++dependencies {
++    api(project(":client"))
++}
+diff --git a/scripts/build-index.sh b/scripts/build-index.sh
+new file mode 100755
+index 0000000..240dd9c
+--- /dev/null
++++ b/scripts/build-index.sh
+@@ -0,0 +1,128 @@
++#!/usr/bin/env bash
++# SPDX-License-Identifier: Apache-2.0
++# Regenerate the generated index regions in AGENTS.md and .agents/skills/README.md.
++#   build-index.sh          rewrite them
++#   build-index.sh --check  fail if they are not current
++set -uo pipefail
++ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
++cd "$ROOT"
++MODE="${1:-write}"
++python3 - "$MODE" <<'PY'
++import os, re, sys, glob
++mode = sys.argv[1]
++changed = []
++broken = []
++
++def frontmatter(path, key):
++    with open(path) as f:
++        txt = f.read()
++    m = re.search(r'^%s:\s*(.+)$' % key, txt, re.M)
++    return m.group(1).strip() if m else ''
++
++def trigger(desc):
++    """The 'Use when ...' clause -- layer 1 is what gets a skill loaded."""
++    m = re.search(r'\bUse (when|before|after|at|whenever|during)\b(.*)', desc, re.S)
++    if not m:
++        return desc.split('.')[0].strip()
++    t = (m.group(1) + m.group(2)).strip().rstrip('.')
++    t = re.sub(r'\s+', ' ', t)
++    return t[0].upper() + t[1:]
++
++skills = []
++for d in sorted(glob.glob('.agents/skills/*/')):
++    name = os.path.basename(d.rstrip('/'))
++    f = os.path.join(d, 'SKILL.md')
++    if not os.path.exists(f):
++        continue
++    skills.append((name, trigger(frontmatter(f, 'description'))))
++
++FAMILY_ORDER = {'Process': 0, 'Quality': 1, 'Delivery': 2, 'Code': 3}
++stds = []
++for f in sorted(glob.glob('docs/internal/standards/*.md')):
++    txt = open(f).read()
++    fam = (re.search(r'^\*\*Family:\*\*\s*(.+)$', txt, re.M) or [None, 'Code'])[1].strip()
++    rw = re.search(r'^\*\*Read when:\*\*\s*(.+)$', txt, re.M)
++    stds.append((fam, os.path.basename(f), f, rw.group(1).strip() if rw else ''))
++stds.sort(key=lambda r: (FAMILY_ORDER.get(r[0], 9), r[1]))
++
++def table_skills(prefix):
++    rows = ['| Skill | Use when |', '|---|---|']
++    rows += ['| [`%s`](%s%s/SKILL.md) | %s |' % (n, prefix, n, t) for n, t in skills]
++    return '\n'.join(rows)
++
++def table_standards():
++    rows = ['| Family | Standard | Read when |', '|---|---|---|']
++    rows += ['| %s | [%s](%s) | %s |' % (fam, base, path, rw) for fam, base, path, rw in stds]
++    return '\n'.join(rows)
++
++def table_gates():
++    """The Gates table, read from .pre-commit-config.yaml and scripts/.
++
++    Hand-maintained, this table was wrong in three directions at once: it named
++    a hook that was not wired, omitted four that were, and never mentioned a
++    script that existed. A section that calls itself "the honest answer to what
++    actually runs" is the last place a stale list belongs, so it is generated.
++    """
++    cfg = open('.pre-commit-config.yaml').read()
++    hooks = []
++    for block in re.split(r'\n      - id: ', cfg)[1:]:
++        hid = block.split('\n', 1)[0].strip()
++        ent = re.search(r'^\s*entry:\s*(.+)$', block, re.M)
++        nam = re.search(r'^\s*name:\s*"(.*)"\s*$', block, re.M)
++        stg = re.search(r'^\s*stages:\s*\[(.*)\]', block, re.M)
++        hooks.append((hid,
++                      ent.group(1).strip() if ent else '?',
++                      nam.group(1) if nam else '',
++                      stg.group(1).strip() if stg else 'pre-commit'))
++    rows = ['| Script | Stage | Enforces |', '|---|---|---|']
++    wired = set()
++    for _, entry, name, stage in hooks:
++        script = entry.split()[0]
++        wired.add(os.path.basename(script))
++        shown = entry if ' ' in entry else os.path.basename(entry)
++        rows.append('| `%s` | %s | %s |' % (shown, stage, name))
++    present = {os.path.basename(f) for f in glob.glob('scripts/check-*.sh')}
++    unwired = sorted(present - wired)
++    out = '\n'.join(rows)
++    if unwired:
++        out += ('\n\nPresent in `scripts/` but **not** wired into pre-commit, because each '
++                'needs an argument a whole-tree hook cannot supply — invoke them by hand or '
++                'from a skill: ' + ', '.join('`%s`' % u for u in unwired) + '.')
++    return out
++
++
++def splice(path, key, body):
++    # A missing file or a missing marker used to return silently, which made
++    # "the region is absent" indistinguishable from "the region is current".
++    if not os.path.exists(path):
++        broken.append('%s does not exist' % path)
++        return
++    txt = open(path).read()
++    start, end = '<!-- index:%s:start -->' % key, '<!-- index:%s:end -->' % key
++    if start not in txt or end not in txt:
++        broken.append('%s has no index:%s region' % (path, key))
++        return
++    new = re.sub(re.escape(start) + r'.*?' + re.escape(end),
++                 start + '\n' + body + '\n' + end, txt, flags=re.S)
++    if new != txt:
++        changed.append('%s (%s)' % (path, key))
++        if mode != '--check':
++            open(path, 'w').write(new)
++
++splice('AGENTS.md', 'skills', table_skills('.agents/skills/'))
++splice('AGENTS.md', 'standards', table_standards())
++splice('AGENTS.md', 'gates', table_gates())
++splice('.agents/skills/README.md', 'skills', table_skills(''))
++
++if broken:
++    print('  \033[31mFAIL\033[0m generated index region(s) missing: ' + ', '.join(broken))
++    sys.exit(1)
++if mode == '--check':
++    if changed:
++        print('  \033[31mFAIL\033[0m generated index is stale: ' + ', '.join(changed))
++        print('         run scripts/build-index.sh')
++        sys.exit(1)
++    print('  \033[32mok\033[0m   generated index regions are current')
++else:
++    print('  \033[32mok\033[0m   regenerated ' + (', '.join(changed) if changed else 'nothing (already current)'))
++PY
+diff --git a/scripts/check-commit-msg.sh b/scripts/check-commit-msg.sh
+new file mode 100755
+index 0000000..95ad752
+--- /dev/null
++++ b/scripts/check-commit-msg.sh
+@@ -0,0 +1,23 @@
++#!/usr/bin/env bash
++# SPDX-License-Identifier: Apache-2.0
++# Non-negotiable 1: the commit subject names a real backlog task.
++source "$(dirname "$0")/lib.sh"
++cd "$ROOT"
++MSG_FILE="${1:-}"
++[ -n "$MSG_FILE" ] && [ -f "$MSG_FILE" ] || { echo "usage: check-commit-msg.sh <file>"; exit 2; }
++subject=$(head -1 "$MSG_FILE")
++case "$subject" in "Merge "*|"Revert "*|"fixup!"*) exit 0 ;; esac
++hdr "check-commit-msg"
++id=$(printf '%s' "$subject" | grep -oE '^M-?[0-9]+\.[0-9]+' || true)
++if [ -z "$id" ]; then
++  fail "subject does not start with a task ID (expected e.g. 'M0.3 <summary>'): $subject"
++  finish
++fi
++BACKLOG=docs/internal/product/backlog.md
++if [ ! -f "$BACKLOG" ]; then
++  fail "$BACKLOG does not exist, so the ID cannot be verified"
++  finish
++fi
++grep -qE "(^|[^0-9A-Za-z.])${id}([^0-9]|$)" "$BACKLOG" || fail "task $id is not in $BACKLOG"
++[ "$FAILED" -eq 0 ] && ok "subject names backlog task $id"
++finish
+diff --git a/scripts/check-dependency-licenses.sh b/scripts/check-dependency-licenses.sh
+new file mode 100755
+index 0000000..98d0c09
+--- /dev/null
++++ b/scripts/check-dependency-licenses.sh
+@@ -0,0 +1,60 @@
++#!/usr/bin/env bash
++# SPDX-License-Identifier: Apache-2.0
++# build.md rule 2: no GPL/AGPL/SSPL/EUPL/CDDL-1.0/BUSL dependency.
++#
++# ⚠️ This is the FAST half. The authoritative gate is `./gradlew dependencyLicenses`,
++# which additionally verifies a pinned SHA-1 per jar against the jars actually
++# resolved, and runs as part of `check`. This script checks only what can be
++# checked from the tree in milliseconds, so a pre-commit hook does not need a JVM.
++#
++# The mechanism is OpenSearch's: a licences directory committed to the tree, with
++# a pinned sha and a licence text per dependency. It replaced a task that scraped
++# POM <licenses> over the network, which emitted prose where the deny-list
++# expected SPDX ids, never followed <parent>, and could not be cached.
++source "$(dirname "$0")/lib.sh"
++cd "$ROOT"
++hdr "check-dependency-licenses"
++
++DIR=licenses
++MANIFEST="$DIR/SPDX.txt"
++# Exact SPDX identifiers, never substrings: "GPL-2.0" as a substring also matches
++# LGPL-2.0, which is a different licence and one this project has not ruled out.
++DENIED="GPL-1.0-only GPL-1.0-or-later GPL-2.0-only GPL-2.0-or-later GPL-3.0-only
++GPL-3.0-or-later GPL-2.0 GPL-3.0 AGPL-1.0-only AGPL-1.0-or-later AGPL-3.0-only
++AGPL-3.0-or-later AGPL-3.0 SSPL-1.0 EUPL-1.0 EUPL-1.1 EUPL-1.2 CDDL-1.0 BUSL-1.1"
++
++if [ ! -f "$MANIFEST" ]; then
++  if [ -f settings.gradle.kts ]; then
++    fail "$MANIFEST is missing, but a Gradle build exists"
++    echo "         Every dependency needs a declared SPDX id and a committed licence."
++    echo "         Run: ./gradlew updateShas && ./gradlew dependencyLicenses"
++  else
++    warn "no build yet -- dependency licences unenforced"
++  fi
++  finish
++fi
++
++n=0
++while read -r prefix spdx _; do
++  case "$prefix" in ''|\#*) continue ;; esac
++  n=$((n+1))
++  [ -f "$DIR/$prefix-LICENSE.txt" ] || fail "$MANIFEST names '$prefix' with no $DIR/$prefix-LICENSE.txt"
++  for d in $DENIED; do
++    [ "$spdx" = "$d" ] && {
++      fail "'$prefix' is $spdx, which this project cannot ship (build.md rule 2)"
++      echo "         Replace the dependency, or record an exception with the reviewer's"
++      echo "         name in baselines/licenses.txt."
++    }
++  done
++done < "$MANIFEST"
++
++# A licence text with no declared identifier is unreviewed, not clean.
++for f in "$DIR"/*-LICENSE.txt; do
++  [ -e "$f" ] || continue
++  p=$(basename "$f"); p=${p%-LICENSE.txt}
++  grep -qE "^[[:space:]]*$p[[:space:]]" "$MANIFEST" \
++    || fail "$f has no SPDX identifier in $MANIFEST -- add: $p <SPDX-ID>"
++done
++
++[ "$FAILED" -eq 0 ] && ok "$n declared licence(s), none denied (authoritative check: ./gradlew dependencyLicenses)"
++finish
+diff --git a/scripts/check-file-size.sh b/scripts/check-file-size.sh
+new file mode 100755
+index 0000000..5f4d54f
+--- /dev/null
++++ b/scripts/check-file-size.sh
+@@ -0,0 +1,16 @@
++#!/usr/bin/env bash
++# SPDX-License-Identifier: Apache-2.0
++# code-structure.md: a source file is at most 500 lines.
++source "$(dirname "$0")/lib.sh"
++cd "$ROOT"
++hdr "check-file-size"
++LIMIT=500
++count=0
++while IFS= read -r f; do
++  [ -f "$f" ] || continue
++  count=$((count+1))
++  n=$(wc -l < "$f")
++  [ "$n" -le "$LIMIT" ] || fail "$f: $n lines (limit $LIMIT) -- split it, do not raise the limit"
++done < <(git ls-files '*.java' '*.sh' '*.py' '*.gradle.kts' 2>/dev/null)
++[ "$FAILED" -eq 0 ] && ok "$count source files within $LIMIT lines"
++finish
+diff --git a/scripts/check-gate-scope.sh b/scripts/check-gate-scope.sh
+new file mode 100755
+index 0000000..0ca978f
+--- /dev/null
++++ b/scripts/check-gate-scope.sh
+@@ -0,0 +1,80 @@
++#!/usr/bin/env bash
++# SPDX-License-Identifier: Apache-2.0
++# Every gate judges THIS repository and nothing else.
++#
++# A gate that walks the filesystem sees whatever happens to be on the disk: a
++# reference clone under .tmp/, a sibling checkout at ../OpenSearch, another
++# project's build output. It then reports on files this project does not own --
++# or, worse, passes because it never looked at ours.
++#
++# The rule is deterministic so it survives a new session with none of the
++# context that produced it: gates discover files through `workspace_files`,
++# which is derived from git, and this script fails any that do not.
++source "$(dirname "$0")/lib.sh"
++cd "$ROOT"
++hdr "check-gate-scope"
++
++# Scripts allowed to walk the filesystem, each for a stated reason.
++# ⚠️ Adding a line here is a decision. Say why.
++declare -A ALLOWED=(
++  [lib.sh]="defines workspace_files itself"
++  [check-gate-scope.sh]="this script; it greps the others for these patterns"
++  [tdd-red.sh]="deletes stale build/test-results, which are untracked by design"
++  [tdd_scan.py]="reads build/test-results and locates test sources under */src/*/java"
++  [test_budget.py]="reads buildSrc conventions and docker-compose files"
++  [build-index.sh]="globs .agents/skills and docs/internal/standards to generate the index"
++)
++
++for f in scripts/*.sh scripts/*.py; do
++  base=$(basename "$f")
++  [ -n "${ALLOWED[$base]:-}" ] && continue
++
++  # A filesystem walk that is not workspace_files.
++  if grep -nE '(^|[^_[:alnum:]])(find[[:space:]]+[./]|glob\.glob\(|os\.walk\()' "$f" >/dev/null 2>&1; then
++    fail "$base walks the filesystem instead of using workspace_files"
++    grep -nE '(^|[^_[:alnum:]])(find[[:space:]]+[./]|glob\.glob\(|os\.walk\()' "$f" | head -3 | sed 's/^/           /'
++    echo "         Use: workspace_files '*.md'   -- tracked + staged, git-derived."
++    echo "         If this gate genuinely needs untracked files, add it to ALLOWED"
++    echo "         in scripts/check-gate-scope.sh with the reason."
++  fi
++done
++
++# Nothing may reach outside the repository root, whatever it is called.
++for f in scripts/*.sh scripts/*.py; do
++  hits=$(grep -nE "['\"](\.\./|/home/|~/)" "$f" | grep -vE '\.\./\.\./|dirname' || true)
++  if [ -n "$hits" ]; then
++    fail "$(basename "$f") references a path outside the repository"
++    printf '%s\n' "$hits" | head -3 | sed 's/^/           /'
++    echo "         A gate that reads ../ or an absolute home path judges files this"
++    echo "         project does not own, and its result depends on what else is on"
++    echo "         the disk -- which is not a gate."
++  fi
++done
++
++# A source file that .gitignore swallows is invisible to git, to every gate that
++# derives its file list from git, and to a fresh clone -- which then fails to
++# build for a reason nobody can see in the diff.
++#
++# ⚠️ This is not hypothetical: the package `binjava.build` put two Kotlin task
++# classes in a directory named `build/`, the standard ignore pattern matched it,
++# and `git add buildSrc` silently staged neither.
++ignored_src=$(git ls-files --others --ignored --exclude-standard \
++              -- '*/src/*.kt' '*/src/*.java' '*/src/*.kts' 2>/dev/null || true)
++if [ -n "$ignored_src" ]; then
++  fail "source file(s) under a src/ directory are gitignored:"
++  printf '%s\n' "$ignored_src" | head -5 | sed 's/^/           /'
++  echo "         They are absent from a fresh clone. Rename the directory rather"
++  echo "         than weakening the ignore rule -- a package called 'build' is the"
++  echo "         problem, not the pattern that catches build output."
++fi
++
++# .tmp/ is the quarantine for reference clones and scratch. It must stay ignored,
++# or the next `git add -A` commits somebody else's repository into this one.
++if ! git check-ignore -q .tmp 2>/dev/null; then
++  fail ".tmp/ is not gitignored"
++  echo "         It is the quarantine for reference clones and scratch work."
++  echo "         Un-ignored, a 'git add -A' commits an entire upstream checkout."
++fi
++
++[ "$FAILED" -eq 0 ] && ok "$(ls scripts/*.sh scripts/*.py | wc -l | tr -d ' ') gate scripts judge this repository only"
++finish
+diff --git a/scripts/check-license-headers.sh b/scripts/check-license-headers.sh
+new file mode 100755
+index 0000000..5d93550
+--- /dev/null
++++ b/scripts/check-license-headers.sh
+@@ -0,0 +1,19 @@
++#!/usr/bin/env bash
++# SPDX-License-Identifier: Apache-2.0
++# build.md: every source file carries an SPDX header. Retrofitting headers to a
++# grown tree is tedious; from the first commit it is free.
++source "$(dirname "$0")/lib.sh"
++cd "$ROOT"
++hdr "check-license-headers"
++SPDX="SPDX-License-Identifier: Apache-2.0"
++missing=0; checked=0
++while IFS= read -r f; do
++  [ -f "$f" ] || continue
++  checked=$((checked+1))
++  head -8 "$f" | grep -qF "$SPDX" || { fail "$f: no '$SPDX' in the first 8 lines"; missing=$((missing+1)); }
++# Shell and Python are source too. check-file-size.sh already treats *.sh as
++# source; leaving them out here meant the 19 scripts that ARE the enforcement
++# harness were the only files in the tree exempt from the licence rule.
++done < <(workspace_files '*.java' '*.gradle' '*.gradle.kts' '*.kt' '*.sh' '*.py')
++[ "$missing" -eq 0 ] && ok "$checked source file(s) carry the SPDX header"
++finish
+diff --git a/scripts/check-links.sh b/scripts/check-links.sh
+new file mode 100755
+index 0000000..edef473
+--- /dev/null
++++ b/scripts/check-links.sh
+@@ -0,0 +1,20 @@
++#!/usr/bin/env bash
++# SPDX-License-Identifier: Apache-2.0
++# Every relative markdown link resolves. Cheap, and the corpus is mostly links.
++source "$(dirname "$0")/lib.sh"
++cd "$ROOT"
++hdr "check-links"
++n=0
++while IFS= read -r f; do
++  d="$(dirname "$f")"
++  while IFS= read -r l; do
++    [ -z "$l" ] && continue
++    case "$l" in http*|mailto*|'#'*) continue ;; esac
++    t="${l%%#*}"
++    [ -z "$t" ] && continue
++    n=$((n+1))
++    [ -e "$d/$t" ] || fail "$f -> $t"
++  done < <(grep -o '](\([^)]*\.md\)[^)]*)' "$f" 2>/dev/null | sed 's/](\(.*\))/\1/')
++done < <(workspace_files '*.md')
++[ "$FAILED" -eq 0 ] && ok "$n relative markdown links resolve"
++finish
+diff --git a/scripts/check-metric-cardinality.sh b/scripts/check-metric-cardinality.sh
+new file mode 100755
+index 0000000..8aa768f
+--- /dev/null
++++ b/scripts/check-metric-cardinality.sh
+@@ -0,0 +1,25 @@
++#!/usr/bin/env bash
++# SPDX-License-Identifier: Apache-2.0
++# observability.md rule 1: the metric label allow-list is closed.
++# A high-cardinality label is a standards violation with a number attached:
++# `index` costs 200,000 series, `tenant` costs 100 million.
++source "$(dirname "$0")/lib.sh"
++cd "$ROOT"
++hdr "check-metric-cardinality"
++FILES=$(workspace_files '*.java')
++if [ -z "$FILES" ]; then
++  ok "no Java sources yet (build lands in M0.4)"
++  finish
++fi
++# metric/span label registration sites naming a forbidden dimension
++BAD='"(index|indexName|partition|stream|streamId|tenant|tenantId|routing|objectKey|segmentKey|offset|docId|_id)"'
++hits=$(grep -rnE "(tag|label|attribute|withTag|addTag|put)\s*\(\s*$BAD" $FILES 2>/dev/null || true)
++if [ -n "$hits" ]; then
++  n=$(printf '%s\n' "$hits" | wc -l | tr -d ' ')
++  fail "$n high-cardinality metric/span label(s) -- observability.md rule 1"
++  printf '%s\n' "$hits" | head -5 | sed 's/^/           /'
++  echo "         Count it in memory and expose it via top-K logs or /admin/cost instead."
++  finish
++fi
++ok "no forbidden metric labels"
++finish
+diff --git a/scripts/check-milestone-verified.sh b/scripts/check-milestone-verified.sh
+new file mode 100755
+index 0000000..64b2779
+--- /dev/null
++++ b/scripts/check-milestone-verified.sh
+@@ -0,0 +1,49 @@
++#!/usr/bin/env bash
++# SPDX-License-Identifier: Apache-2.0
++# A milestone is not done because the loop stopped. Every acceptance criterion in
++# SPEC.md must have a matching evidence line in VERIFIED.md naming what demonstrated it.
++#
++#   scripts/check-milestone-verified.sh <milestone-dir>
++#
++# It cannot verify the evidence is TRUE -- that is non-negotiable 4, which no script
++# can check. It forces ENUMERATION, which catches the quiet omission.
++source "$(dirname "$0")/lib.sh"
++cd "$ROOT"
++DIR="${1:-}"
++[ -n "$DIR" ] && [ -f "$DIR/SPEC.md" ] || { echo "usage: check-milestone-verified.sh <dir with SPEC.md>" >&2; exit 2; }
++hdr "check-milestone-verified $(basename "$DIR")"
++python3 - "$DIR" <<'PY'
++import os, re, sys
++d = sys.argv[1]
++spec = open(os.path.join(d, 'SPEC.md')).read()
++m = re.search(r'^## Acceptance criteria\s*(.*?)(?=^## )', spec, re.S | re.M)
++if not m:
++    print("  \033[31mFAIL\033[0m SPEC.md has no '## Acceptance criteria' section"); sys.exit(1)
++# `-?` because M1's first acceptance criterion is numbered -1. The gate
++# whose entire purpose is forcing enumeration must not silently drop one.
++crit = re.findall(r'^\s*(-?\d+)\.\s+(.+)$', m.group(1), re.M)
++if not crit:
++    print("  \033[31mFAIL\033[0m no numbered acceptance criteria found"); sys.exit(1)
++vp = os.path.join(d, 'VERIFIED.md')
++if not os.path.exists(vp):
++    print("  \033[31mFAIL\033[0m %s missing. %d criteria need evidence:" % (vp, len(crit)))
++    for n, t in crit: print("           %s. %s" % (n, t[:80]))
++    print("         Each line must name the test or command that demonstrated it,")
++    print("         or say OBSERVED-NOT / NOT-RUN. Do not write one you did not run.")
++    sys.exit(1)
++ver = open(vp).read()
++missing, unproven = [], []
++for n, t in crit:
++    row = re.search(r'^\s*%s\.\s+(.+)$' % re.escape(n), ver, re.M)
++    if not row: missing.append((n, t))
++    elif not re.search(r'(#|\.sh|\bgradlew\b|Test\b|NOT-RUN|OBSERVED-NOT)', row.group(1)):
++        unproven.append((n, row.group(1)))
++for n, t in missing: print("  \033[31mFAIL\033[0m criterion %s has no evidence line: %s" % (n, t[:70]))
++for n, r in unproven: print("  \033[31mFAIL\033[0m criterion %s names no test or command: %s" % (n, r[:70]))
++if missing or unproven: sys.exit(1)
++notrun = len(re.findall(r'(NOT-RUN|OBSERVED-NOT)', ver))
++print("  \033[32mok\033[0m   %d criteria, all with evidence%s"
++      % (len(crit), (" (%d explicitly NOT run -- report them)" % notrun) if notrun else ""))
++PY
++[ $? -eq 0 ] || FAILED=1   # a heredoc exit status is not inherited by `finish`
++finish
+diff --git a/scripts/check-portability.sh b/scripts/check-portability.sh
+new file mode 100755
+index 0000000..f392dd5
+--- /dev/null
++++ b/scripts/check-portability.sh
+@@ -0,0 +1,37 @@
++#!/usr/bin/env bash
++# SPDX-License-Identifier: Apache-2.0
++# skills/README.md rules 2, 3, 5: skills are vendor-neutral and adapters are thin.
++source "$(dirname "$0")/lib.sh"
++cd "$ROOT"
++hdr "check-portability"
++
++for d in .agents/skills/*/; do
++  name="$(basename "$d")"
++  f="$d/SKILL.md"
++  [ -f "$f" ] || { fail "$name: no SKILL.md"; continue; }
++  head -1 "$f" | grep -q '^---$' || fail "$name: SKILL.md does not begin with YAML front matter"
++  fname=$(awk -F'name: ' '/^name: /{print $2; exit}' "$f")
++  [ "$fname" = "$name" ] || fail "$name: frontmatter name is '$fname', must equal the directory name"
++  grep -q '^description: ' "$f" || fail "$name: no description in frontmatter"
++  desc=$(awk -F'description: ' '/^description: /{print $2; exit}' "$f")
++  # A trigger, not a title. "Use when/before/after/at/whenever ..." all qualify.
++  printf '%s' "$desc" | grep -qiE 'use (when|before|after|at|whenever|during)' \
++    || fail "$name: description has no 'Use <when|before|after|at|whenever> <trigger>' clause -- layer 1 is the whole mechanism"
++  # rule 3: no vendor syntax
++  grep -nE '^@[A-Za-z._/]' "$f" >/dev/null 2>&1 && fail "$name: SKILL.md contains a vendor @import"
++  # rule 1: adapter must exist
++  [ -f ".claude/commands/$name.md" ] || fail "$name: no .claude/commands/$name.md adapter"
++done
++
++grep -nE '^@[A-Za-z._/]' AGENTS.md >/dev/null 2>&1 && fail "AGENTS.md contains a vendor @import; that belongs in CLAUDE.md"
++
++for c in .claude/commands/*.md; do
++  n="$(basename "$c" .md)"
++  [ -d ".agents/skills/$n" ] || fail "$c: adapter for a skill that does not exist"
++  grep -q ".agents/skills/$n/SKILL.md" "$c" || fail "$c: does not point at its skill"
++  lines=$(wc -l < "$c")
++  [ "$lines" -le 20 ] || fail "$c: $lines lines -- an adapter is a pointer, not a procedure"
++done
++
++[ "$FAILED" -eq 0 ] && ok "skills are portable and adapters are thin"
++finish
+diff --git a/scripts/check-reviewed.sh b/scripts/check-reviewed.sh
+new file mode 100755
+index 0000000..c6ff5a0
+--- /dev/null
++++ b/scripts/check-reviewed.sh
+@@ -0,0 +1,50 @@
++#!/usr/bin/env bash
++# SPDX-License-Identifier: Apache-2.0
++# Non-negotiable 5: every commit is reviewed by two agents that did not write it,
++# and the verdict is bound to the staged bytes by hash.
++source "$(dirname "$0")/lib.sh"
++cd "$ROOT"
++hdr "check-reviewed"
++if [ -n "${CHECK_RANGE:-}" ]; then
++  SHA=$(git diff "$CHECK_RANGE" HEAD | sha256sum | cut -d' ' -f1)
++else
++  git diff --cached --quiet && { ok "nothing staged"; finish; }
++  SHA=$(git diff --cached | sha256sum | cut -d' ' -f1)
++fi
++# non-negotiable 5: BOTH reviewers. Test weakness is invisible to every other gate,
++# so a production-only review is not a review.
++for ROLE in reviewer test-reviewer; do
++  [ -f "build/review/$SHA.$ROLE.json" ] || {
++    fail "no '$ROLE' verdict for the staged bytes ($SHA)"
++    echo "         scripts/review.sh context --task <ID>"
++    echo "         then have the $ROLE agent return: scripts/review.sh record --file v.json --task <ID> --role $ROLE"
++  }
++done
++[ "$FAILED" -eq 0 ] || finish
++for ROLE in reviewer test-reviewer; do
++V="build/review/$SHA.$ROLE.json"
++# Checked for EVERY verdict, not only changes-requested: review.md rules 9-10
++# say a blocking or major finding is fixed or argued, and a reviewer returning
++# 'pass' while carrying one is exactly the case that used to slip through.
++unresolved=$(python3 - "$V" "$ROLE" <<'PY'
++import json, os, sys
++v = json.load(open(sys.argv[1])); role = sys.argv[2]
++argued = set()
++p = 'baselines/review.txt'
++if os.path.exists(p):
++    for line in open(p):
++        line = line.strip()
++        if line and not line.startswith('#'):
++            # Keyed <role>:<id>. Keyed on the bare id, an argument staged for
++            # the production reviewer's R3 also silenced the test reviewer's R3.
++            argued.add(line.split()[0])
++bad = [f for f in v.get('findings', [])
++       if f.get('severity') in ('blocking', 'major')
++       and ('%s:%s' % (role, f.get('id'))) not in argued]
++print(len(bad))
++PY
++)
++[ "$unresolved" = "0" ] || fail "$ROLE: $unresolved blocking/major finding(s) neither fixed nor argued as '$ROLE:<id>' in baselines/review.txt"
++done
++[ "$FAILED" -eq 0 ] && ok "staged bytes reviewed by both reviewer and test-reviewer ($SHA)"
++finish
+diff --git a/scripts/check-suite-time.sh b/scripts/check-suite-time.sh
+new file mode 100755
+index 0000000..dee4acf
+--- /dev/null
++++ b/scripts/check-suite-time.sh
+@@ -0,0 +1,24 @@
++#!/usr/bin/env bash
++# SPDX-License-Identifier: Apache-2.0
++# build.md: a suite that exceeds its budget fails. A slow suite stops being run,
++# and a suite that is not run is not a gate.
++#   check-suite-time.sh <layer> <seconds>   -- record and assert
++source "$(dirname "$0")/lib.sh"
++cd "$ROOT"
++LAYER="${1:-}"; SECS="${2:-}"
++[ -n "$LAYER" ] && [ -n "$SECS" ] || { echo "usage: check-suite-time.sh <L0|L1|L2|L3> <seconds>" >&2; exit 2; }
++hdr "check-suite-time $LAYER"
++case "$LAYER" in
++  L0) BUDGET=90  ;; L1) BUDGET=300 ;; L2) BUDGET=600 ;; L3) BUDGET=900 ;;
++  *)  echo "unknown layer $LAYER" >&2; exit 2 ;;
++esac
++mkdir -p build/timing
++printf '%s %s\n' "$(date -u +%FT%TZ)" "$SECS" >> "build/timing/$LAYER.log"
++if [ "${SECS%.*}" -gt "$BUDGET" ]; then
++  fail "$LAYER took ${SECS}s, budget ${BUDGET}s"
++  echo "         Split it, move a test to a slower layer, or argue the budget up in build.md."
++  echo "         Do NOT silently accept it: the suites people stop running are the slow ones."
++  finish
++fi
++ok "$LAYER ${SECS}s within ${BUDGET}s"
++finish
+diff --git a/scripts/check-tdd.sh b/scripts/check-tdd.sh
+new file mode 100755
+index 0000000..8759fb3
+--- /dev/null
++++ b/scripts/check-tdd.sh
+@@ -0,0 +1,16 @@
++#!/usr/bin/env bash
++# SPDX-License-Identifier: Apache-2.0
++# testing.md rule 2: every NEW test in the staged diff was observed to fail first.
++#
++# It compares the whole set of test methods before and after, rather than
++# parsing diff hunks. Hunk parsing cannot see an annotation and a signature on
++# one line, cannot see @ParameterizedTest, and mis-attributes a method to the
++# annotation above it -- three ways a new test slips in unredded.
++source "$(dirname "$0")/lib.sh"
++cd "$ROOT"
++hdr "check-tdd"
++if [ -z "${CHECK_RANGE:-}" ]; then
++  git diff --cached --quiet && { ok "nothing staged"; finish; }
++fi
++python3 scripts/tdd_scan.py check "${CHECK_RANGE:-}" || FAILED=1
++finish
+diff --git a/scripts/check-terminology.sh b/scripts/check-terminology.sh
+new file mode 100755
+index 0000000..3c499a5
+--- /dev/null
++++ b/scripts/check-terminology.sh
+@@ -0,0 +1,40 @@
++#!/usr/bin/env bash
++# SPDX-License-Identifier: Apache-2.0
++# glossary.md: one name per concept. Flags deprecated vocabulary in prose and code.
++source "$(dirname "$0")/lib.sh"
++cd "$ROOT"
++hdr "check-terminology"
++
++# term|replacement  -- matched case-insensitively on word boundaries
++BAD=(
++  "service pod|ingester node"
++  "service node|ingester node"
++  "the service|the ingester"
++  "client library|consumer library"
++  "service-side|ingester-side"
++  "ingester pod|ingester node"
++  "collector|one of the six roles"
++)
++# NOT banned outright: "agent" and "broker". glossary.md deprecates them as names
++# for OUR components, but docs/research/10-prior-art/ describes Kafka, WarpStream
++# and AutoMQ, where "broker" is those systems' own correct term -- and "agent"
++# names this repository's harness. A gate that cannot tell the two apart would be
++# turned off, and a gate that is off enforces nothing.
++FILES=$(workspace_files '*.md' '*.java')
++
++for pair in "${BAD[@]}"; do
++  term="${pair%%|*}"; repl="${pair##*|}"
++  # skip the glossary itself (it must name the deprecated terms) and ADR filenames
++  hits=$(grep -rniE "\b${term}\b" $FILES 2>/dev/null \
++         | grep -v '^docs/internal/standards/glossary.md:' \
++         | grep -v 'scripts/check-terminology.sh' \
++         | grep -v '0004-the-service-serves-reads.md' || true)
++  if [ -n "$hits" ]; then
++    n=$(printf '%s\n' "$hits" | wc -l | tr -d ' ')
++    fail "\"$term\" ($n) -- use \"$repl\" (glossary.md)"
++    printf '%s\n' "$hits" | head -3 | sed 's/^/           /'
++    [ "$n" -gt 3 ] && echo "           ... and $((n-3)) more"
++  fi
++done
++[ "$FAILED" -eq 0 ] && ok "vocabulary matches glossary.md"
++finish
+diff --git a/scripts/check-test-budget.sh b/scripts/check-test-budget.sh
+new file mode 100755
+index 0000000..493830f
+--- /dev/null
++++ b/scripts/check-test-budget.sh
+@@ -0,0 +1,20 @@
++#!/usr/bin/env bash
++# SPDX-License-Identifier: Apache-2.0
++# build.md: the configured memory limits must SUM below the per-session ceiling,
++# and every container must declare one.
++#
++# WSL2 does not kill the offending process, it kills whatever it likes, so a
++# runaway has to die as a JVM OutOfMemoryError or a Docker OOM-kill. That only
++# works if the limits are actually set AND actually add up -- the previous
++# version grepped for the presence of `-Xmx` without reading its value, so
++# `-Xmx12g` passed while the script printed "ceiling 6144 MiB".
++source "$(dirname "$0")/lib.sh"
++cd "$ROOT"
++hdr "check-test-budget"
++
++if [ ! -f gradle.properties ]; then
++  warn "no gradle.properties yet -- budget unenforced"
++  finish
++fi
++python3 scripts/test_budget.py || FAILED=1
++finish
+diff --git a/scripts/check-test-integrity.sh b/scripts/check-test-integrity.sh
+new file mode 100755
+index 0000000..009c988
+--- /dev/null
++++ b/scripts/check-test-integrity.sh
+@@ -0,0 +1,20 @@
++#!/usr/bin/env bash
++# SPDX-License-Identifier: Apache-2.0
++# testing.md rules 4-5: production changes to satisfy the test, never the reverse.
++#
++#   check-test-integrity.sh [<commit-msg-file>]
++#
++# It runs at the commit-msg stage because the escape hatch testing.md names is
++# "justify it in the commit body", and the commit body does not exist at the
++# pre-commit stage. The previous version grepped the staged *markdown* for
++# /remove.*test/i instead, so the documented remedy did not work and an
++# unrelated documentation line did.
++source "$(dirname "$0")/lib.sh"
++cd "$ROOT"
++hdr "check-test-integrity"
++MSG_FILE="${1:-}"
++if [ -z "${CHECK_RANGE:-}" ]; then
++  git diff --cached --quiet && { ok "nothing staged"; finish; }
++fi
++python3 scripts/test_integrity.py "${MSG_FILE}" "${CHECK_RANGE:-}" || FAILED=1
++finish
+diff --git a/scripts/java_tests.py b/scripts/java_tests.py
+new file mode 100644
+index 0000000..58ed471
+--- /dev/null
++++ b/scripts/java_tests.py
+@@ -0,0 +1,242 @@
++# SPDX-License-Identifier: Apache-2.0
++"""Locate test methods in Java source.
++
++One parser, imported by both `check-tdd` and `check-test-integrity`. They had a
++copy each, and review found them disagreeing three separate times -- about
++`@Nested` ids, about `@ValueSource`, about which brace opened a method body. Two
++gates that must agree on what a test is cannot be kept in agreement by care.
++
++⚠️ This is a lexical parser, not a Java front end. It normalises away the
++constructs that break brace counting -- text blocks, char literals, string
++literals, comments and annotation arguments -- and then walks braces. It does
++not resolve types and does not need to.
++
++⚠️ **Known blind spot: composed annotations.** JUnit 5 lets a project declare
++`@Test public @interface ClusterTest {}` and then annotate tests with
++`@ClusterTest` alone. This parser recognises the five JUnit annotations by name,
++so such a test is invisible to check-tdd and check-test-integrity -- it does not
++refuse, it simply does not see it. Resolving that needs cross-file knowledge of
++every `@interface` in the tree. Recorded as a backlog task rather than guessed
++at, because a gate with an undocumented blind spot is worse than one with a
++documented one.
++"""
++import re
++
++# Matched against an annotation's LAST dotted segment, so the fully-qualified
++# `@org.junit.jupiter.api.Test` -- plain Java that JUnit 5 runs -- is seen.
++TEST_ANN = re.compile(r'(?:Test|ParameterizedTest|RepeatedTest|TestFactory|TestTemplate)$')
++# An annotation name may be qualified: @Test, @api.Test, @org.junit...Test.
++ANN_NAME = r'@\s*[A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)*'
++ANN_BLOCK = re.compile(r'(?:' + ANN_NAME + r'\s*)+')
++NOT_A_METHOD = {'if', 'for', 'while', 'switch', 'catch', 'return', 'new',
++                'synchronized', 'do', 'else', 'try', 'assert'}
++PKG = re.compile(r'^\s*package\s+([\w.]+)\s*;', re.M)
++
++TOKEN = re.compile(r"""
++    (?P<decl>\b(?:class|interface|enum|record)\s+(?P<name>[A-Za-z_$][\w$]*))
++  | (?P<ann>@\s*[A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)*)
++  | (?P<open>\{)
++  | (?P<close>\})
++  | (?P<semi>;)
++  | (?P<call>\b(?P<method>[A-Za-z_$][\w$]*)\s*\()
++""", re.X)
++
++
++# One alternation, scanned left to right. `re.sub` takes the leftmost match and
++# resumes after it, so a `//` inside a string is consumed BY the string and a
++# quote inside a comment is consumed BY the comment. Order within the group only
++# breaks ties at the same start position, which is why the text block precedes
++# the string -- at `"""` both could match, and the string would take the empty
++# `""` and leave a stray quote behind.
++NOISE = re.compile(r"""
++    (?P<textblock>\"{3}(?:[^"\\]|\\.|"(?!""))*\"{3})
++  | (?P<block>/\*.*?\*/)
++  | (?P<line>//[^\n]*)
++  | (?P<char>'(?:\\.|[^'\\\n])*')
++  | (?P<string>"(?:\\.|[^"\\\n])*")
++""", re.X | re.S)
++
++_NOISE_SUB = {'textblock': '""', 'block': ' ', 'line': '', 'char': "' '", 'string': '""'}
++
++
++# JLS 3.3: a unicode escape is translated BEFORE lexing, and only when preceded
++# by an even number of backslashes -- so \u0022 really does terminate a string,
++# while \\u0022 is a literal backslash-u. Doing what the language does is both
++# more faithful and cheaper than refusing: an earlier version refused on any
++# such escape and rejected two real OpenSearch test files, and a gate that
++# rejects real files gets switched off.
++UNICODE_ESC = re.compile(r'(?<!\\)((?:\\\\)*)\\u+([0-9a-fA-F]{4})')
++
++
++def decode_unicode_escapes(src):
++    return UNICODE_ESC.sub(lambda m: m.group(1) + chr(int(m.group(2), 16)), src)
++
++
++def normalise(src):
++    """Remove everything that can carry a brace without meaning one.
++
++    ⚠️ This MUST stay a single pass. It was three sequential re.sub calls, and
++    `assertThat(url).isEqualTo("http://localhost:9000")` -- a line this
++    project's first store test will contain -- had its line truncated by the
++    comment pass, which orphaned the opening quote, which then paired with a
++    later quote and deleted every test method in between. Both gates then
++    reported success on a change they should have rejected.
++    """
++    src = NOISE.sub(lambda m: _NOISE_SUB[m.lastgroup], decode_unicode_escapes(src))
++    # Annotation arguments hold braces and parentheses of their own:
++    # `@ValueSource(ints = {1, 2, 3})` was read as a method body, and
++    # `@ExtendWith(Foo.class)` as a class declaration. Innermost first,
++    # repeatedly, so nested annotations collapse too. Safe as a separate pass:
++    # by here there are no string or comment delimiters left to confuse it.
++    prev = None
++    while prev != src:
++        prev = src
++        src = re.sub(r'(@[A-Za-z_$][\w$]*)\s*\([^()]*\)', r'\1', src)
++    return src
++
++
++def scan(src):
++    """{'pkg.Outer$Inner#method': {'disabled': bool, 'body': str}}."""
++    return _scan(src)[0]
++
++
++def _scan(src):
++    """(found, detected) -- `detected` counts test methods BEFORE ids collapse.
++
++    Overloads share one qualified id, so `len(found)` under-counts them. The
++    cross-check needs the pre-collapse number or it refuses legal Java.
++    """
++    src = normalise(src)
++    m = PKG.search(src)
++    pkg = m.group(1) + '.' if m else ''
++
++    found = {}
++    classes = []           # [name, depth_opened, disabled]
++    depth = 0
++    pending_class = None   # (name, disabled)
++    pending_method = None  # (name, disabled)
++    armed = False          # a test annotation is waiting for its signature
++    in_annotation_type = False  # inside an `@interface` body
++    disabled_here = False  # @Disabled seen in the current annotation block
++    open_method = None     # (id, body_start, depth)
++    ann_type_depth = None  # brace depth of an @interface body, if open
++    detected = 0           # test methods seen, counting overloads separately
++
++    for t in TOKEN.finditer(src):
++        kind = t.lastgroup if t.lastgroup in ('name', 'method') else None
++        if t.group('decl'):
++            pending_class = (t.group('name'), disabled_here)
++        elif t.group('ann'):
++            last = re.sub(r'\s+', '', t.group('ann'))[1:].split('.')[-1]
++            if last == 'interface':
++                # `@interface Foo` declares an annotation type, not a test.
++                # JUnit 5 composed annotations (@ClusterTest and friends) carry
++                # @Test on the declaration; treating that as a test method both
++                # invented an id and, via the cross-check, hard-blocked the gate.
++                armed, disabled_here, pending_class = False, False, None
++                in_annotation_type = True
++            elif last == 'Disabled':
++                disabled_here = True
++            elif TEST_ANN.match(last):
++                armed = True
++        elif t.group('call'):
++            name = t.group('method')
++            if armed and classes and name not in NOT_A_METHOD:
++                pending_method = (name, disabled_here or any(c[2] for c in classes))
++                armed = False
++        elif t.group('open'):
++            depth += 1
++            if in_annotation_type:
++                ann_type_depth = depth
++                in_annotation_type = False
++                armed = False
++                disabled_here = False
++                continue
++            if pending_method:
++                ident = '%s%s#%s' % (pkg, '$'.join(c[0] for c in classes), pending_method[0])
++                open_method = (ident, t.start(), depth, pending_method[1])
++                pending_method = None
++                detected += 1
++            elif pending_class:
++                classes.append([pending_class[0], depth, pending_class[1]])
++                pending_class = None
++            disabled_here = False
++        elif t.group('close'):
++            if ann_type_depth is not None and ann_type_depth == depth:
++                ann_type_depth = None
++                depth -= 1
++                disabled_here = False
++                continue
++            if open_method and open_method[2] == depth:
++                ident, start, _, dis = open_method
++                found[ident] = {'disabled': dis, 'body': src[start:t.end()]}
++                open_method = None
++            if classes and classes[-1][1] == depth:
++                classes.pop()
++            depth -= 1
++            disabled_here = False
++        elif t.group('semi'):
++            disabled_here = False
++            pending_class = None
++    return found, detected
++
++
++class UnparseableJava(Exception):
++    """The parser does not trust its own answer for this file."""
++
++
++def scan_checked(src, path='<source>'):
++    """`scan`, with its result cross-checked against independent signals.
++
++    ⚠️ This exists because the failure that matters is not a wrong answer, it is
++    a wrong answer that looks like a clean one. Every parser bug review found --
++    a `'}'` char literal, `@ValueSource(ints = {…})`, a string containing `//`,
++    a comment containing `\"\"\"` -- ended with a gate printing `ok` on a change
++    it should have rejected. A gate that cannot parse must say so.
++    """
++    norm = normalise(src)
++    found, detected = _scan(src)
++
++    # 1. Every construct must have consumed its own delimiters.
++    if norm.count('{') != norm.count('}'):
++        raise UnparseableJava('%s: braces do not balance after normalisation '
++                              '(%d open, %d close)'
++                              % (path, norm.count('{'), norm.count('}')))
++    if norm.count('"') % 2:
++        raise UnparseableJava('%s: an unpaired quote survives normalisation' % path)
++
++    # 2. The brace walk and a plain count of annotation blocks must agree.
++    #    ⚠️ These are NOT independent -- both resolve an annotation to its simple
++    #    name through TEST_ANN, deliberately, because when they used separate
++    #    spellings the counter could not see `@org.junit.jupiter.api.Test` and
++    #    the two agreed on a self-consistent zero. Sharing one vocabulary is what
++    #    makes them disagree when the BRACE WALK loses its place, which is the
++    #    failure this check exists for. It does not detect an annotation neither
++    #    of them knows -- see the composed-annotation note above.
++    # Count annotation BLOCKS containing a test annotation, not annotations:
++    # `@Test @Disabled void x()` is two annotations and one test method.
++    annotated = 0
++    for m in ANN_BLOCK.finditer(norm):
++        names = [re.sub(r'\s+', '', a)[1:].split('.')[-1]
++                 for a in re.findall(ANN_NAME, m.group(0))]
++        if not any(TEST_ANN.match(n) for n in names):
++            continue
++        # An `@interface` declaration carries the test annotation but declares
++        # no test method. Counting it made every JUnit 5 composed annotation --
++        # the idiom the clusterTest source set will use -- refuse forever.
++        if 'interface' in names:
++            continue
++        if re.match(r'\s*(?:public|protected|private|abstract|static|final|\s)*@\s*interface\b',
++                    norm[m.end():m.end() + 120]):
++            continue
++        annotated += 1
++    if annotated != detected:
++        raise UnparseableJava(
++            '%s: found %d test method(s) but %d test annotation(s). The parser '
++            'lost track of the file, and a gate that guesses here reports '
++            'success on tests it never saw.' % (path, detected, annotated))
++    return found
++
++
++def test_ids(src, path='<source>'):
++    return set(scan_checked(src, path))
+diff --git a/scripts/lib.sh b/scripts/lib.sh
+new file mode 100755
+index 0000000..6a94888
+--- /dev/null
++++ b/scripts/lib.sh
+@@ -0,0 +1,39 @@
++#!/usr/bin/env bash
++# SPDX-License-Identifier: Apache-2.0
++# Shared helpers. Sourced, never executed.
++set -uo pipefail
++ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
++FAILED=0
++fail() { printf '  \033[31mFAIL\033[0m %s\n' "$*"; FAILED=1; }
++warn() { printf '  \033[33mWARN\033[0m %s\n' "$*"; }
++ok()   { printf '  \033[32mok\033[0m   %s\n' "$*"; }
++hdr()  { printf '\033[1m%s\033[0m\n' "$*"; }
++finish() { if [ "$FAILED" -ne 0 ]; then exit 1; fi; exit 0; }
++
++# ---------------------------------------------------------------------------
++# workspace_files -- the ONE definition of "files this project owns".
++#
++#   workspace_files '*.md' '*.java'
++#
++# Derived from git, never from a filesystem walk. That is the whole point: a
++# reference clone under .tmp/, a sibling checkout at ../OpenSearch, a Gradle
++# build/ directory and anything else outside version control are unreachable
++# BY CONSTRUCTION rather than by each gate remembering to exclude them.
++#
++# ⚠️ This replaced five different hand-maintained `find . -not -path ...` lists
++# that had drifted apart -- one excluded .tmp/ but not build/, another the
++# reverse -- and a python glob that needed its own .tmp/ special case. Every new
++# gate was a fresh chance to forget one. scripts/check-gate-scope.sh now fails
++# any gate that walks the filesystem directly, so this cannot drift again.
++#
++# Scope is tracked + staged, which is exactly what a pre-commit gate should
++# judge: an unstaged file is not part of the commit under test. It also fixes
++# the initial-commit case, where `git ls-files` alone returns nothing.
++workspace_files() {
++  {
++    git ls-files -- "$@" 2>/dev/null
++    git diff --cached --name-only --diff-filter=ACMR -- "$@" 2>/dev/null
++  } | sort -u | while IFS= read -r f; do
++    [ -n "$f" ] && [ -f "$f" ] && printf '%s\n' "$f"
++  done
++}
+diff --git a/scripts/review.sh b/scripts/review.sh
+new file mode 100755
+index 0000000..2c8ace3
+--- /dev/null
++++ b/scripts/review.sh
+@@ -0,0 +1,103 @@
++#!/usr/bin/env bash
++# SPDX-License-Identifier: Apache-2.0
++# Build the review packet, and record a verdict bound to the staged diff by hash.
++#   review.sh context --task <ID>
++#   review.sh record  --file <verdict.json> --task <ID>
++# It does NOT spawn the reviewer: no script can do that across tools. It owns the
++# hash, the packet and the artifact; the agent owns the judgement.
++source "$(dirname "$0")/lib.sh"
++cd "$ROOT"
++CMD="${1:-}"; shift || true
++TASK=""; FILE=""; ROLE=""
++while [ $# -gt 0 ]; do
++  case "$1" in
++    --task) TASK="$2"; shift 2 ;;
++    --file) FILE="$2"; shift 2 ;;
++    --role) ROLE="$2"; shift 2 ;;
++    *) echo "unknown arg: $1" >&2; exit 2 ;;
++  esac
++done
++DIFF_SHA=$(git diff --cached | sha256sum | cut -d' ' -f1)
++OUT="build/review"; mkdir -p "$OUT"
++
++case "$CMD" in
++  context)
++    [ -n "$TASK" ] || { echo "--task required" >&2; exit 2; }
++    echo "=== TASK $TASK ==="
++    grep -F "$TASK" docs/internal/product/backlog.md 2>/dev/null || echo "(not found in backlog)"
++    echo
++    echo "=== STANDARDS THE REVIEWER MUST READ (selected from paths, not by the author) ==="
++    ./scripts/which-standards.sh
++    echo
++    # Run them. The previous version printed a hardcoded four-item list under
++    # this heading without invoking anything -- which is precisely the claim
++    # non-negotiable 4 exists to forbid, made by the script that serves the
++    # reviewer.
++    echo "=== GATES THAT ALREADY PASSED (do not re-check these) ==="
++    gate_failed=0
++    for g in $(grep -oE 'scripts/check-[a-z-]+\.sh' .pre-commit-config.yaml | sort -u) \
++             "scripts/build-index.sh --check"; do
++      case "$g" in
++        */check-commit-msg.sh|*/check-test-integrity.sh) continue ;;  # need the message file
++        # check-reviewed is the gate this packet exists to satisfy. Running it
++        # here would fail by construction, every time.
++        */check-reviewed.sh) continue ;;
++      esac
++      if out=$(eval "$g" 2>&1); then
++        echo "  PASSED  $(basename "$g")"
++      else
++        echo "  FAILED  $(basename "$g")"
++        echo "$out" | sed 's/^/          /'
++        gate_failed=1
++      fi
++    done
++    if [ "$gate_failed" -ne 0 ]; then
++      echo
++      echo "!!! A deterministic gate is failing. Fix it before spending a review:"
++      echo "!!! the reviewer's attention is the scarce thing, and a script already"
++      echo "!!! knows the answer to whatever it would find."
++      exit 1
++    fi
++    echo
++    echo "=== STAGED DIFF (sha256 $DIFF_SHA) ==="
++    git diff --cached
++    ;;
++  record)
++    [ -n "$FILE" ] && [ -f "$FILE" ] || { echo "--file <verdict.json> required" >&2; exit 2; }
++    case "$ROLE" in reviewer|test-reviewer) ;; *) echo "--role reviewer|test-reviewer required" >&2; exit 2 ;; esac
++    command -v python3 >/dev/null || { echo "python3 required" >&2; exit 2; }
++    python3 - "$FILE" "$DIFF_SHA" "$TASK" "$OUT" "$ROLE" <<'PY'
++import json, sys, os
++path, sha, task, out, role = sys.argv[1:6]
++v = json.load(open(path))
++errs = []
++if v.get('diff_sha256') != sha:
++    errs.append('diff_sha256 is stale: verdict says %r, staged bytes hash to %r'
++                % (v.get('diff_sha256'), sha))
++if v.get('verdict') not in ('pass', 'changes-requested'):
++    errs.append("verdict must be 'pass' or 'changes-requested'")
++for i, f in enumerate(v.get('findings', [])):
++    if not f.get('failure_scenario'):
++        errs.append('finding %d has no failure_scenario -- that makes it a style opinion' % i)
++    if f.get('severity') not in ('blocking', 'major', 'minor'):
++        errs.append('finding %d: severity must be blocking|major|minor' % i)
++# review.md rules 9-10: a blocking or major finding is fixed or argued. A
++# 'pass' carrying either was accepted here and then never checked against
++# baselines/review.txt by check-reviewed.sh, so the finding vanished into a
++# gitignored directory.
++heavy = sorted({f.get('severity') for f in v.get('findings', [])
++                if f.get('severity') in ('blocking', 'major')})
++if v.get('verdict') == 'pass' and heavy:
++    errs.append("a 'pass' cannot coexist with a %s finding -- review.md rules 9-10"
++                % '/'.join(heavy))
++if errs:
++    for e in errs:
++        print('  \033[31mFAIL\033[0m ' + e)
++    sys.exit(1)
++v['task'] = task; v['role'] = role
++json.dump(v, open(os.path.join(out, '%s.%s.json' % (sha, role)), 'w'), indent=2)
++print('  \033[32mok\033[0m   %s verdict recorded for %s (%s)' % (role, sha[:12], v['verdict']))
++PY
++    ;;
++  *) echo "usage: review.sh context|record ..." >&2; exit 2 ;;
++esac
+diff --git a/scripts/tdd-red.sh b/scripts/tdd-red.sh
+new file mode 100755
+index 0000000..2871839
+--- /dev/null
++++ b/scripts/tdd-red.sh
+@@ -0,0 +1,48 @@
++#!/usr/bin/env bash
++# SPDX-License-Identifier: Apache-2.0
++# testing.md rule 2: record that new tests were RUN and OBSERVED TO FAIL, before
++# the production code exists.
++#
++#   scripts/tdd-red.sh <fully.qualified.TestClass#method>...
++#
++# It runs the named tests, reads the JUnit XML the run produced, and records
++# ONLY the ids that actually appear there as failed.
++#
++# It deliberately does NOT treat "gradle exited non-zero" as red. A compile
++# error, an unresolvable selector, a missing task and a daemon crash all exit
++# non-zero, and every one of them would otherwise mint a red record for a test
++# that never ran. "The build failed" and "this test failed" are different facts.
++source "$(dirname "$0")/lib.sh"
++cd "$ROOT"
++hdr "tdd-red"
++[ $# -gt 0 ] || { echo "usage: tdd-red.sh <fully.qualified.TestClass#method>..." >&2; exit 2; }
++
++OUT=build/tdd; mkdir -p "$OUT"
++if [ ! -x ./gradlew ]; then
++  fail "no ./gradlew -- run this from the repository root"
++  finish
++fi
++
++# Which Gradle task runs each id depends on the source set its file lives in.
++# check-tdd.sh demands a red record for every tier, so a runner that only knows
++# `test` would deadlock every T3 and T4 test in a milestone's plan: no way to
++# record one honestly, and the forgeable red.json waiting right there.
++PLAN="$OUT/plan.txt"
++python3 scripts/tdd_scan.py plan "$@" > "$PLAN" || { cat "$PLAN"; FAILED=1; finish; }
++
++# Results from a previous run must not be mistaken for this one's.
++find . -path '*/build/test-results/*' -name 'TEST-*.xml' -delete 2>/dev/null || true
++
++for task in $(cut -d' ' -f1 "$PLAN" | sort -u); do
++  SELECTORS=(); n=0
++  # One --tests per selector: `--tests "$@"` places only $1 after the flag and
++  # turns $2..$n into Gradle task names, which then "fail" for the wrong reason.
++  while read -r sel; do SELECTORS+=(--tests "$sel"); n=$((n+1)); done \
++    < <(awk -v t="$task" '$1==t {print $2}' "$PLAN")
++  echo "         ./gradlew $task ($n selector(s))"
++  ./gradlew "$task" "${SELECTORS[@]}" >> "$OUT/red.log" 2>&1
++done
++
++python3 scripts/tdd_scan.py record "$OUT" "$@"
++[ $? -eq 0 ] || FAILED=1   # a heredoc/child exit status is not inherited by `finish`
++finish
+diff --git a/scripts/tdd_scan.py b/scripts/tdd_scan.py
+new file mode 100755
+index 0000000..1350d6c
+--- /dev/null
++++ b/scripts/tdd_scan.py
+@@ -0,0 +1,207 @@
++# SPDX-License-Identifier: Apache-2.0
++"""Find the test methods in a Java source, and check new ones have a red record.
++
++Kept out of check-tdd.sh because the parsing is the whole substance of the gate,
++and a heredoc is a bad place for the only thing standing between the project and
++tests written after the code.
++
++    tdd_scan.py ids   <file.java>       -- print every test id in a file
++    tdd_scan.py check [<base-ref>]      -- gate the staged diff (or a CI range)
++"""
++import hashlib, json, os, re, subprocess, sys
++sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
++
++RED, GREEN = '\033[31m', '\033[32m'
++OFF = '\033[0m'
++
++# JUnit 5 has five test-bearing annotations. The old gate matched the literal
++# string "@Test", so @ParameterizedTest and @RepeatedTest were invisible.
++from java_tests import test_ids, UnparseableJava   # one parser, shared with check-test-integrity
++
++
++def git(*a):
++    r = subprocess.run(['git'] + list(a), capture_output=True, text=True)
++    return r.stdout if r.returncode == 0 else None
++
++
++# A test source is anything under a source set named for a test tier. The old
++# gate matched only *Test.java / *Tests.java, a convention no standard states,
++# so a class named anything else was silently exempt.
++TEST_PATH = re.compile(r'/src/(?:test|integrationTest|clusterTest)/java/')
++
++
++def check(base):
++    if base:
++        names = git('diff', '--name-only', base, 'HEAD') or ''
++        after_ref, before_ref = 'HEAD:', base + ':'
++    else:
++        names = git('diff', '--cached', '--name-only') or ''
++        after_ref, before_ref = ':', 'HEAD:'
++
++    paths = [p for p in names.split() if p.endswith('.java') and TEST_PATH.search(p)]
++    new_ids, blob_sha = set(), {}
++    for p in paths:
++        after = git('show', after_ref + p)
++        if after is None:
++            continue                                   # deleted
++        before = git('show', before_ref + p) or ''     # absent => new file
++        try:
++            fresh = test_ids(after, p) - test_ids(before, p)
++        except UnparseableJava as e:
++            print('  %sFAIL%s %s' % (RED, OFF, e))
++            print('         Refusing to certify a file the parser cannot read.')
++            return 1
++        for i in fresh:
++            new_ids.add(i)
++            blob_sha[i] = hashlib.sha256(after.encode()).hexdigest()
++
++    if not new_ids:
++        print('  %sok%s   no new tests in this diff' % (GREEN, OFF))
++        return 0
++
++    rec_path = 'build/tdd/red.json'
++    if not os.path.exists(rec_path):
++        print('  %sFAIL%s %d new test(s) staged but no red record at %s'
++              % (RED, OFF, len(new_ids), rec_path))
++        for i in sorted(new_ids):
++            print('           ' + i)
++        print('         run: scripts/tdd-red.sh <ids...>   BEFORE the production code')
++        return 1
++
++    rec = json.load(open(rec_path)).get('red', {})
++    missing = [i for i in sorted(new_ids) if i not in rec]
++    # Each record is bound to the bytes it was observed in. Editing the test
++    # after watching it fail means the thing observed failing is not the thing
++    # being committed.
++    # Every record must be a dict carrying the sha256 of the file the test was
++    # observed failing in. A record of any other shape -- an int, a string, a
++    # dict with sha256 null -- is a hand-written one, and is refused rather than
++    # tolerated: the tolerance WAS the bypass.
++    stale = [i for i in sorted(new_ids)
++             if i in rec and not (isinstance(rec[i], dict)
++                                  and rec[i].get('sha256') == blob_sha[i])]
++
++    if missing:
++        print('  %sFAIL%s these new tests were never observed to fail:' % (RED, OFF))
++        for i in missing:
++            print('           ' + i)
++        print('         A test written after the code, or never run red, constrains nothing.')
++    if stale:
++        print('  %sFAIL%s these tests changed after their red run:' % (RED, OFF))
++        for i in stale:
++            print('           ' + i)
++        print('         Re-run scripts/tdd-red.sh -- what was observed failing is not')
++        print('         what is being committed.')
++    if missing or stale:
++        return 1
++    print('  %sok%s   %d new test(s), all observed failing first, unchanged since'
++          % (GREEN, OFF, len(new_ids)))
++    return 0
++
++
++SOURCE_SET_TASK = {'test': 'test', 'integrationTest': 'integrationTest',
++                   'clusterTest': 'clusterTest'}
++
++
++def source_of(fq_id):
++    """The file a test id lives in, or None.
++
++    Outer$Inner lives in Outer.java: the nested part is not a path component.
++    Getting this wrong made the sha256 binding a no-op for every @Nested test.
++    """
++    import glob as _glob
++    fq_class = fq_id.split('#')[0].split('$')[0]
++    rel = fq_class.replace('.', '/') + '.java'
++    for cand in _glob.glob('*/src/*/java/' + rel):
++        return cand
++    return None
++
++
++def plan(ids):
++    """`<gradle-task> <gradle-selector>` per id, on stdout."""
++    out, bad = [], []
++    for i in ids:
++        src = source_of(i)
++        if src is None:
++            bad.append(i)
++            continue
++        m = re.search(r'/src/([^/]+)/java/', src)
++        task = SOURCE_SET_TASK.get(m.group(1) if m else '', None)
++        if task is None:
++            bad.append(i)
++            continue
++        # Gradle's selector syntax is Class.method; ours is Class#method.
++        out.append('%s %s' % (task, i.replace('#', '.')))
++    if bad:
++        print('  %sFAIL%s cannot locate a test source for:' % (RED, OFF))
++        for i in bad:
++            print('           ' + i)
++        print('         Use fully-qualified ids: binjava.format.SegmentTest#roundTrips')
++        return 1
++    print('\n'.join(out))
++    return 0
++
++
++def record(out_dir, ids):
++    """Record only ids the run actually reported as failed."""
++    import glob as _glob, hashlib as _h, json as _j, time as _t
++    import xml.etree.ElementTree as ET
++    failed, passed = set(), set()
++    for xml in _glob.glob('*/build/test-results/*/TEST-*.xml'):
++        try:
++            root = ET.parse(xml).getroot()
++        except ET.ParseError:
++            continue
++        for case in root.iter('testcase'):
++            name = re.split(r'[(\[]', case.get('name', ''))[0]
++            key = '%s#%s' % (case.get('classname', ''), name)
++            bad = case.find('failure') is not None or case.find('error') is not None
++            (failed if bad else passed).add(key)
++
++    if not failed and not passed:
++        print('  %sFAIL%s the run produced no test results at all.' % (RED, OFF))
++        print('         Read %s/red.log -- this is normally a compile error,' % out_dir)
++        print('         which is NOT the same as a test observed to fail.')
++        return 1
++
++    recorded, problems = [], []
++    for i in ids:
++        if i in failed:
++            recorded.append(i)
++        elif i in passed:
++            problems.append('%s PASSED. A test that passes before the production code\n'
++                            '           exists is not testing the change.' % i)
++        else:
++            problems.append('%s did not run. An unmatched selector is not a red test.' % i)
++    for p in problems:
++        print('  %sFAIL%s %s' % (RED, OFF, p))
++    if problems:
++        return 1
++
++    path = os.path.join(out_dir, 'red.json')
++    rec = _j.load(open(path)) if os.path.exists(path) else {"red": {}}
++    for i in recorded:
++        src = source_of(i)
++        if src is None:
++            print('  %sFAIL%s no source for %s -- a record that is not bound to the'
++                  % (RED, OFF, i))
++            print('         bytes observed failing is not evidence.')
++            return 1
++        rec["red"][i] = {"at": int(_t.time()), "source": src,
++                         "sha256": _h.sha256(open(src, 'rb').read()).hexdigest()}
++    _j.dump(rec, open(path, 'w'), indent=2, sort_keys=True)
++    print('  %sok%s   %d test id(s) observed failing in this run' % (GREEN, OFF, len(recorded)))
++    return 0
++
++
++if __name__ == '__main__':
++    cmd = sys.argv[1] if len(sys.argv) > 1 else 'check'
++    if cmd == 'ids':
++        for i in sorted(test_ids(open(sys.argv[2]).read())):
++            print(i)
++        sys.exit(0)
++    if cmd == 'plan':
++        sys.exit(plan(sys.argv[2:]))
++    if cmd == 'record':
++        sys.exit(record(sys.argv[2], sys.argv[3:]))
++    sys.exit(check(sys.argv[2] if len(sys.argv) > 2 else ''))
+diff --git a/scripts/test_budget.py b/scripts/test_budget.py
+new file mode 100755
+index 0000000..28fd33d
+--- /dev/null
++++ b/scripts/test_budget.py
+@@ -0,0 +1,190 @@
++# SPDX-License-Identifier: Apache-2.0
++"""Sum every configured memory limit and compare it against the session ceiling.
++
++Reads the real numbers out of the real files: gradle.properties for the daemons,
++the java-conventions plugin for the test JVM, and every docker-compose service
++for the containers.
++"""
++import os, re, subprocess, sys
++
++
++def workspace_files(*patterns):
++    """Tracked + staged, git-derived -- the python half of lib.sh's helper.
++
++    Not a filesystem walk: a docker-compose.yml inside a reference clone under
++    .tmp/ is not ours to check, and a gate whose answer depends on what else
++    happens to be on the disk is not a gate.
++    """
++    out = set()
++    for args in (['git', 'ls-files', '--'], ['git', 'diff', '--cached',
++                                             '--name-only', '--diff-filter=ACMR', '--']):
++        r = subprocess.run(args + list(patterns), capture_output=True, text=True)
++        if r.returncode == 0:
++            out.update(p for p in r.stdout.split() if os.path.isfile(p))
++    return sorted(out)
++
++RED, GREEN, YEL = '\033[31m', '\033[32m', '\033[33m'
++OFF = '\033[0m'
++
++# build.md: 8 GiB is the per-session share of a 32 GiB WSL2 box running several
++# sessions. 6 GiB is the ceiling; the rest is page cache and headroom.
++CEILING_MIB = 6144
++CONVENTIONS = 'buildSrc/src/main/kotlin/binjava.java-conventions.gradle.kts'
++
++
++def mib(text):
++    # Decimals are legal in compose (`mem_limit: 1.5g`) and in -Xmx only as
++    # whole units, but accepting both here costs nothing and refusing to parse
++    # is safer than silently reading 1.5g as 1.
++    m = re.match(r'^(\d+(?:\.\d+)?)\s*([gGmMkK]?[bB]?)$', text.strip())
++    if not m:
++        return None
++    n, unit = float(m.group(1)), m.group(2).lower().rstrip('b')
++    scale = {'g': 1024.0, 'm': 1.0, 'k': 1.0 / 1024.0, '': 1.0 / (1024.0 * 1024.0)}
++    if unit not in scale:
++        return None
++    return int(round(n * scale[unit]))
++
++
++def main():
++    props = open('gradle.properties').read()
++    parts, failed = [], False
++
++    def need(pattern, label, src, text):
++        nonlocal failed
++        m = re.search(pattern, text, re.M)
++        if not m:
++            print('  %sFAIL%s %s declares no %s (build.md)' % (RED, OFF, src, label))
++            failed = True
++            return 0
++        v = mib(m.group(1))
++        if v is None:
++            print('  %sFAIL%s %s: cannot read %s from %r' % (RED, OFF, src, label, m.group(1)))
++            failed = True
++            return 0
++        parts.append((label, v))
++        return v
++
++    need(r'^org\.gradle\.jvmargs=.*?-Xmx(\S+?)\b', 'Gradle daemon heap', 'gradle.properties', props)
++
++
++    m = re.search(r'^org\.gradle\.workers\.max=(\d+)', props, re.M)
++    if not m:
++        print('  %sFAIL%s gradle.properties sets no org.gradle.workers.max (build.md)' % (RED, OFF))
++        print('         Without it Gradle sizes the pool from the core count, and the')
++        print('         per-worker limits below stop bounding anything.')
++        failed = True
++        workers = 1
++    else:
++        workers = int(m.group(1))
++
++    conv_files = [p for p in workspace_files('buildSrc/src/main/kotlin/*.gradle.kts')
++                  if 'maxHeapSize' in open(p).read()] or (
++                  [CONVENTIONS] if os.path.exists(CONVENTIONS) else [])
++    if conv_files:
++        conv = '\n'.join(open(p).read() for p in conv_files)
++        # The compile daemon's heap is read from the conventions plugin, where
++        # the runtime actually enforces it. It used to be read from
++        # gradle.properties, whose `org.gradle.java.compile-daemon.jvmargs` key
++        # Gradle does not read at all -- so this gate counted 512 MiB toward the
++        # budget for a daemon that was in fact unbounded.
++        cd = re.search(r'forkOptions\.memoryMaximumSize\s*=\s*"([^"]+)"', conv)
++        if not cd:
++            print('  %sFAIL%s %s sets no compile-daemon forkOptions.memoryMaximumSize (build.md)'
++                  % (RED, OFF, CONVENTIONS))
++            failed = True
++        else:
++            parts.append(('compile daemon heap', mib(cd.group(1)) or 0))
++
++        t = re.search(r'maxHeapSize\s*=\s*"([^"]+)"', conv)
++        if not t:
++            print('  %sFAIL%s %s sets no test-JVM maxHeapSize (build.md)' % (RED, OFF, CONVENTIONS))
++            failed = True
++        else:
++            # Every worker can hold a test JVM at once, so the budget is the
++            # product, not the single value.
++            per = mib(t.group(1))
++            if per is None:
++                print('  %sFAIL%s cannot read test-JVM maxHeapSize %r'
++                      % (RED, OFF, t.group(1)))
++                failed = True
++            else:
++                parts.append(('test JVMs (%d x %d MiB)' % (workers, per), per * workers))
++        if 'timeout.set(' not in conv:
++            print('  %sFAIL%s %s sets no test timeout -- a hung test holds its memory'
++                  % (RED, OFF, CONVENTIONS))
++            failed = True
++    elif os.path.exists('gradlew'):
++        # The build exists, so an unfound limit is a missing limit, not a
++        # not-yet. Warning here is how a term silently drops out of the sum.
++        print('  %sFAIL%s no test-JVM maxHeapSize found in buildSrc/ (build.md)' % (RED, OFF))
++        failed = True
++    else:
++        print('  %sWARN%s no build yet -- test JVM limit unenforced' % (YEL, OFF))
++
++    # Every compose service declares a limit, checked within its own block. The
++    # previous regex was unanchored, so a service with no limit was satisfied by
++    # one belonging to a different service later in the file.
++    for f in workspace_files('docker-compose*.y*ml', '*/docker-compose*.y*ml'):
++        lines = open(f).read().splitlines()
++        # Only blocks nested under a top-level `services:` key are services.
++        # Reading every two-space key as one meant `volumes:` and `networks:`
++        # were asked to declare a memory limit.
++        blocks, name, buf, in_services, svc_indent = [], None, [], False, None
++        for line in lines:
++            if re.match(r'^[A-Za-z0-9_-]+:', line):
++                if name:
++                    blocks.append((name, buf))
++                    name, buf = None, []
++                in_services = line.startswith('services:')
++                svc_indent = None
++                continue
++            if not in_services:
++                continue
++            m = re.match(r'^(\s+)([A-Za-z0-9_-]+):\s*(?:#.*)?$', line)
++            if m and svc_indent is None:
++                svc_indent = len(m.group(1))     # whatever this file indents by
++            if m and len(m.group(1)) != svc_indent:
++                m = None                          # a nested key, not a service
++            if m:
++                if name:
++                    blocks.append((name, buf))
++                name, buf = m.group(2), []
++            elif name is not None:
++                buf.append(line)
++        if name:
++            blocks.append((name, buf))
++        for svc, body in blocks:
++            text = '\n'.join(body)
++            lim = re.search(r'^\s*(?:mem_limit|memory):\s*[\'"]?'
++                            r'(\d+(?:\.\d+)?\s*[gGmMkK]?[bB]?)', text, re.M)
++            if lim and mib(lim.group(1)) is None:
++                print('  %sFAIL%s %s: service %r has an unparseable memory limit %r'
++                      % (RED, OFF, f, svc, lim.group(1)))
++                failed = True
++                continue
++            if not lim:
++                print("  %sFAIL%s %s: service '%s' declares no memory limit" % (RED, OFF, f, svc))
++                print('         A container without one can take the session down with it.')
++                failed = True
++            else:
++                parts.append(('%s/%s' % (os.path.basename(f), svc), mib(lim.group(1)) or 0)) 
++
++    total = sum(v for _, v in parts)
++    for label, v in parts:
++        print('         %-34s %5d MiB' % (label, v))
++    if total > CEILING_MIB:
++        print('  %sFAIL%s configured limits sum to %d MiB, ceiling %d MiB (build.md)'
++              % (RED, OFF, total, CEILING_MIB))
++        print('         Lower a limit or reduce org.gradle.workers.max. Do NOT raise the')
++        print('         ceiling: it is the number that keeps WSL2 from killing the session.')
++        return 1
++    if failed:
++        return 1
++    print('  %sok%s   limits sum to %d MiB, within the %d MiB ceiling'
++          % (GREEN, OFF, total, CEILING_MIB))
++    return 0
++
++
++if __name__ == '__main__':
++    sys.exit(main())
+diff --git a/scripts/test_integrity.py b/scripts/test_integrity.py
+new file mode 100755
+index 0000000..acc9ba3
+--- /dev/null
++++ b/scripts/test_integrity.py
+@@ -0,0 +1,147 @@
++# SPDX-License-Identifier: Apache-2.0
++"""Detect a test weakened in the same change as the production code it covers.
++
++Two earlier versions of this gate were green when they should have been red:
++
++* the first compared the COUNT of added and removed assertion lines, which is
++  blind to a rewrite in place -- one line out, one line in;
++* the second scored assertion strength but summed it per FILE, so a commit that
++  added one test while gutting another netted to zero.
++
++So the scoring is per test METHOD, and a disabled test counts as a removed one.
++
++⚠️ What it still cannot see: a rewrite that keeps the same strength class --
++`isEqualTo(expected)` becoming `isEqualTo(actualComputedTheSameWay)`. No
++lexical rule catches that. It is the test reviewer's job, which is why
++non-negotiable 5 buys a second pair of eyes rather than a third script.
++"""
++import os, re, subprocess, sys
++sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
++from java_tests import scan_checked, UnparseableJava   # one parser, shared with check-tdd
++
++RED, GREEN, YEL = '\033[31m', '\033[32m', '\033[33m'
++OFF = '\033[0m'
++
++# Strength is "how much of the output space does this rule out". An assertion
++# that pins an exact value rules out nearly everything; a null check rules out
++# one value. The ordering matters more than the exact numbers.
++STRENGTH = [
++    (3, r'\b(assertEquals|assertArrayEquals|assertIterableEquals|assertLinesMatch)\s*\('),
++    (3, r'\.(isEqualTo|isEqualByComparingTo|containsExactly|containsExactlyInAnyOrder|'
++        r'isSameAs|hasSize|isCloseTo|hasToString|containsOnly|isDeepEqualTo)\s*\('),
++    (2, r'\b(assertTrue|assertFalse|assertThrows|assertThrowsExactly|assertSame|'
++        r'assertNotEquals)\s*\('),
++    (2, r'\.(isTrue|isFalse|contains|containsEntry|startsWith|endsWith|isGreaterThan|'
++        r'isLessThan|isBetween|isInstanceOf|hasMessage|hasMessageContaining|matches|'
++        r'isNotEqualTo|allSatisfy|anySatisfy)\s*\(?'),
++    (1, r'\b(assertNotNull|assertNull|assertDoesNotThrow|assertNotSame)\s*\('),
++    (1, r'\.(isNotNull|isNull|isNotEmpty|isEmpty|doesNotThrowAnyException|isPresent|'
++        r'isNotBlank)\s*\(?'),
++    # cost.md's Enforcement section names three assertions to write first and
++    # two of them are `.isZero()`. Absent from this table they scored 0, so the
++    # project's flagship cost assertions could not be seen to weaken at all.
++    (3, r'\.(isZero|isOne|isNotZero|isPositive|isNegative|isNotPositive|isNotNegative)\s*\(?'),
++    (3, r'\b(assertZero)\s*\('),
++]
++TEST_PATH = re.compile(r'/src/(?:test|integrationTest|clusterTest)/java/')
++MAIN_PATH = re.compile(r'/src/main/java/')
++
++
++def strength(text):
++    return sum(w * len(re.findall(p, text)) for w, p in STRENGTH)
++
++
++def test_methods(src, path='<source>'):
++    """{'pkg.Class#method': (strength, disabled)} -- keyed by the QUALIFIED id.
++
++    Keyed by bare method name, two same-named methods in different @Nested
++    classes collapsed into one entry and gutting the strong one was invisible.
++    """
++    return {k: (strength(v['body']), v['disabled'])
++            for k, v in scan_checked(src, path).items()}
++
++
++def git(*a):
++    r = subprocess.run(['git'] + list(a), capture_output=True, text=True)
++    return r.stdout if r.returncode == 0 else None
++
++
++def main(msg_file, base):
++    if base:
++        names = git('diff', '--name-only', base, 'HEAD') or ''
++        after_ref, before_ref = 'HEAD:', base + ':'
++    else:
++        names = git('diff', '--cached', '--name-only') or ''
++        after_ref, before_ref = ':', 'HEAD:'
++    paths = names.split()
++
++    if not any(p.endswith('.java') and MAIN_PATH.search(p) for p in paths):
++        print('  %sok%s   no production change in this commit' % (GREEN, OFF))
++        return 0
++
++    weakened, removed, disabled = [], [], []
++    for p in paths:
++        if not (p.endswith('.java') and TEST_PATH.search(p)):
++            continue
++        before = git('show', before_ref + p)
++        if before is None:
++            continue                       # new test file: nothing to weaken
++        after = git('show', after_ref + p)
++        try:
++            b = test_methods(before, p)
++            a = test_methods(after, p) if after is not None else {}
++        except UnparseableJava as e:
++            print('  %sFAIL%s %s' % (RED, OFF, e))
++            print('         Refusing to certify a file the parser cannot read.')
++            return 1
++        for name, (b_str, b_dis) in b.items():
++            if name not in a:
++                removed.append('%s  %s' % (p, name))
++            else:
++                a_str, a_dis = a[name]
++                # Per METHOD, not per file: summing per file let an added test
++                # cancel out a gutted one.
++                if a_str < b_str:
++                    weakened.append(('%s  %s' % (p, name), b_str, a_str))
++                if a_dis and not b_dis:
++                    disabled.append('%s  %s' % (p, name))
++
++    if not (weakened or removed or disabled):
++        print('  %sok%s   no test weakened, disabled or removed alongside the production change'
++              % (GREEN, OFF))
++        return 0
++
++    # testing.md rule 5: the justification belongs in the commit body, and it
++    # must name what it is justifying.
++    body = open(msg_file).read() if msg_file else ''
++    def has(tag):
++        return re.search(r'^%s:\s*\S' % tag, body, re.M | re.I)
++
++    bad = False
++    for name, b, a in weakened:
++        if has('Test-weakened'):
++            print('  %sWARN%s %s: assertion strength %d -> %d, justified in the commit body'
++                  % (YEL, OFF, name, b, a))
++        else:
++            print('  %sFAIL%s %s: assertion strength fell %d -> %d' % (RED, OFF, name, b, a))
++            bad = True
++    for name in removed + disabled:
++        verb = 'disabled' if name in disabled else 'removed'
++        if has('Test-removed'):
++            print('  %sWARN%s %s %s, justified in the commit body' % (YEL, OFF, name, verb))
++        else:
++            print('  %sFAIL%s %s %s alongside a production change' % (RED, OFF, name, verb))
++            bad = True
++    if bad:
++        print('         This is the "production changed to satisfy the test" inversion')
++        print('         (testing.md rule 4). Either split the change, or add a trailer to')
++        print('         the commit body naming what you did and why:')
++        print('             Test-weakened: <which assertion, and why the new one is right>')
++        print('             Test-removed:  <which test, and why it is no longer needed>')
++        return 1
++    return 0
++
++
++if __name__ == '__main__':
++    sys.exit(main(sys.argv[1] if len(sys.argv) > 1 else '',
++                  sys.argv[2] if len(sys.argv) > 2 else ''))
+diff --git a/scripts/which-standards.sh b/scripts/which-standards.sh
+new file mode 100755
+index 0000000..d380650
+--- /dev/null
++++ b/scripts/which-standards.sh
+@@ -0,0 +1,28 @@
++#!/usr/bin/env bash
++# SPDX-License-Identifier: Apache-2.0
++# Map staged paths to the standards a reviewer should be given.
++# Selected from the paths, deliberately NOT chosen by the author.
++source "$(dirname "$0")/lib.sh"
++cd "$ROOT"
++paths="${*:-$(git diff --cached --name-only)}"
++S=docs/internal/standards
++out=""
++add() { case "$out" in *"$1"*) ;; *) out="$out$1"$'\n' ;; esac; }
++add "$S/git.md"; add "$S/sdd.md"
++case "$paths" in *.java*) add "$S/java-style.md"; add "$S/code-structure.md"; add "$S/testing.md" ;; esac
++# cost.md reaches every module that can decide how many object-store requests
++# happen -- which is most of them. Routing it only to *store*/*segment* paths
++# handed the reviewer of `ingest/`, `client/` or `plugin/` java-style.md and
++# testing.md and never the standard that IS the architecture, on exactly the
++# modules where "one GET per object per node" turns into "one per shard".
++case "$paths" in \
++  *store*|*Store*|*s3*|*S3*|*segment*|*Segment*|*ingest*|*Ingest*|*client*|*Client*|\
++  *plugin*|*Plugin*|*consumer*|*Consumer*|*reader*|*Reader*|*writer*|*Writer*|\
++  *fetch*|*Fetch*|*cache*|*Cache*|*poll*|*Poll*|*format*|*Format*|*flush*|*Flush*|\
++  *http*|*Http*|*bulk*|*Bulk*)
++    add "$S/cost.md"; add "$S/performance.md" ;;
++esac
++case "$paths" in *Test*|*test*|*bench*|*Bench*) add "$S/testing.md"; add "$S/performance.md" ;; esac
++case "$paths" in *lease*|*Lease*|*commit*|*Commit*|*sequencer*|*Sequencer*) add "$S/cost.md"; add "$S/security.md" ;; esac
++case "$paths" in *plugin*|*Plugin*|*subscri*|*Subscri*|*grant*|*Grant*) add "$S/security.md" ;; esac
++printf '%s' "$out" | sed '/^$/d'
+diff --git a/sequencer/README.md b/sequencer/README.md
+new file mode 100644
+index 0000000..8de4eeb
+--- /dev/null
++++ b/sequencer/README.md
+@@ -0,0 +1,11 @@
++# sequencer
++
++Leases, epoch fencing, the write-once commit log, and checkpoints. The coordination
++layer, built on compare-and-swap against the object store rather than on a
++consensus cluster ([ADR-0011](../docs/internal/product/decisions/0011-no-consensus-cluster.md)).
++
++**Depends on:** `binstore-spi`, `format`.
++
++Invariants I1-I5 in [architecture.md](../docs/internal/product/architecture.md)
++are this module's obligation. They are tested by deterministic simulation, not
++by hoping.
+diff --git a/sequencer/build.gradle.kts b/sequencer/build.gradle.kts
+new file mode 100644
+index 0000000..8ba5b9c
+--- /dev/null
++++ b/sequencer/build.gradle.kts
+@@ -0,0 +1,8 @@
++// SPDX-License-Identifier: Apache-2.0
++
++plugins { id("binjava.java-conventions") }
++
++dependencies {
++    api(project(":binstore-spi"))
++    api(project(":format"))
++}
+diff --git a/settings.gradle.kts b/settings.gradle.kts
+new file mode 100644
+index 0000000..5a003c1
+--- /dev/null
++++ b/settings.gradle.kts
+@@ -0,0 +1,21 @@
++// SPDX-License-Identifier: Apache-2.0
++
++// The module list is docs/internal/product/architecture.md § Modules, in
++// dependency order. Adding a module here without adding it there is how a
++// component map stops being true.
++rootProject.name = "opensearch-bin-ingester"
++
++dependencyResolutionManagement {
++    repositories { mavenCentral() }
++}
++
++include(
++    "binstore-spi",
++    "binstore-backends",
++    "format",
++    "sequencer",
++    "ingest",
++    "http",
++    "client",
++    "plugin",
++)

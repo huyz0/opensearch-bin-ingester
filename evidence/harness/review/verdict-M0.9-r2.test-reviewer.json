@@ -1,0 +1,22 @@
+{
+  "diff_sha256": "3951da7bc1a444af203f6a364ff06349028a222472da95f1d28c61ba1183e5da",
+  "task": "M0.9",
+  "role": "test-reviewer",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "M0.9-tr-1",
+      "severity": "major",
+      "file": "docs/internal/product/backlog.md:31",
+      "summary": "M0.35 row's '2 of 29 product docs unreached before M0.9, 1 after' is reproducible only under an unstated, not-yet-adopted convention (bare directory link reaches one level inside). Under check-links.sh's actual current semantics -- verified by reading the script, which does a single `[ -e \"$d/$t\" ]` existence check per literal link target and performs no directory expansion at all -- an independent BFS from AGENTS.md over docs/internal/product/**/*.md gives 3 unreached before this diff and 2 unreached after, because docs/internal/product/decisions/0003-adaptive-tagged-membership-filter-in-the-object-key.md is not linked from anywhere in the tree (confirmed: grep for its filename across docs/ and AGENTS.md returns zero hits) and is reachable only if the still-open 'decisions/ bare link reaches one level in' rule is granted for free.",
+      "failure_scenario": "A reader reproduces the BFS mechanically using today's check-links.sh reachability rule (no directory expansion) and gets 3/2, not 2/1, and finds a third orphan the row never names. That reader now has no way to tell whether the row's numbers were measured against the gate as it exists or against the gate as M0.35 proposes it to become -- exactly the 'a row carrying a number nobody can reproduce is worse than a row carrying none' failure this same message warns against, and it would survive because nothing mechanical checks a backlog row's arithmetic against a live BFS."
+    },
+    {
+      "id": "M0.9-tr-2",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:27,31",
+      "summary": "M0.9 is marked 'done' and its own regression -- a design doc reachable from nothing -- is fixed by nothing more than one added Markdown line in AGENTS.md. F1 (no regression check planted) is disclosed inline and tracked as M0.35, which is the right size of fix per the row's own reasoning (index coverage vs. M0.20's citation resolution), so this is not blocking. But between now and M0.35 landing, a revert of that one AGENTS.md line -- or the addition of a tenth product doc nobody links -- is caught by nothing: check-links.sh still only proves resolution, not reachability, so the property M0.9 exists to fix has zero mechanical protection in this tree today.",
+      "failure_scenario": "Someone reverts the single added line in AGENTS.md (or its equivalent get lost in a future edit/merge), reintroducing the exact defect M0.9 fixes. Every existing gate -- check-links, check-cross-refs (M0.20, not yet built), everything in the pre-commit table -- stays green, because none of them enforce reachability. The regression is invisible until the next manual BFS."
+    }
+  ]
+}

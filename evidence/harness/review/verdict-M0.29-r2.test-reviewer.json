@@ -1,0 +1,94 @@
+{
+  "diff_sha256": "15a67b0b315fa22eaf819608139dcbb60f89660fc654df0e436ba6008d82c8ea",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "TR7",
+      "severity": "major",
+      "blocking": false,
+      "file": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java:58,72-78",
+      "title": "run() and trackedIn() do not scrub the git env that gate() scrubs; with an absolute GIT_DIR/GIT_INDEX_FILE the TR4 post-condition passes vacuously and the real index is overwritten",
+      "detail": "gate() removes GIT_DIR/GIT_INDEX_FILE/GIT_WORK_TREE with a comment naming this exact leak as the one that made ModuleGateTest pass under a mutation. The defence is applied to the one method that only READS. run() (git init && git add -A && git commit) and trackedIn() (git ls-files) inherit the ambient environment. Measured with an absolute value set: run() exits 0 with no output, the OUTER repository's index is rewritten to the fixture's contents, the fixture's own .git is left empty, and trackedIn(dir) and trackedIn(repo) both read the leaked repo and are therefore trivially equal -- the TR4 post-condition passes having compared a list to itself. Not present on the default path: git+pre-commit export GIT_INDEX_FILE=.git/index RELATIVE and no GIT_DIR (measured for both root and subdirectory commits), and relative resolves against the fixture cwd and is harmless. Trigger is an absolute value: IDE git integration (.idea/ is present in the parent), git --git-dir=, worktrees, wrappers. Fix is to hoist the existing scrub loop out of gate() and apply it in run() and trackedIn() as well.",
+      "surviving_mutation": "not a code mutation -- an environment in which the fixture assertions, including the TR4 post-condition added this round, all pass while the fixture is the real repository"
+    },
+    {
+      "id": "TR8",
+      "severity": "minor",
+      "blocking": false,
+      "file": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java:54",
+      "title": "the tar pipeline has no pipefail, so a failure in the PRODUCING tar exits 0 and run()'s exit-zero assertion cannot see it",
+      "detail": "Answering the question asked: tar is the right choice and I verified the three properties it was chosen for -- the fixture carries WORKING-TREE content (confirmed against both the index and the working tree), the tracked symlink .claude/skills survives as a symlink, and exec bits come from the working tree. The third failure mode is the pipeline, not tar: `printf 'nonexistent\\0' | tar --null -T - -cf - | tar -x` exits 0 because bash reports only the last command, and run() asserts on that. The realistic trigger -- a tracked file deleted from the working tree but not yet git rm'd -- IS caught, one layer down, by the TR4 post-condition (measured: source 214 tracked, fixture 213, assertion fires). What is NOT caught is content-level truncation: tar's 'file changed as we read it' leaves the path present but the member short, so the path sets match, the post-condition passes, and the fixture holds a corrupt file. Close it with `bash -o pipefail -c` in run(), or `set -o pipefail;` prefixed to the script string.",
+      "surviving_mutation": "n/a -- fixture robustness, not a production mutation"
+    },
+    {
+      "id": "TR9",
+      "severity": "minor",
+      "blocking": false,
+      "file": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java:146-148",
+      "title": "the planted personal ignore is load-bearing but nothing asserts it is live, so if git's lookup ever changes the -c core.excludesFile mutation starts surviving silently",
+      "detail": "Answering the question asked: planting is the right technique and it is empirically load-bearing. Dropping `-c core.excludesFile=/dev/null` from the gate KILLS gateScopeRefusesWhenTmpIsNotIgnored, which is only possible if the plant is being read; confirmed directly -- with the plant and no override git check-ignore returns 0, with the override it returns 1. The XDG dependency is real but narrow. The residual is that the decay is SILENT in one direction only: if the plant ever stops being found, the gate refuses anyway because the fixture's .gitignore lost the pattern, so the test still passes and the override mutation quietly survives with no signal. Two ways to close it, either is one or two lines: also plant at $HOME/.config/git/ignore (HOME is already pointed at the fixture, and I verified git honours that location too, so the plant then survives either lookup order), or assert the plant is live before running the gate.",
+      "surviving_mutation": "future-conditional: `git -c core.excludesFile=/dev/null check-ignore` -> `git check-ignore` would survive if the plant ever stopped being found. It dies today -- verified."
+    },
+    {
+      "id": "TR10",
+      "severity": "minor",
+      "blocking": false,
+      "file": "scripts/check-harness-tests.sh:19,45",
+      "title": "two mutations in check-harness-tests.sh survive the whole suite; both are M0.24's territory, but the class javadoc reads as though it covers this script generally",
+      "detail": "Measured SURVIVES: (1) line 45, `[ \"${n:-0}\" -gt 0 ]` -> `-ge 0`, which neuters the 'reported 0 tests -- it did not run' antidote that this commit's own comment cites as the thing the bug inverted; the gradlew stub always exits 7 so the success branch is never entered by any test. (2) line 19, `if [ \"$GATE_SCOPE\" != \"full\" ]` -> `= \"full\"`; the fixture always has a single initial commit in which every file is new, so changed_files is never empty and the delta short-circuit can never be exercised. Neither is a regression introduced here -- the diff to this script is the one mkdir line -- and M0.24 names both. Recording them so the gap is on the record rather than implied away by the class javadoc.",
+      "surviving_mutation": "check-harness-tests.sh:45 `-gt 0` -> `-ge 0`; check-harness-tests.sh:19 `!=` -> `=`"
+    },
+    {
+      "id": "TR11",
+      "severity": "minor",
+      "blocking": false,
+      "file": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java:113,131,161",
+      "title": "testing.md rule 17: @TempDir lands in the system temp directory, not build/tmp",
+      "detail": "Measured by a throwaway probe test: java.io.tmpdir=/tmp and @TempDir=/tmp/junit-<n>. Rule 17 says scratch goes under build/tmp and never the system temp directory. Each test copies the 1.5 MB tracked set plus a fresh .git there, three times per suite run. Pre-existing rather than new in kind -- ModuleGateTest has the same violation -- and the fix is one line in buildSrc/build.gradle.kts setting the test worker's java.io.tmpdir, which fixes both suites at once. Better as its own backlog row than as a change to this commit.",
+      "surviving_mutation": "n/a -- standards violation, not a weak assertion"
+    },
+    {
+      "id": "TR12",
+      "severity": "info",
+      "blocking": false,
+      "file": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java:54",
+      "title": "the fixture reflects the WORKING TREE, so the suite validates bytes that are not necessarily the staged bytes the verdict is bound to",
+      "detail": "Noting the tension rather than asking for a change, because the alternative is exactly the checkout-index false green that was just removed. Concrete instance right now: scripts/lib.sh and scripts/review.sh carry unstaged M0.21 edits, and the fixture copied and executed those versions -- confirmed the fixture's lib.sh matches the working tree and differs from the index. Under `git add -p` or a path-limited commit the suite could go green over a script whose committed form differs. This is the same property every other test in this repository has.",
+      "surviving_mutation": "n/a"
+    },
+    {
+      "id": "TR13",
+      "severity": "trivial",
+      "blocking": false,
+      "file": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java:6,39,42-50,56,60-63",
+      "title": "stale assertion message and duplicated commentary",
+      "detail": "Line 56 says 'sanity: checkout-index must have produced the tree' in the assertion that guards a tar-produced fixture -- a stale message inside the guard for the mechanism it names wrongly. Line 6 imports java.io.IOException, unused. Line 39 computes `repo`, then line 66 recomputes the identical path inline. Lines 42-50 and 60-63 tell the same Files.copy/symlink history twice.",
+      "surviving_mutation": "n/a"
+    }
+  ],
+  "verified_by_measurement": {
+    "mutations_run": 13,
+    "killed": 11,
+    "survived": 2,
+    "killed_list": [
+      "check-gate-scope.sh: .tmp/probe -> .tmp (original bug 1) -- kills gateScopeDoesNotAccuseAFreshCheckoutOfNotIgnoringTmp",
+      "check-gate-scope.sh: drop -c core.excludesFile=/dev/null -- kills gateScopeRefusesWhenTmpIsNotIgnored (proves the plant is live)",
+      "check-gate-scope.sh: delete the .tmp block entirely -- kills gateScopeRefusesWhenTmpIsNotIgnored",
+      "check-gate-scope.sh: probe -> build/x (rule inert) -- kills gateScopeRefusesWhenTmpIsNotIgnored",
+      "check-gate-scope.sh: negate the check-ignore condition (reviewer-added) -- kills both gate-scope tests",
+      "check-gate-scope.sh: fail -> echo, dropping the exit-code side effect (reviewer-added) -- kills gateScopeRefusesWhenTmpIsNotIgnored",
+      "check-harness-tests.sh: drop mkdir -p .harness (original bug 2) -- kills harnessTestsCreatesItsLogDirectoryBeforeRedirecting",
+      "check-harness-tests.sh: keep mkdir, redirect to /dev/null -- kills harnessTestsCreatesItsLogDirectoryBeforeRedirecting (TR1 confirmed)",
+      "check-harness-tests.sh: fail -> ok on suite failure (reviewer-added) -- kills harnessTestsCreatesItsLogDirectoryBeforeRedirecting (TR3 confirmed)",
+      "check-harness-tests.sh: mkdir moved AFTER the redirect (reviewer-added) -- kills harnessTestsCreatesItsLogDirectoryBeforeRedirecting",
+      ".gitignore: remove the .tmp/ line -- kills gateScopeDoesNotAccuseAFreshCheckoutOfNotIgnoringTmp"
+    ],
+    "survived_list": [
+      "check-harness-tests.sh:45 -gt 0 -> -ge 0 (see TR10, owned by M0.24)",
+      "check-harness-tests.sh:19 GATE_SCOPE != full -> = full (see TR10, owned by M0.24)"
+    ],
+    "tr5_independently_confirmed": "Removed the .gitignore input declaration from buildSrc/build.gradle.kts, then deleted the .tmp/ line from the real .gitignore: `> Task :test UP-TO-DATE`, BUILD SUCCESSFUL -- the gate goes green having not run the test that fails on exactly that edit. With the declaration restored the same edit fails the suite. The 'Measured:' claim in the comment is true.",
+    "suite_runtime_seconds": 2.6,
+    "tier": "T0-equivalent: subprocess exec only, no socket, no clock, no container, no fixed port, no Thread.sleep"
+  }
+}

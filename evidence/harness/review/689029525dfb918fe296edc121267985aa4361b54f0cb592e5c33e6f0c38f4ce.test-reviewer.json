@@ -1,0 +1,7 @@
+{
+  "diff_sha256": "689029525dfb918fe296edc121267985aa4361b54f0cb592e5c33e6f0c38f4ce",
+  "verdict": "pass",
+  "findings": [],
+  "task": "M2.7",
+  "role": "test-reviewer"
+}

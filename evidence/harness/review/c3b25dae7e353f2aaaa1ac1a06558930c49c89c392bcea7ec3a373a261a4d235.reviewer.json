@@ -1,0 +1,30 @@
+{
+  "diff_sha256": "c3b25dae7e353f2aaaa1ac1a06558930c49c89c392bcea7ec3a373a261a4d235",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "M4.8a-r3-1",
+      "severity": "minor",
+      "file": "format/src/main/java/binjava/format/Checkpoint.java:158",
+      "title": "The catch comment's measured enumeration is falsified by this round's own fix: 'a partitionId that reads negative' is no longer one of the five routes through the IllegalArgumentException unwrap.",
+      "failure_scenario": "decode()'s `catch (IllegalArgumentException)` is justified by 'Five routes were measured: offsets out of order, a blank podId, a partitionId that reads negative, and full-width varints in `sequence` or a flushSeq.' The new partitionId bound intercepts every value that would have reached RunKey's negative check, so that route now throws a direct IOException with cause=null and never enters the catch. Measured in a copy of the staged tree: the four other routes still yield 'corrupt checkpoint: ...' (oldestRetainedOffset past nextOffset, a podId is never blank, sequence is never negative, lastAppliedFlushSeq is never negative), while a 10-byte varint partitionId yields 'a checkpoint claims partitionId -9223372036854775808, which is not a partition any writer can produce'. Nothing in the tree holds the enumeration, so a maintainer auditing the unwrap reproduces 4 of 5, and the comment now also teaches the opposite of what this fix established: it says a narrowing field is refused by the record it feeds, which is exactly the design the partitionId guard had to abandon. The next int-narrowing field added to this decoder is the one that gets validated in RunKey-style and repeats the defect."
+    },
+    {
+      "id": "M4.8a-r3-2",
+      "severity": "minor",
+      "file": "format/src/test/java/binjava/format/CheckpointTest.java:337",
+      "title": "aWIDEPodIdLengthIsRefusedRatherThanNarrowedToAShorterRead claims a measurement its own bytes do not produce.",
+      "failure_scenario": "The comment says 'Measured, a podId length of `0x1_0000_0004` narrows to 4 and the object decodes as valid', but the test splices WIDE_ONE, which is 0x1_0000_0001 and narrows to 1. Measured with the podLen guard deleted from a copy of the staged tree, these exact bytes are NOT accepted: podId becomes the single byte 'p', the remainder is misparsed, and decode fails with 'checkpoint has bytes after its last field'. The test is still a real detector, because that message does not contain 'podId', but the comment misstates what its fixture demonstrates. A later maintainer who widens the trailing-bytes guard, or changes the fixture's podId to a one-byte name, silently converts this from a podId-guard test into a trailing-bytes test while the comment still asserts it pins the narrowing."
+    },
+    {
+      "id": "M4.8a-r3-3",
+      "severity": "minor",
+      "file": "format/src/test/java/binjava/format/CheckpointTest.java:356",
+      "title": "aREPEATEDPodIsRefusedToo claims a BACKWARDS lastAppliedFlushSeq that its fixture cannot show.",
+      "failure_scenario": "The comment says 'measured, dropping the pod half let a repeated podId decode last-wins with `lastAppliedFlushSeq` going BACKWARDS', but the fixture copies the same six bytes ('poda' with flushSeq 1) twice, so last-wins yields the same value. Measured with the duplicate throw deleted from a copy of the staged tree, the object decodes to pods={poda=1} -- accepted, with no backwards move. The test still kills the mutation (it expects an exception and gets none), but the harm the comment names is not the harm this fixture reproduces; giving the second copy a lower flushSeq would cost one byte and make the claim true. As written, someone tightening the test later has no way to tell whether the backwards move was ever asserted here or only asserted about the stream half."
+    }
+  ],
+  "task": "M4.8a",
+  "role": "reviewer",
+  "staged_tree": "6f39ca59a7ed88d6aed8e1880f3a9a0f9242c523"
+}

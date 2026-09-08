@@ -1,0 +1,53 @@
+{
+  "diff_sha256": "3e8198a5ef9629ae84a0e82efe49ca71bad972e077ed7caf72f26be1654b83db",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "severity": "major",
+      "location": "sequencer/src/test/java/binjava/sequencer/AckOrderTest.java:99",
+      "title": "'Pipelining is permitted' is asserted only at depth 2, where the watermark never advances more than one step; the multi-step advance loop is unconstrained",
+      "failure_scenario": "ADR-0011's own scenario is depth 3 -- 'a leader that issues N+1, N+2, N+3 concurrently'. A writer that pipelines three PUTs whose confirmations land 1, 2, 0 and which then acks 0, 1, 2 in order is LEGAL and must report nothing. Only the confirmation of 0 closes a two-wide gap, so it is the only trace in the suite where the watermark must advance more than one step in a single confirm event. pipeliningThatWAITSToAckIsPERMITTED and pipelinedButOrderedAcks() are depth 2 (confirms 1 then 0), where one step is always enough; serial(n), aSerialWriterWhoseChainSTARTSAtOneViolatesNOTHING and ONECHAINSConfirmationsDoNotSatisfyANOTHERS are strictly serial, one step per confirm; anAckOverAGapOfTWOIsCaught acks BEFORE the gap is closed, so it never exercises the advance either. The author added depth 3 for the VIOLATION side after round 1 and left the PERMITTED side at depth 2 -- and the permitted side is the half the row says stops the rule collapsing into 'be serial'. A checker that mis-advances reports a healthy pipelining writer as violating I5, and M4.13 pins exact counts against it, so a clean seed fails.",
+      "mutation": "Invariants.java:145 `while (seen.contains(w)) { w++; }` -> `if (seen.contains(w)) { w++; }`. MEASURED in the reviewer tree: all 10 AckOrderTest tests pass (BUILD SUCCESSFUL). Not an equivalent mutant -- MEASURED on the trace confirmed(1,1), confirmed(1,2), confirmed(1,0), acked(1,0), acked(1,1), acked(1,2): the staged checker returns [] and the mutant returns [Violation[I5, 'epoch 1 acked sequence 2 while the lower-numbered write 1 was still unconfirmed']].",
+      "fix": "Add the depth-3 permitted case as its own test: confirms 1, 2, 0 then acks 0, 1, 2 in order -> isEmpty(). It is the exact mirror of anAckOverAGapOfTWOIsCaught."
+    },
+    {
+      "severity": "major",
+      "location": "sequencer/src/test/java/binjava/sequencer/AckOrderTest.java:196",
+      "title": "ONECHAINSConfirmationsDoNotSatisfyANOTHERS reaches only the 'own write unconfirmed' branch, so the epoch keying of the ORDERING branch is unconstrained",
+      "failure_scenario": "The test's epoch-2 event is acked(2, 2) with no epoch-2 confirmation at all, so it is caught by the first branch (`!seen.contains(e.sequence())`) and the watermark comparison is never reached. Nothing in the suite presents a successor chain that DID confirm the sequence it acks while one of its own lower writes is still in flight -- the ordering half of 'in its OWN chain', which is what the test's javadoc claims to close and what a failover simulation produces. A checker whose confirmed-set is per-epoch but whose watermark leaks across epochs reports zero violations for a successor acking out of order, silently, and M4.13 consumes the count.",
+      "mutation": "Invariants.java:144, 149, 152: key the watermark on a constant instead of the epoch -- `watermark.computeIfAbsent(e.epoch(), base::get)` -> `watermark.computeIfAbsent(0L, k -> base.get(e.epoch()))`, likewise the ack-side lookup, and `watermark.put(e.epoch(), w)` -> `watermark.put(0L, w)`. MEASURED: all 10 AckOrderTest tests pass (BUILD SUCCESSFUL). Not equivalent -- MEASURED on the trace [epoch 1: confirmed 0/acked 0/confirmed 1/acked 1/confirmed 2/acked 2] followed by [epoch 2: confirmed 0, confirmed 2, acked 2]: the staged checker returns 1 violation, the mutant returns 0.",
+      "fix": "Extend ONECHAINSConfirmationsDoNotSatisfyANOTHERS, or add a sibling, where epoch 2 confirms 0 and 2 and then acks 2 -> exactly one I5 violation naming epoch 2 and lower-numbered write 1."
+    },
+    {
+      "severity": "minor",
+      "location": "sequencer/src/test/java/binjava/sequencer/AckOrderTest.java:180",
+      "title": "aSerialWriterWhoseChainSTARTSAtOneViolatesNOTHING pins 'not the literal 0' but not 'the CHAIN'S OWN floor' -- one chain cannot tell per-epoch from global",
+      "failure_scenario": "Every trace in the suite that has two epochs (only ONECHAINSConfirmationsDoNotSatisfyANOTHERS) has both epochs sharing the same floor of 0, so a base computed as one global minimum over the whole trace is indistinguishable from the per-epoch base the javadoc promises. When M4.13 feeds a trace whose successor chain is observed from a higher floor than its predecessor -- a takeover recorded mid-run -- the global-base version reports a perfectly serial successor as violating, which is round 1's finding R1b reoccurring one level up.",
+      "mutation": "Invariants.java:131-133, after the per-epoch merge, flatten it: `long g = base.values().stream().mapToLong(Long::longValue).min().orElse(0L); for (Long k : new ArrayList<>(base.keySet())) { base.put(k, g); }`. MEASURED: all 10 AckOrderTest tests pass (BUILD SUCCESSFUL). Not equivalent -- MEASURED on [epoch 1: confirmed 0/acked 0] then [epoch 2: confirmed 5/acked 5/confirmed 6/acked 6]: the staged checker returns [] and the mutant returns two I5 violations against epoch 2.",
+      "fix": "Give the clean multi-chain case its own trace: epoch 1 based at 0 and epoch 2 based at 5, both strictly serial -> isEmpty()."
+    },
+    {
+      "severity": "minor",
+      "location": "sequencer/src/test/java/binjava/sequencer/AckOrderTest.java:159",
+      "title": "No test pins WHICH lower write the ordering message names when more than one lower exists and some are confirmed",
+      "failure_scenario": "anAckOverAGapOfTWOIsCaught is the only test asserting the ordering detail, and in it the chain floor and the watermark are both 0, so the message cannot distinguish 'the lowest unconfirmed write' from 'the chain's floor'. A checker that names the floor tells an operator, and a failing M4.13 seed, that a write which was in fact confirmed is the one still outstanding.",
+      "mutation": "Invariants.java:157, `+ \" while the lower-numbered write \" + w` -> `+ \" while the lower-numbered write \" + base.get(e.epoch())`. MEASURED: all 10 AckOrderTest tests pass (BUILD SUCCESSFUL). Not equivalent -- MEASURED on confirmed(1,0), confirmed(1,2), acked(1,2): the staged checker says 'lower-numbered write 1' and the mutant says 'lower-numbered write 0', which is confirmed.",
+      "fix": "Assert the detail on a trace where the floor and the lowest unconfirmed write differ, e.g. confirmed 0, confirmed 2, acked 2 -> 'lower-numbered write 1'."
+    }
+  ],
+  "verified": [
+    "Round 1 R1a (scan collapses to the adjacent sequence) is FIXED. Mutation: `else if (w < e.sequence())` -> `else if (w < e.sequence() && e.sequence() - w == 1)`. MEASURED: KILLED by anAckOverAGapOfTWOIsCaught.",
+    "Round 1 R1b (base is the literal 0) is FIXED, and the shipped behaviour is now the per-epoch min I proposed. Mutation: `base.merge(e.epoch(), e.sequence(), Math::min)` -> `base.merge(e.epoch(), 0L, Math::min)`. MEASURED: KILLED by aSerialWriterWhoseChainSTARTSAtOneViolatesNOTHING. Confirmed intended.",
+    "Round 1 R1c (detail cannot tell the ack from the lower) is FIXED. Mutation: swap `e.sequence()` and `w` in the ordering message. MEASURED: KILLED by aNAIVEPipeliningWriterVIOLATESI5 and anAckOverAGapOfTWOIsCaught.",
+    "Round 1 R1d (one ack double-counted) is FIXED. Mutation: drop the `else`, so both branches can fire for one ack. MEASURED: KILLED by anAckThatIsBothUnconfirmedAndOutOfOrderCountsONCE. (A guarded variant that keeps the else's semantics survives, as expected -- that is an equivalent mutant, not a gap.)",
+    "The forbid-pipelining-outright probe re-run against the rewritten checker: add to the confirm branch `if (e.sequence() != watermark) found.add(...)`, i.e. forbid two outstanding writes while keeping the rest. MEASURED: KILLED, by FOUR tests -- pipeliningThatWAITSToAckIsPERMITTED, aNAIVEPipeliningWriterVIOLATESI5, anAckOverAGapOfTWOIsCaught and EVERYOutOfOrderAckIsReportedNotJustTheFirst. The rule cannot collapse into 'be serial' and stay green. It is no longer UNIQUELY held by pipeliningThatWAITSToAckIsPERMITTED, because the exact-count assertions now catch over-reporting too.",
+    "Scan-from-the-last-ack rather than from the floor is still constrained. Mutation: suppress the ordering violation when the watermark is at or below the epoch's last acked sequence. MEASURED: KILLED by EVERYOutOfOrderAckIsReportedNotJustTheFirst.",
+    "Constant-return-empty MEASURED: KILLED (`if (true) { return new ArrayList<>(); }` at the top of checkAckOrder).",
+    "No assertion was weakened. The one changed assertion, AckOrderTest:91, went from contains(\"1\").contains(\"0\") to contains(\"acked sequence 1\").contains(\"lower-numbered write 0\") -- strictly stronger, and it is the round-1 minor R1c being fixed. Every other edit to an existing test is the AckEvent factories gaining the epoch argument.",
+    "Tier is correct: T0 in every case. No clock, socket, store, sleep, fixed port or system temp; testing.md rules 1 and 15-17 satisfied. checkAckOrder is a pure function over a list, which is the right shape for a rule that leaves no trace in the stored bytes.",
+    "Baseline re-measured green in the reviewer tree before and after every mutation; the tree was restored to the staged bytes at the end (diff -q against a pristine copy)."
+  ],
+  "task": "M4.11",
+  "role": "test-reviewer",
+  "staged_tree": "e6a4d06a145a2cea5537632450f45ad38bacd5da"
+}

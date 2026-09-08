@@ -1,0 +1,38 @@
+{
+  "diff_sha256": "b5232d5c8b40c4be646ea517953fb5d50add267f75e38fa824bb1d704f9c988e",
+  "verdict": "changes-requested",
+  "summary": "Docs/config only; no object-store request is added, so the cost lens is inapplicable and stays that way. Separating the unauthored files into their own task is right, and the skill satisfies skills/README.md rules 2, 3 and 5. One major: the skill's Out of scope section excludes the exact artifact its description and the two agent briefs point it at.",
+  "findings": [
+    {
+      "id": "F1",
+      "file": ".agents/skills/brevity/SKILL.md:85",
+      "severity": "major",
+      "title": "The skill claims review reports in its description and excludes them in its body; the two agent briefs point at the excluded case",
+      "failure_scenario": "Line 3 (the frontmatter description, which build-index copies into AGENTS.md and .agents/skills/README.md, so every session loads it) says 'Use when writing any reply, review report or finding.' Lines 80-85 say 'These are written for other people, or persist beyond the conversation. Use normal, complete prose at natural length: ... Documentation, READMEs, reports, published artifacts'. A review verdict is written for another agent and persists in .harness/review/<hash>.json, so it satisfies both clauses of the Out-of-scope criterion and is literally named 'reports'. The next reviewer run loads brevity because its layer-1 trigger names 'review report', reaches line 85, and has two supportable readings with nothing in the tree deciding between them: either the skill governs its output (as .claude/agents/reviewer.md:35 and .claude/agents/test-reviewer.md:61 now instruct) or it is out of scope and the instruction those two files just added is a no-op. Two runs of the same agent on the same diff can then apply opposite output policies, and the change delivers nothing for the two agents it exists to serve. This is the backlog row's own claim ('pointed at it for OUTPUT STYLE ONLY') failing at the pointer: the section the reviewers land in tells them to write at natural length instead. Fix is one clause -- either drop 'reports' from line 85 or qualify it as 'reports written for a person' and say review findings are in scope."
+    },
+    {
+      "id": "F2",
+      "file": ".agents/skills/brevity/SKILL.md:25",
+      "severity": "minor",
+      "title": "The anti-hedging rule protects the measurement but not its provenance",
+      "failure_scenario": "'Always cut -- Hedging: \"it might be worth\", \"you could consider\", \"I'd probably recommend\". State the recommendation.' The Never-cut list protects numbers, units and 'caveats that change what the user would do', so a measured value survives; what is unprotected is the sentence that says whether it was measured at all. A reviewer that inferred a surviving mutation by inspection today writes 'I did not execute this; by inspection the assertion does not constrain X'; under line 25, now binding on that agent via .claude/agents/test-reviewer.md:61, the same reviewer writes 'the mutation survives'. That is the unmeasured claim AGENTS.md non-negotiable 4 forbids, and the failure mode M0.64 (a reviewer reporting a verdict it never recorded) already documents in this repository. Add 'whether a result was measured or inferred' to the Never cut list."
+    },
+    {
+      "id": "F3",
+      "file": ".claude/agents/reviewer.md:35",
+      "severity": "minor",
+      "title": "The output-style rule for reviewers lands only in the Claude-specific brief, not in the vendor-neutral review skill",
+      "failure_scenario": ".agents/skills/review/SKILL.md is the vendor-neutral procedure and it already mirrors the briefs: line 101 says 'Its full brief is `.claude/agents/test-reviewer.md`. The core of it:' followed by a summary, and its Output section states the finding format. This commit changes both briefs and leaves that skill untouched, so a tool that reads only .agents/ runs a reviewer with no output-style rule while Claude Code runs one with it -- the same fork skills/README.md line 5 ('Claude-specific files under .claude/ are thin adapters that delegate here') exists to prevent, and one check-portability.sh does not see because it only inspects .claude/commands/. One sentence in review/SKILL.md \u00a7 Output pointing at the brevity skill closes it."
+    },
+    {
+      "id": "F4",
+      "file": "docs/internal/product/backlog.md:151",
+      "severity": "minor",
+      "title": "An M0 row is filed under the M4 heading",
+      "failure_scenario": "backlog.md has four sections (line 16 '## M0 -- harness', 70 M1, 98 M2, 110 '## M4 -- sequencer and commit log'). M0.79 is appended at line 151, inside the M4 section, between M4.45 and M4.15; every other M0.x row including the recent M0.73/M0.74/M0.75 sits under the M0 heading. A session reading the current milestone's section sees a harness task it will not act on, and one scanning the M0 section for harness work does not see M0.79 at all. Move the row under line 16's heading."
+    }
+  ],
+  "task": "M0.79",
+  "role": "reviewer",
+  "staged_tree": "73bbbb561fe7b5cbf5ef692d5224d442a8b134b6"
+}

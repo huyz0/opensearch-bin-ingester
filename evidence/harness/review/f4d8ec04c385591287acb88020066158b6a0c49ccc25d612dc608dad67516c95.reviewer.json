@@ -1,0 +1,38 @@
+{
+  "diff_sha256": "f4d8ec04c385591287acb88020066158b6a0c49ccc25d612dc608dad67516c95",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "fake-sequencer-keys-on-the-triple-alone",
+      "severity": "major",
+      "location": "sequencer/src/testFixtures/java/binjava/sequencer/FakeSequencer.java:44,74-90",
+      "summary": "FakeSequencer's dedup map is keyed on the triple ONLY -- tripleOf(request) = podId\\0incarnationId\\0flushSeq -- which is the exact defect this commit fixed in IdempotencyWindow.answers by adding the segment key to the match. The fake was not given the same fix.",
+      "failure_scenario": "MEASURED, both sides, same input. commitAll([(podx,i1,5,seg/a,3),(podx,i1,5,seg/b,4)]) then the byte-identical retry. Real LocalSequencer: 'PROBEREAL first: [seg/a@0, seg/b@3]' / 'PROBEREAL retry: [seg/a@0, seg/b@3]' -- answered correctly. FakeSequencer: 'PROBEFAKE first: [seg/a@0, seg/b@3]' / 'PROBEFAKE threw: java.lang.IllegalArgumentException: a delta names the same segment twice, so no caller could tell which offsets are its own: seg/b'. applied.put(tripleOf(request), segment) overwrites seg/a with seg/b, so the retry resolves both requests to seg/b, the returned delta names it twice, and seg/a becomes unanswerable at all. A caller writing a retry test against the fake -- the reason baselines/review.txt gives for why this commit could not be split ('FakeSequencer must model it or a caller's retry tests pass against a fake that is wrong') -- sees a hard failure where production succeeds, and would code around a defect that does not exist."
+    },
+    {
+      "id": "sequencer-contract-still-promises-what-was-split-out",
+      "severity": "major",
+      "location": "sequencer/src/main/java/binjava/sequencer/Sequencer.java:59-62,92-95,106-110",
+      "summary": "Sequencer's published contract states three guarantees this build does not provide, and one of them directly contradicts the paragraph this commit added ten lines above it.",
+      "failure_scenario": "Line 106-110, the @throws tag on commit(), reads: 'the store was unreachable -- AMBIGUOUS, so the commit may or may not have landed. Retrying with the same (podId, incarnationId, flushSeq) is safe only from M4.10d'. M4.10d IS this build, so the tag tells a caller the retry is safe now, while the body paragraph this commit rewrote says 'a retry after IOException still commits the same records a second time. Reconciling that from the chain is M4.10e, and it is NOT in this build.' A caller reads the @throws on the method it calls, implements a retry reusing the triple, and on an ambiguous PUT the same records commit twice at two sets of offsets -- exactly the harm M4.10e exists to fix and that this row claims Sequencer now discloses. Line 59-62 states 'AND IT IS BOUNDED BY THE CHECKPOINT. A successor inherits the window from its predecessor's newest checkpoint, so a replay of a flush applied AFTER that checkpoint ... commits twice' -- nothing inherits anything in this build: LocalSequencer.java:111 constructs 'new IdempotencyWindow(store, prefix)' per instance and grep finds no caller of any inherit path (the whole mechanism went to M4.10f), so IdempotencyWindow's own class javadoc says the opposite -- 'THIS IS PROCESS-LOCAL STATE ... a replay that crosses a takeover is NOT caught'. Line 92-95 likewise claims the attribution 'is what lets a successor rebuild the idempotency window from the uncheckpointed tail'; nothing rebuilds from the tail. A reader of the seam's contract cannot tell which of the two contradictory statements is the code."
+    },
+    {
+      "id": "segment-key-match-is-unconstrained-by-any-test",
+      "severity": "major",
+      "location": "sequencer/src/main/java/binjava/sequencer/IdempotencyWindow.java:179",
+      "summary": "The round-2 fix -- '&& segment.segmentKey().equals(request.segmentKey())' in answers() -- is correct and is killed by no test. Nothing in the tree constrains it.",
+      "failure_scenario": "MEASURED. Deleting that one conjunct (leaving the triple match intact) and running the WHOLE build: 'BUILD SUCCESSFUL in 36s', every module green, :sequencer green on a --rerun-tasks run too. The scenario it exists for then fails immediately: with the conjunct gone, commitAll([(podx,i1,5,seg/a,3),(podx,i1,5,seg/b,4)]) followed by the identical retry throws 'IllegalArgumentException: a delta names the same segment twice ... seg/a'. The nearest test, aReplayIsAnsweredWithITSOwnSegmentOutOfABatchedDelta, uses poda/i1 and podb/i9 -- two DIFFERENT triples -- so it exercises selection by triple and never by key. A future refactor of answers() reintroduces the round-2 blocking defect with the suite, PIT and every gate green."
+    },
+    {
+      "id": "delta-reader-occupied-has-no-caller",
+      "severity": "minor",
+      "location": "sequencer/src/main/java/binjava/sequencer/DeltaReader.java:30-33",
+      "summary": "DeltaReader.occupied() is dead: grep over all *.java in the tree finds the name only at its own declaration. Its only caller was IdempotencyWindow.resolveAmbiguous, which went to M4.10e; the method did not go with it.",
+      "failure_scenario": "It issues store.stat(...) -- an object-store request -- and no test exercises it, so if M4.10e reuses it the probe-forward semantics it was written for are unverified and unowned. Today it is untested code with no caller that a reader must still decide is correct; the split should have taken it."
+    }
+  ],
+  "notes": "Verified by measurement, in a private worktree, tree restored clean afterwards. WHAT IS FIXED AND CONFIRMED: (1) the round-2 blocking ambiguous-PUT reconciliation is genuinely gone -- no ambiguousFrom map, no resolveAmbiguous, applyFresh is a bare log.commitAll -- and it is filed as M4.10e; (2) the round-2 major on the 4096 bound guarding only the inheritance path is fixed and now TESTED: replacing evictOldestBeyond's guard with 'if (true) { return; }' fails pastTheBoundTheOLDESTIncarnationIsEVICTEDAndCommitsAgain, where at round 2 the same mutation left the suite green; (3) the round-2 major on re-reading one delta once per pod is gone with resolveAmbiguous, and the surviving read cache in answer() IS constrained -- replacing 'CommitDelta pointed = read.get(slot)' with 'pointed = null' fails aBatchOfReplaysPointingAtONEDeltaReadsItONCE. COST: no new request on the ordinary path -- split() is pure in-memory and applyFresh is unchanged, so a fresh commit costs exactly what it did before; the only added requests are in answer(), reached only by a caller resubmitting an applied triple, which no production caller does today, bounded at one GET per distinct (epoch, sequence) and constrained by test. Nothing scales with records, shards, partitions or indices. THE QUESTION I WAS ASKED TO JUDGE: leaving answer()'s 'holds no delta' orElseThrow in place, unreachable, with its test moved to M4.10f, is RIGHT and is not a finding. DeltaReader.at returns an Optional, so the empty arm must be handled by something; a descriptive IOException is the only handling that does not lose the diagnosis, and the alternatives (orElseThrow() with no message, or an assert) are worse. The comment saying it is unreachable and naming where its test lives is the correct disclosure. That is a different case from DeltaReader.occupied, which has no caller at all.",
+  "task": "M4.10d",
+  "role": "reviewer",
+  "staged_tree": "b55e7768f9e12713a169feb75982a5ce079a8c54"
+}

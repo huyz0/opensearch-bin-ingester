@@ -1,0 +1,15 @@
+{
+  "diff_sha256": "f5ddef629b04fa58a0536479edc8b43ba8b9497408459b6de58f403648f27277",
+  "verdict": "pass",
+  "findings": [
+    {
+      "file": "format/src/test/java/binjava/format/BatchedCommitDeltaTest.java",
+      "line": 947,
+      "severity": "minor",
+      "what": "The new run-count bound is pinned only by a 0x7FFFFFFF fixture, so its TIGHTNESS is unconstrained -- the same gap the author closed for the segment count in this round by adding aSegmentCountOnlyMODESTLYTooLargeIsAlsoRefused, and did not close for the run count. Measured in a copy of the staged bytes: replacing `runCount > c.remaining()` with `runCount > (long) c.remaining() * 100000` leaves :format:test, :ingest:test and :sequencer:test all green.",
+      "failure_scenario": "A later refactor loosens or rewrites the run bound (a multiplier, `a.length`, or a cast that widens it) while keeping it non-trivial. Every suite stays green because the only run-count fixture claims 0x7FFFFFFF, which any of those forms still rejects. A modestly corrupt v0 delta -- the shape a torn PUT actually produces -- then claims a few hundred thousand runs in a short object and sizes an ArrayList from it before reading a byte, restoring the allocation-from-a-count class this commit exists to close, on the v0 path every bucket already holds. A second fixture with a modest overclaim (say 9 runs in 8 remaining bytes, mirroring the segment-count test) would kill it."
+    }
+  ],
+  "task": "M4.7a",
+  "role": "reviewer"
+}

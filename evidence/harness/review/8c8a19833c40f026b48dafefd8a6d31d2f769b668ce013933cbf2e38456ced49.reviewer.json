@@ -1,0 +1,50 @@
+{
+  "diff_sha256": "8c8a19833c40f026b48dafefd8a6d31d2f769b668ce013933cbf2e38456ced49",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "major",
+      "location": "sequencer/src/main/java/binjava/sequencer/CommitLog.java:144",
+      "title": "The new recover() barrier has no negative control: widening it to CONTINUE survives the whole suite",
+      "failure_scenario": "M4.5 shipped losingASlotToAContinueIsOrdinaryContentionAndRetries (CommitLogTest.java:436) precisely because 'the barrier is the SEAL, and ONLY the SEAL' -- without it, widening commit's fenced check to Seal||Continue passed every other test. This commit adds the same barrier at the recover() site and adds no matching control. Mutate CommitLog.java:144 to stop at any non-delta: `if (!(entry instanceof CommitDelta)) { if (entry instanceof Seal s) sealedAt = s; return; }`. Every test in the tree still passes. The only recover-over-a-CONTINUE test (CommitLogTest.java:326-352) deliberately builds a chain that is 'the CONTINUE and NOTHING ELSE', so it cannot discriminate: recover returns at seq 0 either way and nextSequence is 1 either way. CommitLogSealTest's three chains contain no CONTINUE at all. Production consequence once M4.6c lands: M4.6c's own backlog row says the leader 'writes the CONTINUE that opens its chain', so every leased chain has a Continue at seq 0. recover() would return at seq 0 having applied nothing, nextOffset(stream) would be 0 for every stream, and the leader would re-issue offsets from 0 across a chain that already assigned them -- duplicate offsets on every stream, silently, with no lost race and no exception. Fix: one test recovering [Continue(0), delta(1)] asserting the delta's offsets ARE applied."
+    },
+    {
+      "id": "R2",
+      "severity": "major",
+      "location": "docs/internal/product/backlog.md:42 (M0.64)",
+      "title": "M0.64 labels its prescribed fix 'rung 1' when gate-design's own table makes it rung 7, and the row's own analysis refutes it",
+      "failure_scenario": "The row says: 'FIX at rung 1, not rung 7: the review prompt should state that .harness/ is outside the isolation boundary and name the record command'. gate-design/SKILL.md's ladder defines rung 1 as 'make the bad state unrepresentable' and rung 7 as 'an instruction in a prompt'. 'The review prompt should state X' IS rung 7 verbatim. The genuinely-rung-1 option is demoted to 'a stronger version' in the next clause. Worse, the row's own earlier sentence refutes the fix it prescribes: 'THE PART THAT IS NOT THE PROMPT'S: being told not to write explains not running the command; it explains nothing about asserting it had been run.' Concrete failure: an agent picks up M0.64, reads 'FIX at rung 1', edits the review prompt, and closes the row -- skipping non-negotiable 9's requirement to write one sentence saying why rungs 1-5 cannot carry it, because the row told it this WAS rung 1. The failure the row exists to close (a reviewer asserting a verdict it never recorded) stays fully reachable, since no prompt sentence can prevent an agent from claiming it ran the recorder. This is a misstated mechanism inside the one row whose subject is enforcement design, and M0.64 is not in the current milestone, so it will not be caught by review.md rule 13's milestone-boundary harvest before it is acted on. Fix: swap the two clauses -- name the harness-runs-the-recorder option as the rung-1/3 fix, and the prompt sentence as the rung-7 stopgap it is."
+    },
+    {
+      "id": "R3",
+      "severity": "minor",
+      "location": "sequencer/src/test/java/binjava/sequencer/CommitLogTest.java:354-361",
+      "title": "A prominently marked comment still claims the hole this commit closed is open",
+      "failure_scenario": "recoveryAdvancesPastASealWithoutApplyingIt carries '\u26a0\ufe0f Deliberately asserts NOTHING about committing afterwards. A writer whose recovered state sits beyond a SEAL wins its slot outright and never reaches commit's fenced check -- that is I5 by a second route, it is real, and M4.6 owns it.' After this diff that writer does NOT win its slot: it is refused at CommitLog.java:226. The diff touches only backlog.md, CommitLog.java and a new test file, so this comment was left standing. Concrete failure: the agent that picks up M4.6b or M4.6c reads CommitLogTest.java:354-361 -- the file it must read to understand the seal semantics -- concludes I5-by-second-route is still live, and either re-implements the containment or writes a redrive branch on the assumption that recover() still advances past a seal. The 'M4.6 owns it' pointer now names a row marked 'split' and not implemented. The assertions themselves remain valid, which is why this is minor rather than major."
+    },
+    {
+      "id": "R4",
+      "severity": "minor",
+      "location": "sequencer/src/main/java/binjava/sequencer/CommitLog.java:269",
+      "title": "sealedAt is set by recover() but not by the lost-race branch, so the class holds two different states for one fact",
+      "failure_scenario": "A writer that recovers a clean chain (sealedAt == null), commits for a while, and is then fenced learns of the seal at CommitLog.java:252 and throws fenced(seal) -- without setting sealedAt. Every subsequent commit() call therefore re-enters the loop from the top: a failed putIfAbsent plus a GET of the seal, every flush, forever, on a pod that can never make progress again. That is 2 wasted object-store requests per segment flush for the life of the process. It does not violate non-negotiable 6 (it scales with segments, not records or shards) and it is not an I5 hole -- the refusal is correct every time -- which is why this is minor. But the asymmetry also means an accessor added in M4.6c (isSealed()/continuedAt(), which LocalSequencer needs to follow the CONTINUE) would answer 'not sealed' for a writer that has already been told it is fenced, depending only on how it found out. Setting sealedAt = seal before the throw at :269 collapses both to one state."
+    },
+    {
+      "id": "R5",
+      "severity": "minor",
+      "location": "sequencer/src/test/java/binjava/sequencer/CommitLogSealTest.java:82-83",
+      "title": "Dead CommitLog in recoveryDoesNotApplyTheDiscardedSuffixAfterASeal",
+      "failure_scenario": "`CommitLog past = new CommitLog(store, \"bins\", 1); past.recover();` is never read again -- the late delta is hand-encoded at :84 and written with first.keyFor(2) at :86. The variable name and position make it read as though the discarded-suffix delta was produced BY a fenced writer that recovered past the seal, which is the scenario the test claims to build; it is not. Concrete failure: a reader treats this test as evidence that a recovered-past-seal writer can still produce a post-seal delta, which after this commit it cannot (that path now throws at CommitLog.java:226), and reasons from a fixture that does not exist. It also costs a LIST plus two GETs per run. Deleting the two lines changes nothing the test asserts."
+    },
+    {
+      "id": "R6",
+      "severity": "minor",
+      "location": "sequencer/src/main/java/binjava/sequencer/CommitLog.java:280-284",
+      "title": "The shared fenced(Seal) helper makes two operationally distinct refusals indistinguishable in the log",
+      "failure_scenario": "Both throw sites now emit the byte-identical 'chain sealed at seq N, continued at epoch E; this writer is fenced and must stop'. The two conditions call for different operator action: the :252 site means the seal landed during this writer's lifetime (recent fencing, an in-flight write lost a race -- transient, resolved by the next leader), while the :231 site means this process STARTED UP on an already-sealed chain (a stale epoch or misconfiguration -- permanent for this CommitLog, and it will repeat on every flush per R4). An operator paging on a flood of these cannot tell a normal failover from a pod wedged against a dead chain, and the message is the only signal either produces. Neither existing test pins more than hasMessageContaining(\"sealed\"), so the distinguishing text is unconstrained either way. Adding the site as a word to the message costs one argument."
+    }
+  ],
+  "task": "M4.6a",
+  "role": "reviewer"
+}

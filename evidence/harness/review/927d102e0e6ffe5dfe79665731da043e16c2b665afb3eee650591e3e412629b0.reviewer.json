@@ -1,0 +1,47 @@
+{
+  "verdict": "pass",
+  "summary": "Round 6, verify, scoped to the four minors and the new rounds:M4.8a cap argument. Minors 1, 2 and 3 are correctly fixed and I re-derived each against the tree: the partitionId splice at CheckpointDecodeRefusalTest.java:293-297 replaces one byte with ten so the object still ends at its last field (spliceAt substitutes, it does not insert) and without the `< 0` half 0xFFFFFFFF00000001 narrows to partition 1 and the object DECODES; the requireNonNull entry's new measurement is reproducible from the compact constructor's order at Checkpoint.java:68-72 (requireNonNull before `sequence < 0`, so deleting it lets IllegalArgumentException fire first); and the entry/mutant arithmetic now checks out -- 2+1+1+2 = six forms across four entries. On minor 4 I WITHDRAW the two places I was wrong about: I read the golden bytes, 148 long, stream-count byte 0x06 at offset 9, pods `poda`=42 and `podb`=77 and no third, so GoldenCheckpointTest:19 and ADR-0033:54 are true as written; CheckpointTest's javadoc was the only drift and it is fixed, and its new claims hold (fixture() is 8 streams / 3 pods, the idx(3),9 / idx(3),4 pair is the only non-co-varying shape, and no test in GoldenCheckpointTest touches fixture(), so the golden file genuinely does not track it). The cap argument's CONCLUSION is sound -- wire-format-change does forbid splitting a record from its codec, golden file and ADR -- and its account of the two habits is supported by the tree. Two minors in its prose, both of the class the entry itself is confessing to. Neither blocks; per review.md `minors-land` they belong in the commit body, and fixing them in a round 7 is the failure mode `two-round-cap` describes.",
+  "findings": [
+    {
+      "id": "M4.8a-r6-1",
+      "file": "baselines/review.txt:20",
+      "severity": "minor",
+      "finding": "The cap argument writes '45 of 51 mutants killed, 88.2%, with zero unargued survivors -- against 73.7% at round 3', attributed as 'measured by the test review rather than by me'. The 45/51 figure and the round-3 73.7% (28/38) are both real and correctly attributed, but the COMPARISON between them is the one thing the measuring role explicitly refused. The round-5 test-reviewer verdict records, in its own mutation_matrix note: 'The matrix is re-derived, not the round-4 matrix replayed, so 88.2% (45/51) is NOT comparable by arithmetic to the 78.9% (30/38) of round 4 -- the same error baselines/mutants.txt now warns about. What IS comparable across both is the survivor SET.' The staged entry performs exactly that arithmetic comparison, across a 38-mutant enumeration and a 51-mutant one, and does it against round 3's 73.7% rather than round 4's 78.9% -- the lower of the two comparable-looking figures and the one that maximises the apparent gain, skipping the intermediate measurement entirely. It also contradicts a file staged in the same commit: baselines/mutants.txt's footer says 'deriving the new figure by arithmetic is exactly the error that put two false arguments in this file's first draft'. What the record supports is the survivor set (six, all argued, down from four unargued survivors plus two false equivalence arguments), not a percentage delta.",
+      "failure_scenario": "A later session picks up M4.8b or M4.9, reads baselines/review.txt for what M4.8a's rounds cost, and repeats '88.2%, up from 73.7%' as a measured improvement in a commit body or a backlog row. The two numbers have different denominators over different mutant enumerations, so the 14.5-point gain is an artefact of re-enumeration rather than of the tests the rounds bought; the real evidence -- that the survivor set went from four unargued survivors plus two false equivalence arguments to six argued survivors -- is lost, and the next person to quote it is quoting a number the role that measured it disclaimed in writing at the hash immediately before this one."
+    },
+    {
+      "id": "M4.8a-r6-2",
+      "file": "baselines/review.txt:20",
+      "severity": "minor",
+      "finding": "'`wire-format-change` requires the record, the codec, the fakes, the golden file and the ADR in ONE commit ... The diff is exactly that set.' The diff is a strict subset: there is no fake in it. The staged file list is Checkpoint.java, three test classes, the golden .bin, ADR-0033, two baselines and two backlog files. Nothing under testFixtures/ changes, and neither FakeSequencer nor MemoryBinStore is touched. That is defensible -- there is no reader or writer of checkpoint bytes yet, which is the whole reason this row is separable -- but 'exactly that set' is a checkable claim about the staged paths and it is false against them. The argument's conclusion does not need it: the record, the codec, the golden file and the ADR must land together regardless of whether a fake exists.",
+      "failure_scenario": "M4.8b lands the writer and its author reads this entry as the statement that M4.8a already shipped the fake side of the format, so the checkpoint case is never added to whatever fake or in-memory store M4.8b needs -- or, in the other direction, a reviewer of a later format row treats 'the diff is exactly that set' as the precedent for what wire-format-change's checklist actually requires and waves through a format change with no fake updated, on the ground that M4.8a did the same and was argued past the cap for it."
+    }
+  ],
+  "resolved": [
+    {
+      "id": "M4.8a-r5-minor-1",
+      "status": "resolved",
+      "evidence": "baselines/mutants.txt:14-19 and CheckpointDecodeRefusalTest.java:249-252 now separate the three hand-built objects from the partitionId splice and state why the splice works. Verified from spliceAt (CheckpointDecodeRefusalTest.java:66-73): it copies original[0,at), the 10-byte replacement, then original[at+1,end), so a 1-byte partitionId becomes 10 bytes with no bytes appended past the last field. With the `< 0` half deleted, WIDE_NEGATIVE (0xFFFFFFFF00000001) is not > Integer.MAX_VALUE, narrows to 1, and the object decodes as the same single stream -- an accept, not a differently-worded refusal."
+    },
+    {
+      "id": "M4.8a-r5-minor-2",
+      "status": "resolved",
+      "evidence": "baselines/mutants.txt:44-49 now states the exception TYPE change. Reproducible by reading Checkpoint.java:68-72: requireNonNull(streams), requireNonNull(pods), then `sequence < 0`. Delete the parameter checks and new Checkpoint(-1, null, Map.of()) reaches the sequence guard and raises IllegalArgumentException where it previously raised NPE. The 'nothing is ACCEPTED and no caller can branch' half also holds for the only production caller: decode() builds its own LinkedHashMaps and never passes null, and its catch at Checkpoint.java:150 is unreachable by this route."
+    },
+    {
+      "id": "M4.8a-r5-minor-3",
+      "status": "resolved",
+      "evidence": "baselines/mutants.txt:21-22 replaces 'One entry per mutant' with 'One entry per GUARD; two entries cover two mutant forms each, so four entries carry six mutants.' Counted against the file: streamCount (divisor removed OR /9) = 2, podCount doubled = 1, podLen widened = 1, requireNonNull (either of two) = 2. Six, and it reconciles with 51 - 45 = 6 survivors."
+    },
+    {
+      "id": "M4.8a-r5-minor-4",
+      "status": "withdrawn-in-part",
+      "evidence": "I re-measured the golden artefact rather than inferring it: xxd of format/src/test/resources/golden/checkpoint-v0.bin is 148 bytes, header 42 43 4b 50 then version 0, sequence byte 09, stream-count byte 06, and the tail 02 | 04 'poda' 2a | 04 'podb' 4d -- six streams, two pods, no third pod. GoldenCheckpointTest:19 ('the six streams') and ADR-0033:54 ('148 bytes for the six-stream golden fixture') are therefore true as written and the author was right not to change them; my finding was wrong about those two sites. The third site, CheckpointTest.fixture()'s javadoc, had drifted and is fixed, and its replacement is accurate: the loop plus the idx(3),9 / idx(3),4 pair is 8 streams, pods are podb/poda/pod-\u00e9 = 3, the pair is the only shape that does not co-vary indexId with partitionId, and no test in GoldenCheckpointTest calls fixture() -- it only decodes and re-encodes the committed bytes -- so 'the golden file is a SEPARATE six-stream artifact and does not track this one' holds."
+    }
+  ],
+  "cost_lens": "No change. The delta since the reviewed hash is prose only -- two baseline files, two backlog files and two javadoc/comment blocks. No object-store call is added, moved or removed by it, and Checkpoint.java is unchanged this round. The commit as a whole still adds no request of any kind: it has no writer and no trigger, so nothing here issues a GET, PUT, LIST or STAT, and the size assertion at CheckpointTest.java:153-169 is what keeps the object O(streams) rather than O(history), which is the request-rate property M4.9 depends on.",
+  "diff_sha256": "927d102e0e6ffe5dfe79665731da043e16c2b665afb3eee650591e3e412629b0",
+  "task": "M4.8a",
+  "role": "reviewer",
+  "staged_tree": "99df6a2f9ab8d4798b6cad48cc2cbab411992798"
+}

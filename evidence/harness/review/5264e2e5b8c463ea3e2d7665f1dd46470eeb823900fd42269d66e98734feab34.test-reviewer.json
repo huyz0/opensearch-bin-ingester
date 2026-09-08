@@ -1,0 +1,31 @@
+{
+  "diff_sha256": "5264e2e5b8c463ea3e2d7665f1dd46470eeb823900fd42269d66e98734feab34",
+  "verdict": "pass",
+  "summary": "No test source in the diff. The one line of logic (\"^junit$\" to \"junit4\") IS constrained: deleting it makes dependencyLicenses fail, measured. The round-1 major M0.83-1 is fixed and verified -- junit4 EPL-1.0 text, SPDX entry, mapping, gate green. Three measured minors, all in pre-existing untouched task code: the deny list misses a valid SPDX expression, orphan licence files are never reported, and a non-jar artifact bypasses the gate entirely.",
+  "findings": [
+    {
+      "severity": "minor",
+      "location": "build.gradle.kts:75-83 (denied.set) with licenses/SPDX.txt",
+      "title": "The deny list is exact set membership, so a valid SPDX expression or a case variant passes green",
+      "failure_scenario": "Measured in the review tree. Changing the SPDX.txt line `framework Apache-2.0` to `framework GPL-3.0-only` fails correctly with 'framework-3.8.0.jar is GPL-3.0-only, which this project cannot ship'. Changing it to `framework GPL-3.0-only WITH Classpath-exception-2.0` -- a valid SPDX expression, and the standard way to write the licence of the very family this diff touches -- gives BUILD SUCCESSFUL, deny list never matched. `framework gpl-3.0-only` also passes. DependencyLicensesTask.kt:123 takes parts[1] with limit=2, so the whole remainder of the line becomes the id, and line 160 tests `spdx in denied.get()`. This commit is the first to give the deny list real input (77 entries) and it hand-picks one side for 4 dual-licensed artifacts -- jakarta.annotation-api, whose POM declares GPL-2.0 with classpath exception, is exactly the entry an author would write in expression form next time. The convention 'either of these two is not an identifier' is prose in SPDX.txt's header and is enforced by nothing. Fix is a predicate over the file: reject a second field containing whitespace, or normalise case before the set test.",
+      "mutation_that_survives": "In DependencyLicensesTask.kt, replace `else if (spdx in denied.get())` with `else if (false)` -- no test and no gate run detects it, because no committed SPDX.txt line is currently denied and nothing exercises the deny branch."
+    },
+    {
+      "severity": "minor",
+      "location": "buildSrc/src/main/kotlin/binjava/DependencyLicensesTask.kt:131,154",
+      "title": "seenLicence is written and never read, so an orphan *-LICENSE.txt is unreported and this commit's fix reverts to green in two obedient steps",
+      "failure_scenario": "Measured. Deleting only `\"^junit$\" to \"junit4\"` from licenceMappings fails with exactly one problem: `SPDX.txt names 'junit4', which no dependency uses -- delete it`. Following that instruction (deleting the junit4 line from SPDX.txt) gives BUILD SUCCESSFUL with junit:junit:4.13.2 back on junit 5's EPL-2.0 -- the precise defect M0.83 exists to fix -- and licenses/junit4-LICENSE.txt left orphaned with no complaint. .sha1 orphans (line 169) and SPDX orphans (line 172) are both reported; licence-file orphans are not, although `seenLicence` is already collected at line 154. Adding the symmetric loop makes the two-step revert fail with 'unused junit4-LICENSE.txt'.",
+      "mutation_that_survives": "Delete line 154 (`seenLicence += licence.name`) entirely: nothing reads the set, so the build is unchanged."
+    },
+    {
+      "severity": "minor",
+      "location": "buildSrc/src/main/kotlin/binjava/DependencyLicensesTask.kt:133",
+      "title": "A non-jar artifact reaches the build with no sha, no licence and no SPDX entry, and the gate does not mention it",
+      "failure_scenario": "Measured. Adding `dependencies.add(\"licenseCheck\", files(\"evil/notajar-1.0.zip\"))` produces zero problems -- the file is filtered out by `.filter { it.name.endsWith(\".jar\") }` and never counted, sha-checked or licence-checked. Any dependency resolving to a .zip, .aar, .exe or native distribution (protoc binaries, JNI natives) is invisible to build.md rule 2 while the stamp reports 'ok 122 jar(s)' as though the set were complete. Same class as the group-blindness minor already recorded on M0.19 and belongs on the same row: the gate's identity model is the jar filename, not the artifact. Separately confirmed for the recorded one -- `com.evil:framework:9.9` gives 'missing sha for framework-9.9.jar', then one `./gradlew updateShas` writes the pin and the gate goes green with the foreign jar inheriting `framework Apache-2.0`.",
+      "mutation_that_survives": "Change the filter to `.filter { it.name.endsWith(\".jar\") && it.length() > 0 }` or any narrowing that drops a whole artifact class -- nothing observes the count of skipped files."
+    }
+  ],
+  "task": "M0.83",
+  "role": "test-reviewer",
+  "staged_tree": "eb724c75c5f43821f7bb2610ec6c9857042674c3"
+}

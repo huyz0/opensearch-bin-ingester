@@ -1,0 +1,16 @@
+{
+  "diff_sha256": "33b4071390b071de377432f806d9863ca4560fddcd4741f12af0a34f7ddf2fdf",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "M4.13a-R1a",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/Invariants.java:300",
+      "summary": "checkReader's expected side is derived through Invariants.inheritedOffsets, which silently truncates at `if (depth > 1000) { return inherited; }` and returns a PARTIAL base with no violation recorded. That cap was pre-existing and only fed checkChain, where a short base makes a delta read as a `gap`; this diff makes it decide a READER verdict, and ChainReplay's own javadoc records the same cap as measured wrong: \"An earlier draft capped depth at 1000 and called anything deeper corrupt; that was FALSE and measured so -- at 1002 legitimate terms\", because every restart, rolling deploy, TTL expiry and failed start burns an epoch and nothing compacts them. Note the asymmetry the diff creates: production (ChainReplay) is iterative and uncapped, the checker judging it is recursive and capped.",
+      "failure_scenario": "A chain more than 1,000 epochs deep -- legitimate per ChainReplay's own measurement -- gives inheritedOffsets a truncated base, so `expected` is lower than what the reader correctly carries and every inherited stream is reported as `I3 ... beyond the sealed prefix which ends at N`. A correct reader is named as the violator of the exact invariant M4's acceptance criterion 3 is about, and the pinned seed sends whoever debugs it at the reader instead of at the checker. Minor because M4.13's sweep does not reach 1,000 epochs per seed and the recursion would be a stack problem before it is an accuracy problem, so nothing in the current tree can hit it."
+    }
+  ],
+  "task": "M4.13a",
+  "role": "reviewer",
+  "staged_tree": "e15a3ddb97ce1c47b08b21922a21d368e8ac2ae4"
+}

@@ -1,0 +1,60 @@
+{
+  "diff_sha256": "fc0f8f981116d12d11acf15b03d52e0fe9393fa88d8ee6b0fe243fed8328bd94",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "TR1",
+      "severity": "major",
+      "location": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java:105",
+      "title": "The test asserts the log DIRECTORY, not the log FILE the gate cites -- so the exact defect its own Javadoc describes still survives",
+      "detail": "The Javadoc says the bug was that the gate 'reported the suite failed, citing a log that did not exist'. The assertion added is that .harness/ exists. The contract is that .harness/harness-tests.log -- the path printed in the FAIL line -- exists and holds Gradle's output. Verified by execution in a replicated fresh checkout: with the fix in place and the exit-7 stub, .harness/harness-tests.log IS written, so asserting it costs nothing and is strictly stronger.",
+      "surviving_mutation": "Keep `mkdir -p .harness`, change the redirect to `> /dev/null 2>&1`, and drop the `grep -E ... .harness/harness-tests.log` line. Executed: the gate prints `FAIL harness tests failed -- see .harness/harness-tests.log`, exits 1, emits no 'No such file or directory', and .harness/ exists -- both assertions pass while the gate cites a log that was never written. Fix: assertThat(repo.resolve(\".harness/harness-tests.log\")).exists()."
+    },
+    {
+      "id": "TR2",
+      "severity": "major",
+      "location": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java:84-88, scripts/check-gate-scope.sh:100-106",
+      "title": "The commit changes an enforcement predicate and adds only a passing fixture; nothing constructs the input the check must REJECT",
+      "detail": "grep shows FreshCheckoutTest is the ONLY thing in the tree that executes check-gate-scope.sh, and it asserts exit 0 plus the absence of a message. Every mutation that makes the .tmp/ rule more permissive is invisible to it. The packet's own lens for this change says: construct the input each check must REJECT and confirm it rejects it. The rejecting fixture is four lines on the fixture already built -- rewrite .gitignore without the '.tmp/' line, assert exit 1 and 'not gitignored'. Verified by execution: with '.tmp/' removed the correct gate does refuse (exit 1), so the fixture is unambiguous.",
+      "surviving_mutation": "Two, both executed in a replicated fresh checkout. (a) Delete the whole `if ! git check-ignore -q .tmp/probe ... fi` block -- gate prints `ok 27 gate scripts judge this repository only`, exit 0, test green. (b) Swap the probe path: `git check-ignore -q build/x`. The gate then reports ok EVEN WITH '.tmp/' removed from .gitignore -- the rule is inert, the repository's quarantine is unguarded, and the test is green."
+    },
+    {
+      "id": "TR3",
+      "severity": "minor",
+      "location": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java:101-105",
+      "title": "The test constrains a side effect but never the gate's verdict; false-green mutations of check-harness-tests.sh survive",
+      "detail": "The invocation the test already performs makes the failure path reachable, so asserting the verdict is free: out.startsWith(\"1\") and contains(\"harness tests failed\"). Without them the test cannot distinguish an enforcing gate from an inert one. Separately, the exit-7 stub (line 101) leaves the whole success branch unreachable -- the XML count and the `[ \"${n:-0}\" -gt 0 ]` antidote the Javadoc names are executed by nothing. That part is M0.24's row ('tests for that script, which today no test executes') and I am not asking for it here.",
+      "surviving_mutation": "Executed, all three green under the test as written: (a) delete the `else fail ... grep ...` branch -- the gate exits 0 on a failing harness suite and prints nothing; (b) replace everything after `mkdir -p .harness` with `ok \"harness tests pass\"; finish` -- constant return, Gradle never invoked, exit 0; (c) `-gt 0` -> `-ge 0` in the success branch -- unreachable under the stub."
+    },
+    {
+      "id": "TR4",
+      "severity": "minor",
+      "location": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java:37-55",
+      "title": "freshCheckout() is not the checkout it claims to be, and its skip is silent",
+      "detail": "Measured by replicating the helper in shell and diffing `git ls-files` against a real `git clone` of the repo: the fixture OMITS the tracked symlink .claude/skills (Files.isRegularFile follows the link, a symlink to a directory returns false, and line 46-48 continues silently). Harmless for these two gates, a trap for the next one added here -- check-portability.sh is precisely a gate that reads .claude/. Also: the copy takes WORKING-TREE bytes for index-listed paths, so it holds staged-but-uncommitted and unstaged edits (my replication contained FreshCheckoutTest.java, the clone did not); a fix that lives only in the working tree and is never staged still shows green, mitigated in practice by pre-commit stashing unstaged changes. And Files.isExecutable asks whether THIS process may execute, not whether the mode bit is set, so the fixture cannot represent a clone that lost the +x on gradlew -- which check-harness-tests.sh line 16 branches on. The cheap guard is a post-condition rather than more copying: assert the fixture's own `git ls-files` equals the source list minus the known symlink, so the next silently-skipped file is loud.",
+      "surviving_mutation": "Add a tracked symlink, or a path git would quote (core.quotePath, none today), and the helper drops it with no assertion firing -- a gate whose subject is that file is then tested against a checkout that does not contain it."
+    },
+    {
+      "id": "TR5",
+      "severity": "minor",
+      "location": "buildSrc/build.gradle.kts:31-45",
+      "title": ".gitignore is an input of this test and is not declared, so the suite can be UP-TO-DATE across the change it guards",
+      "detail": "Measured, not reasoned: two clean `./gradlew -p buildSrc test` runs to reach UP-TO-DATE, then removed '.tmp/' from .gitignore and ran again -- `> Task :test UP-TO-DATE, BUILD SUCCESSFUL in 472ms`, i.e. check-harness-tests.sh would print 'ok N harness test(s) pass' having not run the test that fails on exactly that edit. This is the failure mode the build file's own harnessScripts comment was written for. Exposure is narrow today because check-gate-scope.sh itself catches that particular edit directly; the declaration is one line: inputs.file(rootDir.parentFile.resolve(\".gitignore\")).",
+      "surviving_mutation": "Delete '.tmp/' from .gitignore in a commit that touches no script: the suite reports UP-TO-DATE and the harness gate reports ok, while gateScopeDoesNotAccuseAFreshCheckoutOfNotIgnoringTmp would have failed had it run."
+    },
+    {
+      "id": "TR6",
+      "severity": "minor",
+      "location": "docs/internal/product/backlog.md:36",
+      "title": "The row's criterion is class-shaped ('gates must pass in a fresh checkout'); the tests are two named instances",
+      "detail": "Not a defect in what was written -- both named bugs have a test that fails without the fix (verified below) -- but the row will read as covering the class. I ran every scripts/check-*.sh except check-module.sh (needs Gradle/network) and check-harness-tests.sh (covered) inside a replicated fresh checkout with GATE_SCOPE=full: all pass; the three exit-2s (check-commit-msg, check-milestone-verified, check-suite-time) are usage errors from missing arguments, not fresh-checkout failures. So nothing else is broken today and nothing keeps it that way. Either narrow the row's wording to the two gates or open a follow-up for the parameterised version -- do not widen this commit."
+    },
+    {
+      "id": "TR7",
+      "severity": "info",
+      "location": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java:83-106",
+      "title": "Both red records were verified genuine by direct execution, not taken on trust",
+      "detail": "The question asked was whether either test is red for a reason unrelated to what it guards. Reverted each bug inside a replicated fresh checkout and ran the real gates. `.tmp/probe` -> `.tmp`: 'FAIL .tmp/ is not gitignored', exit 1 -- kills BOTH assertions of test 1. Removing `mkdir -p .harness`: 'check-harness-tests.sh: line 37: .harness/harness-tests.log: No such file or directory' plus 'grep: ...: No such file or directory', and .harness/ absent -- kills BOTH assertions of test 2, the directory assertion independently of the message, which also makes test 2 robust to a non-English LC_MESSAGES that would translate strerror's text and pass the doesNotContain vacuously. The stub at line 101 does not weaken the guard: bash evaluates the redirect before the command, so the bug reproduces regardless of what gradlew does. @TempDir resolves under buildSrc/build/tmp/test, not the system temp directory (testing.md rule 17): checked, no /tmp/junit* exists."
+    }
+  ]
+}

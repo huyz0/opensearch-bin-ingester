@@ -1,0 +1,67 @@
+{
+  "diff_sha256": "ffa93235d06c2bfa217e349cd419b43bfa91d2ee3a570844690e4d065f01c15d",
+  "verdict": "changes-requested",
+  "round": 2,
+  "summary": "R1, R3, R4 (in-repo TMPDIR), R5 (script header) and R6 verified fixed or reasonably argued. R2 is verified correct for the tree itself -- the materialised repo's HEAD tree hashes identically to the staged tree (0f743f16), and gates in it report 282/566 instead of 0. Two majors remain, both introduced or left open by the round-1 fixes: the new packet block tells reviewers to run every build inside the tree while the harness requires GIT_INDEX_FILE exported, and one such build DESTROYS that index (measured, twice, isolated to ReviewRolesTest); and the same packet block still asserts the tree carries no .git, which the R2 fix made false.",
+  "findings": [
+    {
+      "id": "R7",
+      "severity": "major",
+      "file": "scripts/review.sh:45",
+      "title": "The new packet block tells reviewers to run builds inside the tree; doing so under the exported GIT_INDEX_FILE destroys the index the verdict is bound to",
+      "failure_scenario": "MEASURED TWICE IN THIS REVIEW, and once for real. The packet block added by this diff says 'do every mutation, build and test run inside it', and the harness requires GIT_INDEX_FILE exported in every shell (review-tree.sh's own comment at line 78 celebrates honouring it). Following both: `cd $TREE && ./gradlew -p buildSrc test` rewrites the caller's private index from 566 entries to 3. Isolated to a single test: `env GIT_INDEX_FILE=<copy> ./gradlew -p buildSrc test --tests '*ReviewRolesTest*'` alone takes the copy from 566 entries to 3. It happened to the real index for THIS review at 11:20 -- `git diff --cached` then showed 561 staged deletions -- and was only recoverable because I had earlier recorded `git write-tree` (0f743f16); `git read-tree 0f743f16` restored the staged-diff sha256 to ffa93235. Without that record the bytes the verdict binds to would have been unreconstructable. Consequence in the normal case: check-reviewed recomputes a different hash and the verdict is silently void, or the author commits from a 3-entry index that stages 561 deletions. The diff SHIPS the fix -- GitEnv.stripped -- and applies it to ReviewTreeTest only, deferring ReviewRolesTest and FreshCheckoutTest at GitEnv.java:23-26 on the grounds that 'M0.57 does not own them'. M0.57 does own this one: it is the row that makes running the suite under a private index routine, and it made it routine in the same commit that declined to make it safe. Minimum fix inside this diff's own files: the packet block must issue the build line as `env -u GIT_INDEX_FILE ./gradlew ...`, or GitEnv must be applied to the two named tests."
+    },
+    {
+      "id": "R8",
+      "severity": "major",
+      "file": "scripts/review.sh:51",
+      "title": "The packet asserts 'the tree carries no .git and no history', which the R2 fix made false",
+      "failure_scenario": "review-tree.sh now runs `git init`, `git add -A` and `git commit` in DEST (lines 86-93), so the issued tree has a .git and exactly one commit -- verified: `git log --oneline` in the issued tree prints '49f0a0c the staged bytes under review' and `git ls-files` prints 566 paths. The packet still tells every reviewer the opposite, and this is the reviewer-facing contract, not a code comment. A reviewer who believes there is no .git will not run a git-derived gate in the tree (knowing it would pass vacuously on 0 files) and will run it in the shared repository instead -- which is the contention M0.57 exists to remove -- or will skip the gate-mutation verification that the packet's own first lens demands. The opposite reading is as bad: with a .git now present, `scripts/review.sh record` run inside the tree writes .harness/review/ into a throwaway directory and check-reviewed in the real repo finds nothing (M0.64's failure mode). The sentence's instruction is still right; its stated reason is now false, which is the same class as round 1's R5."
+    },
+    {
+      "id": "R9",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/ReviewTreeTest.java:274",
+      "title": "R5's false claim was fixed in the script header and left standing in the test file",
+      "failure_scenario": "The comment still says 'A materialised copy INSIDE the tree would be scanned by check-file-size, check-links and every other full-scope gate'. Verified false for both gates named: check-file-size.sh:14 resolves input through `scoped_files`, check-links.sh:23-25 through `workspace_files`, and lib.sh:32-38 derives both from `git ls-files` plus `git diff --cached` -- an untracked in-repo copy is unreachable BY CONSTRUCTION, which lib.sh:18-21 states as the point of the design. The script header was rewritten to the true claim ('anything walking the working directory rather than asking git'), which I checked and which is real -- check-terminology.sh:36 and check-metric-cardinality.sh:16 use `grep -r`, check-gate-scope.sh:54 warns about exactly that, and tdd-red.sh:40 does `find . -path '*/build/test-results/*' -delete`. The test file kept the old, false version, so the next reader who greps for why the guard exists finds a reason that contradicts lib.sh."
+    },
+    {
+      "id": "R10",
+      "severity": "minor",
+      "file": "scripts/review-tree.sh:59",
+      "title": "The outside-the-repository guard is defeated by a symlinked TMPDIR because `cd && pwd` is logical, not physical",
+      "failure_scenario": "`DEST=$(cd \"$DEST\" && pwd)` returns bash's LOGICAL path, so the `case \"$DEST/\" in \"$ROOT\"/*` refusal compares a path that still contains the symlink. Measured: with `TMPDIR=<link>` where <link> -> <repo>/insiderepo, review-tree.sh exits 0, prints /tmp/.../link-to-inside/binjava-review-trees/reviewer.asD8XUvw, and a full 566-file copy plus a nested .git lands physically inside the repository -- the exact state the guard's own comment says must not exist, and one that tdd-red.sh's `find . -delete` and the `grep -r` gates would then walk. The absolute and relative in-repo TMPDIR cases are both correctly refused (measured); only the symlink slips. `pwd -P` (and comparing against a realpath'd ROOT) closes it."
+    },
+    {
+      "id": "R11",
+      "severity": "minor",
+      "file": "scripts/review-tree.sh:86",
+      "title": "`env -u` uses the explicit three-key list that this commit's own test file argues is insufficient",
+      "failure_scenario": "ReviewTreeTest.java:246-250 strips by GIT_ prefix and asserts GIT_OBJECT_DIRECTORY is removed, with the comment that 'an explicit three-key list ... would leave it inherited'. The shell half of the same commit then uses exactly that three-key list, under a comment claiming it is there 'for exactly the reason GitEnv exists on the Java side'. Measured consequence with GIT_OBJECT_DIRECTORY exported and pointing at a valid object store: the script exits 0 and prints a path, `git init` creates a .git with no objects/ directory, and every git command in the issued tree then fails with 'fatal: not a git repository' -- so every git-derived gate in it examines nothing and PASSES, which is R2's silent-green defect verbatim; the tree's blobs and commit are written into the CALLER's object store instead (confirmed: `git fsck` in the caller reports the dangling commit). The trigger is exotic -- nothing in this harness exports GIT_OBJECT_DIRECTORY -- which is why this is minor and not major, but the fix is the same prefix strip the Java side already uses."
+    },
+    {
+      "id": "R12",
+      "severity": "minor",
+      "file": "scripts/review-tree.sh:48",
+      "title": "ReviewTreeTest's fixtures materialise into the same shared parent as live reviewer trees",
+      "failure_scenario": "review-tree.sh keys BASE on ${TMPDIR:-/tmp}, and ReviewTreeTest invokes it 16 times per run without setting TMPDIR for the child, so the harness suite writes its fixture trees into /tmp/binjava-review-trees alongside the trees real reviewers are working in. Measured now: 132 directories, 47M, mixing 12-hex-char leftovers from the pre-fix draft, tiny 2-file fixtures, and live 13M repo copies belonging to a concurrently running test-reviewer. The header's reclamation argument ('trees share one parent so the platform's temp reaper can take them') survives -- systemd-tmpfiles-clean.timer is active here and /usr/lib/tmpfiles.d/tmp.conf ages /tmp at 10d, so R6's decision not to reclaim is reasonable and I am not reopening it -- but the parent it relies on is now indistinguishable test litter and live evidence, so nobody can safely clean it by hand either. Setting TMPDIR to the @TempDir in the fixture would keep the suite out of it."
+    },
+    {
+      "id": "R13",
+      "severity": "minor",
+      "file": "scripts/review-tree.sh:49",
+      "title": "The in-repo refusal leaves behind the directories it created inside the repository",
+      "failure_scenario": "`mkdir -p \"$BASE\"` and `mktemp -d` both run before the `$ROOT` containment check, so refusing an in-repo TMPDIR still leaves <repo>/<tmpdir>/binjava-review-trees/<role>.XXXXXXXX on disk -- observed for both the absolute and the relative TMPDIR cases. They are empty, so no gate sees them (git ignores empty directories) and nothing is corrupted; but the script's stated contract is that it never leaves anything inside the repository, and on this path it does. Doing the containment check on $BASE before mkdir would cost nothing."
+    }
+  ],
+  "verified_from_round_1": [
+    "R1 FIXED: `git checkout-index` failure now exits 1 and prints nothing on stdout (measured with an index naming an unreachable blob: stdout is 0 bytes, stderr names the destination). `mkdir -p` and `mktemp -d` are both checked and both were made to fail (unwritable TMPDIR, unwritable BASE) -- exit 1, clear message, no path.",
+    "R2 FIXED for the tree itself: the issued tree's HEAD tree object equals the staged tree object exactly (0f743f1628dd29a19e0d762d9511d0891a2745d7 both sides), file lists are identical at 566, and check-file-size/check-terminology inside the tree report 282 source files / 566 tracked instead of 0. The git init/add/commit step cannot half-succeed: every command is `|| exit 1` inside the sh -c and the outer `if !` turns any of them into exit 1 with a distinct message; an empty index would make `git commit` fail and be reported rather than yielding a repo-less tree. review-tree.sh itself does NOT write the caller's index (index sha256 unchanged across an invocation). See R7 for what is still open around it.",
+    "R3 FIXED: no `rm -rf` and no reuse path remain; DEST is `mktemp -d`, which is atomic, so two concurrent invocations for one role cannot collide -- 90+ distinct directories observed across concurrent sessions, none reused.",
+    "R4 PARTLY FIXED: absolute in-repo TMPDIR and relative TMPDIR are both refused with an actionable message (measured). Symlinked TMPDIR is not -- see R10.",
+    "R5 FIXED in the script header, and the replacement claim is TRUE and if anything understated. Not fixed in the test file -- see R9.",
+    "R6 ACCEPTED: the reaper the header relies on exists and runs on this platform (systemd-tmpfiles-clean.timer active, /tmp aged at 10d), so declining to add an age-based sweep is a reasonable call and I am not reopening it. The parent's hygiene is a separate, smaller point -- see R12."
+  ],
+  "task": "M0.57",
+  "role": "reviewer"
+}

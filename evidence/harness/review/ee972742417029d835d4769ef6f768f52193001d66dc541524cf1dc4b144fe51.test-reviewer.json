@@ -1,0 +1,87 @@
+{
+  "diff_sha256": "ee972742417029d835d4769ef6f768f52193001d66dc541524cf1dc4b144fe51",
+  "verdict": "changes-requested",
+  "summary": "Both of my round-2 majors are discharged, and discharged in prose a test can actually enforce: the minting site now names the INGESTER process and the DefaultIngest instance, and IngestCommitPathTest's Recording decorator does record CommitRequests from a real DefaultIngest across two flushes, so the per-flush mutation the ADR names is killable exactly where it says; the delta attribution is now PER SegmentCommit, and BatchingSequencerTest.java:259 already builds the two-pod commitAll that discriminates it. All three discriminating tests I named still hold, unchanged. The new defect is in the round-3 addition itself, and it is the same shape as the two just fixed: the POINTER added to close the answerability gap answers exactly ONE flush per pod, while the same document sells UNBOUNDED-DEPTH detection two paragraphs earlier and M4.10d's row is instructed to answer every detected replay with the original offsets. Every discriminator M4.10d's notes name is depth one, so the implementation that returns the pointed delta's offsets for any detected replay is green against all of them and hands a producer another flush's offsets. One clause repairs it; this does not imply a split.",
+  "findings": [
+    {
+      "id": "M4.10b-R3a",
+      "severity": "major",
+      "file": "docs/internal/product/decisions/0036-the-idempotency-key-carries-an-explicit-pod-incarnation.md",
+      "line": 89,
+      "title": "THE POINTER ANSWERS EXACTLY ONE FLUSH PER POD, while detection is sold as unbounded-depth and M4.10d is told to answer every replay",
+      "failure_scenario": "l.50-56 makes unbounded depth a PROPERTY of the key: 'one number gives an unbounded-depth window: a replay of any earlier commit is caught, not merely the pod's most recent one.' l.89-97, new this round, closes answerability with ONE pointer per pod: '(epoch, sequence) of the delta that LAST applied for that pod ... so one GET answers the replay.' Those cannot both hold. Concretely: pod A commits flushSeq 5 in delta seq 100, then flushSeq 6 in delta seq 101. The slot holds (lastApplied=6, ptr=101). A duplicate delivery of flush 5 arrives. Detection: 5 <= 6, replay. Answering: GET delta 101, which carries flush 6's SegmentCommit and RunCommits and \u2014 now that the triple is per SegmentCommit \u2014 provably does NOT carry (podA, inc, 5). So the implementation either returns delta 101's offsets, acking flush 5's records at flush 6's offsets (the same invariant break this very commit writes into M4.46's row: 'a committed offset must resolve to the records committed at it'), or it answers nothing, which is the property the row lists as binding ('a replay must be ANSWERED, not merely detected: M4.10d must return the original offsets') and the ground on which 'bound the window to the tail' is rejected at l.153-154. Note the pointer does not even dominate that rejected alternative: walking the uncheckpointed tail answers ANY of the pod's flushes still in the tail, the pointer answers exactly one flush at any depth. Reachability in M4 is nil \u2014 flushLocked holds one lock so at most one flush is outstanding and a commit-level retry is always depth one \u2014 which is exactly what makes it dangerous: it is M4-invisible and breaks on M5's first duplicate or reordered forwarded commit, the identical shape that disqualified the lease epoch (l.19-22) and that the per-SegmentCommit clause was added to prevent.",
+      "mutation_that_survives": "In M4.10d, answer a detected replay by GETting the slot's pointer and returning the offsets of that delta's SegmentCommit for the replaying pod \u2014 without checking that its flushSeq equals the replayed one (or falling back to the delta's first SegmentCommit). Green against every discriminator the notes require: backlog-notes.md M4.10d names 'a restarted pod reissuing 0 for a NEW segment' (accept path, no answer at all), 'a replay arriving after a checkpoint recorded it' (the pod's most recent flush, pointer correct), and the commitAll(S1,S2)-then-commit(S1) case (both segments live in ONE delta, so the pointer is right and the per-SegmentCommit triple picks the right segment). Nothing anywhere requires a pod to commit flush N, then flush N+1 in a LATER delta, then replay flush N \u2014 the only fixture that discriminates.",
+      "remedy": "One clause in Consequences stating the answerable depth and what happens outside it. Either 'the pointer answers a replay of the pod's MOST RECENT flush; a strictly older replay is detected and refused explicitly, never answered with another flush's offsets \u2014 M4.10d owns that refusal and its test', or scope the l.50-56 claim to detection and say answering is depth-one by construction. The discriminating test is writable at T0 the day M4.10c lands: commit (podA,inc,5) and (podA,inc,6) in two separate deltas, replay 5, assert the answer is 5's ORIGINAL offsets or an explicit refusal \u2014 never 6's."
+    },
+    {
+      "id": "M4.10b-R3b",
+      "severity": "minor",
+      "file": "docs/internal/product/decisions/0036-the-idempotency-key-carries-an-explicit-pod-incarnation.md",
+      "line": 130,
+      "title": "'the slot-overwrite bound above' does not exist above",
+      "failure_scenario": "The rewritten ADR-0031 paragraph discharges the two-live-processes scenario by pointing at 'the slot-overwrite bound above'. grep -i 'overwrit|destruct|interleav|unordered' over the whole ADR matches this line only: no bound is stated anywhere in the document. The notes agree it is NOT here \u2014 backlog-notes.md M4.10d says 'ADR-0036 also leaves the slot destructible by an interleaving incarnation; pin that bound' \u2014 so the deferral is deliberate and fine, but the ADR reads as though it discharged what it deferred. A session reading only the ADR (M4.10c's row says 'ADR travels here') gets a citation to nothing, and no test can be derived from it in either direction.",
+      "mutation_that_survives": "None \u2014 documentation consistency. Recorded because it sits on the other reviewer's round-2 major, and because 'the bound is above' and 'M4.10d pins the bound' cannot both be true.",
+      "remedy": "Say it plainly: the slot is last-writer-wins across interleaving incarnations, and M4.10d owns the bound. One sentence, or a pointer to the note."
+    },
+    {
+      "id": "M4.10b-R3c",
+      "severity": "minor",
+      "file": "docs/internal/product/decisions/0036-the-idempotency-key-carries-an-explicit-pod-incarnation.md",
+      "line": 109,
+      "title": "The sizing paragraph widened the field and kept the old number in its conclusion",
+      "failure_scenario": "The heading became 'grows by fixed-width fieldS per pod' and the pointer, 'two longs', was added \u2014 then the conclusion still argues from 'and 16 bytes per pod does not approach the remainder'. The per-pod addition is now ~32 bytes plus the existing uvarint, so the margin against the 64 KiB assertion halves (remainder is ~26 KiB over the 38 KiB body: ~1,600 pods at 16 bytes, ~830 at 32). Also 'fixed-width' is not what the encoder does \u2014 Checkpoint.encode writes pods with putUvarint (Checkpoint.java:137). And nothing measures this axis: CheckpointTest.java:163-164, the test the paragraph cites, puts exactly ONE pod in the fixture, so the 64 KiB assertion is blind to per-pod width entirely. This is the size argument ADR-0033 is amended against, so the number should track the shape.",
+      "mutation_that_survives": "Not a test-kill: the cited assertion (CheckpointTest.java:169, isLessThan(64*1024)) is green for any per-pod width, because the fixture has one pod. That is the point \u2014 the paragraph's arithmetic is the only thing standing in for a measurement, and it is now stale by 2x.",
+      "remedy": "Update the number to the shape you just chose, or drop the arithmetic and let M4.10c's row own a pods-dimension size assertion."
+    },
+    {
+      "id": "M4.10b-R3d",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-done.md",
+      "line": 149,
+      "title": "The archived row records the decision with the noun the same commit's ADR calls wrong",
+      "failure_scenario": "backlog-done.md:149 reads 'with the incarnation minted per producer process'. The ADR added, this round, 'THE MINTING SITE IS PART OF THE DECISION ... The producer is the record supplier (glossary.md), and is the wrong noun: it is the ingester that holds flushSeq' (l.39-41). The archive row is the summary form of this decision and the only one a session sees without opening the ADR; it now states the rejected reading of the load-bearing clause. Same family as my round-2 minor about the dead key surviving in the surfaces a session reads.",
+      "mutation_that_survives": "None \u2014 documentation consistency.",
+      "remedy": "s/producer process/ingester process/ in the archived row. Trivial, and it is the one line that outlives the ADR's prominence."
+    },
+    {
+      "id": "M4.10b-R3e",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md",
+      "line": 123,
+      "title": "The placement clause landed in the ADR only; M4.10c's row and note still say 'carries the triple'",
+      "failure_scenario": "The ADR now says PER SegmentCommit and, correctly, names the mutation as one that 'round-trips, passes both new goldens and is byte-equivalent today'. That is a testability fact an implementer can act on \u2014 but neither M4.10c's row (backlog.md:123, 'CommitDelta carries the triple') nor its note requires the fixture that kills it, and the note's only relevant line is the pre-existing 'every production delta is single-segment today'. So the round-trip test an implementer writes from the row alone is single-segment and passes against the once-per-delta field.",
+      "mutation_that_survives": "Write the triple once, after `sequence`, in both encode paths instead of inside writeSegment (CommitDelta.java:167 region). Single-segment round-trips pass, both new goldens pass, CheckpointWriterContentTest passes (its requests come through observe(List<CommitRequest>), not a decoded delta). Killed only by a delta batching pod0 and pod1 \u2014 the shape BatchingSequencerTest.java:259 already constructs.",
+      "remedy": "Six words in M4.10c's row: 'per SegmentCommit; one test decodes a two-pod delta'. Not worth a round on its own."
+    },
+    {
+      "id": "M4.10b-R3f",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/CommitRequest.java",
+      "line": 19,
+      "title": "The dead key survives in one more published contract than the packet lists",
+      "failure_scenario": "Carried from round 2, and confirmed still open by design (the packet assigns FakeSequencer and Sequencer javadocs to M4.10c/d). Adding one surface the packet does not name: CommitRequest's own class javadoc says '(podId, flushSeq) is the idempotency key M4.10 will use to ignore a replay' \u2014 and CommitRequest is the record the ADR says the incarnation is CARRIED IN, so it is the field's own documentation stating the superseded key.",
+      "mutation_that_survives": "None \u2014 documentation consistency. Recorded so M4.10c's sweep includes it and does not stop at Sequencer/FakeSequencer.",
+      "remedy": "Add CommitRequest to the list of surfaces M4.10c moves with the format."
+    }
+  ],
+  "what_i_verified": [
+    "Staged hash: `git diff --cached | sha256sum` = ee972742417029d835d4769ef6f768f52193001d66dc541524cf1dc4b144fe51, matches the packet.",
+    "Round-2 major #1 (minting site) is DISCHARGED and, more than that, is now enforceable prose. Verified the claim rather than taking it: IngestCommitPathTest.java:79-108 constructs a real DefaultIngest with podShortId 'pod7' and wraps the sequencer in `Recording`, which records at commitAll (IngestCommitPathTest.java:143) and already drives TWO flushes. So 'the same object that mints flushSeq, i.e. one per DefaultIngest instance' is directly assertable there: same instance -> same incarnationId across both recorded requests kills the per-flush mint the ADR names. DefaultIngest.java:63 confirms `private long flushSeq` is an instance field and :349 confirms it is minted at the same site, so 'the same object that mints flushSeq' is true of the tree.",
+    "Discriminating test #1 still holds unchanged: two DefaultIngest instances sharing podShortId mint DIFFERENT incarnations, one instance's flushes share ONE. Note the ADR names only the per-flush mutation; the second half of that assertion is what kills a hard-coded constant, which is production-fatal (post-restart flushSeq 0 <= lastApplied, real commits SUPPRESSED). 'one per DefaultIngest instance' implies it, so I am not raising it, but the two-instance half is the load-bearing one.",
+    "Round-2 major #2 (delta attribution) is DISCHARGED: the ADR says PER SegmentCommit, not once per delta, and states the mutation's exact blast radius. Verified the discriminating fixture still exists and is constructible today: BatchingSequencerTest.java:259 builds `commitAll(List.of(from(\"pod0\", 0), from(\"pod1\", 0)))`, and CommitDelta is `(long sequence, List<SegmentCommit> segments)` with a compact constructor refusing only duplicate keys \u2014 nothing prevents a two-pod delta in a test. Discriminating test #2 holds unchanged.",
+    "Discriminating test #3 (the UPDATE rule) holds and moved to the right owner: backlog-notes.md M4.10d now carries 'PIN THE UPDATE RULE, NOT ONLY THE COMPARISON' with the depth-one observation. Verified the tree fact it rests on: CheckpointWriter.java:129 is `pods.merge(request.podId(), request.flushSeq(), Math::max)`.",
+    "Present-tense claims in the new prose check out against the tree: Checkpoint.java:151 is a strict `version != VERSION` throw, so 'today it is a strict equality check' and the IOException-on-takeover consequence are accurate; CheckpointTest.java:158/169 carry the '~38 KiB at 1,600 streams' comment and the isLessThan(64*1024) assertion the sizing paragraph cites.",
+    "Grepped the whole ADR for the slot-overwrite bound it forward-references (overwrit|destruct|interleav|unordered|newer): the single match is the forward reference itself, l.130.",
+    "M4.46's rewrite matches what I measured in round 2 and states the invariant correctly (offsets already acknowledged resolving to another incarnation's records), and the notes now carry the caveat that 175/200 is a fixture artifact and the production trigger is a clock that does not advance across a restart. Nothing to add.",
+    "No code and no tests changed in this diff; nothing existing was weakened. `git diff --cached --stat` is six documentation files."
+  ],
+  "answers_to_the_launcher": {
+    "do_the_three_discriminating_tests_still_hold": "Yes, all three, and two of them are better supported than in round 2. #1 (minting) is now anchored to the exact seam that can see it and I verified that seam records what the assertion needs. #2 (per-SegmentCommit) is now the ADR's stated shape and the two-pod fixture already exists in BatchingSequencerTest. #3 (update rule) moved to M4.10d's note with the depth-one observation intact. None of the three is weakened by anything in this round.",
+    "does_the_new_prose_say_something_a_test_can_enforce": "The minting-site clause: YES, precisely \u2014 'one per DefaultIngest instance' plus the named seam is an assertion, not an aspiration, and the mutation it names is exactly the one that survives every sequencer-seam test. The per-SegmentCommit clause: YES for the placement, but 'M4-invisible' is the phrase to watch \u2014 it is true of PRODUCTION (single-segment deltas) and false of a TEST (commitAll takes a list), and M4.10c's row does not carry the distinction, which is minor R3e.",
+    "does_this_round_admit_a_new_mutation": "Yes, one, and it is in the addition that fixed the other lane's major: the per-pod pointer answers exactly one flush per pod while detection is advertised as unbounded-depth. The mutation is 'answer any detected replay from the pointer without matching the flushSeq', and it is green against every fixture M4.10d's notes require, because all of them are depth one. That is finding R3a.",
+    "is_it_landable": "Not as staged, on one clause. Everything else here is minor and lands in the commit body or a row. R3a is a major of the same class the ADR has now corrected twice \u2014 invisible to every test M4 can write, wrong from M5's first duplicate forwarded commit \u2014 and it arrived in the paragraph written to fix the previous one. The repair is a sentence bounding the answerable depth and saying what happens outside it; it is not a re-decision and it does not imply a split, because an ADR is one decision and this one's identity, formats and minting site are now sound."
+  },
+  "task": "M4.10b",
+  "role": "test-reviewer",
+  "staged_tree": "e1a95fce56a987a9aac728bbb07ecf69f5bed5b6"
+}

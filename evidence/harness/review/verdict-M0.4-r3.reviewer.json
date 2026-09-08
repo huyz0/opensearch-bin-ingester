@@ -1,0 +1,34 @@
+{
+  "diff_sha256": "11fc2410154a5f53d87898c999a7c76a44a0d603828e715f68158905021a4d30",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "B16",
+      "severity": "major",
+      "file": "build.gradle.kts:10",
+      "summary": "The B9 fix `plugins { base }` gives the root project a `clean` task that deletes `<root>/build`, which is where `scripts/review.sh` writes the hash-bound review verdicts and packets that `scripts/check-reviewed.sh` reads. Before this diff the root had no `clean` task, so the collision is introduced here.",
+      "failure_scenario": "Verified on a byte-identical copy of the staged tree: `mkdir -p build/review && echo '{}' > build/review/deadbeef.json; ./gradlew clean` -> `> Task :clean` and `build/review/deadbeef.json` is gone. In the real repo `./gradlew clean --dry-run` now lists `:clean` alongside the eight subproject cleans. Concretely: an agent finishes both reviews (build/review/<sha>.reviewer.json and <sha>.test-reviewer.json exist), runs `./gradlew clean build` as a final sanity check before committing, and check-reviewed.sh then fails with 'no verdict' -- non-negotiable 5's evidence for the very commit being made has been destroyed and two full review rounds must be re-run. Either relocate the root buildDirectory, exclude `review/` from the root clean, or move review artifacts out of `build/`."
+    },
+    {
+      "id": "B17",
+      "severity": "major",
+      "file": "build.gradle.kts:26",
+      "summary": "The comment asserts an existing gate for a script that exists nowhere -- not in the staged set and not in the working tree. `scripts/check-catalog-only.sh` is backlog M0.19, status `todo`. The licence gate's completeness claim on lines 22-26 therefore rests on nothing.",
+      "failure_scenario": "`ls scripts/check-catalog-only.sh` -> no such file; `grep M0.19 docs/internal/product/backlog.md` -> '| M0.19 | scripts/check-catalog-only.sh ... | - | todo |'. The `licenseCheck` configuration is built only from `libs.libraryAliases`, so any dependency declared as a literal coordinate is invisible to it. Concretely: at M1 someone adds `implementation(\"software.amazon.awssdk:s3:2.x\")` directly to `binstore-backends/build.gradle.kts` rather than via the catalogue. `./gradlew build` stays green, `dependencyLicenses` reports 'ok 10 jar(s)', and the S3 SDK plus its ~30 transitives ship with no pinned SHA-1 and no committed licence -- exactly the supply-chain hole this task exists to close. The reader who checks whether that is possible finds a comment in the present tense telling them a script prevents it. Phrase it as intent (e.g. 'M0.19 will enforce this; today it is a convention') or land the script."
+    },
+    {
+      "id": "B18",
+      "severity": "minor",
+      "file": "buildSrc/src/main/kotlin/binjava/DependencyLicensesTask.kt:69",
+      "summary": "The round-two minor is not fixed and the comment justifying the fix is false. `@Optional` on an `@InputDirectory` only permits the property to be *unset*; when it is set (build.gradle.kts:47 always sets it) to a directory that does not exist, Gradle's input validation still fails before the task action runs, so the explicit message at line 105-110 remains unreachable.",
+      "failure_scenario": "Verified on a copy of the staged tree with `licenses/` renamed away: `./gradlew dependencyLicenses` fails with \"Type 'binjava.DependencyLicensesTask' property 'licensesDir' specifies directory '.../licenses' which doesn't exist\" -- Gradle's generic validation error -- and never reaches the GradleException that would have said 'run `./gradlew updateShas` to create the shas, then add <prefix>-LICENSE.txt'. A contributor cloning without the licences directory (or having deleted it) gets the message the comment claims was replaced. Either drop the dead branch and the comment, or change the property to a plain `@Internal`/`@InputFiles` formulation that lets the task action own the diagnosis."
+    },
+    {
+      "id": "B19",
+      "severity": "minor",
+      "file": "buildSrc/src/main/kotlin/binjava/DependencyLicensesTask.kt:186",
+      "summary": "`prefixFor` strips a trailing `-<digit...>` segment, which is correct for every name the reviewer was asked about, but a jar with a *classifier* after the version keeps the version in its prefix, so the licence filename and the SPDX.txt key become version-pinned.",
+      "failure_scenario": "Traced the exact expression on the requested names -- `commons-lang3-3.14.0` -> `commons-lang3`, `asm-9.7` -> `asm`, `jakarta.json-api-2.1.3` -> `jakarta.json-api`, `log4j-1.2-api-2.24.1` -> `log4j-1.2-api`: all correct, B12 is fixed. But for `netty-transport-native-epoll-4.1.115.Final-linux-x86_64.jar` (a classified artifact the AWS SDK's netty-nio-client pulls in, so plausible for the S3 backend at M1) the last `-` is followed by `x`, not a digit, so the whole basename is returned: the author must create `licenses/netty-transport-native-epoll-4.1.115.Final-linux-x86_64-LICENSE.txt` and the matching SPDX.txt line, and the next netty bump fails the gate with \"SPDX.txt has no entry for 'netty-transport-native-epoll-4.1.116.Final-linux-x86_64'\" until both are renamed by hand. A mapping regex can paper over it, but only for someone who already knows to add one."
+    }
+  ]
+}

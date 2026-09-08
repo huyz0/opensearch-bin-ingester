@@ -1,0 +1,54 @@
+{
+  "diff_sha256": "a0f5ee12dd18744629b530571a7ea5e400ae7555198e2fa199574e5b8d5aa2e1",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "M4.13-r10-1",
+      "severity": "minor",
+      "file": "baselines/review.txt",
+      "line": 37,
+      "title": "This is round 10, not round 8, and the packet this round was supposed to be judged from was never produced",
+      "failure_scenario": "MEASURED: `python3 scripts/review_rounds.py --for-task M4.13` prints 9, so `review.sh context` computes ROUND=10. `REVIEW_ROUND_BUDGET=9 scripts/review.sh context --task M4.13` therefore exits 1 at the budget check, printing the task, the standards, the lenses and the tree instructions but NOT the gate list, NOT the staged-file status and NOT the delta. I reconstructed the delta by calling review_delta.prior_tree by hand (prior tree 2de2179f) and diffing it against `git write-tree`. Concrete failure: a reviewer who runs the command as given, sees exit 1 and no diff, and reviews from the accompanying prose instead is grading the author's summary -- which is the one thing review/SKILL.md says the reviewer must never be given. The staged `rounds:M4.13` argument covers review.md's cap of two but its narrative stops at round 8's DEFAULT_SEEDS finding; rounds 9 and 10 are not in it, and round 10's delta is entirely prose repair, which is the case the packet's own remedy text answers with DELETE rather than correct again.",
+      "disposition": "evidence"
+    },
+    {
+      "id": "M4.13-r10-2",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-done.md",
+      "line": 177,
+      "title": "The staged commit now states four different measured durations for the same 1,000-seed sweep, and this round fixed one of them",
+      "failure_scenario": "backlog-done.md:177 (edited this round) says 'MEASURED at 14.6s'; CommitProtocolSweepTest.java:91 (edited this round) says 'MEASURED at 14.6s'; CommitProtocolSweepTest.java:270, 179 lines below the javadoc this round rewrote and untouched by it, says 'Review measured 15.2s on 20 cores: a 3.9x dead band'; backlog.md:160 (M0.90, added by this commit) says 'an 18x dead band against a measured 16.4s'; backlog-notes.md:950 (added by this commit, and the target of the row's own [notes](backlog-notes.md#m413) link) says present tense 'The sweep runs, at 17.1s for 1,000 seeds'. I MEASURED the staged tree: `sweep: 1000 seeds in 15090 ms, 74172 readers judged, budget 60000 ms`. The 74,172 is exact and the 14.6s is within variance, so the row's own numbers are sound; what is not is that the round whose stated purpose was to retire a stale duration retired it in two of five copies. Concrete failure: M0.90 is the row asking someone to wire a per-suite budget, and its argument is the ratio -- 300/16.4 = 18x, which against the number the same commit now calls measured is 20.5x. Whoever picks M0.90 up derives a threshold from the highest of five numbers and cannot tell which is current. The M4.13f entry three lines above in this same file names this exact shape as the recurring defect: 'a fact updated in one copy and left stale in its duplicates'. The remedy it records is FEWER COPIES, not a fifth correction.",
+      "disposition": "backlog"
+    },
+    {
+      "id": "M4.13-r10-3",
+      "severity": "minor",
+      "file": "baselines/review.txt",
+      "line": 37,
+      "title": "The new concession clause says ONE round found the shape alongside false sentences; three did",
+      "failure_scenario": "The staged line reads 'and one round found that shape ALONGSIDE two false sentences, so this is a tendency in the diff and not the only thing the rounds caught'. I checked every recorded verdict for M4.13. Round 4 is the intended referent: M4.13-r-1, one refuted pipelining claim living in two Java files. But round 6's M4.13-R4-1 is 'The ack trace half of the round-3 fix did not land, AND THE COMMENT CLAIMS IT DID', and round 7's M4.13-R5-1 is 'R4-2 is NOT closed AND THE JAVADOC SAYS IT IS' -- both the assertion-that-cannot-fail shape alongside a sentence the tree made false. Round 4 also carried a third wrong sentence of its own, M4.13-r-3, an .as() description printing the pair the fix removed. So the clause added to weaken an overclaim installs a new undercount, in the direction that flatters the author: three rounds, not one. The universal it qualifies -- 'EVERY ROUND PAST THE CAP FOUND AN ASSERTION THAT COULD NOT FAIL' -- I verified round by round and it does hold for rounds 3 through 9, round 4 via M4.13-r-2 (the ack trace carries zero fenced-writer acknowledgements while the same file calls a zombie the ONLY thing that makes I5 reachable). Concrete failure: this entry is the permanent record of why the cap was argued, and a reader counting false-sentence findings against it finds three where it promises one.",
+      "disposition": "backlog"
+    },
+    {
+      "id": "M4.13-r10-4",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md",
+      "line": 159,
+      "title": "M0.91's proposed fix cites a sibling pattern that does not exist",
+      "failure_scenario": "The row says 'Fix is `b.environment().remove(\"REVIEW_ROUND_BUDGET\")`, matching the sibling test below it.' MEASURED: `grep -rn 'environment().remove' buildSrc/src/` returns MutantsGateTest:112,206,255, FreshCheckoutTest:126, CoverageGateTest:95 and ModuleGateTest:109,110 -- all for GATE_SCOPE and CHECK_RANGE, none in ReviewRoundBudgetTest, ReviewRoundCapTest or ReviewRoundCapArgumentValidityTest, and none for REVIEW_ROUND_BUDGET. The only test below packet() that touches the variable is theBudgetIsOVERRIDABLESoItIsAPromptRatherThanAWall:150, which SETS it via the varargs, the opposite operation. The rest of the row I confirmed: GitEnv.stripped strips only GIT_* so packet() does inherit it, and the class has exactly 4 @Test methods, matching '4 tests completed, 1 failed'. Concrete failure: whoever picks M0.91 up greps for the sibling to copy, finds nothing matching, and either drops the fix or places the remove() AFTER the `b.environment().put(env[i], env[i+1])` loop at :78, which reddens theBudgetIsOVERRIDABLE... -- the one test the row's own measurement says currently passes.",
+      "disposition": "backlog"
+    },
+    {
+      "id": "M4.13-r10-5",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-done.md",
+      "line": 177,
+      "title": "The archive row's new 'SEEDS ITSELF IS ASSERTED' is unconditional; the assertion is guarded, and this same commit files the row about defeating the guard",
+      "failure_scenario": "The row now reads 'Anti-vacuity floors are `SEEDS * k` ... and `SEEDS` ITSELF IS ASSERTED, because six such floors are invariant under the seed count'. The six floors is right -- commits, takeovers, epochsBurned, faultsFired, readersChecked, ackEvents, all `SEEDS * k`. But CommitProtocolSweepTest.java:145 wraps the assertion in `if (System.getProperty(\"sweep.seeds\") == null)`, and M0.89, filed by this same commit at backlog.md:160, records that a tracked `systemProp.sweep.seeds=3` in gradle.properties defeats it -- MEASURED green in 269 ms with DEFAULT_SEEDS mutated. The javadoc at :80-88 and the notes at backlog-notes.md#m089 both say so; the archive row does not. Concrete failure: backlog-done.md is by its own header the copy that is never rewritten, and it is what a future reader consults to answer 'is M4's 1,000 pinned'. Unconditionally it is not, and the caveat is one clause.",
+      "disposition": "backlog"
+    }
+  ],
+  "task": "M4.13",
+  "role": "reviewer",
+  "staged_tree": "924876a7065e968801fe88f8803659ee060cd8ce"
+}

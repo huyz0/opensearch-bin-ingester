@@ -1,0 +1,35 @@
+{
+  "diff_sha256": "5264e2e5b8c463ea3e2d7665f1dd46470eeb823900fd42269d66e98734feab34",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "M0.83-1",
+      "severity": "minor",
+      "file": "build.gradle.kts:49",
+      "status": "FIXED - verified independently",
+      "failure_scenario": "RESOLVED. junit 4.13.2's POM (junit/junit/4.13.2/.../junit-4.13.2.pom, no <parent>) declares <name>Eclipse Public License 1.0</name>, confirming EPL-1.0 and not the EPL-2.0 the `junit` prefix carried. The fix WIDENS only: build.gradle.kts has 0 deleted lines in the staged diff (3 deletions total across 78 files, all accounted for: the stale byte-buddy-1.15.11 pin, the rewritten `junit EPL-2.0` line, the rewritten M0.19 row), the denied set, the licenseCheck configuration and the `check` dependsOn are untouched, and `^junit$` is disjoint from every other pattern under Regex.matches. No other build file moved (settings.gradle.kts, gradle/libs.versions.toml, buildSrc/ all absent from the staged list). MEASURED in /tmp/binjava-review-trees/reviewer.gfPbWD8H: `./gradlew dependencyLicenses` BUILD SUCCESSFUL; `./gradlew build` BUILD SUCCESSFUL with `Task :dependencyLicenses` executed. Three mutations all rejected: (a) rm licenses/junit4-LICENSE.txt -> 'missing junit4-LICENSE.txt for junit-4.13.2.jar'; (b) junit4 -> GPL-2.0-only with the inline comment left in place -> 'junit-4.13.2.jar is GPL-2.0-only, which this project cannot ship'; (c) delete the junit4 line -> 'SPDX.txt has no entry for junit4'. The prefix is live, not vacuous, and the new inline `#` comments do not blind either parser (DependencyLicensesTask substringBefore('#'); check-dependency-licenses.sh `read -r prefix spdx _`). The other four predecessors re-derived independently and correct: assertj-core Apache-2.0, opentest4j Apache-2.0, junit-jupiter-api EPL-2.0, byte-buddy via byte-buddy-parent Apache-2.0, helidon-webserver -> ... -> helidon-parent Apache 2.0 at the sixth POM (five parents up), exactly as claimed."
+    },
+    {
+      "id": "M0.83-3",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:65",
+      "failure_scenario": "The M0.19 row now has FIVE cells against a four-column header (`| ID | Task | Serves | State |`): `| M0.19 | <task> | - AND `prefixFor` KEYS ON THE JAR FILENAME... | - | todo |`. GFM ignores cells past the header width, so the row RENDERS as Serves = the prefixFor essay and State = `-`, with `todo` dropped entirely. A reader (or the `next-task` skill) scanning the State column sees no state for an open row, and the Serves column carries prose where every other row carries an FR/NFR id. check-session-load.sh does not catch it because it reads `cells[-1]`, the last cell, not the fourth. Fix is one character: replace the `|` before `- AND` with a space so the note joins the Task cell. (Two rows already have stray cells - M0.55 and M4.31 - but those are unescaped `||` and `|` inside code spans, not a hand-written extra column.)"
+    },
+    {
+      "id": "M0.83-4",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-done.md:168",
+      "failure_scenario": "The landed row says '71 licence texts and SPDX entries added'. MEASURED on the staged tree: 72 `*-LICENSE.txt` files added (git diff --cached --name-status | grep -c '^A.*LICENSE.txt'), and licenses/SPDX.txt now holds 77 entries against 5 in HEAD, so 72 entries added. The undercounted one is junit4 - precisely the entry round 1 forced. The archive row is the durable summary a later reader checks with `ls licenses/*-LICENSE.txt | wc -l`, and it is the same class of arithmetic claim non-negotiable 4 governs. Say 72."
+    },
+    {
+      "id": "M0.83-2",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:65",
+      "status": "recorded, placement queried",
+      "failure_scenario": "Carried from round 1 and now recorded on M0.19's row. The record is adequate, but M0.19's deliverable is named as `scripts/check-catalog-only.sh`, while this item requires editing DependencyLicensesTask.prefixFor in buildSrc to key on group:artifact - work that script cannot deliver. A row whose title names one script and whose body demands an unrelated code change is how half of it lands. Its own row is cleaner; not a defect, and not worth a round to move."
+    }
+  ],
+  "task": "M0.83",
+  "role": "reviewer",
+  "staged_tree": "eb724c75c5f43821f7bb2610ec6c9857042674c3"
+}

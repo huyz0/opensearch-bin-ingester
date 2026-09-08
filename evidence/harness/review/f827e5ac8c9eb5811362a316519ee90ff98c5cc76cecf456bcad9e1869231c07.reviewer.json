@@ -1,0 +1,43 @@
+{
+  "diff_sha256": "f827e5ac8c9eb5811362a316519ee90ff98c5cc76cecf456bcad9e1869231c07",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "W21",
+      "severity": "major",
+      "file": "buildSrc/src/test/java/binjava/ModuleGateTest.java:30",
+      "summary": "The class javadoc says the stub constrains selection 'not the dependency rules, which ModuleSelectionTest and the rule-5 denylist cover separately'. Neither covers them. ModuleSelectionTest tests which modules a change selects (same subject as this class), and a denylist is production code that cannot cover itself. No test anywhere in the repository asserts architecture.md rules 2/4/5 -- grep for helidon/awssdk/runtimeClasspath across buildSrc/src/test/java returns only comments. Verified surviving mutations against all six ModuleGateTest scenarios in a replica scratch repo: emptying HTTP_GROUPS, replacing 'for conf in runtimeClasspath compileClasspath' with runtimeClasspath alone, and disabling the rule-4 'depends on http' check each leave 6/6 green, and each also leaves the real repo's check-module.sh green because no module violates a rule today. The fix is one sentence, not a test: say plainly that the enforcement half is unconstrained and name what survives.",
+      "failure_scenario": "A later change drops compileClasspath from the resolution loop (or trims a group from HTTP_GROUPS as noisy). Every test stays green, the pre-commit hook keeps printing its name -- 'architecture.md rules 2/4/5: each module stays inside its dependency surface' -- and a compileOnly Helidon dependency in `ingest` plus a production class calling io.helidon.common.Version passes every commit. The reader who would have written that test was told by this javadoc that it already existed."
+    },
+    {
+      "id": "W22",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/ModuleGateTest.java:153",
+      "summary": "gradlew-invocations is the only observable that kills deleting the drift halt (confirmed: with '[ \"$PLAN_DRIFT\" = ok ] || finish' removed, exit code and printed output are byte-identical and only the ghost case fails). But the file is used exclusively through doesNotExist -- no test ever asserts it IS written. The stub does record today (':alpha:build --console=plain -q'), so this is latent, not live. One line in aModuleChangeSelectsThatModuleOnly asserting the file contains ':alpha:build' would pin the recorder, replace a count with a name (a count passes when the gate builds the wrong module -- ModulePlanTest's own javadoc says so), and pin the .pre-commit-config.yaml:65 claim that a docs-only commit makes no gradlew call, which is true but asserted nowhere.",
+      "failure_scenario": "Someone edits the stub (exec, a different $0 shape, a cwd change in the gate) so the append no longer lands at repo/gradlew-invocations. Every test still passes, doesNotExist is now vacuous, and deleting the drift halt becomes a surviving mutation again -- the absence-proves-presence error the DRIFT_CHECKED comment in check-module.sh names three lines above."
+    },
+    {
+      "id": "W23",
+      "severity": "minor",
+      "file": "scripts/check-module.sh:215",
+      "summary": "ALL is now derived and cross-checked both ways, but NO_HTTP and NO_CLOUD remain hardcoded module-name lists with no cross-check against ALL, in a file whose new comment declares a restated module list to be the defect. check_drift already walks ALL and is the natural home for the assertion that every name in NO_HTTP/NO_CLOUD is a real module.",
+      "failure_scenario": "settings.gradle.kts renames `ingest` (the glossary makes ingester/ingest naming churn plausible). ALL, the drift check and the selection all follow the rename; NO_HTTP still says 'ingest', so rule 5 now applies to a module that does not exist and not to the one that does. The gate prints 'ok 8 module(s) checked' and Helidon can enter the renamed module unopposed."
+    },
+    {
+      "id": "W24",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:25",
+      "summary": "The task is 'wire into .pre-commit-config.yaml and CI'. No .github/ exists; the CI half lands as a sentence in the AGENTS.md capability table saying CI sets GATE_SCOPE=full. M0.7's backlog row -- in the file this diff already edits -- still reads only 'GitHub Actions workflow running pre-commit run --all-files', with no mention of the environment variable check-module's entire CI value depends on.",
+      "failure_scenario": "M0.7 is implemented from its backlog row as written. check-module runs in CI with an empty staged index, plan() selects nothing, and the hook prints 'ok no module changed' having built zero of eight modules -- a green CI line that means nothing, which is the failure mode the same AGENTS.md table documents for check-reviewed."
+    },
+    {
+      "id": "W25",
+      "severity": "minor",
+      "file": ".pre-commit-config.yaml:65",
+      "summary": "The nine-line comment restates build.md:105-118 almost verbatim, including the two measured values (11 s / 15 s) and the unmeasured-cold-daemon caveat. Two copies of a moving fact in files no gate compares.",
+      "failure_scenario": "A later measurement updates build.md's paragraph; the YAML comment keeps the old numbers and the reader nearest the hook gets the stale one. This is the same drift the module list itself was just consolidated to avoid."
+    }
+  ],
+  "task": "M0.6",
+  "role": "reviewer"
+}

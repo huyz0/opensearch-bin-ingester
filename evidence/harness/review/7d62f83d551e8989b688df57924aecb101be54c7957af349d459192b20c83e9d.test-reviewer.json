@@ -1,0 +1,29 @@
+{
+  "verdict": "changes-requested",
+  "diff_sha256": "7d62f83d551e8989b688df57924aecb101be54c7957af349d459192b20c83e9d",
+  "task": "M0.13",
+  "role": "test-reviewer",
+  "findings": [
+    {
+      "id": "M013-TR-01",
+      "severity": "blocking",
+      "file": "scripts/coverage.py:1-113 (and scripts/check-coverage.sh:1-14)",
+      "summary": "The new gate logic (five distinct outcomes: ok, FAIL-below-floor, FAIL-missing-report, NOT-MEASURED, EXCLUDED-warn, plus check-coverage.sh's exit-code relay) ships with zero automated tests, breaking this repository's own established pattern: every prior gate backend has a companion test that execs the real script against a fixture -- tdd_scan.py is exercised by buildSrc/src/test/java/binjava/JavaTestParserTest.java, check-module.sh by RuleListTest.java/ModuleGateTest.java/ModuleDriftTest.java (including a negative case, anEmptyDependencyReportIsNotCompliance, that is the direct analogue of coverage.py's missing-report branch), and check-gate-scope.sh by FreshCheckoutTest.java. coverage.py has no analogue at all.",
+      "failure_scenario": "Any of the following silent regressions to the exact failure mode this gate exists to prevent ('reports success while measuring nothing') would pass every existing gate and reviewer-visible check today: (1) in the missing-report branch, delete `missing.append(m); failed = True` and leave a bare `continue` -- a module with classes and no report is silently skipped instead of failing; (2) in the empty-tree branch, change `print(NOT-MEASURED...); return 0` to `print('  ok   0 modules...'); return 0` -- this is verbatim the 'ok while measuring nothing' defect the docstring names; (3) flip `bad = line_cov < LINE_FLOOR or br_cov < BRANCH_FLOOR` to `and`, so a module can pass with either metric arbitrarily low as long as the other clears its floor; (4) remove `|| FAILED=1` from check-coverage.sh so a nonzero coverage.py exit is swallowed and the pre-commit hook reports success regardless; (5) hardcode `pct()` to always return 100.0. Nothing in the tree runs coverage.py or check-coverage.sh against any fixture, so none of these would produce a failing test."
+    },
+    {
+      "id": "M013-TR-02",
+      "severity": "minor",
+      "file": "scripts/coverage.py:24-30 (counters())",
+      "summary": "The manual probes described in the task (a throwaway class demonstrating the FAIL branch, and the JaCoCo 0.8.12 zero-byte-XML/ElementTree.ParseError crash) were real TDD-red observations but were not preserved as fixtures. No committed input exercises a malformed or zero-byte jacocoTestReport.xml, so the only evidence that ET.ParseError propagates as a loud, nonzero-exit failure rather than a silent pass is the author's own removed, unrepeatable probe.",
+      "failure_scenario": "A future change that wraps `ET.parse(xml_path)` in a broad try/except and returns an empty counters dict 'to be defensive' would turn a malformed-report input from a loud crash (nonzero exit, currently accidentally caught by check-coverage.sh's `|| FAILED=1`) into a silent skip or a false pass, and nothing in the tree would catch that regression since the scenario is not encoded as a test."
+    },
+    {
+      "id": "M013-TR-03",
+      "severity": "minor",
+      "file": "scripts/check-gate-scope.sh:27,29-31",
+      "summary": "The new ALLOWED entry for coverage.py is justified as 'only the search INSIDE a known module directory touches the filesystem, so it cannot wander into a sibling checkout' -- true of the current single `glob.glob('%s/build/classes/...' % m)` call. But the enforcement mechanism (`[ -n \"${ALLOWED[$base]:-}\" ] && continue` at the top of the per-file loop) exempts the entire file from both the unguarded-grep and filesystem-walk detectors, not just that one call site. This is the same whole-file granularity every existing ALLOWED entry uses, so it is not a new inconsistency introduced by this commit, but the comment's narrower claim is not what the code actually grants, and nothing tests the difference.",
+      "failure_scenario": "A later edit adding, anywhere else in coverage.py, a second glob such as `glob.glob('*/build.gradle.kts')` (an actual filesystem walk that could pick up a sibling checkout or .tmp/) would pass check-gate-scope.sh silently, because the whole file is already waived. No test (existing or new) asserts that the waiver is scoped to the specific call the comment describes."
+    }
+  ]
+}

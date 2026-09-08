@@ -1,0 +1,910 @@
+=== TASK M0.4 ===
+| M0.4 | Gradle build, JDK 25 toolchain, module skeleton per `architecture.md` | — | todo |
+
+=== STANDARDS THE REVIEWER MUST READ (selected from paths, not by the author) ===
+docs/internal/standards/git.md
+docs/internal/standards/sdd.md
+docs/internal/standards/java-style.md
+docs/internal/standards/code-structure.md
+docs/internal/standards/testing.md
+docs/internal/standards/cost.md
+docs/internal/standards/performance.md
+docs/internal/standards/security.md
+
+=== GATES THAT ALREADY PASSED (do not re-check these) ===
+  PASSED  check-dependency-licenses.sh
+  PASSED  check-file-size.sh
+  PASSED  check-license-headers.sh
+  PASSED  check-links.sh
+  PASSED  check-metric-cardinality.sh
+  PASSED  check-portability.sh
+  PASSED  check-tdd.sh
+  PASSED  check-terminology.sh
+  PASSED  check-test-budget.sh
+  PASSED  build-index.sh --check
+
+=== STAGED DIFF (sha256 94eb42b754d2d886cc0bf2c449b09eed79d70ce1ed3fcc0f32a1381bececb3c4) ===
+diff --git a/.gitignore b/.gitignore
+new file mode 100644
+index 0000000..cab2403
+--- /dev/null
++++ b/.gitignore
+@@ -0,0 +1,5 @@
++.tmp/
++build/
++.gradle/
++*.class
++__pycache__/
+diff --git a/binstore-backends/README.md b/binstore-backends/README.md
+new file mode 100644
+index 0000000..2464114
+--- /dev/null
++++ b/binstore-backends/README.md
+@@ -0,0 +1,10 @@
++# binstore-backends
++
++Implementations of `BinStore`: in-memory, local filesystem, and later S3, GCS and
++Azure.
++
++**Depends on:** `binstore-spi`.
++
++⚠️ Nothing in `plugin` may depend on this module. Keeping cloud SDKs out of the
++OpenSearch JVM is a stated architectural property, not an accident —
++[architecture.md](../docs/internal/product/architecture.md) § Dependency rules.
+diff --git a/binstore-backends/build.gradle.kts b/binstore-backends/build.gradle.kts
+new file mode 100644
+index 0000000..911e494
+--- /dev/null
++++ b/binstore-backends/build.gradle.kts
+@@ -0,0 +1,7 @@
++// SPDX-License-Identifier: Apache-2.0
++
++plugins { id("binjava.java-conventions") }
++
++dependencies {
++    api(project(":binstore-spi"))
++}
+diff --git a/binstore-spi/README.md b/binstore-spi/README.md
+new file mode 100644
+index 0000000..5358b1f
+--- /dev/null
++++ b/binstore-spi/README.md
+@@ -0,0 +1,13 @@
++# binstore-spi
++
++The object-store seam. `BinStore`, `Version`, `Capabilities`, and the decorators
++that wrap any backend: retry, rate-limit, and **counting**.
++
++**Depends on:** nothing. That is deliberate — it is the one interface both the
++ingester and the conformance suite compile against, and a dependency here would
++be inherited by every module in the build.
++
++The counting decorator is why this module exists as a seam rather than as an
++S3 client: every object-store request in the project passes through one type, so
++`docs/internal/standards/cost.md` can be asserted in a test rather than reviewed
++by eye.
+diff --git a/binstore-spi/build.gradle.kts b/binstore-spi/build.gradle.kts
+new file mode 100644
+index 0000000..8ab9fa7
+--- /dev/null
++++ b/binstore-spi/build.gradle.kts
+@@ -0,0 +1,3 @@
++// SPDX-License-Identifier: Apache-2.0
++
++plugins { id("binjava.java-conventions") }
+diff --git a/build.gradle.kts b/build.gradle.kts
+new file mode 100644
+index 0000000..5d75b38
+--- /dev/null
++++ b/build.gradle.kts
+@@ -0,0 +1,31 @@
++// SPDX-License-Identifier: Apache-2.0
++
++// The root project holds no code. Modules apply `binjava.java-conventions`
++// from buildSrc; this file names the build and merges the licence report.
++description = "Bundled object-store ingestion for OpenSearch pull-based ingest"
++
++// scripts/check-dependency-licenses.sh reads exactly one file. Each module
++// resolves its own classpaths (Gradle 9 forbids doing it from here) and this
++// task concatenates the fragments.
++tasks.register("licenseReport") {
++    group = "verification"
++    description = "Merge every module's licence data into build/reports/licenses/licenses.json"
++    val fragments = files(subprojects.map { it.layout.buildDirectory.file("reports/licenses/module.json") })
++    val out = layout.buildDirectory.file("reports/licenses/licenses.json")
++    dependsOn(subprojects.map { "${it.path}:licenseData" })
++    inputs.files(fragments)
++    outputs.file(out)
++
++    doLast {
++        val body = fragments.files
++            .filter { it.exists() && it.length() > 0 }
++            .flatMap { it.readText().trimEnd().split(",\n") }
++            .distinct()
++            .sorted()
++            .joinToString(",\n")
++        val f = out.get().asFile
++        f.parentFile.mkdirs()
++        f.writeText("{\n  \"dependencies\": [\n$body\n  ]\n}\n")
++        logger.lifecycle("licenseReport -> ${f.path}")
++    }
++}
+diff --git a/buildSrc/build.gradle.kts b/buildSrc/build.gradle.kts
+new file mode 100644
+index 0000000..3e8315a
+--- /dev/null
++++ b/buildSrc/build.gradle.kts
+@@ -0,0 +1,7 @@
++// SPDX-License-Identifier: Apache-2.0
++
++// Convention plugins live here rather than in `subprojects {}` blocks: cross-
++// project configuration is what makes a build resist ever being split up.
++plugins { `kotlin-dsl` }
++
++repositories { mavenCentral() }
+diff --git a/buildSrc/settings.gradle.kts b/buildSrc/settings.gradle.kts
+new file mode 100644
+index 0000000..72cf8ed
+--- /dev/null
++++ b/buildSrc/settings.gradle.kts
+@@ -0,0 +1,9 @@
++// SPDX-License-Identifier: Apache-2.0
++rootProject.name = "build-conventions"
++
++dependencyResolutionManagement {
++    repositories { mavenCentral() }
++    versionCatalogs {
++        create("libs") { from(files("../gradle/libs.versions.toml")) }
++    }
++}
+diff --git a/buildSrc/src/main/kotlin/binjava.java-conventions.gradle.kts b/buildSrc/src/main/kotlin/binjava.java-conventions.gradle.kts
+new file mode 100644
+index 0000000..58df264
+--- /dev/null
++++ b/buildSrc/src/main/kotlin/binjava.java-conventions.gradle.kts
+@@ -0,0 +1,145 @@
++// SPDX-License-Identifier: Apache-2.0
++
++// Everything every module of this project agrees on: the toolchain, the test
++// tiers, and the memory caps. Applied by each module's build.gradle.kts, which
++// then declares only its own dependencies.
++//
++// Rationale: docs/internal/standards/build.md and java-style.md.
++
++import java.time.Duration
++
++plugins {
++    `java-library`
++    `jvm-test-suite`
++}
++
++// JDK 25 LTS. OpenSearch 3.8 bundles 25.0.3+9, so one toolchain serves both the
++// ingester and the plugin -- java-style.md rule 1. JEP 491 removed the
++// `synchronized` pinning that made JDK 21 the wrong target for a service built
++// on virtual threads.
++java {
++    toolchain { languageVersion = JavaLanguageVersion.of(25) }
++}
++
++val libs = extensions.getByType<VersionCatalogsExtension>().named("libs")
++// Resolved once, at configuration time. Reading `layout` from inside a task
++// action instead would capture the Project, which the configuration cache
++// cannot serialise -- and a build that silently drops its configuration cache
++// is a build nobody notices getting slower.
++val scratch = layout.buildDirectory.dir("tmp").get().asFile.also { it.mkdirs() }
++
++tasks.withType<JavaCompile>().configureEach {
++    options.encoding = "UTF-8"
++    // -Werror because a warning nobody fails on is a warning nobody reads.
++    // `-serial` and `-processing` are noise for a project with no serialisable
++    // types and no annotation processors.
++    options.compilerArgs.addAll(listOf("-Xlint:all,-serial,-processing", "-Werror"))
++}
++
++// The three tiers of docs/internal/standards/testing.md map onto three Gradle
++// tasks, and only the first is wired into `check`:
++//
++//   ./gradlew test             T0-T2, no container      every commit
++//   ./gradlew integrationTest  T3,    MinIO             on demand + CI
++//   ./gradlew clusterTest      T4,    OpenSearch        on demand + CI
++//
++// The default task starting no container is the point. A developer, or an agent
++// running /milestone, gets a fast light loop; the heavy tiers are explicit.
++testing {
++    suites {
++        withType<JvmTestSuite>().configureEach {
++            useJUnitJupiter(libs.findVersion("junit").get().requiredVersion)
++            dependencies {
++                implementation(project())
++                implementation(libs.findLibrary("assertj-core").get())
++            }
++            targets.configureEach {
++                testTask.configure {
++                    // build.md: set where the runtime enforces it, so a runaway
++                    // dies as a JVM OutOfMemoryError rather than as WSL2 killing
++                    // an unrelated session.
++                    maxHeapSize = "512m"
++                    jvmArgs("-XX:+HeapDumpOnOutOfMemoryError", "-XX:HeapDumpPath=$scratch")
++                    // A hung test holds its memory until something reclaims it.
++                    timeout.set(Duration.ofMinutes(10))
++                    // testing.md rule 17: scratch under build/tmp, never the
++                    // system temp directory. Enforced here so it is automatic.
++                    systemProperty("java.io.tmpdir", scratch.absolutePath)
++                    testLogging { events("failed") }
++                }
++            }
++        }
++        register<JvmTestSuite>("integrationTest")
++        register<JvmTestSuite>("clusterTest")
++    }
++}
++
++// ---------------------------------------------------------------------------
++// licenseData -- this module's half of the dependency-licence gate.
++//
++// It lives here, per module, because Gradle 9 refuses cross-project
++// configuration resolution: a root task walking `subprojects` and resolving
++// their classpaths fails with "attempted without an exclusive lock". The root
++// `licenseReport` task merges what these produce.
++//
++// `com.github.jk1.dependency-license-report` would do this, but it is
++// configuration-cache-incompatible and already deprecated for Gradle 10, and
++// the job is small enough to own.
++// ---------------------------------------------------------------------------
++tasks.register("licenseData") {
++    group = "verification"
++    description = "Write this module's resolved dependency licences"
++    val out = layout.buildDirectory.file("reports/licenses/module.json")
++    outputs.file(out)
++    outputs.upToDateWhen { false }
++    notCompatibleWithConfigurationCache("resolves this module's classpaths at execution time")
++
++    doLast {
++        // Production and test classpaths are both reported, tagged by scope: a
++        // copyleft test dependency is not a distribution problem, but "we never
++        // looked" and "we looked and it was fine" are different answers.
++        val found = sortedMapOf<String, MutableSet<String>>()
++        val scopes = sortedMapOf<String, MutableSet<String>>()
++        configurations
++            .filter { it.isCanBeResolved && it.name.endsWith("RuntimeClasspath") }
++            .forEach { conf ->
++                val scope = if (conf.name == "runtimeClasspath") "runtime" else "test"
++                conf.incoming.resolutionResult.allComponents.forEach { component ->
++                    val id = component.moduleVersion ?: return@forEach
++                    if (id.group.isEmpty()) return@forEach   // this project itself
++                    val coord = "${id.group}:${id.name}:${id.version}"
++                    found.getOrPut(coord) { linkedSetOf() }
++                    scopes.getOrPut(coord) { sortedSetOf() }.add(scope)
++                }
++            }
++        found.keys.forEach { coord ->
++            val names = try {
++                val pom = configurations
++                    .detachedConfiguration(dependencies.create("$coord@pom"))
++                    .resolve().firstOrNull()
++                if (pom == null) emptyList()
++                else Regex("<licenses>(.*?)</licenses>", RegexOption.DOT_MATCHES_ALL)
++                    .find(pom.readText())
++                    ?.let { block ->
++                        Regex("<name>(.*?)</name>", RegexOption.DOT_MATCHES_ALL)
++                            .findAll(block.groupValues[1])
++                            .map { it.groupValues[1].trim() }.toList()
++                    } ?: emptyList()
++            } catch (e: Exception) {
++                logger.warn("licenseData: cannot read POM for $coord: ${e.message}")
++                emptyList()
++            }
++            found[coord]!!.addAll(names)
++        }
++        val json = found.entries.joinToString(",\n") { (coord, lics) ->
++            // A POM that declares no licence is reported as UNKNOWN rather than
++            // omitted: the gate must be able to tell unreviewed from clean.
++            val names = if (lics.isEmpty()) listOf("UNKNOWN") else lics.toList()
++            """    { "module": "$coord", "scope": "${scopes[coord]!!.joinToString("+")}", """ +
++                """"licenses": [""" + names.joinToString(", ") { "\"" + it.replace("\"", "'") + "\"" } + "] }"
++        }
++        val f = out.get().asFile
++        f.parentFile.mkdirs()
++        f.writeText(json)
++    }
++}
+diff --git a/client/README.md b/client/README.md
+new file mode 100644
+index 0000000..910a654
+--- /dev/null
++++ b/client/README.md
+@@ -0,0 +1,9 @@
++# client
++
++The consumer: subscription, fetch-mode dispatch, coalescing and decode. Bundled
++into the plugin and running inside the OpenSearch process.
++
++**Depends on:** `format` only.
++
++That single dependency is the point. This code runs in someone else's JVM, so its
++dependency surface is a liability rather than a convenience.
+diff --git a/client/build.gradle.kts b/client/build.gradle.kts
+new file mode 100644
+index 0000000..217e105
+--- /dev/null
++++ b/client/build.gradle.kts
+@@ -0,0 +1,7 @@
++// SPDX-License-Identifier: Apache-2.0
++
++plugins { id("binjava.java-conventions") }
++
++dependencies {
++    api(project(":format"))
++}
+diff --git a/format/README.md b/format/README.md
+new file mode 100644
+index 0000000..982b289
+--- /dev/null
++++ b/format/README.md
+@@ -0,0 +1,10 @@
++# format
++
++Pure encode and decode: segment layout, the key grammar, membership filters and
++commit-log records. No I/O, no clock, no configuration.
++
++**Depends on:** nothing, and it must stay that way. This is where T0 tests live,
++and its purity is what makes them cheap enough to run on every commit.
++
++A change to anything here is a wire-format change: see
++[`wire-format-change`](../.agents/skills/wire-format-change/SKILL.md).
+diff --git a/format/build.gradle.kts b/format/build.gradle.kts
+new file mode 100644
+index 0000000..8ab9fa7
+--- /dev/null
++++ b/format/build.gradle.kts
+@@ -0,0 +1,3 @@
++// SPDX-License-Identifier: Apache-2.0
++
++plugins { id("binjava.java-conventions") }
+diff --git a/gradle.properties b/gradle.properties
+new file mode 100644
+index 0000000..c43c74d
+--- /dev/null
++++ b/gradle.properties
+@@ -0,0 +1,14 @@
++# Memory caps live here because this is where the runtime enforces them.
++# docs/internal/standards/build.md: WSL2 does not kill the offending process,
++# it kills whatever it likes -- so a runaway must die as a JVM OutOfMemoryError
++# or a Docker OOM-kill, never as a lost session.
++#
++# Budget (build.md): daemon 1 GiB + compile daemon 512 MiB + test JVM 512 MiB,
++# two workers, leaving headroom inside the 8 GiB per-session share of 32 GiB.
++# scripts/check-test-budget.sh asserts these are present.
++org.gradle.jvmargs=-Xmx1g -XX:MaxMetaspaceSize=512m
++org.gradle.java.compile-daemon.jvmargs=-Xmx512m
++org.gradle.workers.max=2
++org.gradle.parallel=true
++org.gradle.caching=true
++org.gradle.configuration-cache=true
+diff --git a/gradle/libs.versions.toml b/gradle/libs.versions.toml
+new file mode 100644
+index 0000000..cfe37b2
+--- /dev/null
++++ b/gradle/libs.versions.toml
+@@ -0,0 +1,11 @@
++# Version catalogue. One place a version is written, so an upgrade is one edit
++# and a divergence between modules is impossible rather than merely unlikely.
++[versions]
++junit = "5.14.0"
++assertj = "3.27.3"
++
++[libraries]
++junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
++junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
++junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
++assertj-core = { module = "org.assertj:assertj-core", version.ref = "assertj" }
+diff --git a/gradle/wrapper/gradle-wrapper.jar b/gradle/wrapper/gradle-wrapper.jar
+new file mode 100644
+index 0000000..eddabd2
+Binary files /dev/null and b/gradle/wrapper/gradle-wrapper.jar differ
+diff --git a/gradle/wrapper/gradle-wrapper.properties b/gradle/wrapper/gradle-wrapper.properties
+new file mode 100644
+index 0000000..69dd0d0
+--- /dev/null
++++ b/gradle/wrapper/gradle-wrapper.properties
+@@ -0,0 +1,9 @@
++distributionBase=GRADLE_USER_HOME
++distributionPath=wrapper/dists
++distributionUrl=https\://services.gradle.org/distributions/gradle-9.7.0-bin.zip
++networkTimeout=10000
++retries=0
++retryBackOffMs=500
++validateDistributionUrl=true
++zipStoreBase=GRADLE_USER_HOME
++zipStorePath=wrapper/dists
+diff --git a/gradlew b/gradlew
+new file mode 100755
+index 0000000..249efbb
+--- /dev/null
++++ b/gradlew
+@@ -0,0 +1,248 @@
++#!/bin/sh
++
++#
++# Copyright © 2015 the original authors.
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#      https://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++#
++# SPDX-License-Identifier: Apache-2.0
++#
++
++##############################################################################
++#
++#   gradlew start up script for POSIX generated by Gradle.
++#
++#   Important for running:
++#
++#   (1) You need a POSIX-compliant shell to run this script. If your /bin/sh is
++#       noncompliant, but you have some other compliant shell such as ksh or
++#       bash, then to run this script, type that shell name before the whole
++#       command line, like:
++#
++#           ksh gradlew
++#
++#       Busybox and similar reduced shells will NOT work, because this script
++#       requires all of these POSIX shell features:
++#         * functions;
++#         * expansions «$var», «${var}», «${var:-default}», «${var+SET}»,
++#           «${var#prefix}», «${var%suffix}», and «$( cmd )»;
++#         * compound commands having a testable exit status, especially «case»;
++#         * various built-in commands including «command», «set», and «ulimit».
++#
++#   Important for patching:
++#
++#   (2) This script targets any POSIX shell, so it avoids extensions provided
++#       by Bash, Ksh, etc; in particular arrays are avoided.
++#
++#       The "traditional" practice of packing multiple parameters into a
++#       space-separated string is a well documented source of bugs and security
++#       problems, so this is (mostly) avoided, by progressively accumulating
++#       options in "$@", and eventually passing that to Java.
++#
++#       Where the inherited environment variables (DEFAULT_JVM_OPTS, JAVA_OPTS,
++#       and GRADLE_OPTS) rely on word-splitting, this is performed explicitly;
++#       see the in-line comments for details.
++#
++#       There are tweaks for specific operating systems such as AIX, CygWin,
++#       Darwin, MinGW, and NonStop.
++#
++#   (3) This script is generated from the Groovy template
++#       https://github.com/gradle/gradle/blob/3d91ce3b8caaf77ad09f381f43615b715b53f72c/platforms/jvm/plugins-application/src/main/resources/org/gradle/api/internal/plugins/unixStartScript.txt
++#       within the Gradle project.
++#
++#       You can find Gradle at https://github.com/gradle/gradle/.
++#
++##############################################################################
++
++# Attempt to set APP_HOME
++
++# Resolve links: $0 may be a link
++app_path=$0
++
++# Need this for daisy-chained symlinks.
++while
++    APP_HOME=${app_path%"${app_path##*/}"}  # leaves a trailing /; empty if no leading path
++    [ -h "$app_path" ]
++do
++    ls=$( ls -ld "$app_path" )
++    link=${ls#*' -> '}
++    case $link in             #(
++      /*)   app_path=$link ;; #(
++      *)    app_path=$APP_HOME$link ;;
++    esac
++done
++
++# This is normally unused
++# shellcheck disable=SC2034
++APP_BASE_NAME=${0##*/}
++# Discard cd standard output in case $CDPATH is set (https://github.com/gradle/gradle/issues/25036)
++APP_HOME=$( cd -P "${APP_HOME:-./}" > /dev/null && printf '%s\n' "$PWD" ) || exit
++
++# Use the maximum available, or set MAX_FD != -1 to use that value.
++MAX_FD=maximum
++
++warn () {
++    echo "$*"
++} >&2
++
++die () {
++    echo
++    echo "$*"
++    echo
++    exit 1
++} >&2
++
++# OS specific support (must be 'true' or 'false').
++cygwin=false
++msys=false
++darwin=false
++nonstop=false
++case "$( uname )" in                #(
++  CYGWIN* )         cygwin=true  ;; #(
++  Darwin* )         darwin=true  ;; #(
++  MSYS* | MINGW* )  msys=true    ;; #(
++  NONSTOP* )        nonstop=true ;;
++esac
++
++
++
++# Determine the Java command to use to start the JVM.
++if [ -n "$JAVA_HOME" ] ; then
++    if [ -x "$JAVA_HOME/jre/sh/java" ] ; then
++        # IBM's JDK on AIX uses strange locations for the executables
++        JAVACMD=$JAVA_HOME/jre/sh/java
++    else
++        JAVACMD=$JAVA_HOME/bin/java
++    fi
++    if [ ! -x "$JAVACMD" ] ; then
++        die "ERROR: JAVA_HOME is set to an invalid directory: $JAVA_HOME
++
++Please set the JAVA_HOME variable in your environment to match the
++location of your Java installation."
++    fi
++else
++    JAVACMD=java
++    if ! command -v java >/dev/null 2>&1
++    then
++        die "ERROR: JAVA_HOME is not set and no 'java' command could be found in your PATH.
++
++Please set the JAVA_HOME variable in your environment to match the
++location of your Java installation."
++    fi
++fi
++
++# Increase the maximum file descriptors if we can.
++if ! "$cygwin" && ! "$darwin" && ! "$nonstop" ; then
++    case $MAX_FD in #(
++      max*)
++        # In POSIX sh, ulimit -H is undefined. That's why the result is checked to see if it worked.
++        # shellcheck disable=SC2039,SC3045
++        MAX_FD=$( ulimit -H -n ) ||
++            warn "Could not query maximum file descriptor limit"
++    esac
++    case $MAX_FD in  #(
++      '' | soft) :;; #(
++      *)
++        # In POSIX sh, ulimit -n is undefined. That's why the result is checked to see if it worked.
++        # shellcheck disable=SC2039,SC3045
++        ulimit -n "$MAX_FD" ||
++            warn "Could not set maximum file descriptor limit to $MAX_FD"
++    esac
++fi
++
++# Collect all arguments for the java command, stacking in reverse order:
++#   * args from the command line
++#   * the main class name
++#   * -classpath
++#   * -D...appname settings
++#   * --module-path (only if needed)
++#   * DEFAULT_JVM_OPTS, JAVA_OPTS, and GRADLE_OPTS environment variables.
++
++# For Cygwin or MSYS, switch paths to Windows format before running java
++if "$cygwin" || "$msys" ; then
++    APP_HOME=$( cygpath --path --mixed "$APP_HOME" )
++
++    JAVACMD=$( cygpath --unix "$JAVACMD" )
++
++    # Now convert the arguments - kludge to limit ourselves to /bin/sh
++    for arg do
++        if
++            case $arg in                                #(
++              -*)   false ;;                            # don't mess with options #(
++              /?*)  t=${arg#/} t=/${t%%/*}              # looks like a POSIX filepath
++                    [ -e "$t" ] ;;                      #(
++              *)    false ;;
++            esac
++        then
++            arg=$( cygpath --path --ignore --mixed "$arg" )
++        fi
++        # Roll the args list around exactly as many times as the number of
++        # args, so each arg winds up back in the position where it started, but
++        # possibly modified.
++        #
++        # NB: a `for` loop captures its iteration list before it begins, so
++        # changing the positional parameters here affects neither the number of
++        # iterations, nor the values presented in `arg`.
++        shift                   # remove old arg
++        set -- "$@" "$arg"      # push replacement arg
++    done
++fi
++
++
++# Add default JVM options here. You can also use JAVA_OPTS and GRADLE_OPTS to pass JVM options to this script.
++DEFAULT_JVM_OPTS='"-Xmx64m" "-Xms64m"'
++
++# Collect all arguments for the java command:
++#   * DEFAULT_JVM_OPTS, JAVA_OPTS, and optsEnvironmentVar are not allowed to contain shell fragments,
++#     and any embedded shellness will be escaped.
++#   * For example: A user cannot expect ${Hostname} to be expanded, as it is an environment variable and will be
++#     treated as '${Hostname}' itself on the command line.
++
++set -- \
++        "-Dorg.gradle.appname=$APP_BASE_NAME" \
++        -jar "$APP_HOME/gradle/wrapper/gradle-wrapper.jar" \
++        "$@"
++
++# Stop when "xargs" is not available.
++if ! command -v xargs >/dev/null 2>&1
++then
++    die "xargs is not available"
++fi
++
++# Use "xargs" to parse quoted args.
++#
++# With -n1 it outputs one arg per line, with the quotes and backslashes removed.
++#
++# In Bash we could simply go:
++#
++#   readarray ARGS < <( xargs -n1 <<<"$var" ) &&
++#   set -- "${ARGS[@]}" "$@"
++#
++# but POSIX shell has neither arrays nor command substitution, so instead we
++# post-process each arg (as a line of input to sed) to backslash-escape any
++# character that might be a shell metacharacter, then use eval to reverse
++# that process (while maintaining the separation between arguments), and wrap
++# the whole thing up as a single "set" statement.
++#
++# This will of course break if any of these variables contains a newline or
++# an unmatched quote.
++#
++
++eval "set -- $(
++        printf '%s\n' "$DEFAULT_JVM_OPTS $JAVA_OPTS $GRADLE_OPTS" |
++        xargs -n1 |
++        sed ' s~[^-[:alnum:]+,./:=@_]~\\&~g; ' |
++        tr '\n' ' '
++    )" '"$@"'
++
++exec "$JAVACMD" "$@"
+diff --git a/gradlew.bat b/gradlew.bat
+new file mode 100644
+index 0000000..8508ef6
+--- /dev/null
++++ b/gradlew.bat
+@@ -0,0 +1,82 @@
++@rem
++@rem Copyright 2015 the original author or authors.
++@rem
++@rem Licensed under the Apache License, Version 2.0 (the "License");
++@rem you may not use this file except in compliance with the License.
++@rem You may obtain a copy of the License at
++@rem
++@rem      https://www.apache.org/licenses/LICENSE-2.0
++@rem
++@rem Unless required by applicable law or agreed to in writing, software
++@rem distributed under the License is distributed on an "AS IS" BASIS,
++@rem WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++@rem See the License for the specific language governing permissions and
++@rem limitations under the License.
++@rem
++@rem SPDX-License-Identifier: Apache-2.0
++@rem
++
++@if "%DEBUG%"=="" @echo off
++@rem ##########################################################################
++@rem
++@rem  gradlew startup script for Windows
++@rem
++@rem ##########################################################################
++
++@rem Set local scope for the variables, and ensure extensions are enabled
++setlocal EnableExtensions
++
++set DIRNAME=%~dp0
++if "%DIRNAME%"=="" set DIRNAME=.
++@rem This is normally unused
++set APP_BASE_NAME=%~n0
++set APP_HOME=%DIRNAME%
++
++@rem Resolve any "." and ".." in APP_HOME to make it shorter.
++for %%i in ("%APP_HOME%") do set APP_HOME=%%~fi
++
++@rem Add default JVM options here. You can also use JAVA_OPTS and GRADLE_OPTS to pass JVM options to this script.
++set DEFAULT_JVM_OPTS="-Xmx64m" "-Xms64m"
++
++@rem Find java.exe
++if defined JAVA_HOME goto findJavaFromJavaHome
++
++set JAVA_EXE=java.exe
++%JAVA_EXE% -version >NUL 2>&1
++if %ERRORLEVEL% equ 0 goto execute
++
++echo. 1>&2
++echo ERROR: JAVA_HOME is not set and no 'java' command could be found in your PATH. 1>&2
++echo. 1>&2
++echo Please set the JAVA_HOME variable in your environment to match the 1>&2
++echo location of your Java installation. 1>&2
++
++"%COMSPEC%" /c exit 1
++
++:findJavaFromJavaHome
++set JAVA_HOME=%JAVA_HOME:"=%
++set JAVA_EXE=%JAVA_HOME%/bin/java.exe
++
++if exist "%JAVA_EXE%" goto execute
++
++echo. 1>&2
++echo ERROR: JAVA_HOME is set to an invalid directory: %JAVA_HOME% 1>&2
++echo. 1>&2
++echo Please set the JAVA_HOME variable in your environment to match the 1>&2
++echo location of your Java installation. 1>&2
++
++"%COMSPEC%" /c exit 1
++
++:execute
++@rem Setup the command line
++
++
++
++@rem Execute gradlew
++@rem endlocal doesn't take effect until after the line is parsed and variables are expanded
++@rem which allows us to clear the local environment before executing the java command
++endlocal & "%JAVA_EXE%" %DEFAULT_JVM_OPTS% %JAVA_OPTS% %GRADLE_OPTS% "-Dorg.gradle.appname=%APP_BASE_NAME%" -jar "%APP_HOME%\gradle\wrapper\gradle-wrapper.jar" %* & call :exitWithErrorLevel
++
++:exitWithErrorLevel
++@rem Use "%COMSPEC%" /c exit to allow operators to work properly in scripts
++"%COMSPEC%" /c exit %ERRORLEVEL%
+diff --git a/http/README.md b/http/README.md
+new file mode 100644
+index 0000000..d47b805
+--- /dev/null
++++ b/http/README.md
+@@ -0,0 +1,11 @@
++# http
++
++The Helidon adapter. Parses `_bulk` as a stream, maps errors to status codes, and
++delegates to `ingest`. It owns no decision of its own.
++
++**Depends on:** `ingest`.
++
++Nothing depends on `http`
++([architecture.md](../docs/internal/product/architecture.md) § Dependency rules,
++rule 4). It is a front door, and a front door that something else depends on has
++stopped being one.
+diff --git a/http/build.gradle.kts b/http/build.gradle.kts
+new file mode 100644
+index 0000000..aaea78c
+--- /dev/null
++++ b/http/build.gradle.kts
+@@ -0,0 +1,7 @@
++// SPDX-License-Identifier: Apache-2.0
++
++plugins { id("binjava.java-conventions") }
++
++dependencies {
++    api(project(":ingest"))
++}
+diff --git a/ingest/README.md b/ingest/README.md
+new file mode 100644
+index 0000000..b783890
+--- /dev/null
++++ b/ingest/README.md
+@@ -0,0 +1,12 @@
++# ingest
++
++The library: accumulators, the flush trigger, the writer, the reader, subscription
++fan-out and GC. Everything an ingester node does, expressed with no HTTP on the
++classpath.
++
++**Depends on:** `binstore-spi`, `format`, `sequencer`.
++
++⚠️ **No HTTP dependency, ever.** Two delivery surfaces share one implementation
++([ADR-0019](../docs/internal/product/decisions/0019-two-delivery-surfaces.md)):
++the in-process API is this module, and `http` is a thin adapter over it. If a
++routing or flush decision can be made in `http`, it is in the wrong module.
+diff --git a/ingest/build.gradle.kts b/ingest/build.gradle.kts
+new file mode 100644
+index 0000000..49d972d
+--- /dev/null
++++ b/ingest/build.gradle.kts
+@@ -0,0 +1,9 @@
++// SPDX-License-Identifier: Apache-2.0
++
++plugins { id("binjava.java-conventions") }
++
++dependencies {
++    api(project(":binstore-spi"))
++    api(project(":format"))
++    api(project(":sequencer"))
++}
+diff --git a/plugin/README.md b/plugin/README.md
+new file mode 100644
+index 0000000..09375db
+--- /dev/null
++++ b/plugin/README.md
+@@ -0,0 +1,9 @@
++# plugin
++
++The OpenSearch `IngestionConsumerPlugin` implementation: the factory, the shard
++consumer, the pointer type and the message type.
++
++**Depends on:** `client`, and through it `format`. Never on `binstore-backends`.
++
++Built against the OpenSearch 3.8 pull-based ingestion SPI —
++[docs/research/20-opensearch/01-pull-based-ingestion-spi.md](../docs/research/20-opensearch/01-pull-based-ingestion-spi.md).
+diff --git a/plugin/build.gradle.kts b/plugin/build.gradle.kts
+new file mode 100644
+index 0000000..fae25c8
+--- /dev/null
++++ b/plugin/build.gradle.kts
+@@ -0,0 +1,7 @@
++// SPDX-License-Identifier: Apache-2.0
++
++plugins { id("binjava.java-conventions") }
++
++dependencies {
++    api(project(":client"))
++}
+diff --git a/sequencer/README.md b/sequencer/README.md
+new file mode 100644
+index 0000000..8de4eeb
+--- /dev/null
++++ b/sequencer/README.md
+@@ -0,0 +1,11 @@
++# sequencer
++
++Leases, epoch fencing, the write-once commit log, and checkpoints. The coordination
++layer, built on compare-and-swap against the object store rather than on a
++consensus cluster ([ADR-0011](../docs/internal/product/decisions/0011-no-consensus-cluster.md)).
++
++**Depends on:** `binstore-spi`, `format`.
++
++Invariants I1-I5 in [architecture.md](../docs/internal/product/architecture.md)
++are this module's obligation. They are tested by deterministic simulation, not
++by hoping.
+diff --git a/sequencer/build.gradle.kts b/sequencer/build.gradle.kts
+new file mode 100644
+index 0000000..8ba5b9c
+--- /dev/null
++++ b/sequencer/build.gradle.kts
+@@ -0,0 +1,8 @@
++// SPDX-License-Identifier: Apache-2.0
++
++plugins { id("binjava.java-conventions") }
++
++dependencies {
++    api(project(":binstore-spi"))
++    api(project(":format"))
++}
+diff --git a/settings.gradle.kts b/settings.gradle.kts
+new file mode 100644
+index 0000000..5a003c1
+--- /dev/null
++++ b/settings.gradle.kts
+@@ -0,0 +1,21 @@
++// SPDX-License-Identifier: Apache-2.0
++
++// The module list is docs/internal/product/architecture.md § Modules, in
++// dependency order. Adding a module here without adding it there is how a
++// component map stops being true.
++rootProject.name = "opensearch-bin-ingester"
++
++dependencyResolutionManagement {
++    repositories { mavenCentral() }
++}
++
++include(
++    "binstore-spi",
++    "binstore-backends",
++    "format",
++    "sequencer",
++    "ingest",
++    "http",
++    "client",
++    "plugin",
++)

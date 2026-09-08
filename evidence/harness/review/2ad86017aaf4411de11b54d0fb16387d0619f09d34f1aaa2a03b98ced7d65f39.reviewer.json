@@ -1,0 +1,16 @@
+{
+  "diff_sha256": "2ad86017aaf4411de11b54d0fb16387d0619f09d34f1aaa2a03b98ced7d65f39",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "M0.16-R1",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md",
+      "summary": "The M0.16 row drops its 'Serves' citation from FR-8 to '\u2014' in the same edit that flips State to done, with no note in the row (or, visibly, the commit) explaining the drop.",
+      "failure_scenario": "sdd.md rule 2 requires every task to cite a requirement ID ('work serving no FR/NFR is unjustified'); a reader hitting this row later has no way to tell whether FR-8 was dropped because the fixture genuinely serves no requirement (defensible, since the FR-8-serving conformance suite was already re-scoped to M1 in the row's own text) or because an unrelated edit quietly erased the linkage. Nothing here says which, so a future cross-ref gate (M0.20) or a milestone reviewer has to re-derive the reasoning from scratch instead of reading it."
+    }
+  ],
+  "notes": "Verified independently rather than trusted: (1) `docker pull minio/minio:latest` + `docker inspect` today reproduces the exact committed digest sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e, and `docker manifest inspect` confirms it is a multi-arch manifest-list digest (amd64/arm64/ppc64le), not a single-platform one. (2) `docker compose -f docker-compose.test.yml up -d` reaches `healthy` via the `mc ready local` healthcheck and publishes a kernel-assigned host port (observed 32770), matching testing.md rule 16. `down -v` tears down cleanly. (3) `python3 scripts/test_budget.py` reproduces the claimed 3328/6144 MiB sum, and the added line is exactly `docker-compose.test.yml/minio 256 MiB`, matching build.md's own budget table entry for the MinIO container. (4) File comments correctly label MinIO a fixture never a supported backend (testing.md rule 19a) and make no production claim. (5) No object-store request-rate concern: this file starts a local test container and never issues a request that scales with records/shards/partitions/indices; the healthcheck polls the fixture's own loopback, not our store SPI.",
+  "task": "M0.16",
+  "role": "reviewer"
+}

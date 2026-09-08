@@ -1,0 +1,51 @@
+{
+  "diff_sha256": "322f180de44e8f25aa361c0c6ba55cbbe944db9cfa96d8c5f552ee3dbe09ee72",
+  "task": "M4.13",
+  "role": "test-reviewer",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "M4.13-tr-1",
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSimulation.java:272",
+      "summary": "THE SLOT-0 CONTINUE CONFIRMED EVENT IS NOT EMITTED, and three places in the tree say it is. The only two `acks.add` calls in the file are the confirmed/acked pair for a successful `leader.commit`, whose sequence starts at 1 because slot 0 holds the CONTINUE. MEASURED with a probe over seeds 0..199 at ROUNDS=120, PODS=3 with the sweep's own profile: 424 epoch-level ack traces, minSequenceHistogram={1=424}, zero gaps. So `checkAckOrder`'s per-chain base is 1 in every trace it has ever been fed, which is exactly the floor the notes say must be pinned at 0. Contradicted by: backlog-done.md:177 ('a trace the driver emits including the slot-0 CONTINUE'), backlog-notes.md '### M4.13' ('THE SWEEP MUST EMIT A CONFIRMED EVENT FOR THE SLOT-0 CONTINUE'), and AckOrderInvariants.java:80-83 ('it is for the caller to emit a CONFIRMED event for the slot-0 CONTINUE, which pins the floor at 0 and removes the hole. M4.13 owns that'). The remedy is MEASURED, not asserted: adding `acks.add(AckOrderInvariants.AckEvent.confirmed(leader.epoch(), 0L));` immediately after `takeovers++` leaves the whole `:sequencer` suite (47 classes, 384 testcases) GREEN, so nothing forced the omission.",
+      "failure_scenario": "The hole AckOrderInvariants documents stays open while the archive row -- a file backlog-done.md's own header says is never rewritten -- records it closed. A future writer that pipelines its first two commits, loses sequence 1 and acks sequence 2 produces a trace whose floor moves up to 2; checkAckOrder reports clean, because the lost write is below the base it inferred. A reader of the row concludes the mitigation is in place and does not re-derive it. The surviving mutation is the one already in the diff: DELETE nothing -- the event was never added, and every test in the tree is green with it absent AND green with it present, so no assertion distinguishes the two states."
+    },
+    {
+      "id": "M4.13-tr-2",
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSweepTest.java:58",
+      "summary": "`-Dsweep.seeds` DOES NOT REACH THE TEST JVM, so the row's 'seed count configurable via `sweep.seeds`' is false from the documented entry point. MEASURED twice: (a) `./gradlew :sequencer:test --tests CommitProtocolSweepTest --rerun-tasks -Dsweep.seeds=3` reported time=14.607s, indistinguishable from the 1,000-seed run; (b) a probe test run under `./gradlew :sequencer:test --tests ZzProbeTest --rerun-tasks -Dsweep.seeds=7` printed `sweep.seeds=null resolved=1000`. Gradle sets a CLI `-D` on the daemon JVM, not on the forked test worker, and buildSrc/src/main/kotlin/binjava.java-conventions.gradle.kts forwards exactly one system property (`java.io.tmpdir`, line 123) and does not forward this one. Answering the round's question 4 directly: the knob cannot be used to make a red run green because the knob does nothing at all -- and the javadoc's warning at :53-56 governs a control that is not wired.",
+      "failure_scenario": "Someone bisecting a failing seed runs `./gradlew test -Dsweep.seeds=20`, waits the full 1,000-seed run, and gets 1,000 seeds' worth of violations back -- the exact affordance the javadoc offers, silently ignored. Worse in the other direction: a future author wiring `systemProperty(\"sweep.seeds\", ...)` through the convention plugin turns a documented-but-inert knob into a live one that CAN shrink the sweep, with no gate asserting the sweep ran 1,000 seeds. No test constrains SEEDS at all: mutating line 58 to `Integer.getInteger(\"sweep.seeds\", 5)` leaves the whole `:sequencer` suite green and reduces M4's completion condition from 1,000 seeds to 5, with the anti-vacuity floors at :94-96 still satisfied."
+    },
+    {
+      "id": "M4.13-tr-3",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSimulation.java:303",
+      "summary": "The `checkReader` wiring is unpinned. MEASURED: guarding the call with `if (reader.epoch() < 0)` -- i.e. never calling it -- leaves the whole `:sequencer` suite GREEN (BUILD SUCCESSFUL, 47 result files, 384 testcases). Confirming the round's question 2. \u26a0\ufe0f BUT IT IS NOT A DEAD CHECKER, and that is the part worth recording rather than the survival: reverting ChainReplay.neverOpened's empty-origin arm (`if (first == null) return !atOrigin;` -> `return false;`) reddens the sweep with 'seed 0: I4 -- reader applied stream RunKey[...] up to 0, dropping records the chain committed up to 37'. So this call site catches a real production defect and nothing in the tree stops a future refactor from deleting it.",
+      "failure_scenario": "A later commit removes or short-circuits the checkReader call while tidying the sweep's epoch loop. Every gate stays green -- check-mutants.sh scopes to production code and this is test-harness wiring -- and backlog-done.md:177 goes on claiming I3 and I4's drop clause are swept across 1,000 seeds. The next real reader-side regression (the ChainReplay one above is a live example) then lands unnoticed. Surviving mutation: delete lines 301-304 of CommitProtocolSimulation.java."
+    },
+    {
+      "id": "M4.13-tr-4",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSimulation.java:307",
+      "summary": "`checkAckOrder`'s stated purpose is not achievable with this driver, and the survival is worse than the javadoc admits. MEASURED: guarding `violations.addAll(AckOrderInvariants.checkAckOrder(acks));` with `if (acks.size() < 0)` leaves the whole `:sequencer` suite GREEN. The javadoc at :313-314 and CommitProtocolSweepTest:29-34 justify keeping it because 'a pipelining writer -- which is what would break it -- would be caught the day it arrives'. It would not: the driver synthesises `confirmed` and `acked` from ONE `commit()` return, adjacently, one call at a time, and AckOrderInvariants.java:21 records that nothing in production emits a trace. So the trace is a contiguous, in-order confirmed/acked pair sequence BY CONSTRUCTION OF THE DRIVER, not by any property of CommitLog -- a genuinely pipelining CommitLog would still be traced this way, and catching it would require rewriting this driver first, which is the 'the day someone remembers to check' the sentence promises to avoid. The residual power is narrower and should be what the prose claims: a non-monotonic or sequence-skipping return from `commit()`, which checkChain's gap arm already reports.",
+      "failure_scenario": "CommitLog is changed to pipeline (M11 or later). The sweep stays green, because the driver still emits confirmed-then-acked per return. The author trusts the javadoc's 'caught the day it arrives', does not add a production-emitted trace, and I5's ack clause is unchecked while backlog-done.md and this file both say it is swept. Surviving mutation: delete line 315."
+    },
+    {
+      "id": "M4.13-tr-5",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSweepTest.java:94",
+      "summary": "The anti-vacuity floors bite on a ZEROED fault profile but not on the sweep's DEPTH, because all three are summed across 1,000 seeds and only asserted `isPositive()`. MEASURED: changing ROUNDS from 120 to 3 (line 63) leaves the sweep GREEN in a 5s build with all three floors satisfied, having done roughly 1/40th of the work the row's 17.1s measurement describes. Answering the round's question 1: no, it is not vacuous today -- a real production defect reddens it (see M4.13-tr-3) -- but the floors do not hold the sweep at the depth the row claims. The sibling `CommitProtocolSimulationTest.aFAULTEDSWEEPKeepsCOMMITTINGRatherThanSTALLING` asserts `commits > seeds` and `takeovers > seeds` over its range, a per-seed floor this one drops to `> 0` over 1,000.",
+      "failure_scenario": "ROUNDS or PODS is lowered by a later commit tuning suite time (the elapsed assertion at :103 actively rewards that), the sweep drops to a handful of commits per seed and stops reaching failover-into-contention interleavings at all, and every assertion here stays green while the row keeps claiming M4's completion condition. Surviving mutation: `ROUNDS = 120` -> `ROUNDS = 3`, verified green."
+    },
+    {
+      "id": "M4.13-tr-6",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSweepTest.java:103",
+      "summary": "A wall-clock assertion in the one test that runs on every commit. `elapsed` is measured from `System.nanoTime()` and asserted under 60,000ms against a measured 17.1s (author) / 14.4s (this reviewer's tree), a ~4x margin held by nothing but the host. This is the only place in the diff where a test outcome depends on machine load rather than on behaviour, and it is red-in-the-wrong-direction rather than weak.",
+      "failure_scenario": "A loaded or shared CI runner takes over 60s for the sweep. The suite goes red naming a budget rather than an invariant, and the cheapest repairs are both forbidden by non-negotiable 2 (raise BUDGET_MILLIS) or by M4.13-tr-5 (lower ROUNDS). No mutation survives this one -- the finding is that a non-behavioural input can turn it red, and that the timing claim would be better carried by the @Timeout at :49 or by a bench harness than by an assertion inside the invariant test."
+    }
+  ],
+  "staged_tree": "c30ef97c86c93e4c767b2fe11c3e78c98a1dbc88"
+}

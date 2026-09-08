@@ -1,0 +1,15 @@
+{
+  "diff_sha256": "5d013d5bc24ef7dfe0f04769f47e14eaade9affe49b00cabd96dccc7301b4761",
+  "verdict": "pass",
+  "findings": [
+    {
+      "file": "format/src/test/java/binjava/format/PathologicalKeySizeTest.java",
+      "line": 55,
+      "severity": "minor",
+      "summary": "Inline fully-qualified java.util.stream.Collectors.toSet() while IntStream/Set/HashSet are imported normally elsewhere in the same file.",
+      "failure_scenario": "purely cosmetic inconsistency; does not affect correctness or behavior"
+    }
+  ],
+  "task": "M2.8",
+  "role": "reviewer"
+}

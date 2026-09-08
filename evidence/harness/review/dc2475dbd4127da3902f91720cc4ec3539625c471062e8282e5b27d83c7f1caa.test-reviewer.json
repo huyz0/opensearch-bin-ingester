@@ -1,0 +1,53 @@
+{
+  "diff_sha256": "dc2475dbd4127da3902f91720cc4ec3539625c471062e8282e5b27d83c7f1caa",
+  "verdict": "changes-requested",
+  "summary": "Round 2, verified by mutation in an isolated tree (24 mutations, every one run with --rerun-tasks and read from format/build/test-results/test/*.xml). All six round-1 findings are genuinely closed -- tr-1 (comparator), tr-2's version/trailing-bytes/streamCount branches, tr-3 (all six record preconditions, including the four I was asked to re-check for the hasMessageContaining weakness -- none has it), tr-4, tr-5, tr-6 -- and the carried-forward swap, deleted-sort and Map.copyOf measurements reproduce on the enlarged fixture. What is NOT closed: the round-1 FIX added five new decode guards and gave four of them no test at all. Two of those four, when deleted, make the decoder ACCEPT a crafted object as valid rather than refuse it -- silent misreads, the highest-harm category in a wire format -- and one of them is claimed as covered by a test whose name says it is.",
+  "findings": [
+    {
+      "id": "M4.8a-tr-7",
+      "severity": "major",
+      "location": "format/src/test/java/binjava/format/CheckpointTest.java:275",
+      "title": "aREPEATEDStreamOrPodIsRefusedRatherThanLastWinning tests the stream half only, and its NAME asserts the pod half",
+      "surviving_mutation": "In Checkpoint.java:210, replace `if (pods.put(pod, c.uvarint()) != null) { throw new IOException(\"a checkpoint repeats pod \" + pod); }` with the bare `pods.put(pod, c.uvarint());`. MEASURED: :format:test --rerun-tasks exits 0, whole module green.",
+      "failure_scenario": "A torn or hostile checkpoint carrying podId 'poda' twice decodes to whichever copy came last, so lastAppliedFlushSeq goes BACKWARDS -- exactly the defect the sibling stream guard at Checkpoint.java:186 exists for and which this commit measured and documented there. M4.9 reads that field to bound dedup, so a checkpoint that says a pod's last applied flushSeq is lower than it is causes already-applied commits to be re-applied. The test name promises 'StreamOrPod', so the next session reading the suite will believe the pod branch is pinned; the stream half is pinned (dup-a is killed by this test), the pod half is not. The remedy is the same construction the test already does for streams: duplicate the single pod entry, bump the pod count to 2, assert hasMessageContaining(\"repeats pod\")."
+    },
+    {
+      "id": "M4.8a-tr-8",
+      "severity": "major",
+      "location": "format/src/main/java/binjava/format/Checkpoint.java:205",
+      "title": "The 64-bit-to-int narrowing guard added this round is unconstrained, and the sibling cast one field over is neither guarded nor tested",
+      "surviving_mutation": "Replace `if (podLen < 0 || podLen > c.remaining()) {` with `if (false) {`. MEASURED: :format:test --rerun-tasks exits 0, whole module green. I then wrote a throwaway probe that encodes a well-formed one-pod checkpoint whose podId length uvarint is 0x1_0000_0004: on the unmutated tree Checkpoint.decode refuses it; with the guard deleted it returns a VALID Checkpoint with pods={poda=7}. So the branch is load-bearing, its consequence is a silent accept rather than an exception, and nothing in the suite constrains it.",
+      "failure_scenario": "The comment at Checkpoint.java:201-204 states this behaviour as measured fact; no test holds it, so the guard is a comment with a `if` in front of it and the first refactor that simplifies the cast reinstates the misread with the tree green. WORSE, and measured the same way: `(int) c.uvarint()` at Checkpoint.java:182 for partitionId has NO guard at all, and a probe feeding it a partitionId uvarint of 0x1_0000_0001 decodes to partitionId 1 and the object is accepted -- a checkpoint whose stream offsets are attributed to the WRONG partition, which is precisely the recovery input M4.9 acts on. That is the same 'the same defect one field over' shape baselines/review.txt already records for M4.7a round 3, and there it was fixed in the commit rather than filed, on the stated ground that bounding one of two while a comment claims the class is closed is worse than either. One test that feeds a narrowing uvarint to BOTH sites, asserting IOException from each, kills both."
+    },
+    {
+      "id": "M4.8a-tr-2",
+      "severity": "minor",
+      "location": "format/src/main/java/binjava/format/Checkpoint.java:194",
+      "title": "Carry-forward: the pod-count bound, the second of the 'both count bounds' in round-1 tr-2, is still unconstrained",
+      "surviving_mutation": "Replace `if (podCount < 0 || podCount > c.remaining()) {` with `if (false) {`. MEASURED: :format:test --rerun-tasks exits 0, whole module green. aCOUNTThatCannotFitInTheRemainingBytesIsRefusedBeforeAnyLoop asserts 'streams but only' twice and never exercises the pod count.",
+      "failure_scenario": "DOWNGRADED FROM THE MAJOR I RAISED IN ROUND 1, and the measurement is why: with the bound gone, an absurd podCount still terminates in an IOException, because each loop iteration consumes at least one byte through Cursor.uvarint and Cursor bounds every read -- so the observable difference is the message an operator gets, not the outcome. That makes it materially weaker than the stream-count case, which this round did pin, and than tr-7 and tr-8 above, which change accept/refuse. Recording it rather than blocking on it: the streamCount fixture in the same test already generalises to podCount by moving the two synthesised bytes past a zero stream count."
+    },
+    {
+      "id": "M4.8a-tr-9",
+      "severity": "minor",
+      "location": "format/src/main/java/binjava/format/Checkpoint.java:80",
+      "title": "The streams null-key/null-value guard added this round has no test",
+      "surviving_mutation": "Delete the whole `for (Map.Entry<RunKey, StreamOffsets> e : streams.entrySet()) { Objects.requireNonNull(...); }` loop. MEASURED: :format:test --rerun-tasks exits 0, whole module green.",
+      "failure_scenario": "The comment says the guard exists because an earlier draft validated only `pods`, so a null value in `streams` survived construction and became an NPE later, inside encode(), on the write path. Nothing pins that: no test hands the constructor a map with a null key or a null value. Minor rather than major because both worlds end in an NPE and the difference is where it is raised, not whether bad data is accepted -- but it is production code added in a round-1 fix with no red record possible for it, which is the pattern the other three findings here share. Two lines in theRecordREFUSESValuesNoEncoderShouldEverProduce close it."
+    }
+  ],
+  "verified_closed": [
+    "M4.8a-tr-1: encoder sorting by indexId alone is now KILLED by theENCODERSortsWhateverOrderTheCallerHandedIn and twoCheckpointsDifferingONLYInInsertionOrderEncodeIdentically; dropping the partitionId tiebreak from RunKey.compareTo itself is KILLED by the latter. Both measured.",
+    "M4.8a-tr-2 (three of four branches): deleting the version check is killed by anUNKNOWNVersionSTOPSRatherThanGuessingTheLayout; deleting the trailing-bytes check by BYTESAfterTheLastFieldAreRefused; and the streamCount bound is killed BOTH by deletion and by substituting a constant cap of 1_000_000, so the modest nine-streams-in-eight-bytes assertion does the work it was added for.",
+    "M4.8a-tr-3: I re-ran the other four assertions individually as you asked. Deleting each of the six record preconditions -- nextOffset<0, oldestRetainedOffset<0, the cross-field check, sequence<0, blank podId, negative lastAppliedFlushSeq -- is killed. None of the four repeats the hasMessageContaining overlap that the nextOffset one had: each guard's message is the only one in its class containing the asserted substring.",
+    "M4.8a-tr-4: dropping the LinkedHashMap copy on streams, dropping it on pods, and dropping the unmodifiableMap wrapper are all killed by theMapsAreCOPIEDSoALaterMutationCannotReachTheRecord.",
+    "M4.8a-tr-5: putUvarint(out, raw.length) -> putUvarint(out, pod.length()) is killed by everyFieldSurvivesARoundTrip and theENCODERSortsWhateverOrderTheCallerHandedIn.",
+    "M4.8a-tr-6: the GoldenCheckpointTest javadoc's two claims both reproduce. Deleting the stream sort and deleting the pod sort each leave all three tests in that class GREEN and are killed only in CheckpointTest; substituting Map.copyOf fails theGoldenBytesCarryStreamsAndPodsInASCENDINGOrder.",
+    "Carried forward and re-measured on the enlarged fixture: swapping nextOffset and oldestRetainedOffset consistently in encode AND decode, with the StreamOffsets cross-field invariant also removed so the prescription is tested rather than a lucky guard, is killed by GoldenCheckpointTest#aV0CheckpointFromAnEarlierBuildStillParses -- the hand-verified VALUES, as the deleted-meta-test comment claims.",
+    "Deleting the magic check is now killed by bytesThatAreNotACheckpointAreRefusedRatherThanMisread, so that test no longer passes against its own mutation; deleting the short-header check is killed by the same test; removing the IllegalArgumentException-to-IOException wrap in decode is killed by aTORNObjectIsAnIOExceptionRatherThanAnUncheckedOne.",
+    "No assertion was weakened. hasSize(6)->hasSize(8) and containsExactly gaining a third podId track a larger fixture; the zero-filled-buffer assertion was REPLACED by a strictly stronger one that also pins the message."
+  ],
+  "task": "M4.8a",
+  "role": "test-reviewer",
+  "staged_tree": "cc962e915578f4569ecc53f78e1e54ba13c2aa91"
+}

@@ -1,0 +1,15 @@
+{
+  "diff_sha256": "3ae3427f18a4b3858cb15ecde54dff3973c03fbc7be2f4fc9244938f95527f60",
+  "verdict": "pass",
+  "findings": [
+    {
+      "file": "baselines/review.txt",
+      "line": 13,
+      "severity": "minor",
+      "what": "The entry says 'both bound fixtures had zero trailing bytes'. Measured against the reviewed packets, only ONE ever did: aSegmentCountLargerThanTheOBJECTIsRefusedRatherThanAllocated ended at putUvarint(0x7FFFFFFFL) in the round-2 diff, which is the defect round 2 found. The run-count bound fixture, aRUNCountLargerThanTheObjectIsRefusedToo, first appears in the round-3 diff already carrying out.writeBytes(new byte[] {1,2,3,4,5,6,7,8}) -- it was born with slack and never had the weakness the sentence attributes to it. The other two claims check out: every batched fixture in format, ingest and sequencer was exactly two segments through round 2 (so a literal 2 in place of segments.size() was byte-identical everywhere and survived), and arity is now genuinely varied -- I re-ran the literal-2 mutation on the staged tree and :format:test fails 1 of 177.",
+      "failure_scenario": "A future reader of the argued round-cap entry treats it as a measured record of what the fixtures looked like and concludes that trailing-byte slack was retrofitted onto both repeat-count guards after review found both weak. In fact the run-count guard's fixture was written with slack from the start, so the entry credits review with a catch it did not make and slightly overstates the fixture weakness it is drawing a lesson from. No test is affected: the four bound fixtures in the staged tree all carry eight trailing bytes and all assert on the count in the message."
+    }
+  ],
+  "task": "M4.7a",
+  "role": "test-reviewer"
+}

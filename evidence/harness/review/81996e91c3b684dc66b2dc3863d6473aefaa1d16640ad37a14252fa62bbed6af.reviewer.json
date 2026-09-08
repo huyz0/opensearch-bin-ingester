@@ -1,0 +1,15 @@
+{
+  "diff_sha256": "81996e91c3b684dc66b2dc3863d6473aefaa1d16640ad37a14252fa62bbed6af",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "M11",
+      "severity": "minor",
+      "file": "scripts/check-module.sh:31",
+      "summary": "The MT12 derivation `grep -oE '^\\s*\"[a-z][a-z-]*\",'` requires a TRAILING COMMA, so a module declared as the last entry without one -- legal Kotlin, and the usual way a list is written -- is dropped from ALL. That is MT12's own failure mode with a narrower trigger: the delta path filters candidate module dirs through ALL, so the module is silently skipped while the success line prints a count. The usage header two lines up still hardcodes \"all eight\", the fourth copy of a fact the derivation just removed three of.",
+      "failure_scenario": "Ran the script's exact grep over `include(\\n \"format\",\\n \"plugin\"\\n)`: output is `format` only. So `settings.gradle.kts` gaining `\"wal\"` as the final entry without a trailing comma, plus `wal/` in the diff, yields MODULES empty -> `ok no module changed`; `GATE_SCOPE=full` prints `ok 8 module(s) checked` over nine modules; and `scripts/check-module.sh wal` fails with `unknown module: wal`, the same split-brain MT12 named. Fix is one character class: `'^\\s*\"[a-z][a-z-]*\",?\\s*$'`, and make the header say \"every module\" rather than \"all eight\"."
+    }
+  ],
+  "task": "M0.5",
+  "role": "reviewer"
+}

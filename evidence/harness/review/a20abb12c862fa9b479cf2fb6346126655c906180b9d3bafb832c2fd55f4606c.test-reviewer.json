@@ -1,0 +1,56 @@
+{
+  "diff_sha256": "a20abb12c862fa9b479cf2fb6346126655c906180b9d3bafb832c2fd55f4606c",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/LocalSequencerTest.java:181",
+      "detail": "LocalSequencer.commit forwards nothing any test reads back. Two single-site mutations survive all 121 tests: (a) log.commit(\"MUTANT\", request.recordCounts()) and (b) recordCounts flattened to 1 per stream. commitsLandInThisLeadersOwnChainAfterTheContinueThatOpenedIt asserts only delta.sequence()==1 and firstOffset==0, both true for any first commit at slot 1 regardless of payload. Fix: assert delta.segmentKey() and commit twice so the second firstOffset equals the first count.",
+      "failure_scenario": "A refactor of LocalSequencer.commit that drops or rewrites the segment key or the record counts ships green. Production effect: every commit points readers at one wrong segment (records acked, never readable) or assigns offsets from wrong counts (I2 broken), with the whole suite passing."
+    },
+    {
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitLogSealWriteTest.java:244",
+      "detail": "afterSealingAChainThisWriterRefusesToCommitToIt matches only \"sealed\". Surviving mutation: sealedAt = new Seal(proposed.sequence(), proposed.continuedAt() + 7) -- 121/121 green. The writer that WON its own seal can bind to a seal naming a chain that does not exist. The sibling adopt test (line 200) already pins \"continued at epoch 9\" with a comment saying exactly why; the mirror was not applied here.",
+      "failure_scenario": "A leader that WINS its own seal binds to a Seal naming a continuation epoch that does not exist. It refuses further commits, so it looks correct, but a cross-boundary reader in M4.6e follows continuedAt to a chain that was never opened and stalls at the boundary. Suite stays green."
+    },
+    {
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitLogSealWriteTest.java:66",
+      "detail": "seal()'s continuedAt argument is pinned only where it coincides with epoch+1. Surviving mutation: Seal proposed = new Seal(nextSequence, epoch + 1) -- 121/121 green, because every fixture seals an epoch-1 chain with continuedAt == epoch. Line 69's assertion 'names where the chain continues' cannot distinguish the parameter from a derived constant. Same shape as the already-closed prevEpoch = epoch-1 finding, one parameter over. Sealing with a non-coincident continuedAt (e.g. log.seal(9, 5)) closes this and the finding above together.",
+      "failure_scenario": "seal() ignores its continuedAt argument and derives epoch+1 instead. Invisible today because epochs advance by one, but the moment a caller (M5's remote sequencer, or any path that seals a non-adjacent chain) passes a different continuation, the SEAL points readers at the wrong epoch and no test notices."
+    },
+    {
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitLogSealWriteTest.java:153",
+      "detail": "open()'s two apply(opening) calls are pinned only as a disjunction. Dropping CommitLog.java:297 (won branch) survives 121/121; dropping CommitLog.java:302 (idempotent branch) survives 121/121; dropping BOTH is caught. Under the 297 mutation nextSequence stays 0 after every failover, so the new leader's first commit races slot 0 against its own CONTINUE, loses, spends a GET and retries -- a wasted PUT+GET per failover, invisible because no test on this path counts requests.",
+      "failure_scenario": "The apply(opening) in open()'s winning branch is removed during a cleanup. Every failover then costs an extra PUT and an extra GET on its first commit, because the leader races slot 0 against its own CONTINUE. This is a cost.md regression on the failover path and 121/121 tests still pass."
+    },
+    {
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/LocalSequencerTest.java:106",
+      "detail": "takingOverSealsThePredecessorsChainBeforeOpeningItsOwn asserts terminal state only; it survives the seal/open reorder (that mutation killed thePredecessorIsSealedBEFORE and aTakeoverRedrives, not this one). The name claims ordering it does not check. Property is pinned elsewhere, so this is naming, not coverage.",
+      "failure_scenario": "The seal/open order is inverted in a refactor and a reader is told this test covers ordering. It does not; the successor's chain becomes crossable while the predecessor is still unfenced and still acking, and this test stays green."
+    },
+    {
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/StealFirstPutStore.java:34",
+      "detail": "The k.equals(contestedKey) conjunct is unconstrained: removing it leaves 121/121 green, because at both call sites the first putIfAbsent through the decorator is already the contested key (the takeover lease path uses putIfMatch). Unlike M4.6a's SmallPageStore this cannot disarm silently -- a no-op steal fails both tests loudly -- so it is latent fragility, not a hole. The decorator is otherwise sound.",
+      "failure_scenario": "A future fixture change makes some earlier putIfAbsent reach the decorator first (e.g. a cold-start lease that mints via putIfAbsent). The single steal is then spent on the wrong key. Both contention tests would fail rather than pass silently, but the diagnosis points at the production code instead of at the fixture."
+    },
+    {
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/CommitLog.java:343",
+      "detail": "apply(proposed) on seal's winning branch is unconstrained (deleting it survives 121/121). Nothing asserts nextSequence() after a won seal, and sealedAt already blocks commit, so a reader cannot tell whether the line is load-bearing.",
+      "failure_scenario": "apply(proposed) is deleted as apparently redundant. nextSequence() then reports the seal's own slot rather than one past it; any future caller reading nextSequence() after a successful seal gets a value one short, and nothing in the suite disagrees."
+    },
+    {
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/LocalSequencer.java:65",
+      "detail": "log.recover() on the sequencer's OWN chain is unconstrained (deleting it survives 121/121). A fresh epoch's chain is always empty, so it costs one LIST per leader start and nothing distinguishes its presence. Design note for the production reviewer rather than a test hole.",
+      "failure_scenario": "log.recover() is deleted as apparently redundant, or kept forever as an unexplained LIST per leader start. Either way no test distinguishes the two, so the request cost of a failover is unpinned."
+    }
+  ],
+  "task": "M4.6c",
+  "role": "test-reviewer"
+}

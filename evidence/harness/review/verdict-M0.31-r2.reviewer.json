@@ -1,0 +1,13 @@
+{
+  "verdict": "changes-requested",
+  "diff_sha256": "b585910ba0625f1d42aaa5bfc4a3b7362f079bf8ec3cae81cda5fc0db322c065",
+  "findings": [
+    {
+      "id": "M0.31-R2-1",
+      "severity": "major",
+      "file": "docs/internal/product/backlog.md",
+      "summary": "The M0.31 row, part of this very staged diff, asserts 'Staged hash `994726dc`' and 'it carries no verdict'. Neither is true of any state this session actually produced: the round-1 diff that was reviewed hashed to 0e9f5d13...57c839 (recorded in .harness/review/verdict-M0.31-r1.reviewer.json, verdict changes-requested -- so a verdict DOES exist), the current staged diff hashes to b585910b...db322c065 (git diff --cached | sha256sum, matches .harness/review/.inflight), and no file anywhere under .harness/review/ contains or is named 994726dc. The string does not correspond to any diff this project has actually hashed.",
+      "failure_scenario": "A future session (or this one, at commit time) trusts the backlog's own instruction ('Re-run scripts/review.sh context --task M0.31 and both reviewers, then commit; do not assume the gates were re-run') and treats 994726dc as the reference point for 'what was staged when this was last true' -- e.g. to sanity-check that nothing drifted between the note being written and the commit being made. Since 994726dc matches nothing recorded, that check silently can't be performed, and 'it carries no verdict' actively contradicts the recorded r1 verdict file, so a reader would not know a review already happened and found a major defect. This is exactly the class of unmeasured claim non-negotiable 4 forbids, sitting in the one file whose whole content is process bookkeeping other agents are told to trust."
+    }
+  ]
+}

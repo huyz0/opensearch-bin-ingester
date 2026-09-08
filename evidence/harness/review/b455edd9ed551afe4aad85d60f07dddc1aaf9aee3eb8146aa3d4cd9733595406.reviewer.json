@@ -1,0 +1,16 @@
+{
+  "diff_sha256": "b455edd9ed551afe4aad85d60f07dddc1aaf9aee3eb8146aa3d4cd9733595406",
+  "verdict": "pass",
+  "summary": "Round 2 of 2. Round-1's major (epoch 0 is not a free slot) is verified as correctly handled by documentation plus a new owned backlog row M4.4b, which is the right disposition: the actual fix is a LeaseManager change that would have weakened LeaseManagerTest.theFirstAcquisitionStartsAtEpochZero in the same commit as a production change, i.e. exactly the inversion testing.md rules 4-5 forbid, and it is not what M4.4 asked for. Verified independently: LeaseManager's cold start does take epoch 0 (LeaseManagerTest.java:72-79), Lease exposes epoch(), DefaultIngest.java:135 is a real production no-lease caller, and there are exactly 17 pre-existing 2-arg call sites, so every claim in the javadoc and in the M4.4b row is true. The narrowed I3 claim in the M4.4 row is now correct: architecture.md:88 states I3 as 'a sealed prefix or a later epoch's chain', and the two tests pin only the second half, the sealed-prefix half genuinely needing M4.5/M4.6's CONTINUE. No ADR is needed and the corpus discrepancy is already reconciled in the tree, not only in a commit body: M4/SPEC.md:129 fixes the <epoch:016x> grammar and M4/SPEC.md:215-216 explicitly settles <slot> over the corpus's <podId> under ADR-0007. Round-1 minors verified fixed: epoch() now has theChainReportsWhichTermItBelongsTo, and keyFor's full key is asserted including the .delta suffix and the padded sequence. Cost lens clean: the only LIST is recover()'s, still once per node at startup over one prefix and unchanged in count; commit() still issues one putIfAbsent per delta; epoch() and logPrefix() issue nothing; no request scales with records, shards, partitions or indices. Key-grammar change is self-contained: grep shows no reader, fake, golden file, spec or VERIFIED.md outside CommitLog encodes 'ctl/log/0/0/', and the only durable-looking backend (LocalFsBinStore) is used solely from temp-dir test roots, so 'no data persists' holds. Nothing here pre-empts M4.5, M4.6 or M4.8. One minor recorded below; per review.md rule 11 and rule 12 it should land in the commit body, not be fixed.",
+  "findings": [
+    {
+      "id": "m44r2-1",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/CommitLog.java:56",
+      "title": "The deferral comment claims an owner but does not name it",
+      "failure_scenario": "The 2-arg constructor's javadoc ends 'Carried as its own backlog row rather than left here, because a comment is not an owner' without naming M4.4b. The test at CommitLogTest.java:247 does name it ('see M4.4b on why that collides'), so the production comment is the weaker of the two. A reader who arrives at CommitLog.java while implementing M4.6 -- the exact reader this comment is written for -- learns that a row exists but not which one, and must grep the whole backlog for 'epoch 0' to find it. If M4.4b is ever renumbered or absorbed, nothing connects the comment to the row and the deferral silently loses its owner. Blast radius is documentation only; the collision itself is described in full and correctly. Record it in the commit body rather than fixing it: this is the last round, and the surface a fix would create is more prose in the same comment."
+    }
+  ],
+  "task": "M4.4",
+  "role": "reviewer"
+}

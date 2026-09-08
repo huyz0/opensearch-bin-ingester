@@ -1,0 +1,22 @@
+{
+  "diff_sha256": "1853c3e458a1398154d0c459299222af99b1c429b2adff7610c80e393fa0797e",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "M013-TR-03",
+      "severity": "blocking",
+      "file": "buildSrc/src/test/java/binjava/CoverageGateTest.java:36-39,75-86",
+      "summary": "The stub gradlew (\"#!/usr/bin/env bash\\nexit 0\") makes the regeneration step in check-coverage.sh a complete no-op, and none of the six fixtures ever change the on-disk report between when the fixture writes it and when the gate reads it. Every test's report file is planted directly by module() before gate() runs, and the stub ignores its arguments entirely (it doesn't even record what it was invoked with). Result: the exact fix the production reviewer called blocking -- 'the gate now runs ./gradlew jacocoTestReport itself before parsing' -- has zero test coverage for whether that call happens, whether it names the right task, or what happens when it fails.",
+      "failure_scenario": "Verified by direct mutation: deleting the entire regeneration block from check-coverage.sh (the './gradlew jacocoTestReport ... || fail ...' block) and running the six CoverageGateTest fixtures against the mutated script by hand produces byte-identical stdout and exit codes to the unmutated script in every case. The same holds for swapping the task name to something arbitrary, or for the gradlew stub always failing (that branch -- 'could not generate the JaCoCo reports' -- is never exercised by any of the six tests since none configure the stub to exit non-zero). So a future refactor that silently drops the regeneration call (reintroducing the stale-report bug that was just fixed) passes CoverageGateTest with all green, and the earlier blocking finding regresses invisibly."
+    },
+    {
+      "id": "M013-TR-04",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/CoverageGateTest.java:139-147",
+      "summary": "passesAboveTheFloors's red record (per .harness/tdd/red.json) was obtained by temporarily raising LINE_FLOOR/BRANCH_FLOOR to 200 rather than by the implementation being absent or wrong for this input. That forces coverage.py down the 'bad' branch shared with failsBelowTheFloors, not the pass-branch formatting logic (measured>0, the 'ok' print, doesNotContain checks) this test exists to guard -- so the red observation itself doesn't demonstrate that this specific test would catch a bug particular to the passing path.",
+      "failure_scenario": "Not blocking: checked directly against the current (non-contrived) production code, the test's own assertions do catch a realistic passing-path regression -- mutating coverage.py's 'if measured == 0:' guard to 'if measured >= 0:' (always reports NOT-MEASURED even when a module passed) makes passesAboveTheFloors's doesNotContain(\"NOT-MEASURED\") assertion fail, confirmed by running it. So the shipped assertions are load-bearing even though the red-record technique used to observe them failing was a floor override rather than a naturally absent feature; flagged only because a future reader of the red-record json could mistake the contrivance for evidence the pass-path formatting was exercised when it was not."
+    }
+  ],
+  "task": "M0.13",
+  "role": "test-reviewer"
+}

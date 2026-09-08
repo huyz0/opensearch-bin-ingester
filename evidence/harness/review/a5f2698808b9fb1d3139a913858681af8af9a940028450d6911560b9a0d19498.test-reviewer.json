@@ -1,0 +1,60 @@
+{
+  "diff_sha256": "a5f2698808b9fb1d3139a913858681af8af9a940028450d6911560b9a0d19498",
+  "verdict": "pass",
+  "summary": "Round 4, tests. The three round-3 remedies are falsifiable: deleting the slot-0 CONTINUE emission reds (MEASURED), deleting readersChecked++ reds (MEASURED), one-reader-per-seed reds (MEASURED, 200 vs a 2,000 floor), and the AckOrderTest epoch/sequence swap in AckOrderInvariants:118 now reds. No floor trips falsely at N=1,2,3,4,5,10,20,50,200,1000 -- every floor is cumulative from seed 0 and N=1 alone clears all five. Four minors, each with a surviving mutation: the readersChecked assertion pins the loop's ITERATION but not the consumption of checkReader's verdict; ackFloorAlwaysZero pins 1 of the 3 ack-emission sites; the readersChecked floor has a 7.4x margin so it survives skipping 3 epochs in 4; and the -Dsweep.seeds forwarding fix has no test at all.",
+  "findings": [
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSimulation.java:355",
+      "severity": "minor",
+      "title": "readersChecked pins that the loop iterated, not that checkReader's verdict is consumed",
+      "failure_scenario": "Someone optimising the O(E-squared) phase against the budget, or refactoring the violation plumbing, drops the addAll and keeps the call: the sweep then judges every reader and throws every verdict away, while reporting that I3 and I4's drop clause held across 1,000 seeds. That is the same 'documented in three places, emitted nowhere' shape the slot-0 CONTINUE already shipped in here once.",
+      "surviving_mutation": "Replace 'violations.addAll(ReaderInvariants.checkReader(backing, PREFIX, ReaderInvariants.ReaderView.of(reader)));' with the bare call 'ReaderInvariants.checkReader(backing, PREFIX, ReaderInvariants.ReaderView.of(reader));'. MEASURED at -Dsweep.seeds=200: BUILD SUCCESSFUL, readersChecked unchanged at 15,154, every new assertion green. NOT BLOCKING because detection is not lost today for the one production defect I could reach: with the addAll dropped AND ChainReplay.applyOffsets made a no-op, checkChain's I2 arm still reds ('seed 0: I2 -- resumes at 0 but the chain had assigned up to 36'), MEASURED.",
+      "remedy": "Make the arm's reachability an assertion rather than a count -- e.g. once per sweep, hand checkReader a deliberately broken ReaderView (the epoch of a chain with commits, Map.of() offsets) and assert it returns a non-empty I4. That constrains the checker, the ReaderView wiring and the violations plumbing in one line, which the counter does not."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSweepTest.java:150",
+      "severity": "minor",
+      "title": "ackFloorAlwaysZero pins the slot-0 CONTINUE emission only -- 1 of the 3 ack-emission sites",
+      "failure_scenario": "Round 3's finding was 'neutralising every acks.add left 388 tests green'. The remedy closes the slot-0 site and leaves the other two open: the trace can lose every real acknowledgement the leader made and the sweep still reports that I5's ack clause held. lowestAckedSequenceIn returns -1 for an epoch with no acks, and -1 is not > 0, so a trace that shrinks to nothing but slot-0 confirmations satisfies the assertion by construction.",
+      "surviving_mutation": "Delete both 'acks.add(AckOrderInvariants.AckEvent.confirmed(leader.epoch(), acked.sequence()));' and the adjacent 'acked(...)' at CommitProtocolSimulation.java:319-320. MEASURED at -Dsweep.seeds=200: BUILD SUCCESSFUL, 15,154 readers judged, ackFloorAlwaysZero still true. (Zombie writes are 0, so those two sites contribute nothing either way.)",
+      "remedy": "One more line, and it is falsifiable without needing checkAckOrder to be able to fail: assert 'run.acks().size() >= 2 * run.commits()' per run, or the cumulative equivalent across the sweep. The Result record already exposes acks()."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSweepTest.java:148",
+      "severity": "minor",
+      "title": "the readersChecked floor has a 7.4x margin, so it bites only below ~13.5% of the current work",
+      "failure_scenario": "This answers the question the floor was added for. It DOES catch the mutations that matter -- MEASURED: readersChecked++ deleted reds; checking only the first reader per seed reds (200 against a 2,000 floor at SEEDS=200). What it does not catch is a partial skip, and a partial skip is what a plausible 'sample the epochs' optimisation of the O(E-squared) phase looks like: half the readers unchecked, half the I3/I4 coverage gone, sweep green.",
+      "surviving_mutation": "Guard the reader block with 'if (epoch % 2 == 0)'. MEASURED at -Dsweep.seeds=200: BUILD SUCCESSFUL, 7,528 readers judged against a floor of 2,000. Baseline is 74,172 for 1,000 seeds (74.2 per seed) against a floor of 10 per seed, so skipping 3 epochs in 4 also survives; the floor first reds below about 13.5% of current work.",
+      "remedy": "Not worth a tighter absolute number -- variance across seeds is what forced 10. If it is worth tightening, tie it to something the run already computes: readersChecked as a fraction of epochsBurned (74,172 / 80,200 = 0.92 measured), which is scale-free and reds on any systematic skip."
+    },
+    {
+      "file": "buildSrc/src/main/kotlin/binjava.java-conventions.gradle.kts:124",
+      "severity": "minor",
+      "title": "the -Dsweep.seeds forwarding fix has no test, and its removal is silent",
+      "failure_scenario": "Round 3 found -Dsweep.seeds advertised as a knob that Gradle never forwards to the test JVM -- a claim already written into the archive row. The fix restores the knob but nothing observes it, so the identical defect can return in any future edit of the convention plugin with every gate green and the archive row still asserting the knob works. Whoever next bisects a failing seed silently runs all 1,000.",
+      "surviving_mutation": "Delete the two-line 'providers.systemProperty(\"sweep.seeds\").orNull ?.let { systemProperty(\"sweep.seeds\", it) }' block. MEASURED: './gradlew -p buildSrc test' green, and './gradlew :sequencer:test --tests CommitProtocolSweepTest -Dsweep.seeds=5' printed 'sweep: 1000 seeds in 17812 ms' and BUILD SUCCESSFUL -- the knob is ignored and nothing anywhere reds.",
+      "remedy": "gate-design rung 1: a predicate over files in the tree. A grep in an existing check script for the forwarding line beside the sweep's Integer.getInteger(\"sweep.seeds\") is cheaper and more durable than a GradleRunner functional test, and it is exactly the class of rule that must not be left to a prompt."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSweepTest.java:170",
+      "severity": "minor",
+      "title": "removing the wall-clock assertion leaves the 60s budget with no gate at all today",
+      "failure_scenario": "performance.md rule 9 is the right call on the assertion, and check-test-integrity does not see a weakening here because the file is new in this commit. But the designated home, scripts/check-suite-time.sh, is listed in AGENTS.md as present in scripts/ and NOT wired into .pre-commit-config.yaml. So between this commit and whoever wires it, a change that multiplies checkChain's cost lands with nothing red and nothing measured, while the archive row keeps asserting '17.1s against the stated 60s budget'.",
+      "surviving_mutation": "Any performance regression up to about 18x survives: MEASURED baseline 16,393 ms for 1,000 seeds, and the only remaining wall-clock constraint is @Timeout(value = 300) at CommitProtocolSweepTest.java:73 -- an 18x dead band, wider than the 3.9x the assertion was removed for. Restoring the second checkChain call the driver comment at line 340 says was deleted for cost would not red anything.",
+      "remedy": "Say in the commit body which row wires check-suite-time.sh, or file it. The removal is defensible; the gap it opens should not be discovered by whoever next reads the archive row's number."
+    }
+  ],
+  "verified_by_mutation": [
+    "slot-0 CONTINUE emission deleted (CommitProtocolSimulation.java:214) -> theInvariantsHoldAcrossEverySeed FAILED, 'Expecting value to be true but was false'. The claim holds.",
+    "readersChecked++ deleted (CommitProtocolSimulation.java:357), loop otherwise intact -> FAILED. The claim holds.",
+    "reader checked only once per seed (the realistic O(E-squared) optimisation) -> FAILED, 200 against a 2,000 floor at SEEDS=200.",
+    "AckOrderInvariants.java:118 own-write arm, epoch and sequence swapped -> AckOrderTest.ONECHAINSConfirmationsDoNotSatisfyANOTHERS FAILED. The deferred M4.11 gap is closed.",
+    "AckOrderInvariants.java:121 second arm, same swap -> 4 tests FAILED. That arm was already pinned.",
+    "ChainReplay.applyOffsets made a no-op -> sweep FAILED naming seed 0 with both I4 (checkReader) and I2 (checkChain). The sweep's red does name a reproducing seed.",
+    "no false trip at a smaller seed count: green at -Dsweep.seeds = 1, 2, 3, 4, 5, 10, 20, 50, 200, 1000. Every floor accumulates from seed 0 and seed 0 alone clears all five, with readers at 87 for one seed against a floor of 10.",
+    "baseline: :sequencer:test green in the review tree, 1,000 seeds in 16,393 ms, 74,172 readers judged."
+  ],
+  "task": "M4.13",
+  "role": "test-reviewer",
+  "staged_tree": "21db4e314c3c0b16912d4f72e403d882d7d13514"
+}

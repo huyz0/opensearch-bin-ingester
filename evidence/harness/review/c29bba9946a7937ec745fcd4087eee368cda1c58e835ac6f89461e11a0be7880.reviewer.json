@@ -1,0 +1,45 @@
+{
+  "diff_sha256": "c29bba9946a7937ec745fcd4087eee368cda1c58e835ac6f89461e11a0be7880",
+  "verdict": "changes-requested",
+  "summary": "Round 1's blocking pointer defect is genuinely fixed and now bound by a test (MEASURED: reverting pointerSequence to log.nextSequence() fails 2 tests in CheckpointWriterContentTest). The per-instance minting is bound too (MEASURED: re-minting inside flushLocked fails :ingest:test). Cost lens: no get/put/list/stat is added, moved or multiplied by this change; delta and checkpoint PUT rates are unchanged and both objects grow by a bounded per-segment/per-pod triple, so nothing scales with records, shards, partitions or indices. Two majors remain, both of the same class round 1 named: a production call site whose correctness no test constrains, and one falsified seam paragraph in the file M4.10d must read first.",
+  "findings": [
+    {
+      "id": "M4.10c-r2-1",
+      "file": "sequencer/src/main/java/binjava/sequencer/LocalSequencer.java:353",
+      "severity": "major",
+      "title": "The round-1 fix moved the pointer's value to a call site that no test constrains",
+      "failure_scenario": "MEASURED in a review tree of the staged bytes: replacing `writer.observe(requests, delta.sequence())` with `writer.observe(requests, 0L)` leaves the FULL `./gradlew test` BUILD SUCCESSFUL. Every assertion on a pointer's VALUE (CheckpointWriterContentTest:88, :114) calls `writer.observe(...)` directly and computes the argument the same way production does, so the test mirrors the wiring instead of exercising it; the one test that goes through LocalSequencer's real commit path, LocalSequencerCheckpointTest:98-105, asserts only `s.hasPointer()).isTrue()` -- the exact assertion shape this commit's own new javadoc calls insufficient (\"ASSERTING hasPointer() IS NOT ASSERTING A POINTER\"). Consequence: the round-1 defect can be reintroduced by a one-token edit at the only site that ships (a 'simplification' back to log.nextSequence(), or M5's forwarding path passing a batch's first sequence) with the whole suite green. M4.10d then reads the pointed delta, does not find the exact (podId, incarnationId, flushSeq) triple, and REFUSES a legitimate retry per ADR-0036 -- a producer's post-ambiguous-failure retry erroring, diagnosed in M4.10d rather than here. Remedy is an assertion, not a split: LocalSequencerCheckpointTest already decodes the checkpoint, so assert `s.sequence()` against the sequence the second `sequencer.commit(...)` returned and `s.epoch()` against `sequencer.epoch()`."
+    },
+    {
+      "id": "M4.10c-r2-2",
+      "file": "sequencer/src/main/java/binjava/sequencer/CheckpointWriter.java:49-55",
+      "severity": "major",
+      "title": "The class javadoc still states the premise this commit falsifies, in the class M4.10d must change",
+      "failure_scenario": "The class-level paragraph reads: \"PER-POD lastAppliedFlushSeq IS PROCESS-LOCAL, and that is a known hole rather than a design: CommitDelta carries (sequence, segments) and nothing else, so a new leader cannot recover it\". As of this commit CommitDelta's segments carry Attribution(podId, incarnationId, flushSeq), which ADR-0036 makes normative precisely so \"a successor can rebuild the window from the uncheckpointed tail\". The author corrected the method javadoc 57 lines below (:106) and left the class javadoc asserting the opposite. This is the same defect round 1 raised as major and for the same stated reason: an M4.10d session reads the seam, not the backlog, and this paragraph is the first thing it reads in the file the row itself names as \"the class M4.10d must change\". Told recovery is impossible, that session implements only the process-local window and skips the tail rebuild; after a failover the idempotency window is empty exactly when duplicates are likeliest -- the paragraph's own scenario -- and a replayed commit is assigned fresh offsets, the duplication FR-3 exists to prevent. The trailing sentence is stale too: CheckpointWriterContentTest no longer asserts only that, since this commit added the restart case at :107-131."
+    },
+    {
+      "id": "M4.10c-r2-3",
+      "file": "format/src/main/java/binjava/format/Checkpoint.java:322",
+      "severity": "minor",
+      "title": "The per-slot flag treats every value except 1 as \"no attribution\" instead of refusing it",
+      "failure_scenario": "Carried from round 1, unchanged, and it still does not block. `if (version == VERSION_ATTRIBUTED && c.uvarint() == 1)` reads a flag byte of 2 as \"bare slot\" and then parses the incarnation's length prefix as the NEXT pod's key length: a torn checkpoint either dies later with a message naming the wrong field (\"a checkpoint claims a ...-byte pod id\") or decodes into a plausible-but-wrong pods map. Every other refusal in this file converts a value the wire can carry but the record refuses into an IOException; this one guesses. Unreachable without prior corruption, and nothing in production reads pods() until M4.10d, so it stays minor -- `flag != 0 && flag != 1 -> throw` when the file is next opened."
+    },
+    {
+      "id": "M4.10c-r2-4",
+      "file": "sequencer/src/main/java/binjava/sequencer/CommitLog.java:289",
+      "severity": "minor",
+      "title": "Read side and write side ship in one commit, and the write side flips unconditionally",
+      "failure_scenario": "Carried from round 1, unaddressed, and it still does not block TODAY. `commitAll` attaches an Attribution to every submission, so from this commit every delta a leader writes encodes under KIND_DELTA_ATTRIBUTED, and every checkpoint written after a commit encodes under VERSION_ATTRIBUTED. wire-format-change rung 3 is explicit -- \"ship the read side first, in an earlier commit, then the write side\" -- and the commit does both at once. The failure it guards against: in a mixed-version rollout an old-build node takes over a chain a new-build node wrote, ChainEntry.decode throws \"unsupported chain entry kind: 3\" out of ChainReplay and Checkpoint.decode throws \"unsupported checkpoint version: 1\" out of CheckpointCursor.newest, where BinStore defines IOException as \"the store is unreachable\" -- so the takeover is diagnosed as an object-store outage and that chain stops accepting writes until every node is upgraded. Not blocking because nothing is deployed and M4 is single-node, but the first rollout that matters is M5's, and the escape (a build that WRITES the old shape until a flag flips) has to exist before then, not after. That is a backlog row, not a fix here."
+    },
+    {
+      "id": "M4.10c-r2-5",
+      "file": "sequencer/src/main/java/binjava/sequencer/CommitRequest.java:58",
+      "severity": "minor",
+      "title": "incarnationId is bounded only by non-blankness, on a record that becomes network input at M5",
+      "failure_scenario": "Carried from round 1, unchanged, and it still does not block. The only minter today is DefaultIngest's 36-byte UUID, so nothing is at risk in-process. From M5 a CommitRequest arrives from another pod, and neither the record nor CommitDelta.decodeAttributedBody bounds the string (Cursor.bytes only bounds it by the object's own remaining bytes): a buggy or hostile peer's 1 MiB incarnationId is copied verbatim onto EVERY SegmentCommit of every delta it commits and into that pod's checkpoint slot, inflating chain objects the whole fleet reads back on recovery. wire-format-change's checklist already carries the shape of the fix (\"key-length bound re-checked against 1,024 bytes for the pathological input\"); it belongs with the row that opens the network path."
+    }
+  ],
+  "task": "M4.10c",
+  "role": "reviewer",
+  "staged_tree": "3766ded979005c4fcba16efc1d5cdcc89066052a"
+}

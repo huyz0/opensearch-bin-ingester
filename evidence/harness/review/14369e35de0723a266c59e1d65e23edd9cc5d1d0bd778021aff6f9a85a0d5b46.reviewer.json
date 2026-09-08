@@ -1,0 +1,34 @@
+{
+  "diff_sha256": "14369e35de0723a266c59e1d65e23edd9cc5d1d0bd778021aff6f9a85a0d5b46",
+  "verdict": "changes-requested",
+  "summary": "The CODE half of round 1's I4 finding is fixed and the trimming cut nothing load-bearing: every claim dropped from Invariants.java's comments survives either in the class javadoc (architecture.md's I4 wording, line 85), in the test javadoc (BatchedDeltaInvariantsTest:64-87, the shared-cursor causal link) or in the sentence that replaced it. I MEASURED two of the three claimed message mutations killed in my own tree -- offsets transposed, and the pre-M4.13f 'segment ' + r wording restored -- both fail aStreamOutOfOrderOnlyInALATERPairIsStillCaught. No object-store request is added or moved: the new work is a LinkedHashMap group plus an in-memory sort per delta, and Invariants reads only the log prefix (store.list/store.get at lines 469/485), never a segment object, which is what makes the new 'BELOW THE RUN, NOTHING HERE CAN SEE IT' paragraph true. What blocks is the DOC half of the same round-1 finding, which was never fixed: MEASURED, git diff <round-2 staged tree> --cached -- docs/ is EMPTY, so backlog-done.md and backlog-notes.md still record this change as reporting I4.",
+  "findings": [
+    {
+      "file": "docs/internal/product/backlog-done.md:176",
+      "severity": "major",
+      "title": "the archive row records the arm as I4 -- the exact mislabel the code was changed to avoid, and this file is not rewritten after it ships",
+      "failure_scenario": "The staged row says the checker 'folds a delta's runs in OFFSET order for the cross-entry arithmetic and reports the segment-order disagreement as I4, so a permutation, a reassignment and a hole keep their own names'. The code emits new Violation(\"order\", ...) at Invariants.java:191, and Invariants.java:104-107 says in as many words that 'calling it I4 would claim an invariant that explicitly allows it'. This is the unresolved half of round 1's major (ac8782b38301): production was fixed, the record was not. backlog-done.md's own header states rows that already shipped are not rewritten, so the false statement is durable. Concretely: whoever picks up M4.13q -- whose open row correctly says 'the mislabel M4.13f removed inside a delta' -- reads the archive row for M4.13f, greps checkChain for an I4 arm, finds none, and either re-adds one (re-introducing the mislabel) or concludes M4.13f never landed. Fix is two words: 'as `order`'."
+    },
+    {
+      "file": "docs/internal/product/backlog-notes.md:1317-1318",
+      "severity": "major",
+      "title": "the notes contradict themselves about the arm's name, four paragraphs apart",
+      "failure_scenario": "Line 1298 reads 'AND THE ARM IS NOT NAMED I4, which is the row's real conclusion ... It is `order`'. Lines 1317-1318 read 'reports segment-order disagreement as I4 ... a permutation is I4, a genuine overlap is still I2'. One section, opposite claims, and the second is the one written in the past tense as the record of what LANDED, so it is the one a later reader trusts. This is the same shape as round 1's first major (two lines of one file disagreeing about whether the reorder clause is checked), and it is why the archive row above is wrong -- the row was written from this paragraph."
+    },
+    {
+      "file": "docs/internal/product/backlog-notes.md:1306-1309",
+      "severity": "minor",
+      "title": "round 2's overclaim is fixed only in the javadoc; the notes still carry it verbatim",
+      "failure_scenario": "The notes still say 'an offset never reassigned, in entries never rewritten, is an order that cannot change', with no run-granularity qualifier and no 'below the run nothing here can see it'. Invariants.java:88-103 now says the conclusion holds only at the granularity the chain carries, and that a segment rewritten with permuted contents is invisible to both checkers. A reader who reaches the notes -- which is where AGENTS.md sends anyone wanting the reasoning behind a long row -- gets the version that was withdrawn, and would conclude committed-record order is fully covered."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/BatchedDeltaInvariantsTest.java:322-328",
+      "severity": "minor",
+      "title": "one of the three mutations the comment claims killed still survives",
+      "failure_scenario": "The comment names 'the sequence replaced by a constant' among three mutations that were measured surviving and are now pinned. MEASURED in my own copy of the staged tree: replacing '+ e.sequence() +' with '+ 1L +' at Invariants.java:193 leaves the whole :sequencer suite green (./gradlew :sequencer:test exit 0). Only constants other than 1 are killed, because the single fixture that asserts the detail sits at sequence 1. Operationally the surviving mutant means a violation on a failing seed could name sequence 1 for every entry and no test would notice -- which is the debugging use the comment says the assertion exists for. Either assert the detail from a fixture at a sequence other than 1, or narrow the comment's claim to what it pins."
+    }
+  ],
+  "task": "M4.13f",
+  "role": "reviewer",
+  "staged_tree": "ef90b676a127810a13e83049852591d1a08e1384"
+}

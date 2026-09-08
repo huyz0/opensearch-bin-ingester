@@ -1,0 +1,75 @@
+{
+  "diff_sha256": "dea84321d3e50fa83c1a02f538d75edb5a614454d8688eb20c57d4dbd29365e3",
+  "verdict": "changes-requested",
+  "summary": "The warm-up probe is genuinely falsifiable and I reproduced the author's red by hand (256 ms vs >2000 ms, real <failure>, 3 s). But the ONE assertion that carries the criterion during the load -- files/s < 4.0 -- is a run-average over a phase whose wall clock is dominated by the ceiling, and the flush COUNT is interval-invariant because producers block one chunk per flush. I ran a mutation that settles at the ceiling and then shortens back to the 250 ms floor after 9 load flushes: the test PASSED green in 66 s with ~77% of the 200 MB body ingested in exactly M1.18's floor regime. So AC5's 'at the ceiling' is established for only the first ~12% of the body.",
+  "verification_performed": [
+    "Reproduced the author's stated red: `if (false && ...)` on Accumulator.adaptInterval's lengthen branch -> probe returned 256 ms, test failed in 3 s at line 199 with a real JUnit <failure> element and a self-describing message. Reverted; `git diff` on Accumulator.java empty.",
+    "Independently re-ran the unmutated test with --rerun (the first attempt was restored FROM-CACHE): BUILD SUCCESSFUL, 200.785 s -- the reported figure is accurate.",
+    "Mutation IngestConfig.DEFAULT_FILL_RATIO_HIGH_THRESHOLD 0.9 -> 0.5 (shorten on the FIRST load drain): caught, 152 files over 17 s = 8.94 files/s vs the 4.0 bound. Reverted.",
+    "Mutation: shorten to the floor from the 13th drain onward (3 warm-up + 9 load flushes at the ceiling, then the floor): SURVIVED. BUILD SUCCESSFUL, test green in 66.3 s. Reverted; worktree verified clean and staged sha unchanged.",
+    "Confirmed tdd_scan.py plan emits ':http:test' for this class and tdd-red.sh offers no task override, so no mechanical red record is obtainable."
+  ],
+  "findings": [
+    {
+      "id": "T1",
+      "severity": "major",
+      "file": "http/src/test/java/binjava/http/MemoryFlatAtIntervalCeilingTest.java:286-299",
+      "finding": "The files/s cadence assertion does not do what its own comment and the backlog row claim. The comment says it 'is what catches the case where fillRatio strayed above 0.9 and adaptInterval shortened back to the floor mid-run'. It catches that only if the stray happens in roughly the first 12% of the body. Two measured facts make it a weak detector: (a) the total flush COUNT is interval-invariant -- 152 files in BOTH the 200 s ceiling run and the 17 s floor run -- because 24 blocking producers each contribute exactly one chunk per flush regardless of the interval; (b) the denominator is the run's own wall clock, which the ceiling phase dominates, so a shortening only makes the ratio worse in proportion to how little ceiling time preceded it. Solving 152/(f*190 + (1-f)*17) >= 4.0 gives f <= 0.121: the assertion is blind to any shortening after ~23 s of a ~190 s load.",
+      "failure_scenario": "A regression that lets the interval settle at the ceiling and then drop back to the 250 ms floor part-way through the load leaves this test green, so the run silently becomes a second, faster copy of MemoryFlatUnderTenXBodySizeTest while claiming to prove NFR-6 at the ceiling. AC5's 'at the ceiling' is then established for ~47 MiB of the 200 MB body and nothing else. ADR-0026's own listed future option -- shorten on a BLOCKED PRODUCER rather than on fillRatio -- is exactly a change that would shorten late rather than on the first drain, so this is the next change most likely to walk through the gap.",
+      "mutation_that_survives": "In Accumulator, add `private int drains;` and make adaptInterval's first statement `if (++drains >= 13) { currentInterval = config.intervalFloor(); return; }`. RUN, NOT REASONED: BUILD SUCCESSFUL, test green in 66.3 s (against 200.8 s unmutated), with ~77% of the body ingested at the 250 ms floor. Every assertion -- probe, cadence, 220 MiB peak, 10x ratio -- passed.",
+      "suggested_fix": "Measure the cadence per window rather than as a run average. The sampler thread already wakes once a second; have it record countFiles(root) alongside the heap sample, and assert that no post-warm-up inter-sample delta exceeds ~8 files (2 flushes/s), which sits well clear of the ceiling's 0.8 files/s and well below the floor's 16. That kills the mutation above at the first floor-regime second. A cheaper partial fix is to also assert loadSeconds is ceiling-consistent (e.g. >= 100 s), which raises the blind spot from f<=0.12 to f<=0.48 but does not close it."
+    },
+    {
+      "id": "T2",
+      "severity": "minor",
+      "file": "http/build.gradle.kts:96-115",
+      "finding": "The new memoryBoundCeilingTest is a standalone tasks.register<Test>, not a JvmTestSuite target, so it does NOT inherit `systemProperty(\"java.io.tmpdir\", scratch)` from binjava.java-conventions.gradle.kts:123 -- whose own comment reads 'testing.md rule 17: scratch under build/tmp, never the system temp directory. Enforced here so it is automatic.' The enforcement is silently bypassed. Verified on disk: /tmp/binstore-memflat-ceiling* holds 175 MB per passing run, never deleted (there is no cleanup of Files.createTempDirectory at line 160, and none in @AfterEach). Pre-existing in memoryBoundTest; this commit doubles the rate.",
+      "failure_scenario": "Repeated runs accrete 175 MB each into the real system temp. On a CI runner or a WSL2 session with a modest /tmp, LocalFsBinStore eventually throws on ENOSPC and the failure presents as a memory-bound-test failure -- a flake that looks like the very regression the test exists to detect, in the tier where a failure is most expensive to diagnose.",
+      "mutation_that_survives": "n/a -- this is a testing.md rule-17 violation with a measured consequence, not a weak assertion.",
+      "suggested_fix": "Add `systemProperty(\"java.io.tmpdir\", layout.buildDirectory.dir(\"tmp\").get().asFile.absolutePath)` to the new task (and, separately, to memoryBoundTest), matching what the convention already does for every suite-backed task."
+    },
+    {
+      "id": "T3",
+      "severity": "minor",
+      "file": "http/src/test/java/binjava/http/MemoryFlatAtIntervalCeilingTest.java:220-241, 279-282",
+      "finding": "The sampler thread has no failure capture. It is a daemon whose body can die on an uncaught Throwable -- most plausibly an OutOfMemoryError while CopyOnWriteArrayList.add copies its backing array, under exactly the memory pressure this test exists to detect. Nothing observes that: sampler.join() returns normally, `samples` silently holds only the pre-death entries, and `peak` is then a max over truncated evidence. Unlike the producers, the sampler contributes nothing to `failures`, and no assertion constrains samples.size() against the load's duration.",
+      "failure_scenario": "A memory regression severe enough to kill the sampler before it kills a producer erases its own evidence: peak is computed over the early, low samples, comes in under 220 MiB, and the test passes. The -Xmx256m hard-OOM backstop and the producers' catch(Throwable) make this defence-in-depth rather than the sole guard, which is why it is minor and not major.",
+      "mutation_that_survives": "Not demonstrated on production code (I could not induce a sampler-only OOM cheaply); the gap is structural rather than reachable by a one-token mutation, and I am labelling it as such rather than overclaiming.",
+      "suggested_fix": "sampler.setUncaughtExceptionHandler((t, e) -> failures.add(e)) -- failures is already asserted empty -- and assert samples.size() >= loadSeconds / 2 so a truncated sample series cannot masquerade as a flat one."
+    },
+    {
+      "id": "T4",
+      "severity": "minor",
+      "file": "http/src/test/java/binjava/http/MemoryFlatAtIntervalCeilingTest.java:180-187",
+      "finding": "The two Thread.sleep(300) calls are testing.md rule-15 deviations whose stated justification does not hold. The comment says 'the background flusher polls on REAL time, so it needs a moment to drain each warm-up append before the clock jumps out from under it'. But DefaultIngest.append blocks until the records are DURABLE (its own javadoc, FR-4) and BulkService returns 202 only after append returns, so by the time sendTinyBulk returns, drain() -- and the adaptInterval() call inside it -- has already run. The sleeps are dead weight, and the comment misdescribes the mechanism a future reader will rely on.",
+      "failure_scenario": "No failure today; 600 ms of a 200 s test. The cost is that a reader who trusts the comment will believe the warm-up is timing-dependent when it is in fact fully ordered by append's durability contract, and may add more real sleeps by analogy in a tier where sleeps are expensive.",
+      "mutation_that_survives": "Delete both sleeps: the test still passes and still fails under the lengthen-branch mutation. An assertion whose removal changes nothing is a fair description of these two lines.",
+      "suggested_fix": "Remove both sleeps, or correct the comment to say the ordering comes from append being blocking-until-durable and the sleeps are belt-and-braces."
+    },
+    {
+      "id": "T5",
+      "severity": "minor",
+      "file": "http/src/test/java/binjava/http/MemoryFlatAtIntervalCeilingTest.java:283-284",
+      "finding": "assertThat(written.get()).isGreaterThanOrEqualTo(TARGET_BYTES - PRODUCERS * 512L) cannot fail independently of the assertion on the line above it. Each producer's loop exits only once total >= perProducer, and every path that exits early throws and is caught into `failures`, which line 282 already asserts empty. Also, the producer-thread status assertion at line 266 carries no .as(...) description, so when it does fire the entry in `failures` does not name which of the 24 producers failed.",
+      "failure_scenario": "No missed regression -- `failures` covers it. It reads as a third independent check on completeness when it is a restatement, which is the kind of assertion that makes a suite look stronger than it is (testing.md rules 8-10).",
+      "mutation_that_survives": "Delete lines 283-284 entirely: no behaviour of the test changes under any production mutation I tried.",
+      "suggested_fix": "Keep it if wanted as documentation, but add .as(\"producer %d\", id) to line 266 so a real producer failure names itself."
+    }
+  ],
+  "things_checked_and_found_sound": [
+    "The warm-up probe (>2000 ms, line 196-199) is discriminating, not noise-tolerant: the floor value is a measured 256 ms, a 7.8x gap, and the probe runs before any load with a near-empty 256 MB heap, so a 1.75 s GC or scheduling stall is not a plausible spurious pass. It is the strongest assertion in the file and it is mutation-killed.",
+    "Producer-thread failure propagation works as claimed: AssertJ throws AssertionError, which extends Throwable, is caught at line 267, added to the CopyOnWriteArrayList, and asserted empty on the main thread at 282. Nothing is swallowed. The ready/go latch pattern is correct -- ready.countDown() is each thread's first statement so ready.await() cannot deadlock, and go.countDown() releases all 24 together.",
+    "`written` as the 10x denominator is correct: an AtomicLong accumulated across all 24 producers, read before the heap read in each sample, so any skew is in the conservative direction. Note that once ~22 MB has been streamed (~20 s of a 190 s run) the 10x bound exceeds the 220 MiB absolute bound and the ratio loop is strictly subsumed by the peak assertion; it earns its place only in the first ~13 MB, where the 128 MiB floor is the tighter constraint.",
+    "Sampling at 1 Hz against a 5 s interval gives ~5 samples per accumulation cycle, so the peak is under-read by at most ~20% of one interval's ~5.2 MiB against 45 MiB of headroom under the 220 MiB bound. A sub-second transient could still be missed, but the -Xmx256m JVM OOM is an event-driven, non-sampled backstop for the unbounded case.",
+    "'Could it pass with fewer producers actually running?' -- no silently: a thread that throws lands in `failures`, and a shape that serialised the producers would drop to ADR-0026's ~44 KB/s lone-producer regime and blow the 900 s @Timeout. The failure would present as a timeout rather than a named assertion, which is acceptable but worth knowing.",
+    "Thresholds are not tight enough to flake: passing run 0.80 files/s against the 4.0 bound (5x), immediate-shorten mutation 8.94 files/s (2.2x the other way); peak heap comfortably under 220 MiB; probe 5 s against a 2 s bound. Test time 200.8 s against a 900 s @Timeout and a 20-minute task timeout, correctly ordered so JUnit fires first and names the test.",
+    "Test independence: own temp root, port 0 (no fixed port), own DefaultIngest and hub, server stopped in @AfterEach, no shared mutable static state, sole test in its own task.",
+    "The SKIP=check-tdd handling is honest and the call is right. I verified independently that `tdd_scan.py plan` emits ':http:test' for this class -- a task the build excludes it from -- and that tdd-red.sh accepts no task override, so no mechanical red record was achievable. The test does fail cleanly with a real <failure> under the correct task, which I reproduced. Backlog row M0.38 is the correct deterministic fix and is the right rung of the gate-design ladder for it.",
+    "No existing assertion was weakened: the diff adds a file, adds an exclude line, and adds a task. MemoryFlatUnderTenXBodySizeTest and its memoryBoundTest budget are untouched. No production code changed, so the check-test-integrity inversion does not arise."
+  ],
+  "notes": [
+    "Unverified-by-run, offered as context for T1 rather than as a finding in its own right: nothing in this test pins the ceiling's VALUE. The probe asserts only 'longer than the floor'. Mutating DEFAULT_INTERVAL_CEILING from 5 s to 2.5 s would leave the probe (~2.5 s > 2 s), the cadence (~1.6 files/s < 4.0) and both memory bounds green, while doubling the PUT rate ADR-0017 prices. That belongs to AC4/M3.4, not to this task, and I did not run it -- I am labelling it as reasoned so it is not mistaken for a measurement."
+  ],
+  "task": "M3.5",
+  "role": "test-reviewer"
+}

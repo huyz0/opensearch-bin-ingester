@@ -1,0 +1,15 @@
+{
+  "diff_sha256": "f2591b45385dea46f1c3bf166fb8d88c31a4f280197bcf194bd4b359f8116ddd",
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "location": "ingest/src/test/java/binjava/ingest/IntervalPutRateTest.java:78-85 (BYTES_PER_TICK, PAYLOAD)",
+      "description": "PAYLOAD is sized as `BYTES_PER_TICK - 11`, but Accumulator.estimatedFramedBytes' non-payload overhead for this record (1 flags + 5+id.length with id=\"d\" (1 byte) + 5 payload-length, no version) is 1+5+1+5 = 12, not 11. Each tick therefore buffers 131073 bytes, not the claimed-exact 131072 (1 MiB/8). The comment 'Sized so each tick's append contributes exactly BYTES_PER_TICK' (and the backlog row's 'Appends 131072 bytes ... every 125ms tick') is off by one byte per tick.",
+      "failure_scenario": "A reader trusting the comment's claim of exactness, or a future test copying this sizing pattern at a tighter tolerance, would get a wrong byte-rate model. In practice the 1-byte-per-131072 error (~0.00076%) is far inside both the settling-time tolerance (\u00b11s on a 120s target) and the PUT-rate tolerance (\u00b120%), so it does not change this test's pass/fail outcome -- verified empirically: the test passed reliably across 16 real runs (3 after a clean build) with this arithmetic as staged."
+    }
+  ],
+  "notes": "Verified empirically, not just read: (1) ran the real test via `./gradlew :ingest:test --tests IntervalPutRateTest` after a clean build 3x plus 8 more reruns, all green, confirming it passes against the real Accumulator/SegmentPublisher/CountingBinStore/MemoryBinStore as staged (one earlier pre-clean run failed with 'interval never settled within PT4M' at line 132, but this was traced to a stale FROM-CACHE compile artifact predating this review session -- 11 subsequent runs, 3 of them from a clean build, all passed, so this is not attributable to the diff). (2) Independently reproduced the backlog's mutation claim by compiling a standalone copy of Accumulator.java with the two adaptInterval target-interval assignments swapped and driving it with a byte-for-byte copy of the test's own loop logic outside the tracked tree: the interval never left the floor and the loop's 4-minute give-up fired cleanly at t=240125ms, exactly as the backlog row describes. (3) Confirmed the CommitLog exclusion against ADR-0016/0017's own PUT/s table: '6 writers @ 5s -> 1.2 obj/s' is 0.2 PUT/s per pod, matching this test's target `1/intervalCeiling`. (4) Confirmed IngestConfig.defaults() defaults (250ms floor, 5s ceiling, 0.4/0.9 thresholds, 2min lengthen delay, 8 MiB target) match every number the test and its comments assume. (5) Confirmed no wall-clock read anywhere except the JUnit-level @Timeout(30) wrapper, which is a real-time safety net around the whole method, not used to drive simulated time. No production code touched. Test file is 157 lines, well under the 500-line gate.",
+  "task": "M3.4",
+  "role": "reviewer"
+}

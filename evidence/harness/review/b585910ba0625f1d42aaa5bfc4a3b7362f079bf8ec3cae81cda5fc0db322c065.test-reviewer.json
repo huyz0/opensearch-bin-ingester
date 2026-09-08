@@ -1,0 +1,24 @@
+{
+  "diff_sha256": "b585910ba0625f1d42aaa5bfc4a3b7362f079bf8ec3cae81cda5fc0db322c065",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "M0.31-R2-TR-1",
+      "severity": "blocking",
+      "file": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java:192-201",
+      "summary": "The `!.tmp/ourclone/README` row of gateScopeRefusesAnythingShortOfAQuarantine, and its javadoc claiming the row is 'caught by the gate's check-ignore -q EXIT STATUS', does not exercise -q's negation-resolving behaviour at all: withGitignore() REPLACES the '.tmp/' line rather than appending alongside it, so the fixture has no broad rule left for the negation to carve an exception out of -- README itself already fails `check-ignore -q` ('not ignored at all'), producing the identical break-point and message as the unrelated null-replacement test (gateScopeRefusesWhenTmpIsNotIgnoredAtAll). Neither of the two assertions on this row (`startsWith(\"1\")`, `contains(\"not quarantined\")`) is probe-specific, so the row cannot tell a correct -q-based defence from the exact historically-buggy one the script's own comment describes ('check-ignore -v exits 0 and prints the rule ... so the gate went green').",
+      "failure_scenario": "Mutated scripts/check-gate-scope.sh's quarantine loop to trust bare `git check-ignore -v`'s own exit status instead of `-q`'s (i.e. reintroduced exactly the historical false-green the comment at lines 110-122 documents: `-v` alone exits 0 and prints the winning rule even when that rule is a negation that leaves the path genuinely un-ignored -- verified directly: `git check-ignore -v` on `.tmp/ourclone/README` with only `!.tmp/ourclone/README` in .gitignore exits 0, while `-q` on the same input exits 1). Ran the mutated script against the current row's exact fixture (`.tmp/` line replaced by `!.tmp/ourclone/README` alone): output is still `FAIL ... not quarantined` (masked -- Main.java independently fails 'not ignored at all' for an unrelated reason), so gateScopeRefusesAnythingShortOfAQuarantine['!.tmp/ourclone/README'] stays green over the reintroduced bug -- the mutation SURVIVES. Then built the fixture the row should have used -- all four probes negated, nothing else touching .tmp/ -- and confirmed the split: the CURRENT staged (-q-based) script correctly FAILs it ('README is not ignored at all'), while the mutated (-v-based) script reports 'ok 27 gate scripts judge this repository only', a genuine silent quarantine escape. No test in this suite builds that fixture. This is precisely the class of defect the task exists to close (three/four prior rounds each found a new false-green in the previous fix) reappearing one level deeper, in the final capped round, in the row whose own comment claims to guard against it.",
+      "surviving_mutation": "scripts/check-gate-scope.sh:134-137  `if ! git check-ignore -q \"$_p\" 2>/dev/null; then ... fi; _rule=$(git check-ignore -v \"$_p\" ...)`  ->  use `_rule=$(git check-ignore -v \"$_p\"); _rc=$?; if [ $_rc -ne 0 ]; then ... fi` (drop -q, trust bare -v's exit status). 12/12 tests green against the current row-7 fixture; a fixture negating all four probes (none exists in this diff) is required to expose the false pass."
+    },
+    {
+      "id": "M0.31-R2-TR-2",
+      "severity": "minor",
+      "file": "scripts/check-gate-scope.sh:133",
+      "summary": "`.tmp/scratch.txt`, the fourth probe and the second member of the 'two distinct subtrees' the task's own title requires, is never independently exercised by any of the 12 tests: the loop breaks on first failure, and `.tmp/other/pom.xml` (third in the list) always fails first in every adversarial fixture the diff constructs, so scratch.txt is only ever reached in the all-pass (real .gitignore) case.",
+      "failure_scenario": "Removed `.tmp/scratch.txt` from the probe list in check-gate-scope.sh (3 probes: README, Main.java, other/pom.xml) and re-ran: the real-.gitignore happy path still reports ok (exit 0), and the `.tmp/ourclone/` adversarial row still correctly FAILs via other/pom.xml (exit 1, 'not quarantined') -- both measured directly. No test distinguishes 4 probes across 2 subtree members from 3 probes across 1.5. This is the same class the diff already discloses for probe/.tmp/probe/*probe* (kept, but documented as jointly killed) -- this instance is undisclosed. Recommend either a parametrised row using a pattern that ignores nested clone directories but not loose top-level files (e.g. `.tmp/*/`), or a comment acknowledging the redundancy the way the probe-row javadoc already does.",
+      "surviving_mutation": "scripts/check-gate-scope.sh:133  for _p in .tmp/ourclone/README .tmp/ourclone/src/Main.java .tmp/other/pom.xml .tmp/scratch.txt  ->  for _p in .tmp/ourclone/README .tmp/ourclone/src/Main.java .tmp/other/pom.xml   (12/12 tests green)"
+    }
+  ],
+  "task": "M0.31",
+  "role": "test-reviewer"
+}

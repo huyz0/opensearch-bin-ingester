@@ -1,0 +1,46 @@
+{
+  "task": "M4.8b1",
+  "role": "reviewer",
+  "verdict": "changes-requested",
+  "diff_sha256": "9472c5ea19f8cfa68308aa4e2a487dfb525d167165df7d66f8d58b262b8854bc",
+  "summary": "The round-5 blocking finding is FIXED and verified: `rounds:M4.8b1` now names four mutants and all four resolve against `.harness/review` -- the round trip (fcf8d15, both roles), both length guards (006aa9a, test-reviewer), `startsWith(logPrefix)`->`startsWith(prefix)` (19d8ae1, T2), `endsWith(SUFFIX)` narrowed (6e889cf, T3); no fifth survivor is recorded, no count contradicts a no-count clause, 'no round faulted what isEntryKey decides' holds across all ten verdicts, and 'every end-to-end interloper is refused by an earlier guard' is now true of all three seeded keys (two by `endsWith`, one by the parse). The deleted comment clause in LogKeysTest leaves a true and coherent sentence -- I checked both surviving cases against the `startsWith(prefix)` mutant. The two minors from round 5 are closed. What blocks is NEW: the third equivalence argument in baselines/mutants.txt states a boundary that measurement refutes. Its headline claim is true (I measured the trailing-slash narrowing surviving), but the clause that names the epoch segment as the bound is false in both halves -- a guard narrowing that DROPS the epoch also survives (0 failures over 344 tests), and the 12-test kill it cites is reproducible only with a mutant that hardcodes the prefix, killing for the opposite reason (every real key refused, not a sibling's key admitted). This file's own header says a wrong equivalence argument is worse than an unargued survivor.",
+  "findings": [
+    {
+      "id": "R6-1",
+      "file": "baselines/mutants.txt (third new entry, `key.startsWith(logPrefix)` narrowed)",
+      "severity": "major",
+      "blocks": true,
+      "title": "The epoch-segment bound is false in both halves, measured: the epoch-dropping narrowing SURVIVES, and the kill that is cited happens for the opposite reason",
+      "detail": "The entry's headline -- a narrowing that keeps the whole epoch segment is equivalent on the observable -- is TRUE, and I reproduced its stated measurement: `key.startsWith(logPrefix.substring(0, logPrefix.length() - 1))` gives 344 tests, 0 failures over `:sequencer:test :ingest:test`. The clause after it is false. (a) THE BOUND IS NOT THE EPOCH SEGMENT. `key.startsWith(logPrefix.substring(0, logPrefix.length() - 17))` -- the same operand-only narrowing, dropping the 16 hex digits AND the separator, i.e. exactly `<prefix>/ctl/log/0/` -- also gives 344 tests, 0 failures. It survives. (b) THE STATED MECHANISM CANNOT HAPPEN. 'a sibling epoch's entries would be read into this chain' is unreachable under any narrowing that leaves `key.equals(keyFor(sequence))` in place, because `keyFor` regenerates with THIS epoch, so a sibling epoch's key can never compare equal. This diff's own `LogKeysTest.aKeyThatIsNotThisChainsAtAllIsRefused` asserts it (`new LogKeys(\"bins\", 2).keyFor(0)`), and that assertion still passes under the epoch-dropping mutant -- it is the round trip, not the prefix guard, that refuses it. The entry's own preceding sentence says as much ('every key it sees already starts with the full prefix and a test narrowed within that prefix cannot change the answer'), which proves too much for the clause that follows it. (c) THE 12 IS AN HONEST NUMBER FOR A DIFFERENT MUTANT. Substituting the literal `key.startsWith(\"bins/ctl/log/0/\")` does kill 12 sequencer tests (13 with `:ingest:test`), but because it hardcodes the prefix `bins`: every key of the tests built on `\"p\"` and `\"bins/cluster-a\"` is then REFUSED and the chain recovers empty. `CommitLogTest.twoEpochsWriteToDisjointPrefixesAndNeitherSeesTheOthersDeltas` fails on its POSITIVE CONTROL -- 'the epoch DOES see its own chain', expected 7, was 0 -- while its two cross-epoch assertions still pass. The failure mode is a real entry dropped from recovery, the direction this task's row calls 'worse than the bug being fixed', and the exact opposite of a foreign entry admitted. Remedy: either delete the clause (the remedy this task already applied twice to prose that could not be made true), or restate what was measured -- every proper-prefix narrowing of this operand measured so far survives, epoch included; the only killed one is `startsWith(prefix)`, killed because `bins.delta` then slices backwards; the guards carry no semantics beyond preventing the StringIndexOutOfBoundsException.",
+      "failure_scenario": "M4.8b2's writer, or any later refactor that hoists a slot-level prefix constant so the checkpoint writer and the reader share it, narrows this guard past the epoch segment. The session consults baselines/mutants.txt -- the file testing.md rule 9 makes the record of which weakenings the suite catches -- and reads that crossing the epoch boundary costs 12 failing tests and lets a sibling epoch's entries into this chain. It crosses the boundary, the suite stays green, and it concludes the change is safe because a gate it was told exists said nothing. The gate does not exist: nothing in the suite constrains this operand anywhere between `prefix` and `logPrefix`. Worse, the clause names a cross-epoch containment failure (I3) as being under test when the only thing that enforces it is the round trip, which was itself unconstrained until round 1 found it."
+    },
+    {
+      "id": "R6-2",
+      "file": "baselines/mutants.txt (header, and the `NO SCORE IS QUOTED HERE` block now mid-file)",
+      "severity": "minor",
+      "blocks": false,
+      "title": "The header's own count is made false by this diff, and the file's closing comment is now stranded in the middle",
+      "detail": "The header says 'One entry per GUARD; two entries cover two mutant forms each, so four entries carry six mutants.' The file now has seven entries. And the `\u26a0\ufe0f NO SCORE IS QUOTED HERE ON PURPOSE` block -- whose 73.7% / 78.9% figures and 'crafted-object tests' are about the Checkpoint/M4.8a set -- was written as the file's footer and now sits between the Checkpoint entries and the three LogKeys ones, where it reads as introducing them. Not raised as a fix request: rule minors-land, and this round already carries a major.",
+      "failure_scenario": "A session opens baselines/mutants.txt to see whether its own survivor is already argued, counts entries against the header, and finds the file disagreeing with itself about its own contents -- in a file whose credibility is the whole point of it, and whose header warns that a wrong claim here launders a real defect as benign."
+    },
+    {
+      "id": "R6-3",
+      "file": "sequencer/src/test/java/binjava/sequencer/LogKeysTest.java (class javadoc)",
+      "severity": "minor",
+      "blocks": false,
+      "title": "The `Long.parseUnsignedLong` claim was generalised in review.txt and left un-generalised in its twin here",
+      "detail": "This delta corrects `rounds:M4.8b1` to 'every end-to-end interloper is refused by an earlier guard', which I verified is true of all three seeded keys. The class javadoc here still says 'every interloper it seeds is refused one step EARLIER, by {@code Long.parseUnsignedLong}', which is true only of `ckpt/<hex>.delta`; `ckpt/<seq>.ckpt` and `<seq>.delta.tmp` are refused by `endsWith(SUFFIX)` and never reach the parse. Its conclusion (the round trip was unconstrained) is right either way. Pre-existing and out of this delta, and test-file prose is the test-reviewer's surface -- recorded, not requested.",
+      "failure_scenario": "A session reads the test javadoc and the baselines entry, finds the same fact stated two different ways in two staged documents, and cannot tell which was measured -- the 'two staged documents disagreeing about the same artifacts' failure that this very entry was rewritten to stop."
+    },
+    {
+      "id": "R6-4",
+      "file": "baselines/mutants.txt (the three new entries)",
+      "severity": "minor",
+      "blocks": false,
+      "title": "Three further survivors measured in round 4's test verdict are not carried into the tree, and `.harness/` is gitignored",
+      "detail": "The round-4 test-reviewer verdict (6e889cf, finding T5) measured three more survivors on this same method: both guards replaced by a single length test; `!key.startsWith(logPrefix)` replaced by `key.length() < logPrefix.length()`; and the `NumberFormatException` catch replaced by `sequence = 0`. The three entries staged here are a disjoint set. `.gitignore:12` ignores `.harness/`, so T5's arguments leave the tree with nothing, and testing.md rule 9 puts the argument in `baselines/mutants.txt` precisely so it outlives the session. Recording, not requesting -- adding prose is what the last four rounds were spent on.",
+      "failure_scenario": "A later session mutates `isEntryKey`, rediscovers one of T5's three survivors, finds it absent from baselines/mutants.txt, and either re-derives the equivalence argument from scratch or -- the expensive case -- treats a known-benign survivor as a fresh test gap and writes a test to kill a mutant that cannot be killed."
+    }
+  ],
+  "staged_tree": "685c59003ee7a331f39e3ca79e302c5ecca69847"
+}

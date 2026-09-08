@@ -1,0 +1,38 @@
+{
+  "diff_sha256": "28ac1467c7f92f121c8018ab50518d3f448c7f6093eaa996e9408655bf561aaf",
+  "verdict": "pass",
+  "summary": "Round 3. Delta since round 2 is tests plus three backlog rows; no production byte changed. Both round-2 minors are discharged, and I re-measured each claim rather than reading it. R2a: deleting LocalSequencer:323 burned.recoverChainEnd() reddens exactly one test, LocalSequencerSealRaceTest#aRacingChainLONGERThanTheRedriveBudgetStillConverges, with 'seal did not converge at seq 8 within 8 redrive(s)' -- so the redrive branch is pinned and nothing else regressed. R2b is filed as M4.48 and the PIT report confirms it as the ChainReplay:373 survivor. New ChainReplayEmptyOriginTest is the sole killer of atOrigin = originIsOwnChain -> true. The new landed.sequence() > 1 boundary is killed by aCrossedEpochThatOnlyOPENEDIsStillTheAncestor. Reverting both production hunks reddens 6 tests including CommitProtocolSimulationTest#aFAULTEDSweepHoldsTheInvariantsAcrossEverySeed, so the integration regression is real. Cost lens: the ADR-0037 loop costs one LIST plus one PUT per CROSSED BURNED EPOCH -- a rate in failed lease acquisitions, not in records, shards, partitions or indices -- and the LIST is recovery-path, which cost.md R2 permits. No blocking or major finding.",
+  "findings": [
+    {
+      "id": "M4.47-R3a",
+      "file": "sequencer/src/test/java/binjava/sequencer/LocalSequencerSealRaceTest.java:38",
+      "severity": "minor",
+      "finding": "LocalSequencerSealRaceTest redeclares PREFIX = \"bins/cluster-a\" and STREAM as its own constants, while manager(), burnEpochs() and slotZero() delegate to LocalSequencerAncestorSealTest, whose LeaseConfig and CommitLog keys are built from THAT class's PREFIX. The two values agree today, and nothing checks that they do.",
+      "failure_scenario": "Someone changes LocalSequencerAncestorSealTest.PREFIX (e.g. to isolate a fixture) and does not touch the race test. The lease is then acquired under one prefix while the chains under test are written under the other. LocalSequencer.start still returns a sequencer, the epoch numbering still advances, and the assertions on slotZero()/firstOffset() still pass -- while the race the class exists to force is no longer being forced, because OpenOnFirstProbeStore is watching a key the walk no longer probes. A silently vacuous race test is exactly the shape testing.md rule 2 exists to prevent, and it would not be caught by any gate."
+    },
+    {
+      "id": "M4.47-R3b",
+      "file": "sequencer/src/test/java/binjava/sequencer/LocalSequencerSealRaceTest.java:47",
+      "severity": "minor",
+      "finding": "The delegating wrapper renames the parameter: `burnEpochs(BinStore store, int upTo)` forwards to LocalSequencerAncestorSealTest.burnEpochs(store, count), whose contract is a COUNT of acquire/release pairs, not an upper bound on epoch number. The two coincide in every call site here only because the burn starts at epoch 1.",
+      "failure_scenario": "A later case seals or opens epoch 1 through a lease before calling burnEpochs(backing, 3). Reading `upTo` as an upper bound, the author expects epochs to be burned through 3; the call actually burns three MORE, landing at 4, so the successor's epoch and the expected prevEpoch are both one off. The assertions are on absolute epoch numbers (isEqualTo(3), isEqualTo(4)), so the test fails with a number that does not point at the renamed parameter."
+    },
+    {
+      "id": "M4.47-R3c",
+      "file": "sequencer/src/main/java/binjava/sequencer/LocalSequencer.java:321",
+      "severity": "minor",
+      "finding": "The ADR-0037 loop calls burned.recoverChainEnd() -- a LIST per 1000 objects plus one GET (ChainEnd.of) -- for every crossed epoch, and for a genuinely burned epoch that LIST returns zero objects and changes nothing: seal would propose at slot 0 either way. It pays for itself only in the race case R2a measures. This is not a defect, and it is filed as M4.48; recorded here so the cost is on the record for the row rather than only in the row's own prose.",
+      "failure_scenario": "A cluster-birth outage burns N epochs before any start succeeds. The next successful start issues N LISTs and N PUTs, and it scales with FAILED ACQUISITIONS, not with records, shards, partitions or indices -- so it stays inside cost.md's rule. What makes it worth naming is the direction of the trend: the measured run is mean 1.56 / max 7, and if a future change ever makes burned runs grow with cluster size (more pods racing the lease per failover), this is the line where a per-node rate would turn into a per-node-squared one."
+    },
+    {
+      "id": "M4.47-R3d",
+      "file": ".pre-commit-config.yaml:0",
+      "severity": "minor",
+      "finding": "The round-3 packet reported check-mutants.sh as FAILED, not passed: 'unreadable mutation report sequencer/build/reports/pitest/mutations.xml: no element found: line 58, column 338'. I did not take the reported 109/119 on faith. Reading the report in the repository now: 119 mutants, 99 KILLED + 10 TIMED_OUT + 9 SURVIVED + 1 NO_COVERAGE = 109/119 = 91.6%, matching. The only survivor on a line this change touches is ChainReplay:373 (M4.48); the rest are on untouched LocalSequencer.close/renewForever logging and interrupt calls.",
+      "failure_scenario": "The gate must be re-run to a green result before the commit, because the packet's cached record for this staged hash says FAILED. If it is not, check-mutants passes at commit time only because a stale readable report happens to be on disk -- which is M0.88's defect in the other direction, and a green gate nobody ran is worth less than no gate at all (non-negotiable 4)."
+    }
+  ],
+  "task": "M4.47",
+  "role": "reviewer",
+  "staged_tree": "f4aa33a7b3e696b8a7663a67ae8cc7e62ad943ce"
+}

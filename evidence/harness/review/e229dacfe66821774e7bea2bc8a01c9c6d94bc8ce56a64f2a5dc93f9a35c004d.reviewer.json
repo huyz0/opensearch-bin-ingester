@@ -1,0 +1,64 @@
+{
+  "diff_sha256": "e229dacfe66821774e7bea2bc8a01c9c6d94bc8ce56a64f2a5dc93f9a35c004d",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "M4.21-r2-1",
+      "severity": "major",
+      "location": "docs/internal/product/backlog.md:268",
+      "title": "ROUND-1 MAJOR 1 IS NOT CLOSED IN THE ONE PLACE EVERY FUTURE REVIEWER READS. The M4.21 delivery note written by this commit still says 'Three M4 commits landed that way' -- the exact 3-vs-9 error, now contradicted by review.md inside the same staged diff.",
+      "failure_scenario": "VERIFIED INDEPENDENTLY: `git log --grep=SKIP=check-reviewed` returns NINE -- M4.0 0837f34, M4.1 44400b5, M4.3 74254f6, M4.3b d9a3c22, M4.4b 6871e7f, M4.6c 3a5ed79, M4.6e 461dd53, M4.19 2953b5a, M4.20 2e0f1d9. I read all nine bodies: every one names rule 12's round cap as the ONLY remaining refusal with both roles `pass` and zero blocking/major, so review.md:47-56 is correct and its nine ids match the log exactly. The gate comment and the test javadoc are correct too. The row is NOT, and the row is where the number is load-bearing: '...it made the whole gate ABSENT exactly when the cap bit. Three M4 commits landed that way. An argued exception is therefore STRICTER than the skip it replaces.' Three is a weak argument for reversing the row's own stated recommendation; nine is the argument. CONCRETE FAILURE: `scripts/review.sh context --task M4.21` prints this row verbatim -- it printed it to me in this packet -- so every future reviewer of anything citing M4.21 reads 'Three' while review.md two files away says 'nine' and lists the ids. A reader who resolves the contradiction must re-run the log; a reader who does not carries the wrong number forward, which is precisely how 'three' arrived. AGENTS.md non-negotiable 4: the authoritative task list states a measured count the log refutes. Same for 'five' tests / 'nine' tests in the same sentence-set (see M4.21-r2-3). NOTE ON RULE 12: the fix is one word. This finding is NOT evidence that the commit is too big, so 'split it' would be a misreading of it; if the resulting round 3 is refused, this is exactly the case the escape this commit builds was built for."
+    },
+    {
+      "id": "M4.21-r2-2",
+      "severity": "minor",
+      "location": "docs/internal/standards/review.md:53-56",
+      "title": "The sentence added to explain how the wrong number arose is itself a count from memory, and it is off by one about the commits it blames.",
+      "failure_scenario": "'counted from the three commits that called themselves first, second and third rather than from the log; seven of the nine predate them.' MEASURED across the nine bodies: only TWO carry an ordinal -- M4.19 (2953b5a) 'AND THIS IS THE SECOND TIME' and M4.20 (2e0f1d9) 'THE THIRD TIME'. No commit calls itself the first. And with 'them' = three commits, 9-3 = 6 predate them, not seven; 'seven' is right only for two. The test javadoc avoids this by anchoring on a different thing ('seven of them before the session that wrote this class'), which is true. Failure: this clause exists in a STANDARD to explain that a count stated from memory is how the 3x error happened, and a reader who checks it finds a count stated from memory. The next hand correcting it re-opens rule 12's text for a third time."
+    },
+    {
+      "id": "M4.21-r2-3",
+      "severity": "minor",
+      "location": "docs/internal/product/backlog.md:268, docs/internal/product/backlog.md:284",
+      "title": "Three stale counts in the two backlog rows this commit writes, in a file that argues explicitly against counts in prose.",
+      "failure_scenario": "(a) :268 'it and the cap now have five' -- ReviewRoundCapTest has NINE @Test methods (withinTheCapTheGatePasses, overTheCapWithNoArgumentTheGateREFUSES, overTheCapWithASTAGEDArgumentTheGatePasses, anArgumentForADIFFERENTTaskDoesNOTLiftTheCap, anUNSTAGEDArgumentDoesNOTLiftTheCap, aROUNDSLineOnlyInTheWORKTREEOfASTAGEDFileDoesNOTLiftTheCap, anARGUEDCapStillBLOCKSAnUnresolvedMajor, aROUNDSKeyWithNOREASONDoesNOTLiftTheCap, aTASKNameIsMatchedEXACTLYAndNotAsAPattern), and the row's mutation list names four of the seven that now exist. (b) :268 'violated on 8 of 12 tasks' contradicts review.md:61 'on 7 of 12 tasks' four sentences later in the same row's own commit. The scripts and the standard were aligned to 7; the row was not. For the record, 7 is the better number: counted from .harness/review, seven M0-era tasks exceeded two rounds (M-1.1 3, M0.5 3, M0.9 3, M0.29 4, M0.6 4, M0.31 5, M0.13 11), and M0.47:69 -- untouched, the row where '8 of 12' was first recorded -- is the remaining copy. (c) :284 M4.27 says 'TWO OF ITS FOUR STATED ACCEPTANCE CRITERIA' while M4.20's criteria sentence has five conjuncts: many logical pods / one seed / driven through the Sequencer seam / failover BOTH ways / fenced leaders that do not know it yet. The two defeated criteria are named explicitly so the row is legible, but its denominator cannot be resolved against the row it cites. Failure mode is the one the M4.12 row in this same file already records against itself: 'this sentence said six, then nine, then twelve, and was wrong at every one -- a number in prose is stale the moment a review round adds a test'. Four rounds have now added tests."
+    },
+    {
+      "id": "M4.21-r2-4",
+      "severity": "minor",
+      "location": "scripts/review_rounds.py:24-43, scripts/check-reviewed.sh:64-69, scripts/review.sh:143",
+      "title": "The traceless cap bypass is one CLI argument away, and this commit's own comment names its cause while closing only the other half.",
+      "failure_scenario": "MEASURED in a scratch repo, two mechanisms. (a) `review.sh record` writes `v['task'] = task` with no validation of `--task`. Recording the round-3 verdict under any other string gives ROUNDS=1 and the cap never fires: gate printed `ok staged bytes reviewed by reviewer test-reviewer (round 1 of 2)` and exited 0 at true round 3, with no baseline line, no WARN, and nothing in the tree. (b) Worse because it needs no intent: `rounds_for` resolves the task from the FIRST file `glob.glob` returns and `break`s, so when the two roles' verdicts for one hash disagree about `task` the winner is directory order. Verified: reviewer=M9.1 (3 distinct hashes) and test-reviewer=M9.9 (1) for the same staged hash made `--task` print M9.9, ROUNDS=1, and the gate print `ok ... (round 1 of 2)` -- a green line asserting a round number that is false. check-reviewed.sh:66-69 cites '`review.sh record` does not validate `--task`, so `--task .*` would let any rounds: line argue anything' as the reason for the awk change, so the unvalidated field was seen; the half closed was the pattern, and the half left open is cheaper than the escape this commit builds and leaves nothing in the tree -- which is the property the whole design argument rests on. Neither is filed. `sorted()` plus a refusal when the roles disagree closes (b) and is testable; (a) wants a row, because validating `--task` against backlog.md does not close it (any real row id also resets the count)."
+    },
+    {
+      "id": "M4.21-r2-5",
+      "severity": "minor",
+      "location": "scripts/check-reviewed.sh:79-88, docs/internal/standards/review.md:43-46",
+      "title": "The printed remedy, followed exactly at the moment it is printed, produces a different refusal -- the same shape as the defect this task exists to close, one step milder.",
+      "failure_scenario": "MEASURED. Scratch repo at round 3: gate refuses with \"argue it with a STAGED baselines/review.txt line keyed 'rounds:M9.1  <why it cannot be split>'\". Staging exactly that line and re-running gives `FAIL no 'reviewer' verdict for the staged bytes (647a58ea...)` plus the same for test-reviewer -- because staging the argument moves the hash the verdicts are bound to, so a fresh TWO-ROLE review of the argument is required before the escape works. The extra round is defensible and arguably correct (check-reviewed.sh:56-57 says the argument is 'reviewed like any other change'), but neither the message nor review.md rule 12 says it; only review_rounds.py's docstring hints at it. Net effect: the escape is usable without an extra round only by an author who stages the argument BEFORE the review that will exceed the cap -- the one thing an author cannot know in advance. And no test covers the followed-as-printed path: every fixture stages the baseline before the verdicts are written, so only the anticipated workflow is pinned. One echo line inside the block already being changed closes the message half."
+    },
+    {
+      "id": "M4.21-r2-6",
+      "severity": "minor",
+      "location": "scripts/check-reviewed.sh:64, buildSrc/src/test/java/binjava/ReviewRoundCapTest.java:1-262",
+      "title": "SURVIVING MUTATION: the staged-NAME guard carries a real property and nothing in the suite holds it.",
+      "failure_scenario": "Delete `&& git diff --cached --name-only | grep -qx 'baselines/review.txt'` and keep the `git show :` read. VERIFIED: all nine tests still pass -- anUNSTAGEDArgumentDoesNOTLiftTheCap still refuses (git show fails on an absent index entry) and aROUNDSLineOnlyInTheWORKTREEOfASTAGEDFileDoesNOTLiftTheCap still refuses (the index copy has no rounds: line). What changes IS reachable: a `rounds:<task>` line committed by an earlier argued commit and not touched by the current one. Verified against the real gate -- entry in HEAD, file untouched, round 3 -- exit 1, refused. Against the mutant: `WARN ... ARGUED as 'rounds:M9.1'` then `ok`, exit 0, an argued cap waived by a line that appears nowhere in the diff under review. review.md:59-61's 'a growing list of rounds: entries is a signal, not a workflow' is exactly the property this guard enforces, and it is the one arm the suite leaves unconstrained. Fixture: commit the entry, stage something else, expect refusal."
+    },
+    {
+      "id": "M4.21-r2-7",
+      "severity": "minor",
+      "location": ".pre-commit-config.yaml:143-149, scripts/check-reviewed.sh:89",
+      "title": "The WARN is the only runtime announcement that a cap was waived, and pre-commit swallows it. Round-1 finding, neither addressed nor filed.",
+      "failure_scenario": "pre-commit prints a hook's output only when the hook fails. check-reviewed exits 0 on the argued path, and no hook in .pre-commit-config.yaml sets `verbose: true` -- verified, the string does not appear in the file -- so under the only invocation path that matters the escape fires and prints nothing. JUDGEMENT, since it was asked for: the WARN is NOT the alarm, and the commit is right not to rest on it. The alarm is the staged `rounds:` line -- in the tree, greppable, and reviewed -- and check-reviewed.sh:56-57 rests the argument there rather than on the warning, which is the correct design. `verbose: true` would also print the ok line on every commit, changing every commit's output for a path that fires rarely, so it does not obviously belong in this commit. What must not happen is the finding evaporating: it wants a row next to M4.26 saying the cap-waived signal is invisible at runtime and naming what, if anything, should carry it (a commit-msg-stage assertion that an argued cap is stated in the body would be the rung-3 answer)."
+    },
+    {
+      "id": "M4.21-r2-8",
+      "severity": "minor",
+      "location": "docs/internal/product/backlog.md:283, scripts/check-reviewed.sh:97-113",
+      "title": "M4.26 records the worktree read and the undocumented key but not the reason asymmetry this commit creates fourteen lines apart in the same file.",
+      "failure_scenario": "M4.26 reproduces exactly as written -- verified: a wholly untracked baselines/review.txt silences blocking findings from BOTH roles and the gate prints ok, exit 0. Two things the row omits. (a) The older key requires no reason at all: the loop keys on `line.split()[0]`, so a file containing only `reviewer:R1` and `test-reviewer:R1` -- no justification whatsoever -- silenced two blocking findings and the gate printed ok (verified). The new `rounds:` key enforces `NF > 1` for exactly the reason the baseline file's own header documents for the OLD key ('<role>:<finding-id>  <why it is not a defect>'), so after this commit the two keys in one file disagree about whether the reason is required, and the one a reader will assume is stricter is the one that is not. (b) So M4.26 is three fixes rather than two -- the index read, the header, and the reason -- and saying so while the row is `todo` costs a clause. Failure if left: the next hand closes M4.26's index read, believes the argue path is now sound, and a bare `reviewer:R1` still silences a blocking finding."
+    }
+  ],
+  "task": "M4.21",
+  "role": "reviewer"
+}

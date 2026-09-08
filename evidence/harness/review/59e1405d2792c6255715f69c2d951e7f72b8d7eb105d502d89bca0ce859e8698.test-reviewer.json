@@ -1,0 +1,16 @@
+{
+  "diff_sha256": "59e1405d2792c6255715f69c2d951e7f72b8d7eb105d502d89bca0ce859e8698",
+  "verdict": "pass",
+  "summary": "All three carried-forward major findings (R1 6604026fa9cb, R2 6604026fa9cb, R2 1e4d2d44e8e5) are fixed in the staged bytes: CommitProtocolSimulation.java's 'PODS TAKE TURNS' javadoc now correctly attributes the chain-slot race to CommitLogSealWriteTest/LocalSequencerTest and no longer defers it to M4.13; SimulatedClockTest.aReZonedCopySTILLMovesWhenTheOriginalAdvances re-zones to Australia/Sydney (not ZoneOffset.UTC), and withZoneReturnsACLOCKCarryingTheGivenZoneAndTheSAMETime now also asserts zoned.withZone(Asia/Tokyo).getZone(), closing the inner-copy delegation gap (R9). theSameSeedReplaysExactlySoAFailureIsAPermanentRegression now compares violations() too (R7). Independently mutating the tests: each SimulatedClockTest test is falsifiable against the specific defect its comment names (no-op advance, wall-clock read, this-returning withZone, snapshotting withZone), and the CommitProtocolSimulationTest suite has a real anti-vacuity floor plus a measured faulted-range floor with a named, defended margin. One minor found: a tautological assertion.",
+  "findings": [
+    {
+      "id": "T1",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSimulationTest.java:498-502",
+      "summary": "assertThat(zombieWrites).isGreaterThanOrEqualTo(0) cannot fail: zombieWrites is an int accumulated only by `zombieWrites += r.zombieWrites()` over a field that itself only ever increments (CommitProtocolSimulation.java:314, `zombieWrites++` inside the zombie-commit try block, never decremented). Short of 32-bit overflow, no mutation of the production or driver code can make this assertion fail -- it is documented as deliberate ('recorded, not asserted') but the mechanism is the same 'a claim that cannot go false is not evidence' pattern the M4.19 row names for crossEpochOffsetsChecked(). Naming the surviving mutation: delete `zombieWrites++` entirely (the fenced-writer path silently stops landing writes) -- this line still passes, at 0 instead of whatever the range produces, indistinguishable in the assertion from the current behaviour.",
+      "failure_scenario": "A future change to the seal barrier (M4.16's fix, or a regression in it) changes how often a fenced write lands -- from the currently-measured handful across 30 seeds to zero, or to every attempt. Both extremes satisfy isGreaterThanOrEqualTo(0) identically, so this line gives a reader auditing the suite no signal either way; the only place that number is visible is the failure message of an assertion that cannot produce one. Recommend replacing the assertion with a plain comment/log of the count (as the driver already does for Result.zombieWrites), since an assertion that cannot go false invites a later hand to read it as a check rather than a note."
+    }
+  ],
+  "task": "M4.20",
+  "role": "test-reviewer"
+}

@@ -1,0 +1,29 @@
+{
+  "diff_sha256": "26d6cd2588d6dfa2ac8bbd60172b16bcd10eff600f8465782c2ecf3131ea9a91",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "H14",
+      "severity": "minor",
+      "file": "scripts/java_tests.py:1",
+      "summary": "The scanner is a regex/token approximation of Java, not a parser; its refusal path is the only thing standing between a mis-lex and a silently under-counted TDD gate.",
+      "failure_scenario": "A future Java construct not in NOISE (e.g. a new literal form) lexes wrong, scan returns fewer methods than the counter expects, and the cross-check refuses rather than mis-reporting -- acceptable today, but the failure mode is a hard-blocked gate on legal code, so refusals must stay loud and diagnosable."
+    },
+    {
+      "id": "H15",
+      "severity": "minor",
+      "file": "scripts/java_tests.py:151",
+      "summary": "Several branches (the @interface branch, NOT_A_METHOD, the classes guard, UNICODE_ESC's even-backslash rule) are unconstrained by any fixture; the gap is now honestly documented but still open.",
+      "failure_scenario": "One of these branches is refactored incorrectly and every fixture stays green, so the TDD gate keeps counting tests that no longer exist."
+    },
+    {
+      "id": "H16",
+      "severity": "minor",
+      "file": "scripts/check-harness-tests.sh:1",
+      "summary": "The harness self-test suite is the only thing that validates the gate scripts, and it is not itself wired into a gate that must pass before the gate scripts change.",
+      "failure_scenario": "A gate script is edited without running check-harness-tests.sh; the pre-commit hooks still pass because they exercise the happy path only, and a weakened gate ships."
+    }
+  ],
+  "task": "M-1.2",
+  "role": "reviewer"
+}

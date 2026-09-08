@@ -1,0 +1,56 @@
+{
+  "diff_sha256": "ff3aee50603e2ea221340171736b14126462d8dc3d303c973cf39135dc49c50b",
+  "verdict": "pass",
+  "summary": "LeaseManager matches the task and the SPEC: two acquisition paths (putIfAbsent when stat is empty, putIfMatch otherwise), release writes an expired lease rather than deleting, a corrupt lease propagates as IOException, TTL/renewInterval are constructor parameters, no checkpoint pointer, synchronized around every read-decide-CAS. I could not find a safety hole: every epoch transition is bound to a conditional write, so two nodes cannot mint the same epoch, and a stale-version writer always loses. Request counts are constant per call and per node -- acquire 2 (absent) / 2 (held, unexpired, no write) / 3 (takeover: stat + get + putIfMatch), renew 1 PUT, release 1 PUT or 0 -- one object per slot, no LIST, nothing scaling with records, shards, partitions or indices. Five minors, all liveness/claim-truth, none blocking.",
+  "findings": [
+    {
+      "id": "M4.3b-R1-1",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/LeaseManager.java:152",
+      "title": "An ambiguous renew failure self-fences a healthy leader, and tryAcquire cannot reclaim the node's own live lease",
+      "failure_scenario": "A holds the lease at version V1. renew() issues putIfMatch, the write LANDS as V2, and the response is lost -- the store throws IOException, so held/heldVersion are never updated and stay at (L1, V1). The lease on disk is now A's own, freshly extended, holder=podA, unexpired. A's next renew does putIfMatch(V1), the version has moved (by A's own write), the empty Optional is read as 'fenced', and held/heldVersion are cleared. A then calls tryAcquire(): stat sees the object, read() returns a lease that is NOT expired, so line 129 returns empty -- A cannot take back a lease it still holds, and no other node can take it either until it lapses. Result: one lost PUT response leaves the cluster with no sequencer for up to a full TTL (~10 s per ADR-0007), where a re-read on the IOException path, or letting tryAcquire adopt an unexpired lease whose holderPodId equals this podId, would recover in one request. The renew() javadoc at :140 ('an empty result is how a holder LEARNS it is fenced') is correspondingly stronger than what the code can know: empty means 'the version moved', which includes 'moved by my own write whose response I lost'. This is the same ambiguous-conditional-PUT class M4.1's review made the CommitRequest javadoc state explicitly rather than over-promise, and M4.10 is the task that owns idempotency for it. Cost note: recovery is bounded by the TTL failover the SPEC already accepts, which is why this is minor and not major."
+    },
+    {
+      "id": "M4.3b-R1-2",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/LeaseManager.java:79",
+      "title": "The renewInterval guard permits configurations that defeat its own stated rationale",
+      "failure_scenario": "The comment at :80-82 says the corpus renews at TTL/3 'precisely so that a single missed renew is survivable rather than terminal', but the guard only refuses renewInterval >= ttl. ttl=10s with renewInterval=9s is accepted, and there a single missed renew (one 1.5 s GC pause, exactly the gray-failure case the lease exists for) IS terminal: the lease lapses before the next attempt, the node is fenced and the cluster pays a failover. So the check buys only the guaranteed-loss case, not the survivability the comment claims for it. Either bound the ratio (renewInterval <= ttl/2 is a ratio, not a value, so it does not hardcode what M8 will measure) or reword the comment to say what the guard actually refuses. Everything else in the validation is complete: both durations positive, both non-null, and the ordering strict."
+    },
+    {
+      "id": "M4.3b-R1-3",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/LeaseManager.java:190",
+      "title": "A lost takeover leaves the stale local belief in place, unlike renew()'s documented clearing",
+      "failure_scenario": "renew() clears held/heldVersion on an empty result, justified at :155-156 as 'so a caller that ignores the empty result cannot keep renewing against a stale version'. adopt() does not: when A already holds an expired lease, calls tryAcquire(), and B wins the takeover first, A's putIfMatch loses, adopt returns empty and leaves held pointing at the term B has just superseded. held() (a public accessor, :100) then reports a lease A does not hold until A happens to call renew(). The same argument that justifies clearing on the renew path applies here. Related: held() has no caller anywhere in the tree and no test -- making it return Optional.empty() unconditionally survives the whole suite -- and its javadoc does not state that the belief may be stale, which is the one thing a caller of it needs to know."
+    },
+    {
+      "id": "M4.3b-R1-4",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/LeaseManager.java:67",
+      "title": "podId and endpoint are null-checked but not validated, so a config error surfaces as an unchecked exception from a method declared throws IOException",
+      "failure_scenario": "POD_NAME is not wired through the K8s downward API, so podId is \"\". The constructor accepts it -- ttl and renewInterval are validated eagerly, these are not -- and the failure appears later, inside tryAcquire(), as Lease's IllegalArgumentException('holderPodId is never blank') escaping a method declared 'throws IOException'. A leader-election loop that catches IOException (the only failure the signature advertises, and the one the corrupt-lease path teaches it to expect) does not catch it. This is the same fail-late class M4.3's own round-1 test review fixed inside Lease.decode, mirrored one layer up: the guard exists, it just does not run until the first acquisition attempt. A blank/JSON-hostile podId or endpoint is knowable at construction. Same for prefix, which is only null-checked, so an empty prefix silently yields the key '/ctl/lease/0.json'."
+    },
+    {
+      "id": "M4.3b-R1-5",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/LeaseManagerTest.java:266",
+      "title": "The cost test names an acquire count it never asserts, and the count it names is true of only one of the three acquire paths",
+      "failure_scenario": "acquiringCostsOneReadAndOneWriteAndRenewingCostsOneWrite captures store.counts().total() into afterAcquire at :274 and uses it only as a baseline; nothing asserts it equals 2. Adding a redundant stat() or an extra get() to the first-acquisition path leaves the suite green while the test's own name says otherwise -- a number in a test name that no assertion measures. The name is also only true of the absent-key path: taking over an existing expired lease costs stat + get + putIfMatch = 3 requests, and a standby that polls a live lease pays stat + get = 2 GET-class requests per poll with no write. Neither is a scaling defect (constant per node per call, one object per slot, no LIST, and the extra GET is unavoidable because stat carries the version and get carries the expiry), but neither is pinned either, so the request cost of the contended path is currently unmeasured. Primarily the test reviewer's ground; recorded here because the request-count claim is this review's assigned lens."
+    }
+  ],
+  "verified": [
+    "Two acquisition paths correct against BinStore's contract: stat() empty selects putIfAbsent, so putIfMatch is never invoked on an absent key; every later transition (takeover, renew, release) is putIfMatch.",
+    "Race between stat() and the conditional write is safe in both directions. Two nodes both seeing absent: putIfAbsent arbitrates, the loser gets empty from adopt() and returns empty (no exception, no partial state). A sees present-and-expired but B takes over first: A's putIfMatch carries the pre-takeover version, loses, and A returns empty without touching B's term. A stale body can never be paired with a newer version in a way that succeeds, because the CAS is bound to the stat version and any intervening write moves it.",
+    "Release-does-not-delete reasoning holds: renewedUntil preserves the epoch and the CAS keeps the object, so the next acquirer reads epoch N and writes N+1 via takenOverBy. Deleting really would restart the counter at 0 and reuse a term's epoch. Expiry is inclusive (Lease.isExpiredAt uses >=), so writing expiresAt = now is genuinely already expired and failover is immediate rather than TTL-bound. Fenced release: A's putIfMatch carries the superseded version, loses, and B's live lease on disk is untouched -- pinned by aFencedHolderCannotReleaseSomeoneElsesLease.",
+    "No path lets a holder keep sequencing after losing the lease: renew() on a lost CAS returns empty AND clears the local belief, so a caller that ignores the result cannot renew again against the stale version. The inverse (stopping while still holding) is finding R1-1.",
+    "Corrupt lease is never treated as unheld: the only branch that writes without reading is the stat()-empty branch, so an existing-but-unparseable object always reaches Lease.decode and propagates IOException. Lease.decode's own unchecked exceptions were already wrapped in M4.3, so the catch is honoured.",
+    "Request rate: one lease object per slot (S=1), acquire 2-3 requests, renew 1 PUT, release 1 PUT or 0 when not held, zero requests when nothing is held. Constant per node per call; nothing scales with records, shards, partitions, indices or documents. No LIST anywhere. Steady state at TTL/3 is ~0.3 PUT/s, matching the SPEC's ~0.33 PUT/s budget. The class ships no polling loop, so it creates no idle request rate by itself -- R3 lands on whichever task wires the standby poll.",
+    "Configuration not constants: no TTL or renew-interval default appears anywhere in production code; the TTL/3 reference is rationale in a comment, not a value. Nothing M8 will measure is hardcoded.",
+    "Thread safety: held and heldVersion are read and written only under the instance monitor (held(), tryAcquire(), renew(), release() all synchronized; adopt() is private and reached only from a synchronized method). key, renewInterval and every other unsynchronized-accessor field is final and assigned in the constructor, so their publication is safe. Holding a monitor across store I/O is java-style rule 6's ReentrantLock case, but the task names IndexOrdinalRegistry's synchronized as the precedent to follow and it does the same, so it is not raised as a finding here.",
+    "No pre-emption of M4.8: no checkpoint pointer, no checkpoint field, no discovery method, and nothing added to Lease.",
+    "Backlog row is internally honest: every claim in it maps to code or to a named test, and the suite arithmetic is consistent (432 at M4.1/M4.2 + 22 for M4.3 + 18 new tests here = 472). I did not re-run the suite, so the 'green' half of that claim rests on the author having run it."
+  ],
+  "task": "M4.3b",
+  "role": "reviewer"
+}

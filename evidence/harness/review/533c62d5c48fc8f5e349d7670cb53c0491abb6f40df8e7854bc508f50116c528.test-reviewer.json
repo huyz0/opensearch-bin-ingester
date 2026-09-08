@@ -1,0 +1,50 @@
+{
+  "diff_sha256": "533c62d5c48fc8f5e349d7670cb53c0491abb6f40df8e7854bc508f50116c528",
+  "task": "M4.10b",
+  "role": "test-reviewer",
+  "verdict": "pass",
+  "summary": "Docs-only. The two new test-forcing artifacts (criterion 6's pointer bound, the T0 replay-answering GET row) each kill a mutation that was alive at round 12, so the round bought real constraint. Five minors remain, none blocking. Round-12 minor 3 is NARROWED, not closed: the equality case is now forced to be answered, killing the 'GET is dead code' mutation, but a below-watermark replay the pointed delta DOES carry is still refusable under criterion 6's wording while ADR-0036:68-71 requires it answered. Round-12 minor 2 is, contrary to the author's account, materially TAKEN in these bytes (ADR-0036:418-420 prescribes 'Two requests from ONE pod at flushSeq 0 and 1 in a single batch' and the notes point the per-segment assertion at the existing three-pod fixture); nothing further belongs in M4.10b. Round-12 minor 1 stands exactly as found and is M4.10d's.",
+  "findings": [
+    {
+      "id": "M4.10b-tr-1",
+      "severity": "minor",
+      "file": "docs/internal/product/milestones/M4/SPEC.md:419-427",
+      "summary": "Criterion 6's new pointer bound NARROWS round 12's below-watermark contradiction without closing it. What it closes: 'THE POINTER IS RECORDED FOR EVERY APPLIED COMMIT, so a replay of a pod's most recent applied flushSeq is ALWAYS answered' now forbids refusing at flushSeq == lastApplied, which kills the round-12 mutation 'refuse every detected replay' and forces the answering GET to exist and be exercised. What survives: 'the refuse branch applies only BELOW that watermark' reads as a permission covering the whole below-watermark region, and no criterion and no T0 row demands a test for a below-watermark replay that the pointed delta DOES carry. ADR-0036:68-71 requires that case answered -- 'read the pointed delta and answer only if it carries that exact (podId, incarnationId, flushSeq)' -- and ADR-0036:59-60 names the exact shape ('A batch may carry several requests from one pod ... <= handles a replay of the lower of them'). The two documents still disagree. Not blocking, because the correct rule is stated twice in the tree (ADR-0036:68-71 and criterion 6's own headline sentence 'returns the original assignment') and only the trailing gloss is loose. One clause closes it: 'a below-watermark replay the pointed delta DOES carry is answered too; refusal is permitted only when the pointed delta does not carry the triple'.",
+      "failure_scenario": "M4.10d ships `if (flushSeq < lastApplied) return REFUSE;` ahead of any read of the pointed delta. Flushes 5 and 6 apply in ONE batched delta (commitAll is the primitive), the slot points at that delta with watermark 6, and a retry of 5 is refused although the pointed delta carries its exact triple. Criterion 6 stays green -- the most-recent replay, flushSeq 6, is still answered -- and so does the T0 GET row. Per backlog-notes.md's own M4.10d section, the caller then re-flushes and 'one set of records holds two sets of committed offsets': the duplication criterion 6 exists to prevent, shipped green.",
+      "surviving_mutation": "if (flushSeq < lastAppliedFlushSeq) return REFUSE; placed before the pointed-delta read -- green against criterion 6, criterion 9's GET clause and both T0 rows."
+    },
+    {
+      "id": "M4.10b-tr-2",
+      "severity": "minor",
+      "file": "docs/internal/product/milestones/M4/SPEC.md:482",
+      "summary": "The new T0 row 'Replay answering: GET count per commitAll unchanged from 1 replaying pod to 6 when their pointers share one delta' is an equality-and-upper-bound only, with no lower bound and no conjunct requiring the six replays to be ANSWERED. Its criterion (SPEC.md:443-446) is upper-bound only too ('at most one GET per distinct (epoch, sequence) per commitAll'), and zero satisfies 'at most one'. Criterion 5 carries exactly the anti-vacuity clause this row lacks ('>=5,000 checkpoints, not >=50 ... the workload must exceed a page for the assertion to discriminate at all'), and criterion 9's PUT row carries its own ('the saturation clause matters'). Fix is one conjunct: each of the six is answered with its original offsets, at a GET count of exactly one.",
+      "failure_scenario": "A session writes the row's test with six replaying pods against a dedup whose refuse branch is taken for all six (or one that answers from an in-process cache). GET count is 0 for one pod and 0 for six -- 'unchanged' -- and 'at most one GET per distinct (epoch, sequence)' holds vacuously. The row is green while nothing was answered and the answering path it exists to bound was never entered, so the pod-axis regression it was added to catch can be introduced later without this row going red.",
+      "surviving_mutation": "Make the answering path a no-op: `if (isReplay(r)) return REFUSE;` with no store read at all. GET count 0 == 0 across 1 and 6 pods, row green."
+    },
+    {
+      "id": "M4.10b-tr-3",
+      "severity": "minor",
+      "file": "docs/internal/product/milestones/M4/SPEC.md:443",
+      "summary": "The new GET clause is added as a second acceptance criterion numbered '9.', immediately ABOVE the existing '9. Commit cost does not scale with pods or streams'. Two consequences. (a) Every renderer auto-numbers the list, so the PUT criterion becomes 10 and criteria 10, 11, 12 become 11, 12, 13; the file's own two references to 'criterion 9' -- SPEC.md:370 'Acceptance criterion 9 asserts the pod dimension specifically' and SPEC.md:508's Risks mitigation 'criterion 9's pod dimension' -- then resolve to the GET criterion instead of the PUT one. In raw markdown the number is simply ambiguous. (b) The clause opens 'AND NOR DOES THE REPLAY-ANSWERING GET', whose antecedent ('does not scale with pods') is the item BELOW it, so as a standalone numbered criterion it has no subject. The fix adds no prose: attach the clause to criterion 9 rather than numbering it as its own.",
+      "failure_scenario": "A session implementing the M4 multi-pod risk mitigation follows SPEC.md:508 to 'criterion 9's pod dimension', lands on the GET-coalescing criterion, and writes a GET-count test where the risk row requires the PUT-count pod dimension -- so 'the multi-pod gap becomes invisible' keeps its named mitigation while the assertion that carries it goes unwritten. Same misroute at M4.15, where VERIFIED.md walks the criteria by number.",
+      "surviving_mutation": "n/a -- citation defect, not an assertion defect; the failure is the wrong criterion being tested."
+    },
+    {
+      "id": "M4.10b-tr-4",
+      "severity": "minor",
+      "file": "docs/internal/product/milestones/M4/SPEC.md:482",
+      "summary": "The new replay-answering row is tiered T0. Counting GETs requires CountingBinStore (binstore-spi/src/main/java/binjava/binstore/CountingBinStore.java) wrapping a MemoryBinStore, which testing.md's tier table puts at T1 ('T0 ... Backing store: none'). Its structural sibling in the same table, 'Commit batching: PUT count unchanged from 1 pod to 6', is T1, and criterion 5's request-count assertion says 'asserted by request count through CountingBinStore' and is T1 in the table too. Verified by reading the tier table and the class.",
+      "failure_scenario": "A session takes T0 at its word ('backing store: none') and counts replay reads with a hand-rolled counter or a spy on the dedup helper rather than at the BinStore seam. Any answering read that reaches the store by another path -- ChainReplay, a cursor, a second call site -- is then uncounted, and N GETs of one shared delta ship with the row green, which is precisely the pod-axis cost the row exists to bound.",
+      "surviving_mutation": "Route the pointed-delta read through a second BinStore call site not covered by the hand-rolled counter: per-pod GETs, row still green."
+    },
+    {
+      "id": "M4.10b-tr-5",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:149-169",
+      "summary": "The M4.10c sites paragraph is accurate on everything it names -- I ran its own command, `git grep -n 'podId, flushSeq' -- '*.java'`, which returns exactly 11 hits and all 11 are listed, and I spot-verified Sequencer.java:35/46/88, CommitRequest.java:19 and :35-36, FakeSequencer.java:27/29, FakeSequencerTest.java:178, Checkpoint.java:32, IngestCommitPathTest.java:81, CommitProtocolSimulation.java:58, CommitProtocolSimulationFlushSeqTest.java:23 at those exact lines. The grep-blind-spot list, however, names only two sites and misses CheckpointWriter.java:105-106: 'it is the only place the writer can see {@code podId} and {@code flushSeq}, which the chain does not carry'. ADR-0036 REVERSES that premise -- CommitDelta is to carry the triple per SegmentCommit precisely so a successor can rebuild the window from the uncheckpointed tail -- and this sits in the class whose merge rule M4.10d must change and whose merge comment the notes already quote. (Second, weaker: CommitLog.java:247-248 enumerates the pair and becomes incomplete rather than false.) The paragraph disclaims completeness, so this is an omission and not a false claim.",
+      "failure_scenario": "An M4.10c or M4.10d session reads CheckpointWriter.observe's javadoc, is told the chain does not carry podId or flushSeq, and keeps pod state captured at write time only -- never harvesting it from the tail on recovery. That is the exact no-op backlog-notes.md's M4.10d section names: 'Seeding the pods map at write time and leaving the dedup window empty makes containsEntry(\"poda\", 42L) green while the replay still commits twice.' The stale javadoc is what makes the wrong choice look correct.",
+      "surviving_mutation": "n/a -- stale premise in a javadoc an implementing session reads instead of this file; the harm is the no-op capture above, which the M4.10d anchor is the only thing that catches."
+    }
+  ],
+  "staged_tree": "cfa4a5fad538f34e2417b7309b349afdd698e33a"
+}

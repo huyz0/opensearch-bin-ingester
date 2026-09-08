@@ -1,0 +1,36 @@
+{
+  "diff_sha256": "df2f9f52f65e8291a89d5f49f9e57ec74ac998795b76ceeeafac967a9ac73575",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/BatchingSequencerLifecycleTest.java",
+      "line": 491,
+      "severity": "major",
+      "what": "The round-4 fix is CORRECT in production but is not pinned by any test: the ORDERING of the interrupt restore relative to delegate.close() has no falsifier. closeJOINSTheCommitterBeforeClosingTheDelegate asserts the two halves separately (closedMidCommit==false, and Thread.interrupted()==true), but its `blocking` delegate's close() is `closedMidCommit.set(committing.get())` -- it performs no interrupt-sensitive operation, so it is indifferent to whether the flag is already set when close() runs. Every other lifecycle delegate close() here is also a plain setter or a no-op. Remedy is small and test-only: give one delegate a close() that models LeaseManager.release, e.g. `if (Thread.currentThread().isInterrupted()) { throw new IOException(\"lease not released\"); } released.set(true);`, and assert released==true.",
+      "failure_scenario": "MEASURED SURVIVING MUTATION on the staged bytes, in a copy of the index. In BatchingSequencer.close (BatchingSequencer.java:329-337) I hoisted the restore out of the finally to just before `try { delegate.close(); }` -- i.e. exactly the round-4 major, byte-for-byte the ordering the comment at :332 says was 'measured both ways'. Ran `:sequencer:test :ingest:test`: BUILD SUCCESSFUL, TEST-binjava.sequencer.BatchingSequencerLifecycleTest.xml reports tests=\"9\" failures=\"0\" errors=\"0\". Production consequence of the regression, verified by reading the code rather than taken from the comment: LocalSequencer.close -> LeaseManager.release (LeaseManager.java:419) does `if (!lock.tryLock()) lock.takeOrFail(\"release\", ttl)`, and BoundedLock.takeOrFail (BoundedLock.java:54) calls `lock.tryLock(bound, NANOSECONDS)`, which throws InterruptedException IMMEDIATELY when the calling thread's flag is set -- so whenever release races an in-flight renew the lease is not released, the successor waits out the full TTL (~10 s failover, ADR-0007), and close() throws so the caller's remaining shutdown never runs. Nothing in the tree would report that; the only thing holding the ordering today is a comment."
+    },
+    {
+      "file": "sequencer/src/main/java/binjava/sequencer/BatchingSequencer.java",
+      "line": 86,
+      "severity": "minor",
+      "what": "sleepFor's guard refuses zero and negative intervals but not sub-millisecond positive ones: `interval.toMillis()` truncates, so Duration.ofNanos(500_000) passes `isZero()/isNegative()` and produces `() -> Thread.sleep(0)`. That is the exact state the guard's own comment says must be unrepresentable ('a zero interval is not batch nothing, it is close the window before anyone else can join'). Bound on millis (e.g. reject `interval.toMillis() < 1`) rather than on the Duration.",
+      "failure_scenario": "No production caller constructs a BatchingSequencer yet (M4.7c), but commitBatchInterval is a configuration value and a Duration-parsing config binding will accept '500us' or '0.5ms'. Configured that way the window closes before any second flush can join it, so every pod flush is its own conditional PUT and the commit rate returns to scaling with the fleet -- silently, only under load, and with the validator having reported the value as acceptable."
+    },
+    {
+      "file": "baselines/review.txt",
+      "line": 14,
+      "severity": "minor",
+      "what": "The staged rounds:M4.7 argument claims 'EVERY ROUND FOUND A REAL HANG, none found a scope problem'. The second clause is false: round 3 found that BatchingSequencer is built and nothing constructs one, which is a conformance/scope finding, and it produced the M4.7c row added by this same diff -- whose own text says 'a reviewer named this and it is recorded rather than glossed'. Drop the clause or restate it as 'every round but one found a real hang; the exception was the unwired-batcher finding that became M4.7c'.",
+      "failure_scenario": "An argued baselines entry is the permanent tree-visible justification for exceeding the round cap, and rule 12 says a growing rounds: list is a signal to be read. A reader auditing whether the extra rounds were earned reads a claim the tree contradicts two lines of the same diff away, and the entry that exists to make the exception checkable becomes uncheckable."
+    },
+    {
+      "file": "sequencer/src/main/java/binjava/sequencer/BatchingSequencer.java",
+      "line": 214,
+      "severity": "minor",
+      "what": "Carried from round 4 and still open (you asked): drainLoop's `catch (Throwable timerFailed)` fails the held batch and returns without logging. The caller in the failing window gets the cause, but every caller after it gets `new IOException(\"this sequencer is closed\")` from submit or from the finally net -- a message that affirmatively misattributes the failure, because on this path nobody called close.",
+      "failure_scenario": "A committer dies on a live pod (an Error from the delegate, an unchecked throw from a WindowTimer). One producer sees the cause; every subsequent flush on that pod fails with 'this sequencer is closed and must not commit again' forever. An operator reading the logs sees a pod claiming it was closed, checks that nothing closed it, and has no record of the Error that actually killed the thread -- the close() timeout at :321 logs its own case, so the two committer-death paths are reported asymmetrically."
+    }
+  ],
+  "task": "M4.7",
+  "role": "reviewer"
+}

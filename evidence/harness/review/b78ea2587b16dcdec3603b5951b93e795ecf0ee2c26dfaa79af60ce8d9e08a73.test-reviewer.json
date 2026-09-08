@@ -1,0 +1,48 @@
+{
+  "diff_sha256": "b78ea2587b16dcdec3603b5951b93e795ecf0ee2c26dfaa79af60ce8d9e08a73",
+  "verdict": "pass",
+  "summary": "19 hand mutations of `Invariants.checkChain` run against the full :sequencer:test suite in an issued review tree; 14 killed, 5 survived and none of the survivors changes a verdict. The rename I4 -> `order` is pinned by mutation (renaming it back is killed by 5 fixtures). The eight fixtures' reds are genuine assertion failures at the assertion line numbers the current file has. `aPermutationThatALSOOverlapsReportsBOTHNames` is pinned in BOTH directions: dropping I2 for a permuted stream and dropping `order` for an overlapping stream are each killed by that fixture alone. No existing assertion was weakened -- containsExactly(\"I4\") -> containsExactly(\"order\") is the same strength.",
+  "findings": [
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/BatchedDeltaInvariantsTest.java:217",
+      "severity": "minor",
+      "title": "Two javadoc blocks still name I4 for an arm that now reports `order`",
+      "failure_scenario": "Line 217 reads \"RB is well-ordered, so exactly one I4 must be reported and it must name RA\" while the assertion four lines down (line 238) asserts \"order\"; line 247 reads \"calling it I4 as well would report one defect under two names\" while the same test's .as() message on line 264 was updated to `order`. checkChain no longer emits I4 from any arm -- grep of sequencer/src shows the only I4 producer is ReaderInvariants' DROP clause. The failure this invites is the doc-to-test-to-production inversion: a maintainer reconciling the test with its own javadoc changes the assertion to \"I4\", and then production to satisfy it -- reinstating exactly the overclaim this row removed. No verdict is wrong today; the assertions and .as() messages are all correct.",
+      "mutation": "Not a surviving mutation -- the NAME is pinned. MEASURED: renaming the Violation back to new Violation(\"I4\", ...) is KILLED by aBatchedDeltaWhoseSECONDSegmentREWINDSIsStillCaught, aStreamOutOfOrderTWICEIsStillONEViolation, aStreamOutOfOrderOnlyInALATERPairIsStillCaught, ONEStreamPermutedInABatchDoesNotIndictTheOTHER and aPermutationThatALSOOverlapsReportsBOTHNames. The defect is prose-only, hence minor."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/Invariants.java:191",
+      "severity": "minor",
+      "title": "The `order` violation's detail string is unpinned except for the stream key",
+      "failure_scenario": "The diff rewrites this detail message and attaches a comment justifying the rewrite (\"NO SEGMENT INDEX IN THE MESSAGE: `r` walks this STREAM's runs, not the delta's segments, and a single-segment delta with two runs of one stream reported 'segment 1' where no segment 1 exists\"). Nothing asserts the new wording, the sequence number or the two offsets. The only detail assertion in the suite is ONEStreamPermutedInABatchDoesNotIndictTheOTHER's contains(RA)/doesNotContain(RB). So the message a human reads when the 1,000-seed sweep of M4.13 fails can name the wrong chain entry, or report the offsets backwards, and the suite stays green -- the diagnostic points the reader at the wrong delta while the verdict itself stays right. Minor because no invariant name and no violation count changes.",
+      "mutation": "THREE MEASURED SURVIVORS against the full :sequencer:test suite: (1) `+ e.sequence() +` -> `+ 0L +` (every `order` violation claims sequence 0) SURVIVED; (2) swapping the two offsets in the message -- `inSegmentOrder.get(r)` and `get(r - 1)` exchanged in the string only -- SURVIVED, so \"a run starting at 4 follows one starting at 0\" is reported for the reverse fact; (3) restoring the exact pre-diff wording `\": segment \" + r + \" starts at \" ... \" after \"` -- the mislabel the comment says was fixed -- SURVIVED. Two further survivors are equivalent rather than gaps: LinkedHashMap -> HashMap (only reorders the returned list, which no test pins and no caller specifies), and guarding the order arm with `delta.segments().size() > 1` (CommitLog.commitSubmissions builds runs from a Map<RunKey,Long> per segment, so a single-segment delta cannot carry two runs of one stream)."
+    }
+  ],
+  "measured": {
+    "tree": "/tmp/binjava-review-trees/test-reviewer.3InHseHt (issued copy of the index)",
+    "command": "env -u GIT_INDEX_FILE GRADLE_USER_HOME=/tmp/binjava-review-trees/gradle-home ./gradlew :sequencer:test",
+    "baseline": "green at the staged bytes, including --rerun-tasks",
+    "mutations_run": 19,
+    "killed": [
+      "order -> I4 in the Violation: KILLED (5 fixtures)",
+      "the order comparison `<` -> `<=`: KILLED by TWOSegmentsStartingAtTheSAMEOffsetIsI2Alone",
+      "drop the `break` after reporting order: KILLED by aStreamOutOfOrderTWICEIsStillONEViolation",
+      "drop the offset-order sort (fold in segment order): KILLED by 4 fixtures",
+      "collapse: skip the offset-order fold for any stream that already reported order: KILLED by aPermutationThatALSOOverlapsReportsBOTHNames ALONE",
+      "inverse collapse: suppress the order report when the two runs overlap: KILLED by aPermutationThatALSOOverlapsReportsBOTHNames ALONE",
+      "anchor the comparison on get(0) instead of get(r-1): KILLED by aStreamOutOfOrderOnlyInALATERPairIsStillCaught",
+      "run the order check over delta.allRuns() instead of per stream: KILLED by ONEStreamPermutedInABatchDoesNotIndictTheOTHER",
+      "drop Math.max when advancing nextOffset: KILLED by InvariantsTest#theHIGHWATERMARKNEVERGOESBACKWARDSAfterARewind",
+      "drop the stream key from the order detail: KILLED by ONEStreamPermutedInABatchDoesNotIndictTheOTHER",
+      "sort the fold descending: KILLED by 8 fixtures",
+      "skip the first adjacent pair (r = 2): KILLED by 3 fixtures",
+      "the order arm never fires (`if (false)`): KILLED by 5 fixtures",
+      "report a rewind as gap instead of I2: KILLED by 9 tests across 4 classes"
+    ],
+    "reds": "all eight BatchedDeltaInvariantsTest fixtures that assert a name have a red in .harness/tdd/red.log that is a genuine AssertionError/AssertionFailedError at the line the CURRENT file asserts on (106, 189, 212, 236, 265, 292, 319, 348) -- not a compile failure and not a stale line number, so the re-mint was against the final file shape. Timestamps 2026-09-07 22:21-22:22, after the 21:44-21:54 reds of the two fixtures the rename did not touch.",
+    "weakened_assertions": "none -- containsExactly(\"I4\") -> containsExactly(\"order\") is the same strength, and the new fixture's containsExactlyInAnyOrder pins both names because violation ORDER is not a specified property"
+  },
+  "task": "M4.13f",
+  "role": "test-reviewer",
+  "staged_tree": "3d85e70a59801cfc45c5693d99fee35ac19fe343"
+}

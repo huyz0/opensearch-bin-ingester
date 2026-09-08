@@ -1,0 +1,37 @@
+{
+  "diff_sha256": "b70b1b180fda66f23ab0e38b7c9d12059a677c37cdf119eb7ac461a1bb34219a",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "minor",
+      "file": "AGENTS.md",
+      "summary": "The two-line fix restores reachability for this one document but plants no gate or regression check against recurrence; that index-registration.md is now reachable is established only by my manual BFS, not by anything that runs on every commit.",
+      "failure_scenario": "A later edit removes this AGENTS.md line (merge conflict, index reshuffle, another author reordering the list) or adds a new docs/internal/product/*.md file without linking it. check-links.sh still reports 'N relative markdown links resolve' unchanged, check-tdd/check-test-integrity have nothing to say about a prose file, and no pre-commit hook fails -- the orphan reappears silently, exactly as it did the first time in 2d74593."
+    },
+    {
+      "id": "F2",
+      "severity": "minor",
+      "file": "scripts/check-links.sh",
+      "summary": "Confirmed by reading the script: it only walks OUT from every markdown file and asserts each link target resolves (`[ -e \"$d/$t\" ]`, line ~29). It never accumulates which files were visited and never asks whether AGENTS.md's link graph covers the corpus, so it is structurally incapable of catching an orphan -- it is not that it 'missed' this case, it does not model the property at all.",
+      "failure_scenario": "N/A -- this is a design confirmation, not a mutation-style finding: the script cannot fail this class of defect no matter how production docs change, because 'every link resolves' and 'every doc is reachable' are different predicates over the same edge list."
+    },
+    {
+      "id": "F3",
+      "severity": "minor",
+      "file": "docs/internal/product/milestones/README.md",
+      "summary": "Ran a BFS from AGENTS.md over docs/internal/product/**/*.md, using the same link-parsing regex as check-links.sh and treating a bare directory link (e.g. decisions/) as reaching every .md one level inside -- matching how ADRs are intentionally indexed. Pre-diff: 2/29 product docs unreached (index-registration.md, milestones/README.md). Post-diff: 1/29 unreached. milestones/README.md is a live second instance of the exact defect class M0.9 fixes one occurrence of: roadmap.md links straight to milestones/M1/SPEC.md, and `grep -rl \"milestones/README\"` over the whole tree finds nothing. Correctly NOT touched by this diff (git.md rule 8 -- folding it in here would be scope creep) but it answers round-1 question 1 with a measured number rather than an argument, and shows a reachability gate would need either an allowlist entry for milestones/README.md or a link fixing it, before it could run clean.",
+      "failure_scenario": "Not a finding against this diff's correctness -- evidence that the orphan class is not hypothetical or a one-off: a second instance exists in the tree right now, unfixed, and no existing gate (check-links.sh, check-cross-refs.sh's future scope, or any gate in the generated table) would notice it either way."
+    }
+  ],
+  "notes": [
+    "Answering the three round-1 questions directly:",
+    "(1) Yes -- a ~10-line reachability BFS from AGENTS.md, reusing check-links.sh's own link-parsing regex, flips index-registration.md from unreached to reached across this diff, and simultaneously surfaces a second, currently-live orphan (milestones/README.md) that this diff correctly does not touch. False positives are contained to directories that are intentionally indexed one level down (decisions/, research/) -- both were reachable via their directory/README link with no extra allowlisting; milestones/ is the one case needing a decision (allowlist it as intentionally un-indexed, or link it) before the gate could run clean.",
+    "(2) Confirmed, not merely believed: check-links.sh (scripts/check-links.sh) only validates that link TARGETS exist on disk (`[ -e \"$d/$t\" ]`). It has no notion of which files were visited and cannot detect an orphan -- resolution and reachability are different predicates over the same edge set, and no existing gate in AGENTS.md's Gates table checks the second one.",
+    "(3) Recommend its own row rather than folding into M0.20. M0.20's stated scope (every M<n>/R<n> citation resolves, and no Completed row contradicts its own State cell) is a citation-resolution check in the outward direction; reachability is an inward-coverage check over a different graph (the docs corpus, not the M<n>/R<n> namespace) with a different failure mode (silence, not a wrong number) and its own allowlist design question (milestones/README.md). Bundling a third, structurally different check into one script risks the same 'reviewer had to be told to ignore it' drift M0.28 already named for a different gate. Since check-links.sh already owns the link-parsing mechanism, extending IT with a reachability pass (not writing a fourth parallel parser) is the cheaper non-negotiable-9 rung than a new script from scratch.",
+    "Verdict is 'pass' for the staged diff itself: it is a correctly-scoped two-line fix (git.md rule 8), the gates-that-already-passed list is consistent with that scope, and none of the above blocks THIS commit -- they are inputs to whether a new backlog row should be authored, which the requesting agent said explicitly it is not folding in here.",
+    "Reminder for the eventual commit body (git.md rule 4): if these minor findings are accepted rather than acted on immediately, the commit body must record them."
+  ],
+  "task": "M0.9",
+  "role": "test-reviewer"
+}

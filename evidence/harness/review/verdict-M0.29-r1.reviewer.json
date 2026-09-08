@@ -1,0 +1,54 @@
+{
+  "diff_sha256": "fc0f8f981116d12d11acf15b03d52e0fe9393fa88d8ee6b0fe243fed8328bd94",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "major",
+      "file": "scripts/check-gate-scope.sh:106",
+      "title": "the .tmp/probe probe reads the developer's global excludes file, so the gate can pass on a repository whose own .gitignore no longer ignores .tmp/",
+      "detail": "git check-ignore consults core.excludesFile (~/.config/git/ignore) as well as the repository's .gitignore. Reproduced: a repo whose .gitignore contains only 'build/', plus a user global ignore containing '.tmp/', gives `git check-ignore -q .tmp/probe` -> 0, so the gate prints ok. The old `.tmp` form returned 1 there, so this rewrite moves the check from 'always red in a fresh checkout' to 'green for a reason that is not in the repository'. That contradicts this script's own header (lines 3-8: 'its result depends on what else is on the disk -- which is not a gate') and the packet's lens for this change ('confirm it cannot pass vacuously'). Failure scenario: a contributor whose personal global ignore lists .tmp/ deletes '.tmp/' from .gitignore; the gate is green, the commit lands, and the next `git add -A` on a machine without that global ignore commits an upstream checkout. Fix is one flag, verified: `git -c core.excludesFile=/dev/null check-ignore -q .tmp/probe` returns 1 without the repo pattern and 0 with it. FreshCheckoutTest cannot catch this either, because gate() does not isolate HOME/XDG_CONFIG_HOME for the subprocess -- the checkout is fresh in files but not in the environment that decides this predicate's answer.",
+      "failure_scenario": "A contributor whose personal ~/.config/git/ignore lists '.tmp/' removes '.tmp/' from the repository .gitignore. check-gate-scope.sh prints ok (reproduced: repo .gitignore = 'build/' only + global ignore '.tmp/' gives `git check-ignore -q .tmp/probe` -> 0), FreshCheckoutTest stays green because it does not isolate HOME/XDG_CONFIG_HOME, the commit lands, and the next `git add -A` on any machine without that global ignore commits an entire upstream checkout -- the exact outcome the gate's own message names."
+    },
+    {
+      "id": "R2",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java:44-48",
+      "title": "the copy silently drops every tracked entry that is not a regular file, so the 'fresh checkout' is not the one a clone produces",
+      "detail": "`if (!Files.isRegularFile(src)) continue;` drops the repository's one tracked symlink (.claude/skills, mode 120000) with no assertion and no log, and would equally drop any path git ls-files renders quoted (core.quotePath, non-ASCII). Inert today because neither gate under test reads .claude/. It stops being inert the moment a third gate is added to this test -- check-portability.sh reads .claude/ -- and the failure mode is a green test over a tree that differs from a clone. `git checkout-index -a -f --prefix=<dir>/` reproduces modes and symlinks exactly in one command; I used it to build the fresh checkout for this review.",
+      "failure_scenario": "Someone adds check-portability.sh to FreshCheckoutTest. The tracked symlink .claude/skills was silently skipped by the isRegularFile guard, so the temp tree has no .claude/skills, and the test either fails on correct code or -- if the gate treats a missing adapter as nothing to check -- passes over a tree no clone would produce."
+    },
+    {
+      "id": "R3",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java:14-19",
+      "title": "the javadoc claims a measurement that cannot exist, and contradicts itself twelve lines later",
+      "detail": "'both failed on 100% of CI runs' -- there is no .github/ in the tree and M0.7 (the workflow) is still todo, so a reader cannot check that number against anything in the repository. Line 31-33 of the same javadoc gives the true provenance: 'They were found only by running the gates somewhere that had never run them.' Two incompatible provenance claims in one comment, one of them a percentage. AGENTS.md non-negotiable 4. Keep the second sentence and drop the first.",
+      "failure_scenario": "A future reader trying to reproduce '100% of CI runs' looks for .github/, finds nothing (M0.7 is still todo), and cannot tell whether the number was measured, estimated, or invented -- while the same javadoc says twelve lines later that the bugs were found by running the gates locally."
+    },
+    {
+      "id": "R4",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java:97-102",
+      "title": "the local named `repo` is the temp copy here and the real working tree in freshCheckout(), one line before a destructive write",
+      "detail": "freshCheckout() binds `repo` to Path.of(\"..\") -- the actual repository. harnessTestsCreatesItsLogDirectoryBeforeRedirecting binds `repo` to the throwaway copy, then does Files.writeString(repo.resolve(\"gradlew\"), \"...exit 7\"). The two meanings are three lines apart in the same file, and a line moved or copied between them overwrites the real ./gradlew with a stub. Rename the test-local to `fresh` or `checkout`.",
+      "failure_scenario": "An edit moves or copies `Files.writeString(repo.resolve(\"gradlew\"), ...)` into freshCheckout(), where `repo` is Path.of(\"..\") -- the real working tree. The repository's ./gradlew is overwritten with `exit 7`, and every subsequent gate and build fails for a reason that is not in any diff."
+    },
+    {
+      "id": "R5",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java:73-77",
+      "title": "gate() clears one environment variable where the sibling helper clears the class",
+      "detail": "ModuleGateTest.gate() clears GATE_SCOPE and CHECK_RANGE under a comment recording that env leakage from a developer shell and from CI produced a real false green ('aDocAlongsideASharedBuildFileStillEscalates PASSED with the SC2046 mutation applied'). The new gate() clears CHECK_RANGE only and lets GIT_INDEX_FILE, GIT_DIR and GIT_AUTHOR_* through. Verified: git exports GIT_INDEX_FILE=.git/index and GIT_AUTHOR_{NAME,EMAIL,DATE} to every pre-commit hook, which is the path this suite runs under. The relative value happens to resolve inside the temp repo, so it is benign today; an absolute GIT_DIR from any wrapper would point both `git init` and `git check-ignore` at the real repository and make both tests report on it instead. Same remedy as R1: clear the git environment for the subprocess.",
+      "failure_scenario": "Any wrapper that exports an absolute GIT_DIR (a git alias, an IDE runner, a future CI step) propagates it through gradlew into the test JVM and into gate(). `git init -q .` and `git check-ignore` inside the temp directory then operate on the real repository, both tests pass regardless of what the fresh checkout contains, and the suite reports green on a fresh-checkout regression it never examined."
+    },
+    {
+      "id": "R6",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:37",
+      "title": "the commit carries a second, unrelated backlog row",
+      "detail": "The M0.28 row is M0.7's split, not M0.29's. It is one line and harmless, but one task equals one commit (non-negotiable 1) means the diff for M0.29 should contain M0.29's row and nothing else; a reader bisecting for when M0.28 was raised lands on a commit about gitignored directories.",
+      "failure_scenario": "Someone bisecting or grepping the history for when M0.28 was raised lands on the commit whose subject and body are about gitignored directories and fresh checkouts, with no mention of review-lenses.sh, and concludes the entry was added by accident."
+    }
+  ]
+}

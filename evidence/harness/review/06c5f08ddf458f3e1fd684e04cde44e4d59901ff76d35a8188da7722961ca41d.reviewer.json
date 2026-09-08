@@ -1,0 +1,52 @@
+{
+  "diff_sha256": "06c5f08ddf458f3e1fd684e04cde44e4d59901ff76d35a8188da7722961ca41d",
+  "verdict": "changes-requested",
+  "summary": "Four new security types plus the M1 backlog rows. Two blocking: the M1 section was spliced into the middle of the M0.20 table row, destroying that row and mangling M1.2; and Credential.Bearer's generated accessor hands out the live secret array, defeating both the copy-on-construction invariant and the toString redaction. Three major: record equals/hashCode on a byte[] is identity-based, which breaks the obvious map-lookup implementation of the SPI it exists for; the package sits in `ingest`, which `client` (and therefore the plugin) cannot depend on, contradicting ADR-0021's own consequence; and the M1.0 row is marked done while claiming a write-path threading that the diff does not contain. No object-store request is added or moved by this change.",
+  "findings": [
+    {
+      "id": "F1",
+      "file": "docs/internal/product/backlog.md:59-92",
+      "severity": "blocking",
+      "title": "The M1 section was inserted into the middle of the M0.20 table row",
+      "failure_scenario": "M0.20's row now reads `... and no row under ` and terminates; 33 lines later a line beginning `## Completed` contradicts its own State cell. Review found all three by hand | \u2014 | todo |` resumes it. The insertion point was the literal string `## Completed` inside M0.20's backticks, not the heading. Consequences: (a) M0.20 is no longer a legible or greppable backlog row -- the task it describes, check-cross-refs.sh, is now unreadable to whoever picks it up; (b) line 92 renders as an `<h2>` named `Completed` immediately before the real `## Completed` at line 95, so the file has two Completed headings and the M1 table appears nested under M0.20 rather than as a peer of `## M0`; (c) M0.20's own subject is cross-reference integrity in this very file. check-links and build-index --check pass because every link still resolves and no generated region moved -- no gate sees a table row cut in half. The M1 section belongs between the end of the M0 table (after M0.19, line 93) and `## Completed`."
+    },
+    {
+      "id": "F2",
+      "file": "ingest/src/main/java/binjava/ingest/security/Credential.java:15",
+      "severity": "blocking",
+      "title": "Bearer.secret() returns the live internal array -- the copy-in defence is one-sided and the redaction is bypassable",
+      "failure_scenario": "The compact constructor clones on the way in, but the record's generated accessor `secret()` returns the stored array by reference, uncopied. Verified by running it on this JDK: `Bearer b = new Bearer(s); byte[] leaked = b.secret(); Arrays.fill(leaked, (byte)0);` then `b.matches(originalBytes)` returns FALSE. So the exact defect the constructor comment names -- 'a credential that changes under the holder is a live authentication bug' -- is reachable in one line through the public API, and the comment asserting the invariant is therefore false. Second consequence, and the one that matters for security.md rule 4 / ADR-0021 handling rule 3: the overridden toString redacts, but `log.info(\"cred {}\", new String(bearer.secret()))` or any Jackson/JSON serialisation that reflects over accessors prints the token verbatim. `bearerSecretNeverAppearsInToString` pins toString only, so this path is untested and unguarded. Fix by cloning in an explicit `secret()` override, or by making the component private to the type (drop the accessor from the API surface and keep `matches` as the only reader) -- the latter is preferable since no caller in this diff needs the bytes."
+    },
+    {
+      "id": "F3",
+      "file": "ingest/src/main/java/binjava/ingest/security/Credential.java:15",
+      "severity": "major",
+      "title": "Generated equals/hashCode over a byte[] component are identity-based, and the SPI's natural implementation is a map keyed on Credential",
+      "failure_scenario": "A record with a reference-typed component uses Objects.equals/Objects.hashCode, which for an array is reference identity. Verified on this JDK: `new Bearer(s).equals(new Bearer(s))` is false, and `map.put(new Bearer(s), p); map.get(new Bearer(s))` returns null. CredentialSource.authenticate(Credential presented) invites exactly that lookup -- it is how M2's FileCredentialSource will be written -- and it will authenticate nothing while the type looks like a value. It fails closed (401 for a valid credential), so the symptom is 'rotation broke auth' rather than a breach, but the repair an engineer reaches for under that pressure is `Arrays.equals` inside a HashMap-backed lookup, which reintroduces the timing oracle ADR-0021 handling rule 1 exists to forbid -- through equals(), where the isEqual in matches() no longer protects anything. This is a foreseeable trap the type should close now: either override equals/hashCode to be unusable (or contents-based via MessageDigest.isEqual plus a length-independent hash), or document at the type that Bearer must never be used as a map key and lookups go through matches().",
+      "notes": "Not the toString path the task flagged; that one is handled. This is the other generated member of the same record."
+    },
+    {
+      "id": "F4",
+      "file": "ingest/src/main/java/binjava/ingest/security/CredentialSource.java:14",
+      "severity": "major",
+      "title": "The SPI is in `ingest`, which `client` and `plugin` cannot depend on -- ADR-0021 says they authenticate through this same SPI",
+      "failure_scenario": "architecture.md line 38 gives `client` the dependency surface `format` alone, and `plugin` depends on `client`. ADR-0021 Consequences states 'The plugin authenticates to the gateway through the same SPI, with a principal bound to its cluster -- so a node can subscribe only within its own domain.' With Credential/Principal/CredentialSource in `binjava.ingest.security`, that consequence is unreachable: M1.11-M1.14 will either add a `client -> ingest` edge that check-module.sh refuses, or duplicate Principal in the consumer -- two types named for the same trust boundary, which is the divergence security.md rule 1 depends on not happening. check-module.sh passes today only because nothing outside `ingest` references these types yet, so the constraint bites at M1.12, not now. These four types have zero dependencies beyond java.base and are pure by construction; `format` (architecture.md line 34, 'nothing (pure)') is the module both `ingest` and `client` already depend on and is where they belong. If `ingest` is nevertheless the intended home, ADR-0021's plugin consequence needs amending in the same commit, since it is currently a documented decision the code cannot satisfy."
+    },
+    {
+      "id": "F5",
+      "file": "docs/internal/product/backlog.md:66",
+      "severity": "major",
+      "title": "M1.0 is marked `done` while its row and ADR-0021 both claim a write-path threading the diff does not contain",
+      "failure_scenario": "The row reads 'CredentialSource SPI + StaticCredentialSource + Principal; trust domain threaded through the write path', and ADR-0021 Consequences says 'the trust domain flows through the write path from day one'. Nothing in the diff threads anything: no method anywhere takes a Principal, no caller invokes authenticate(), and the write path (M1.6-M1.9) is `todo`. The two halves of the row are not deliverable in one commit, and the half that is not delivered is the half that carries the invariant -- a Principal nothing consumes constrains nothing. Marking the row done makes the backlog, which AGENTS.md calls authoritative, assert a property the tree does not have, and the natural reader of 'M1.0 done' at M1.9 is someone who will not re-check whether the writer takes a domain. Either split the threading clause into its own row against M1.6/M1.9, or leave M1.0 open until a call site consumes the Principal. Note also the M1.0 state cell is `done` in a commit that has not yet been made -- the row is being written ahead of its own commit."
+    },
+    {
+      "id": "F6",
+      "file": "docs/internal/product/backlog.md:70",
+      "severity": "major",
+      "title": "M1.2's unescaped pipe eats the Serves column -- FR-8 is dropped",
+      "failure_scenario": "The row is `| M1.2 | \\`LocalFsBinStore\\`, \\`putIfAbsent\\` via \\`O_CREAT\\ | O_EXCL\\` | todo |`. The SPEC has `O_CREAT\\|O_EXCL`; here a space was inserted after the backslash, so the backslash escapes the space and the pipe is a live cell delimiter. The row's four cells become ID=M1.2, Task=...O_CREAT\\, Serves=O_EXCL, State=todo -- FR-8 is gone and the Serves column now holds an open-flag name. Any consumer of the backlog's requirement traceability (including M0.20's future check-cross-refs.sh, which this same commit corrupted the row of) reads M1.2 as serving no requirement."
+    }
+  ],
+  "task": "M1.0",
+  "role": "reviewer"
+}

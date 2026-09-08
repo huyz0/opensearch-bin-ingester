@@ -1,0 +1,18 @@
+  PASSED  check-archive-row-size.sh
+  PASSED  check-dependency-licenses.sh
+  PASSED  check-diff-size.sh
+  PASSED  check-file-size.sh
+  PASSED  check-gate-scope.sh
+  PASSED  check-harness-tests.sh
+  PASSED  check-license-headers.sh
+  PASSED  check-links.sh
+  PASSED  check-metric-cardinality.sh
+  PASSED  check-module.sh
+  PASSED  check-mutants.sh
+  PASSED  check-portability.sh
+  PASSED  check-rule-citations.sh
+  PASSED  check-session-load.sh
+  PASSED  check-tdd.sh
+  PASSED  check-terminology.sh
+  PASSED  check-test-budget.sh
+  PASSED  build-index.sh --check

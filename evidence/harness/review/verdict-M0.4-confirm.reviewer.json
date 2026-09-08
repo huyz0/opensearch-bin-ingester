@@ -1,0 +1,34 @@
+{
+  "diff_sha256": "af5ecccc9f29ea8f2599e4bbdd7c96737c912c1bb1805d9e69c2d3a7c40bc256",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "B20",
+      "severity": "minor",
+      "file": "buildSrc/src/main/kotlin/binjava/DependencyLicensesTask.kt:124",
+      "summary": "The gate only ever looks at files whose name ends in `.jar` (`dependencies.files.filter { it.name.endsWith(\".jar\") }`, twice, plus a `.sha1`-only sweep of licenses/). Any other artifact type resolved into the build -- a distribution `zip`, a `tar.gz`, a native `.so`/`.exe` classifier artifact -- is skipped with no pin, no licence, and no message. Unlike the literal-coordinate hole on build.gradle.kts:22-26, this one is not documented anywhere. Carried forward unchanged from the previous round; not re-verified.",
+      "failure_scenario": "M0.16 adds the cluster-test tier and the catalogue gains an OpenSearch distribution archive, e.g. `opensearch-dist = { module = \"org.opensearch.distribution:opensearch\", version = \"3.8.0\" }` consumed as `@zip`. `licenseCheck` resolves it, the task's two filters drop it, the unused-sha sweep never mentions it because it only inspects `*.sha1` files, and `./gradlew dependencyLicenses` prints `ok 10 jar(s)` -- a green gate for a build that now pulls a multi-hundred-megabyte artifact nobody pinned or licensed. Either fail loudly on a non-jar entry (`problems += \"unhandled artifact type ...\"`) or state the jar-only assumption next to the catalogue-only one."
+    },
+    {
+      "id": "B21",
+      "severity": "minor",
+      "file": "buildSrc/src/main/kotlin/binjava/DependencyLicensesTask.kt:151",
+      "summary": "The denied-licence error tells the operator to \"record an exception in baselines/licenses.txt\" (build.md rule 3 says the same). Nothing reads that file: `baselines/` contains only `review.txt`, and neither the task nor scripts/check-dependency-licenses.sh mentions it outside the message text. The one instruction the message gives is inert. Carried forward; the message text was re-observed verbatim during this round's licence-gate spot-check.",
+      "failure_scenario": "Verified by executing the path: setting `assertj  GPL-3.0-only` in licenses/SPDX.txt fails `./gradlew dependencyLicenses` with exit 1 and the message `assertj-core-3.27.3.jar is GPL-3.0-only, which this project cannot ship -- build.md rule 2. Replace the dependency, or record an exception in baselines/licenses.txt.` An operator who does exactly what it says -- creates baselines/licenses.txt naming the dependency, the licence and the reviewer -- re-runs and gets the identical failure with no hint why. The only remaining way to proceed is to delete the identifier from the `denied` set in build.gradle.kts, i.e. weaken the gate to make the check pass, which is precisely AGENTS.md non-negotiable 2. Either implement the baseline read or drop the sentence and say the dependency must be replaced."
+    },
+    {
+      "id": "B22",
+      "severity": "minor",
+      "file": "buildSrc/src/main/kotlin/binjava/DependencyLicensesTask.kt:1",
+      "summary": "252 lines of enforcement logic (deny-list, sha comparison, prefixFor, the unused-pin and unused-prefix sweeps) with no test anywhere -- `grep -rl DependencyLicenses` outside the two source files finds only build.gradle.kts, build.md and review-lenses.sh. buildSrc/build.gradle.kts:8 claims \"buildSrc holds real logic now ... so it gets tests like anything else\", but the only buildSrc test is JavaTestParserTest, which constrains the parser. check-tdd.sh scans Java `@Test` declarations, so Kotlin gate logic is the one place the TDD gate cannot see; check-harness-tests.sh only requires the suite to report >0 tests, which the parser fixtures already satisfy. Carried forward unchanged; not re-verified.",
+      "failure_scenario": "Named surviving mutations, all of which leave `./gradlew -p buildSrc test` green, `./gradlew build` green and the task printing `ok 10 jar(s)`: (a) delete `denied.set(...)` from build.gradle.kts -- `denied` is a managed SetProperty whose default is the empty set, not an error, so every licence is accepted; (b) change `else if (spdx in denied.get())` to `if (false)`; (c) make `sha1()` return `expected`; (d) drop the `problems.isNotEmpty()` throw. Each is a gate that reports success while checking nothing, and nothing in the tree would notice. A `DependencyLicensesTaskTest` driving the action over a temp `licenses/` directory (one denied case, one sha-mismatch case, one missing-pin case) is a handful of assertions and would kill all four; today only an agent re-deriving them by hand does, once."
+    },
+    {
+      "id": "B24",
+      "severity": "minor",
+      "file": "buildSrc/src/main/kotlin/binjava.java-conventions.gradle.kts:103",
+      "summary": "The comment says the module jar on a test classpath alongside build/classes is 'a mutant-loading hazard for PIT at M0.14', and presents that hazard as avoided by keeping `project()` off the built-in `test` suite. It is not avoided there: `java-test-fixtures` implicitly adds `testImplementation(testFixtures(project))`, and the testFixtures component api-depends on the producing project, so the module jar arrives on the default `test` classpath anyway. Measured on the staged tree: `sourceSets.test.runtimeClasspath` for binstore-spi is `build/classes/java/test`, `build/resources/test`, `build/libs/binstore-spi-test-fixtures.jar`, `build/libs/binstore-spi.jar`. The comment's stated reason for the asymmetry between the built-in and registered suites no longer holds, and the asymmetry itself now buys nothing. This is a stale claim rather than a new regression -- `java-test-fixtures` was applied at the previous hash; the delta only made it functional -- but the comment is the thing a future author will trust.",
+      "failure_scenario": "At M0.14 PIT is wired to `test`. Because the module jar is on the runtime classpath, PIT can load an unmutated copy of a production class from the jar in preference to the mutated bytes served from build/classes/java/main, and mutants report as surviving (or, worse, as killed) for reasons unrelated to the tests. The author debugging it reads this comment, concludes the default suite is clean by construction, and looks at the registered suites instead. Fix is one line of prose, or removing the now-pointless asymmetry: state that the jar is on every suite's classpath via the fixtures capability and that PIT must be configured with an explicit `mutableCodePaths`/classpath filter."
+    }
+  ]
+}

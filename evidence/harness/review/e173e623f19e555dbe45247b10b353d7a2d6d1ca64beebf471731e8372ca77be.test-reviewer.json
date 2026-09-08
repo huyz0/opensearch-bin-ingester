@@ -1,0 +1,127 @@
+{
+  "diff_sha256": "e173e623f19e555dbe45247b10b353d7a2d6d1ca64beebf471731e8372ca77be",
+  "verdict": "changes-requested",
+  "role_note": "test-reviewer: the only question asked was 'would this test fail if the production code were wrong'. 38 mutations were applied to the staged bytes and run with --rerun-tasks --no-build-cache; every mutation was reverted and the source hash re-verified after each run.",
+  "method": {
+    "command": "./gradlew :sequencer:test --tests binjava.sequencer.FaultInjectingStoreTest --rerun-tasks --no-build-cache",
+    "baseline": "12 tests, 0 failures, suite time 0.18s",
+    "mutants_run": 38,
+    "killed": 24,
+    "survived": 14,
+    "driver_guard": "each run aborted unless the base hashes matched the staged blobs (FaultInjectingStore.java sha256 44370edb..., FaultInjectingStoreTest.java sha256 7a47f6a3...), and compared the source hash before and after gradle to detect any concurrent edit",
+    "isolation_check": "the five UNSTAGED files (Invariants, InvariantsTest, CommitProtocolSimulation, CommitProtocolSimulationTest, SimulatedClock) were temporarily parked outside the source tree and the full :sequencer:test suite was run against the staged tree alone: 15 test classes, 0 failures. All five files were restored and their sha256 verified with sha256sum -c."
+  },
+  "findings": [
+    {
+      "id": "T1",
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/FaultInjectingStoreTest.java:207-253",
+      "also": "sequencer/src/test/java/binjava/sequencer/FaultInjectingStore.java:92-94",
+      "title": "Nothing constrains WHICH stream each fault class is wired to. One shared Random for all three classes leaves all 12 tests green -- and that is defect #1 from this file's own history.",
+      "surviving_mutations": [
+        "FaultInjectingStore.java:92-94 -> `Random shared = new Random(scramble(seed, 1)); this.unreachableDraws = shared; this.ambiguousDraws = shared; this.duplicateDraws = shared;`  => 12/12 green",
+        "FaultInjectingStore.java:94 -> `this.duplicateDraws = new Random(scramble(seed, 1));` (alias stream 3 onto stream 1)  => 12/12 green",
+        "FaultInjectingStore.java:93 -> `this.ambiguousDraws = new Random(scramble(seed, 3));` (alias stream 2 onto stream 3)  => 12/12 green"
+      ],
+      "failure_scenario": "theTHREEFaultStreamsAreINDEPENDENTCoinsAndNotOnePhaseLocked measures FaultInjectingStore.scramble(seed, k) as a pure function with the literal stream numbers 1, 2 and 3 written into the test. It never observes the object, so it cannot see which stream each class actually draws from. A future refactor of the constructor -- extracting a helper and passing the wrong index, or collapsing three Randoms into one 'for simplicity' -- makes two or three fault classes perfectly correlated and the whole suite stays green. Then M4.13's sweep runs with phase-locked coins and criterion 1 ('each fault class has at least one seed where it changes the outcome') becomes unattainable for the correlated classes. The comment at test line 221-225 names this exact consequence for one of the three aliases -- 'unreachable throws BEFORE the duplicate branch is reached, so duplicatePut would fire exactly when it is unobservable, defeating criterion 1 for that class by construction' -- and the mutation it describes survives the test written to close it. Verified: adding pairs {1,3} and {2,3} DOES kill scramble-level collisions (folding stream 3 to 1 inside scramble, and ignoring the stream argument, are both killed), so the widening earned its keep; the gap is that the wiring from class to stream is on the other side of the seam the test chose.",
+      "what_would_close_it": "One assertion that goes THROUGH the store: hold the seed, drive a fixed call sequence with only unreachable enabled, then only ambiguousPut, then only duplicatePut, and assert the three per-class fault position sets are not equal to each other (they are, under every alias above, and they are not under the staged code). That is deterministic and needs no statistics."
+    },
+    {
+      "id": "T2",
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/FaultInjectingStoreTest.java:314-365",
+      "also": "sequencer/src/test/java/binjava/sequencer/FaultInjectingStore.java:168, 218, 220",
+      "title": "The new draw-order test constrains ONE of the three streams on ONE of the two write verbs. Its own comment claims it closes three round-4 mutations; it closes one of them.",
+      "surviving_mutations": [
+        "FaultInjectingStore.java:218 -> delete `fires(unreachableDraws, faults.unreachable());` from putIfMatch  => 12/12 green",
+        "FaultInjectingStore.java:220 -> delete `fires(duplicateDraws, faults.duplicatePut());` from putIfMatch  => 12/12 green",
+        "FaultInjectingStore.java:150 -> move `boolean duplicate = fires(duplicateDraws, faults.duplicatePut());` down to just above `if (duplicate)`, i.e. draw the duplicate coin lazily so a firing `unreachable` OR a firing `ambiguousPut` skips it  => 12/12 green"
+      ],
+      "failure_scenario": "ambiguousCallsWith (line 347) drives putIfAbsent only, and classifies by the throw, so it can observe the unreachable and ambiguousPut streams and nothing else. duplicatePut never throws, so its draw positions are invisible to the test -- which is why making that one draw lazy survives, even though it is the identical defect (a firing class shifting the classes after it) that the test's own header says it exists to pin. The two draws at FaultInjectingStore.java:218 and :220 exist for no other purpose than stream alignment -- a nine-line production comment says so, and says closing the putIfMatch gap later 'moves no other class's positions' -- and both can be deleted with the whole suite green. Concretely: once the lease path is exercised alongside the commit-log path (M4.13, and the M4.20 driver already in the tree), a deleted putIfMatch draw desynchronises the unreachable and duplicatePut streams by one draw per lease CAS, so toggling one class silently moves the others' positions and the per-class attribution criterion 1 requires is lost -- exactly the failure the file has now shipped three times. Note the test comment at line 318-321 asserts all three round-4 mutations are closed; only the lazy-draws-in-putIfAbsent one is (verified killed, at seed 0 alone).",
+      "what_would_close_it": "Extend the fixed call sequence in ambiguousCallsWith to interleave putIfMatch and stat/get/list calls, and record duplicatePut positions from injected() rather than from the throw (they are already in the record). The duplicate class is observable in injected() on the non-throwing path; only the classifier's reliance on the exception hides it."
+    },
+    {
+      "id": "T3",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/FaultInjectingStoreTest.java:368-393",
+      "title": "Injected.key is now pinned on the read path and for duplicatePut, but not on the write path for the two classes that throw.",
+      "surviving_mutations": [
+        "FaultInjectingStore.java:152 -> `injected.add(new Injected(\"unreachable\", \"\"));` in putIfAbsent  => 12/12 green",
+        "FaultInjectingStore.java:162 -> `injected.add(new Injected(\"ambiguousPut\", \"\"));` in putIfAbsent  => 12/12 green",
+        "FaultInjectingStore.java:225 -> `injected.add(new Injected(\"ambiguousPut\", \"\"));` in putIfMatch  => 12/12 green"
+      ],
+      "failure_scenario": "The read-verb test pins keys s/g/l and the duplicate test pins 'fresh', so three of six record sites name their key under test. The three write sites that matter most for debugging -- the ambiguous CAS on the lease and the ambiguous append to the commit log -- can record an empty key and no test notices. The stated purpose of the record (class javadoc: the only defence against a silent simulator) is to say what a run saw; a sweep that reports 'ambiguousPut on \"\"' cannot say which chain to look in, which is the debugging session the read-verb test's own message warns about. Cheap to close: the two existing ambiguous tests already have the key in hand ('k') and assert only kind().",
+      "note": "review.md rule 11 -- a minor on a pass lands and fixing it is usually wrong. Recorded here because it is one word per assertion in tests that already exist, not new prose."
+    },
+    {
+      "id": "T4",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/FaultInjectingStoreTest.java:105-133",
+      "also": "sequencer/src/test/java/binjava/sequencer/FaultInjectingStore.java:130-132",
+      "title": "theSameSeedInjectsTheSameFaultsSoAFailingRunIsAPermanentRegression only asserts self-consistency within one build. Nothing pins the draw sequence, so a seed pinned as a regression can stop reproducing silently.",
+      "surviving_mutations": [
+        "FaultInjectingStore.java:131 -> `return draws.nextFloat() < p;` (one next() call instead of two: every class's fault positions move, all seeds change)  => 12/12 green",
+        "FaultInjectingStore.java:131 -> `draws.nextDouble(); return draws.nextDouble() < p;`  => 12/12 green",
+        "FaultInjectingStore.java:131 -> `return draws.nextDouble() <= p;`  => 12/12 green"
+      ],
+      "failure_scenario": "The test compares kindsFor(42) to kindsFor(42) in the same JVM, which is true for any deterministic implementation including all three mutants. The property the class javadoc claims -- 'a failing seed is a permanent, named regression rather than a story about a flake' -- is stability across code versions, and no assertion pins it. So when M4.13 names seed 79 as a regression and someone later touches fires(), the named seed quietly stops reproducing the defect and the pinned regression test goes green having tested nothing. I judge the first two mutants behaviour-preserving for every property this file asserts (uniform coin, per-class streams, alignment) and only seed-mapping-changing; `<=` is equivalent to within 2^-53. That is why this is minor rather than major -- but it is the one property a single golden would nail: pin the kind sequence for one seed as an exact expected list, the way M4.3 pins the lease's byte sequence.",
+      "note": "review.md rule 11: recorded, not required."
+    },
+    {
+      "id": "T5",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/FaultInjectingStore.java:201-207, 231-254",
+      "title": "The non-faulting delegations are unconstrained: an argument swap and two dropped side effects all survive.",
+      "surviving_mutations": [
+        "FaultInjectingStore.java:202 -> `return delegate.getRange(k, b, a);` (arguments swapped)  => 12/12 green",
+        "FaultInjectingStore.java:245 -> delete `delegate.delete(keys);` (delete becomes a no-op)  => 12/12 green",
+        "FaultInjectingStore.java:253 -> delete `delegate.close();`  => 12/12 green"
+      ],
+      "failure_scenario": "The backlog row is honest that put, getRange, multipart and delete INJECT nothing; that is a documented scope decision and not what this finding is about. What is unconstrained is that they DELEGATE correctly. A swapped range on getRange makes every ranged read in a simulation return the wrong bytes or throw, and the harness -- not the protocol -- is the cause; a silently no-op delete makes any future compaction or GC test pass for the wrong reason. One test that puts an object through the decorator, range-reads a known slice, deletes it and asserts it is gone closes all three at once and costs about eight lines.",
+      "note": "review.md rule 11: recorded, not required. Also FaultInjectingStore.java:248 `capabilities()` returning null survives, same class of gap."
+    }
+  ],
+  "questions_the_task_asked": {
+    "is_25_seeds_enough_and_deterministic": "Yes to both, and 200 would buy nothing. The lazy-draw mutant it was written for is caught by seed 0 ALONE (verified: seeds<25 reduced to seeds<1, plus the lazy-draw mutation, still fails) and by 60 calls instead of 120 (verified: also fails). It is fully deterministic -- java.util.Random's algorithm is specified by its javadoc, every stream is seeded from `scramble`, there is no clock, no shared RNG and no iteration over a hash-ordered collection -- so there is no flake risk at 25 or at 1. The 200-seed measurement was the right way to establish the discriminator; carrying it into the committed test would have been 8x the runtime for no extra falsification.",
+    "does_ambiguousCallsWith_misattribute_by_reading_the_last_entry": "No, and the last-entry read is load-bearing. In putIfAbsent every throwing path appends exactly one Injected immediately before throwing (lines 151-154 and 155-164), MemoryBinStore never throws, and read(body) on a ByteArrayInputStream cannot -- so a caught IOException always corresponds to the last entry. A call cannot record two faults and throw: unreachable throws before the ambiguous branch, ambiguous throws before the duplicate block, and duplicatePut (the only non-throwing recorder) is therefore never appended in the same call as a throw. Proof that it is not decorative: replacing get(size()-1) with get(0) makes the test FAIL against the unmutated production code. Two robustness notes, neither a finding: the classifier is a two-way else, so a fourth kind added to putIfAbsent would be silently counted as ambiguousPut -- today that is safe because relabelling 'unreachable' to 'boom' in putIfAbsent IS killed by this very test; and the helper never asserts that injected() grew by one on the faulting call, which is the assertion that would make the invariant it relies on explicit.",
+    "is_the_read_verb_containsExactly_brittle": "No -- the order dependence is the point and it earns its keep. injected()'s javadoc promises 'in order', the three calls are sequential on one thread with no concurrency, and containsExactly(\"s\",\"g\",\"l\") is what kills swapping the recorded key for the wrong parameter (verified: recording `a` instead of `p` in list() is killed only by this assertion). A containsExactlyInAnyOrder here would be a weakening, not a robustness improvement.",
+    "clock_sleep_port_or_temp": "None. Neither staged file references Thread.sleep, System.currentTimeMillis, Instant.now, Clock, a socket, a port or a temp directory (grepped). Tiering is right: scramble and the Faults guard are T0 pure logic, everything else is T1 on MemoryBinStore/CountingBinStore per testing.md's tier table. @Timeout(60, SEPARATE_THREAD) is a deadlock guard, not a wait. Whole class runs in 0.18s (slowest test 0.076s), so the 20,000-seed decorrelation loop costs 0.032s and is not a budget concern."
+  },
+  "previous_round_findings": [
+    {
+      "previous": "1. MAJOR: 'all three drawn before any branch' had no test; surviving mutations were lazy draws in putIfAbsent, deleting either putIfMatch discarded draw, fires -> nextFloat() < p, an extra nextDouble() before the comparison.",
+      "status": "PARTIALLY CLOSED",
+      "detail": "Lazy draws in putIfAbsent is now killed (by aFIRINGClassDoesNotSHIFTTheStreamsOfTheClassesAfterIt, at seed 0 alone). Both putIfMatch discarded draws STILL survive deletion -- see T2. nextFloat and the extra nextDouble STILL survive -- see T4, where I argue they are equivalent mutants for every asserted property and downgrade them to minor."
+    },
+    {
+      "previous": "2. MAJOR: the `unreachable` class was never asserted to be RECORDED -- deleting injected.add(new Injected(\"unreachable\", key)) or relabelling it to \"boom\" left all tests green.",
+      "status": "CLOSED",
+      "detail": "Verified killed: dropping the record in putIfAbsent (killed by the draw-order test), relabelling it to 'boom' in putIfAbsent (killed by the draw-order test), relabelling all four sites (killed by both the draw-order test and theREADSideFaultsToo...), and dropping the record in stat (killed by theREADSideFaultsToo...)."
+    },
+    {
+      "previous": "3. minor: the decorrelation test compared only stream pair (1,2); aliasing stream 3 onto stream 1 survived.",
+      "status": "CLOSED for the scrambler, NOT CLOSED for the store",
+      "detail": "The added pairs {1,3} and {2,3} do earn their keep: folding stream 3 onto 1 inside scramble, and ignoring the stream argument entirely, are both now killed, and widening the tolerance band to (0, MAX_VALUE) makes the scramble-identity mutant survive again -- so the band is load-bearing too. But aliasing stream 3 onto stream 1 in the CONSTRUCTOR still survives, as does aliasing 2 onto 3, as does one shared Random for all three. Escalated to T1 (major) because the test that was widened cannot reach the wiring, and the test's own comment claims that alias is closed."
+    },
+    {
+      "previous": "4. minor: stat/get/list could each be made pure pass-throughs.",
+      "status": "CLOSED",
+      "detail": "All three pass-through mutations are killed by theREADSideFaultsTooAndEVERYClassRecordsWHICHKeyItHit, and so is recording the wrong parameter as the key in list()."
+    },
+    {
+      "previous": "5. minor: Injected.key pinned for duplicatePut only; List.copyOf(injected) -> injected survived.",
+      "status": "PARTIALLY CLOSED",
+      "detail": "List.copyOf is now killed by theInjectedRecordIsASNAPSHOTACallerCannotMutate. Keys are now pinned for the three read verbs as well as duplicatePut, but the three write-path record sites (unreachable and ambiguousPut in putIfAbsent, ambiguousPut in putIfMatch) can each record an empty key with the suite green -- see T3, still minor."
+    }
+  ],
+  "what_is_strong": [
+    "Both ambiguous-landing arms are pinned: deleting the landing write in putIfAbsent and in putIfMatch are each killed by their own test. That is the file's defining property and it is genuinely constrained on both write verbs.",
+    "The duplicatePut class is now observed at the DELEGATE, not at the return value: deleting the second putIfAbsent, returning the retry's Optional instead of the first, negating the condition, and blanking the key are all killed. CountingBinStore is the right instrument for this and using it beats a mock (testing.md rule 18).",
+    "The probability guard is constrained three ways: deleting its body, rewriting it as the naive p < 0 || p > 1 (which accepts NaN), and replacing the message with a constant are all killed. NaN and the accepted endpoints are both covered.",
+    "Unseeding the Randoms is killed by two independent tests, so the determinism claim is not resting on a comment.",
+    "The negative control (Faults.none() injects nothing over 200 calls) kills fires -> always-true, and fires -> always-false is killed by 8 of the 12 tests. No test in the file passes vacuously: every one of the 12 was observed failing under at least one mutation."
+  ],
+  "process_note_not_a_test_finding": "review.md rule 12b -- the tree was edited by another process WHILE this review ran. One mutant run compiled a FaultInjectingStoreTest.java containing 13 tests including one named EVERYClassDrawsOnEVERYFaultingCallSoNoClassCanBeSkippedSilently, which is in neither the index nor the working tree before or after; my driver flagged the source hash changing across that run and I re-ran every surviving mutant afterwards against verified staged hashes, so no finding here rests on the corrupted run. The verdict is bound to e173e623f19e and the working tree matches the index for both staged files. If the author is mid-revision, this verdict describes the bytes staged at e173e623f19e and nothing else.",
+  "task": "M4.12",
+  "role": "test-reviewer"
+}

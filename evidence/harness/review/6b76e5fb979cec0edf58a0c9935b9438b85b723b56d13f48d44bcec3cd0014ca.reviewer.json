@@ -1,0 +1,50 @@
+{
+  "diff_sha256": "6b76e5fb979cec0edf58a0c9935b9438b85b723b56d13f48d44bcec3cd0014ca",
+  "verdict": "pass",
+  "summary": "ADR-0036 decides the key, the minting site and both formats, and every tree fact it rests on was re-measured and holds. Round-13 F1 and F2 are both fixed: the acceptance-criteria list parses as 12 unique numbers 1-12, and criterion 6 no longer claims 'always answered' on the ambiguous path. Four minors, none blocking.",
+  "verified": [
+    "SPEC acceptance criteria parse as exactly 12 criteria numbered 1..12 with no duplicate, using check-milestone-verified.sh's own regex over the '## Acceptance criteria' section (F1 closed).",
+    "LocalSequencer.java:346-354: `writer.observe(requests)` runs only after `log.commitAll(requests)` returns, so criterion 6's ambiguous-commit clause is true as written (F2 closed).",
+    "CheckpointWriter.java:105-106 is the javadoc 'the only place the writer can see podId and flushSeq, which the chain does not carry' -- the blind-spot site is real and correctly located.",
+    "CheckpointWriter.java:129 `pods.merge(request.podId(), request.flushSeq(), Math::max)` carries the comment the M4.10d note describes, and the depth-one failure the note predicts is arithmetically right: after a restart, max(7,0)=7 leaves flushSeq 1 refused.",
+    "Cited sites hold: Sequencer.java:35/46/50, CommitRequest.java:19/35-36, Checkpoint.java:32, FakeSequencer.java:27/29, FakeSequencerTest.java:178, IngestCommitPathTest.java:81, CommitProtocolSimulation.java:58, CommitProtocolSimulationFlushSeqTest.java:23.",
+    "Format claims hold: Checkpoint.decode is a strict `version != VERSION` equality (line 151); CheckpointDecodeRefusalTest sets bytes[7]=1; SegmentKey.MAX_KEY_BYTES=1024; CheckpointTest asserts <64 KiB at 1,600 streams with the ~38 KiB body; golden/chain-delta-batched-v1.bin contains `bins/a.seg`,`bins/b.seg` and GoldenChainEntryTest asserts byte-identity on both goldens.",
+    "Fixture claims hold: BatchedCommitDeltaTest round-trips three segments with isEqualTo(original); BatchingSequencerTest:259-261 asserts only hasSize(2) on the two-pod delta with from(\"pod0\",0)/from(\"pod1\",0); the three-pod per-segment case at :152 is `new CommitRequest(\"pod\" + pod, 0, ...)`.",
+    "M4.46 is a real defect, not an invented row: SegmentPublisher.java:130-141 puts unconditionally on the 'unique WITHOUT coordination' comment, and the key's timestamp is the segment header's createdAt, written from Accumulator.firstAppendMillis.",
+    "ADR-0031 is characterised accurately -- it rejects a nonce in `Lease` for two LIVE processes and says nothing about idempotency -- so ADR-0036 does not overturn it silently.",
+    "Cost, steady state: detection is an in-memory comparison, recovery reads objects ChainReplay.applyChain already GETs, the idle path is untouched, and the commit-path PUT rate is unchanged. cost.md `one fetch per object per node` is honoured by the at-most-one-GET-per-distinct-(epoch,sequence) rule."
+  ],
+  "findings": [
+    {
+      "id": "F1",
+      "file": "docs/internal/product/milestones/M4/SPEC.md:456-462",
+      "severity": "minor",
+      "title": "The new GET clause was inserted mid-sentence, leaving a dangling duplicate of the saturation sentence",
+      "failure_scenario": "Criterion 9 now reads: line 456 '\u26a0\ufe0f The saturation clause matters: \"unchanged\" alone is' (sentence stops there), then the new AND-NOR-DOES-THE-REPLAY-ANSWERING-GET block at 457-461, then line 462 repeating '\u26a0\ufe0f The saturation clause matters: \"unchanged\" alone is' and completing it at 463. A reader of criterion 9 -- M4.15 enumerating criteria for VERIFIED.md, or the M4.10d session reading its GET bound -- hits a truncated sentence and can attach the saturation qualifier to the GET clause, which it does not qualify. The fix is the deletion of line 456, not new prose, so it does not manufacture a round-15 surface."
+    },
+    {
+      "id": "F2",
+      "file": "docs/internal/product/milestones/M4/SPEC.md:457-461 and docs/internal/product/decisions/0036-the-idempotency-key-carries-an-explicit-pod-incarnation.md:173-177",
+      "severity": "minor",
+      "title": "Criterion 9's headline claims the replay GET does not scale with pods; the ADR's own Consequences says it can, and only the coalesced case is pinned",
+      "failure_scenario": "The ADR states 'the retry path costs one GET per distinct pointed delta, so pods whose last-applied commits sit in DIFFERENT objects cost one GET each'. Criterion 9's inserted headline is 'AND NOR DOES THE REPLAY-ANSWERING GET' [scale with pods], and its operative bound is one GET per distinct (epoch, sequence). Concretely: six pods evicted from one AZ retry in one commitAll, and because their last-applied commits landed in six different batch windows, the batch issues six GETs -- one per pod. That passes the literal bound (six distinct pointers), and the T1 row only fixes the workload where the six pointers SHARE one delta, so no test in the matrix ever measures the divergent case. The GET is on the retry path rather than the steady-state path and cost.md's one-fetch-per-object-per-node still holds, which is why this is minor and not major -- but the criterion's headline is stronger than what the ADR supports and stronger than what the matrix checks."
+    },
+    {
+      "id": "F3",
+      "file": "docs/internal/product/milestones/M4/SPEC.md:452-464",
+      "severity": "minor",
+      "title": "Folding the GET bound into criterion 9 means check-milestone-verified.sh accepts one evidence line for two independent bounds",
+      "failure_scenario": "The gate keys on the numbered criteria only (`^\\s*(-?\\d+)\\.\\s+` inside '## Acceptance criteria'); it never reads the test matrix. With the replay-GET bound folded into criterion 9 rather than numbered, M4.15 can write '9. CommitBatchingCostTest' in VERIFIED.md, the gate goes green, and the replay-answering GET bound is never demonstrated by anything. The fold was the right call against renumbering five live citations, so this is the cost of that choice rather than a mistake -- but it is a real hole in the one gate that forces enumeration, and it is not visible from the criterion text."
+    },
+    {
+      "id": "F4",
+      "file": "docs/internal/product/decisions/0036-the-idempotency-key-carries-an-explicit-pod-incarnation.md:188-193",
+      "severity": "minor",
+      "title": "The checkpoint size argument quantifies bytes per pod but never bounds the pod count",
+      "failure_scenario": "'about 32 bytes per pod ... does not approach the remainder' is measured against CheckpointTest's <64 KiB assertion whose ~38 KiB body is 1,600 STREAMS and zero pods. The remainder is ~26 KiB, i.e. ~800 pods, and the ADR widens each pods entry from one uvarint to ~32 bytes without saying what bounds the number of distinct podIds a checkpoint may carry. A fleet of ~1,000 ingester pods -- or a deployment whose podShortIds are not reused across restarts, which the ADR's own rejection of pod-id qualification assumes away rather than establishes -- produces a checkpoint past the size the cited test bounds, and no fixture in M4 varies the pod count in a size assertion, so nothing catches it. Size, not rate, hence minor."
+    }
+  ],
+  "task": "M4.10b",
+  "role": "reviewer",
+  "staged_tree": "3b482d780c1f2e9f431326fb7b6cdd2ca2eddbdc"
+}

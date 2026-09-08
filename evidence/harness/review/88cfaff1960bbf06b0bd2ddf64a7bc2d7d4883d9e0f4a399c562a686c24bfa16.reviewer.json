@@ -1,0 +1,15 @@
+{
+  "diff_sha256": "88cfaff1960bbf06b0bd2ddf64a7bc2d7d4883d9e0f4a399c562a686c24bfa16",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "M4.3k-R1",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/LeaseManager.java:408-427",
+      "summary": "No test (existing or new) re-locks the SAME LeaseManager instance after release() returns, in either the uncontended (tryLock succeeds) or contended (takeOrFail) branch. Every test that calls release() then does a follow-up acquire uses a DIFFERENT manager instance (a fresh BoundedLock). So a boolean-negation mutant of the new fast path -- `if (lock.tryLock()) { lock.takeOrFail(...); }` instead of `if (!lock.tryLock())` -- is only caught in the CONTENDED case (it skips locking entirely and unlock() throws IllegalMonitorStateException, failing the new concurrency/lock tests). In the UNCONTENDED case the same mutant reenters the lock via takeOrFail (legal, since ReentrantLock is reentrant), finally unlocks once, and leaves the lock permanently held with hold-count 1 -- and nothing in the suite would notice, because nothing calls tryAcquire/renew/release again on that instance afterward.",
+      "failure_scenario": "A future edit to the fast path accidentally inverts the condition (or reorders the branches) in the common, uncontended case. The whole suite stays green because no test exercises 'release(), then take the same instance's lock again' when uncontended. In production this manifests as a pod whose release() call quietly wedges its own BoundedLock: the same instance's next tryAcquire/renew/release blocks for its full bound and then times out, even though nothing else is contending -- observable only under a real rolling restart, not in CI."
+    }
+  ],
+  "task": "M4.3k",
+  "role": "reviewer"
+}

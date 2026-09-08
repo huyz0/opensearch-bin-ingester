@@ -1,0 +1,39 @@
+{
+  "diff_sha256": "b9d1e1e0a98f3bab5a7030ff1ddb6b14c279d1e6d5f6d3732598fde8a48c3153",
+  "verdict": "pass",
+  "summary": "13 mutations applied to CommitLog.java and run (sequencer suite, and the full 490-test suite where a call site outside the module could have caught it). The fencing property, the epoch's zero-padding, the 2-arg default, epoch() and the negative-epoch guard are each killed by a named test. Two minors, both with measured surviving mutations. No existing assertion was weakened: the test diff is 96 insertions, 0 deletions.",
+  "measured": {
+    "baseline": "490 tests, 0 failures, 0 skipped (./gradlew test) before and after all mutations; git diff clean, staged sha unchanged",
+    "kills": [
+      "logPrefix() ignores the epoch (hardcoded 0/0): kills aFencedWriters..., twoEpochs..., epochPrefixesSort..., theKeyCarries...",
+      "recover() lists the PARENT prefix ctl/log/0/: kills aFencedWriters..., twoEpochs...",
+      "keyFor() hardcodes 0/0 on the WRITE side only: kills aFencedWriters..., recoveryRebuildsOffsetsFromTheLogAlone",
+      "epoch %016x -> %x: kills theKeyCarries..., epochPrefixesSort...",
+      "epoch %016x -> %016X: kills theKeyCarries... only",
+      "2-arg ctor delegates to epoch 1: kills theTwoArgConstructorIsEpochZero..., theChainReportsWhichTermItBelongsTo",
+      "epoch() returns constant 0: kills theChainReportsWhichTermItBelongsTo only",
+      "guard deleted, and guard boundary epoch<0 -> epoch<-1: each kills aNegativeEpochIsRefused",
+      "recover() falls back to the previous epoch when its own chain is empty: kills twoEpochs... ONLY -- so that test is not redundant with its sibling"
+    ],
+    "red_records": "spot-checked .harness/tdd/red.log: each of the 16 CommitLogTest reds at source sha 965e4fad4982 is a single-test AssertionFailedError at a load-bearing line (e.g. offsetsAreMonotonic at :44, theKeyCarries at :205, twoEpochs at :262, aFencedWriters at :285), not a compile error or a mass failure. theTwoArgConstructor's red is timestamped 23s after the others, consistent with the backlog row's account that it first passed against the skeleton.",
+    "not_verified": "The row's clusterTest claim was not re-run here (Docker/T4, on demand). plugin/build/reports/tests/clusterTest shows 9 tests / 0 failures / 30.8s dated today 11:10; I could not establish which source state it ran against, because my own mutation restores clobbered CommitLog.java's mtime.",
+    "backlog_row": "checked and accurate where checkable: 490 tests; 17 two-arg call sites (16 with a literal prefix plus DefaultIngest's `new CommitLog(store, prefix)`); LeaseManagerTest#theFirstAcquisitionStartsAtEpochZero exists and asserts epoch 0, so the M4.4b collision it describes is real and its citation resolves.",
+    "earlier_open_finding": "The round-1 major (epoch 0 means both 'no lease' and 'first term') is a design collision owned by the production reviewer. From the test side it is addressed honestly: no test in the tree wires a Lease into CommitLog, so nothing asserts the collision away, and theChainReportsWhichTermItBelongsTo names M4.4b in its own assertion description. Not re-raised here."
+  },
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitLogTest.java:195",
+      "title": "The test named 'theKeyCarries...' asserts logPrefix(), not the key -- keyFor() is pinned by nothing in the tree",
+      "failure_scenario": "keyFor() is the line this diff rewrote (from one literal format string to logPrefix() + \"%016x.delta\"), and the task's acceptance criterion states the key becomes ctl/log/0/<epoch:016x>/<seq:016x>.delta. The <seq:016x> and .delta halves of that criterion have no test. Measured on the FULL 490-test suite, both green: (a) drop the suffix -- `\"%s%016x\"` instead of `\"%s%016x.delta\"` -- 490 tests, 0 failures; (b) unpad the sequence -- `\"%s%x.delta\"` -- 490 tests, 0 failures. So a typo in the key grammar, which is a wire value that outlives the process, lands silently; and the padding the javadoc calls load-bearing (\"like the sequence beside it, so lexicographic order is numeric order\") is asserted for the epoch and not for the sequence. Nothing breaks today because reads and writes both go through keyFor and recover() folds offsets with a max-merge, which is why it is minor and not major -- and the gap is inherited from M1 rather than introduced here. One assertion on keyFor(0) and keyFor(255) closes it; keyFor is package-private and the test is in the same package."
+    },
+    {
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitLogTest.java:251",
+      "title": "twoEpochsWriteToDisjointPrefixes... asserts only zeros, so it cannot tell 'fenced' from 'recovery reads nothing'",
+      "failure_scenario": "Both assertions are isZero(), which is also the state before recover() ever ran. Measured, this test alone survives: (a) recover() with an empty body -- passes; (b) keyFor() hardcoding /ctl/log/0/0/ on the write side while logPrefix() stays epoch-aware, so every epoch writes to one chain -- passes. Both are killed by aFencedWriters... and by recoveryRebuildsOffsetsFromTheLogAlone, so the suite is safe; the weakness is that the test which names the fencing property is the one that would stay green if fencing were achieved by recovery being broken. Counter-evidence recorded so this is not overstated: it is the ONLY test that kills the most plausible wrong implementation -- recover() falling back to epoch-1's chain when its own is empty, which is roughly what M4.5's CONTINUE will do -- so it earns its place. A positive control in the same test (commit under epoch 1, recover a second epoch-1 log, assert it sees 2 while still seeing none of epoch 0's 4) would make it self-sufficient."
+    }
+  ],
+  "task": "M4.4",
+  "role": "test-reviewer"
+}

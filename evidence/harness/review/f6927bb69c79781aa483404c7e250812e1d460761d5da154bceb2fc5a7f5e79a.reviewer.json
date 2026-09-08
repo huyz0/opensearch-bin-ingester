@@ -1,0 +1,58 @@
+{
+  "task": "M4.10",
+  "role": "reviewer",
+  "round": 10,
+  "verdict": "pass",
+  "diff_sha256": "f6927bb69c79781aa483404c7e250812e1d460761d5da154bceb2fc5a7f5e79a",
+  "summary": "Decomposition-only commit (no code). The round-9 major is cleanly resolved: the false COST-gap clause is gone, no sentence in the M4.10 region references it (the word 'tail' no longer appears there), and the sentence now terminates on two claims I verified against the tree. The new rounds:M4.10 baseline claims check out against the source: cost.md R6 is the index axis and no rule names pods as an axis; SegmentCommit carries a rendered SegmentKey containing podShortId; ChainReplay.applyChain GETs every entry from the seeded checkpoint forward; no format record carries flushSeq. Three minors, all recordable under review.md minors-land rather than fixed -- fixing any of them adds prose whose reason becomes round 11's finding, which is the exact habit this entry documents.",
+  "verified": [
+    "format/src/main/java/binjava/format/RunCommit.java:19 -- record RunCommit(RunKey key, int recordCount, long firstOffset) with lastOffset(); 'each RunCommit carries the original offsets' is true.",
+    "format/src/main/java/binjava/format/SegmentCommit.java:26 -- record SegmentCommit(String segmentKey, List<RunCommit> runs), segmentKey non-empty; SegmentKey.render emits '<ts>-<podShortId>-<seq16hex>-h<len>-<filter>' and the constructor forbids '-' and '/' in podShortId, so podShortId and the per-pod sequence are recoverable from every SegmentCommit. Round 8's 'CommitDelta carries no pod attribution' is indeed false.",
+    "sequencer/src/main/java/binjava/sequencer/ChainReplay.java:361-390 -- applyChain LISTs from keyFor(hop.from()-1) and GETs every entry key past it; crossFromCheckpoint seeds hop.from() = checkpoint.sequence(). Harvesting pod state from those entries is free; entries below the checkpoint are never listed or GET, so 'the checkpoint absorbs everything before it' holds.",
+    "docs/internal/standards/cost.md:36 -- R6 is 'Commit/metadata write rate is independent of index count' (index axis). The invariant block lists segments/AZs/nodes and records/shards/partitions/indices/documents; pods appear on neither axis list, so no rule citation was available for the per-pod commit-rate bullet.",
+    "grep flushSeq over format/src/main: it appears only in two comments in Checkpoint.java, in no encoded field -- 'a chain missing flushSeq is an information gap' and 'Only flushSeq is absent from the chain' both hold.",
+    "sequencer/src/main/java/binjava/sequencer/CheckpointWriter.java:78,129 -- pods is a plain HashMap merged per request with Math::max and never evicted; Checkpoint's constructor validates only non-blank pod ids and non-negative values, and decode reads length-prefixed strings, so 'qualifying the key inside Checkpoint.pods's existing String changes no format' is true and 'the pods map has no eviction' is true.",
+    "ingest/src/main/java/binjava/ingest/DefaultIngest.java:63,349 -- flushSeq is an instance field incremented unconditionally at the single issuance site; nothing constructs BatchingSequencer outside sequencer/src/test.",
+    "format/src/main/java/binjava/format/Checkpoint.java:151 and CheckpointCursor.newest -- version mismatch throws IOException and newest has no catch, so it propagates as BinStore's 'store unreachable'. ADR-0031 is about two live same-podId processes racing epoch 1 at the lease level, so 'adjacent, not answer' is an accurate characterisation. Roadmap M5 does own commit forwarding, so the M4.10 row's warning against inheriting the lease epoch is sound.",
+    "No claim in the diff asserts a request rate that scales with records, shards, partitions or indices. M4.10b's third property forbids a commit-path request scaling with pods, names the concrete ctl/pods/<podId> shape that would violate it, extends it to GETs via the backwards walk, and correctly exempts the segment path per ADR-0017."
+  ],
+  "findings": [
+    {
+      "id": "R10-1",
+      "severity": "minor",
+      "file": "baselines/review.txt:28",
+      "title": "The recorded TRUE reason for the fold is sufficient but is not the binding one",
+      "detail": "The entry records 'the fold exists because the checkpoint ABSORBS everything before it, so a replay older than the newest checkpoint has nothing left on the chain to read.' That statement is true and I verified the mechanism (ChainReplay.applyChain never reads below hop.from()). But it is a conditional reason: it would bind only in a world where the chain carried flushSeq at all. The unconditional reason is stated two paragraphs away in the M4.10d row -- 'Only flushSeq is absent from the chain' -- and again in production at CheckpointWriter.java:105-106, 'the only place the writer can see podId and flushSeq, which the chain does not carry'. So the fold is forced by the information gap first and by checkpoint absorption only second.",
+      "failure_scenario": "A later session auditing the round cap reads this entry, concludes the fold's necessity rests on checkpoint truncation, and reasons that a K=0 or per-commit-checkpoint configuration would make the fold unnecessary -- reintroducing the process-local lastAppliedFlushSeq the row exists to remove. The failure is silent: dedup passes every in-process test and duplicates ship on the first takeover.",
+      "recommendation": "Record, do not rewrite. Rewriting this sentence adds a fourth reason beside a correction, which is the precise habit rounds 7-9 established and this entry names."
+    },
+    {
+      "id": "R10-2",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:184",
+      "title": "The d-depends-on-c edge is never stated, only implied",
+      "detail": "Carried from round 9. The ordering paragraph says 'M4.10d is blocked by M4.10b' and backlog.md's M4.10d row says 'DEPENDS on b's answer'. But the carrier for flushSeq, if b decides one is needed, is shipped by M4.10c, and no text says d is then blocked by c as well. The clue is present ('returning the original offsets across a takeover needs a carrier for flushSeq') but the dependency edge is left for the reader to derive.",
+      "failure_scenario": "b lands deciding a carrier field is required; a session picks d next because the only blocker named is b, implements the refusal, and cannot satisfy 'must return the original offsets' -- discovering mid-task that c is a prerequisite, and either stalling or widening d to include the format change that non-negotiable 8 requires land atomically with its ADR and goldens.",
+      "recommendation": "Land in the commit body under review.md minors-land."
+    },
+    {
+      "id": "R10-3",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:220",
+      "title": "The no-growth property and the free-looking qualification sit in separate bullets and are never joined",
+      "detail": "Carried from round 9. Property 2 says no object may grow with history and that CheckpointWriter's pods map has no eviction. Property 6 says qualifying the key inside Checkpoint.pods's existing String changes no format at all. Both are true and I verified both against the code. Their conjunction is the interesting fact and it is nowhere stated: a key qualified by pod incarnation makes the pods map gain one permanent entry per restart of every pod, which is growth with history -- so the cheapest-looking answer to the ADR fails the second property it was reached for.",
+      "failure_scenario": "The ADR picks 'qualify the pod id string, no format change' because property 6 presents it as free, and property 2 is read as being about the segment index rather than about the pods map. A long-lived cluster then grows its checkpoint by one pods entry per pod restart forever, which is the unbounded object ADR-0033 exists to forbid, and the growth is invisible until checkpoint size shows up in takeover latency.",
+      "recommendation": "Land in the commit body under review.md minors-land. Do not add a joining sentence: it would be a new mechanism claim inside a row whose remaining defects have all been mechanism claims."
+    },
+    {
+      "id": "R10-4",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/CheckpointWriter.java:105",
+      "title": "The corrected claim has a duplicate in production javadoc that no row points at",
+      "detail": "The rounds entry rightly calls 'CommitDelta carries no pod attribution' false. The same assertion lives in the tree as CheckpointWriter's javadoc: 'it is the only place the writer can see podId and flushSeq, which the chain does not carry' -- true of flushSeq, misleading of podId, which every SegmentCommit's segment key contains. CommitLog.java:256 states the narrow version correctly ('the log never READS podId or flushSeq'). No row in this decomposition mentions the CheckpointWriter wording, and M4.10d is the task that will edit that file.",
+      "failure_scenario": "M4.10a's own rounds entry records the failure mode exactly: a fact is corrected in one place and its duplicate survives. A session implementing M4.10d reads that javadoc, believes the chain has no pod attribution at all, and rules out the chain-side half of any mechanism b chose -- or leaves the sentence in place, so the next reader inherits the claim this round just retired.",
+      "recommendation": "Body note only. Editing production javadoc in a no-code decomposition commit would widen scope; the natural place is M4.10d, which touches the file."
+    }
+  ],
+  "staged_tree": "20c64cc90b44fb25bc59205ade46d31e597fa0ab"
+}

@@ -1,0 +1,41 @@
+{
+  "diff_sha256": "d54402165603b6c4687d3f547e0f6050a3d73c13082944baa9afd903e601e172",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "R16",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java:178",
+      "summary": "`// TR3:` is a review-round finding ID committed into source. It resolves to nothing in the tree -- review findings live in .harness/review/, which is gitignored and local to the machine that ran the review. It is also the only `T<n>`-shaped token in any .java/.sh/.kts file that is NOT a test tier: every other one (T0-T4 in binjava.java-conventions.gradle.kts, tdd-red.sh) means the tier vocabulary from testing.md.",
+      "failure_scenario": "A successor reading the last assertion wants to know why it exists, greps `TR3` across the repo, and gets exactly one hit -- this comment. Reading `TR3` as `T3` (the container tier, which is what T3 means everywhere else in this repository) they conclude the assertion is tier-related and either move it or drop it, taking with it the only assertion that the gate reports the stub's failure at all."
+    },
+    {
+      "id": "R17",
+      "severity": "minor",
+      "file": "buildSrc/build.gradle.kts:53-55",
+      "summary": "The paragraph 'An earlier version of this comment credited a check-gate-scope test that has since moved to M0.31, and carried a \"Measured:\" for it' describes a version of the comment that exists in no commit -- the declaration and the comment arrive together in this diff. It is honest about the session but asserts a repository history the repository does not have.",
+      "failure_scenario": "A successor doing archaeology on why `rootGitignore` is declared runs `git log -p -- buildSrc/build.gradle.kts` or `git log -S rootGitignore`, finds one commit and no earlier version, and concludes either that history was rewritten or that the comment belongs to a different file -- spending the budget the comment was written to save. The correcting sentence in the same paragraph ('The declaration was right and its stated reason was not') is the part worth keeping; the reference to an uncommitted predecessor is not."
+    },
+    {
+      "id": "R18",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java:44",
+      "summary": "`dir` is interpolated unquoted into a shell command string: `\"git ls-files -z | tar --null -T - -cf - | tar -C \" + dir + \" -xf -\"`. Every other path in this class is passed as a ProcessBuilder argument or a Path; this one crosses a `bash -c` word-splitting boundary bare.",
+      "failure_scenario": "JUnit's @TempDir honours java.io.tmpdir/TMPDIR. On a machine or CI runner where that resolves under a path containing a space (e.g. TMPDIR=/mnt/c/Users/Dev Name/tmp, which is ordinary on the WSL2 setup build.md targets), tar receives `-C /mnt/c/Users/Dev` and the remainder as member names. The extraction fails or lands elsewhere, pipefail propagates, and run() fails with a tar error -- a false RED produced by the environment, in the suite whose entire thesis is that the environment must not decide the answer."
+    },
+    {
+      "id": "R19",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java:100-106",
+      "summary": "trackedIn() is the only child process in this class that neither sets redirectErrorStream(true) nor drains stderr; run() and gate() both do. The child's stderr is an unread pipe.",
+      "failure_scenario": "If git writes more than the pipe buffer (~64KB) to stderr during `git ls-files` -- warnings emitted per path, or an object-store error repeated across a large tracked set -- the child blocks on write while the test blocks in readAllBytes on stdout, and the buildSrc suite hangs rather than failing. check-harness-tests.sh has no timeout, so the pre-commit run hangs with it, which build.md treats as the failure mode worth designing against (a runaway must die as a visible failure, not as a lost session). Low likelihood, one-line fix, and it is the inconsistency that makes it worth naming: the two sibling helpers already do the right thing."
+    },
+    {
+      "id": "R20",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md",
+      "summary": "The new M0.31 row records that check-gate-scope.sh currently FAILS in a fresh checkout, and the new FreshCheckoutTest javadoc says the same (verified against the tree: scripts/check-gate-scope.sh still runs `git check-ignore -q .tmp` and .gitignore carries the directory-only pattern `.tmp/`). Neither M0.31 nor M0.7 names the other, and both are `todo`.",
+      "failure_scenario": "M0.7 lands the GitHub Actions workflow before M0.31. On a fresh runner `.tmp/` does not exist, `git check-ignore -q .tmp` returns non-zero, and `pre-commit run --all-files` fails with '.tmp/ is not gitignored' -- the project's first CI run is red for a defect the repository does not have, which is the same false RED this task exists to remove, one gate over. A `blocked by M0.31` note on the M0.7 row costs one clause and is the kind of ordering constraint that is invisible once the session that knew it ends."
+    }
+  ]
+}

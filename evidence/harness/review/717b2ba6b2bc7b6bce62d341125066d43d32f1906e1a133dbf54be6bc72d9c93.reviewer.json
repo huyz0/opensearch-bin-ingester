@@ -1,0 +1,29 @@
+{
+  "diff_sha256": "717b2ba6b2bc7b6bce62d341125066d43d32f1906e1a133dbf54be6bc72d9c93",
+  "verdict": "pass",
+  "findings": [
+    {
+      "file": "sequencer/src/main/java/binjava/sequencer/Sequencer.java",
+      "line": 76,
+      "severity": "minor",
+      "what": "The task row states this commit SETTLES the attribution question the Sequencer contract left open, but Sequencer.java is not in the diff and its @return javadoc still reads 'How a caller learns which offsets are its own is M4.7's to settle'. The settlement (select by the segment key you submitted; duplicates in a batch refused) is recorded only on CommitLog.commitAll, which no ingest-side caller of the Sequencer seam reads.",
+      "failure_scenario": "M4.7's batcher author reads the interface that poses the question, finds it still open, and re-derives an answer -- most obviously selecting by RunKey, which the same paragraph warns is insufficient because two pods may commit the same stream in one window. That mis-attribution is silent: the caller acks records against another pod's offset range, which is I2 with no exception anywhere."
+    },
+    {
+      "file": "sequencer/src/main/java/binjava/sequencer/CommitLog.java",
+      "line": 228,
+      "severity": "minor",
+      "what": "Submission's javadoc claims 'NOT CommitRequest: podId and flushSeq are the SEQUENCER's business ... Keeping the log ignorant of the pair is what lets the two evolve apart', but commitAll -- twenty lines below, in the same class -- takes List<CommitRequest> as its public parameter type. CommitLog is not ignorant of CommitRequest; it names it in its API. The real reason Submission exists is that the two-arg commit(String, Map) path cannot build a CommitRequest without inventing a podId, and the comment does not say that.",
+      "failure_scenario": "A maintainer trusting the stated isolation moves or re-uses CommitLog on the assumption it has no dependency on the sequencer's request record, or adds a field to CommitRequest believing the log cannot be affected, and discovers the coupling only at compile time -- or worse, adds podId-dependent behaviour to the log because the boundary the comment describes does not actually exist."
+    },
+    {
+      "file": "sequencer/src/main/java/binjava/sequencer/CommitLog.java",
+      "line": 271,
+      "severity": "minor",
+      "what": "'Segment keys are distinct within a delta' is now a load-bearing invariant -- it is the whole basis of the attribution rule -- but it is enforced only on this write path. CommitDelta's constructor and CommitDelta.decodeBatchedBody accept a delta whose segments share a key, so the invariant does not survive a round trip through the bytes. gate-design rung 1 (make the bad state unrepresentable) would put the check in the record, where every producer and every reader inherits it.",
+      "failure_scenario": "A delta with duplicate segment keys arrives from corrupt bytes, a truncated write, or a future/foreign writer. It decodes without complaint, and a caller applying the newly-settled rule -- filter segments() by my key, findFirst -- silently takes the first match's offsets, which belong to the other segment. Nothing throws; the caller acks a range it was never assigned."
+    }
+  ],
+  "task": "M4.7b",
+  "role": "reviewer"
+}

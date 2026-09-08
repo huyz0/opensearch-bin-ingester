@@ -1,0 +1,65 @@
+{
+  "diff_sha256": "d5f64d9417a8afdacd99932a61edd3223a33bd0835fd1a80a5c1b129edc6f412",
+  "verdict": "pass",
+  "summary": "Round 3, test-reviewer. All six round-2 survivors are closed and each fix separates what it claims; I re-derived each mutation and it dies. No existing assertion was weakened (every file is new). Remaining findings are all minor and all forward-looking: four uncovered shapes in the brand-new checkedStream (which has no production caller in this commit), and four conformance cases a filesystem backend would pass while being wrong. Every claim below was executed against the compiled classes, not reasoned about.",
+  "findings": [
+    {
+      "id": "T1",
+      "file": "binstore-spi/src/test/java/binjava/binstore/BodyTest.java:77-105",
+      "severity": "minor",
+      "title": "checkedStream has a fourth and fifth uncovered shape: the over-long body and the byte-wise reader",
+      "failure_scenario": "Mutation A: Body.java:56 `if (seen != length)` -> `if (seen < length)`. All three checkedStream tests still pass (both lying bodies are short, the honest one is exact), yet an over-long body now streams through unrefused - which is precisely the S3 content-length truncation the class javadoc names as its reason to exist. readFully is tested on BOTH sides (BodyTest.java:57-63 asserts the long case); checkedStream only on the short side. Mutation B: delete the single-argument `read()` override at Body.java:63 entirely, inheriting FilterInputStream's. No test calls in.read() - both readAllBytes() calls take the bulk override and the stop-early test reads nothing - so the whole override is unexecuted. Under mutation B an honest body read byte-wise counts seen=0 and every such write is rejected as short. Verified: a byte-wise read of an honest body currently yields n=5, and no test exercises that path."
+    },
+    {
+      "id": "T2",
+      "file": "binstore-spi/src/test/java/binjava/binstore/BodyTest.java:92-98",
+      "severity": "minor",
+      "title": "The stop-early test asserts the throw but not the two contracts written beside it",
+      "failure_scenario": "Mutation A: replace the try/finally at Body.java:85-90 with a plain `verify(); in.close();`. checkedStreamRefusesAShortBodyEvenIfTheReaderStopsEarly still passes - it only asserts that close() throws - while the delegate leaks on every rejected write, which is exactly what the comment above those lines claims is prevented. The counting-close idiom needed to kill it already exists in this file at readFullyClosesTheStreamItOpened. Mutation B: make verify() also require that EOF was observed (add a sawEof flag set only in the n<0 branch). All three checkedStream tests survive - the two lying bodies throw for the other reason, the honest one hits EOF via readAllBytes - yet the ordinary S3 path, where the SDK reads exactly content-length bytes and closes without ever seeing EOF, now fails every honest write. Verified: readNBytes(5) on an honest 5-byte body currently succeeds and nothing constrains it."
+    },
+    {
+      "id": "T3",
+      "file": "binstore-spi/src/testFixtures/java/binjava/binstore/BinStoreConformance.java:59-67",
+      "severity": "minor",
+      "title": "Overwrite is only ever probed with a body at least as long as the old one - the missing-O_TRUNC shape",
+      "failure_scenario": "putOverwritesUnconditionally writes \"first\" (5) then \"second\" (6); aVersionChangesWhenTheObjectChanges does the same. A filesystem backend that opens the final path O_WRONLY|O_CREAT without O_TRUNC passes both, because the longer body covers the shorter one completely. Overwrite \"0123456789\" with \"hi\" and it serves \"hi23456789\" with stat().size()==10. No test asserts the size or body after a shrinking overwrite. Verified: MemoryBinStore reports size=2 today, so the case is green on the fake and would be red on the defective backend - which is the whole point of the fixture. M1.2 should not be asserted conformant without it."
+    },
+    {
+      "id": "T4",
+      "file": "binstore-spi/src/testFixtures/java/binjava/binstore/BinStoreConformance.java:198-217",
+      "severity": "minor",
+      "title": "A failed put is only probed on a key that never existed, so it cannot catch destroy-then-fail",
+      "failure_scenario": "The lying-body test asserts stat(\"k\") and stat(\"c\") are empty afterwards, which only proves nothing was created. A backend that streams into the final path and discovers the length mismatch at EOF has already destroyed whatever was there. Add: put(\"k\",\"good\"); assert put(\"k\", lying) throws; assert get(\"k\")==\"good\". MemoryBinStore passes it today (readFully runs before objects.put), so it is free here and is the data-loss case for M1.2. Mutation it kills: moving the length check after the write in any streaming backend."
+    },
+    {
+      "id": "T5",
+      "file": "binstore-spi/src/testFixtures/java/binjava/binstore/BinStoreConformance.java:220-334",
+      "severity": "minor",
+      "title": "No listing case has zero matches, and none has maxKeys <= 0",
+      "failure_scenario": "Every list case in the suite matches at least one key. list(\"nothing/\", null, 100) must return an empty page with an empty nextStartAfter; a filesystem backend built on Files.list of a prefix directory throws NoSuchFileException instead, and recovery over a fresh bucket dies on startup. Verified empty on MemoryBinStore, so the assertion is free. Separately and worse: list(prefix, null, 0) throws java.lang.IndexOutOfBoundsException: Index -1 out of bounds for length 0 from MemoryBinStore.java:132-133 - verified by execution - an unchecked exception from an SPI whose every I/O method declares IOException. No test constrains maxKeys <= 0 in either direction, so the contract is unstated and the fake crashes on it. Minor only because no M1 caller passes 0; M1.3b's governor is the one that will."
+    },
+    {
+      "id": "T6",
+      "file": "binstore-spi/src/testFixtures/java/binjava/binstore/BinStoreConformance.java:347-360",
+      "severity": "minor",
+      "title": "maxKeyBytes is probed with an all-ASCII key, so chars and bytes are indistinguishable",
+      "failure_scenario": "Mutation: MemoryBinStore.java:90 `key.getBytes(UTF_8).length` -> `key.length()`. Both assertions still pass, because \"k\".repeat(max) has equal char and byte counts. The capability is named maxKeyBytes and a filesystem NAME_MAX is measured in bytes, so a backend counting chars accepts a 1024-character multi-byte key that is 2048 bytes on disk and fails at write time instead of at validation. Verified: a 1024-char/2048-byte key is correctly rejected today, so the case would be green now and would bite the char-counting backend."
+    },
+    {
+      "id": "T7",
+      "file": "binstore-spi/src/testFixtures/java/binjava/binstore/BinStoreConformance.java:41-56",
+      "severity": "minor",
+      "title": "A zero-length object is never round-tripped, and minPartSize/batchDelete are never constrained",
+      "failure_scenario": "ObjectStatTest asserts a zero size is legitimate, but no conformance case writes an empty body, so a backend that rejects, skips or loses a zero-length put passes the whole suite while readingAnAbsentKeyFails continues to insist the two are distinguishable. Verified: put of new byte[0] currently gives size=0 and a zero-byte get. Likewise capabilities().minPartSize() and batchDelete() are returned by production and read by no assertion anywhere - mutation: return 0 for minPartSize, or false for batchDelete, and every test passes. M2's multipart is the first reader of the former."
+    },
+    {
+      "id": "T8",
+      "file": "binstore-spi/src/testFixtures/java/binjava/binstore/BinStoreConformance.java:88-135",
+      "severity": "minor",
+      "title": "The unbounded CyclicBarrier.await turns a regression into a suite hang rather than a failure",
+      "failure_scenario": "start.await() has no timeout. The pool is sized to the writer count so it cannot deadlock today, but a future backend whose putIfAbsent blocks, or a resize of either constant, produces a test that never returns instead of one that fails - and a hung suite in CI is diagnosed far later than a red one. await(5, SECONDS) costs one argument. Not a correctness gap in the assertions themselves."
+    }
+  ],
+  "task": "M1.1",
+  "role": "test-reviewer"
+}

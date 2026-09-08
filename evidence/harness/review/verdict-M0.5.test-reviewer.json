@@ -1,0 +1,55 @@
+{
+  "diff_sha256": "bfc11788fb2a8b7598d7220b24d0100351b7c5c968a2762519bbc88a0a61192d",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "MT1",
+      "severity": "blocking",
+      "file": "scripts/check-module.sh:50",
+      "summary": "The `dependencies` invocation's exit status is unchecked and its stderr discarded; if it fails, `deps` is empty, every grep finds nothing and the gate prints the full success sentence and exits 0. The `build` invocation on line 44 IS checked, so this is the one unguarded Gradle call.",
+      "failure_scenario": "EXECUTED, in an isolated worktree: replaced ./gradlew with a stub that exits 0 for ':ingest:build' and exits 1 with 'FAILURE: Timeout waiting to lock file hash cache.' on stderr for ':ingest:dependencies'. Output: 'ok 1 module(s) build, test, and stay inside their dependency surface', EXIT=0. Real triggers that hit exactly this shape: a second Gradle process holding the file-hash lock, the daemon killed mid-run (build.md's own WSL2 OOM scenario), or a future module for which 'runtimeClasspath' is not a resolvable configuration name. Fix: capture status, and fail loudly if `deps` is empty or lacks the 'runtimeClasspath -' header line, rather than treating no output as no violation."
+    },
+    {
+      "id": "MT2",
+      "severity": "blocking",
+      "file": "scripts/check-module.sh:37",
+      "summary": "HTTP_GROUPS is a spot-check that reads as a constraint. The pattern requires a colon immediately after the group prefix, so it matches only artifacts whose groupId is EXACTLY one of the six strings. Every modern HTTP library ships under a suffixed group and slips through.",
+      "failure_scenario": "EXECUTED end to end: added implementation(\"org.apache.httpcomponents.client5:httpclient5:5.4.1\") to ingest/build.gradle.kts. ingest's runtimeClasspath then contains org.apache.httpcomponents.client5:httpclient5, org.apache.httpcomponents.core5:httpcore5 and httpcore5-h2 -- a complete HTTP client stack in a module architecture.md rule 5 says must compile without HTTP. Gate output: 'ok 1 module(s) ... stay inside their dependency surface', EXIT=0. Same shape for org.eclipse.jetty.ee10:* and io.helidon.webserver:helidon-webserver (offline regex check: only 'io.helidon:helidon-bom' and 'io.netty:netty-common' match from a realistic eight-line coordinate list). Helidon currently fails ONLY by accident: helidon-http and helidon-webserver both drag in the bare-group artifact io.helidon:helidon transitively -- verified, the FAIL line reads 'io.helidon:helidon', not the artifact that was added. A Helidon module that stops depending on io.helidon:helidon, or an author writing an HTTP client by hand against a suffixed group, turns this gate green. The netty case the author verified is the single artifact in the list whose group happens to have no suffix. Match on group PREFIX (e.g. (io\\.helidon|org\\.apache\\.httpcomponents)[.:]) rather than exact group."
+    },
+    {
+      "id": "MT3",
+      "severity": "major",
+      "file": "scripts/check-module.sh:26-32",
+      "summary": "Delta routing derives modules from the first path segment of changed files, so a violation introduced from OUTSIDE any module directory, or introduced in an UPSTREAM module and inherited transitively, is never examined. GATE_SCOPE=delta is the default and is what pre-commit runs.",
+      "failure_scenario": "EXECUTED, two cases. (a) Appended `dependencies { \"api\"(\"io.netty:netty-common:4.1.115.Final\") }` to buildSrc/src/main/kotlin/binjava.java-conventions.gradle.kts and staged only that file. The sed at line 29 cannot match 'buildSrc/...' ([a-z-]* stops at the capital S and no lowercase prefix is followed by '/'), so MODULES is empty and the gate prints 'ok no module changed', EXIT=0 -- while ':ingest:dependencies' now shows io.netty:netty-common on the runtime classpath of every module. Root build.gradle.kts, settings.gradle.kts and gradle/libs.versions.toml route the same way. (b) Added api(\"software.amazon.awssdk:regions:2.29.0\") to format/build.gradle.kts and staged only format/. MODULES=format; format is neither 'plugin' nor 'client' so the cloud check never runs, and awssdk is not an HTTP group. Gate: 'ok 1 module(s) ... stay inside their dependency surface', EXIT=0. The same tree run as `check-module.sh plugin` FAILS with 17 software.amazon.awssdk artifacts. A commit that ships a cloud SDK into the OpenSearch JVM through the plugin's transitive closure passes pre-commit green. Fix: when any module in MODULES is upstream of plugin/client (or when a build-config file changes), escalate to the dependents, or at minimum always check plugin and client."
+    },
+    {
+      "id": "MT4",
+      "severity": "major",
+      "file": "scripts/check-module.sh:50",
+      "summary": "Reading runtimeClasspath is the wrong configuration for the rule being asserted. architecture.md rule 5 says the modules below http must COMPILE without Helidon on the classpath; compileOnly and testImplementation dependencies are absent from runtimeClasspath and therefore invisible.",
+      "failure_scenario": "EXECUTED: added compileOnly(\"io.netty:netty-common\") plus testImplementation of the same to ingest/build.gradle.kts, and a production class ingest/src/main/java/bin/Leak.java whose body calls io.netty.util.Version.identify(). Production source in `ingest` now imports an HTTP-stack type and compiles against it. Gate: 'ok 1 module(s) build, test, and stay inside their dependency surface', EXIT=0. This is not hypothetical for `plugin`: the OpenSearch SPI arrives there as compileOnly, and anything else added beside it under the same scope is unpoliced. Check compileClasspath (and the test configurations) in addition to runtimeClasspath."
+    },
+    {
+      "id": "MT5",
+      "severity": "major",
+      "file": "scripts/check-module.sh:60",
+      "summary": "architecture.md rule 2 has two clauses and only the weaker one is asserted. The gate checks for cloud-SDK GROUP IDS on plugin/client, but never that `plugin` does not depend on the project `:binstore-backends` -- which is the literal text of rule 2 and the structural invariant the group list is only a proxy for.",
+      "failure_scenario": "EXECUTED: appended api(project(\":binstore-backends\")) to plugin/build.gradle.kts. Gate: 'ok 1 module(s) build, test, and stay inside their dependency surface', EXIT=0. It passes because binstore-backends has no external dependencies TODAY; the violation goes in green now and only starts failing on the unrelated future commit that adds an S3 SDK to the backend, at which point the failure points at the wrong file. Separately, CLOUD_GROUPS omits com.amazonaws (AWS SDK v1) -- adding com.amazonaws:aws-java-sdk-s3:1.12.780 to plugin does fail, but under the rule-5 HTTP branch via its transitive org.apache.httpcomponents:httpclient, printing the misdirecting advice 'the adapter belongs in `http`' for a cloud SDK in the OpenSearch JVM. Assert the project-dependency graph directly (grep the `project ':...'` lines the same `dependencies` output already prints)."
+    },
+    {
+      "id": "MT6",
+      "severity": "minor",
+      "file": "scripts/check-module.sh:74",
+      "summary": "The success line omits scope_note, so a delta pass that examined one module is worded identically to a full-tree pass. lib.sh's own comment states the opposite requirement: 'Every gate PRINTS its mode. A delta pass is a weaker statement than a full pass and must not read like one -- non-negotiable 4.'",
+      "failure_scenario": "In the MT3(b) run, a tree with a cloud SDK on the plugin's classpath printed 'ok 1 module(s) build, test, and stay inside their dependency surface' with no mode marker -- a sentence a reader takes as a statement about the modules' dependency surfaces generally. The early-exit line 32 does append scope_note, and check-file-size.sh, check-license-headers.sh, check-terminology.sh and check-metric-cardinality.sh all append it on success, so this is a lone divergence from the established convention. It compounds MT3: the narrowest possible pass reads as the broadest."
+    },
+    {
+      "id": "MT7",
+      "severity": "minor",
+      "file": "scripts/check-module.sh:1",
+      "summary": "The gate is not wired into .pre-commit-config.yaml, and the (unstaged) AGENTS.md edit justifies that with 'needs an argument a whole-tree hook cannot supply' -- which is not true of this script: with no arguments it derives its own module list from changed_files, exactly like every wired hook that uses pass_filenames:false.",
+      "failure_scenario": "Nothing in .pre-commit-config.yaml or scripts/ invokes check-module.sh, so every violation above is moot in practice: a commit that adds Helidon to `ingest` is committed and pushed with no gate consulting the script at all. The packet's own lens says 'confirm the check is wired (a task nothing depends on is a preference)'. If the real reason is cost -- ./gradlew :m:build per changed module is slow at pre-commit -- say that, because it is a defensible reason and the stated one is not, and it is the sentence that stops the next author from assuming the gate ran."
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "diff_sha256": "5a190e023e6273ca37745c96acd71943f190dd6b9c0170a013a787783855261a",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "D16",
+      "severity": "major",
+      "file": "docs/internal/product/milestones/M1/SPEC.md:62",
+      "summary": "The M3b rewrite fixed the link but not the referent. Line 62 reads \"M3 adds compression, the filter and the ordinal registry\", while roadmap.md:11 defines M2 as \"Segment format ... key grammar with the adaptive filter\" and roadmap.md:12 defines M3 as the ingest path (Helidon endpoint, bundling, flush). The segment-format work named on line 62 belongs to M2. This occurrence is also bare text, not a link, so contrary to the fix note only one of the two occurrences reads [M3](../../roadmap.md) and check-links.sh cannot see this one at all.",
+      "failure_scenario": "An agent decomposing M3 with the milestone skill reads M1/SPEC.md line 62 as the authority on what the segment format defers, and schedules compression, the adaptive filter and the ordinal registry into the ingest-path milestone. M2 then completes without the filter its own completion condition names, or the work is planned twice; ADR-0003's filter and the ordinal registry it makes mandatory land one milestone after the format that must encode them, which is a wire-format change after the golden files exist."
+    },
+    {
+      "id": "D19",
+      "severity": "minor",
+      "file": "docs/internal/product/decisions/0013-fast-mode-two-tier-durability.md:65",
+      "summary": "R1/R2 used as record labels in the head-of-line paragraph collides with the binding R<n> cost-rule namespace that cost.md:10 declares. Agreed as minor and carried forward, not fixed: local context (\"R1 (durable)\", \"R2 (fast)\") disambiguates for a human reader.",
+      "failure_scenario": "A grep-driven citation sweep for cost-rule references reports ADR-0013 as citing R1 and R2 (write coalescing, no LIST on hot paths) when it cites neither, sending a later cost audit to the wrong ADR."
+    }
+  ]
+}

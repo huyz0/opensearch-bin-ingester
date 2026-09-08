@@ -1,0 +1,27 @@
+{
+  "diff_sha256": "fdddda0f1aa21e4d33d5be03e56aeb3fec430a837704cf2aeb05e8d64ad24f78",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "W23",
+      "severity": "major",
+      "file": "buildSrc/build.gradle.kts:37",
+      "summary": "The new tests' source of truth is the ROOT settings.gradle.kts, which is neither a declared Gradle input nor in check-harness-tests.sh's delta pathspec. RuleListTest, ModulePlanTest and ModuleListDerivationTest therefore do not run on the change they guard. The diff widens the input declaration to scripts/*.sh but leaves the other file these tests read undeclared.",
+      "failure_scenario": "Rename `ingest` to `ingester` in settings.gradle.kts and rename the directory. Stage settings.gradle.kts + ingester/build.gradle.kts + the moved sources. check-harness-tests.sh runs delta and evaluates `changed_files 'scripts/*.py' 'scripts/*.sh' 'buildSrc/*'` -- verified: settings.gradle.kts matches none of those pathspecs -- so it prints `ok no harness change; suite not run` and never starts Gradle. RuleListTest, whose entire purpose is 'rename a module and its rule silently stops applying', does not execute. check-module.sh runs (shared-build escalation, 8 modules) and passes, because NO_HTTP still names the dead module `ingest` and simply never matches `ingester`: architecture.md rule 5 stops applying to the ingester and the gate prints ok. Even if the suite were invoked, buildSrc's Test task declares only scripts/*.py|*.sh and buildSrc/src/test/resources as inputs, so it reports UP-TO-DATE. Same mechanism for the more likely case of ADDING a ninth module: ModulePlanTest's `ALL=<eight names>` and `DRIFT=ok checked=8` assertions go stale silently and surface later attached to an unrelated commit that happens to touch scripts/. Fix is two lines: add 'settings.gradle.kts' and '*/build.gradle.kts' to the pathspec at scripts/check-harness-tests.sh:21, and add the root settings.gradle.kts to inputs.files in buildSrc/build.gradle.kts."
+    },
+    {
+      "id": "W24",
+      "severity": "minor",
+      "file": ".pre-commit-config.yaml:69",
+      "summary": "The hook comment points the reader at `build.md § Execution layers`, but the cost narrative and the 11 s/15 s non-measurement it defers to were added under `§ Gate scope: fast by default, complete in CI` (build.md:83). § Execution layers is at build.md:128 and contains only the L0-L5 budget table.",
+      "failure_scenario": "A developer whose commit suddenly takes seconds follows the pointer, lands on the L0-L5 table, finds no mention of check-module, of the shared-build cliff, or of the unmeasured cold-daemon case, and concludes the numbers were deleted rather than relocated -- then restates a measured number in the hook comment, which is the two-copies drift the comment exists to prevent."
+    },
+    {
+      "id": "W25",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/RuleListTest.java:52",
+      "summary": "RuleListTest is a real constraint but a one-directional one: `isSubsetOf(all)` catches a rule naming a DEAD module (rename, typo) and catches NO_HTTP=\"\" (the split yields [\"\"], not in `all`). It does not catch a rule that stops naming a LIVE module, which is the weakening a developer under pressure actually performs.",
+      "failure_scenario": "A developer wants Helidon in `ingest`, hits `ingest resolves an HTTP dependency (architecture.md rule 5, ADR-0019)`, and edits scripts/check-module.sh:221 to NO_HTTP=\"format binstore-spi sequencer\". Both RuleListTest cases stay green (a shorter list is still a subset, and the lists are still disjoint), check-module.sh prints `ok 8 module(s) checked`, and rule 5 is off for the one module the gate's own comment says it must cover. That is non-negotiable 2 -- a threshold moved in the direction that weakens its gate -- with no detector. Same family as M0.23; the honest fix is to widen M0.23's row to include 'a rule list that stops naming a live module', or to say so in the javadoc, which currently reads as though list integrity is covered."
+    }
+  ]
+}

@@ -1,0 +1,63 @@
+{
+  "diff_sha256": "a0a6d9684572193d99e44e879ed6f02afc60140b58d930ab0c0b050f67dcddaa",
+  "verdict": "changes-requested",
+  "summary": "The seam is right and the filter is genuinely separable, but the banner's own no-clause-lost claim is false in the one clause that makes the split safe (nothing orders M4.8b2 after M4.8b1), the accepted-cost arithmetic ignores the T trigger the sibling row mandates, and the single prescribed acceptance test cannot reach the applyChain site the row calls the worse of the two.",
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "major",
+      "file": "docs/internal/product/backlog-notes.md:325",
+      "also": "docs/internal/product/backlog-notes.md:333, docs/internal/product/backlog.md:119, docs/internal/product/backlog.md:121",
+      "title": "The banner claims every clause landed; the clause that makes the split safe landed nowhere, and no row orders b2 after b1",
+      "detail": "The deleted source row carried 'With K and T defaulting large enough that no current test crosses the trigger, this lands green and fails first in production.' That clause is in neither M4.8b1 nor M4.8b2, and neither sub-row states a dependency. The only surviving statement of it is 'the writer needs the filter' inside the M4.8b banner at backlog-notes.md:325 -- which a session picking M4.8b2 is instructed by AGENTS.md not to read ('Read the notes for the ONE task you pick, never whole'). Second prong, same sentence: backlog.md:119 says 'this row is the source text' and backlog-notes.md:325 says 'The source text below is preserved', while the source text exists in neither file after this diff -- M4.6's split (backlog-notes.md:161) keeps banner AND source text precisely so its no-clause-lost check stays repeatable, and backlog-notes.md's M4.8 row records that difference as the thing to be aware of.",
+      "failure_scenario": "A session picks M4.8b2 from backlog.md:121, reads only the M4.8b2 notes entry, and ships the checkpoint writer. Nothing in either place mentions the recovery hazard or names M4.8b1. With K and T defaulted large no test crosses a trigger, so every gate is green. In production the first checkpoint written under ctl/log/0/<epoch>/ becomes the last key of that prefix, the next takeover's CommitLog.recoverChainEnd -> ChainReplay.chainEnd GETs it, ChainEntry.decode throws IOException ('not a chain entry: bad magic'), LocalSequencer.start:257-269 releases the lease and rethrows, and the next node repeats -- the cluster has no sequencer until someone ships the filter.",
+      "remedy": "One clause in M4.8b2 and in its backlog.md row saying it is blocked on M4.8b1 and why; and either restore the source text under the M4.8b banner (M4.6's convention) or stop claiming it is preserved."
+    },
+    {
+      "id": "F2",
+      "severity": "major",
+      "file": "docs/internal/product/backlog-notes.md:329",
+      "title": "The accepted-cost arithmetic ignores the T trigger the sibling row mandates: 'a factor of about 1 + 1/K rather than a new dimension' is not derivable from this split's own spec",
+      "detail": "M4.8b2 requires an OR trigger and says so explicitly: 'K alone starves an idle-but-not-silent cluster'. In that regime -- fewer than K deltas per T seconds, which is the regime T exists for -- checkpoint count is driven by the clock, not by delta count: with d deltas per T-period (1 <= d < K) the checkpoint:delta ratio is 1/d, up to one checkpoint per delta, i.e. a factor of 2, not 1 + 1/K. At any realistic K that understates by up to K-fold. And M4.8b2 constrains only the zero-delta case ('advance an INJECTED clock past at least 2T with zero deltas'), so it does not rule out a tick that fires whenever the clock passes T; on that reading the key count under the listed prefix grows at 1/T with UPTIME independent of commit volume, which is a new dimension and is exactly what the M4 SPEC already says about this prefix ('paging the whole ckpt/ prefix, which grows with uptime because nothing deletes checkpoints until M7', SPEC.md:266, repeated at :281). The deleted source row said 'grows WITH UPTIME'; this rewrite reverses that without evidence, and it is the sole quantitative ground on which the row rejects the key-outside-the-prefix alternative ('for a factor the same milestone is already bounding').",
+      "failure_scenario": "An implementer sizes the accepted cost from this sentence, reads 1.01 at K=100, and ships the filter believing recovery's LIST page count is essentially unchanged. On an idle-but-not-silent cluster (one commit per T) the ckpt keys equal the delta keys, and if the tick is unconditional the page count under CommitLog.logPrefix() grows with elapsed time at 1/T -- a recovery request count scaling with uptime rather than with segments or nodes, on the path SPEC.md:282-284 runs from up to 300 plugin nodes against cost.md R15's ~1 LIST/s ceiling. Nothing else in the tree records the true shape, because this row is where the trade is written down.",
+      "remedy": "Delete the factor and use the honest bound that is already one clause away: SPEC.md AC5 (:406-414) requires recovery to issue NO list at all once discovery and bounded recovery land, so the growth is bounded by the time to M4.9, not by a constant multiple of the delta count."
+    },
+    {
+      "id": "F3",
+      "severity": "major",
+      "file": "docs/internal/product/backlog-notes.md:329",
+      "title": "The prescribed acceptance test ('a takeover test with a checkpoint-shaped key present') cannot exercise applyChain -- the site the row itself calls the worse of the two",
+      "detail": "applyChain does not 'hand EVERY key to ChainEntry.decode': it returns at the first entry past hop.upTo (ChainReplay.java:319) and at the first Seal (ChainReplay.java:331-340). In a takeover, LocalSequencer.start seals the predecessor (LocalSequencer.java:239) and then crosses into it with upTo = that seal's sequence (open -> crossFrom -> ChainReplay.inherited -> applyChain), and the seal's key is '<seq:016x>.delta', which sorts BEFORE 'ckpt/...'. applyChain therefore returns at the seal and never reads a checkpoint in any takeover. The row's model of the code is wrong at the site whose coverage it is trying to force. (Also, minor and in the same sentence: chainEnd takes the LAST key, so with two or more checkpoints present it is the newest, not 'the first checkpoint written', that is read as the chain end.)",
+      "failure_scenario": "An implementer filters chainEnd only, writes exactly the prescribed test -- seed a predecessor chain with a Continue, deltas and a hand-seeded ckpt/<seq>.ckpt key, then call LocalSequencer.start on a new node -- and it passes green with request counts and correctness both satisfied, while applyChain is still unfiltered. That is verbatim the outcome the row warns about two clauses earlier ('a chainEnd-scoped fix passes a chainEnd-scoped test'), produced by the row's own criterion. The shape that does reach applyChain needs a hop with upTo = Long.MAX_VALUE over an UNSEALED chain: leader at epoch 3 with deltas plus checkpoints, a node acquires 4 and dies before sealing 3, the next node seals 4 at slot 0, and replayAncestry's neverOpened branch (ChainReplay.java:175-191) hops to epoch 3 with limit = Long.MAX_VALUE, so applyChain walks past 3's last delta into its ckpt keys and CommitLog.recover() throws.",
+      "remedy": "Name the fixture shape the applyChain half needs (burned successor epoch leaving an unsealed ancestor replayed with upTo = MAX, or a direct CommitLog.recover() over a seeded unsealed chain), instead of one takeover test, and drop the 'EVERY key' description of applyChain."
+    },
+    {
+      "id": "F4",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:329",
+      "title": "'carrying a REQUEST-COUNT dimension' names no invariant, so any count assertion satisfies it",
+      "detail": "M4.8b2's counterparts are exact ('zero PUTs after K-1 deltas, exactly one after the Kth with the clock frozen'). Requiring a request-count dimension for a filter is the right call -- it is what separates 'skip the key' from 'GET the key and swallow the decode failure', which is correct and costs one GET per checkpoint -- but the row never says which count must be bounded by what. Stated as 'the GET count on the recovery path is constant in the number of checkpoint-shaped keys seeded (measure at 1 and at N, assert equal)' it kills that mutation; as written it is met by asserting any number, which is sdd.md rule 6 satisfied nominally.",
+      "failure_scenario": "The filter is implemented as 'GET every key, catch the decode failure, skip it'. Recovery is correct, the takeover succeeds, and a test asserting 'a REQUEST-COUNT dimension' passes on whatever number it happens to observe -- while every recovery still spends one GET per checkpoint under the prefix, which is the cost the row exists to bound. An invariant stated as 'GET count constant in the number of checkpoint-shaped keys seeded, measured at 1 and at N' kills that implementation; the sentence as written does not."
+    },
+    {
+      "id": "F5",
+      "severity": "minor",
+      "file": "docs/internal/product/decisions/0033-a-checkpoint-carries-offsets-and-flush-seqs-never-the-segment-index.md:88",
+      "also": "format/src/main/java/binjava/format/Checkpoint.java:20, docs/internal/product/backlog-done.md:106",
+      "title": "Three sites outside the backlog cite M4.8b for facts this commit removes from that row",
+      "detail": "ADR-0033:88 says 'the confusion M4.8b records as a live hazard -- ChainReplay decodes every key under the log prefix and takes the last as the chain end'; Checkpoint.java:20 says 'M4.8b decides when a checkpoint is written and under which key'; backlog-done.md:106 says 'M4.8b records that ChainReplay decodes every key under the log prefix'. After this diff M4.8b records neither fact -- the first is M4.8b1's and the second is M4.8b2's. The ID still resolves to a banner naming both, which is why this is minor and not major, but it is the same fix-one-copy-miss-the-duplicates shape that backlog-notes.md's own M4.8 row ('BOTH COPIES OF A SPLIT MUST SAY SO') and M4.45 both record, and it is a direct consequence of deleting the source text rather than keeping it as M4.6 does.",
+      "failure_scenario": "A session following ADR-0033's pointer to understand why a checkpoint needs its own magic lands on a two-sentence banner that says nothing about ChainReplay, and has to guess which sub-row carries the hazard."
+    },
+    {
+      "id": "F6",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:333",
+      "title": "oldestRetainedOffset lost its name in the one row that was supposed to give it an acceptance criterion",
+      "detail": "The source row said the first clause -- per-stream nextOffset/oldestRetainedOffset, per-pod lastAppliedFlushSeq -- 'has NO acceptance criterion in a, b or c'. M4.8b2 keeps 'assert the per-stream and per-pod values against a workload where they differ' but drops the field name, and ADR-0033:70-73 records that oldestRetainedOffset is 'exactly the one a careless fixture leaves at 0' because nothing consumes it before M7.",
+      "failure_scenario": "The writer hardcodes oldestRetainedOffset to 0, a test that asserts per-stream nextOffset and per-pod lastAppliedFlushSeq passes, and the field ships wrong in the one commit the row exists to make it checkable in."
+    }
+  ],
+  "task": "M4.8b",
+  "role": "reviewer",
+  "staged_tree": "21c15dde9047f1fb629094c86e813236712939f5"
+}

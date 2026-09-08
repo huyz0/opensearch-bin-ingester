@@ -1,0 +1,42 @@
+{
+  "task": "M4.10b",
+  "role": "test-reviewer",
+  "verdict": "changes-requested",
+  "diff_sha256": "f592e52ae013e6fafd1bfd964d7b7966d4a606333f2e8161e98fcde36e260450",
+  "summary": "Decision-only commit; no tests changed, so this pass reviews the test GUIDANCE the ADR and the M4.10c notes hand forward. The decision itself is sound and every tree fact I could check is accurate. One major: the fixture guidance restored in round 8 is now wrong in both directions -- its stated reason is inverted by the restored podId, and one of the three fixtures it names does not discriminate the hoist under EITHER instruction, because the guidance constrains fixture DATA and never the ASSERTION. Two round-7 minors still stand; the third is confirmed moot.",
+  "findings": [
+    {
+      "severity": "major",
+      "location": "docs/internal/product/decisions/0036-the-idempotency-key-carries-an-explicit-pod-incarnation.md:118-121 and docs/internal/product/backlog-notes.md (### M4.10c, 'NOT INVISIBLE TO TESTS' paragraph)",
+      "title": "The per-segment fixture guidance constrains the fixture and not the assertion, and one of its three named fixtures dies under neither instruction",
+      "failure_scenario": "The guidance says the three fixtures 'must be given differing incarnationId or flushSeq per segment' and that then 'it dies at T0'. MUTATION THAT SURVIVES IT: encode the triple ONCE PER DELTA and apply it to every segment on decode. Measured against BatchingSequencerTest:259-263, which the ADR names: `commitAll(List.of(from(\"pod0\",0), from(\"pod1\",0)))` asserts only `delta.segments()).hasSize(2)`, plus a PUT count and a window count. A hoist moves the TRIPLE, not the segments, so arity stays 2 and all three assertions still pass -- whether the fixture differs by pod, by incarnationId, or by flushSeq. That fixture needs a per-segment triple ASSERTION added, which neither the ADR nor the notes ask for. Separately the stated REASON is inverted: with podId restored to the per-segment payload, 'differing pods alone leaves every encoded triple distinct only in a field a once-per-delta encoder can still hoist' is backwards -- a hoist is INVISIBLE only when a field's values are IDENTICAL across segments, and visible when they differ. BatchedCommitDeltaTest already carries three different pods and asserts whole-record equality at :54 (`assertThat(decoded).isEqualTo(original)`), which once SegmentCommit gains the triple as record components compares all three fields per segment and kills the hoist on pods alone. So the instruction over-constrains the one fixture that already works and under-constrains the one that does not. The property the guidance actually needs is: assert the per-segment triple after round-trip / after commitAll, with a fixture whose triple varies in at least one field per segment. Given the round budget, the honest remedy the packet itself names is to DELETE the 'differing incarnationId or flushSeq / differing pods alone' reasoning rather than correct it a third time, and state only that property."
+    },
+    {
+      "severity": "minor",
+      "location": "docs/internal/product/decisions/0036-the-idempotency-key-carries-an-explicit-pod-incarnation.md:116-119 vs :128-131",
+      "title": "A committed golden is listed among fixtures that must be 'given' differing field values, one section above the line saying goldens are untouched",
+      "failure_scenario": "':116-118' names `golden/chain-delta-batched-v1.bin` in the list of fixtures that ':118-119' says 'must be given differing incarnationId or flushSeq per segment', while ':128-131' says 'Existing goldens are untouched and new ones added beside them'. A committed byte file cannot be given field values and stay untouched. An M4.10c author following the first sentence REGENERATES chain-delta-batched-v1.bin, which destroys the only evidence that the pre-change bytes still decode and silently converts a backward-compatibility fixture into a restatement of the new encoder. Verified the file is immutable evidence: it hexdumps to `bins/a.seg` and `bins/b.seg` with no pod in either, which is also the ADR's own ':103' claim and is accurate. Remedy is one clause: the discriminating golden is a NEW file beside the untouched one."
+    },
+    {
+      "severity": "minor",
+      "location": "docs/internal/product/decisions/0036-the-idempotency-key-carries-an-explicit-pod-incarnation.md:163-169 (and ### M4.10c notes, 'OLD OBJECTS MUST STILL DECODE')",
+      "title": "Checkpoint version tolerance is prescribed without naming the refusal test it breaks, or whether tolerance is enumerated or a range",
+      "failure_scenario": "M4.10c bumps the checkpoint VERSION to carry the new pods shape and makes `decode` version-TOLERANT. `CheckpointDecodeRefusalTest:113-122` (`anUNKNOWNVersionSTOPSRatherThanGuessingTheLayout`) builds a v0 body and sets `bytes[7] = 1` to make the version UNKNOWN. After the bump, 1 is the CURRENT version, so the test no longer exercises the unknown-version path at all; its own comment records that deleting the version check once left the whole build green, so this is the guard becoming a no-op. It fails loudly rather than silently because it asserts the message 'unsupported checkpoint version' -- which is why this is minor, not major -- but the cheapest repair is to relax that message assertion, and an assertion loosened in the same commit as a format change is exactly the inversion `check-test-integrity.sh` exists to catch. The notes' '\u26a0\ufe0f A PODS-KEY SHAPE CHANGE REWRITES MORE THAN ONE ASSERTION ... Budget for that rather than discovering it' is the right instinct but names only the `Math::max` test. Two clauses are missing: this test must keep an unknown version (a value in neither accept-set member), and tolerance must be an ENUMERATED accept-set {0,1} rather than `version <= VERSION` -- 'version-TOLERANT' reads naturally as the range form, under which a future v2 body would be decoded with v1's layout, which is the guess the test's own name forbids."
+    },
+    {
+      "severity": "minor",
+      "location": "sequencer/src/main/java/binjava/sequencer/CommitRequest.java (class javadoc) vs docs/internal/product/backlog-notes.md (### M4.10c, 'THE THREE DESCRIPTIVE SPEC.md SITES ARE THIS ROW'S')",
+      "title": "The notes enumerate the sites still saying the bare pair and miss the one in production source",
+      "failure_scenario": "`CommitRequest`'s class javadoc states '`(podId, flushSeq)` is the idempotency key M4.10 will use to ignore a replay'. ADR-0036 falsifies that. The M4.10c notes enumerate three descriptive sites and all three are in SPEC.md; this one is in the file M4.10c edits to add `incarnationId`, so an author adding the field beside a javadoc that names the old key leaves the record's own documentation contradicting the field it just gained. `baselines/review.txt` rounds:M4.10a records this exact failure mode ('a method javadoc contradicting its own class javadoc') and rounds:M4.10 records 'fixing one copy of a fact and missing its duplicates'. Adding it to the enumeration costs four words."
+    }
+  ],
+  "verified": [
+    "Staged diff hash matches f592e52a; diff is docs-only (7 files, no code, no tests), contradicting the stale session-start git status.",
+    "ADR:102 'SegmentCommit.segmentKey is a String checked only for non-emptiness' -- confirmed, the record is (String segmentKey, List<RunCommit> runs) with only a requireNonNull and an isEmpty guard.",
+    "ADR:102 'SegmentKey exposes no parser for the pod' -- confirmed, the only key parser is headerLenOf(String); podShortId is a constructor component, never extracted from a rendered key. This is why round-7 minor 3 is MOOT now that podId is carried explicitly.",
+    "ADR:103 'chain-delta-batched-v1.bin holds bins/a.seg with no pod in it at all' -- confirmed by hexdump: bins/a.seg and bins/b.seg.",
+    "ADR:156-161 the checkpoint size headroom argument -- confirmed, CheckpointTest:169 asserts isLessThan(64*1024) at 1,600 streams with a ~38 KiB comment at :158.",
+    "ADR:116-117 'BatchedCommitDeltaTest round-trips a three-segment three-pod delta' -- confirmed at :41-46, and its :54 whole-record equality assertion is what will carry the per-segment discrimination once SegmentCommit gains the triple."
+  ],
+  "staged_tree": "41df9c494994415ec36910649909b5a860a52938"
+}

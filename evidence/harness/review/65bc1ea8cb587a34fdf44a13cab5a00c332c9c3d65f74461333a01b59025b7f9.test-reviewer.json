@@ -1,0 +1,50 @@
+{
+  "diff_sha256": "65bc1ea8cb587a34fdf44a13cab5a00c332c9c3d65f74461333a01b59025b7f9",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "severity": "major",
+      "file": "sequencer/src/main/java/binjava/sequencer/CommitLog.java:190",
+      "detail": "recoverChainEnd()'s paging loop is unconstrained. Replacing the while/nextStartAfter loop with a single list() call survives 124/124. This is M4.6a's already-paid-for major (return -> break) verbatim, in a new method, with SmallPageStore sitting unused in the same package -- CommitLogSealTest uses it for recover(), nothing uses it for recoverChainEnd().",
+      "failure_scenario": "A predecessor chain longer than one 1000-key page. recoverChainEnd returns a chain end taken from the first page, so seal() proposes hundreds of slots too low. With a realistic redrive budget it throws 'did not converge' and the failover FAILS while this node holds the lease -- the cluster-wide outage the redrive branch exists to prevent. With a large budget it instead grinds through one PUT+GET per entry. 124/124 green either way."
+    },
+    {
+      "severity": "major",
+      "file": "sequencer/src/main/java/binjava/sequencer/CommitLog.java:210",
+      "detail": "recoverChainEnd() remembering a seal is unconstrained: guarding 'sealedAt = seal' so it never fires survives 124/124. The predecessor-already-sealed shape is never built through LocalSequencer, so this path never sees a Seal as the last entry. sealingAChainThisWriterALREADYKNOWSIsSealedWritesNoSecondSeal pins this for recover(); the mirror was not made for recoverChainEnd().",
+      "failure_scenario": "Two pods handed the same epoch by the lease ambiguity this module has four test classes about. Pod B calls recoverChainEnd on a predecessor pod A already sealed. Without the remembered seal, seal()'s new sealedAt guard never fires, pod B proposes at sealSeq+1, WINS uncontended and writes a SECOND seal past the barrier -- I5 -- and its CONTINUE then names a slot past the real boundary, which is exactly what M4.6e's crossing reader follows."
+    },
+    {
+      "severity": "major",
+      "file": "sequencer/src/main/java/binjava/sequencer/LocalSequencer.java:66",
+      "detail": "The held() fallback -- half the fix for the production reviewer's blocking finding -- is entirely unconstrained. Deleting 'won = leases.held(); if (won.isEmpty()) return empty;' and returning empty directly (the round-1 behaviour) survives 124/124. Every test builds a fresh LeaseManager per start(), so tryAcquire() never returns empty-because-this-instance-already-holds-it, and the branch is never entered. Needs one test that calls start twice with the SAME LeaseManager.",
+      "failure_scenario": "The branch is dropped or inverted in a later refactor. A retry after a partially failed start reports 'not the leader' while holding the term; the only exit is taking over from itself and burning an epoch, and the cluster has no sequencer meanwhile -- the precise outage this round-2 fix was written to prevent, restored silently."
+    },
+    {
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/LocalSequencerTest.java:425",
+      "detail": "recoverChainEnd()'s '+1' is unconstrained: nextSequence = last.sequence() (one short) survives 124/124, because the two cost tests BRACKET the boundary instead of sitting on it. thePredecessorIsRECOVERED gives budget 1, which absorbs exactly one lost slot; aTakeoverReads allows gets < 5 where the measured value is 2. Verified both ways: 'last.sequence() - 1' (two short) IS killed, and either one-token tightening -- budget 1 -> 0, or isLessThan(5L) -> isEqualTo(2L) -- kills the one-short mutant on its own. Same 'either side of the boundary rather than ON it' defect theBudgetBoundaryIsExactRatherThanOffByOne exists to name, one method over.",
+      "failure_scenario": "Every failover silently loses its first seal attempt: one wasted PUT plus one wasted GET, and one unit of a redrive budget an operator sized from the renew interval. At budget 0 -- a legitimate configuration this suite itself exercises -- the failover fails outright with 'did not converge' while the node holds the lease."
+    },
+    {
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/CommitLog.java:185",
+      "detail": "The javadoc's 'THIS LOG MUST NOT THEN COMMIT' is a claimed mechanism with no enforcement and no test. Measured directly: a writer acks 100 records; a second CommitLog on the same chain calls recoverChainEnd() and reports nextOffset=0; its commit SUCCEEDS at seq 1 with firstOffset=0. Answer to the direct question -- yes, something lets it, because nothing stops it. Not reachable through LocalSequencer today (the only caller seals immediately and seal sets sealedAt), so minor, same status as M0.65 -- but recoverChainEnd is public and M4.6e is the caller that will want a cheap chain-end probe on a chain it does NOT seal.",
+      "failure_scenario": "M4.6e's crossing reader calls recoverChainEnd on a chain it does not seal and then commits through the same instance. Every stream restarts at offset 0 -- I2 -- with no exception and no failing test."
+    },
+    {
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/LocalSequencerTest.java:394",
+      "detail": "aStartThatFailsAFTERAcquiringHandsTheLeaseBackRatherThanStrandingIt asserts only isInstanceOf(IOException.class). Every path in this stack throws IOException -- the injected store refusal, the seal's 'did not converge', the closed check -- so it cannot say WHICH failure propagated. The sibling committingAfterCloseFailsRatherThanSilentlySucceeding buys exactly that discrimination with hasMessageContaining, and this test does not mirror it. Not blind (the return-empty mutation is killed), just undiscriminating.",
+      "failure_scenario": "A refactor swallows the injected store failure and rethrows a different IOException from the release path or the seal. The test still passes while the operator-facing cause of a failed leadership start has changed underneath it."
+    },
+    {
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/LocalSequencerTest.java:344",
+      "detail": "thePredecessorIsRECOVEREDSoTheSealCostsOneSlotRatherThanOnePerEntry is named for, and its comment argues about, 'predecessor.recover()' -- which production no longer calls. It now exercises recoverChainEnd(), whose own javadoc says in as many words 'It is a boundary probe, not a recovery.' Test name and comment now contradict the production javadoc they describe. Doc drift only; the test still earns its place (it is the sole killer of the two-slots-short mutation).",
+      "failure_scenario": "A reader looking for the test that covers recoverChainEnd greps for the method name, finds nothing, and concludes it is uncovered -- or re-adds a duplicate. The same 'reads as coverage of the wrong thing' cost M4.6a recorded when deleting its redundant test."
+    }
+  ],
+  "task": "M4.6c",
+  "role": "test-reviewer"
+}

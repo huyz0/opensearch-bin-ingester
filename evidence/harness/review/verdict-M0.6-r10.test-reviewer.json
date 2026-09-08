@@ -1,0 +1,41 @@
+{
+  "diff_sha256": "283b5e7846c09a1532ab2dca2f04d4785d32f6b9d2d77e09b2025fef3f3bb1df",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "WT39",
+      "severity": "major",
+      "file": "scripts/check-harness-tests.sh:23",
+      "summary": "The relevance filter gained 'settings.gradle.kts' in this commit to stop a module rename running no test at all, and nothing asserts it. No test in the repository executes check-harness-tests.sh; the property is claimed only by the comment three lines above it. Verified by running the gate: with only settings.gradle.kts staged the current code runs the suite; with the argument removed it prints 'ok no harness change; suite not run' and makes no Gradle call, while all 61 tests stay green. The same seam that makes check-module.sh testable (--select-modules, --check-drift, --root) is absent here.",
+      "surviving_mutation": "scripts/check-harness-tests.sh:23  changed_files 'scripts/*.py' 'scripts/*.sh' 'buildSrc/*' 'settings.gradle.kts'  ->  changed_files 'scripts/*.py' 'scripts/*.sh' 'buildSrc/*'   (61 tests, 0 failures; gate then prints 'ok no harness change; suite not run' on a commit that renames a module, which RuleListTest, ModulePlanTest and ModuleListDerivationTest all take as their subject)"
+    },
+    {
+      "id": "WT40",
+      "severity": "major",
+      "file": "scripts/check-harness-tests.sh:68",
+      "summary": "The printTestInputs guard -- ~50 new lines whose whole job is to refuse a test task that stopped declaring the inputs its suites depend on -- is 100% failure path and entirely unconstrained. That is the identical argument that produced ModuleDriftTest ('review found it was 100% failure path and could be deleted entire with the suite still green'), not applied here. I confirmed by hand that the guard does fire when the rootSettings declaration is deleted, so the production code is right; nothing would notice if it stopped being. Incidentally the WT37 rationale is slightly off: substring matching against the ABSOLUTE $ROOT/settings.gradle.kts is not satisfied by the drift fixtures either (I ran it -- it still FAILs). It was the relative path that was loose. Whole-line equality is still the better form.",
+      "surviving_mutation": "scripts/check-harness-tests.sh:75  [ \"$_found\" -eq 1 ] || fail ...  ->  :   (or drop \"$ROOT/settings.gradle.kts\" from the _want list on line 68). 61 tests, 0 failures either way; the guard becomes decorative and the tree returns to the state whose comment says it 'has now been wrong twice'. A --check-inputs door taking the declared-input list as a PARAMETER -- the same trick plan() already uses for --root -- makes both directions reachable with no nested Gradle run."
+    },
+    {
+      "id": "WT41",
+      "severity": "minor",
+      "file": "scripts/check-module.sh:202",
+      "summary": "The empty-module-list guard was strengthened in this commit ([ -n \"$ALL\" ] -> [ -n \"${ALL// /}\" ]) and no test constrains either form. Reported as minor rather than major because I built the case and check_drift subsumes it: with an empty ALL every tracked */build.gradle.kts becomes an orphan and the gate exits 1 with 'alpha has a build.gradle.kts but is not in settings' before any Gradle call. The only input where removing the guard yields a green is a tree with no module directories at all, where a green is honest. Worth knowing that this guard is redundant rather than load-bearing.",
+      "surviving_mutation": "scripts/check-module.sh:202  [ -n \"${ALL// /}\" ] || { fail ...; finish; }  ->  :   (61 tests, 0 failures; also survives reverting to HEAD's [ -n \"$ALL\" ] form)"
+    },
+    {
+      "id": "WT42",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/ModuleDriftTest.java:18",
+      "summary": "The javadoc says the clean fixture 'deliberately contains a four-character module name (`http`)'. It contains zeta and omega. The stated property survives -- zeta is four characters -- but the named module is not in the fixture, so a future reader checking the claim finds it false and cannot tell which half is stale. Name zeta, or add http to the fixture.",
+      "surviving_mutation": "n/a -- documentation accuracy, not a weak assertion"
+    },
+    {
+      "id": "WT43",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/ModuleGateTest.java:32",
+      "summary": "Not a new finding, recorded because I verified the disclosure rather than trusting it, and it is accurate and if anything understated. Five mutations survive all 61 tests: HTTP_GROUPS emptied, `for conf in runtimeClasspath compileClasspath` -> runtime only, the rule-4 http check disabled, the rule-2 binstore-backends check disabled, and `if [ -n \"$hits\" ]` -> `if false` in the rule-5 block. The javadoc names the first three and the class of all five; backlog M0.23 records it with the swap variant. No action in this commit.",
+      "surviving_mutation": "scripts/check-module.sh:250  HTTP_GROUPS='io\\.helidon|...'  ->  HTTP_GROUPS='zzzznope'   (61 tests, 0 failures -- rule 5 becomes inert and the summary is byte-identical)"
+    }
+  ]
+}

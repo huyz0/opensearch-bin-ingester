@@ -1,0 +1,47 @@
+{
+  "diff_sha256": "35a281215e497535c41c785e710937dbf2ae17b6437325838d687d68d79d3a90",
+  "verdict": "pass",
+  "summary": "Round-3 test pass, re-binding a verdict to the final bytes. 17 sequencer tests, all 17 carry a valid red record whose source sha256 matches the current file. Suite 432/0/0/0, sequencer 17. 20 mutations applied and re-run in fresh JVMs: 18 killed, 2 survive (both minor, both named below). Change 2 (dropping the in-loop null checks) weakened nothing -- verified on this JDK 25 that Map.copyOf rejects a null key AND a null value with NPE, and both arms of anEmptyOrNonPositiveRecordCountIsRefused still discriminate independently. Change 4 (3 -> 6 streams) genuinely fixed the probabilistic escape: the missing-sort mutation was killed 18/18 in fresh JVMs, and exhaustive enumeration of Map.copyOf iteration orders for this key set shows the escape probability is exactly 0, not 1-in-720. theCopiedRecordCountsAreImmutableNotMerelyUnaliased and theRecordCountsAreCopiedSoALaterMutationCannotChangeACommitAlreadyMade are exactly non-redundant -- each kills a mutation the other survives. All T0, no sleep, no port, no temp dir, fakes not mocks. No existing assertion weakened (all test files are new; check-test-integrity ok). Tree restored, staged hash unchanged.",
+  "findings": [
+    {
+      "id": "T1",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/CommitRequest.java:69",
+      "title": "The copy-FIRST ordering -- the exact defect the round-2 production review found -- is not pinned by any test",
+      "surviving_mutation": "Move `recordCounts = Map.copyOf(recordCounts);` from line 69 to the last statement of the compact constructor, so `isEmpty()` and the positivity loop read the CALLER's map again. That is byte-for-byte the round-2 defect. Measured: all 17 tests pass, 0 failures.",
+      "failure_scenario": "The backlog row names 'recordCounts copied FIRST then validated, so a caller cannot mutate between check and copy' as a deliverable of this task, and the production reviewer had to raise it as a round-2 finding because it had already been got wrong once. Nothing in the suite would catch it being got wrong again -- a later refactor that hoists the empty-check above the copy (the natural shape, since the check reads more naturally next to the null checks) reintroduces the TOCTOU silently and green. It is minor rather than major because the residual damage is bounded downstream: RunCommit refuses recordCount <= 0 and CommitDelta refuses an empty run list, so a poisoned request fails at delta construction with a worse error message rather than committing bad state. It is testable at T0 in about ten lines -- pass a HashMap subclass whose isEmpty() or entrySet() inserts a negative-count entry as a side effect, and assert the request is refused; copy-first refuses it, validate-first accepts it."
+    },
+    {
+      "id": "T2",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitRequestTest.java:39",
+      "title": "The null arm asserts only the exception TYPE, so all three explicit requireNonNull calls are deletable",
+      "surviving_mutation": "Delete all three lines `Objects.requireNonNull(podId, \"podId\")`, `...(segmentKey, ...)`, `...(recordCounts, ...)`. Measured: all 17 tests pass, because `podId.isBlank()`, `segmentKey.isBlank()` and `Map.copyOf(null)` each throw a bare NPE anyway. Related: replacing `Map.copyOf(recordCounts)` with `Collections.unmodifiableMap(new HashMap<>(recordCounts))` also survives both the aliasing and the immutability tests, and it accepts a null KEY that Map.copyOf rejects -- no test covers a null key or a null value inside recordCounts.",
+      "failure_scenario": "Low value and close to an equivalent mutant -- the observable type is NPE either way, and only the diagnostic naming the offending parameter is lost. But the blank arm four lines above DOES assert `hasMessageContaining(\"podId\")` while the null arm does not, so the asymmetry is unintentional rather than argued. A caller debugging a null segmentKey from M5's forwarding path gets an unattributed NPE from inside `isBlank`, and the test that was supposed to guarantee otherwise passes. One `hasMessageContaining` per arm closes it."
+    },
+    {
+      "id": "T3",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/FakeSequencerTest.java:158",
+      "title": "The comment's '1 in 720' misstates the mechanism it is justifying, though it errs safe",
+      "surviving_mutation": "None -- the test itself is sound. Measured: the missing-sort mutation (delete `.sorted(Map.Entry.comparingByKey())`) failed 18 out of 18 fresh JVMs, and the observed run order differed between runs (first key was bb/0, aa/0, aa/1 across runs), confirming the workers really are fresh JVMs with a re-rolled SALT.",
+      "failure_scenario": "The comment models Map.copyOf's iteration order as a uniform random permutation of the six keys ('1 in 720'). It is not: ImmutableCollections.MapN iterates a fixed hash table from a SALT-chosen start slot in a SALT-chosen direction, so only 2*n distinct orders are reachable, all of them rotations of one fixed order. Enumerated exhaustively over 250 fresh JVMs for this exact fixture: exactly 12 distinct orders appear, and NONE of them is the sorted order (the table interleaves the aa and bb keys, so no rotation can produce all-aa-then-all-bb). The real escape probability is 0, not 1/720. The conclusion holds and is stronger than claimed, so nothing is weakened -- but the stated reason is wrong, and a later author who edits the fixture's UUIDs or drops back to four keys will reason from '1 in 720' and may land back in the probabilistic regime without noticing. Same failure mode the backlog row itself records for this task: fixing one copy of a fact and leaving the reasoning that produced it."
+    }
+  ],
+  "verified": [
+    "Change 2 (in-loop null checks dropped): Map.copyOf on JDK 25.0.4 throws NPE for a null key, a null value, and a mixed map. Nothing weakened -- no test asserted on those paths before or after.",
+    "anEmptyOrNonPositiveRecordCountIsRefused discriminates BOTH arms independently: disabling `recordCounts.isEmpty()` kills it, and relaxing `e.getValue() <= 0` to `< 0` kills it.",
+    "Change 4 (3 -> 6 streams): missing-sort mutation killed 18/18 fresh JVMs; exhaustive order enumeration over 250 fresh JVMs shows 12 reachable orders, none sorted, so escape probability is 0.",
+    "theCopiedRecordCountsAreImmutableNotMerelyUnaliased and theRecordCountsAreCopiedSoALaterMutationCannotChangeACommitAlreadyMade are non-redundant: `new HashMap<>(...)` kills only the first, `Collections.unmodifiableMap(...)` kills only the second.",
+    "Other killed mutations: blank-podId guard disabled; dash-only guard; slash-only guard; flushSeq `< 0` -> `< -1`; blank-segmentKey guard disabled; podId/flushSeq/segmentKey each pinned to a constant in the compact constructor; FakeSequencer `.limit(1)`; advance-by-1 instead of by count; drop the nextOffsets side effect; nextOffset() returns 0L; nextSequence never advances; recordCount hardcoded to 1; one global offset space instead of per-stream. All killed by a named test.",
+    "All 17 red records present, valid, and their source sha256 matches the current file bytes; check-tdd ok.",
+    "Suite: 432 tests, 0 failures, 0 errors, 0 skipped. Sequencer contributes 17 (CommitRequestTest 8, FakeSequencerTest 9). Matches the backlog row's claim.",
+    "check-test-integrity ok -- no assertion weakened, disabled or removed. All five source files are new (A), so no existing test could have been loosened.",
+    "Tier: T0 throughout, no socket, clock or object store. No Thread.sleep, no fixed port, no system temp, fake not mock (testing.md 15-18).",
+    "All three earlier-round findings addressed: no affirmative 'at most once' claim survives in Sequencer.java (F7); the multi-run commit is now exercised by two tests plus nextOffset (round-1 test major); the retry javadoc now states plainly that a retry may assign a second set of offsets (F1).",
+    "Backlog row is honest about all three rounds: round-1 production and test majors, round-2 production findings and the round-2 test measurement, with the 8-of-8 remeasurement. The 432/17 numbers are true as measured here. Round 3 is this pass and has not happened yet.",
+    "Tree restored after every mutation; git status shows only the staged five additions and the backlog modification; staged diff sha256 still 35a281215e497535c41c785e710937dbf2ae17b6437325838d687d68d79d3a90."
+  ],
+  "task": "M4.1",
+  "role": "test-reviewer"
+}

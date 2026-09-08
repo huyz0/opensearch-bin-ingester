@@ -1,0 +1,36 @@
+{
+  "diff_sha256": "a9c65e4b497d65a76a270c83bea684d4609de14d10b4c3346327efbeec0a31e1",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "file": "sequencer/src/main/java/binjava/sequencer/BatchingSequencer.java",
+      "line": 215,
+      "severity": "blocking",
+      "what": "The committer-must-not-die fix was applied to the timer path only. `commitBatch` catches `IOException | RuntimeException`, and `queue.drainTo(batch)` / `commitBatch(batch)` sit OUTSIDE the `try` that catches `Throwable`. An `Error` out of `delegate.commitAll` therefore propagates out of `drainForever`, killing the committer with `running == true`, skipping `failAll(batch, ...)` and skipping the tail `failAll(drainRemaining(), ...)` (which is not in a `finally`). The asymmetry is explicit in the source: `catch (Throwable timerFailed)` twenty lines above, `catch (IOException | RuntimeException failed)` here.",
+      "failure_scenario": "MEASURED on the staged bytes: a delegate whose `commitAll` throws `new OutOfMemoryError(\"delta encode\")`, timer `() -> {}`. The first caller had not returned after 5 s (still alive), and a caller arriving afterwards had also not returned after 5 s -- `Pending.await` is `CompletableFuture.join`, which is UNINTERRUPTIBLE, so neither can be woken. This is verbatim the failure mode the sibling comment at line 173 says must not exist, via the more likely door: an `Error` from the delegate is the realistic one, because batching exists to make batches big and `CommitLog.commitSubmissions` calls `delta.encode()` TWICE per attempt (once for the length, once for the body supplier), so the OOM window is the batched path itself. `LinkageError` from a lazily-loaded store SDK class and `StackOverflowError` reach the same line. Fix shape: the loop body must not be able to exit with `running == true`, and the tail drain must be in a `finally`."
+    },
+    {
+      "file": "sequencer/src/main/java/binjava/sequencer/BatchingSequencer.java",
+      "line": 169,
+      "severity": "major",
+      "what": "The `InterruptedException` branch fails its held batch and breaks, but -- unlike the `Throwable` branch three lines below -- it does NOT call `stop()`. It is safe only under the assumption that the sole source of an interrupt is `close()`, which sets `running = false` first. Nothing in the class enforces that assumption, and `WindowTimer` and `Sequencer` are both public seams whose implementations run on this thread.",
+      "failure_scenario": "MEASURED on the staged bytes: a delegate whose `commitAll` uses the textbook idiom `Thread.currentThread().interrupt(); throw new IOException(...)` -- the same idiom `BoundedLock.java:56` in this very module already uses, and the one any future S3/HTTP backend will use for `ClosedByInterruptException`. The first caller is failed correctly with an IOException, so nothing looks wrong. The committer then re-enters `queue.take()` with the interrupt flag still set, takes this branch with an empty batch, breaks out with `running == true`, and dies. The next caller passed the `if (!running)` check, enqueued, and had not returned after 5 s -- parked forever on the uninterruptible join. The door is left open by a committer that is gone, which is exactly the state `stop()` exists to make unrepresentable."
+    },
+    {
+      "file": "sequencer/src/main/java/binjava/sequencer/BatchingSequencer.java",
+      "line": 264,
+      "severity": "minor",
+      "what": "The javadoc at line 251 states the join unconditionally -- `delegate.close()` must not run \"while the committer is still inside CommitLog's redrive loop\". The code bounds it at 10 s and then proceeds to `failAll` and `delegate.close()` regardless, with no log, no exception and no signal that the bound was hit. The interrupt at line 255 cannot shorten that wait: `CommitLog.commitSubmissions`'s `while (true)` redrive loop contains no interrupt check and no sleep, so it only unwinds if a store call itself throws.",
+      "failure_scenario": "A contended chain: the committer loses slot N, re-reads, retries N+1, and stays in the redrive loop past 10 s. `close()` gives up silently, releases the lease via `delegate.close()`, a successor acquires the next epoch, and the old committer writes a delta afterwards. The epoch-in-path fencing bounds the damage, which is why this is minor rather than the fork the comment claims -- but the comment claims a guarantee the code gives only up to a hardcoded, unnamed, unobservable bound, and an operator has no way to learn the bound was hit."
+    },
+    {
+      "file": "sequencer/src/main/java/binjava/sequencer/BatchingSequencer.java",
+      "line": 134,
+      "severity": "minor",
+      "what": "One message serves two very different states: a sequencer an operator closed, and a sequencer that shut its own door after its committer crashed (line 188). `aCommitterKilledByItsTimerFAILSCallersRatherThanParkingThem` asserts on `hasMessageContaining(\"closed\")` for the crash case, pinning the conflation.",
+      "failure_scenario": "The window timer throws in production. The one caller held at the time gets the real cause; every caller after it gets `IOException(\"this sequencer is closed and must not commit again\")`. An operator reading the ingester's logs sees an orderly shutdown and looks for who called close, when what happened is that the commit path crashed and stopped accepting work. The crash cause reached exactly one thread and is nowhere in the refusal."
+    }
+  ],
+  "task": "M4.7",
+  "role": "reviewer"
+}

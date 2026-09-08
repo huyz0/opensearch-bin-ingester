@@ -1,0 +1,15 @@
+{
+  "diff_sha256": "a216363e6179cb2b997396ef75b50b3c68d244b006bcd876c6b5296f5b704e48",
+  "verdict": "pass",
+  "findings": [
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitLogBatchTest.java",
+      "line": 184,
+      "severity": "minor",
+      "what": "twoSubmissionsNamingTheSameSegmentAreRefused does not distinguish the batch-level guard from its absence, because the substring it asserts ('same segment') also appears in the message the NEW CommitDelta record-level guard throws. This is the exact hazard the sibling test anEmptyBatchIsRefused names in capitals ten lines above ('THE MESSAGE NAMES THE LAYER ... Measured: the guard was an equivalent mutant until this assertion named it'); the discipline was applied to the empty-batch guard and not to the duplicate-key guard added in the same commit. Fix is the same shape: assert 'two submissions in one batch' rather than 'same segment'.",
+      "failure_scenario": "MEASURED SURVIVING MUTATION: delete the whole duplicate-key loop from CommitLog.commitSubmissions (the `if (!keys.add(s.segmentKey())) throw ...` block, plus the now-unused Set). :sequencer:test and :format:test both stay GREEN in full, with no test filter. The invariant itself still holds today because CommitDelta refuses the delta one rung lower, so this is defence-in-depth rather than correctness -- but the batch layer is unconstrained, and a later commit that relaxes the record-level check (a decoder that must tolerate a legacy object, say) would drop BOTH layers with no test noticing, at which point commitAll writes an entry in which one caller is unfindable and the other answers for both."
+    }
+  ],
+  "task": "M4.7b",
+  "role": "test-reviewer"
+}

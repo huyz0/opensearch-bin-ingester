@@ -1,0 +1,27 @@
+{
+  "diff_sha256": "55abf5a8d10c94f0bb753f7be43f97e6d99b6ca33d82dec2b318838ff669813a",
+  "verdict": "pass",
+  "summary": "Round 5's major is fixed correctly: both twin javadocs now state only the property, and MEASURED in a review tree, the property each one asserts is the property its fixture actually pins -- anchoring the adjacent-pair comparison on get(0) fails ONLY aStreamOutOfOrderOnlyInALATERPairIsStillCaught, and narrowing the loop to the last adjacent pair fails ONLY aStreamOutOfOrderOnlyInANEARLYPairIsStillCaught. Round 3's surviving mutants on the detail message are dead too: e.sequence() -> 1L and the two offsets transposed each fail the LATER fixture. The rounds: entry now reconciles with .harness/review: round 2 (b78ea2587b16) is pass/pass with 3 and 2 minors, rounds 1, 3, 4, 5 carry the majors the entry names, and the cap/budget wording matches review.md two-round-cap (2) and review.sh's default budget (4). No object-store request was added or moved: the new per-stream grouping and per-delta sort are in-memory over entries checkChain already read, so the request rate still scales with chain entries, not with streams or runs.",
+  "findings": [
+    {
+      "file": "baselines/review.txt:35",
+      "severity": "minor",
+      "title": "the third remedy clause is stated as a general property of the tree, and five javadocs in the same commit contradict it",
+      "failure_scenario": "The entry ends 'The remedy taken is not more care but FEWER COPIES: the reasoning has one home in backlog-notes.md, the fixture counts are deleted rather than corrected, and the offsets are no longer restated in javadoc beside the code that holds them.' The first two clauses are total claims about the tree and are true. The third reads as one by parallel construction and is not: this same commit adds or keeps javadocs that restate offsets beside the fixture holding them -- BatchedDeltaInvariantsTest.java:69-70 ('3 records at 4 covers 4..6, 4 records at 0 covers 0..3, together 0..6 exactly once'), :169-170 ('3 records at 0 covers 0..2, 3 records at 2 covers 2..4'), :351-353 ('Segment A covers 4..6 and segment B covers 0..5'), plus the as() recitals at :291 and :323. Only the two twins round 5 blocked on had their offsets deleted. Concrete failure: baselines/review.txt is the permanent argued-list, and it is read for exactly one thing -- whether the account of a task that ran three rounds past the cap is trustworthy. An auditor who checks the last clause against the file finds five counterexamples in the commit the clause is describing, which is the same 'one copy of a fact updated, its duplicate left asserting otherwise' shape the sentence claims to have remedied. A reader who instead believes the clause deletes accurate, load-bearing offsets from the other five javadocs. Not blocking, and not a wrong verdict from any checker: scoping the clause to the two fixtures it is about ('the offsets round 5 found stale are deleted rather than corrected') makes it true. Under review.md minors-land this belongs in the commit body, not in a round 7 -- rounds 3-5 of this task are what fixing minors already cost.",
+      "measured": "read against the staged file; not a test failure"
+    }
+  ],
+  "verification": [
+    "MEASURED in /tmp/binjava-review-trees/reviewer.K3Irv91c (staged bytes): ./gradlew :sequencer:test green at baseline.",
+    "MEASURED: Invariants.java:184 loop anchored on inSegmentOrder.get(0) instead of get(r-1) -> BUILD FAILED, single failing test aStreamOutOfOrderOnlyInALATERPairIsStillCaught. The LATER javadoc's claim ('the second segment ascends from the first, so a check anchored on the first sees a clean batch') is true of the fixture (starts 3, 8, 6) and is pinned.",
+    "MEASURED: same loop narrowed to the last adjacent pair only -> BUILD FAILED, single failing test aStreamOutOfOrderOnlyInANEARLYPairIsStillCaught. The EARLY javadoc's claim ('a check reading only the last pair sees an ascending step and reports nothing') is true of the fixture (starts 5, 3, 7; last pair 3 then 7) and is pinned.",
+    "MEASURED: detail message mutations 'e.sequence()' -> '1L' and the two offsets transposed each fail the LATER fixture -- round 3's surviving mutant is dead, as the inline comment at :308-313 and :322-331 claims.",
+    "Checked by hand: both twins tile their range exactly once (LATER 3..5, 6..7, 8..9 = 3..9 after the sequence-1 delta covers 0..2; EARLY 3..4, 5..6, 7..8 = 3..8), so neither gap nor I2 can fire and 'silent' is accurate.",
+    "Checked against .harness/review: ac8782b (round 1, reviewer changes-requested, 2 majors incl. the I4 overclaim), b78ea25 (round 2, reviewer pass 3 minors incl. the RUNS-versus-records overclaim, test-reviewer pass 2 minors), 14369e3 (round 3, 2 majors, backlog-done.md:176 archive row), 969a4f0 (round 4, major stale fixture count + minor early-pair hole), 35965db (round 5, major on both twin javadocs). Every per-round sentence in the rounds: entry matches.",
+    "Checked: Invariants.java's header now says seven kinds and grep 'new Violation(\"' yields exactly I1, chain, I5, order, I2, gap, link.",
+    "Checked: architecture.md:89 defines I4 as quoted, and the backlog row, the archive row, backlog-notes.md and ReaderInvariantsTest.java all now name the arm `order` rather than I4 -- rounds 1 and 3's majors are closed in every copy."
+  ],
+  "task": "M4.13f",
+  "role": "reviewer",
+  "staged_tree": "9bc76121080bcdeb64298135775bb601f4c0d906"
+}

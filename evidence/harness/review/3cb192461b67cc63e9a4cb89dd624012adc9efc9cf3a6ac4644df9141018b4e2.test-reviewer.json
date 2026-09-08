@@ -1,0 +1,95 @@
+{
+  "diff_sha256": "3cb192461b67cc63e9a4cb89dd624012adc9efc9cf3a6ac4644df9141018b4e2",
+  "verdict": "pass",
+  "summary": "Round 5, verify. Re-ran a 51-mutant matrix over Checkpoint.java against :format:test with --rerun-tasks: 45/51 killed (88.2%), and every one of the six survivors is an entry in baselines/mutants.txt. Zero unargued survivors. The carried MAJOR tr-10 is closed by measurement: with each < 0 half deleted individually, s1-streamCountNEGhalf, c1-podCountNEGhalf, l1-podLenNEGhalf and p1-partitionNEGhalf are all KILLED. The hand-built objects are stronger than the prescription I gave in round 4, not merely different: each ends after the field under test so the mutant ACCEPTS rather than refusing with a different message, which is a kill by decode-returned-normally and not only by message text. Carried majors tr-1, tr-2 and tr-7 also measured killed. One minor.",
+  "findings": [
+    {
+      "id": "M4.8a-tr-16",
+      "file": "baselines/mutants.txt:41",
+      "severity": "minor",
+      "finding": "The requireNonNull equivalence argument says 'new LinkedHashMap<>(null) raises NullPointerException either way'. Measured with both parameter checks deleted, that holds for new Checkpoint(1, null, Map.of()) and new Checkpoint(1, Map.of(), null) -- both NPE 'Cannot invoke java.util.Map.size() because m is null'. It does NOT hold for new Checkpoint(-1, null, Map.of()): with the checks present that is NPE, without them the sequence < 0 guard fires first and it is IllegalArgumentException. The exception TYPE changes, which is more than the message the entry claims. The conclusion still stands -- a caller error is refused with an unchecked exception either way and no caller can depend on which -- so this is a precision defect in the prose, not a wrong licence. Not worth fixing in a sixth round; the file's own header is the right place for it if it is ever touched again.",
+      "failure_scenario": "Someone reads the entry as measured fact, deletes both parameter checks, and a caller that passes a negative sequence together with a null map now gets IllegalArgumentException where the entry promised NullPointerException. Nothing downstream branches on that, so no defect follows -- but the file opens by saying a wrong equivalence argument is worse than an unargued survivor, and this one is imprecise in the same direction as the two it just removed.",
+      "mutation_that_survives": "Objects.requireNonNull(streams, \"streams\") and Objects.requireNonNull(pods, \"pods\") deleted -- r6/r7, both measured SURVIVED, both argued."
+    }
+  ],
+  "resolved": [
+    {
+      "id": "M4.8a-tr-10",
+      "status": "resolved-by-measurement",
+      "evidence": "Each < 0 disjunct deleted individually against :format:test --rerun-tasks: streamCount KILLED, podCount KILLED, podLen KILLED, partitionId KILLED. Also measured: the whole-guard and > limit halves of all three counts (s2/s3, c2/c3, l2/l3, p2/p3) are KILLED. The crafted objects at CheckpointDecodeRefusalTest.java:263-285 end exactly after the field under test, so without its guard each object DECODES SUCCESSFULLY -- a checkpoint with no streams, a checkpoint with no pods, and a pod 'p' with flushSeq 7 -- rather than being refused by the trailing-bytes check. That is a stronger detector than the three hasMessageContaining assertions I prescribed in round 4, because it does not depend on message text to distinguish two refusals."
+    },
+    {
+      "id": "M4.8a-r4-1",
+      "status": "resolved",
+      "evidence": "The false entry arguing streamCount < 0 and podLen < 0 as equivalent is REMOVED from baselines/mutants.txt, and both halves are now killed by test (s1, l1)."
+    },
+    {
+      "id": "M4.8a-r4-2",
+      "status": "resolved",
+      "evidence": "The claim that podCount < 0 was killed by a splice-based test is gone; c1-podCountNEGhalf is now genuinely KILLED by an object that ends after the pod count."
+    },
+    {
+      "id": "M4.8a-tr-14",
+      "status": "resolved",
+      "evidence": "The splice at CheckpointDecodeRefusalTest.java:250-253 that left six trailing bytes is replaced by raw()-built objects with no trailing bytes; measured, the mutant that survived it is now killed."
+    },
+    {
+      "id": "M4.8a-tr-15",
+      "status": "resolved",
+      "evidence": "The line arguing the negative counts as zero-iteration-then-trailing-bytes is removed; the measurement it contradicted (accept, not refuse) is what the new objects demonstrate."
+    },
+    {
+      "id": "M4.8a-tr-1",
+      "status": "resolved-by-measurement",
+      "evidence": "Not in scope for this round but cheap to check with the harness already built. Dropping the partitionId leg of RunKey.compareTo fails 5 of 198 :format tests; replacing Collections.sort(keys) with a sort by indexId alone fails 2. The idx(3)/partition 9 and idx(3)/partition 4 pair in CheckpointTest.fixture() is what pins the tiebreak."
+    },
+    {
+      "id": "M4.8a-tr-2",
+      "status": "resolved-by-measurement",
+      "evidence": "h1-shortHeaderBound (bytes.length < 8 -> < 7), h2-magicCheckDeleted and h3-versionCheckDeleted are all KILLED, as are h4 (MAGIC constant changed) and h5 (VERSION constant changed)."
+    },
+    {
+      "id": "M4.8a-tr-7",
+      "status": "resolved-by-measurement",
+      "evidence": "d2-repeatPodGuard KILLED by aREPEATEDPodIsRefusedToo; d1-repeatStreamGuard KILLED."
+    },
+    {
+      "id": "M4.8a-tr-8",
+      "status": "partially-resolved",
+      "evidence": "t2-iaeWrapRemoved (rethrow the IllegalArgumentException instead of wrapping it) is KILLED, so the wrap itself is pinned by aTORNObjectIsAnIOExceptionRatherThanAnUncheckedOne. The comment's ENUMERATION of routes remains untested, but it is now checkable rather than a count: verified by reading that sequence, both offsets, podId (isBlank) and flushSeq each feed a validating record, and that partitionId cannot -- RunKey's only other check is partitionId < 0, which the decoder's [0, Integer.MAX_VALUE] bound preempts. Removing the thrice-wrong count is the right remedy, not an evasion: nothing pinned the number so every value survived every mutation, whereas the enumeration can be falsified by reading. Carried, unchanged in severity, from the round that raised it."
+    },
+    {
+      "id": "dangling-doc-comments",
+      "status": "resolved",
+      "evidence": "WIDE_ONE's duplicated javadoc is gone and WIDE_NEGATIVE carries its own; :format:compileJava and :format:compileTestJava with --rerun-tasks emit no dangling-doc warning."
+    }
+  ],
+  "mutation_matrix": {
+    "scope": "format/src/main/java/binjava/format/Checkpoint.java, the only production file this task adds",
+    "suite": ":format:test --rerun-tasks, 198 tests, baseline green",
+    "killed": 45,
+    "total": 51,
+    "score": "88.2%",
+    "note": "The matrix is re-derived, not the round-4 matrix replayed, so 88.2% (45/51) is NOT comparable by arithmetic to the 78.9% (30/38) of round 4 -- the same error baselines/mutants.txt now warns about. What IS comparable across both is the survivor SET.",
+    "survivors_all_argued": [
+      "s4-streamCountDivisor9 -- streamCount > c.remaining()/18 becomes /9 (argued: divisor entry)",
+      "s5-streamCountDivisorGone -- divisor removed entirely (argued: same entry)",
+      "c4-podCountDoubled -- podCount > c.remaining() becomes > 2*c.remaining() (argued)",
+      "l4-podLenWidened -- podLen > c.remaining() becomes > Integer.MAX_VALUE (argued)",
+      "r6-requireNonNullSTREAMSparam (argued)",
+      "r7-requireNonNullPODSparam (argued)"
+    ],
+    "excluding_argued": "45/45 = 100%, against testing.md rule 9's 80% floor",
+    "notable_kills": [
+      "e6-offsetsSwappedCONSISTENTLY -- nextOffset and oldestRetainedOffset swapped in BOTH encode and decode: KILLED, which is the hazard the backlog row names and which round-trip cannot see",
+      "e1-sortStreamsDeleted and e2-sortPodsDeleted: KILLED",
+      "e3-podLenInCharsNotBytes -- putUvarint(raw.length) becomes putUvarint(pod.length()): KILLED by the non-ASCII podId in the fixture",
+      "r16-mapCopyOfForStreams -- the documented alternative to the LinkedHashMap copy: KILLED",
+      "r4-crossFieldGeBoundary -- oldest > next becomes oldest >= next: KILLED",
+      "s6-streamCountGeBoundary -- > becomes >=: KILLED"
+    ]
+  },
+  "task": "M4.8a",
+  "role": "test-reviewer",
+  "staged_tree": "5391a3e67c7bcc42ecee105209c6402d300969fa"
+}

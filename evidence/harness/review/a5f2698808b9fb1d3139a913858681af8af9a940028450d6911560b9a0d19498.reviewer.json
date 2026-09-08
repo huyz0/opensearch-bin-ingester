@@ -1,0 +1,51 @@
+{
+  "diff_sha256": "a5f2698808b9fb1d3139a913858681af8af9a940028450d6911560b9a0d19498",
+  "verdict": "changes-requested",
+  "task": "M4.13",
+  "role": "reviewer",
+  "findings": [
+    {
+      "id": "M4.13-R4-1",
+      "severity": "major",
+      "file": "sequencer/src/main/java/binjava/sequencer/CommitProtocolSimulation.java:84-93 (and CommitProtocolSweepTest.java:161-166)",
+      "summary": "The ack trace half of the round-3 fix did not land, and the comment claims it did. CommitProtocolSimulation.java:84-86 states the trace is 'PUBLISHED SO A TEST CAN SEE THEM FIRE' and names the exact mutation as its motivation: 'neutralising every acks.add left 388 tests green'. MEASURED in a review tree on the staged bytes: replacing the acks list with an ArrayList whose add() is a no-op -- neutralising all four acks.add sites, the slot-0 CONTINUE at :214, the zombie pair at :298/:300 and the leader pair at :323/:324 -- leaves the ENTIRE :sequencer suite GREEN at the default 1,000 seeds ('BUILD SUCCESSFUL in 23s'). The named mutation still survives. The reader-count half of the same fix does work (deleting the checkReader loop reddens); the ack half does not. The mechanism: lowestAckedSequenceIn returns -1 for an epoch with no events, -1 > 0 is false, so ackFloorAlwaysZero stays true; and checkAckOrder(emptyList) returns no violations. The assertion at :161-166 is RELATIVE -- 'no chain's floor is above 0' -- and passes vacuously on an empty trace, which is exactly the 'gate reports success while checking nothing' shape. Its as() message, 'every chain's ack trace is based at 0', overstates what it checks: a chain with no trace at all satisfies it. Fix is one assertion: a proportional floor on total ack events. MEASURED for calibration: 17,534 events over 1,000 seeds, 17.53 per seed; a floor of SEEDS * 5 has a minimum cumulative ratio of 3.09x over every seed count 1..1000, so it cannot false-red a bisect.",
+      "failure_scenario": "A later refactor moves the emission (e.g. commit() stops returning the delta, or an early continue skips the adds) and the trace goes empty. The sweep prints 'sweep: 1000 seeds in ...' and passes, the archive row and the class javadoc both keep saying I5's ack clause is carried over a 1,000-seed trace, and checkAckOrder examines zero events. This is the same defect the notes record as already having shipped once here -- the slot-0 CONTINUE 'documented in three places and EMITTED NOWHERE ... and nothing could tell' -- reintroduced one level up, on the trace as a whole rather than on its floor."
+    },
+    {
+      "id": "M4.13-R4-2",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/CommitProtocolSimulation.java:355-357",
+      "summary": "readersChecked counts loop iterations, not consumed verdicts, so it pins the checkReader loop's EXISTENCE and not that its violations reach the assertion. MEASURED: changing 'violations.addAll(ReaderInvariants.checkReader(...))' to a bare 'ReaderInvariants.checkReader(...)' -- the call still made, its result discarded, readersChecked++ untouched -- leaves the whole :sequencer suite GREEN at 1,000 seeds. The floor at CommitProtocolSweepTest.java:158-160 still reads 74,172. Not a false statement (the comment's named mutation, deleting the loop, does redden), but the counter is a proxy one edit away from the thing it stands for.",
+      "failure_scenario": "Someone optimising against the 60s budget keeps the reader construction for its side effects and drops the addAll, or a merge resolves the addAll away. I3 and I4's drop clause -- 'half of what M4's completion condition claims', by this file's own wording -- stops being asserted across 1,000 seeds, readersChecked keeps reporting 74,172 readers judged, and the printed line says so."
+    },
+    {
+      "id": "M4.13-R4-3",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSweepTest.java:158-160",
+      "summary": "The readersChecked floor is the one floor of the five with no measurement behind it in its own comment. commits cites 7.4, takeovers 2.87, epochsBurned 80.2 and faultsFired 122; readersChecked cites only 'one reader judged per epoch that has a chain', which does not derive the constant 10. MEASURED: 74.17 readers per seed at 1,000 seeds, so SEEDS * 10 has 7.4x of headroom -- and it duplicates the epochsBurned constant despite readersChecked being 0.92 x epochsBurned, so the two floors do not separate independently.",
+      "failure_scenario": "The next person calibrating this floor -- or arguing it down -- has no number to argue against, which is how the isPositive() floors this round replaced got in. A change that made checkReader run on one epoch in eight per seed would still clear SEEDS * 10."
+    },
+    {
+      "id": "M4.13-R4-4",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSweepTest.java:108-113, 167-170",
+      "summary": "The failure report is unbounded and duplicated, against the row's own promise that 'every violation names the seed that reproduces it' and is pinnable as a named regression. checkChain is called once per epoch over a scan range of pods * rounds = 360, so one chain-level defect is re-reported at every epoch whose walk covers it, and 'failing' accumulates all of them across all seeds. MEASURED on this tree with a single production mutation (ChainReplay:456 Math::max -> Math::min) at -Dsweep.seeds=20: 2,000 lines from 13 distinct seeds, a 353 KB test XML, every line identical apart from the seed. At the default 1,000 seeds that is roughly 100,000 lines and ~17 MB. Deduplicating the list, or capping it at the first N distinct seeds, keeps the promise intact.",
+      "failure_scenario": "A developer hits a red sweep on a real regression and the route back to the defect -- the seed -- is buried in tens of thousands of duplicate lines that Gradle then truncates in the console, so they re-run with a smaller -Dsweep.seeds to get a readable message rather than reading the one they already have."
+    },
+    {
+      "id": "M4.13-R4-5",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSweepTest.java:172-182",
+      "summary": "Dropping the wall-clock assertion is right (performance.md rule 9, and the 3.9x dead band is real), but the comment names 'scripts/check-suite-time.sh' as 'the designated home for the budget' and that script does not carry this budget and is not wired into pre-commit. It budgets by LAYER -- L1 is 300s, five times this test's 60s -- and AGENTS.md lists it under 'present in scripts/ but not wired into .pre-commit-config.yaml'. No backlog row owns moving the 60s there. The archive row's 'MEASURED at 17.1s for 1,000 seeds against the stated 60s budget' is honest about the measurement (I measured 16,401 ms on this tree) but the budget it is stated against is now enforced by nothing.",
+      "failure_scenario": "checkChain's O(E-squared) walk (M4.24) or an added fault class takes the sweep from 17s to 250s. Nothing fails: the printf reports it, the L1 layer budget of 300s still passes, and pre-commit does not run check-suite-time.sh at all. The 60s number survives in three documents as a claim nothing tests."
+    },
+    {
+      "id": "M4.13-R4-6",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSweepTest.java:129-157",
+      "summary": "ANSWER TO THE QUESTION ASKED, recorded as evidence rather than as a defect: none of the three new floors risks a false RED on a smaller -Dsweep.seeds run. MEASURED by replaying the test's own five expressions against cumulative totals at EVERY seed count from 1 to 1,000 (seeds are deterministic and always the prefix 0..N-1, so this is the exhaustive set of runs a bisecting developer can produce): 0 false reds. Minimum cumulative margin over the floor: commits 2.10x, takeovers 1.60x, epochsBurned 8.02x, faultsFired 5.80x, readersChecked 7.32x. Means per seed at 1,000: 7.33, 2.87, 80.84, 122.10, 74.17, against the comments' 7.4, 2.87, 80.2, 122 -- all accurate. takeovers is the tightest as the comment says, and integer division makes SEEDS * 3 / 2 read 1 at SEEDS=1 against an actual 2, which is the narrowest single point and still clears.",
+      "failure_scenario": "None. Recorded so the next round does not re-derive it, and so the 1.60x minimum on takeovers is on the record as the margin that would be consumed first by any future change that reduces failover frequency."
+    }
+  ],
+  "staged_tree": "21db4e314c3c0b16912d4f72e403d882d7d13514"
+}

@@ -1,0 +1,76 @@
+{
+  "diff_sha256": "5b805231aa3b534c32d57084d1c1363f978ddc4623d366175682c332c02cbd59",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "H1",
+      "severity": "major",
+      "file": "scripts/check-terminology.sh:28",
+      "summary": "With an empty scoped file list the gate degrades into a recursive grep of the whole working directory, including the .tmp/ quarantine -- the exact scope violation check-gate-scope.sh exists to prevent, and which it cannot see.",
+      "failure_scenario": "FILES=$(scoped_files '*.md' '*.java') is empty for any commit that stages no markdown or Java -- e.g. a commit touching only scripts/, or only .pre-commit-config.yaml, or only gradle.properties. `grep -rniE \"\\bcollector\\b\" $FILES` then runs with NO file operand, and GNU grep documents that a recursive search with no FILE examines the working directory. Reproduced in this checkout: the loop body with FILES=\"\" returns 390 hit lines, the first being .tmp/automq/storage/src/main/java/org/apache/kafka/storage/internals/log/AbstractIndex.java:295. The gate fails the commit citing a file this project does not own and that no edit to this repository can fix, so the developer's only remedy is --no-verify or deleting .tmp/. On a machine with no .tmp/ the mirror image happens: the gate scans the entire tree while printing 'vocabulary matches glossary.md (changed files only -- CI runs GATE_SCOPE=full)', a scope note that is then false. check-gate-scope.sh misses it because it only pattern-matches `find <path>`, `glob.glob(` and `os.walk(`, not `grep -r` with an unguarded word-split variable."
+    },
+    {
+      "id": "H2",
+      "severity": "major",
+      "file": "scripts/check-reviewed.sh:11",
+      "summary": "The gate carrying non-negotiable 5 exits 0 with 'ok nothing staged' in a fresh checkout, so `pre-commit run --all-files` passes it vacuously -- and AGENTS.md:215 asserts the opposite behaviour.",
+      "failure_scenario": "Reproduced: seeded a clean git repository from the tracked+staged tree, committed once, ran ./scripts/check-reviewed.sh with nothing staged -- output '  ok   nothing staged', EXIT=0. `git diff --cached --quiet` is true whenever the index equals HEAD, which is the state of every fresh checkout and of every `pre-commit run --all-files` invocation. AGENTS.md:215 states 'It is a *pre-commit-stage* hook, so `--all-files` **does** invoke it and it fails in a fresh checkout -- CI must run with `SKIP=check-reviewed`', and .pre-commit-config.yaml:23-26 repeats it. Both are false as written. The consequence is worse than the wrong prose: a future CI run that adds `--all-files` without SKIP will report check-reviewed green having examined nothing, which is the 'gate that reports success while checking nothing' shape gate-design/SKILL.md:51 names, in the one gate that stands behind non-negotiable 5. Either the check must refuse when it has no diff to judge, or the row must say it passes vacuously rather than that it fails."
+    },
+    {
+      "id": "H3",
+      "severity": "major",
+      "file": "AGENTS.md:213",
+      "summary": "The CI table claims check-tdd is enforceable in CI 'only with CHECK_RANGE'. With CHECK_RANGE it cannot pass in CI at all, because the red record it reads is gitignored -- the same reason check-reviewed is marked as impossible one row below.",
+      "failure_scenario": "Reproduced: built a two-commit repository from this tree where the second commit adds buildSrc/src/test/java/binjava/JavaTestParserTest.java, no .harness/ present (as in any fresh CI checkout), then ran `CHECK_RANGE=HEAD~1 GATE_SCOPE=full ./scripts/check-tdd.sh`. Output: 'FAIL 1 new test(s) staged but no red record at .harness/tdd/red.json ... binjava.JavaTestParserTest#findsExactlyTheseTestIds', EXIT=1. scripts/tdd_scan.py:62-70 reads .harness/tdd/red.json, and .gitignore:12 ignores .harness/, so the file is never in a clone. Any PR that adds a test therefore fails check-tdd in CI unconditionally and unfixably. The row directs a future M0.7 author to wire `CHECK_RANGE=<base-ref>` and expect a working gate; they will get a permanently red pipeline and the predictable fix will be to add check-tdd to the SKIP list, at which point the gate is enforced locally only -- which is what the table should have said in the first place."
+    },
+    {
+      "id": "H4",
+      "severity": "major",
+      "file": "buildSrc/src/test/java/binjava/JavaTestParserTest.java:30",
+      "summary": "The suite claims 'one case per parser bug review actually found', but most fixtures stay green when the mechanism they are named for is deleted, and no fixture exercises the parser's refusal path at all.",
+      "failure_scenario": "Mutated scripts/java_tests.py and ran all eight fixtures through `python3 scripts/tdd_scan.py ids` after each mutation. Surviving mutants, each green across the whole suite: (1) delete the annotation-argument collapse loop at java_tests.py:91-94 entirely -- value-source.java, the fixture written for `@ValueSource(ints = {1, 2, 3})`, still returns exactly p.ParamTest#rejectsBadPartition and p.ParamTest#plain, rc=0; (2) delete the `line` alternative from NOISE at java_tests.py:54 -- text-block-in-comment.java, the fixture written for a comment containing \"\"\", still returns exactly p.SegTest#parses and p.SegTest#hidden, because the fixture's comment contains a balanced PAIR of \"\"\" and the text block's own content {\"index\":{\"_id\":\"1\"}} has balanced braces; (3) move `textblock` after `string` in NOISE -- the ordering the module docstring at java_tests.py:45-50 says is load-bearing -- same, all eight green; (4) replace the `if last == 'interface':` branch at java_tests.py:131 with `if False:` -- annotation-type.java stays green, because it only pins the cross-check lookahead at java_tests.py:229, not the scan-side branch; (5) replace each of scan_checked's three refusal guards with `if False:` -- brace balance (:201), quote parity (:205) and the annotated!=detected cross-check (:233) -- all eight green, because every case asserts `p.waitFor()` isZero (:62) and there is no fixture the parser must REFUSE. Concretely: someone tidying NOISE into three sequential re.sub calls, or dropping the collapse loop as dead code, ships with this suite green; both TDD gates then lose or mis-attribute ids in the next real test file and print 'ok no new tests in this diff' on a change they should reject -- the precise regression the suite was added to prevent, per its own javadoc at :14-24. Needs at least: a fixture whose comment carries an ODD number of \"\"\", a fixture whose text block contains an unbalanced brace, a fixture where the annotation-argument braces would swallow a following method, and a negative fixture asserting a non-zero exit and an UnparseableJava message."
+    },
+    {
+      "id": "H5",
+      "severity": "major",
+      "file": "scripts/check-gate-scope.sh:27",
+      "summary": "The ALLOWED map pre-grants filesystem-walk exemptions to coverage.py and mutants.py, files this commit does not add, so the waiver is decided in a review that cannot see the code it waives.",
+      "failure_scenario": "check-gate-scope.sh:18 states 'Adding a line here is a decision. Say why.' Lines 27-28 make that decision for scripts/coverage.py and scripts/mutants.py, which arrive later with M0.13/M0.14. When M0.13 lands a coverage.py containing `glob.glob('**/build/reports/**')` -- or `os.walk('..')`, or a walk that reaches the .tmp/automq clone -- check-gate-scope.sh skips it silently on the first `continue` at line 33, and the M0.13 reviewer sees only 'PASSED check-gate-scope.sh' in the packet with no indication a waiver was ever granted. The exemption is unconditional: nothing binds the future file to the stated reason ('reads JaCoCo XML under */build/reports'). The two lines belong in the commit that adds the script they exempt, where a reviewer can read both together."
+    },
+    {
+      "id": "m1",
+      "severity": "minor",
+      "file": ".pre-commit-config.yaml:24",
+      "summary": "The header says check-reviewed's evidence 'lives in build/review/'. It lives in .harness/review/.",
+      "failure_scenario": "review.sh:21 sets OUT=.harness/review and check-reviewed.sh:17 reads .harness/review/$SHA.$ROLE.json; .gitignore:7-11 documents the deliberate move off build/ because `./gradlew clean` was deleting verdicts. The stale path survives in the one file a CI author reads to learn what to SKIP and what to preserve between steps, so a cache or artifact rule written from it preserves an empty directory."
+    },
+    {
+      "id": "m2",
+      "severity": "minor",
+      "file": "AGENTS.md:212",
+      "summary": "Three stale counts, one of them a timing claim that this commit itself invalidates.",
+      "failure_scenario": "AGENTS.md:212 says 'the ten text/build gates'; `grep -c 'stages: \\[pre-commit\\]' .pre-commit-config.yaml` is 13. scripts/review-lenses.sh:8 says 'all ten cost 412 ms together' -- the same wrong count, and the timing cannot hold now that check-harness-tests forks a Gradle build into the pre-commit set; that sentence is read by every reviewer as justification for not scoping gates, so it should not carry a number nobody can reproduce. scripts/check-license-headers.sh:16 says 'the 19 scripts'; there are 26 (22 .sh + 4 .py)."
+    },
+    {
+      "id": "m3",
+      "severity": "minor",
+      "file": "AGENTS.md:157",
+      "summary": "Non-negotiable 9 is the only one that neither names a gate nor states it has none, against the file's own convention.",
+      "failure_scenario": "Rules 1, 3 and 5 name scripts; 2, 7 and 8 say '*No script yet.*'; 4 says no script can exist; 6 says 'No script until the store SPI lands'. Rule 9 says nothing, so a reader applying the pattern the section establishes concludes something enforces 'a new check is deterministic by default'. Nothing does -- check-gate-scope.sh enforces rung 2 for gate scripts only, and the 'one sentence in the commit body' at :165 has no checker. Mark it '*No script yet.*' like its neighbours."
+    },
+    {
+      "id": "m4",
+      "severity": "minor",
+      "file": "scripts/check-reviewed.sh:24",
+      "summary": "The gate never reads the `verdict` field it stores, so an explicit changes-requested carrying only minor findings lets the commit land.",
+      "failure_scenario": "review.sh:98 accepts verdict in {pass, changes-requested} and review.sh:119 writes it to the artifact; check-reviewed.sh's python block at :29-45 only counts findings whose severity is blocking or major. A reviewer returning {\"verdict\":\"changes-requested\",\"findings\":[{\"severity\":\"minor\",...}]} therefore passes the gate and the commit lands over an explicit request for changes, with the request visible only in a gitignored file -- the same disappearance review.md rule 10 was written to close."
+    },
+    {
+      "id": "m5",
+      "severity": "minor",
+      "file": "scripts/check-metric-cardinality.sh:11",
+      "summary": "The empty-input message states something untrue of the tree.",
+      "failure_scenario": "The message 'no Java sources yet (build lands in M0.4)' prints whenever the delta contains no .java file. M0.4 landed in de66330 and `git ls-files '*.java'` is non-empty, so every future printing of this line is false. An agent reading the gate output concludes the build has not landed."
+    }
+  ]
+}

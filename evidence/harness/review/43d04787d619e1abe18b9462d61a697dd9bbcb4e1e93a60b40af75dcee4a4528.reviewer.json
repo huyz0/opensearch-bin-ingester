@@ -1,0 +1,22 @@
+{
+  "diff_sha256": "43d04787d619e1abe18b9462d61a697dd9bbcb4e1e93a60b40af75dcee4a4528",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "R8",
+      "severity": "minor",
+      "file": "scripts/check-gate-scope.sh:131-140",
+      "summary": "The check anchors on the SOURCE of the match but not on the PATTERN, so a .gitignore that matches the literal probe path .tmp/probe without ignoring .tmp/ passes. The pattern is already in field 3 of the same check-ignore -v line.",
+      "failure_scenario": "Someone narrows .gitignore's `.tmp/` to `.tmp/probe` (or adds any pattern that happens to match the probe path, e.g. `*probe*`). `git check-ignore -v .tmp/probe` then returns `.gitignore:1:*probe*<TAB>.tmp/probe`, the case arm `.gitignore:*)` matches, and the gate prints ok. Measured in a scratch repo: with `.gitignore` = `probe`, `.gitignore` = `.tmp/probe` and `.gitignore` = `*probe*`, the gate arm passes in all three while `git check-ignore -q .tmp/ourclone/README` returns NOT ignored -- i.e. the next `git add -A` stages the entire reference clone, which is precisely the outcome the block exists to prevent. The rejecting test cannot see this: it strips only lines equal to `.tmp/`, so the narrowing edit is outside its fixture. Constraining the third field (or probing a second, unrelated path under .tmp/) closes it."
+    },
+    {
+      "id": "R9",
+      "severity": "minor",
+      "file": "buildSrc/build.gradle.kts:42-55",
+      "summary": "The new rootGitignore declaration was inserted between the settings.gradle.kts rationale comment and the rootSettings declaration it explains, so two comment blocks now sit above one declaration and the second declaration has none.",
+      "failure_scenario": "Lines 42-45 say 'three suites assert against the module list derived from settings.gradle.kts ... without this the task is UP-TO-DATE across a module rename', and they now sit immediately above `inputs.file(...resolve(\".gitignore\"))`, which has nothing to do with module renames. A later maintainer deleting the rootGitignore declaration deletes the comment that justifies rootSettings along with it, or reads the module-rename rationale as applying to .gitignore and drops rootSettings as unexplained -- restoring the exact UP-TO-DATE defect the comment was written to prevent (the same defect the comment itself records as already having happened once)."
+    }
+  ],
+  "task": "M0.29",
+  "role": "reviewer"
+}

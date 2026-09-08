@@ -1,0 +1,15 @@
+{
+  "diff_sha256": "7d84b94abe97b31de8c99ee551d3a291b82d20cceae6792f552fdb3a3639660e",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "DT12",
+      "severity": "minor",
+      "file": "docs/internal/product/milestones/M1/SPEC.md:159",
+      "summary": "Criterion 3's liveness signal proves the 1,600 consumers were alive, not that they polled 3,000 times; a consumer that silently stopped polling but still answers the liveness probe would satisfy the assertion. Line reference shifted 158->159 by the one-line Design edit; finding text unchanged from the 5a190e02 pass.",
+      "failure_scenario": "Mutate the consumer loop to poll once and then park forever while keeping the liveness/heartbeat path intact: store-request count stays at zero, the liveness assertion still passes, and T8/T8b report zero idle cost for a consumer that is not actually consuming. Record the poll-attempt counter, not just liveness."
+    }
+  ],
+  "task": "M-1.1",
+  "role": "test-reviewer"
+}

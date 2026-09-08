@@ -1,0 +1,23 @@
+{
+  "diff_sha256": "702a562b9eeed55544d424560fe562a476e494701735f049d7fd0a2ff6969a80",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "M4.13-R2a",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:147",
+      "summary": "The live M4.13 row still reads \"DECOMPOSED into M4.13a-d\" while this same diff adds M4.13e three lines above (backlog.md:144). backlog.md is the authoritative open-row list, and this sentence is the only enumeration of the sub-rows a reader sees before opening the notes; the archived pre-split row the diff writes into backlog-notes.md:891 says \"SPLIT into M4.13a-e\" and names all five owners, so the two files staged in one commit contradict each other on how many sub-rows exist.",
+      "failure_scenario": "An agent that picks M4.13 (the 1,000-seed sweep) after M4.13a-d land reads \"DECOMPOSED into M4.13a-d\" as the complete prerequisite set, concludes the decomposition is finished, and implements the sweep with no partitioned-leader fault class -- the exact class this commit split out to keep from being lost. The mandated next step (read the notes for the one task picked) does correct it, so the failure needs that step to be skipped, which is why this is minor rather than major."
+    },
+    {
+      "id": "M4.13-R2b",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:787",
+      "summary": "The ### M4.13b section still opens \"The three fault classes M4.12 does not model.\" after the diff moved partitioned leaders out of that row and into M4.13e. The row now owns two classes -- delayed writes and reordered completions -- as its own backlog.md:143 summary says (\"THE TIME-SHAPED FAULT CLASSES\"). The correction arrives two paragraphs later at backlog-notes.md:794.",
+      "failure_scenario": "Whoever picks up M4.13b reads the section's one-line summary, budgets and specs work for three classes, and pulls partitioned leaders back into the deferral-queue change -- re-merging the split at implementation time and duplicating M4.13e. Self-correcting for a reader who continues to line 794, so minor."
+    }
+  ],
+  "task": "M4.13",
+  "role": "reviewer",
+  "staged_tree": "caa8c563d9e092328a384fcce1a74d49646b79a4"
+}

@@ -1,0 +1,24 @@
+{
+  "diff_sha256": "927b8a9ab9ec4a4b50d7be777ded379fe2cf500b8d9abc2b3db365af01014682",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "M0.53-r10-1",
+      "file": "docs/internal/product/backlog.md",
+      "line": 31,
+      "severity": "minor",
+      "what": "The cell's opening claim -- 'every round that examined the scanner logic found a real major' -- and its counterpart in baselines/review.txt:12 -- 'Every round but the first found the same shape of bug: a predicate asked of one end of a rename but not the other' -- are contradicted for rounds 6-9. Record: round 6's majors were backlog prose, the baselines grep claim and a RenameFollowingBoundsTest fixture; rounds 7, 8 and 9 each carried exactly one major, all on this cell's prose, with the test-reviewer passing clean each time. It is falsifiable from the cell alone, no .harness access needed: three sentences later the same cell says round 6's 'three majors were all OUTSIDE the scanner logic' and that rounds 6-8's prose findings are 'more findings than the scanner logic produced in the same span'. The same overstatement makes the cell's closing 'this cell now stops at the code' untrue -- it still carries several who-said-what claims. Minor by the precedent this cell already set: round 9 rated the identical over-count of productive rounds ('every one of the first six found a real major') a minor, on the ground that check-reviewed keys on the presence of the rounds: line and not on any number.",
+      "failure_scenario": "A milestone review, or the next author weighing whether a comparably long round loop was justified, reads the headline and concludes every round paid for itself in the scanner code. The record says four of the nine rounds found nothing in the scanner logic and spent themselves on this cell's own prose -- the rounds-9-11-fixing-minors pattern review.md rule 12 cites, and precisely what this row exists to warn about. The row is the only durable evidence about that loop (.harness/review/ is gitignored), so the overstatement is what a future cap argument would cite when deciding that many rounds are normal and productive."
+    },
+    {
+      "id": "M0.53-r10-2",
+      "file": "docs/internal/product/backlog.md",
+      "line": 31,
+      "severity": "minor",
+      "what": "'THREE DRAFTS OF THIS CELL MADE CLAIMS ABOUT WHO SAID WHAT IN REVIEW AND ALL THREE WERE WRONG -- caught by rounds 6, 7 and 8' is stale by one as of the round whose fix this diff is. Round 9's reviewer recorded a major opening 'The passage added this round is itself a fourth claim about who said what in review, and the record contradicts it' -- and that fourth claim is exactly the clause deleted in this diff. The supported count is four, caught by rounds 6, 7, 8 and 9. It sits two sentences below the new paragraph arguing that a hand-carried count in this cell cannot be kept current, and it is one: the same edit that removed the round count left this count and it went stale in the same round.",
+      "failure_scenario": "The number the sentence exists to convey -- how many times this cell's prose has been wrong -- understates in the direction that flatters the cell, in the record a future reader uses to judge whether prose-only review rounds are worth running. And it will be stale again after any further round, for the same reason the round count was, unless the sentence stops counting the way the round count now does (e.g. 'every draft of this cell that made a claim about who said what in review was wrong, and each was caught')."
+    }
+  ],
+  "task": "M0.53",
+  "role": "reviewer"
+}

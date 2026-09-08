@@ -1,0 +1,25 @@
+{
+  "diff_sha256": "dd3839f0faea487f6d27e4a8a9fd6827e4a239ce20ebd07f10f3d383c86159a6",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "M4.13n-R1a",
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/BatchedDeltaInvariantsTest.java:111-124",
+      "summary": "The third fold site, Invariants.java:323 in offsetsSealedInto, is pinned ONLY against THROWING, not against folding the wrong set of runs. aSUCCESSORInheritsFromABatchedPredecessor crosses into epoch 2 and then never commits anything in epoch 2, so the inherited map offsetsSealedInto computes is seeded and immediately discarded -- epoch 2's chain holds nothing but a CONTINUE, and checkChain's fold loop has no delta to compare the base against. MEASURED: replacing Invariants.java:323 `delta.allRuns()` with `delta.segments().get(0).runs()` -- the checker folding only the first segment of a batched predecessor, so the successor's inherited base for RA is 3 instead of 7 -- leaves the ENTIRE :sequencer suite GREEN, all four new tests included. Contrast the other two sites, where the same first-segment-only mutation is killed: at Invariants.java:156 by aBatchedDeltaWhoseSECONDSegmentREWINDSIsStillCaught, and at ReaderInvariants.java:177 by checkReaderJUDGESAReaderOfABatchedDelta. This is the row's own stated failure mode -- 'the suite is green because the case is absent, not because it works' -- reproduced at the cross-epoch site.",
+      "failure_scenario": "MEASURED, not inferred. Adding one line to the existing test after `second.open(1, seal.sequence())` -- `second.commit(\"seg/C\", Map.of(RA, 2));` -- makes the surviving mutant produce a WRONG RESULT: at baseline `Invariants.checkChain(store, PREFIX, 2)` returns [], and under the first-segment-only mutant at Invariants.java:323 it returns [Violation[invariant=gap, detail=stream RunKey[indexId=00000000-0000-0000-0000-0000000000aa, partitionId=0] resumes at 7, skipping 4]] -- a spurious `gap` against a chain that is correct, with the mirror case (an overstated base) reading as a false I2. So the checker whose whole job is to judge the reader can misjudge a successor of a batched predecessor, in either direction, and no test in the tree says so. The fix is that one line plus the existing isEmpty() assertion; no new test is needed.",
+      "surviving_mutation": "sequencer/src/test/java/binjava/sequencer/Invariants.java:323 -- `for (RunCommit run : delta.allRuns())` -> `for (RunCommit run : delta.segments().get(0).runs())`. Whole :sequencer suite BUILD SUCCESSFUL."
+    },
+    {
+      "id": "M4.13n-R1b",
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/BatchedDeltaInvariantsTest.java:100-109",
+      "summary": "The javadoc states a MEASURED result that is false, and it is false in the direction that invites deleting the sole pin on a changed line. It says: 'THIS ONE PINS PRODUCTION, NOT THE CHECKER. Reverting any of the three CHECKER sites to runs() leaves it green -- measured'. MEASURED HERE, the opposite: reverting Invariants.java:323 (offsetsSealedInto) from allRuns() to runs() FAILS aSUCCESSORInheritsFromABatchedPredecessor with java.lang.IllegalStateException at BatchedDeltaInvariantsTest.java:123, and running the FULL :sequencer suite under that same single-line reversion, it is the ONLY test that fails -- '4 tests completed, 1 failed', everything else green. The reachability is plain from the code: checkChain(store, PREFIX, 2) at line 123 calls inheritedOffsets, which calls offsetsSealedInto(epoch 1, ...), whose fold walks the batched delta this fixture wrote. So this test is not a duplicate of the production pin; it is the load-bearing and unique pin for one of the three sites the commit changed. It earns its place -- for the opposite reason to the one written down.",
+      "failure_scenario": "A maintainer pruning the suite reads 'reverting any of the three CHECKER sites leaves it green' and 'fails along with twenty other tests', concludes the test is covered twenty times over by the ChainReplay production pin, and deletes it. Invariants.java:323 then has NO test at all: reverting it to runs() -- which raises IllegalStateException on every batched delta, the exact defect this row exists to fix -- leaves the whole suite green, and the regression lands silently. Separately, this is non-negotiable 4 in the staged bytes: a MEASURED claim recorded in committed prose that measurement contradicts, in a comment whose only purpose is to tell a future reader what the test is worth.",
+      "surviving_mutation": "Not a surviving mutation -- the inverse. sequencer/src/test/java/binjava/sequencer/Invariants.java:323 `allRuns()` -> `runs()` is killed by this test and by NOTHING ELSE in :sequencer, which is what the javadoc denies."
+    }
+  ],
+  "task": "M4.13n",
+  "role": "test-reviewer",
+  "staged_tree": "38b53b148cf30d37c3ae4b9e854e12e2799f9cd3"
+}

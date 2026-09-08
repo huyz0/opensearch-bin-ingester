@@ -1,0 +1,57 @@
+{
+  "diff_sha256": "f4d8ec04c385591287acb88020066158b6a0c49ccc25d612dc608dad67516c95",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "M4.10d-tr-12",
+      "severity": "blocking",
+      "file": "sequencer/src/test/java/binjava/sequencer/SequencerDedupTest.java:54",
+      "summary": "\"appends nothing\" -- the row's headline claim -- is asserted by NO test. Every dedup test asserts only the RETURNED delta (offsets and sequence); nothing reads the chain back. The class javadoc at line 43 claims 'THE ASSERTION IS ON THE OFFSETS AND ON THE CHAIN, never on the offsets alone', which was true last round and stopped being true when `deltasCarrying` was deleted with the ambiguous tests. The backlog note names this exact blindness.",
+      "mutation": "In LocalSequencer.commitAll, insert `log.commitAll(replays);` immediately before `return new CommitDelta(window.sequenceOf(...), answered);` -- answer from the window AND still append the replay durably.",
+      "failure_scenario": "MEASURED in my own worktree, whole :sequencer suite green (322 tests, 0 failed) with that mutation applied. Probe through the real LocalSequencer, MemoryBinStore, one leader, one epoch: commitAll([(poda,i1,0,seg/0,3 records)]) then the byte-identical retry. Printed 'PROBE returned replay offsets=0 seq=1 (first seq=1)' -- both current assertions in aReplayedTripleReturnsTheORIGINALOffsetsAndAppendsNoSecondDelta pass -- while the store held TWO deltas carrying seg/0: 'durable delta seq=1 offset=0' and 'durable delta seq=2 offset=3'. Three records at two sets of committed offsets, which is the round-1 harm returning in the form an offsets-only assertion cannot see. ChainReplay folds with merge(key, lastOffset+1, Math::max), so the duplicate advances nextOffset past it and a consumer reading the chain sees the segment twice. To kill it, restore a chain-side assertion: count the deltas carrying the replayed segment key and require exactly 1 (the deleted `deltasCarrying` helper did exactly this), or assert store.counts().puts() is unchanged across the replay."
+    },
+    {
+      "id": "M4.10d-tr-13",
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/SequencerDedupTest.java:165",
+      "summary": "The acceptance criterion 'a batch mixing a replay with fresh flushes commits the fresh ones FIRST, so a refusal never loses a flush that had nothing wrong with it' has no killing test. aBatchMixingAReplayWithAFreshFlushCommitsTheFreshOneAndAnswersTheReplay uses an ANSWERABLE replay, where the order of applyFresh and answer is unobservable -- both orders return the same delta. Only a REFUSABLE replay discriminates, and aReplayThePointedDeltaDoesNotCarryIsREFUSED submits the replay alone, with no co-batched fresh flush.",
+      "mutation": "In LocalSequencer.commitAll, swap the two statements: put `answered.addAll(window.answer(replays));` BEFORE `CommitDelta delta = fresh.isEmpty() ? null : applyFresh(fresh);` -- i.e. refuse before committing, the exact ordering the production comment at line 373 says was 'measured at offset 7 instead of 12'.",
+      "failure_scenario": "MEASURED, whole :sequencer suite green with the swap applied. Probe, real LocalSequencer, MemoryBinStore, one leader: poda commits (i1,0,seg/0,3) then (i1,1,seg/1,4), so a replay of (i1,0) points at the delta carrying seg/1 only and is unanswerable. Then commitAll([(poda,i1,0,seg/0) replay, (podb,i9,0,seg/b,5 records) fresh]). Production order printed 'PROBE: threw ... does not carry' AND 'PROBE: seg/b durable at 7'. With the swap it printed the same throw and 'PROBE: seg/b durable=false' -- podb's flush, which had nothing wrong with it, was silently lost. BatchingSequencer fails a whole window together, so that is a producer-visible loss. To kill it, extend the mixed-batch test (or add one) with an unanswerable replay co-batched with a fresh flush, asserting the fresh segment IS durable in the chain after the IOException."
+    },
+    {
+      "id": "M4.10d-tr-14",
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/SequencerDedupTest.java:229",
+      "summary": "The segment-key conjunct added to IdempotencyWindow.answers this round -- the fix for round 2's two-segments-one-triple major -- is constrained by nothing. aSegmentMatchingOnlyPARTOfTheTripleAnswersNOTHING was NOT changed this round (it is byte-identical in the delta) and builds all four SegmentCommits with segmentKey \"seg/x\", the same key `want` carries. There is no case where the triple matches and the key differs, and no end-to-end test submits two segments under one flushSeq.",
+      "mutation": "Delete `&& segment.segmentKey().equals(request.segmentKey())` from IdempotencyWindow.answers (IdempotencyWindow.java:179), i.e. revert this round's fix.",
+      "failure_scenario": "MEASURED, whole :sequencer suite green with the conjunct removed. Probe through the real LocalSequencer: commitAll([(podx,i1,5,seg/a,3), (podx,i1,5,seg/b,4)]) lands as 'PROBE first: [seg/a@0, seg/b@3]'. The byte-identical retry with the conjunct present returns 'PROBE retry: [seg/a@0, seg/b@3]'; with it removed the retry throws 'java.lang.IllegalArgumentException: a delta names the same segment twice, so no caller could tell which offsets are its own: seg/a' -- both replays resolve to one SegmentCommit and a landed flush becomes a producer-visible failure. That is the round-2 finding verbatim, fixed in production and left unpinned. To kill it, add a fifth case to the unit test with the exact triple but a different segmentKey asserted false, or promote the probe to a test."
+    },
+    {
+      "id": "M4.10d-tr-15",
+      "severity": "major",
+      "file": "sequencer/src/testFixtures/java/binjava/sequencer/FakeSequencer.java:120",
+      "summary": "The fake DIVERGES from the real sequencer on the very input this round's production fix addressed. FakeSequencer.tripleOf keys on (podId, incarnationId, flushSeq) and omits the segment key, while IdempotencyWindow.answers now requires it. So the fake carries the defect production just removed, and no test in the commit catches the divergence. The fake's own javadoc says 'A fake that quietly differs is worse than no fake at all'.",
+      "mutation": "None needed -- the divergence is in the shipped bytes. (For completeness, adding the segment key to tripleOf is the fix, and no existing test fails either way.)",
+      "failure_scenario": "MEASURED with the UNMUTATED staged bytes. Same input to both implementations: commitAll([(podx,i1,5,seg/a,3), (podx,i1,5,seg/b,4)]) then the byte-identical retry. Real LocalSequencer: 'PROBE first: [seg/a@0, seg/b@3]' then 'PROBE retry: [seg/a@0, seg/b@3]'. FakeSequencer: 'PROBEFAKE first: [seg/a@0, seg/b@3]' then 'PROBEFAKE retry threw: java.lang.IllegalArgumentException: a delta names the same segment twice ... seg/b' -- because applied.put(tripleOf(request)) overwrites seg/a's entry with seg/b's, so both replays answer with seg/b. A caller writing retry tests against the fake sees a failure production does not produce. Fix tripleOf to include request.segmentKey() and add a fake test asserting a two-segment flush replays cleanly."
+    },
+    {
+      "id": "M4.10d-tr-16",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/IdempotencyWindow.java:148",
+      "summary": "'evicts oldest-by-POINTER' is pinned on the sequence half only. The comparator's primary key, `epoch()`, is inert in this build: with the inheritance split out to M4.10f, every pointer `applied` records carries log.epoch(), a single constant per sequencer instance, so no fixture can ever vary it.",
+      "mutation": "Replace the two-key comparator with `Comparator.comparingLong(e -> e.getValue().sequence())` -- drop the epoch key entirely.",
+      "failure_scenario": "MEASURED, whole :sequencer suite green. pastTheBoundTheOLDESTIncarnationIsEVICTEDAndCommitsAgain builds all 4097 slots inside one term at epoch 1, so the epoch comparison never decides an ordering. This is the round-2 finding's shape one layer down: the direction IS pinned (reversing the comparator is killed, and raising MAX_SLOTS to 8192 is killed), only the epoch key is not. It is unreachable by construction today rather than wrong, which is why this is minor -- but it becomes load-bearing the moment M4.10f inherits pointers from a predecessor's chain, and that is where the test belongs."
+    },
+    {
+      "id": "M4.10d-tr-17",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/IdempotencyWindow.java:67",
+      "summary": "Two defensive claims in IdempotencyWindow carry no test: the NUL separator in key() ('so (\"a b\", \"c\") and (\"a\", \"b c\") cannot collide into one slot'), and answers()'s 'an unattributed segment answers nothing at all'.",
+      "mutation": "(a) `return podId + \"\\0\" + incarnationId;` -> `return podId + incarnationId;`  (b) prepend `if (a == null) { return true; }` to answers().",
+      "failure_scenario": "MEASURED, whole :sequencer suite green for BOTH. (a) With plain concatenation, podId \"a b\" / incarnation \"c\" and podId \"a\" / incarnation \" bc\" share the slot \"a bc\", so one pod's watermark refuses another's genuinely new records -- no fixture uses a podId or incarnationId containing a space. (b) An unattributed SegmentCommit (CommitLog.commit(String, Map) builds Submission with a null attribution) would answer any replay pointed at its delta; unreachable today because every pointer `applied` records names a delta this build attributed, but the javadoc states it as behaviour and nothing holds it."
+    }
+  ],
+  "task": "M4.10d",
+  "role": "test-reviewer",
+  "staged_tree": "b55e7768f9e12713a169feb75982a5ce079a8c54"
+}

@@ -1,0 +1,51 @@
+{
+  "diff_sha256": "84104d638a16bf3b773724386a60db08d710b08b3d4109bd8bbbc42f3b1ab0f8",
+  "task": "M4.8a",
+  "role": "test-reviewer",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "M4.8a-tr-1",
+      "severity": "major",
+      "file": "format/src/test/java/binjava/format/CheckpointTest.java:48",
+      "summary": "THE STATED TOTAL ORDER IS ONLY HALF PINNED. The fixture builds `new RunKey(idx(n), n)`, so indexId and partitionId co-vary and no two streams in ANY fixture in this commit share an indexId -- including the 1,600-stream one at line 130 and the golden file. The second leg of `RunKey.compareTo` is therefore never a tiebreak in any encoded checkpoint. MEASURED SURVIVING MUTATION: replace `Collections.sort(keys)` in `Checkpoint.encode` with `keys.sort(Comparator.comparing(RunKey::indexId))` -- CheckpointTest and GoldenCheckpointTest both go BUILD SUCCESSFUL. That mutant is a PARTIAL order over the shape the system actually produces (one index, many partitions), so two checkpoints carrying identical facts encode differently depending on insertion order -- the exact property ADR-0033 states and `twoCheckpointsDifferingONLYInInsertionOrderEncodeIdentically` exists to pin. The row's prescription of 'a stated total order on entries' is not met by the fixture that tests it.",
+      "failure_scenario": "A later refactor of the encoder's comparator (or of RunKey.compareTo) drops the partitionId leg. Every test in this commit stays green. A cluster with one index and six partitions then encodes the same checkpoint two different ways depending on the order the caller populated the map, the golden re-encode check cannot see it because the golden has no same-index pair either, and M4.9 reads a checkpoint whose bytes are no longer a function of its content. Fix is cheap and does NOT touch the golden file: give two streams the same indexId with different partitionIds, inserted higher-partition-first, in fixture() -- GoldenCheckpointTest never calls fixture()."
+    },
+    {
+      "id": "M4.8a-tr-2",
+      "severity": "major",
+      "file": "format/src/test/java/binjava/format/CheckpointTest.java:143",
+      "summary": "THREE DECODE GUARD BRANCHES ADDED BY THIS COMMIT ARE UNCONSTRAINED. `bytesThatAreNotACheckpointAreRefusedRatherThanMisread` covers only short-input and bad-magic. MEASURED SURVIVING MUTATIONS, each run alone against CheckpointTest + GoldenCheckpointTest, all BUILD SUCCESSFUL: (a) delete `if (version != VERSION) throw` -- nothing feeds a checkpoint whose version byte is not 0; (b) delete `if (!c.atEnd()) throw` -- nothing feeds trailing bytes; (c) delete BOTH count bounds (`streamCount > c.remaining() / 18` and `podCount > c.remaining()`) -- nothing feeds an over-claiming count. Guard (c) carries a code comment citing a defect 'measured in a delta at M4.7a', and the sibling `BatchedCommitDeltaTest:205-284` spends FOUR tests on exactly this, including a `MODESTLY too large` fixture because both reviewers there measured that a huge-count fixture alone cannot distinguish a real bound from a constant cap. None of that discipline is applied here, and `podCount > c.remaining()` is a 3x-loose bound (the smallest pod entry is 3 bytes) that no fixture would distinguish from the real one. Honest caveat: today the count guard is not the only thing preventing OOM, because decode does not presize the maps -- deleting it changes only the exception message, so exposure is latent. Guard (a) is not latent: it is the forward-compatibility guard the wire-format-change discipline rests on.",
+      "failure_scenario": "M4.8b or a later format revision writes a v1 checkpoint. A build whose version check was refactored away decodes it as v0, misreading the kind/field layout into plausible-looking offsets instead of throwing, and recovery resumes streams from fabricated positions -- a silent I3-class wrong answer where the code was written to fail loudly. Every test in this commit stays green through that refactor. Fix: three assertions, each ~6 lines, in CheckpointTest -- flip byte 7 of the golden to 1 and expect IOException 'unsupported checkpoint version'; append 3 bytes to the golden and expect 'bytes after its last field'; and both a 0x7FFFFFFF and a modest 9-stream over-claim expecting 'bytes remain'. All five behaviours were probe-verified as CORRECT in production; only the tests are missing."
+    },
+    {
+      "id": "M4.8a-tr-3",
+      "severity": "minor",
+      "file": "format/src/test/java/binjava/format/CheckpointTest.java:153",
+      "summary": "ONE OF SIX RECORD PRECONDITIONS IS TESTED. `anOldestRetainedOffsetPastNextOffsetIsRefused` pins the ordering invariant; the other five are unconstrained. MEASURED: deleting ALL FIVE together -- `nextOffset < 0`, `oldestRetainedOffset < 0`, `sequence < 0`, `podId.isBlank()`, and `flushSeq == null || < 0` -- leaves the suite BUILD SUCCESSFUL. Precedent for the shape of the missing test is `LeaseTest:176-186`, which loops a hostile-podId array.",
+      "failure_scenario": "A negative or blank field reaches the encoder rather than being refused at construction. `SegmentWriter.putUvarint` on a negative long emits a 10-byte varint that decodes back to the same negative value, so a negative nextOffset round-trips silently and reaches M4.9 as a stream position, and a blank podId becomes a zero-length key in the pods map. Not blocking because nothing untrusted constructs a Checkpoint before M4.8b."
+    },
+    {
+      "id": "M4.8a-tr-4",
+      "severity": "minor",
+      "file": "format/src/main/java/binjava/format/Checkpoint.java:288",
+      "summary": "THE DEFENSIVE COPY THE JAVADOC CALLS 'THE POINT' IS NOT TESTED. MEASURED SURVIVING MUTATION: replace `streams = Collections.unmodifiableMap(new LinkedHashMap<>(streams)); pods = Collections.unmodifiableMap(new LinkedHashMap<>(pods));` with nothing (assign the caller's references straight through) -- BUILD SUCCESSFUL. Nothing asserts that mutating the caller's map after construction leaves the record unchanged, nor that `checkpoint.streams().put(..)` throws. The sibling `BatchedCommitDeltaTest:199-202` asserts exactly the second of those ('nor may a reader append to one').",
+      "failure_scenario": "M4.8b builds a checkpoint from a live, mutating aggregate map and hands it to the encoder. Without the copy the record aliases that map, and a concurrent update between construction and `encode()` produces bytes for a state that never existed as a checkpoint -- while every test here stays green."
+    },
+    {
+      "id": "M4.8a-tr-5",
+      "severity": "minor",
+      "file": "format/src/test/java/binjava/format/CheckpointTest.java:58",
+      "summary": "EVERY podId IN EVERY FIXTURE IS ASCII ('poda', 'podb'), so the UTF-8 length prefix is never distinguished from a char count. MEASURED SURVIVING MUTATION: `SegmentWriter.putUvarint(out, raw.length)` -> `SegmentWriter.putUvarint(out, pod.length())` in `Checkpoint.encode` -- BUILD SUCCESSFUL. The tree already treats charset sensitivity as worth a test elsewhere (`SegmentKeyLocaleTest`, `PathologicalKeySizeTest:62`).",
+      "failure_scenario": "A podId containing any non-ASCII code point is length-prefixed with its char count, the decoder reads too few bytes, and the next field is read from the middle of the name -- every subsequent pod entry is garbage or the object is rejected as corrupt. Low real exposure (k8s pod names are RFC1123 ASCII) and `Checkpoint` does not constrain the charset, which is why this is minor rather than major. One non-ASCII podId in fixture() closes it and does not touch the golden file."
+    },
+    {
+      "id": "M4.8a-tr-6",
+      "severity": "minor",
+      "file": "format/src/test/java/binjava/format/GoldenCheckpointTest.java:22",
+      "summary": "A FALSE CLAIM IN THE ONE FILE WHOSE PURPOSE IS DISCIPLINE. The class javadoc says 'THE FILE ALSO PROVES THE SORT ... An encoder that dropped its sort would produce different bytes every run this fixture is built.' MEASURED: no test in GoldenCheckpointTest builds `CheckpointTest.fixture()` -- all three read committed bytes -- and under both delete-the-sort mutations (streams sort, pods sort) all three GoldenCheckpointTest tests PASSED; only `CheckpointTest.theENCODERSortsWhateverOrderTheCallerHandedIn` and `twoCheckpointsDifferingONLYInInsertionOrderEncodeIdentically` failed. The sort is proved by CheckpointTest, not by the golden file.",
+      "failure_scenario": "A future author reads this javadoc, concludes the golden file already covers ordering, and deletes or weakens the two CheckpointTest order tests as redundant. The delete-the-sort mutation -- the row's named hazard (a) -- then has no detector at all, and the suite is green. Correcting the sentence costs one line."
+    }
+  ],
+  "staged_tree": "9bd0d149cbd28a29fd75934ab0346552348e7db7"
+}

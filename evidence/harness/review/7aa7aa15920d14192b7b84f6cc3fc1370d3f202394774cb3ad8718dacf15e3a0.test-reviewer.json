@@ -1,0 +1,34 @@
+{
+  "diff_sha256": "7aa7aa15920d14192b7b84f6cc3fc1370d3f202394774cb3ad8718dacf15e3a0",
+  "verdict": "pass",
+  "summary": "Round 5, test review, scope limited to my own two open findings. TR3-M4.8-1 CLOSED: the inverted duplicate of the M4.1 figure was deleted, not re-worded, and the single surviving copy in backlog-notes.md M4.8a ('produced the asserted order about 1 run in 6 ... killed roughly 5 runs in 6 and SURVIVED 1') matches backlog-done.md's M4.1 row verbatim in direction. Grepped 'in 6' and '8 of 8' across *.md/*.txt/*.java: no second copy in the docs. TR3-M4.8-2 CLOSED for the mutation family it names: the clause now requires keys DISTINCT AND STRICTLY INCREASING across two triggers, which kills the constant seq, the countdown and deltaCount%K-at-K-boundaries deterministically. Two minors recorded below, neither of which should be fixed in this commit -- the residual on TR3-M4.8-2 is a refinement of my own prescription, and the third statement of the M4.1 figure sits in a file outside the staged three. I judge none of the four production minors to warrant blocking from the test side: none removes or weakens a test prescription in the sub-rows.",
+  "findings": [
+    {
+      "id": "TR4-M4.8-1",
+      "severity": "minor",
+      "location": "docs/internal/product/backlog-notes.md:325 (M4.8b, the 'AND SOMETHING MUST ASSERT WHAT WAS WRITTEN' clause)",
+      "failure_scenario": "M4.8b lands with seq derived from a per-body hash (e.g. seq = Integer.toUnsignedLong(body.hashCode())). The prescribed test observes exactly TWO triggers and asserts the two keys are distinct and strictly increasing. Two arbitrary hashes are ordered correctly for about half of all fixture choices -- and the fixture is DETERMINISTIC, so for that half the mutation survives 100% of runs, not flakily. The clause names 'a body hash' as one of the survivors the strictly-increasing requirement is supposed to kill, and over a two-sample witness it does not. The same holds for 'deltaCount % K' when a T-trigger interleaves (3 then 7 is increasing) and, entirely, for 'the wrong counter' when that counter is itself monotone (flushSeq, deltaCount) -- those are listed under 'something non-monotone' but a wrong monotone counter passes distinct-and-increasing by construction.",
+      "surviving_mutation": "seq = body hash, over a fixed two-checkpoint fixture, in the ~50% of fixture choices whose hashes happen to ascend.",
+      "remedy_if_ever_taken": "Sample at least THREE triggers, or pin the seq VALUES rather than their relation (first checkpoint seq 0, second 1) -- a value assertion kills every member of the listed family deterministically, and the row already prescribes exact key strings for the grammar half.",
+      "disposition": "RECORD, DO NOT FIX. This is a refinement of the prescription I asked for last round; fixing it produces round 6 on prose the fix adds, which is the failure baselines/review.txt's own M4.43 entry names."
+    },
+    {
+      "id": "TR4-M4.8-2",
+      "severity": "minor",
+      "location": "sequencer/src/test/java/binjava/sequencer/FakeSequencerTest.java:207-210",
+      "failure_scenario": "Asked to verify no third copy of the M4.1 figure exists, I found one: a THIRD statement of the same measurement lives in the FakeSequencerTest comment that justifies six streams. It reads 'At three keys a missing sort still produces the asserted order 1 run in 6, i.e. a broken sort would pass CI most times'. The first half is correct (survives 1 in 6); the gloss after 'i.e.' is its reciprocal -- a broken sort would FAIL CI most times -- and it is exactly the inversion M4.8a's new clause exists to correct, one clause of which ('A detector that misses 1 run in 6 is the problem; it is not that the mutation usually passes') is a direct rebuttal of this sentence. A session reading M4.1's test for the precedent M4.8a cites carries the wrong direction forward.",
+      "surviving_mutation": "n/a -- prose, in a comment. No assertion is affected: the six-key fixture and the 1-in-720 figure beside it are both consistent with the correct reading, so nothing in the test is weakened.",
+      "disposition": "RECORD or file as a row. This file is NOT in the staged three, and editing it here widens the scope of a docs-only decomposition commit. Not a blocker and not this commit's to fix."
+    }
+  ],
+  "carried_forward": [
+    "TR-M4.8-1/2/3, TR2-M4.8-1/2/3/4/5, F1/F2/F3, M4.8-R2a: closed in earlier rounds; re-verified as not regressed at this hash -- the delta since the last reviewed round replaces one clause in M4.8a and one in M4.8b and removes no prescription (word-diff checked against the full staged diff).",
+    "TR3-M4.8-1: CLOSED by deletion, as prescribed. Exactly one copy of the figure remains in the docs and it matches backlog-done.md M4.1.",
+    "TR3-M4.8-2: CLOSED for the named non-monotone family; residual noted as TR4-M4.8-1 (minor)."
+  ],
+  "production_minors_judged": "The four production minors (backlog.md's 'this row is the source text' vs the notes' relocation; the clause-by-clause check credited to round 1; the '(b) A KEY OUTSIDE THE LISTED PREFIX has no such growth' claim; baselines/review.txt's 'Every finding ... was a row PRESCRIBING A TEST' universal) do not block from the test side. None removes, weakens or contradicts a test prescription in M4.8a/b/c: the takeover test with a REQUEST-COUNT dimension is required under either remedy, so the (b) defect changes the argument's cost accounting and not the acceptance criterion. The baselines universal is refuted by my own TR3-M4.8-1, which was a false factual claim rather than a weak test prescription -- and by that entry's own next sentence -- so 'recorded in the commit body' is the right disposition, since the entry already ends CLAIMS NO CONVERGENCE.",
+  "process_note": "The author states both fixes were made while the concurrent production review ran (rule 12b), and that the production reviewer re-read the changed bytes and passed at this hash. I reviewed the bytes at 7aa7aa15..., which is what the packet's delta is computed against and what git diff --cached hashes to now. Recorded on that basis.",
+  "task": "M4.8",
+  "role": "test-reviewer",
+  "staged_tree": "f280bc30e7302b73da1a7c2a33efcc3e20e244f9"
+}

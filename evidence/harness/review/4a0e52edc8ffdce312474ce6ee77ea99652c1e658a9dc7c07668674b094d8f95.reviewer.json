@@ -1,0 +1,29 @@
+{
+  "diff_sha256": "4a0e52edc8ffdce312474ce6ee77ea99652c1e658a9dc7c07668674b094d8f95",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "file": "sequencer/src/main/java/binjava/sequencer/BatchingSequencer.java",
+      "line": 315,
+      "severity": "major",
+      "what": "close() skips the committer join ENTIRELY when the closing thread already carries an interrupt: Thread.join(Duration) throws InterruptedException immediately, the catch restores the flag and execution falls straight through to failAll(...) and delegate.close(). The javadoc two lines above claims 'JOINED, NOT MERELY SIGNALLED' and names the consequence as I2; on this path it is merely signalled. This is NOT the round-2 minor about the 10 s bound being unobservable -- there the guard waits and then gives up, here it never waits at all (0 ms) and the failure is deterministic rather than load-dependent. One remedy covers both: act on the boolean join() returns, and re-join (or refuse to close the delegate) when the committer has not terminated.",
+      "failure_scenario": "MEASURED on the staged bytes, in a copy of the index. A delegate whose commitAll busy-works 800 ms, a caller parked in it, then close(). Control (clean closing thread): close took 757 ms and the delegate was closed AFTER the commit finished -- closedMidCommit=false, which is what BatchingSequencerLifecycleTest.closeJOINSTheCommitterBeforeClosingTheDelegate asserts. Same fixture with Thread.currentThread().interrupt() set on the closing thread first: close took 0 ms and closedMidCommit=true -- the delegate was closed with commitAll in flight on the committer thread. In production at M4.7c: a shutdown path that caught InterruptedException and used the textbook restore idiom (Thread.currentThread().interrupt(), the same idiom this class's own drain loop and BoundedLock use) and then closes the sequencer in a finally gets a 0 ms close. LocalSequencer.close() releases the lease while the committer is still inside CommitLog.commitSubmissions's uninterruptible while(true) redrive; a successor acquires the lease in milliseconds and seals the chain while the predecessor's conditional PUT is still racing for a slot -- exactly the in-flight-commit-versus-seal race the join was added to make unreachable."
+    },
+    {
+      "file": "sequencer/src/main/java/binjava/sequencer/BatchingSequencer.java",
+      "line": 196,
+      "severity": "minor",
+      "what": "A terminal committer exit (Error from the delegate, unchecked throw from the timer, or a stray interrupt) shuts the door and fails the queue, but never closes the delegate and emits no signal of any kind -- no log, no metric, no flag a caller can read. The batcher is then permanently non-functional while the delegate, and for a LocalSequencer delegate its lease, is still held. The already-recorded 'one message for closed and crashed' minor covers the message text a caller sees; this is about the process-level observable, which is absent.",
+      "failure_scenario": "Once M4.7c wires a BatchingSequencer over a LocalSequencer: an OutOfMemoryError inside the batched encode -- the case this class's own javadoc argues at length is the realistic one, since CommitLog encodes the delta twice per attempt and batching exists to make deltas big -- kills the committer. Every subsequent commit returns IOException('this sequencer is closed'), which is indistinguishable from an orderly shutdown, and the pod goes on holding leadership because nothing releases the lease. A process that had simply died would have been restarted by Kubernetes and the lease taken over within a TTL; this converts a self-healing crash into a leaseholder that answers but never commits. The blast radius depends on wiring that does not exist yet (nothing drives LeaseManager.renew() today), which is why this is minor rather than major -- but M4.7c is where it becomes reachable and there is nothing in the class to warn whoever writes it."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/BatchingSequencerTest.java",
+      "line": 309,
+      "severity": "minor",
+      "what": "Leftovers from the 500-line split: the ClosingSequencer record in BatchingSequencerTest is never referenced in that file (only BatchingSequencerLifecycleTest uses its own copy), and commitConcurrently's QueuedTimer parameter (line 88) is never read by the method. Both were live before the split.",
+      "failure_scenario": "A reader looking for what closes the delegate in the cost suite finds a fixture that participates in no test, and a helper whose signature says it needs the timer when it does not. The next person adding a cost test wires the timer through commitConcurrently believing it does something, and the window then closes on the default rather than on queue depth -- the exact fixture defect that produced 2 PUTs where criterion 9 demands 1."
+    }
+  ],
+  "task": "M4.7",
+  "role": "reviewer"
+}

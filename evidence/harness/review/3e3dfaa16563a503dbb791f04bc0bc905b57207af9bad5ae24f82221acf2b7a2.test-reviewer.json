@@ -1,0 +1,15 @@
+{
+  "diff_sha256": "3e3dfaa16563a503dbb791f04bc0bc905b57207af9bad5ae24f82221acf2b7a2",
+  "verdict": "pass",
+  "summary": "aCompoundFailureWhereTheREREADAlsoFailsStillKeepsTheAmbiguousTermRatherThanFencing exercises the compound path M4.3i names: the ambiguous write's response is lost, then the re-read inside refreshed() also fails, and the test asserts held() stays present through both and that the SAME term (epoch 1) recovers once the store answers. Hand-traced against LeaseManager.renewLocked()/refreshed(): the self-fencing mutation the backlog row warns about (wrap `mine = refreshed(mine)` in try/catch, clear belief, return empty) makes the test's second assertThatThrownBy(m::renew) fail because renew() would return normally instead of throwing -- the test kills it. A weaker variant (catch, clear belief, but fall through instead of returning) also fails the same assertion, because the fall-through issues a real putIfMatch with a stale version that the backing store rejects, again returning normally instead of throwing. Reordering refreshed() to null the belief before the re-read is also caught, by the held().isPresent() assertion after the second throw. Checked whether the test's pass depends on AmbiguousPutStore.refuseReadIfDue() firing only once (vs. on every read after the ambiguous write): it does not coincidentally survive aweaker fake -- if the fake refused every subsequent read, the test's own final renew() would then throw where the test expects a value, so the fake's 'once' semantics is exercised, not just asserted in a comment.",
+  "findings": [],
+  "notes": [
+    "TDD record verified present: .harness/tdd/red.json has a dict entry for binjava.sequencer.LeaseManagerAmbiguityTest#aCompoundFailureWhereTheREREADAlsoFailsStillKeepsTheAmbiguousTermRatherThanFencing, and check-tdd.sh (which recomputes and compares the binding hash to the staged file) is listed as already PASSED in the review packet, so the record is bound to the currently staged test content rather than a stale one.",
+    "No timing/ordering flakiness: the test uses only the file's existing TestClock (advance(Duration), never a real clock or Thread.sleep), matching every other test in the class.",
+    "No existing assertion was weakened in this diff -- both changed files are pure additions (a new constructor overload + refuseReadIfDue on AmbiguousPutStore, and one new @Test method); no prior test's assertions were touched.",
+    "Tier is right: MemoryBinStore + AmbiguousPutStore are in-memory T0 fakes, consistent with the rest of the file; no socket, real clock or object store used.",
+    "This closes exactly the gap M4.3i's backlog row names (the compound write-then-read failure was previously unwritable because AmbiguousPutStore only gated putIfMatch/putIfAbsent) and does so without touching LeaseManager.java, consistent with the task's premise that the shipped code is already correct."
+  ],
+  "task": "M4.3i",
+  "role": "test-reviewer"
+}

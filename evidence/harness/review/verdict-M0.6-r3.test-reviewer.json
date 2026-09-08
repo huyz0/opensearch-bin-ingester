@@ -1,0 +1,41 @@
+{
+  "diff_sha256": "efbf290014ce2f482320ee9aabfe125b9ac1e219e0f96319bca161555f11c3ba",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "WT9",
+      "severity": "blocking",
+      "file": "scripts/check-module.sh:154",
+      "summary": "Sixth layer: all three new tests enter through test-only front doors (--list-modules, --check-drift, --select-modules). The gate's own production path -- the no-argument invocation that composes ALL, check_drift, select_modules and WHY -- is entered by no test at all, so any mutation confined to lines 105-161 survives the whole 31-test suite. The seams were extracted to be testable; the composition the gate actually runs was not.",
+      "failure_scenario": "VERIFIED. Replace line 154 with the pre-fix body `MODULES=$(printf '%s\\n' $(changed_files) | cut -d/ -f1 | sort -u | while read -r m; do case \" $ALL \" in *\" $m \"*) echo \"$m\" ;; esac; done | tr '\\n' ' ')` -- i.e. the fifth-layer defect restored, gate-side only, select_modules never called by the gate. Result: `./gradlew -p buildSrc test` = 31 tests, 0 failed, and `./scripts/check-module.sh` on THIS staged commit prints `ok no module changed` and exits 0 while buildSrc/build.gradle.kts is staged. The same door admits `check_drift \"$ROOT\" \"$ALL\"` (line 107) being deleted -- verified 31/31 green -- and `ALL=` hardcoded. Fix: one more front door that prints the gate's own plan (ALL, MODULES, WHY) for a given set of changed paths, using the identical composition, so changed_files is the only unseamed part."
+    },
+    {
+      "id": "WT10",
+      "severity": "major",
+      "file": "buildSrc/src/test/java/binjava/ModuleSelectionTest.java:53",
+      "summary": "The test asserts only hasSize(expected), never which modules were selected. Its own CsvSource comment says 'a module change selects that module', and nothing constrains that.",
+      "failure_scenario": "VERIFIED. In select_modules (line 65) change `echo \"$m\"` to `echo \"${all%% *}\"` -- every non-escalating change now selects the first module in the list instead of the one that changed. Counts are unchanged, so all 31 tests stay green. The gate would then build binstore-spi when ingest changed, and print `ok 1 module(s) checked (changed module directories)` over an unexamined Helidon dependency in ingest -- exactly the short-list-indistinguishable-from-compliance defect the file exists to prevent. Fix: containsExactlyInAnyOrderElementsOf on the names, as ModuleListDerivationTest already does."
+    },
+    {
+      "id": "WT11",
+      "severity": "minor",
+      "file": "scripts/check-module.sh:155",
+      "summary": "This diff creates a SECOND copy of the shared-build escalation predicate -- the pre-change file had one `if` setting both MODULES and WHY. select_modules owns the predicate for the decision; line 155 re-states it for the message, and no test reaches it. The file's own comment at line 24 demands ONE implementation of exactly this kind of thing.",
+      "failure_scenario": "VERIFIED. Change the line 155 regex to `^(NEVERMATCHES/)`: 31 tests green, and the gate on a buildSrc-only change prints `ok 8 module(s) checked (changed module directories)` -- it checks the right eight but reports the wrong reason, so the success line no longer distinguishes escalation from coincidence (non-negotiable 4). Blast radius is the message, not the check, hence minor. Fix: have select_modules emit the reason, or derive WHY from whether the output equals ALL."
+    },
+    {
+      "id": "WT12",
+      "severity": "minor",
+      "file": "scripts/check-module.sh:118",
+      "summary": "The checks this commit makes mandatory -- NO_HTTP/HTTP_GROUPS (rule 5), NO_CLOUD/CLOUD_GROUPS (rule 2), the project ':http' grep (rule 4), the plugin/binstore-backends grep -- have no test that constructs an input they must REJECT. Pre-existing code, untouched by this diff, but this is the commit that wires it into pre-commit, which is when a floor becomes load-bearing.",
+      "failure_scenario": "VERIFIED. Set `NO_HTTP=\"\"`: the entire rule-5 arm is dead and 31 tests stay green. A fixture module with an `implementation(\"io.helidon.webserver:helidon-webserver:x\")` and an expected non-zero exit is the missing test; without it the denylist could be emptied, mis-escaped, or lose its `[.:]` suffix and nothing but a human would notice."
+    },
+    {
+      "id": "WT13",
+      "severity": "minor",
+      "file": "AGENTS.md:217",
+      "summary": "The task is 'wire into .pre-commit-config.yaml AND CI'. The pre-commit half is real and verified. The CI half is a new table row asserting 'CI sets GATE_SCOPE=full'; there is no .github directory in the repository, so no file backs the claim and no test would fail if it were wrong.",
+      "failure_scenario": "Delete the words 'CI sets GATE_SCOPE=full' or change them to any other value: nothing fails, because nothing reads them. Consistent with every other row in that table (no CI exists repo-wide), so this is not a regression introduced here -- but the second half of the acceptance criterion is documentation, not wiring."
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "diff_sha256": "75fcbb07ff3fce281011b6896271d9b7bbde61afa4b1f33d30427ed8c665cffa",
+  "verdict": "pass",
+  "summary": "Verify round for M0.13. All three delta claims re-derived and hold. (2) the malformed-baseline refusal is correct and fails closed: exit 1 before the module loop, propagated via `python3 scripts/coverage.py || FAILED=1` + lib.sh finish; both claimed mutations (guard disabled, `if malformed: return 1` deleted) were reconstructed by hand and each produces output the new test rejects. (3) the unreachability argument is sound: brute-forced all 0x110000 codepoints and found zero disagreement between str.strip() and str.split(None), so parts[1] is a suffix of a stripped line ending in a non-whitespace character and parts[1].strip() can never be empty; deleting the clause was right, and a test for it would have had to fabricate an unreachable state. Refusing a malformed baseline has no failure mode worse than accepting one: it fails closed on a repo-owned file that does not exist today, and the remedy is a one-line edit. buildSrc/M0.44 overclaim is corrected, and M0.42's row claim about the nested-module gap was checked against a fixture and is accurate. Suite re-run from scratch: 89 harness tests, CoverageGateTest 15/0. No object-store request is added by this change; the only per-invocation cost is one Gradle run, already disclosed under M0.39. Three minor findings, all latent, none blocking.",
+  "findings": [
+    {
+      "id": "R10-1",
+      "file": "scripts/coverage.py:131",
+      "severity": "minor",
+      "title": "A report with counters but no LINE counter scores line 100.0% and prints ok",
+      "failure_scenario": "The `if c == {}` guard refuses a report with NO counters, but `line_cov = pct(*c.get('LINE', (0, 0)))` silently scores 100.0% when the report carries other counters and no LINE one. Reproduced against the staged script: a report holding only `INSTRUCTION missed=900 covered=100`, `BRANCH missed=0 covered=10` and `METHOD missed=50 covered=1` prints `ok format line 100.0% (floor 95) branch 100.0% (floor 90)` followed by `ok 1 module(s) meet 95% line / 90% branch`, exit 0 -- a module at 10% instruction coverage reported as meeting a 95% line floor. That is the gate's own stated defect class (reporting success while measuring nothing) one level finer than the guard reaches. Reachable whenever class files carry no line-number debug info: JaCoCo omits the LINE counter under `-g:none` / `options.debug = false`, and a `binjava.java-conventions.gradle.kts` edit is all it takes. BRANCH legitimately defaults to 100 and has a test saying so; LINE has no such justification and no test pins it. Suggested fix is one line: treat a missing LINE counter like `c == {}`. Latent today because the conventions plugin leaves debug info on, so this is a backlog row rather than a blocker."
+    },
+    {
+      "id": "R10-2",
+      "file": "scripts/coverage.py:115",
+      "severity": "minor",
+      "title": "baselines/coverage.txt cannot suppress a missing-report failure, so M0.44 has no escape hatch",
+      "failure_scenario": "`if not os.path.exists(report): missing.append(m); failed = True; continue` runs BEFORE the `if m in skips` check, so an excluded module is exempt from the floors but not from the requirement to have a report at all. Reproduced with the staged script: a module with compiled Java classes, no report, and a fully-formed baseline entry (`buildSrc  kotlin main sources; M0.44 makes it regenerable`) still exits 1 with `buildSrc has compiled classes but no JaCoCo report`, and the exclusion is never printed. This makes M0.44's row understate the consequence: the row says the gate 'fails CLOSED, which is why M0.13 ships without it', but it does not say that the documented way out -- testing.md rule 7's baseline -- does not apply. The day buildSrc gains src/main/java, every commit fails, the printed remedy (`Run ./gradlew jacocoTestReport`) cannot satisfy it, and neither can a baseline entry; only editing coverage.py can. Same shape for an excluded module with an unreadable or counter-less report. Suggest amending M0.44 with this sentence, or moving the `m in skips` check above the missing/unreadable branches if the intent is that an exclusion means 'not measured' rather than 'measured leniently'."
+    },
+    {
+      "id": "R10-3",
+      "file": "scripts/check-coverage.sh:44",
+      "severity": "minor",
+      "title": "The new malformed-baseline refusal is paid only after a full `./gradlew test jacocoTestReport`",
+      "failure_scenario": "check-coverage.sh runs the full `test jacocoTestReport` regeneration and only then invokes coverage.py, which parses the baseline first thing and returns 1. Reproduced: in a repo whose baseline is a bare `format`, `gradlew-invocations` records `test jacocoTestReport --console=plain -q` before the refusal is printed. So a one-character typo in a text file costs a whole test run before the developer is told, and the same happens on every retry until the line is fixed. That cost is the exact reason M0.13 ships unwired (M0.39), which makes it worth avoiding rather than inheriting. The baseline parse depends on nothing Gradle produces, so it can run before the regeneration -- either as a separate `python3 scripts/coverage.py --check-baseline` step or by hoisting the parse into the shell. Related and smaller: an entry naming a module that no longer exists is silently ignored (reproduced: `ghost-module  deleted in M0.99` yields `ok 1 module(s) meet`), so the ratchet has no rot detector and a stale exemption leaves no trace."
+    }
+  ],
+  "notes": [
+    "Non-finding, recorded so the next reader does not repeat the check: buildSrc/build/test-results/test/ on disk held a single TEST-binjava.CoverageGateTest.xml showing 15 tests / 1 failure (anExclusionWithoutAReasonIsRefused, with the pre-fix EXCLUDED-with-empty-reason output), timestamped 22:31:24 -- after .harness/harness-tests.log's green run at 22:28:12. That artifact is a post-gate mutation-verification run, not the current state. A clean `./gradlew -p buildSrc test` re-run exits 0 with 89 tests / 0 failures across nine classes, CoverageGateTest 15/0. The claim in the packet is accurate; the build output on disk simply disagreed with it.",
+    "M0.42's row claim was checked rather than assumed: a fixture with a passing top-level module plus a module at group/nested/ scoring 10%/10% prints `ok 1 module(s) meet 95% line / 90% branch` and exits 0, so the row's wording is true as written.",
+    "Cost lens: this change touches no object-store code path and adds no request of any kind. The only per-invocation cost is one Gradle run, and it scales with gate invocations, not with records, shards, partitions or indices."
+  ],
+  "task": "M0.13",
+  "role": "reviewer"
+}

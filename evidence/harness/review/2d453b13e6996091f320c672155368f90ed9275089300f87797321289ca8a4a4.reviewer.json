@@ -1,0 +1,64 @@
+{
+  "diff_sha256": "2d453b13e6996091f320c672155368f90ed9275089300f87797321289ca8a4a4",
+  "verdict": "changes-requested",
+  "summary": "The decision itself is defensible -- the segment key is published before the commit, carries the pod and a per-pod sequence, and CommitDelta really does already carry both segmentKey and an absolute firstOffset, so the 'no delta format change' conclusion checks out against format/src/main/java/binjava/format/CommitDelta.java. Every quotation I chased is faithful (Hop's 'never GET at all', ADR-0033's 64 KiB, M3.0's 'untouched, not regenerated', SegmentPublisher's 'unique WITHOUT coordination', SegmentKey's six components). Three things do not hold up: the single clause the whole discrimination rests on is an unstated wall-clock assumption whose failure produces exactly the harm the ADR opens by naming; ADR-0033's Decision and title are now false and it was not annotated, against this tree's own ADR-0016/0017 precedent; and M4.10d's open row still instructs the next agent to refuse a replayed (podId, flushSeq), the key this ADR rejects, even though M4.10c's row beside it was rewritten.",
+  "findings": [
+    {
+      "id": "F1",
+      "file": "docs/internal/product/decisions/0036-the-idempotency-key-is-the-segment-key-not-podid-and-flushseq.md:34",
+      "severity": "major",
+      "title": "The discrimination claim rests on an unstated wall-clock assumption, and the ADR answers the collision case only under an out-of-protocol banner",
+      "detail": "The entire decision hangs on one clause: 'timestampMillis advances even though sequence restarts at 0'. Measured against the tree, timestampMillis is not a commit-time stamp: SegmentPublisher.publish reads it out of the segment preamble (view.getLong(16)), which SegmentWriter.writeTo stamped from Accumulator.drain's firstAppendMillis, which is clock.millis() of the FIRST APPEND of that segment -- an injected java.time.Clock, wall clock in every production-shaped call site (Clock.systemUTC()). java.time.Clock.millis() carries no monotonicity guarantee across a process restart. So the ADR's premise is really 'a pod's wall clock never regresses across a restart', and that assumption is never stated, never bounded, and never given a failure behaviour. The row asked for exactly this ('whether any of that suffices is this ADR's finding, not this row's'). Compounding it, the ADR never says WHICH comparison detects a replay, and the two candidates fail in opposite directions: equality against the one recorded key detects only the pod's most recent commit, while an ordering comparison (which the %019d-padded, date-pathed key makes possible) detects older ones but suppresses every new commit for as long as a regressed clock stays behind the recorded key. The only place the ADR discusses a colliding key is the ADR-0031 paragraph, which files it under 'out-of-protocol precondition' (two live pods sharing a podId) -- a single pod whose clock steps back is squarely IN protocol and reaches the same suppression.",
+      "failure_scenario": "A node boots with a bad RTC, a pod flushes for a few seconds with timestamps in the future, NTP steps the clock back, and the pod restarts. Its new segment keys sort below the key recorded in Checkpoint.pods for that podId. Under the ordering comparison the key's lexicographic design invites, M4.10d refuses every one of those commits as a replay and answers each with another segment's offsets -- producers are told their records are durable at offsets belonging to bytes they did not write. That is the 'suppress real commits -- worse than the duplication it exists to prevent' harm stated in the ADR's own Context, reached without any out-of-protocol precondition. Fix: state the assumption (and the comparison) explicitly, and say what happens when the clock regresses -- e.g. detect by equality only, or record why a regression cannot produce a false positive.",
+      "suggested_fix": "Add a paragraph naming the comparison rule and the clock property it depends on, sourced to Accumulator.firstAppendMillis rather than to 'the timestamp advances', with the regression case answered."
+    },
+    {
+      "id": "F2",
+      "file": "docs/internal/product/decisions/0036-the-idempotency-key-is-the-segment-key-not-podid-and-flushseq.md:48",
+      "severity": "major",
+      "title": "ADR-0033 is partially overturned and not annotated; its title and Decision are now false",
+      "detail": "ADR-0033 is titled 'A checkpoint carries offsets and flush seqs, never the segment index' and its Decision says 'A checkpoint carries per-stream nextOffset and oldestRetainedOffset, and per-pod lastAppliedFlushSeq.' ADR-0036 changes the per-pod half of exactly that sentence, and cites ADR-0033 only for its size argument. The adr skill is explicit -- 'Superseding does not delete: mark the old one superseded and link forward' and, for divergence short of supersession, 'record it as a dated note on the Status: line'. This tree already does it properly: ADR-0016's Status line reads 'superseded by 0017 ... Everything below about the adaptive interval ... is carried forward by 0017; only the writer consolidation is withdrawn'. ADR-0033's Status line is untouched in this diff. Relatedly, the 'Which formats change' section never says whether lastAppliedFlushSeq SURVIVES alongside the new per-pod state or is replaced by it -- which is the one thing M4.10c has to know to encode the map.",
+      "failure_scenario": "docs/internal/product/decisions/ now holds two accepted ADRs that disagree about what Checkpoint.pods contains, and the one whose TITLE is about the checkpoint's contents is the wrong one -- so an agent searching the directory by title lands on ADR-0033, implements per-pod lastAppliedFlushSeq, and reintroduces the restart-suppression defect this ADR exists to remove. Fix: a dated note on ADR-0033's Status line saying the per-pod field is superseded by 0036 and the rest carried forward, and one sentence in 0036 saying whether lastAppliedFlushSeq stays.",
+      "suggested_fix": "Annotate ADR-0033's Status line in this commit (it is a decision-only commit, so the annotation belongs here), and state in 0036 whether flushSeq remains in the pods map."
+    },
+    {
+      "id": "F3",
+      "file": "docs/internal/product/backlog.md:124",
+      "severity": "major",
+      "title": "M4.10d's open row still names the rejected key, while M4.10c's row beside it was rewritten",
+      "detail": "The commit rewrites M4.10c's row to point at ADR-0036, but leaves M4.10d's row saying 'Refuse a replayed `(podId, flushSeq)`; the successor REFUSING it is the anchor'. That is the exact pair ADR-0036 rejects, in the one open row whose whole purpose is to consume this decision ('M4.10d ... DEPENDS on b's answer'). The row also predates the two new obligations the ADR puts on M4.10d -- 'either adds the retry path or states plainly that its coverage stops at the sequencer seam' -- which now live only inside the ADR. backlog.md is described in AGENTS.md as authoritative and open-rows-only, so this is the text an agent picking M4.10d actually works from.",
+      "failure_scenario": "The next session picks M4.10d, reads its row, and implements the refusal predicate on (podId, flushSeq) as instructed -- the mechanism whose defect (a restarted pod reissues 0, 1, 2 and real commits are suppressed) is the entire reason M4.10b existed. Nothing catches it: check-commit-msg only resolves the ID, and the M4.10d reviewer is given the row as the task. Fix: update M4.10d's row to say the refusal is keyed on the segment key, and carry the retry-path obligation into it.",
+      "suggested_fix": "Rewrite M4.10d's row the way M4.10c's was rewritten, since both are downstream of this decision."
+    },
+    {
+      "id": "F4",
+      "file": "docs/internal/product/decisions/0036-the-idempotency-key-is-the-segment-key-not-podid-and-flushseq.md:54",
+      "severity": "minor",
+      "title": "'Only checkpoint-v0.bin is affected' contradicts the both-versions precedent the same document cites",
+      "detail": "The sentence contrasts with 'neither chain-delta-v0.bin nor chain-delta-batched-v1.bin MOVES', so 'affected' reads as 'moves'. But the ADR's own Consequences section says readers must accept both versions and quotes M3.0 saying 'golden/segment-v0.bin is untouched, not regenerated'. Checkpoint.decode refuses any version != VERSION today (format/src/main/java/binjava/format/Checkpoint.java, 'unsupported checkpoint version'), so a pods-map change means VERSION 0 -> 1, checkpoint-v0.bin staying byte-identical, and a NEW checkpoint-v1.bin. The wrong phrasing is copied into the staged M4.10c row as well.",
+      "failure_scenario": "M4.10c's implementer follows the row literally, regenerates checkpoint-v0.bin against the new encoder, and the only evidence that a pre-change checkpoint still decodes -- the hazard property six was written to cover -- is destroyed, with the golden test still green.",
+      "suggested_fix": "Say 'checkpoint-v0.bin is untouched and a checkpoint-v1.bin is added', in both the ADR and the M4.10c row."
+    },
+    {
+      "id": "F5",
+      "file": "docs/internal/product/decisions/0036-the-idempotency-key-is-the-segment-key-not-podid-and-flushseq.md:68",
+      "severity": "minor",
+      "title": "The checkpoint's own size number is never computed, though an alternative is rejected on that axis",
+      "detail": "'No object grows with history. One entry per pod, as today' answers COUNT and not SIZE. A pods entry goes from a uvarint (1-9 bytes) to a segment key plus a pointer. Rendered by SegmentKey.render, a key is roughly prefix + 20 + 19 + 1 + podShortId + 1 + 16 + 'h' + digits + filter + '.bseg' -- about 90 bytes with the N filter, and up to MAX_KEY_BYTES = 1024 when a Bloom filter fills the slot (SegmentPublisher.chooseFilter budgets right up to it). Against the tree's asserted threshold -- CheckpointTest.aCheckpointAt1600StreamsStaysNearItsSTATEDSize, isLessThan(64 * 1024), with the 1,600-stream body already about 38 KiB -- the headroom is about 26 KiB. The adr skill says 'In this project, quantify ... an alternative rejected without its number is an assertion', and this ADR does quantify to reject 'carry each pod's last runs' while leaving its own number uncomputed. Rate is fine: detection is in-memory and the answer GET is per detected replay, so no commit-path request scales with pods.",
+      "failure_scenario": "At the 18-pod fleet the research corpus uses (docs/research/30-design-space/05-az-topology-and-data-flow.md) with filter-bearing keys, the pods map alone adds up to about 18 KiB of the 26 KiB headroom, and the existing 64 KiB assertion is one fleet growth away from failing -- at which point the cheapest way to make it green is to move the threshold, which non-negotiable 2 forbids. Fix: state bytes-per-pod-entry and the resulting checkpoint size, or say the entry stores a digest of the key rather than the key.",
+      "suggested_fix": "One sentence with the per-entry byte count and the fleet size it is bounded by."
+    },
+    {
+      "id": "F6",
+      "file": "docs/internal/product/decisions/0036-the-idempotency-key-is-the-segment-key-not-podid-and-flushseq.md:32",
+      "severity": "minor",
+      "title": "'A retry resubmits the same key' is true of a commit-level retry only, and the ADR does not say the retry must sit below the publish",
+      "detail": "The claim holds for retrying sequencer.commit with the same CommitRequest -- DefaultIngest.flushLocked builds it from published.key(). It does not hold for the retry unit that today's code actually has: the catch in flushLocked fails the whole batch, so the natural repair is to retry the FLUSH, which re-enters SegmentPublisher.publish, draws a new sequence from the AtomicLong and a new createdAt, and produces a different key. The ADR notes 'Nothing retries yet' but never states the constraint the decision imposes on the retry that M4.10d may add.",
+      "failure_scenario": "M4.10d adds a retry around flushLocked. Every retry PUTs a second segment under a new key and commits it as new work: dedup never fires, records are committed twice, and the segment PUT rate doubles on every ambiguous commit. Fix: one sentence saying the retry must resubmit the same Published, i.e. it wraps sequencer.commit and not publisher.publish.",
+      "suggested_fix": "State the constraint in Consequences beside 'Nothing retries yet'."
+    }
+  ],
+  "task": "M4.10b",
+  "role": "reviewer",
+  "staged_tree": "99e7d0e1fcb0205151cb7f394c059b849874c335"
+}

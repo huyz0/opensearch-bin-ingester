@@ -1,0 +1,57 @@
+{
+  "diff_sha256": "d9654861875754db0dba695c0bbd2f6a80f466a514af56a53a7df5c189b1bb1e",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/FakeSequencerTest.java",
+      "line": 38,
+      "severity": "major",
+      "what": "The fake's new batched path is tested for OFFSETS but never for WHICH SEGMENT KEY carries which runs. aBATCHEDCommitAdvancesOffsetsACROSSSegmentsJustAsTheRealLogDoes asserts segments().get(0)/get(1) firstOffset and nextOffset, and theFakeRefusesAColLidingBatch asserts only that state did not move; neither ever reads segments().get(n).segmentKey(). The only segmentKey assertion in the file is line 179, on the SINGLE-segment path via delta.segmentKey(). So the pairing the Sequencer contract settles -- 'a caller finds its offsets by the SEGMENT KEY it submitted' -- is unconstrained in the fixture every downstream module tests against, and which M4.7c will be the first to batch through.",
+      "failure_scenario": "MEASURED SURVIVING MUTATION. In FakeSequencer.commitAll, keep the runs loop exactly as written and change only the pairing: segments.add(new SegmentCommit(requests.get((i + 1) % requests.size()).segmentKey(), runs)) -- every segment gets its NEIGHBOUR's key while offsets stay correct. `./gradlew :sequencer:test` BUILD SUCCESSFUL; full `./gradlew test` across all modules BUILD SUCCESSFUL. This is the same silent-corruption class the author's own FakeSequencer comment says a fake exists to make visible ('right label, wrong bytes'), and the class M4.7a's round 1 found in SubscriptionHub. Remedy is one line in the existing test: assert delta.segments().get(0).segmentKey() is \"seg-a\" and get(1) is \"seg-b\"."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/BatchingSequencerLifecycleTest.java",
+      "line": 286,
+      "severity": "major",
+      "what": "closingFailsTheQUEUEDCallersTooNotOnlyTheOneInFlight closes the round-3 finding only through the close() door. It reaches the queued caller via batching.close(), so it is satisfied by the net in close() (BatchingSequencer.java:330) alone. The exit net 1 (BatchingSequencer.java:182, in drainForever's finally) actually exists for -- the committer dying on its own with no close in sight -- has no test. The production comment at BatchingSequencer.java:400-406 claims the two nets 'each suffice alone -- dropping either changes nothing'; that is true of the SUITE and false of production, and the comment's next sentence ('They cover different exits') contradicts it.",
+      "failure_scenario": "MEASURED SURVIVING MUTATION: delete ONLY line 182, `failAll(drainRemaining(), new IOException(\"this sequencer is closed\"))` in drainForever's finally, keeping stop() and keeping the net in close(). `./gradlew :sequencer:test :ingest:test` BUILD SUCCESSFUL. MEASURED PRODUCTION CONSEQUENCE with a deterministic probe (timer polls queuedCount() until a second caller is really queued, then throws; NO close() is ever called, which is the live-pod case): mutant printed aAlive=false bAlive=true outcomes=1 -- the queued caller still parked after an 8 s join. Control on the staged bytes: aAlive=false bAlive=false outcomes=2. The probe is deterministic and red-recordable, so unlike the enqueue/close atomicity below this property CAN be pinned. I did verify the author's other claim: deleting BOTH nets is caught (this test FAILED)."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/BatchingSequencerLifecycleTest.java",
+      "line": 369,
+      "severity": "major",
+      "what": "Round 3's blocking finding -- close() throwing out of committer.join immediately when the CLOSING thread already carries an interrupt, measured at closeTookMs=0 with the delegate closed under an in-flight commit -- was fixed in production (`boolean wasInterrupted = Thread.interrupted();`, BatchingSequencer.java:306) with no test. closeJOINSTheCommitterBeforeClosingTheDelegate closes on a clean thread, so it exercises the join but not the flag-clearing that makes the join happen at all. No test in either new file ever sets the interrupt flag on the thread that calls close(). grep for `interrupt` in both files returns comments plus one delegate-side restore, nothing on the closing thread.",
+      "failure_scenario": "MEASURED SURVIVING MUTATION: replace BatchingSequencer.java:306 `boolean wasInterrupted = Thread.interrupted();` with `boolean wasInterrupted = false;` so the flag is left set and join throws at once. `./gradlew :sequencer:test :ingest:test` BUILD SUCCESSFUL. MEASURED PRODUCTION CONSEQUENCE with a probe that is closeJOINSTheCommitterBeforeClosingTheDelegate plus exactly one added line (`Thread.currentThread().interrupt();` before `batching.close();`): mutant printed closeTookMs=16 closedMidCommit=true -- the delegate, and a LocalSequencer's lease, closed under an in-flight commit, the I2 fork the join exists to prevent. Control on the staged bytes: closeTookMs=306 closedMidCommit=false. A shutdown path that catches InterruptedException, restores the flag with the textbook idiom this class's own drain loop uses, and then closes in a finally hits this every time -- the code comment at BatchingSequencer.java:524-531 says so itself, and nothing checks it."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/BatchingSequencerLifecycleTest.java",
+      "line": 255,
+      "severity": "minor",
+      "what": "The enqueue/close atomicity remains unpinned -- reverting submit() to the non-atomic form leaves the suite green -- and is RECORDED in a comment rather than tested. I agree with the author's argument and checked it rather than taking it: a seam before the closed-check lets the broken form observe the already-updated flag and throw correctly, so it reproduces nothing; a seam between the check and the enqueue sits inside the lifecycle monitor in the fixed form, so close()'s stop() blocks on it and the fixed code deadlocks the fixture while the broken code races it. No single seam position distinguishes them, and the deleted stress version fired in 2 of 8, which cannot carry a red record. Recording it in place, with the production reviewer's 300x16 probe as the evidence and the seam DELETED from production rather than left as a member existing for a test that does not work, is the right call. Kept as a minor only so the gap stays visible in the commit body.",
+      "failure_scenario": "Reverting BatchingSequencer.submit to `if (!running) { throw new IOException(...); } queue.add(pending);` outside the lifecycle lock leaves both suites green; a caller descheduled between the check and the add lands in neither the queue nor a batch after close has drained, and parks forever on Pending.await, which is CompletableFuture.join and uninterruptible."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/BatchingSequencerTest.java",
+      "line": 268,
+      "severity": "minor",
+      "what": "Unchanged from round 3 and correctly recorded as not fixed. theRealClockTimerActuallyWaitsItsInterval asserts a LOWER bound only, so it constrains the shipping timer from below and not at all from above.",
+      "failure_scenario": "SURVIVING MUTATION: `return () -> Thread.sleep(millis * 10);` in sleepFor. Elapsed is still >= 120 ms, the assertion holds, and every window in production is ten times its configured interval -- ten times the latency the mission trades for cost, silently."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/BatchingSequencerTest.java",
+      "line": 289,
+      "severity": "minor",
+      "what": "Unchanged from round 3 and correctly recorded as not fixed. aZeroIntervalIsRefused... passes only Duration.ZERO, so only the isZero() half of the guard is exercised.",
+      "failure_scenario": "SURVIVING MUTATION: drop `interval.isNegative() ||` from sleepFor's guard. A negative interval then reaches `Thread.sleep(negativeMillis)`, which throws IllegalArgumentException from inside the committer thread rather than from the constructor -- an unchecked throw out of the drain loop, failing callers instead of refusing the misconfiguration at construction."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/BatchingSequencerTest.java",
+      "line": 309,
+      "severity": "minor",
+      "what": "Unchanged from round 3 and correctly recorded as not fixed. After the file split, ClosingSequencer at line 309 is dead in this file (its only user moved to the lifecycle file, where it is duplicated at line 66), and commitConcurrently at line 88 still takes a `timer` parameter it never reads.",
+      "failure_scenario": "No behavioural mutation survives this one -- it is dead weight, not a weak assertion. It matters only because a reader looking for what constrains ClosingSequencer finds two copies and has to work out which file's tests use which."
+    }
+  ],
+  "task": "M4.7",
+  "role": "test-reviewer"
+}

@@ -1,0 +1,52 @@
+{
+  "diff_sha256": "ffa93235d06c2bfa217e349cd419b43bfa91d2ee3a570844690e4d065f01c15d",
+  "round": 2,
+  "verdict": "pass",
+  "summary": "Both round-1 majors are CLOSED and I verified each by re-running the exact mutation: `unset GIT_INDEX_FILE` before checkout-index now kills theTreeIsMaterialisedFromTheCALLERSPrivateIndex... (and only it), and deleting the role `case` block kills aRoleThatIsNotOneOfTheTwo... The three tests added for the production majors are falsifiable too: dropping the whole git-init block kills theTreeIsAGitRepositorySo..., an unchecked checkout-index kills aMaterialisationThatCouldNotComplete..., and asecondInvocation... pins BOTH non-reuse (fixed DEST per role: assertion 1 dies) and non-destruction (fresh mktemp path plus `rm -rf $BASE/$ROLE.*`: assertion 2 dies) -- it is not merely comparing two mktemp outputs. I produced an independent red for 9 of the 10 tests via 12 targeted mutants. Residual findings are all minor and all named with a surviving mutation.",
+  "findings": [
+    {
+      "id": "T1",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/ReviewTreeTest.java:134",
+      "title": "thePacketSTILLIssuesTheTree... survives the very mutation it was written to kill",
+      "failure_scenario": "MEASURED, twice, in my own tree. (a) Delete the whole `=== YOUR OWN TREE TO MUTATE IN ===` echo block from scripts/review.sh and leave one comment line `# the review-tree.sh block was deleted` in its place: 10/10 green. That is round-1's minor verbatim -- the packet stops issuing the tree and no test notices -- defeated by a string that happens to survive in a comment. (b) Move the block verbatim into `never_called_dead_code() { ... }` appended at the end of review.sh: 10/10 green, so the block can exist and never execute. The test is honest about being a grep, but the grep is on the file rather than on the section, so it constrains strictly less than its name claims. Cheapest real fix follows the precedent already in the same file: the lenses section is a separate script (review-lenses.sh) whose OUTPUT can be asserted; extracting this block the same way would make the assertion behavioural without running the gate loop."
+    },
+    {
+      "id": "T2",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/ReviewTreeTest.java:207",
+      "title": "theTreeIsAGitRepositorySoGatesDoNotPassVACUOUSLYInsideIt does not pin the vacuity it is named for",
+      "failure_scenario": "SURVIVING MUTATION: delete the line `git commit -qm \"the staged bytes under review\" || exit 1` from review-tree.sh -- 10/10 green, because the assertion is `git ls-files` contains subject.txt and ls-files reads the INDEX, which `git add -A` alone populates. So the commit half of the fix has no coverage. It also matters the other way round: the test's own comment names `\"0 source file(s) within 500 lines\" -- a PASS` as the failure it prevents, and in the SHIPPED tree that string is still printed. Measured in a clean materialised tree: `./scripts/check-file-size.sh` -> `ok 0 source file(s)`, `check-license-headers.sh` -> `ok 0 source file(s)`, `check-tdd.sh` -> `ok nothing staged`, because delta mode resolves through `git diff --cached`, which is empty once the tree is committed. With the commit dropped it reports 282 files instead. Both tree states pass the test, so no test would notice the property moving in either direction. (Whether the tree SHOULD be gate-usable in delta mode is the production reviewer's call; the test-side fact is that the assertion covers only the GATE_SCOPE=full path.)"
+    },
+    {
+      "id": "T3",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/ReviewTreeTest.java:271",
+      "title": "theTreeLivesOUTSIDETheRepository... passes for a reason unrelated to the guard it appears to cover",
+      "failure_scenario": "SURVIVING MUTATION: delete the whole `case \"$DEST/\" in \"$ROOT\"/*) ... esac` guard from review-tree.sh -- 10/10 green. The test passes because BASE defaults to ${TMPDIR:-/tmp}, so the path is outside the repository whether or not the guard exists. The script's own comment says `TMPDIR is the caller's, so this is an input, not a constant` -- and that input is never exercised: no test runs the script with TMPDIR set inside the repository, which is the only input that makes the guard fire. One extra case (TMPDIR=<repo>/scratch, expect non-zero exit and no directory created) would kill the deletion."
+    },
+    {
+      "id": "T4",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/ReviewTreeTest.java:183",
+      "title": "aRoleThatIsNotOneOfTheTwoIsREFUSEDBeforeAnythingIsWritten does not constrain `before`, and one of its four roles is refused by accident",
+      "failure_scenario": "Two measurements. (a) SURVIVING MUTATION: move the `case \"$ROLE\"` block from before the mktemp down to just above `DEST=$(cd \"$DEST\" && pwd)` -- 10/10 green, although a rejected role has by then created a directory under BASE. The word `Before` in the name is not asserted; only the victim file and the exit status are. (b) With the allowlist deleted, `../../victim` is refused anyway -- `mktemp -d /tmp/binjava-review-trees/../../victim.XXXXXXXX` gets `Permission denied` on `/` -- so that loop element proves nothing about the guard; measured `review-tree.sh '../victim'` with the guard deleted and it SUCCEEDED, creating /tmp/victim.pkoj7xCV. The mutation is still killed, but by the empty-string element, not by the traversal one. Using `../victim` (or asserting the created path is under BASE) would make the traversal case load-bearing."
+    },
+    {
+      "id": "T5",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/ReviewTreeTest.java:190",
+      "title": "The comment justifying the allowlist states a collision that mktemp has made impossible",
+      "failure_scenario": "The comment says an empty role `collapses both roles onto one path, reinstating exactly the collision this row exists to prevent`. Measured with the allowlist removed: an empty role yields a hidden but still UNIQUE directory (`$BASE/.XXXXXXXX`), because mktemp guarantees uniqueness regardless of ROLE, so two empty-role invocations do not collide. The allowlist still earns its test -- deleting it lets a traversing role materialise outside BASE, see T4 -- but the stated reason is stale prose left over from the rm -rf design, and stale prose is what the next reader will believe when deciding whether the guard may go."
+    },
+    {
+      "id": "T6",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/GitEnv.java:33",
+      "title": "CORROBORATION, not a second block: I reproduced the private-index destruction the production verdict already carries as a major",
+      "failure_scenario": "Following this diff's own new packet instruction (`do every mutation, build and test run inside` the issued tree) with GIT_INDEX_FILE exported -- the shared-checkout workflow review-tree.sh exists to serve and which theTreeIsMaterialisedFromTheCALLERSPrivateIndex... pins -- I ran `./gradlew -p buildSrc test` in the tree. Result: 14 of 208 tests failed (RedRecordWiringTest 2, CoverageGateTest 12) AND my private index was destroyed: 566 entries down to 3 (.pre-commit-config.yaml, scripts/lib.sh, scripts/review-roles.sh -- ReviewRolesTest's fixture). I restored it from HEAD plus the four staged paths taken from a materialisation made before the damage, and `git diff --cached | sha256sum` is again ffa93235d06c2bfa217e349cd419b43bfa91d2ee3a570844690e4d065f01c15d, so this verdict is bound to the intended bytes. Re-running the same suite with `env -u GIT_INDEX_FILE`: 208/208 GREEN. That last number also closes my round-1 R2 -- the issued tree now passes its own suite, and the 13 FreshCheckoutTest failures are gone. GitEnv's javadoc predicts this exact failure and defers the other test files; the deferral currently lives only in a javadoc naming no backlog row. I am recording this as minor because it is a pre-existing hole this diff documents rather than introduces, and because fixing it here would widen scope -- the production verdict already blocks on it."
+    }
+  ],
+  "task": "M0.57",
+  "role": "test-reviewer"
+}

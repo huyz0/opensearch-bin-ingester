@@ -1,0 +1,38 @@
+{
+  "diff_sha256": "6e0d2ee263e6ba3ca20b0a72e275433cba1c645c62c0b179e74a9f98f1f42ee0",
+  "verdict": "changes-requested",
+  "summary": "R2a is genuinely closed -- I killed all four ticker mutations against the class with --rerun-tasks and read the result XML (ofDays(1): the liveness assertion fails; multipliedBy(4): fastRate=2 against the new floor of 3; constant sleep(200): slowRate=4 against <3; honest fastRate probed at 7). R2d, R2e and the M4.39 re-routing are closed as described, and deferring the ADR-0027 amendment to M4.39 is acceptable: the ADR's own text stays true at the LeaseManager layer, and what changed is a consumer that never re-acquires, which is what the staged M4.17-R1a entry and M4.39 now say. One major remains and it is created by this round's own fix: the commit ADDS the deterministic test and the production seam for the close/renewer race while leaving two comments -- one of them in production -- saying that race is untested and filed as M4.40, and M4.40 has been rewritten to mean something else.",
+  "findings": [
+    {
+      "id": "M4.17-R3a",
+      "severity": "major",
+      "file": "sequencer/src/main/java/binjava/sequencer/LocalSequencer.java:310-317",
+      "title": "close()'s comment denies the test this same commit adds, names the wrong consequence for the interrupt, and points at a row that has been rewritten to mean something else",
+      "failure_scenario": "MEASURED, in the reviewer tree, each mutation run with --rerun-tasks and the counts read from TEST-binjava.sequencer.LocalSequencerRenewTest.xml. (1) Removing BOTH `renewer.interrupt()` and the post-tick `if (closed) return;` gives failures=1, the failure being `aCallerAfterCLOSEIsToldCLOSEDRatherThanFENCED` asserting on 'this sequencer lost its lease at epoch 1 and has been fenced'. Removing either one alone gives failures=0. So the pair IS pinned, by a test added in this very diff -- yet the comment says '\u26a0\ufe0f NEITHER IS OBSERVABLE ON ITS OWN -- each masks the other -- which is why no test pins them and why that is filed as M4.40 rather than left implied.' The clause after 'each masks the other' is false as of this commit. (2) The pointer is stale as well: backlog.md and backlog-notes.md M4.40 are rewritten in this same diff to be about the interrupt-BEFORE-release ORDER, not about the pinning -- and M4.40's note justifies itself by saying 'the comment there calls that load-bearing', which no comment in close() does. A future session reading close() is sent to M4.40; M4.40 sends it back to a comment that does not exist; the order property neither artifact states is the one thing actually left open (I confirmed it: swapping to `leases.release(); renewer.interrupt();` leaves the class at failures=0). (3) The comment also names the wrong harm: it says the signal stops 'a renewer already past its `closed` check' spending 'a pointless conditional write learning it has been released', but after `releaseLocked` nulls the belief `renewLocked` returns empty at its `mine == null` guard and issues NO store request at all -- what the interrupt actually prevents is the spurious `fenced` latch plus the ERROR log 'this node will not sequence again and must be restarted', which is exactly what the double mutation produced above. The concrete cost of shipping this: `awaitRenewerStopped` is a package-private method that the comment two screens down describes as covering nothing, so the next reader who prunes production members that exist only for tests deletes the seam and the test with it, and the class returns to the state where a graceful shutdown can be reported to every later caller as a lost lease. Minimum-surface remedy is deletion, not rewriting: drop the 'which is why no test pins them and why that is filed as M4.40' clause and the 'pointless conditional write' clause, and drop the now-stale 19-line block at LocalSequencerRenewTest.java:417-435 ('A TEST FOR THE close/renewer RACE WAS WRITTEN AND DELETED ... its red cannot be reproduced on demand'), whose claim the staged M4.40 note itself retracts as 'WRONG' and which now sits two lines above the shipped deterministic test for that race."
+    },
+    {
+      "id": "M4.17-R3b",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:305",
+      "title": "M4.40's two supporting facts are wrong, though its residual is right",
+      "failure_scenario": "The row says '`close()` interrupts BEFORE it releases, and the comment there calls that load-bearing'. No comment in `close()` says that; the block there argues the opposite shape (it refutes the 'resurrection' reason and settles on promptness). A session picking up M4.40 goes looking for a statement that is not in the tree and has to re-derive the hazard. The row also says a reversed order 'logs a fence at every graceful shutdown': it is a race window, not every shutdown -- with release first, a renewer still parked on the tick takes the interrupt and exits without renewing, and only one already past its `closed` check reaches `renewLocked` with a null belief. The residual itself is correct and I measured it: `leases.release(); renewer.interrupt();` leaves LocalSequencerRenewTest at failures=0."
+    },
+    {
+      "id": "M4.17-R3c",
+      "severity": "minor",
+      "file": "baselines/review.txt:16",
+      "title": "The rounds argument claims the BatchingSequencer lesson is staged in this commit; it is not",
+      "failure_scenario": "'reproduced one class over IN THE COMMIT THAT STAGES THAT LESSON' is false: `git diff HEAD -- baselines/review.txt` shows two added lines only, and the `rounds:M4.7` entry carrying 'both its bounds bypass the constructor' is context, i.e. already in HEAD from the M4.7 commit. The rest of the entry is accurate and the past-the-cap argument holds; this one clause makes a permanent record assert a coincidence that did not happen, and baselines/review.txt is the file that is read to decide whether a round count is justified."
+    },
+    {
+      "id": "M4.17-R3d",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/LocalSequencerRenewTest.java:370-374",
+      "title": "The 'two orders of magnitude of slack in both directions' claim no longer describes the bound that was added below it",
+      "failure_scenario": "Probed in the reviewer tree by widening the assertion and reading the failure: the honest fastRate is 7 in the one-second window, the floor is 3, and the `multipliedBy(4)` mutant lands on 2. So the floor's margin is 2.3x, not two orders of magnitude, and 'cannot flake on a loaded machine' is no longer supported: the floor is met only while the average tick stays under 333ms against a configured 150ms, in a suite that runs 713 tests on a WSL2 box. If it does flake, the comment tells whoever triages it that flaking is impossible."
+    }
+  ],
+  "task": "M4.17",
+  "role": "reviewer",
+  "staged_tree": "3fa1f030c9e1e859417b439842980875c2fd1c4f"
+}

@@ -1,0 +1,15 @@
+{
+  "verdict": "changes-requested",
+  "diff_sha256": "2ad86017aaf4411de11b54d0fb16387d0619f09d34f1aaa2a03b98ced7d65f39",
+  "findings": [
+    {
+      "id": "TR-M0.16-1",
+      "severity": "major",
+      "file": "docs/internal/product/backlog.md",
+      "summary": "The staged diff scoped to task M0.16 also creates a brand-new backlog row for M0.37 in the same hunk set. M0.37 documents a check-reviewed.sh gate-design gap discovered on a different task (M0.9); it is unrelated to the MinIO fixture that M0.16 delivers. Two tasks are bundled into one staged change.",
+      "failure_scenario": "A commit whose subject names M0.16 but whose diff also creates the M0.37 backlog row violates non-negotiable 1 and git.md rules 2/8 (one task, one commit; never widen scope silently). check-commit-msg.sh only validates that the subject cites a real, existing task ID -- it does not compare the diff's content against that ID -- so a commit spanning two unrelated backlog rows passes every existing gate undetected. A later revert of the M0.16 fixture (e.g. because the pinned MinIO digest goes stale and the fixture is redesigned) would silently also delete the M0.37 backlog entry, with no commit body yet on record (the change is still staged) explaining why the two are joined."
+    }
+  ],
+  "task": "M0.16",
+  "role": "test-reviewer"
+}

@@ -1,0 +1,73 @@
+{
+  "verdict": "changes-requested",
+  "summary": "Six new tests, all measured. Three of the four things the author asked to be re-checked hold up: the per-term `streamOfTerm(t)` fix is sufficient (a checkpoint carrying only the streams touched in its own batch is killed by boundedRecoveryReconstructsEXACTLY, and stop-after-the-first-ancestor is killed by anUNCHECKPOINTEDAncestry); the nextSequence seeding test kills its mutant for the right reason (expected 6, got 0); the I3 test fails for the right reason (expected 5, got 9999) when the barrier guard is deleted; and the LocalSequencerFailoverTest threshold move is exactly what the code produces and no more -- measured with M4.9's probe disabled, totals return to 28/56/20/47 and GETs are bit-identical at 18/46/10/31, the entire increase being `stats` (4->6 at one ancestor, 7->12 at four). But three paths the row names are executed and not constrained. The fixtures checkpoint after EVERY delta (K=1) and only ever put a checkpoint on the IMMEDIATE predecessor, so (a) no test has a checkpoint covering only PART of a chain -- dropping every entry after the checkpoint leaves the whole suite green while reassigning already-acked offsets; (b) no test reaches the in-loop checkpoint termination at all -- the walk can be made never to stop there, with the probe still issued, and everything stays green; (c) the barrier guard's boundary is unpinned in both directions, 9,999 being far enough out that an off-by-one survives.",
+  "findings": [
+    {
+      "id": "T1",
+      "severity": "major",
+      "blocks": true,
+      "file": "sequencer/src/test/java/binjava/sequencer/LocalSequencerBoundedRecoveryTest.java:124",
+      "title": "The 'at most K deltas' half of the row has no test: every fixture checkpoints after EVERY delta, so the residual entries after the newest checkpoint are never read by any test",
+      "detail": "takeoverCost injects K=1 and boundedRecoveryReconstructsEXACTLY injects K=1, so the newest checkpoint's sequence always equals the chain's nextSequence and `hop.from()` lands past the last delta. Nothing in the suite ever replays an entry through the `from > 0` path. Verified by measurement, not argument: at K=4 with 12 entries the cost is IDENTICAL to K=1 (total 16) because 12 is a multiple of 4 and the last checkpoint still covers everything -- the fixture would not exercise the path even if K were raised, unless K stops dividing the term length.",
+      "surviving_mutation": "In ChainReplay.applyChain, replace `String startAfter = hop.from() > 0 ? keys.keyFor(hop.from() - 1) : null;` with `if (hop.from() > 0) { return; } String startAfter = null;` -- i.e. read NOTHING after the checkpoint. Measured: 294 tests, 0 failures.",
+      "failure_scenario": "K=1000 or T=60s means the newest checkpoint almost never sits exactly at the chain end. A predecessor that committed 12 deltas with a checkpoint at sequence 10 loses deltas 10 and 11 from recovery: measured directly at K=5, a takeover after 12 commits returns firstOffset 10 where 12 is correct, so two already-acknowledged offsets are handed out a second time. That is I2, on the recovery path this task exists to speed up, and no test in the tree would notice.",
+      "suggested_fix": "One fixture where the checkpoint covers only part of the chain (e.g. K=5 with 12 commits, or a hand-written checkpoint at a sequence below the chain end) asserting the residual deltas' offsets are still counted. The same fixture closes T2 below."
+    },
+    {
+      "id": "T2",
+      "severity": "major",
+      "blocks": true,
+      "file": "sequencer/src/test/java/binjava/sequencer/LocalSequencerBoundedRecoveryTest.java:143",
+      "title": "The in-loop 'a checkpoint TERMINATES the walk' branch -- the transitive bound the row's headline demands -- is reached by no test; only the FIRST hop is exercised",
+      "detail": "Every fixture checkpoints EVERY term, so `inherited()`'s first-hop crossFromCheckpoint always succeeds at the immediate predecessor and replayAncestry returns before the while loop runs. anUNCHECKPOINTEDAncestry has no checkpoints anywhere, so the in-loop probe always misses there. The case the bound exists for -- a predecessor too short to have checkpointed (fewer than K deltas and less than T alive: a rolling deploy, a burned epoch, a crash loop) sitting above an ancestor that DID checkpoint -- has no fixture.",
+      "surviving_mutation": "In ChainReplay.replayAncestry, keep the probe but never act on it: `boolean crossed = chainEpoch >= 1 && crossFromCheckpoint(hops, chainEpoch, limit); if (crossed && Boolean.getBoolean(\"never.set\")) { atOrigin = false; break; }`. Measured: 294 tests, 0 failures. The request counts are unchanged in every existing fixture, so LocalSequencerFailoverTest does not see it either. (The cruder mutation `if (false && chainEpoch >= 1 && crossFromCheckpoint(...))` IS killed -- but only by LocalSequencerFailoverTest's 52L, i.e. by the MISSING probe requests on an UNCHECKPOINTED ancestry, never by any bounded-recovery behaviour.)",
+      "failure_scenario": "Under this mutant a takeover whose predecessor is uncheckpointed walks the whole remaining ancestry transitively, which is exactly the O(all commit-log entries ever written) cost the row says it replaces. Measured on the staged tree with the fixture's K raised above the term length (K=13, 12 deltas per term): total requests 30/84/300 at 1/4/16 prior terms, GETs 18/63/243 -- unbounded again -- and the six new tests stay green because none of them builds that ancestry.",
+      "suggested_fix": "A fixture of the shape term A (checkpointed) -> term B (K set above B's delta count, so uncheckpointed) -> takeover, asserting BOTH that term A's stream offset is inherited AND that the total request count does not grow when more checkpointed terms are added below A."
+    },
+    {
+      "id": "T3",
+      "severity": "major",
+      "blocks": true,
+      "file": "sequencer/src/test/java/binjava/sequencer/LocalSequencerBoundedRecoveryTest.java:270",
+      "title": "The barrier guard is pinned only against deletion, not at its boundary; 9,999 does nothing a value of `barrier + 2` would not",
+      "detail": "The test writes a checkpoint at sequence 9,999 against a barrier of ~6. Deleting the guard is killed for the right reason (measured: expected 5, but was 9999). Every off-by-one is not, in either direction, because 9,999 is nowhere near the boundary the javadoc reasons about (S - 1 <= upTo).",
+      "surviving_mutation": "Two, both measured at 294 tests / 0 failures: (a) `if (checkpoint.sequence() - 2 > upTo)` -- accepts a checkpoint covering exactly ONE entry past the barrier; (b) `if (checkpoint.sequence() - 1 >= upTo)` -- refuses a checkpoint that sits exactly ON the barrier.",
+      "failure_scenario": "(a) is the I3 the test's own javadoc names: a fenced leader's checkpoint covering one entry past the slot its successor's CONTINUE seals is folded in, so the successor resumes one record past the last acked offset and a discarded-suffix record's offset is never re-issued -- silently, on the confident bounded path. (b) is the opposite: the commonest checkpoint position of all (exactly at the sealed slot) stops terminating the walk, and the bound quietly reverts to a full crossing with every functional test still green.",
+      "suggested_fix": "Two cheap cases instead of one large number: a checkpoint at sequence `barrier + 2` (S-1 = barrier+1, must be REFUSED) and one at `barrier + 1` (S-1 = barrier, must be USED and must terminate the walk -- assert the request count, not only the offset)."
+    },
+    {
+      "id": "T4",
+      "severity": "minor",
+      "blocks": false,
+      "file": "sequencer/src/test/java/binjava/sequencer/LocalSequencerBoundedRecoveryTest.java:151",
+      "title": "The two cost tests pin the SLOPE (zero) and no constant, so a per-takeover cost regression on the bounded path is invisible",
+      "detail": "Both assert equality between two measurements. Nothing asserts the absolute figure the row records as MEASURED (17 total, 5 GETs, 3 LISTs); the only absolute request counts in the tree, LocalSequencerFailoverTest's 30/58/22/52, are measured on the UNCHECKPOINTED path, which is not the path M5's up-to-300 plugin nodes run against R15's ~1 LIST/s ceiling. Note also that a recovery reading nothing and returning wrong offsets satisfies both cost tests -- that is properly closed by boundedRecoveryReconstructsEXACTLY (measured: suppressing the checkpoint offset merge fails that test and the nextSequence test, and neither cost test), so the pairing works; the gap is the constant, not the correctness.",
+      "surviving_mutation": "Three redundant `newestCheckpoint(store, prefix, chainEpoch)` calls added to crossFromCheckpoint -- six extra requests (3 stats + 3 GETs) on every bounded recovery. Measured: 294 tests, 0 failures.",
+      "failure_scenario": "A future change adds a constant probe per takeover on the bounded path -- exactly what M4.9 itself just added to the unbounded one -- and no test says a word, while the row's own evidence (17 requests) is the number a cost-budget argument would later cite.",
+      "suggested_fix": "Assert `oneTerm.total()` and `sixteenTerms.total()` against the recorded absolute (and the GET/LIST split), as LocalSequencerFailoverTest already does for its path, rather than only against each other."
+    },
+    {
+      "id": "T5",
+      "severity": "minor",
+      "blocks": false,
+      "file": "sequencer/src/test/java/binjava/sequencer/LocalSequencerBoundedRecoveryTest.java:129",
+      "title": "The counting window contains a real 3-second sleeping renew ticker",
+      "detail": "The checkpoint ticker is correctly frozen (`frozen()`), but the renew ticker is the shipping `LocalSequencer.sleepFor(RENEW)` with RENEW = 3s, and the CountingBinStore wraps the sequencer from `start` to `close`. testing.md rule 15 wants the clock injected; here half of it is.",
+      "failure_scenario": "On a machine where the measured takeover section exceeds 3 seconds (cold JIT under a loaded WSL2 box -- the @Timeout(300) suggests the author allowed for slowness), the renewer thread issues a lease CAS inside the counting window and `isEqualTo(oneTerm.total())` fails, or masks a real difference. Not observed here; it is a latent flake rather than a live one.",
+      "suggested_fix": "Pass a frozen RenewTicker for these fixtures, the same way the checkpoint ticker already is."
+    },
+    {
+      "id": "T6",
+      "severity": "minor",
+      "blocks": false,
+      "file": "sequencer/src/test/java/binjava/sequencer/LocalSequencerFailoverTest.java:195",
+      "title": "(NOT A DEFECT -- recorded as evidence) The 28->30 / 56->58 / 20->22 / 47->52 move is verified honest, and is the minimum the code produces",
+      "detail": "Measured in a copy of the staged tree by neutering crossFromCheckpoint to `return false` before it issues any request: totals return to exactly 28/56/20/47 and GETs are unchanged at 18/46/10/31. The whole increase is in `stats` -- 4->6 at one ancestor and 7->12 at four -- i.e. one probe per takeover plus one per ancestor, precisely what the new comment claims. The assertions remain `isEqualTo`, so there is no slack in the new constants, and the shape the test exists to pin (slope 1 in entries, growth per ancestor) is intact: 30->58 for 12->40 entries, 22->52 for 1->4 ancestors. No other assertion in that file was loosened. Under testing.md rules 4-5 and non-negotiable 2 this is a stated, measured, minimal move with the bounded path asserted elsewhere -- I do not consider it a finding, but it needs the same sentence in the commit body that the test comment carries, since check-test-integrity reads the body and not the comment.",
+      "failure_scenario": "n/a"
+    }
+  ],
+  "diff_sha256": "8f2456df9d9342d6e27827d7370e405e83cd99c3db25d24edffb92d942774642",
+  "task": "M4.9",
+  "role": "test-reviewer",
+  "staged_tree": "7a5d9e0ee6cb46b5d6561ab525d26df20780f57c"
+}

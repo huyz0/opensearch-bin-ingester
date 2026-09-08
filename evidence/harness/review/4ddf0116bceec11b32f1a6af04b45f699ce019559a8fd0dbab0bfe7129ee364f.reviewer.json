@@ -1,0 +1,24 @@
+{
+  "diff_sha256": "4ddf0116bceec11b32f1a6af04b45f699ce019559a8fd0dbab0bfe7129ee364f",
+  "verdict": "pass",
+  "summary": "Round 7, production side. Both round-6 fixes verified by measurement rather than by reading: the M0 section of backlog-done.md is column-consistent (all 17 rows exactly 4 cells, the new row ends '| - | done |'), and every figure now attached to 'the archive as it stands in the BASE' reproduces against HEAD:backlog-done.md with the gate's own recogniser (121 rows, median 1306, max 18845 = M0.56, 25 over cap; staged tree is 122). Gate behaviour re-verified by running it in a scratch repository built from the real base archive: an 11,481-char new row is refused with an actionable message and exit 1; an edit to the already-over-cap M0.56 row passes and is reported as exempt; a tree whose base has no archive fails closed rather than reporting clean; CI cannot reach the vacuous staged reading because ci.yml resolves CHECK_RANGE fail-closed for every event. Other claims spot-checked and true: the BacklogBoundsTest quotation is verbatim modulo the ellipsis, check-commit-msg.sh does accept subject M9.9 against '| **M9.9** |', check-session-load.sh:9 does carry 18,845, check-terminology.sh does scan every *.md full-tree, the withdrawn gate's pattern does flag 'every assertion here', the M0.77 counts reproduce exactly (61 in 36 joined, 50 in 31 line-scoped), M4.8-M4.9 is 40 verdict hashes over 7 tasks with M4.9 at 9 and 4 of the archive's 7 largest rows, and the rounds: keys go 14 -> 15 with this entry. No object-store request is added or changed by this commit; it is harness-only.",
+  "findings": [
+    {
+      "file": "docs/internal/product/backlog-notes.md",
+      "line": 375,
+      "severity": "minor",
+      "finding": "The M0.78 note enumerates the surviving evasions as 'Three shapes still pass at 4,200 characters', and describes '| **`M9.9`** |' as '(four markers)'. Measured by running the staged gate against a real base archive: '| ***M9.9*** |' at 4,222 characters also exits 0, and the marker count in the cited shape is three per side, not four.",
+      "failure_scenario": "A session picks up M0.78, reads the list as the set to close, widens the recogniser to admit exactly the three literal shapes named, and lands it. A 12,000-character row headed '| ***M9.9*** |' still prints 'ok 0 new archive row(s)'. The class is the same one ([*`_]{0,2} being too narrow), so a class-level fix closes both -- but the row invites an instance-level fix, and this is the third enumeration in this task to be short by exactly the instance nobody counted."
+    },
+    {
+      "file": "buildSrc/src/test/java/binjava/ArchiveRowSizeTest.java",
+      "line": 20,
+      "severity": "minor",
+      "finding": "The round-6 wording fix was inserted mid-paragraph at both sites rather than rewrapped: ArchiveRowSizeTest.java:20 is 121 characters in a file that otherwise wraps at 100, and check-archive-row-size.sh:23 is 91 in a comment block that otherwise wraps at 80. The javadoc also now reads '... would say 122.' two clauses before '... gave the count as 120', which is harder to follow than either number alone. No behaviour, and no gate covers it.",
+      "failure_scenario": "A later reader diffing the javadoc sees a line the formatter would rewrap and either rewraps it (a no-value commit) or copies the style. This is the only residue I could find from the two round-6 fixes: neither introduced a defect of the shape it was fixing. Record it in the commit body; it does not justify a round 8."
+    }
+  ],
+  "task": "M0.76",
+  "role": "reviewer",
+  "staged_tree": "b2c3ad917daa734157123740d1e73f4c60e3d0b2"
+}

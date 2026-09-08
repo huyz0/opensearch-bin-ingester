@@ -1,0 +1,15 @@
+{
+  "verdict": "changes-requested",
+  "diff_sha256": "69fdc65cece6cd42e65eb5c6641b1235b89025e05964926bf9c54a3e2d16f0ed",
+  "findings": [
+    {
+      "id": "M0.31-R3-1",
+      "severity": "major",
+      "file": "docs/internal/product/backlog.md",
+      "summary": "This is round 3 of review on a single staged diff whose round-2 findings included a BLOCKING test-reviewer finding (M0.31-R2-TR-1) and a MAJOR reviewer finding (M0.31-R2-1). review.md rule 12 states this unconditionally: 'A blocking finding in round two does not buy a round three -- it means the commit is too big. Split it and review the pieces. ... Do not expect a round three.' There is no size exception in the rule's text, and the packet's own ROUNDS section repeats it verbatim. The accompanying message argues the two fixes are small enough that splitting would be counterproductive -- that is exactly the kind of author-supplied justification review.md was designed to be reviewed without, and check-reviewed.sh enforces only that a hash-matched verdict file exists for each role, never a round count, so nothing mechanical stops a round 4, 5, or 6 the same way.",
+      "failure_scenario": "If a round-3 (or later) re-verification is accepted whenever the author judges the residual fix 'small,' the two-round cap that keeps review affordable erodes precedent by precedent -- the exact pattern rule 12 cites M-1.1 for (five rounds, ~2.5 hours, each round fixing defects the previous round's fix introduced) recurring here one level down: round 1 found a dead negation branch; the fix for that produced round 2's two new defects (a false backlog hash claim and a test that didn't test what its javadoc claimed); we are now being asked to bless round 3's fixes for round 2's defects without any check that round 3 didn't introduce its own. Nothing downstream -- check-reviewed.sh, check-tdd.sh, or any other gate in AGENTS.md's table -- would refuse a commit whose round count is 3, 4, or 10, so the only thing preventing 'just one more round' from becoming the norm is a reviewer declining to grant it. Recommend: split per rule 12 -- land the test-reviewer's blocking fix (buildSrc/src/test/java/binjava/FreshCheckoutTest.java) as its own single-round M0.31 commit, and handle the backlog-row wording correction either bundled trivially with it (a 2-line prose diff carries negligible re-review risk) or staged as an argued entry if the author believes a fresh round is unnecessary for that hunk alone -- but not both defects absorbed into an unbounded verification loop on the full accumulated diff."
+    }
+  ],
+  "task": "M0.31",
+  "role": "reviewer"
+}

@@ -1,0 +1,36 @@
+{
+  "diff_sha256": "97bfe82bb43e37a0527094684de857fa9ab378e451986a58e30bfc78bb2631e1",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "file": "docs/internal/product/backlog.md",
+      "line": 31,
+      "severity": "major",
+      "what": "The staged M0.53 row asserts \"ROUND 6 WAS NOT RUN AND `check-reviewed` WAS SKIPPED: the round-5 verdicts are `changes-requested` from both roles and bind to the PREVIOUS bytes, so nothing in `.harness/` vouches for what landed.\" Round 6 IS being run against exactly these bytes (diff_sha256 97bfe82b...), and this verdict binds to them. The row also contradicts the staged `baselines/review.txt` `rounds:M0.53` entry it ships alongside: that entry exists solely to satisfy `check-reviewed`'s round cap, which is meaningless if `check-reviewed` is skipped. The row is the permanent record of this task's review history, and it states the opposite of what happened.",
+      "failure_scenario": "The commit lands with a round-6 verdict recorded in `.harness/review/97bfe82b....reviewer.json` and `check-reviewed` green, while `backlog.md` line 31 tells every future reader that no round-6 review exists and that the gate was skipped. A later reader auditing which M0.53 bytes were vouched for (exactly the audit AGENTS.md non-negotiable 4 exists to make possible) reads the row, concludes the fix landed unreviewed, and either re-reviews already-reviewed bytes or discounts the whole row -- including the parts that are true. Symmetrically, if the author does commit with SKIP=check-reviewed, the staged `rounds:M0.53` argument is dead text arguing a cap that never fired."
+    },
+    {
+      "file": "baselines/review.txt",
+      "line": 12,
+      "severity": "major",
+      "what": "The `rounds:M0.53` entry makes exactly one mechanically checkable claim -- \"the remaining surface is one predicate now written once per scanner, and that a reader can check that claim by grepping for `TEST_PATH.search` outside `reads`\" -- and the tree fails that check. Measured on the staged bytes: `grep -rn 'TEST_PATH.search' scripts/` returns scripts/test_integrity.py:97 (the `reads` lambda) AND scripts/test_integrity.py:130 (`if not (p.endswith('.java') and TEST_PATH.search(p)):`), a live second copy of the identical predicate outside `reads`. tdd_scan.py has one. So the predicate is written TWICE in one of the two scanners, and the verification method the entry prescribes returns the opposite of the claimed answer. This is the entry that argues six rounds against a cap of two; nothing but a reviewer checks whether it is true. (Measured: collapsing line 130 to `if not reads(p):` keeps the entire buildSrc suite green, so making the claim true costs one line.)",
+      "failure_scenario": "A later change edits `reads` alone -- adds a `benchTest` tier, or drops the `.endswith('.java')` clause so a `.kt` sibling is followed -- trusting the entry's statement that the predicate exists once per scanner. Line 130 keeps the old spelling and the two disagree. That is precisely round 4's measured weakening (`git mv FooTest.java FooTest.java.bak` passing where HEAD refused, because the source was dropped by one predicate while the destination was never read by a second). The commit that shipped the fix for that defect also shipped a false all-clear on the surface that produced it."
+    },
+    {
+      "file": "scripts/java_tests.py",
+      "line": 391,
+      "severity": "minor",
+      "what": "The comment justifying `rekey`'s `startswith` guard says the guard is unfalsifiable \"because ids come from `PKG.search(normalise(src))` while `from_pkg` comes from the raw source\". That premise is false in this diff: both call sites (tdd_scan.py:132, test_integrity.py:144) pass `package_of(...)`, and `package_of` -- added 23 lines above in this same commit -- normalises first, with a docstring saying so explicitly (\"NORMALISED FIRST, so this agrees with the package the ids were built from by construction\"). The guard is indeed unfalsifiable, but for the opposite reason: both sides now come from the same normalisation, so `ident.startswith(from_pkg + '.')` always holds when `from_pkg` is truthy.",
+      "failure_scenario": "A future author reading this comment concludes the two spellings of the package disagree and either 'fixes' `package_of` to read the raw source -- reintroducing the `binjava.sequencer.binjava.ingest.FooTest#m` double-qualification that `package_of`'s own docstring records -- or deletes the `startswith` guard as dead on a rationale that no longer describes the code. The comment is the only documentation of why the guard is kept."
+    },
+    {
+      "file": "docs/internal/product/backlog.md",
+      "line": 31,
+      "severity": "minor",
+      "what": "The row says \"rounds 2-5 each found a real major\", implying round 1 found none. Round 1 found at least three, and the tree records them: RenameBlindnessTest's own comments cite \"ROUND-1 REVIEW FOUND THE VACUITY THIS CLOSES\" (asserting only the absence of moved ids passed while the scanner examined nothing), \"Round-1 test review measured that dropping the `R` guard, and swapping source with destination, both survived\", and \"round-1 review measured it untested\" for the CHECK_RANGE branch. The row exists to record this history and drops a round of it.",
+      "failure_scenario": "The row is the evidence a milestone review or a future `rounds:` argument cites when judging whether this defect class is converging. Undercounting the rounds that found majors makes the fix look one round closer to convergence than it was, in the row whose whole purpose is to prevent exactly that impression."
+    }
+  ],
+  "task": "M0.53",
+  "role": "reviewer"
+}

@@ -1,0 +1,38 @@
+{
+  "diff_sha256": "b699a7d056c6e5118e290b901d8d893ee94a7d05395279566ef254ab10f0c4a4",
+  "verdict": "pass",
+  "summary": "Round 4, docs-only. Both round-3 majors are RESOLVED, verified by re-measurement rather than by reading the fix: LocalFsBinStore.putIfMatch (what releaseLocked() issues) COMPLETES with the interrupt flag pre-set, flag still set afterwards, on both a platform and a virtual thread on this tree's JDK 25.0.4, three runs each; only putIfAbsent throws ClosedByInterruptException, and putIfAbsent appears only in acquireLocked. M4.35 now states exactly that, and no longer asserts an interruptible store write. M4.36's replacement sentence about aQUEUEDCallerIsFailedWithoutWaitingForTheLeaseReleaseToFinish is correct on the two claims that carry it (its spin's motive is batch-membership determinism; nothing interrupts its committer -- that test never calls batching.close()), but its third clause overshoots. The elapsed-vs-margin numbers are now stated the right way round and the arithmetic checks (300 - 211 = 89, 300 - 201 = 99). The three surviving-mutation claims are CARRIED FORWARD from rounds 2 and 3, not re-run: the production code is untouched since they were verified twice. Four minors, none blocking.",
+  "findings": [
+    {
+      "id": "T1",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:120",
+      "title": "M4.36's new precedent warning ends on a claim the tree contradicts: 'a latch would serve there'",
+      "failure_scenario": "The new sentence reads: 'It does spin rather than wait, but its reason is batch-membership determinism, nothing interrupts its committer, and a latch would serve there.' The first two clauses are accurate -- BatchingSequencerTerminationTest.java:282 never calls batching.close(), so nothing interrupts its committer, and the spin's stated motive is that B must be QUEUED rather than merely started. The third is not. What the committer waits for is 'B is really enqueued', and no latch can carry that signal: commit() blocks, so B can only count a latch down BEFORE it enqueues, which is precisely the fixture that was measured to fail -- the test's own comment records 'that fixture handed B the OutOfMemoryError, not the net's IOException', and M4.7's row in backlog-done.md records the same lesson ('commit blocks, so a caller can only signal BEFORE it enqueues -- so the timer watches the real queue depth'). A maintainer taking M4.36 at its word could replace that spin with a latch and weaken an existing test to a race, which is the assertion-weakening inversion. Remedy is to cut the clause or qualify it to 'nothing there would break a latch', which is what the argument actually needs. The row's operative instructions -- do NOT take it as precedent, and THE PIN MUST BE INTERRUPT-PROOF -- are unaffected and correct, which is why this is minor."
+    },
+    {
+      "id": "T2",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:115",
+      "title": "M4.35's leading INTERLEAVING paragraph, and its 'Either way', are stale after the correction that follows them",
+      "failure_scenario": "Paragraph 1 still narrates the hazard as: committer takes the interrupt-insensitive tryLock() and proceeds into releaseLocked()'s store write, then close() interrupts. Paragraphs 2 and 3 now say the live route is takeOrFail UNDER CONTENTION and that the store write is not interruptible. Under the corrected facts the narrated interleaving is benign -- tryLock succeeded, so takeOrFail is never reached, and I measured that the putIfMatch completes with the flag set -- so the row's headline interleaving no longer reaches the outcome the row ends on. 'Either way catch (Throwable) swallows it' likewise had two antecedents (write dies / takeOrFail throws) and now has one. A maintainer building M4.35's fix from paragraph 1 would construct a fixture on the fast path and observe no failure. Everything asserted is individually true and nothing is present-tense-false, which is why this is minor rather than the major it replaces."
+    },
+    {
+      "id": "T3",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:126",
+      "title": "The same measurement now exists in two copies with two different ranges",
+      "failure_scenario": "M4.38's done-row says '~201-211ms across four independent runs ... margin ~89-99ms'. M4.37's notes row, unchanged, still says '~202-211ms ... across three independent runs, so the floor margin is ~90-100ms'. Both are true of the runs they describe, so nothing is false, but the row that will be READ when M4.37 is implemented carries the older copy -- and 'fixing ONE copy of a fact and missing its duplicates' is the failure mode M4.0's own row records as recurring. Fixing it costs a round whose surface is the prose the fix adds, so it is recorded, not requested."
+    },
+    {
+      "id": "T4",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-done.md:102",
+      "title": "'the rows carried backslash-escaped quotes no other row uses' is false in one grep",
+      "failure_scenario": "grep -c '\\\\\"' finds 1 line in backlog.md (M4.14's '\\\"never a label\\\"') and 2 in backlog-done.md (M4.0 among them). Other rows do use them; the M4.38 rows were not unique in that. The claim is a defect-history aside and changes nothing about what gets built. It is also PRE-EXISTING -- it is in both the old and the new version of the row in this round's delta -- so it already carries a verdict from an earlier round; recorded here only because it is falsifiable and neither round caught it."
+    }
+  ],
+  "task": "M4.38",
+  "role": "test-reviewer",
+  "staged_tree": "549f4d13354cc1e90a499b1018283d636d7a8a8d"
+}

@@ -1,0 +1,69 @@
+{
+  "diff_sha256": "1e916032a72234254c3b91eaa2e6e6d8336bc9a2d17665ede237fd91c1b208ca",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "D1",
+      "severity": "major",
+      "file": "docs/internal/product/roadmap.md:27-28",
+      "summary": "Q9 (multi-tenant isolation) and Q10 (security model) are recorded three incompatible ways in one commit. roadmap.md:27-28 defers both as 'needs a research document first'; security.md:22-24 states 'The security model is an open question ... These rules are the part already decided, not a complete model'; but 50-open-questions.md:20-22 lists Q9 and Q10 as decided by ADR-0010, backlog.md:45 marks M0.11 ('Close Q9/Q10 -> ADR-0010 + research doc 11') done, requirements.md:54 asserts 'Nothing is blocked as of 2026-08-30 - every open question is decided', and the research document the roadmap says is missing is staged in this very commit as docs/research/30-design-space/11-multi-tenancy-and-security.md.",
+      "failure_scenario": "The agent picking up M1.0 (CredentialSource SPI, which ADR-0021 builds directly on ADR-0010's trust-domain model) opens security.md as AGENTS.md routes it to, reads rule 8, and treats the trust domain as undecided - so it either defers the trust-domain threading the M1 SPEC calls 'in from day one so nothing is retrofitted through the auth path', or spends a session writing research doc 11 a second time because the roadmap says it does not exist."
+    },
+    {
+      "id": "D2",
+      "severity": "major",
+      "file": "docs/internal/product/milestones/M1/SPEC.md:171",
+      "summary": "M1.0 ('CredentialSource SPI + StaticCredentialSource + Principal; trust domain threaded through the write path') cites FR-12, and decisions/0021-credential-source-spi.md:5 cites 'Requirements: FR-12' as well. requirements.md:21 defines FR-12 as 'Multi-AZ Kubernetes deployment, >=2 ingester nodes per AZ' - which the same SPEC puts explicitly out of scope ('AZ awareness' at SPEC.md:32). The requirement the credential SPI actually serves is FR-20 (requirements.md:51), which requirements.md itself already back-references to ADR-0021. FR-20 is therefore cited by no task anywhere.",
+      "failure_scenario": "sdd.md rule 2 makes the FR citation the traceability link, and check-milestone-verified.sh matches criteria to evidence per requirement. At the M1 milestone review the matrix reads FR-12 (multi-AZ deployment) as satisfied by a static credential file, so the multi-AZ requirement is never scheduled or verified, while FR-20 - the requirement the delivered code actually satisfies - shows as unimplemented and gets a duplicate task opened against it."
+    },
+    {
+      "id": "D3",
+      "severity": "major",
+      "file": "docs/internal/standards/cost.md:58-77",
+      "summary": "The 'R<n>' cost-rule namespace is defined twice with different content, in the one namespace this project exists to control. cost.md's numbered list is called 'rules R1-R11 in cost.md' by sdd.md:20, and its items 1-11 do map one-for-one onto research/00-problem/02-cost-model.md's R1-R11 - but cost.md then continues to 18 with the governor rules, while 02-cost-model.md:295-299 independently defines R12-R16 with entirely different meanings. cost.md R12 is 'the store is fronted by a cost governor' where research R12 is 'cross-AZ crossover ~19.5 KiB'; cost.md R14 is 'never refuse a data write or a commit' where research R14 is 'PUT rate must track bytes / segmentSize, never writers / interval'. The M1 SPEC already cites the collision: SPEC.md:77 'R1, R14 | Bundling works, but the interval is fixed' uses the research meaning, in a table whose neighbouring rows (R3, R2, R9) use meanings that happen to agree in both. Compounding it, sdd.md:20 bounds the required cost-impact statement at R1-R11, which excludes the governor, the LIST ceiling and 'never relax a budget' (cost.md 12-18) from every future spec.",
+      "failure_scenario": "The author of the M3 flush-interval spec writes its cost-impact section against 'R14' and, following sdd.md's pointer to cost.md, reads 'never refuse a data write or a commit' - so the spec argues backpressure semantics and never states the PUT-rate-tracks-bytes obligation that R14 was cited for, which is the rule that keeps the request rate off the writer count. A reviewer checking the same citation against the other document reaches the opposite conclusion, and neither can tell which document is authoritative because sdd.md names cost.md while the SPEC used the corpus."
+    },
+    {
+      "id": "D4",
+      "severity": "major",
+      "file": "docs/internal/product/backlog.md:22",
+      "summary": "The backlog is stated as 'Authoritative task list' whose rows drive scripts/check-commit-msg.sh and the next-task skill, and three of its rows are false as of the tree this commit lands on. Line 22 lists M0.4 ('Gradle build, JDK 25 toolchain, module skeleton') as 'todo' although it is HEAD - commit de66330 - and the same file's own note at lines 12-16 says M0.4 lands first. Line 32 says M0.18 (parser regression suite in buildSrc/src/test/java) 'Lands inside M-1.1, not after it' and line 47 says M0.15 is 'done inside M-1.1', but M-1.1 is this commit: 73 files, docs only, no buildSrc test sources and no scripts/tdd-red.sh. Line 40 additionally marks M-1.2 done before it has landed.",
+      "failure_scenario": "An agent starting a session runs the next-task skill, reads the top unblocked 'todo' row, and re-does the Gradle build and module skeleton that de66330 already contains - or, on the other side, an auditor asked whether the tdd-red.sh Gradle wiring (M0.15) exists reads 'done inside M-1.1', opens commit M-1.1, finds only markdown, and cannot tell whether the gate was ever wired or the claim was simply never updated after the split."
+    },
+    {
+      "id": "D5",
+      "severity": "minor",
+      "file": "docs/internal/product/mission.md:26-27",
+      "summary": "Mission lists under 'What it must never become - A durability compromise': 'An acked write is in a regional, multi-AZ bucket before the ack. There is no local-disk write-ahead log and no single-AZ storage class on the primary path.' ADR-0013 is accepted and does exactly that: an emptyDir WAL on pod-local disk, acked from a quorum before the segment reaches the object store, with NFR-14 explicitly a weaker RPO. The 'on the primary path' qualifier attaches to the storage-class clause, not to the WAL clause, and mission.md never names the opt-in exception.",
+      "failure_scenario": "Mission is the document AGENTS.md points at first and the one an ADR is measured against. The author of the FR-17 spec at M11 reads 'there is no local-disk write-ahead log' as the standing constraint, treats ADR-0013 as superseded by the mission, and either re-opens a settled decision as an ADR or builds fast mode without the WAL that gives it its latency."
+    },
+    {
+      "id": "D6",
+      "severity": "minor",
+      "file": "docs/internal/product/decisions/0018-walking-skeleton-first.md:50",
+      "summary": "ADR-0018's Consequences say 'The store SPI is built twice - minimally in M1, properly in M2', but the roadmap this ADR re-scoped puts the whole SPI inside M1 ('The store SPI, both backends and CountingBinStore are the first tasks inside it, not a milestone of their own', roadmap.md:10) and makes M2 the segment format. The sentence reads as if it predates its own decision's effect on the milestone list.",
+      "failure_scenario": "Whoever decomposes M2 reads the ADR's Consequences as the obligation list and schedules a second, 'proper' store-SPI pass inside a milestone whose completion condition is about encode/decode round-trips and the key grammar, widening M2 and leaving the segment format short of its budget."
+    },
+    {
+      "id": "D7",
+      "severity": "minor",
+      "file": "docs/internal/standards/testing.md:93",
+      "summary": "Rule 20 requires the commit-protocol simulation to assert 'invariants I1-I6'. architecture.md:84-90, the file that defines the invariants, lists I1-I5. I6 is defined only inside ADR-0013 ('every WAL-committed offset appears in a committed segment at the same offset'), which is fast mode - deferred to M11 by roadmap.md:25 and to 'after M9' by the ADR itself.",
+      "failure_scenario": "The author of the M4 simulation suite opens architecture.md for the invariant list, finds five, and writes five properties; the reviewer checks against testing.md rule 20, counts six required, and cannot tell whether I6 was forgotten or does not exist yet - and no reader can look up I6 from the invariant table at all."
+    },
+    {
+      "id": "D8",
+      "severity": "minor",
+      "file": "docs/internal/product/milestones/M1/SPEC.md:189-190",
+      "summary": "M1.17b ('SPDX headers, licence gates, LICENSE/NOTICE wired into the build') and M1.18 ('Gradle memory caps, per-tier test tasks, container memory limits') are listed as M1 tasks, but commit de66330 already ships buildSrc/binjava/DependencyLicensesTask.kt, licenses/SPDX.txt with pinned SHA-1s, gradle.properties with the 1 GiB daemon and 2-worker caps, options.forkOptions.memoryMaximumSize=512m, maxHeapSize=512m with a 10-minute timeout, and registered integrationTest/clusterTest suites - and LICENSE and NOTICE are staged in this commit. The licence and test-budget gates are in the passed list of this very packet.",
+      "failure_scenario": "An agent working the M1 task table in order reaches M1.17b, finds the work already present, and either produces an empty commit that check-commit-msg accepts or 're-wires' the licence task and the memory caps a second time, diverging the conventions plugin from the one check-test-budget.sh and check-dependency-licenses.sh already assert against."
+    },
+    {
+      "id": "D9",
+      "severity": "minor",
+      "file": "docs/internal/standards/build.md:195-204",
+      "summary": "The section 'Version skew between plugin and gateway' says 'the gateway is a separate deployment', 'the gateway speaks the older dialect', and a 'gateway upgrade is a rolling deploy'; the budget table at build.md:23 also meters a 'Gateway under test'. glossary.md:16 defines gateway narrowly as a deployment shape - 'an ingester node running in gateway shape is still an ingester node' - and the thing that negotiates the subscription protocol version with the plugin is the ingester, in either shape. check-terminology.sh does not catch this because gateway is a legitimate glossary term.",
+      "failure_scenario": "The implementer of the subscription version negotiation (M1.11/M1.12, then M5) reads rules 6-7 as constraining only the embedded in-process shape and ships N-1 dialect support on the gateway path but not on the HTTP ingester, so a plugin upgraded ahead of a rolling ingester deploy fails to connect - the exact skew the section exists to prevent."
+    }
+  ]
+}

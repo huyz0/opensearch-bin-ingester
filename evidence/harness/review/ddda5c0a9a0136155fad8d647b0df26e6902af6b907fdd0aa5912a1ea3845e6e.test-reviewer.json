@@ -1,0 +1,68 @@
+{
+  "diff_sha256": "ddda5c0a9a0136155fad8d647b0df26e6902af6b907fdd0aa5912a1ea3845e6e",
+  "verdict": "changes-requested",
+  "summary": "Round-4's T8/T9/T10/T11 fixes are correct and I agree the deleted 'original offsets are unrecoverable' framing was false (verified: RunCommit.firstOffset is absolute, LogKeys.keyFor addresses the delta under a per-epoch prefix, LogKeys:84 records that nothing ever deletes chain objects, CommitDelta.segments() carries the segmentKey -- so a per-pod (epoch, sequence) pointer answers a replay in one GET with no growth). But the T8 remedy itself is defeated, and this time by measurement rather than argument: Invariants.checkChain THROWS on the batched delta the same row mandates, and returns [] for the duplicate the parent row exists to prevent. Separately, the only end-to-end anchor in the decomposition sits inside the row that may be void.",
+  "findings": [
+    {
+      "file": "docs/internal/product/backlog-notes.md",
+      "line": "284-286 with 297-300",
+      "severity": "major",
+      "finding": "The two prescriptions are mutually unsatisfiable, MEASURED. M4.10d requires 'run Invariants.checkChain requiring zero I2' and, twenty lines later, requires a mixed batch through commitAll. Invariants.java:116 and :253 call delta.runs(), which CommitDelta.only() makes throw for a multi-segment delta.",
+      "failure_scenario": "The M4.10d author writes the mandated mixed-batch fixture (one replayed segment plus one fresh, through commitAll), then calls Invariants.checkChain on that chain. It does not return violations -- it throws IllegalStateException: 'this delta batches 2 segments'. The author's cheapest route is to drop the checkChain assertion from the mixed case, which is the one case where a re-append is hardest to see, leaving it with no chain-level assertion at all. The second-cheapest is to silently widen scope into the checker, which belongs to a row this decomposition does not create.",
+      "evidence": "Measured in a copy of the staged bytes (review tree test-reviewer.KB69lkGh): LocalSequencer.commitAll of two CommitRequests, then Invariants.checkChain -> PROBE-BATCH threw=java.lang.IllegalStateException: this delta batches 2 segments; ask for segments() and pair each run with its own. Production ChainReplay.java:440 uses allRuns(); the test-side checker at Invariants.java:116,253 uses runs().",
+      "remedy": "Say in the row that Invariants.checkChain cannot be run on a batched chain today, and decide there whether M4.10d fixes it (runs() -> allRuns()) or whether a different chain-level assertion carries the mixed case. Do not leave the two sentences standing as though they compose."
+    },
+    {
+      "file": "docs/internal/product/backlog.md",
+      "line": "125",
+      "severity": "major",
+      "finding": "The M4.10d row's short form keeps the half of the chain assertion that is measured-blind and drops the half that bites. It says 'ASSERT ON THE CHAIN ... require zero I2 from Invariants' and never mentions the notes' 'no delta carrying the replayed run was appended'. Invariants has no arm for a segment key committed twice; it tracks per-RunKey offsets only.",
+      "failure_scenario": "Mutation that survives the row as written: NO DEDUP AT ALL. Commit (pod1, flushSeq 1, seg/a) twice; the second lands at fresh contiguous offsets, so every run satisfies firstOffset == from, no I2 and no gap is reported, and checkChain returns an empty list. That is the parent row's primary harm -- 'a retried pod is assigned offsets twice, silent duplication' -- passing the row's own headline assertion.",
+      "evidence": "Measured in the review tree: two identical commits of (pod1, 1, seg/a) through LocalSequencer, then checkChain -> PROBE-DUP violations=[]. Invariants.java:120-140 reports I2 only for run.firstOffset() < from.",
+      "remedy": "Put the discriminating clause in the row: 'assert no delta names the replayed SEGMENT KEY twice; zero I2 catches only the re-append-at-original-offsets variant and is measured green against a duplicate at fresh offsets.'"
+    },
+    {
+      "file": "docs/internal/product/backlog-notes.md",
+      "line": "221-223 with 244-250",
+      "severity": "major",
+      "finding": "The parent row's second acceptance criterion -- 'including the case where the replay arrives after a checkpoint recorded it' -- has no owner in the branch where M4.10c is void. The recovery fold and the only end-to-end anchor in the whole decomposition (fold the recovered window into CheckpointWriter.pods, invert doesNotContainKey('poda')) live inside a row declared 'CONDITIONAL ON M4.10b AND POSSIBLY VOID'. But Checkpoint.pods already exists (M4.6d/M4.8b2), so the checkpoint-side half of that fold needs no format change and its ownership should not be gated on one.",
+      "failure_scenario": "M4.10b concludes SegmentKey's timestamp already qualifies the key, so no format changes and M4.10c is void along with its anchor. M4.10d is then built with lastAppliedFlushSeq exactly as process-local as it is today: consulted (kills the no-op mutant), <= (kills the boundary mutant), per-pod map (kills the fleet-wide long), returns the original offsets, accepts a restarted pod's 0, handles the mixed batch. Every named mutation dies, all three of M4.10b's properties hold, and the duplicate still ships across every leader change -- the case CheckpointWriter.java:49-56 calls 'exactly when duplicates are likeliest' and says M4.10 must confront rather than inherit. No prescribed fixture in M4.10d places a checkpoint or a takeover between the original commit and the replay.",
+      "remedy": "Move the checkpoint-recovery fold and the tripwire inversion out of the conditional row into M4.10d (or an unconditional row), and give M4.10d a named fixture: original commit, checkpoint, leader change, replay, must still refuse and still return the original offsets."
+    },
+    {
+      "file": "docs/internal/product/backlog-notes.md",
+      "line": "209-219",
+      "severity": "minor",
+      "finding": "M4.10b's three properties omit the one constraint that makes the decision hard: M4.9's checkpoint TERMINATES the ancestry walk, so deltas below the newest checkpoint are never GET. Nothing in the property list requires the chosen mechanism to survive that truncation or a leader change.",
+      "failure_scenario": "An ADR that answers a replay by scanning the segment keys in the recovered window satisfies all three stated properties -- answerable (the delta carries absolute offsets), no growth with history (the window is bounded), formats named (none) -- and is wrong precisely in the parent row's named case, because ChainReplay.crossFromCheckpoint stops the walk at the checkpoint and the delta holding the replayed segment is never read. The defect is not detectable until M4.10d is being built, which is the ordering this decomposition exists to prevent.",
+      "remedy": "Add a fourth property: whatever is recorded must survive a checkpoint truncating the ancestry walk and a leader change, or the ADR must say plainly that the post-checkpoint case is out of scope and which row then owns it."
+    },
+    {
+      "file": "docs/internal/product/backlog-notes.md",
+      "line": "308-310",
+      "severity": "minor",
+      "finding": "The decomposition never names CommitProtocolSimulation, which already carries the exact fault class M4.10 exists for -- FaultInjectingStore.Faults(unreachable, ambiguousPut, duplicatePut), with ambiguousPut throwing 'the write landed but the response was lost' -- and testing.md rule 20 names deterministic simulation with duplicated in-flight PUTs as how the commit protocol is tested. The row instead offers the out 'say plainly that its coverage stops at the sequencer seam'.",
+      "failure_scenario": "An author takes the simulation route instead, drives a retry after an injected ambiguousPut, and asserts I1-I5 through Invariants as every other simulation test does. Measured: a chain carrying the same segment twice at fresh offsets yields zero violations, so the simulation is green against a completely absent dedup and reports it as protocol-clean across every seed.",
+      "remedy": "Name the simulation and say what it cannot yet witness: Invariants has no duplicate-segment arm, so simulation greenness is not evidence for M4.10 until one exists."
+    },
+    {
+      "file": "docs/internal/product/backlog-notes.md",
+      "line": "246-250",
+      "severity": "minor",
+      "finding": "M4.10c names exactly ONE existing assertion to invert, but a change to the Checkpoint.pods KEY shape -- which is what qualifying (podId, flushSeq) means on the checkpoint side -- rewrites roughly ten more, and the row gives no basis for deciding which rewrites are legitimate under testing.md rules 4-5.",
+      "failure_scenario": "The author qualifies the pods key and must edit CheckpointWriterContentTest:126,145,154,212,216, GoldenCheckpointTest:56,77, CheckpointTest:86,235,241, CheckpointDiscoveryTest:413. Each edit is an existing assertion changed alongside a production change; with no row saying which are inversions and which would be loosenings, check-test-integrity is answered case by case in a commit body. Worst of these: CheckpointWriterContentTest's aPodsFlushSeqNeverGoesBACKWARDSWhenAnOlderFlushArrivesLate pins a Math::max fold over a BARE podId -- under a restart-qualified key that fold is exactly what would suppress a restarted pod's flushSeq 0, so the test's premise inverts and nothing in the rows says so.",
+      "remedy": "One sentence: a pods-key shape change rewrites the named assertions; each must be INVERTED to the new shape with the same discriminating power, never relaxed -- and the Math::max-over-bare-podId test must be re-derived, not edited."
+    },
+    {
+      "file": "docs/internal/product/backlog-notes.md",
+      "line": "284",
+      "severity": "minor",
+      "finding": "'assert the chain grew no delta carrying the replayed RUN' names the wrong identity. A RunKey recurs in every legitimate commit for the same stream; the unique, available identity is the SEGMENT KEY, which Sequencer's javadoc already settles as how a caller finds its own offsets and which CommitDelta's constructor makes unique within a delta.",
+      "failure_scenario": "Read as RunKey, the assertion is wrong in the mixed-batch case the same row mandates: the co-batched fresh segment legitimately appends a run with the same RunKey, so a correct implementation fails the test and the author loosens it -- and the loosest thing that then passes is an offsets assertion, which the same paragraph proves is blind.",
+      "remedy": "Say 'segment key' and cite delta.segments()."
+    }
+  ],
+  "task": "M4.10",
+  "role": "test-reviewer",
+  "staged_tree": "64678bd2806a80bb236920eb3c9ec751a7282206"
+}

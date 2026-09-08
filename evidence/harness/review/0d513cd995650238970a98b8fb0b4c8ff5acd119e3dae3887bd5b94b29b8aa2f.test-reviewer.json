@@ -1,0 +1,22 @@
+{
+  "diff_sha256": "0d513cd995650238970a98b8fb0b4c8ff5acd119e3dae3887bd5b94b29b8aa2f",
+  "verdict": "pass",
+  "summary": "Round 3, test lane. The delta since the reviewed round is javadoc only, and I proved it independently of the diff: the check-tdd binding keys of both tests, which hash the declaration and the file's non-test remainder with comments STRIPPED, still equal the recorded red records byte for byte (76f89ea5.../1464fedc...), so no executable token in either test or in the file's shared fixture has moved since the red was observed. :sequencer:test is green on the exact staged bytes (verified by blob sha against the index). Re-ran the mutations: allocator reverted to the outcome counters kills BOTH tests under ROUGH and, as the class javadoc claims, under Faults.none() too (seed 0, pod0#0 reissued for seg/zombie-31 after seg/1 -- the leader/zombie counter collision, no injected fault). A single fleet-wide per-attempt counter leaves the uniqueness test GREEN and kills the density test at the 0..n-1 assertion. Measured the javadoc's arithmetic directly: 30 seeds give seedsWithSharedValue=19 and seeds-with-two-issuing-pods=19 -- equal, as claimed -- with all 30 dense and issued=211 > landed=175, so no anti-vacuity guard is passing for a trivial reason. The deleted method-javadoc sentence was measurably FALSE (the defect does not need an injected fault), and the reason ROUGH is kept survives in the class javadoc, so nothing load-bearing was removed.",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSimulationFlushSeqTest.java:89",
+      "title": "The shared-value assertion is also independently sufficient to kill a shared counter, so 'not a second discriminator' is true only of the fixed code, not of the mutation",
+      "failure_scenario": "The new javadoc says the shared-value count is 'this test's ANTI-VACUITY GUARD and not a second discriminator'. Measured both halves. The supporting clause is exactly right: on the fix, density-from-zero plus two issuing pods forces a shared value, and the counts are equal (19 seeds with a shared value, 19 seeds with two or more issuing pods, 30/30 dense), so on correct code the count carries no information beyond pod plurality. But under the mutation the paragraph names -- one fleet-wide counter incremented per attempt -- I neutralised the density assertion (replaced isEqualTo(expected) with a no-op) and the test STILL failed, at the seedsWithSharedValue assertion. So the guard is independently sufficient against that mutation; 'not a second discriminator' holds for information content on the fix but not for mutation survival. A reader who later deletes the shared-value assertion on the strength of this sentence would lose a real discriminator. Related and smaller: 'per pod the sequence is exactly 0..n-1, which one shared counter cannot produce' is true of the sweep (19 seeds have two or more pods and density fails there, measured at seed 0 pod1 = [37,64,0,74,0]) but not of a single seed with one issuing pod, of which this sweep has 11. RECOMMEND NOT FIXING: nothing executable is wrong, both assertions are present and both kill the mutation, and round 3's surface would become the prose the fix adds."
+    },
+    {
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSimulation.java:81",
+      "title": "Carried from round 2, unfixed by agreement: the segmentKey field of Issued is not pinned by any assertion",
+      "failure_scenario": "Re-verified on this hash. Mutate record() to new Issued(request.podId(), request.flushSeq(), \"seg/CONSTANT\") -- every issued triple then names the same segment. The whole :sequencer:test suite stays GREEN, because the only reader of segmentKey is previous.isEqualTo(i.segmentKey()) inside the reissue branch, which compares two constants. Pinning it would need a third test asserting the recorded key equals the driver's own seg/<round> naming, which restates the driver. The reissue assertion still fires on the real defect (measured above), so the survivor costs no defect detection. RECOMMEND NOT FIXING, as in round 2."
+    }
+  ],
+  "task": "M4.10a",
+  "role": "test-reviewer",
+  "staged_tree": "36fd2017feab5118f84de54bfb71536d67f709c9"
+}

@@ -1,0 +1,23 @@
+{
+  "diff_sha256": "694f155b9c55ca53cbbfdbc180188a6cc92290010858ffe3741f927405d2129b",
+  "verdict": "pass",
+  "summary": "Round 6's two majors are closed and I confirmed both with the original exploits. Dropping ' -- baselines/review.txt' from the gate now fails exactly anArgumentInADIFFERENTSTAGEDFileDoesNOTLiftTheCap; replacing the no-task guard with 'if false' now fails exactly verdictsThatNameNOTASKRefuseRatherThanCountingAsROUNDZERO. Both new tests were probed and refuse for the reason their names claim (cap-exceeded and 'name no task' respectively), not for a missing verdict or a missing role. Both new output assertions are load-bearing, each being the SOLE killer of a mutation the status assertion survives. All 15 tests are killable -- I demonstrated at least one killing mutation for each. T4/T5 are unchanged, not worse. Two minors below.",
+  "findings": [
+    {
+      "id": "T6",
+      "severity": "minor",
+      "finding": "aFILENAMEThatMerelyMATCHESTheGuardAsAPatternDoesNOTLiftTheCap (ReviewRoundCapTest.java:437) writes 'decoy\\n' into the staged baselines/review_txt, so no fixture in the suite ever stages a rounds: line in a file OTHER than baselines/review.txt but still under baselines/. The new anArgumentInADIFFERENTSTAGEDFile test closes 'any staged file' but not 'any staged file under baselines/'.",
+      "failure_scenario": "Widening the gate's pathspec at check-reviewed.sh:136 from 'baselines/review.txt' to 'baselines/' leaves 15/15 green (measured). So does widening it to 'baselines/review*' (measured). Exploit: stage baselines/review.txt.bak or baselines/review-notes containing 'rounds:<task>  reason' and the cap is waived while baselines/review.txt is untouched. Fix, measured: change that one fixture line to write \"rounds:M9.1  argued in a decoy filename\\n\" instead of \"decoy\\n\" -- the suite stays green against the correct gate and BOTH widenings then fail that test.",
+      "location": "buildSrc/src/test/java/binjava/ReviewRoundCapTest.java:437"
+    },
+    {
+      "id": "T7",
+      "severity": "minor",
+      "finding": "The comment at aROUNDSLineALREADYCOMMITTEDDoesNOTWaiveALATERCap makes two claims that are now false, one of which the same comment contradicts three lines later. (a) 'review measured that matching the staged file's CONTENT instead left every other test here green' -- it does not any more; the content mutation now fails three tests. (b) 'This test dies on a strict SUBSET of what the context test dies on' and 'What it uniquely pins is HISTORY' cannot both hold: a strict subset pins nothing uniquely.",
+      "failure_scenario": "A future reader trusting (a) will believe this test is the only guard on the added-line primitive and will not notice that deleting the whole test still leaves the content mutation killed by aROUNDSLineAppearingOnlyAsDIFFCONTEXT and aFILENAMEThatMerelyMATCHES. Measured: replacing 'git diff --cached -- baselines/review.txt' + the '/^\\+/ && !/^\\+\\+\\+/' awk guard with a staged-content read fails aFILENAMEThatMerelyMATCHES, aROUNDSLineALREADYCOMMITTED and aROUNDSLineAppearingOnlyAsDIFFCONTEXT -- three, not one. The subset claim itself is correct (all-diff-lines fails only the context test, confirmed), so the fix is to delete 'uniquely' and the stale 'left every other test here green', keeping the subset statement.",
+      "location": "buildSrc/src/test/java/binjava/ReviewRoundCapTest.java:350"
+    }
+  ],
+  "task": "M4.21",
+  "role": "test-reviewer"
+}

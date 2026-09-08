@@ -1,0 +1,22 @@
+{
+  "diff_sha256": "35f58f82d097db5037dd4b5c7cbeff9d0b6608f94b830e44e435e7bf5df28ec7",
+  "verdict": "pass",
+  "findings": [
+    {
+      "file": "docs/internal/product/backlog.md",
+      "line": 260,
+      "severity": "minor",
+      "what": "The status cell says \"18 call sites took an explicit epoch\". Measured against HEAD: there were exactly 18 two-arg `new CommitLog(store, prefix)` sites in 5 files, but only 17 of them took an explicit epoch -- the 18th (CommitLogTest.java:247, inside `theTwoArgConstructorIsEpochZeroSoEveryExistingCallSiteKeepsItsMeaning`) was deleted with the test, as the very next sentence of the same cell says. The enumeration in the cell does not reconcile either: 11 predicted CommitLogTest sites + SubscriptionHubTest (1) + EndToEndTest (2) + two ITs (2) = 16, not 18; the true CommitLogTest count was 13 (12 converted plus the one in the deleted test).",
+      "failure_scenario": "A later agent auditing whether the constructor deletion was complete -- the usual check before, say, re-adding a convenience overload or grepping for stragglers -- takes 18 as the number of conversions, counts 17 in the commit, and either re-opens M4.6f as unfinished or concludes some call site was silently dropped, when the tree in fact holds zero two-arg sites and one three-arg constructor."
+    },
+    {
+      "file": "docs/internal/product/backlog.md",
+      "line": 260,
+      "severity": "minor",
+      "what": "The cell describes the two clusterTest ITs as \"two `clusterTest` ITs, which no default test task compiles\". `./gradlew test` indeed does not, but buildSrc/src/main/kotlin/binjava.java-conventions.gradle.kts ends with `tasks.named(\"check\") { dependsOn(\"compileIntegrationTestJava\", \"compileClusterTestJava\") }`, with a comment saying exactly why: \"otherwise broken integration- or cluster-test code commits green\". check-module.sh runs `:plugin:build`, so the two IT conversions in this diff WERE compile-checked by a gate that ran.",
+      "failure_scenario": "An agent reading this row later believes clusterTest sources are outside every default gate, changes an IT without compiling it (or skips updating one during a future API removal), and is surprised when `check-module.sh` fails at commit time -- or, worse, argues that a clusterTest breakage is acceptable to land because \"no default task compiles it\", weakening the compile coverage the conventions file deliberately bought."
+    }
+  ],
+  "task": "M4.6f",
+  "role": "reviewer"
+}

@@ -1,0 +1,41 @@
+{
+  "diff_sha256": "15a67b0b315fa22eaf819608139dcbb60f89660fc654df0e436ba6008d82c8ea",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "R7",
+      "severity": "minor",
+      "file": "scripts/check-gate-scope.sh:117",
+      "title": "the vacuous pass is half closed: .git/info/exclude still decides the answer",
+      "detail": "`-c core.excludesFile=/dev/null` suppresses ~/.gitconfig's core.excludesFile and the XDG default file, but git check-ignore also consults $GIT_DIR/info/exclude, which no config setting disables. Reproduced against the exact staged command: repo whose .gitignore has lost `.tmp/`, `.git/info/exclude` containing `.tmp/` -> `git -c core.excludesFile=/dev/null check-ignore -q .tmp/probe` exits 0 and the gate goes green. Failure scenario: a developer who put `.tmp/` in .git/info/exclude (git's documented home for machine-local, repo-specific ignores) removes it from .gitignore; the gate says nothing and the next `git add -A` commits the quarantined upstream checkout, which is the exact outcome this check exists to prevent. The new rejecting test cannot see it: `git init` gives the fixture an info/exclude containing only comments, so there is nothing to leak in -- the same shape as the HOME-isolation gap you already fixed, one level down. The block comment reads as though the class were closed; it closes one member of it. Close both with one predicate by asserting the SOURCE of the match rather than only that a match happened: `git -c core.excludesFile=/dev/null check-ignore -v .tmp/probe 2>/dev/null | grep -q '^\\.gitignore:'`, with the fixture planting .git/info/exclude the way it now plants xdg/git/ignore. Minor and not blocking: the remaining vector needs a deliberate repo-local edit rather than a machine-wide setting, and review.md rule 12 says round two does not buy round three. Follow-up backlog row, not a round three."
+    },
+    {
+      "id": "R8",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java",
+      "title": "the tar pipeline has a third failure mode -- producer exit status is masked",
+      "detail": "Answering the question directly: the third mode is not symlinks or modes, it is exit-status masking. `run()` invokes `bash -c` with no `set -o pipefail`, so the status it asserts is the EXTRACTING tar's. Verified: with one tracked file absent from the working tree, `git ls-files -z | tar --null -T - -cf - | tar -C dst -xf -` prints `tar: b.txt: Cannot stat` and `Exiting with failure status due to previous errors` from the producer, and the pipeline still exits 0 with a partial fixture. `assertThat(p.waitFor()).isZero()` therefore constrains nothing about the half of the pipeline that reads the repository. Not a live defect, because the post-condition `trackedIn(dir).isEqualTo(trackedIn(repo))` catches a short fixture -- but the safety net is doing work the exit-status assertion is presumed to do, and it reports `the fixture must hold exactly the tracked tree` while the tar diagnostic that named the cause was swallowed into `out`, which `run()` only uses in a description it never prints on success. One token fixes it: prefix the script string with `set -o pipefail; `. What I checked and found sound: the tracked symlink .claude/skills survives as a symlink (no -h), modes survive umask 022/077 with the executable bit intact, `--null` implies verbatim-files-from so a leading-dash path is not read as an option, git tracks no empty directories that any gate needs, and the whole copy is 214 files / 1.5 MB in ~3 ms so three fixtures cost nothing in suite time."
+    },
+    {
+      "id": "R9",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java",
+      "title": "fixture-construction inherits the developer's git environment that gate() deliberately drops",
+      "detail": "`gate()` pins HOME and XDG_CONFIG_HOME and clears GIT_DIR/GIT_INDEX_FILE/GIT_WORK_TREE; `run()` does neither, and `run()` is what executes `git init && git add -A && git commit` inside the fixture. `git add -A` honours the developer's personal excludes file, so a machine whose ~/.config/git/ignore carries any pattern matching a tracked path (`*.log`, `docs/`, `xdg/`) silently drops that file from the fixture's commit and the post-condition fails there and nowhere else -- an environment-dependent red in the one test whose thesis is that the environment must not decide the answer. It fails safe rather than green, which is why this is minor. Fix by giving `run()` the same env treatment as `gate()`, or by writing `git -c core.excludesFile=/dev/null add -A`. Also note `git init` reads the developer's init.templateDir, so a global template with hooks would run them inside the fixture."
+    },
+    {
+      "id": "R10",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java",
+      "title": "assertion description cites checkout-index, which the code deliberately does not use",
+      "detail": "`.as(\"sanity: checkout-index must have produced the tree\")` names the mechanism the comment eight lines above explicitly rejects (\"tar over `git ls-files -z`, and NOT `git checkout-index`\"). This description is the ONLY message an operator sees when the fixture is genuinely incomplete, and it points them at code that is not in the file -- the same class of defect as a gate citing a log it never wrote, which is the defect this commit exists to fix. Rewrite it to name tar."
+    },
+    {
+      "id": "R11",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java",
+      "title": "the .claude/skills symlink rationale is told twice in the same method, and repo is recomputed",
+      "detail": "The tar comment and the post-condition comment carry substantially the same paragraph (\"dropped the tracked SYMLINK .claude/skills silently -- a fixture that is not the checkout it claims to be, in a test about what a checkout looks like\"). Two copies means the next edit updates one of them, and a stale half-explanation in a test about honest gate messages costs more than it saves. Separately, `Path.of(\"..\").toAbsolutePath().normalize()` is computed inline in the post-condition while the identical value is already bound to `repo` two statements earlier."
+    }
+  ]
+}

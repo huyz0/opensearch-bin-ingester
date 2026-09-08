@@ -1,0 +1,34 @@
+{
+  "diff_sha256": "ac8782b383013351db268bb5eaeaa225a48f9a03ed21501067b2788d046340f6",
+  "verdict": "changes-requested",
+  "summary": "The offset-order fold is SOUND -- MEASURED exhaustively over 9,261 three-run deltas (offsets 0..6 x counts 1..3): checkChain is silent exactly when the runs tile [0,total) once AND ascend (silentButWrong=0), fires no spurious gap/I2 on a well-formed tiling (noisyButRight=0), and reports I4 exactly when the segment order is not ascending (i4Mismatch=0). A permuted AND overlapping delta reports I4 plus I2, so the sort hides no overlap. No object-store request is added or moved: checkChain reads the same chain the same number of times, and the new work is a LinkedHashMap group plus an in-memory sort per delta. The two majors are about what the change CLAIMS, not about the fold's arithmetic.",
+  "findings": [
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/Invariants.java:85-92",
+      "severity": "major",
+      "title": "the checker's own javadoc still says the reorder clause is NOT checked, and points at a row this diff archives as done",
+      "failure_scenario": "Line 86 reads 'The REORDER clause is not [checked] ... a per-record consumer trace is what would close it -- **M4.13f**', while line 160 of the same file reads 'I4's REORDER CLAUSE, and this is the only place it is visible (M4.13f)'. The diff archives M4.13f in backlog-done.md and deletes it from M4.13's decomposition list, so the backlog row that used to reconcile those two statements is gone and the contradiction is now the tree's only account of I4. The next reader is M4.13 itself -- the sweep that must decide whether it can assert I4 whole -- and the 'WHAT IS AND IS NOT CHECKED HERE, stated rather than implied' list tells it the clause is open. Lines 30-33 are wrong in the same way and more mechanically: 'Six kinds are reported: I1, I2, I5 name invariants; chain, gap and link name structural defects' no longer enumerates what checkChain can emit, and the warning immediately after it about consumers filtering violation strings is now advice about the wrong set. This is the defect class the row's own notes name -- a mislabel outliving the row, behind a green test that reads as endorsement -- fixed in BatchedDeltaInvariantsTest's javadoc and left standing in the deliverable's."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/Invariants.java:160-176",
+      "severity": "major",
+      "title": "'I4' names a shape architecture.md's I4 explicitly permits, while the clause's committed half stays unchecked and is deferred to M5",
+      "failure_scenario": "architecture.md:89 defines I4 as 'Uncommitted records may be reordered or dropped; committed ones may not'. Every record inside a delta is UNCOMMITTED until that delta lands -- the delta IS the commit, and DefaultIngest.flushLocked completes the appends' futures only after sequencer.commit returns -- so a permutation among one delta's segments reorders records the invariant's first clause permits to be reordered. The class's own convention exists for exactly this case: lines 30-33 say chain, gap and link name 'structural defects that no invariant covers by name'. Naming this one I4 lets M4.13 report I4 asserted over 1,000 seeds on the strength of an arm that fires for a permitted shape, while the only reorder that touches COMMITTED records -- offsets already durable being delivered in a different order -- is deferred to M5 and checked by nothing. The premise change the archived row rests on covers less than it claims: 'ChainReplay.fold merges with Math::max, which is commutative' is true of the next-offset MAP a reader ends at, and says nothing about the order a consumer is handed records, which is the half the deleted row was written about. MEASURED that segment list position is also the wrong proxy for producer-visible order: through the production commitAll path, a batch carrying pod1/inc-1 flushSeq=2 at offsets 0..2 and flushSeq=1 at offsets 3..5 -- one pod's own flushes inverted -- yields checkChain == []. The attribution needed to catch that has been in the bytes since M4.10c and is discarded by the grouping over allRuns(). Either name the string for what it is (an 'order' defect, as gap and link are named) or check the attribution rather than list position; as it stands the row closes I4's reorder clause by redefining it."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/Invariants.java:173",
+      "severity": "minor",
+      "title": "the detail says 'segment r' where r indexes the stream's run list, not the delta's segments",
+      "failure_scenario": "r counts occurrences of ONE stream across allRuns(), so it is a segment index only when the stream appears in every segment -- which is true of all six fixtures and false in general. MEASURED: a delta with a single segment holding two runs of the same stream reports 'segment 1 starts at 0 after 4' although only segment 0 exists; a stream present in segments 0 and 3 of a four-segment batch reports 'segment 1'. An operator opens the wrong segment object. SegmentCommit.segmentKey is in the bytes and would name it unambiguously, but the grouping over delta.allRuns() drops it."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/Invariants.java:158-196",
+      "severity": "minor",
+      "title": "the offset-order fold is per chain ENTRY, so the gap+I2 mislabel survives across entries with nothing saying so",
+      "failure_scenario": "MEASURED: RA at 4..6 committed at sequence 1 and RA at 0..3 at sequence 2 -- disjoint, covering 0..6 exactly once, nothing skipped and nothing reassigned -- still reports gap 'resumes at 4, skipping 4' plus I2 'resumes at 0 but the chain had assigned up to 7'. That is the exact pair of wrong names the row exists to remove, one delta boundary over. Not reachable from commitSubmissions, which writes one delta per batch, and the notes scope the row to the batch -- but the gap/I2 comments at lines 179-186 now read as covering the general case, so the next reader meeting a cross-entry permutation will trust two labels that are both false. One line saying the sort is per entry costs nothing."
+    }
+  ],
+  "task": "M4.13f",
+  "role": "reviewer",
+  "staged_tree": "771daecd9e88f316acb7917df1d3640a7adfd433"
+}

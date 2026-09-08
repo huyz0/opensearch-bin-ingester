@@ -1,0 +1,28 @@
+{
+  "verdict": "pass",
+  "summary": "Round-3 test review, scoped to what changed since 006aa9aad9dd. The round-2 minor is KILLED, measured rather than argued: with `!key.startsWith(logPrefix)` deleted the new test fails at LogKeysTest.java:80 with StringIndexOutOfBoundsException; with `!key.endsWith(SUFFIX)` deleted it fails at LogKeysTest.java:83 with StringIndexOutOfBoundsException. Both guards are now pinned individually, and the comment's claim -- that the failure without a guard is a THROW rather than a wrong answer -- is exactly what happens, for each guard separately. The kills are carried one per assertion: line 80 (\".delta\") kills the startsWith guard only, line 83 (logPrefix + \"x\") kills the endsWith guard only. The rename to `logKeys` is behaviour-free (the delegates format identically, the shadowing local `Set<String> keys` at CommitLog.java:273 is unrelated) and the ChainReplay change is javadoc only. No existing test file is touched by the staged diff, so testing.md rules 4-5 cannot have been violated. Full suite re-run with --rerun-tasks: BUILD SUCCESSFUL, 43 tasks executed (not cached). Tree restored exactly; staged diff hash unchanged at 9e7ac108629ae0be98e2adc6922473b1577485b9. Two minors, neither blocking.",
+  "findings": [
+    {
+      "id": "T1",
+      "file": "sequencer/src/test/java/binjava/sequencer/LogKeysTest.java:86",
+      "severity": "minor",
+      "blocks": false,
+      "title": "`isEntryKey(\"\")` is decoration: it is strictly dominated by line 80 and kills no mutant of its own",
+      "detail": "Measured by isolating it. With lines 80 and 83 deleted so that `isEntryKey(\"\")` is the method's only assertion: mutant `!key.startsWith(logPrefix)` deleted -> BUILD SUCCESSFUL; mutant `!key.endsWith(SUFFIX)` deleted -> BUILD SUCCESSFUL. It kills neither of the two mutants the method's own comment names. It does kill the both-guards-deleted mutant (measured: SIOOBE at that line), but line 80 already kills that one, so it adds nothing. The reason is structural: \"\" is refused by BOTH guards, so any single-guard deletion still refuses it, whereas \".delta\" is refused only by startsWith and logPrefix + \"x\" only by endsWith. Those two are the discriminating cases; \"\" is their union and therefore carries no independent constraint. Drop it rather than credit it -- an assertion that constrains nothing is the false-confidence shape testing.md rule 8 is about, in miniature.",
+      "failure_scenario": "A later edit deletes both length guards at once (or a refactor collapses them); line 86 would be relied on to catch it, but it only ever catches the case line 80 already catches. Meanwhile a reader of this method counts three assertions and infers three constrained cases, when there are two. Measured: with lines 80 and 83 removed, both single-guard-deletion mutants leave the suite BUILD SUCCESSFUL."
+    },
+    {
+      "id": "T2",
+      "file": "sequencer/src/test/java/binjava/sequencer/LogKeysTest.java:68-87",
+      "severity": "minor",
+      "blocks": false,
+      "title": "The guards are pinned against DELETION but not against being narrowed to a proper prefix; surviving mutation named and its killer measured",
+      "detail": "Surviving mutation: in LogKeys.isEntryKey, replace `!key.startsWith(logPrefix)` with `!key.startsWith(prefix)` -- the record component (\"bins\") in place of the local (\"bins/ctl/log/0/0000000000000001/\"). Measured against the WHOLE sequencer suite: BUILD SUCCESSFUL, nothing fails. It is not an equivalent mutant, and the divergence is precisely the failure mode this new test exists to prevent: a key that starts with the bare prefix but is shorter than logPrefix + SUFFIX -- e.g. \"bins.delta\" -- passes both guards and then slices `substring(32, 4)`, so `begin > end` and StringIndexOutOfBoundsException, exactly as with a deleted guard. The three seeded cases miss it because \".delta\" and \"\" do not start with \"bins\" either, and logPrefix + \"x\" is long enough for the slice under this mutant. One line kills it, and I measured that rather than asserting it: adding `assertThat(KEYS.isEntryKey(\"bins.delta\")).isFalse();` to this method makes the mutant fail with SIOOBE at that assertion, and it passes on the unmutated tree. Non-blocking because production cannot today address a key that short -- every key comes from `store.list(logPrefix, ...)` or from `keyFor` -- so the residual gap is narrower than the one this round closed, and testing.md rule 11 does not demand a case per variable. Recording it so the property the method claims (\"refused rather than throwing\") is known to be pinned only against deletion, not against narrowing.",
+      "failure_scenario": "M4.8b2's writer calls isEntryKey on a key it is about to write rather than one it listed. If someone has meanwhile narrowed the guard to `key.startsWith(prefix)` -- a one-token slip between a local and a same-named record component in the same method -- a short key beginning with the bare prefix (\"bins.delta\") reaches `substring(32, 4)` and throws StringIndexOutOfBoundsException out of recovery: the unchecked-exception death this task exists to remove, arriving through the door it just closed. Measured: that mutation leaves the whole sequencer suite BUILD SUCCESSFUL; adding `assertThat(KEYS.isEntryKey(\"bins.delta\")).isFalse();` makes it fail with SIOOBE."
+    }
+  ],
+  "diff_sha256": "19d8ae11daa3666517e7a0494b02b7be480ab920772fa32835604b95b594d14c",
+  "task": "M4.8b1",
+  "role": "test-reviewer",
+  "staged_tree": "e73f61bb79e1d8c516d4ac8c4477596084707db2"
+}

@@ -1,0 +1,35 @@
+{
+  "diff_sha256": "409a23832930d13414783b186ec002228a956bfbb0a859327ec752552d44fbe4",
+  "task": "M1.1b",
+  "role": "reviewer",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "M1.1b-1",
+      "file": "binstore-spi/src/main/java/binjava/binstore/Body.java:51-61",
+      "severity": "blocking",
+      "summary": "The eager `seen > length` check does not catch the failure the task exists to fix. An over-long body still passes silently for a content-length-driven backend that reads exactly `length` bytes.",
+      "failure_scenario": "Body declares 5 bytes, the supplier yields 11. A backend that honours content-length reads with `read(buf, 0, min(buf.length, remaining))` and stops at remaining == 0, so it never over-reads and never sees EOF. `seen == length`, so `count()` never fires; `close()` calls `verify()`, `seen != length` is false, and the stream is accepted. S3 stores a 5-byte truncated object that reads back as a valid short segment -- exactly the failure the task and `readFully`'s javadoc name. Verified by compiling the staged Body.java standalone and running that reader shape: 'over-long body PASSED SILENTLY (no exception)'. The task prescribes a different fix -- 'at `seen == length`, attempt one more read' -- which is the only one that catches an exact-length reader; the diff substitutes a weaker check that fires only when the consumer voluntarily reads past the declared length. The new test `checkedStreamRefusesAnOverLongBody` (BodyTest.java:114) uses `readAllBytes`, which does read past `length`, so it passes while the named backend shape is still broken -- the test makes the defect look fixed. The backlog row was flipped to `done` in the same diff. If the one-more-read probe was rejected on merit (e.g. blocking risk), that is an argued baseline entry or a backlog amendment, not a silent narrowing of the fix."
+    },
+    {
+      "id": "M1.1b-2",
+      "file": "binstore-spi/src/main/java/binjava/binstore/Body.java:31-44",
+      "severity": "major",
+      "summary": "The `checkedStream()` javadoc the task names as overstated is unchanged, and is now also incomplete: it enumerates check sites that no longer match the code.",
+      "failure_scenario": "Line 32 still promises 'a stream that REFUSES, at end of input, a body whose length disagrees with what it declared' -- the task calls this out verbatim as overstated, and after this diff it remains false in the over-long direction (see M1.1b-1). Line 42-43 additionally claims 'the check fires at EOF and again on close', which is now wrong in the other direction: a third, eager site was added inside `count()` that can throw mid-read. A backend author implementing against this SPI reads the contract, assumes both directions are enforced at EOF/close, and omits their own length guard; the truncated object then reaches the store. This is a contract claim in a public SPI, and it is the specific artifact the task asked to correct."
+    },
+    {
+      "id": "M1.1b-3",
+      "file": "binstore-spi/src/main/java/binjava/binstore/Body.java:115-123",
+      "severity": "minor",
+      "summary": "`markSupported()` returns false but `mark(int)` is not overridden, so it still delegates to the underlying stream.",
+      "failure_scenario": "`FilterInputStream.mark(readlimit)` forwards to `in.mark(readlimit)`. A client that calls `mark()` without first consulting `markSupported()` silently arms a mark on the delegate that can never be honoured, and on some delegates that costs a retained buffer of readlimit bytes for the life of the stream. No miscount results, because `reset()` throws unconditionally, so this is a leak of intent rather than a correctness bug -- but overriding `mark` to a no-op alongside `markSupported()` is the complete form of the refusal."
+    }
+  ],
+  "notes": [
+    "Cost lens: clean. No object-store request is added, moved into a loop, or made to scale with records, shards, partitions or indices; `checkedStream` remains the streaming path that keeps C8 intact. Refusing mark/reset makes a client re-open the Body, which re-invokes the local supplier, not a store request.",
+    "The disclosed equivalent mutant at Body.java:68-73 is correct as analysed: every path that increments `seen` (read(), read(byte[],int,int), and now skip(); readNBytes/transferTo route through the bulk read) goes through `count()`, so `verify()` can only ever observe `seen <= length` and `!=` is equivalent to `<`. Disclosing rather than deleting the branch is the right handling. Note that the equivalence is itself evidence for M1.1b-1: the over-long branch of `verify()` is now dead, and the eager check does not cover the case it used to be reachable for.",
+    "Setting `verified = true` before throwing in `count()` suppresses nothing: the IOException has already reached the caller, and `close()` still closes the delegate through the finally. No real error is swallowed on that path.",
+    "The removed `checkedStreamAcceptsAReaderThatStopsExactlyAtTheLength` never existed in HEAD, so no committed coverage was lost, and I could not name a mutation of the code as staged that survives its absence -- its removal is defensible on that basis alone. But the comment added at BodyTest.java:103-106 claiming `checkedStreamPassesAHonestBodyThrough` covers the shape is false: `readAllBytes` reads until EOF, so verify() fires at EOF and close() short-circuits on `verified`; the no-EOF path is never exercised. Once M1.1b-1 is fixed with the one-more-read probe, that test becomes load-bearing -- it is the guard that the probe does not refuse an honest body -- so it should return with the fix rather than stay deleted."
+  ]
+}

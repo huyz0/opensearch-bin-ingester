@@ -1,0 +1,58 @@
+{
+  "diff_sha256": "b699a7d056c6e5118e290b901d8d893ee94a7d05395279566ef254ab10f0c4a4",
+  "verdict": "pass",
+  "summary": "Round-3 major M4.38-R3-1 / T1 is FIXED and independently re-measured. I ran my own probe against LocalFsBinStore on this tree's JDK 25 (Temurin 25.0.4), interrupt flag pre-set, platform and virtual threads: putIfMatch COMPLETED with flagAfter=true; putIfAbsent THREW java.nio.channels.ClosedByInterruptException; put COMPLETED. releaseLocked() issues putIfMatch (LeaseManager.java:releaseLocked), putIfAbsent is reached only from acquireLocked. So the rewritten M4.35 text is true, and the row still rests on a real hazard: release() falls through to BoundedLock.takeOrFail under contention, and takeOrFail's tryLock(bound, NANOSECONDS) throws InterruptedException on a pre-set flag before it even attempts the lock. Four minors remain, all checkable falsehoods or referent ambiguities in prose; none blocks.",
+  "prior_findings_resolved": [
+    "M4.38-R3-1 (reviewer, round 3): FIXED. The 'interruptible on the backend that exists today' claim is gone and replaced with a measured negative.",
+    "T1 (test-reviewer, round 3): FIXED, same sentence, same evidence."
+  ],
+  "findings": [
+    {
+      "id": "M4.38-R4-1",
+      "file": "docs/internal/product/backlog-notes.md:M4.36",
+      "severity": "minor",
+      "title": "M4.36's replacement precedent clause is itself false: 'a latch would serve there' contradicts the M4.7 done row in the same commit",
+      "failure_scenario": "The new sentence reads: 'DO NOT TAKE aQUEUEDCallerIsFailedWithoutWaitingForTheLeaseReleaseToFinish AS THE PRECEDENT. It does spin rather than wait, but its reason is batch-membership determinism, nothing interrupts its committer, and a latch would serve there.' The first two clauses are true and verified (BatchingSequencerTerminationTest.java:303-318 spins on ref.get().queuedCount() < 1 for exactly that reason; the test never calls batching.close(), so nothing interrupts the committer). The third is false. The spin waits for caller B to be REALLY QUEUED, a transition that happens inside submit() while B is already blocked in commit(); no latch can be tripped at that instant. The M4.7 row added by this same commit (backlog-done.md) records why: 'commit blocks, so a caller can only signal BEFORE it enqueues -- so the timer watches the real queue depth'. An implementer of M4.36 who takes the clause at face value replaces the spin with a CountDownLatch tripped by B before it calls commit; the committer then throws OutOfMemoryError before B reaches the queue, B is failed by submit()'s stopped-check instead of by the drain net, and the test STILL PASSES (the failure is still an IOException and released is still false) while no longer exercising the net it exists to pin -- the degradation the fixture's own comment already records ('Measured: that fixture handed B the OutOfMemoryError, not the net's IOException'). Root cause is a referent again: 'there' can attach to the queuedCount spin or to the awaitSet poll (baselines/review.txt's second minor says a latch WOULD be exact for awaitSet), and the sentence is true of one and false of the other. Simplest fix: delete the clause -- the two preceding clauses already carry 'the mechanism matches; the motive does not'."
+    },
+    {
+      "id": "M4.38-R4-2",
+      "file": "docs/internal/product/backlog-done.md:M4.38",
+      "severity": "minor",
+      "title": "'backslash-escaped quotes no other row uses' is false -- three other rows use them",
+      "failure_scenario": "The done row justifies the third of its three row defects with 'the rows carried backslash-escaped quotes no other row uses'. grep for a backslash-quote finds three other rows using exactly that construct: backlog.md:134 (M4.14, rule 1's \\\"never a label\\\" list), backlog-done.md:107 (M4.0) and backlog-done.md:126 (M4.5). The cleanup itself is right (the three new rows carry none), but the stated reason is a universal claim the tree refutes in one grep -- the same shape as the 'only putIfAbsent' and 'is interruptible today' claims two rounds have already had to retire. A reader who checks it concludes the row's own review narrative is unreliable. Fix: say the escaping was unnecessary in a markdown table cell, or drop the clause."
+    },
+    {
+      "id": "M4.38-R4-3",
+      "file": "docs/internal/product/backlog-notes.md:M4.35",
+      "severity": "minor",
+      "title": "'Neither backend that exists has it' is false under its nearest antecedent, one sentence after naming a backend that has it",
+      "failure_scenario": "The corrected paragraph ends: 'Only putIfAbsent opens an explicit FileChannel and throws ClosedByInterruptException, and putIfAbsent is the ACQUIRE path, not the release one. A future NIO-backed S3 store may add that route. Neither backend that exists has it.' The nearest antecedent for 'that route' / 'it' is the FileChannel-plus-ClosedByInterruptException route just named -- and LocalFsBinStore, a backend that exists, has exactly it: I measured putIfAbsent throwing ClosedByInterruptException on both platform and virtual threads. Only the charitable reading ('an interruptible store write ON THE RELEASE PATH') is true. A reader who takes the literal one concludes no backend throws ClosedByInterruptException, which is the overstatement in the opposite direction, and it contradicts the sentence two before it. Fix: 'Neither backend that exists has an interruptible RELEASE write.' Related, and worth a word in the same sentence: 'Only putIfAbsent opens an explicit FileChannel' is true of the write paths but not of the class -- getRange (LocalFsBinStore.java:137) opens one too."
+    },
+    {
+      "id": "M4.38-R4-4",
+      "file": "docs/internal/product/backlog-done.md:M4.38 vs docs/internal/product/backlog-notes.md:M4.37",
+      "severity": "minor",
+      "title": "The same measurement is recorded with two different numbers in one commit",
+      "failure_scenario": "The done row says the 200ms-constant mutation 'LANDS at ~201-211ms across four independent runs' with a margin of '~89-99ms'. M4.37, added by the same commit, says '~202-211ms ... across three independent runs, so the floor margin is ~90-100ms'. Both support the 4x conclusion, so nothing built from them changes -- but the row an implementer actually opens (M4.37) carries the superseded figure, and a reader comparing the two cannot tell which was measured. This is the failure mode M4.0's own row names ('fixing ONE copy of a fact and missing its duplicates in the tables that decide what gets built'). Fix: align M4.37 to four runs / ~201-211ms / ~89-99ms, or drop the run count from one of them."
+    }
+  ],
+  "verified_claims": [
+    "releaseLocked() issues putIfMatch -- LeaseManager.java, confirmed by reading.",
+    "LocalFsBinStore.putIfMatch opens no channel (createTempFile + Files.copy + moveAtomically) and COMPLETES with the interrupt flag pre-set, flag still set afterwards. Measured by me, platform and virtual thread, JDK 25.0.4.",
+    "LocalFsBinStore.putIfAbsent opens FileChannel.open(CREATE_NEW) and THROWS ClosedByInterruptException with the flag pre-set. Measured by me, both thread kinds.",
+    "putIfAbsent is reached only from acquireLocked's cold-start branch; every other lease transition is putIfMatch.",
+    "release() does tryLock() first and only falls through to takeOrFail under contention; takeOrFail's ReentrantLock.tryLock(nanos) throws InterruptedException on a pre-set flag. The row's 'that is the hazard' is a real, interrupt-sensitive route.",
+    "The two comments M4.35 asks to correct exist as described: BatchingSequencer.java:294 states 'reaches BoundedLock.takeOrFail' flatly, BatchingSequencer.java:479 carries the 'whenever tryLock loses to an in-flight renew' qualification.",
+    "baselines/review.txt's M4.7 entry does name TWO minors as recorded-not-fixed and does say 'The first' (the drain net) belongs in a row -- the done row's rewritten sentence is accurate.",
+    "The done row's inverted clause now reads in the right direction: two drafts called the mutant's ELAPSED TIME the margin, and M4.37 says the same, consistently.",
+    "M4.36's first two precedent clauses are true: the spin is at BatchingSequencerTerminationTest.java:313 and its stated reason is batch membership; nothing in that test interrupts the committer.",
+    "No new or changed object-store request appears anywhere in this diff -- it is docs only, and no row proposes a request rate keyed to records, shards, partitions or indices."
+  ],
+  "not_verified": [
+    "The three surviving-mutation claims themselves (terminalFailure message/cause, catch(Exception)->catch(Throwable), the 200ms-constant mutation). Prior rounds measured them and the production code is untouched; I did not re-run them.",
+    "Whether the takeOrFail route is reachable in TODAY'S wiring. Nothing in any main source calls LeaseManager.renew() (that is M4.17), and start() completes before close(), so the contended branch needs a concurrent lease operation that production currently has none of. The row phrases the route conditionally ('under contention'), so I did not raise it as a finding -- but 'THE LIVE ROUTE' is generous, and one clause naming the contender (an in-flight renew, which is M4.17's) would make it exact."
+  ],
+  "task": "M4.38",
+  "role": "reviewer",
+  "staged_tree": "549f4d13354cc1e90a499b1018283d636d7a8a8d"
+}

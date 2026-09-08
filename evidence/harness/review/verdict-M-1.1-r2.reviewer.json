@@ -1,0 +1,48 @@
+{
+  "diff_sha256": "82008131575b14209bf261282ec0e15bfc484d3b3639dba48309780953b5007a",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "D10",
+      "severity": "major",
+      "file": "docs/internal/product/backlog.md:14-16,33,45",
+      "summary": "D4's re-scope of M-1.1 to documentation left three statements in the same file asserting M-1.1 carries Java tests and script wiring. The staged tree contains no scripts/ and no buildSrc/ file (git ls-files shows scripts/ and .agents/ entirely untracked; the 73 staged paths are docs, LICENSE, NOTICE, README). Yet: the header note still says 'M-1.1 carries the parser regression suite (M0.18), those tests are Java, and Java needs the build that M0.4 brings'; M0.18's row still says 'Lands inside M-1.1, not after it' while M-1.2's row claims the parser regression suite; and M0.15 sits in the Completed table marked 'done inside M-1.1' although scripts/tdd-red.sh is untracked and ships in M-1.2.",
+      "failure_scenario": "The next agent runs next-task against the authoritative backlog. M0.15 is in the Completed table, so it is skipped, and the tdd-red Gradle wiring is never claimed by any commit. M0.18 says it lands inside M-1.1, which is now closed, so the parser regression suite is also skipped -- while M-1.2's row silently expects it. Two deliverables fall between two commits and nothing detects it, because check-commit-msg.sh only checks that an ID exists in the file, not that its state is true."
+    },
+    {
+      "id": "D11",
+      "severity": "major",
+      "file": "docs/internal/product/decisions/0013-fast-mode-wal-and-quorum.md:36",
+      "summary": "Broken R-citation, and exactly the class D3 was meant to foreclose. The line reads 'a cost externality of the same shape as the lane-deadline rule (R16)'. cost.md now declares that rule n IS Rn, so R16 resolves unambiguously to 'Count per index in memory; never export it as a metric label' -- unrelated to lane deadlines. grep across docs/internal and .agents finds no lane-deadline rule carrying any R number: the externality is described in ADR-0014 (unnumbered) and research doc 13 'the lane deadline sets the flush cadence'. Before D3 the number was merely vague; after D3 it is definitively wrong.",
+      "failure_scenario": "An implementer capping flush_timer in M3 follows R16 from ADR-0013, lands on the metric-cardinality rule, concludes the flush-cadence externality has no governing cost rule, and ships an uncapped per-index flush_timer. The tightest timer on the pod then sets the PUT cadence for every index on it -- the 250 ms operating point ADR-0017 rejects at $311/mo against $15.55/mo."
+    },
+    {
+      "id": "D12",
+      "severity": "major",
+      "file": "docs/internal/product/milestones/M1/SPEC.md:77",
+      "summary": "The M1 cost table row reads '| R1, R14 | Bundling works, but the interval is fixed; the adaptive loop is M3b |'. Under cost.md's now-explicit namespace R14 is 'Never refuse a data write or a commit', which the row's text never mentions; the rule the text is actually about is R1b, 'the flush interval is adaptive and is the primary dial'. R1b appears nowhere in M1's cost table despite being the only rule the row's own sentence discusses. Either the citation is a typo for R1b, or R14 is cited with no accompanying obligation -- and M1.3b ('writes never refused') is the task that would need it.",
+      "failure_scenario": "M1 SPEC is the milestone's cost contract and sdd.md rule 9 requires every spec to name the rules it touches. With R1b uncited, M3b's implementer reads M1's table, sees the interval already accounted for under R1/R14, and ships the fixed 250 ms interval as the permanent default -- the rejected operating point at roughly 20x the cost. Separately, R14 has no stated M1 obligation, so GoverningBinStore (M1.3b) can be built refusing a segment PUT under pressure, which is acked-data loss."
+    },
+    {
+      "id": "D13",
+      "severity": "minor",
+      "file": "docs/internal/standards/testing.md:54-56",
+      "summary": "The D7/rule-6 fix created a contradiction one rule below it. Rule 9 still reads 'Does not exist until the build does -- see AGENTS.md § Gates, exactly as for rule 6', but rule 6 was just changed away from that formulation precisely because 'saying \"when the build exists\" went stale the moment the build landed in de66330 and this gate did not'. Rule 9's own claim is now false (the build exists, check-mutants.sh does not) and its cross-reference points at text that says the opposite. The honest form is the task ID, M0.14.",
+      "failure_scenario": "A reader checks whether the mutation gate is expected to run, sees 'until the build does', observes the build exists in de66330, and concludes the gate is present -- then reports an 80% mutation score that was never measured, which is the failure AGENTS.md non-negotiable 4 exists to prevent."
+    },
+    {
+      "id": "D14",
+      "severity": "minor",
+      "file": "docs/internal/standards/build.md:16-27",
+      "summary": "The corrected total is itself arithmetically wrong, in a table whose new warning is about arithmetic. Doubling the two per-worker rows gives 1024 + 512x2 + 512x2 + 256 + 1024 + 512 + 1024 = 5888 MiB = 5.75 GiB, not the stated 'approximately 5.9 GiB' (5888/1000 is a MiB-over-1000 slip, not GiB). Separately, the warning 'which is what scripts/test_budget.py sums' sits directly under the Total row, but running the script prints 'limits sum to 3072 MiB' -- it sums only the three configured Gradle rows, not the containers or headroom.",
+      "failure_scenario": "An engineer adding a container reconciles the table's approximately 5.9 GiB against test_budget.py's 3072 MiB, cannot make the two agree, and concludes the script is stale rather than that it deliberately sums only configured limits -- then raises CEILING_MIB to make room, which build.md line 46 explicitly forbids because that number is what keeps WSL2 from killing the session."
+    },
+    {
+      "id": "D15",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:20,45",
+      "summary": "Two blank lines break the markdown tables. One sits immediately after the current-milestone table's header separator '|---|---|---|---|' and before the M-1.2 row; another sits between the M-1.1 row and the M0.1 row in the Completed table. In CommonMark a blank line terminates a table, so every row after each blank renders as a paragraph of literal pipe characters with no header.",
+      "failure_scenario": "The authoritative task list renders as unformatted pipe text on GitHub and in any docs viewer, so the State column is not aligned with its heading and a reader scanning for what is todo misreads which column is which. check-links.sh and check-file-size.sh do not look at table structure."
+    }
+  ]
+}

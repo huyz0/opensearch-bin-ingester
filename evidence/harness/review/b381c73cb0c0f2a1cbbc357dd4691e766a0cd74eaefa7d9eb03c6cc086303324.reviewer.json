@@ -1,0 +1,28 @@
+{
+  "diff_sha256": "b381c73cb0c0f2a1cbbc357dd4691e766a0cd74eaefa7d9eb03c6cc086303324",
+  "verdict": "changes-requested",
+  "summary": "Round-1 F1, F2 and F4 are verified fixed in the staged bytes; F3 is half fixed. But an entire 208-line ADR belonging to a different, still-open task (M4.10b) was added to the staged tree BETWEEN rounds and is not in M0.79's row. Verified against the round-1 record's staged_tree 73bbbb561fe7: docs/internal/product/decisions/0036-*.md was absent then and present now. That is blocking on non-negotiable 1 and on AGENTS.md 'Never widen scope silently', and the remedy is the round-2 remedy the packet names: split, do not review again. Unstage the ADR and M0.79 lands as reviewed. No object-store request is added by the M0.79 files themselves.",
+  "findings": [
+    {
+      "id": "F5",
+      "file": "docs/internal/product/decisions/0036-the-idempotency-key-carries-an-explicit-pod-incarnation.md:1",
+      "severity": "blocking",
+      "failure_scenario": "This 208-line ADR is M4.10b's deliverable, not M0.79's. backlog.md:124 reads 'M4.10b | DECIDE THE IDEMPOTENCY KEY AND WHICH FORMATS CHANGE, as an ADR ... | FR-3 | todo' and is still todo in the staged backlog; M0.79's row (backlog.md:69) names only the skill body, .claude/commands/brevity.md and the two agent briefs. It was not under review in round 1: the round-1 reviewer record .harness/review/b5232d5c8b40....reviewer.json carries staged_tree 73bbbb561fe7b5cbf5ef692d5224d442a8b134b6, and `git ls-tree -r --name-only 73bbbb56 -- docs/internal/product/decisions/` ends at 0035; it was added between rounds. Three concrete failures follow. (1) The commit subject will start with M0.79 and check-commit-msg.sh will pass, so the tree records an idempotency-key wire-format decision under a skill-landing task -- non-negotiable 1, and 'Never widen scope silently' in AGENTS.md. Reverting the brevity skill reverts the ADR with it, and vice versa. (2) M4.10b stays 'todo' with its deliverable already in the tree: the next session that runs next-task and picks M4.10b finds 0036 written, and either mints a duplicate 0037 or has no way to tell whether 0036 is landed work or an abandoned draft. (3) The packet's standards for this review were selected from M0.79's paths -- git.md, sdd.md, testing.md, performance.md, and cost.md is NOT among them -- while the ADR changes BOTH durable formats ('Both delta encodings change, VERSION_DELTA and the kinded batch'), amends ADR-0033, and adds a GET per answered replay. It is being reviewed under a docs-consistency lens chosen for a skill file, in a round whose stated job is verifying four earlier findings, with no cost.md and no wire-format-change pass. Remedy: `git restore --staged docs/internal/product/decisions/0036-*.md`, commit M0.79 alone, and let M4.10b own the ADR and its own two-role review."
+    },
+    {
+      "id": "F6",
+      "file": ".agents/skills/review/SKILL.md:103",
+      "severity": "minor",
+      "failure_scenario": "F3's fix is asymmetric and reintroduces the fork it was raised against, inverted. The new 'Output style follows brevity' bullet sits under '## What the test reviewer looks for' (line 100, 'Its full brief is .claude/agents/test-reviewer.md. The core of it:'), so in the vendor-neutral skill only the TEST reviewer is told to follow brevity. The production reviewer's mirrored core is '## What to look for' (line 64) and '## Output' (line 122), and neither mentions brevity -- yet .claude/agents/reviewer.md:35 now binds the production reviewer to it. A non-Claude harness built from .agents/skills/review/SKILL.md alone, which is what skills/README.md rules 2 and 3 exist to make possible, produces a test-reviewer that follows brevity and a reviewer that does not. Symptom is two roles emitting different output shapes for the same diff. One bullet under '## Output' saying both roles follow brevity and the finding format is never overridden closes it."
+    },
+    {
+      "id": "F7",
+      "file": ".agents/skills/brevity/SKILL.md:52",
+      "severity": "minor",
+      "failure_scenario": "Three tokenizer claims are asserted in the present tense as measured fact with no tokenizer named and no measurement anywhere in the tree: 'The tokenizer splits them the same as the full word: zero tokens saved' (52-53), 'An arrow is its own token; it saves nothing' (55), and '\"sees\" and \"see\" are both one token' (57). The first is checkably wrong for at least one of its own examples on common BPE vocabularies -- 'auth' is one token where 'authentication' is more than one, so the abbreviation does save tokens -- which makes the justification false while the rule it supports ('no invented abbreviations') remains correct on readability alone. The sharper failure is internal: line 43, added THIS round to fix F2, puts 'Whether a result was MEASURED or inferred' on the Never-cut list and cites non-negotiable 4, and lines 52-57 are exactly the shape that clause forbids. An agent that loads this skill and quotes 'zero tokens saved' as settled propagates an unmeasured number into prose, which is the non-negotiable-4 failure the packet's documentation lens names as the most common defect in a docs commit. This does not block: no agent behaviour changes, because the rules stand without the numbers. Fix is a provenance clause -- 'by inspection, on BPE tokenizers of this family' -- or deleting the three justifications and keeping the rules."
+    }
+  ],
+  "task": "M0.79",
+  "role": "reviewer",
+  "staged_tree": "469567ea8610c313b06a655a5661a606fec5fe36"
+}

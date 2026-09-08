@@ -1,0 +1,37 @@
+{
+  "diff_sha256": "bb454df826db4c8c2aba84a7dbaca02c551e2226c8e8279f509608e1effdfa09",
+  "verdict": "changes-requested",
+  "task": "M4.10d",
+  "role": "reviewer",
+  "findings": [
+    {
+      "id": "ambiguous-put-retry-not-deduplicated-multiflush",
+      "severity": "blocking",
+      "file": "sequencer/src/main/java/binjava/sequencer/IdempotencyWindow.java:162 (resolveAmbiguous, the finally block) and :176-190 (split)",
+      "summary": "The round-1 blocking finding is fixed only for a batch carrying ONE flush per incarnation. resolveAmbiguous clears the marker in `finally { ambiguousFrom.remove(k); }` after resolving the FIRST request of an incarnation, so the SECOND request of the same (podId, incarnationId) in the same batch sees isAmbiguous()==false, is not yet a replay (its higher flushSeq is > the watermark applied()d one line earlier), falls into `fresh`, and is committed a second time. MEASURED in my own worktree.",
+      "failure_scenario": "MEASURED, single leader, single epoch, no takeover, no checkpoint. Batch [(podx,i1,0,seg/a,3 records), (podx,i1,1,seg/b,4 records)] through the real LocalSequencer over LandThenThrowStore with armNextDeltaPut(). The delta lands (seg/a at offsets 0-2, seg/b at 3-6) and throws. The byte-identical retry: seg/a is answered at offset 0, seg/b is COMMITTED AGAIN at offset 7. Probe output: 'PROBE deltas carrying seg/a = 1', 'PROBE deltas carrying seg/b = 2'; returned delta 'seg/b runs=[RunCommit[...recordCount=4, firstOffset=7]]'. Four records, two sets of committed offsets, one leader, no takeover -- the exact harm of round-1 finding f29b45554768/ambiguous-put-retry-not-deduplicated. A multi-flush batch from one incarnation is the normal case: BatchingSequencer aggregates a window, and this commit's own aBatchAPPLYINGTwoFlushesOutOfOrderKeepsTheHIGHESTWatermark asserts one batch legitimately carries two flushSeqs from one incarnation. The staged tests aRetryAfterAnAMBIGUOUSPutIsAnsweredNotCommittedTwice and aRetryAfterAFailureThatDidNOTLandStillCommits both submit List.of(flush) -- exactly one request -- so neither can reach it."
+    },
+    {
+      "id": "two-segments-one-triple-throws-on-replay",
+      "severity": "major",
+      "file": "sequencer/src/main/java/binjava/sequencer/IdempotencyWindow.java:265-273 (answers) and :291-315 (answer)",
+      "summary": "answers() matches on (podId, incarnationId, flushSeq) and deliberately NOT on segmentKey, so when one batch carries two segments under one triple, both replays resolve to the SAME SegmentCommit. LocalSequencer then builds a CommitDelta naming that segment twice, which CommitDelta's own constructor refuses. The retry of a fully landed batch becomes a producer-visible IllegalArgumentException. This commit's own staged baselines/mutants.txt entry asserts this input is reachable and says it was 'Reproduced through the real LocalSequencer with (\"poda\",\"i1\",5,\"seg/a\") and (\"poda\",\"i1\",5,\"seg/b\")' -- so the input was constructed and its replay was never exercised.",
+      "failure_scenario": "MEASURED. seq.commitAll([(podx,i1,5,seg/a,3), (podx,i1,5,seg/b,4)]) lands cleanly -- probe printed 'PROBE4 first: [seg/a@0, seg/b@3]'. The byte-identical retry throws java.lang.IllegalArgumentException: 'a delta names the same segment twice, so no caller could tell which offsets are its own: seg/a' from binjava.format.CommitDelta.<init>(CommitDelta.java:54), via LocalSequencer.commitAll:398. The backlog row names this outcome explicitly as the thing not to do: 'a retry after an ambiguous IOException, the case M4.10 exists to make safe, becomes a producer-visible failure on a flush that LANDED'. Under BatchingSequencer the throw fails the whole window, so every co-batched pod's flush fails too."
+    },
+    {
+      "id": "checkpoint-pods-bound-guards-the-wrong-path",
+      "severity": "major",
+      "file": "sequencer/src/main/java/binjava/sequencer/CheckpointWriter.java:108-140 (inherit/evictOldestBeyond) and :196-211 (capture) ; sequencer/src/main/java/binjava/sequencer/IdempotencyWindow.java:237-263 (inherited/evictOldestBeyond) and :202-210 (applied)",
+      "summary": "MAX_PODS/MAX_SLOTS eviction is invoked ONLY from inherit()/inherited(), i.e. once per takeover. The path that actually accumulates -- CheckpointWriter.capture's pods.merge(request.podId(), ...) per commit, and IdempotencyWindow.applied's byIncarnation.compute per commit -- never evicts. So within ONE leader term the checkpoint's pods map is unbounded in uptime, which is exactly what the new javadoc claims the bound prevents ('A BOUND ON THE FLEET, not on uptime', 'makes the object's size a constant rather than a function of how long the cluster has run'). IdempotencyWindow's own javadoc names the unguarded path -- 'one permanent entry per RESTART, not per pod. Unbounded, a long-lived leader's window grows with the fleet's restart history' -- and then guards a different one.",
+      "failure_scenario": "MEASURED. One LocalSequencer term, K=5000, 5000 commits each from a distinct podId (a rolling deploy or scale event churns pod names, as the javadoc itself states): 'PROBE2 pods in checkpoint after ONE term, 5000 pod names = 5000', 'PROBE2 encoded checkpoint bytes = 92686'. MAX_PODS=4096 never applied because inherit() ran once, before any of those commits. An earlier run at K=1 and 6000 pods OOM'd the 512MB test JVM outright, which is the quadratic shape (each of N checkpoints carrying up to N slots) in the same measurement. The staged test thePodsMapIsBOUNDEDNoMatterHowManyTermsAreInherited calls writer.inherit(huge) directly and asserts <= 4097, so it green-lights the one path that IS bounded and is structurally blind to the growth path -- the 'gate that reports success while checking nothing' lens. A leader that holds its lease for days therefore PUTs a checkpoint every K deltas whose size grows with every pod name the cluster has ever used, and a successor GETs that object on every takeover."
+    },
+    {
+      "id": "resolveAmbiguous-rereads-one-delta-once-per-pod",
+      "severity": "major",
+      "file": "sequencer/src/main/java/binjava/sequencer/IdempotencyWindow.java:133-166 (resolveAmbiguous), called per-request from split at :180-186",
+      "summary": "answer() carries a read cache and the javadoc bound 'AT MOST ONE GET PER DISTINCT (epoch, sequence), which is the cost bound ADR-0036 states'. resolveAmbiguous, the new sibling path, has no cache and no sharing across requests in one split: every ambiguous incarnation re-stats and re-GETs the SAME delta object. The bundling of many pods into one delta is the architecture; the retry cost undoes it.",
+      "failure_scenario": "MEASURED with CountingBinStore wrapped by LandThenThrowStore. One batch of 200 requests, 200 distinct (podId, incarnationId), one ambiguous PUT that lands and throws. The retry of the identical batch cost 'gets=200 stats=200' to read ONE delta object -- 400 requests where 2 suffice. The staged test aBatchOfReplaysPointingAtONEDeltaReadsItONCE pins the ONE-get bound for answer() only, so the new path's 200x amplification is untested and unbudgeted. This fires on the path the store has just failed on (i.e. is degraded or throttling), and it is the moment a 200x read burst is most expensive."
+    }
+  ],
+  "staged_tree": "33e72860bc289bfd6a7e19144fb80dbe3610355a"
+}

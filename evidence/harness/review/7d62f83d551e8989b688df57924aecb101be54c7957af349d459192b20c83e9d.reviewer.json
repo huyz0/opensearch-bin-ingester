@@ -1,0 +1,22 @@
+{
+  "diff_sha256": "7d62f83d551e8989b688df57924aecb101be54c7957af349d459192b20c83e9d",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "M0.13-1",
+      "severity": "blocking",
+      "file": "scripts/coverage.py",
+      "summary": "check-coverage.sh passes on a stale JaCoCo XML report that predates newly added, entirely untested production code -- it checks only that a report file exists, never that it reflects the classes currently on disk.",
+      "failure_scenario": "Reproduced directly: in format/, added Branchy.java (one branch) with a test covering it, ran ./gradlew :format:jacocoTestReport, and check-coverage.sh correctly reported 'ok 100.0%/100.0%'. Then, WITHOUT re-running jacocoTestReport, added a second class Untested.java with three untested branches and ran only ./gradlew :format:compileJava (the closest analogue to a normal ./gradlew build/check, since jacocoTestReport is not wired to either -- confirmed separately: ./gradlew :format:check runs test but never invokes jacocoTestReport). Untested.class is now present under format/build/classes/java/main/probe/Untested.class, but check-coverage.sh still printed 'ok 100.0% (floor 95) branch 100.0% (floor 90)' and exited 0 -- the JaCoCo XML on disk only ever analyzed Branchy (grep 'name=\"probe/' on the report shows just probe/Branchy). Since the normal Gradle workflow never regenerates jacocoTestReport as a side effect of build/check/test, a module only needs ONE historical manual ./gradlew jacocoTestReport run to freeze its reported coverage number permanently; every subsequent commit that adds classes without a matching manual regeneration is invisible to the gate and reads as a full pass. This is exactly the class of defect coverage.py's own docstring says it exists to prevent ('the characteristic failure of a threshold gate is not a wrong threshold, it is reporting success while measuring nothing') and the review lens calls out ('construct the input each check must REJECT and confirm it rejects it'); here the rejecting input (new untested code, stale report) is accepted."
+    },
+    {
+      "id": "M0.13-2",
+      "severity": "major",
+      "file": "scripts/coverage.py",
+      "summary": "Nothing in this diff wires jacocoTestReport to run as part of the normal build (./gradlew build/check), and check-coverage.sh does not invoke it either -- unlike the sibling gate check-harness-tests.sh, which runs ./gradlew ... test itself rather than assuming an artifact already exists on disk.",
+      "failure_scenario": "Verified: ./gradlew :format:check --rerun (after adding a real class+test) compiles, runs test, and finishes green without ever producing format/build/reports/jacoco/test/jacocoTestReport.xml; the file only appears after a separate, undocumented ./gradlew jacocoTestReport invocation. The FAIL message this produces (Run ./gradlew jacocoTestReport) is at least actionable, so on a fresh module this fails safe rather than silently passing -- but combined with finding M0.13-1, the two together mean the gate's only two states in ordinary use are 'always FAIL until someone manually runs a task nobody is told to run in AGENTS.md, a skill, or CI' or 'silently frozen at whatever the last manual run measured.' Since check-coverage.sh is not yet wired into any gate (pre-commit or CI), this does not break anything today, but it means the artifact this task delivers cannot function as an enforced gate without a follow-on change (either make check-coverage.sh run ./gradlew jacocoTestReport itself, or wire the report task to check) that is not part of this commit and not tracked anywhere the reader can find."
+    }
+  ],
+  "task": "M0.13",
+  "role": "reviewer"
+}

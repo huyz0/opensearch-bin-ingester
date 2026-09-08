@@ -1,0 +1,65 @@
+{
+  "diff_sha256": "0507fef483850ce7f433a1ffe303e71a683e236c719df5f73373aa849ab37cc0",
+  "verdict": "changes-requested",
+  "summary": "Decision-only commit; no code, no tests (verified: git diff --cached touches 7 doc/baseline paths only, working tree otherwise clean). Round-5 T1 is fixed in the ADR and in the M4.10c NOTES, and the three fixtures I named are verified present and still discriminating. But the falsified claim SURVIVES VERBATIM in backlog.md's open M4.10c row -- the copy a session actually reads -- and in a weaker form in the new baselines entry. That is the duplicate-copy failure this task family's own baselines file records twice. Round-5 T2 is genuinely fixed and the surrounding sentence is sound. T3/T4 confirmed still unfixed, and I still recommend leaving them.",
+  "findings": [
+    {
+      "severity": "major",
+      "file": "docs/internal/product/backlog.md",
+      "line": 123,
+      "title": "The claim deleted from the ADR and the notes survives verbatim in the authoritative open row",
+      "detail": "The staged M4.10c row reads: 'CommitDelta carries the triple PER SegmentCommit, not once per delta: every M4 delta is single-segment so the two placements are byte-equivalent today and only M5 tells them apart.' Both clauses are false about the tree, and both are the exact wording the ADR and backlog-notes.md deleted this round. Measured: format/src/test/java/binjava/format/BatchedCommitDeltaTest.java:42-45 builds a THREE-segment delta (bins/pod-a, bins/pod-b, bins/pod-c) and asserts isEqualTo(original) plus per-index key and firstOffset at indices 1 and 2; format/src/test/resources/golden/chain-delta-batched-v1.bin carries TWO distinct segments and GoldenChainEntryTest.java:75-80 asserts containsExactly over both plus byte-identical re-encode; BatchingSequencerTest.java:259-261 asserts a two-pod commitAll produces segments of size 2. AGENTS.md routes a session to backlog.md open rows and says to read the notes for the ONE task picked -- so the falsified sentence is in the copy read FIRST, and the corrected one only in the copy read second.",
+      "failure_scenario": "A session picks M4.10c, reads this row, and believes no T0 fixture can distinguish the two placements. It therefore has no reason to give the fixtures different triples per segment -- the ADR's ONLY stated T0 defence. Surviving mutation: place the idempotency triple once per CommitDelta instead of once per SegmentCommit. Every existing fixture stays green (they carry no triples that could differ), the new goldens are generated from the same implementation and round-trip, both delta encodings pass, and the decision ADR-0036 records as load-bearing is enforced by nothing. The defect surfaces at M5's first forwarded multi-pod batch as 'drops every pod but one' -- the outcome the ADR names -- with no red record anywhere in M4.",
+      "remedy": "One edit: make the row say what the notes and the ADR now say -- every M4 PRODUCTION delta is single-segment, so the placements are byte-equivalent in production, and three T0 fixtures tell them apart once given different triples per segment. Or delete the clause entirely and let the [notes] link carry it; deletion is the cheaper move and cannot restate the error."
+    },
+    {
+      "severity": "minor",
+      "file": "baselines/review.txt",
+      "line": 29,
+      "title": "The same missing PRODUCTION qualifier in the new rounds:M4.10b entry",
+      "detail": "The entry says the once-per-delta triple 'round-trips and passes both goldens because every M4 delta is single-segment'. The outcome is right; the stated REASON is contradicted by one of the two goldens it names -- chain-delta-batched-v1.bin carries two segments. The reason a once-per-delta field slips through is that the fixtures carry no differing triples, not that the deltas are single-segment.",
+      "failure_scenario": "This file is the argument of record for why the round cap was exceeded, and it is what a future session reads to learn why the error happened. Recording the wrong cause preserves the belief that produced finding 1, so the next task in this family regenerates it. This is the failure the M4.10 and M4.10a entries in this same file already record twice: fixing one copy of a fact and missing its duplicates.",
+      "remedy": "Insert PRODUCTION into that clause, or cut the causal 'because ...' and keep only the M5 consequence."
+    },
+    {
+      "severity": "minor",
+      "file": "docs/internal/product/milestones/M4/SPEC.md",
+      "line": 476,
+      "title": "The amended criterion gained the ACCEPT direction; the mutation column it indexes did not",
+      "detail": "Criterion 6 (line 418) now requires that a restarted pod reissuing flushSeq 0 be ACCEPTED as a new commit -- the direction the pair-keyed wording forbade, and the whole reason ADR-0036 exists. The test-table row on line 476 was updated only in the KEY NAME; its mutation column still reads 'a sequencer that assigns fresh offsets to a retry -- silent duplication', which is the duplication direction only. The SPEC's own preamble says the mutation column is what makes each test worth having.",
+      "failure_scenario": "Surviving mutation: dedup on the bare (podId, flushSeq), ignoring incarnationId entirely. A T0 test written from the table row alone -- retry the same request, assert the original offsets and no fresh assignment -- passes against it, because a retry WITHIN one incarnation still dedups correctly. The suppression-of-real-commits harm ships with a green criterion 6 row in VERIFIED.md. Only criterion 6's prose and M4.10d's backlog row ('Discriminator is a POD RESTART') carry the killing case, and neither is the artifact M4.15 reads.",
+      "remedy": "One clause in the mutation column: '... and a dedup on the bare pair, which SUPPRESSES a restarted pod's flushSeq 0'. Minor rather than major because criterion 6 states the requirement normatively."
+    },
+    {
+      "severity": "minor",
+      "file": "docs/internal/product/decisions/0036-the-idempotency-key-carries-an-explicit-pod-incarnation.md",
+      "line": 141,
+      "title": "The per-pod size argument that rejects the segment-key alternative is pinned by no test -- the sharp form of my standing T4",
+      "detail": "The Consequences section rejects storing a segment key per pod on size grounds ('up to MAX_KEY_BYTES (1024) per pod') and cites CheckpointTest's under-64-KiB assertion as headroom. Verified: format/src/test/java/binjava/format/CheckpointTest.java:153-172 varies STREAM count (1,600) and carries exactly ONE pod ('poda'), bracketing 20 KiB < size < 64 KiB. The cited figures are accurate; the test simply does not measure the axis the argument is about. I am not asking for a change here -- T4 stands unfixed by agreement -- but the mutation belongs on the record for M4.10c.",
+      "failure_scenario": "Surviving mutation: make the per-pod slot hold a segment key up to 1024 bytes instead of two longs -- precisely the alternative this ADR rejects and ADR-0033's size rule forbids. CheckpointTest moves by at most ~1 KiB against ~26 KiB of headroom and stays green; GoldenCheckpointTest fails only because the bytes changed, which it would for ANY format change, so it does not discriminate the size property either. ADR-0033's growth rule ends up enforced by prose alone.",
+      "remedy": "For M4.10c, not this commit: the checkpoint size assertion has to vary POD count, not stream count, to constrain per-pod growth at all."
+    },
+    {
+      "severity": "minor",
+      "file": "docs/internal/product/decisions/0036-the-idempotency-key-carries-an-explicit-pod-incarnation.md",
+      "line": 113,
+      "title": "'Existing goldens are untouched' cites a read-only precedent, and two delta assertions it does not name will be under pressure at M4.10c",
+      "detail": "The cited M3.0 precedent is parse-only: GoldenSegmentTest and GoldenSegmentV1Test read golden bytes and assert values; neither asserts re-encode byte-identity. The DELTA goldens do: GoldenChainEntryTest.java:54-56 ('re-encoding is byte-identical -- a v0 delta is still written as v0') and :82-84 ('re-encoding a MULTI-segment delta is byte-identical too'). Adding a triple per SegmentCommit breaks both unless the canonical-form rule is extended, as it already is for one-segment-encodes-as-v0 (BatchedCommitDeltaTest.java:165-170). The ADR's sentence is literally true of the .bin FILES and silent about the assertions around them.",
+      "failure_scenario": "At M4.10c the cheapest route to green is deleting or loosening those two .isEqualTo(bytes) assertions in the same commit as a production format change -- testing.md rule 4 ('production code changes to satisfy the test, never the reverse') and rule 5, and exactly what check-test-integrity.sh exists to flag. An author following the ADR's 'goldens untouched' line has been told the golden question is settled and will meet the two assertions unprepared.",
+      "remedy": "Optional, and one clause if taken: name the two byte-identity assertions and say they are preserved by extending the canonical-form rule, not weakened. A satisfiable path exists, which is why this is minor."
+    }
+  ],
+  "verified_this_round": [
+    "diff_sha256 recomputed from git diff --cached: matches 0507fef4.",
+    "Decision-only claim VERIFIED: staged paths are 7 docs/baseline files; no .java, no fixtures, working tree carries nothing else.",
+    "Round-5 T1: the 'passes both new goldens' and 'only M5 tells them apart' wording is gone from ADR-0036 and from backlog-notes.md #m410c, and both now qualify byte-equivalence to PRODUCTION and name my three fixtures with the correct remedy (different triples per segment). Fixed in those two files -- see finding 1 for the copy that was missed.",
+    "The three discriminating fixtures STILL HOLD, checked in the tree rather than taken on account: BatchedCommitDeltaTest.batched() is three segments over three pod keys with whole-record isEqualTo plus per-index assertions at 1 and 2; golden/chain-delta-batched-v1.bin is two distinct segments under containsExactly; BatchingSequencerTest.anExplicitBatchGoesThroughTheWindowRatherThanPastIt asserts a two-pod commitAll yields hasSize(2).",
+    "Round-5 T2: '(nothing applied, so a re-flush is safe)' is gone. The surrounding sentence asserts nothing else wrong -- Sequencer.java:86 documents IOException as AMBIGUOUS, DefaultIngest.java:349 consumes flushSeq++ in argument position so it is spent whether or not the commit applied, and both histories genuinely reach the refuse branch once a later flushSeq has moved the watermark. 'Density is over ISSUED flushes, not applied ones' is the correct axis and is consistent with the ADR's dense-and-monotone claim, which is about the counter.",
+    "T3 (a 'distinguishable error' names no observable, ADR line 67) and T4 (the 32-byte figure is arithmetic, not a measurement, ADR line 141) are both still unfixed. That still stands -- neither blocks, and finding 4 records the mutation T4 implies so it is not lost.",
+    "SPEC amendment: sdd.md rule 8 is satisfied (spec amended, correction carried by an ADR). Criterion 6's new prose is enforceable -- 'assigns no new offsets', 'returns the original assignment when the pointer names a delta carrying that triple', and 'a restarted pod reissuing flushSeq 0 must be ACCEPTED' are each observable at T0. It does NOT contradict ADR-0036: the ADR's refuse branch also fires for a never-applied flushSeq below the watermark, and criterion 6 is silent on that case rather than opposed to it. The only gap is the table row, finding 3.",
+    "Every other tree citation in the ADR spot-checked and accurate: CheckpointTest's 64 KiB bound and ~38 KiB body; CheckpointWriter.java:105-106 'the only place the writer can see podId and flushSeq' and :129 pods.merge(..., Math::max); ChainReplay.java:50 'never GET at all'; Checkpoint.decode strict version equality at :151; CheckpointCursor.java:67 'the store is unreachable'; SegmentKey.MAX_KEY_BYTES = 1024; SegmentPublisher.java:136-137 the put-not-putIfAbsent comment quoted verbatim."
+  ],
+  "task": "M4.10b",
+  "role": "test-reviewer",
+  "staged_tree": "7bc352ad49e35d3e9c13605cb546b745696e6b8a"
+}

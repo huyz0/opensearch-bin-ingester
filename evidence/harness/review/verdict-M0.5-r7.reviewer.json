@@ -1,0 +1,3 @@
+{"diff_sha256": "d991767118f2f501f87b2e581e915fb6c8db95642bd33efd0fb88fe1b2c93941",
+ "verdict": "pass",
+ "findings": [{"id":"M11","severity":"minor","file":"scripts/check-module.sh:31","summary":"Delta path derives the changed-module set from staged paths only, so a module made non-compliant by an unstaged or already-committed edit outside the delta is not re-checked until something in it is staged again.","failure_scenario":"A module drifts out of compliance via a change that never appears in a later staged delta; check-module.sh reports ok on every subsequent commit and the violation ships. Non-blocking: the full-tree path still catches it when invoked, and M0.5 scopes the delta path as an optimisation."}]}

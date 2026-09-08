@@ -1,0 +1,41 @@
+{
+  "diff_sha256": "0654cdc6c093d05675f484754ecd95b06161b42ce2859240a474461600c0f362",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "WT16",
+      "severity": "blocking",
+      "file": "buildSrc/src/test/java/binjava/ModuleSelectionTest.java:31-41, buildSrc/src/test/java/binjava/ModulePlanTest.java:32-43",
+      "summary": "WT15 is NOT fixed: every row in both selection suites still passes exactly one changed path, so neither the shared-build escalation nor the multi-path mapping is constrained. A real commit touches many paths. Confirmed green against the real 38-test Gradle suite for all three mutations below. Reinstating the exact historical shape (printf '%s\\n' \"$@\" | grep -qE ...) at line 96 also leaves the suite green -- the regression this suite's own javadoc exists to prevent is reintroducible in silence (rc=141 reproduced for that predicate shape standalone at ~5000 paths). Fix: add one row with two paths, e.g. 'docs/a.md gradle/libs.versions.toml' expecting shared-build/ALL, and 'client/A.java format/B.java' expecting two modules.",
+      "surviving_mutation": "scripts/check-module.sh:96 `for p in \"$@\"` -> `for p in \"${1:-}\"` (SURVIVES; `--plan docs/a.md gradle/libs.versions.toml` then prints WHY=module-dirs / MODULES= i.e. 'ok no module changed' on a shared-build change). AND scripts/check-module.sh:83 `printf '%s\\n' \"$@\"` -> `printf '%s\\n' \"$1\"` (SURVIVES; `--select-modules ... client/A.java format/B.java` returns only `client`)."
+    },
+    {
+      "id": "WT17",
+      "severity": "major",
+      "file": "buildSrc/src/test/java/binjava/ModulePlanTest.java:60-61",
+      "summary": "Answering 'did collapsing --plan into plan() buy what I intended': only partially -- a mutation INSIDE plan() still survives. The MODULES assertion uses substring `contains` and is not line-anchored; for the docs row `want` is \"\" so it degenerates to contains(\"MODULES=\"), which every possible output satisfies (verified: under mutation the row printed MODULES=docs and stayed green). Same defect on non-empty rows: contains(\"MODULES=format\") is satisfied by \"MODULES=format sequencer\". Fix: extract the MODULES= line from the output and isEqualTo it.",
+      "surviving_mutation": "Append to plan() at scripts/check-module.sh:124: `[ -n \"$PLAN_MODULES\" ] || PLAN_MODULES=\"$PLAN_ALL\"`. Confirmed GREEN on the real 38-test suite. Every docs-only commit then builds all eight modules, falsifying the 'a docs-only commit pays NO Gradle startup' claim added to .pre-commit-config.yaml and build.md in this same diff, with nothing red."
+    },
+    {
+      "id": "WT18",
+      "severity": "major",
+      "file": "buildSrc/src/test/java/binjava/ModulePlanTest.java:59",
+      "summary": "plan()'s drift VERDICT has no failure-path test (testing.md rule 14). Every row asserts DRIFT=ok; no test ever observes DRIFT=fail. ModuleDriftTest covers the --check-drift door's exit status (line 158), which is a different code path from plan()'s verdict computation (line 117), so it does not cover this. The gate consumes the verdict at line 193 (`[ \"$PLAN_DRIFT\" = ok ] || finish`), so under the mutation drift never halts the gate. Fix: a --plan invocation against a drifted tree, or let plan() take the settings path so a fixture can reach it.",
+      "surviving_mutation": "scripts/check-module.sh:117 `if [ \"$FAILED\" -eq \"$before\" ]; then PLAN_DRIFT=ok; else PLAN_DRIFT=fail; fi` -> `PLAN_DRIFT=ok`. Confirmed GREEN on the real 38-test suite."
+    },
+    {
+      "id": "WT19",
+      "severity": "major",
+      "file": "buildSrc/src/test/java/binjava/ModuleDriftTest.java:39",
+      "summary": "The gate-path orphan candidate SOURCE is executed but unconstrained -- and it is inside plan()'s callee, not in the four lines named as uncovered by the M0.22 comment. ModuleDriftTest always injects the candidate list via --check-drift's third argument, so the `[ -n \"$candidates\" ] || candidates=$(workspace_files ...)` default (lines 63-64) is entered only by --plan and the gate, where nothing reflects its result: `checked=N` counts only the first loop. Note the loop BODY is bound (deleting the buildSrc skip at line 67 is correctly killed by the DRIFT assertion) -- it is the source that nothing pins. Consequence: a tracked module directory with a build.gradle.kts and no settings entry is silently unchecked, which is the 'a short list is indistinguishable from compliance' defect this half of the gate exists to prevent.",
+      "surviving_mutation": "scripts/check-module.sh:63 `candidates=$(workspace_files '*/build.gradle.kts' | grep -E ...)` -> `candidates=$(true | grep -E ...)`. Confirmed GREEN on the real 38-test suite."
+    },
+    {
+      "id": "WT20",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/ModulePlanTest.java:59",
+      "summary": "Answering 'would checked=8 hardcoded pass': yes. The literal 8 is never related to the derived module count -- ALL= and checked= are two independent literals in the same assertion. Minor rather than major because two real mitigations exist: the `unrun` sentinel at line 113 kills 'check_drift never called', and shrinking the loop input (`for m in ${all%% *}`) yields checked=1 and is killed. So the counter does bind iteration count unless the counter itself is faked. Fix: parse the ALL= line from the same output and assert checked equals its word count.",
+      "surviving_mutation": "scripts/check-module.sh:49 `DRIFT_CHECKED=0` -> `DRIFT_CHECKED=8`, and delete the increment at line 51. Confirmed GREEN on the real 38-test suite."
+    }
+  ]
+}

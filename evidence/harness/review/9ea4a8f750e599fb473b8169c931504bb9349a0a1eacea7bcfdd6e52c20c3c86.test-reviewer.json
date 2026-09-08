@@ -1,0 +1,98 @@
+{
+  "diff_sha256": "9ea4a8f750e599fb473b8169c931504bb9349a0a1eacea7bcfdd6e52c20c3c86",
+  "task": "M4.8c",
+  "role": "test-reviewer",
+  "round": 1,
+  "verdict": "changes-requested",
+  "summary": "The five new tests do kill every mutation the task row names by hand: list-and-take-last dies on lists().isZero() and on the constant-total assertion; a stat-probe of the sequence space dies at 501 vs 5001 requests; a caught get with no stat dies on anUNREACHABLEStoreIsNotReportedAsAChainThatNeverCheckpointed, and on that test alone, which confirms the author's claim it survived before; deleting the pointer PUT dies on theWriterMAINTAINSThePointerSoDiscoveryFindsWhatItJustWrote. Tier and seeding are as prescribed (T1/MemoryBinStore, 1-byte bodies, whole class 54 ms, nowhere near 190 MiB), and no existing assertion was weakened -- the only change to an existing test file is a new opt-in field and method on RecordingBinStore. What is NOT constrained is everything about the pointer other than its existence at one moment: four mutations of production code leave the whole 282-test sequencer suite green -- writing the pointer with putIfAbsent so it freezes at the first checkpoint forever; writing it once per STREAM; parking it at a key that IS a canonical chain-entry key, which bricks every takeover; and dropping the epoch from its key or ignoring the epoch argument of newestCheckpoint. Each was measured in an isolated copy of the staged bytes.",
+  "findings": [
+    {
+      "id": "M4.8c-tr-1",
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/CheckpointDiscoveryTest.java:150",
+      "summary": "The pointer's defining property -- that it is OVERWRITTEN on every successful checkpoint (ADR-0034: 'is overwritten on every successful checkpoint'; CheckpointWriter.java:241 '`put`, not `putIfAbsent`: this key is MEANT to be overwritten') -- is pinned by nothing. theWriterMAINTAINSThePointerSoDiscoveryFindsWhatItJustWrote drives exactly ONE commit at K=1, so it observes exactly one checkpoint; every other test seeds the pointer by hand.",
+      "mutation_that_survives": "sequencer/src/main/java/binjava/sequencer/CheckpointWriter.java:243 `store.put(keys.latestCheckpointKey(), ...)` -> `store.putIfAbsent(keys.latestCheckpointKey(), ...)`. Measured: :sequencer:test 282 tests, 0 failed; full ./gradlew test green.",
+      "failure_scenario": "MemoryBinStore.putIfAbsent (and S3's If-None-Match) does not overwrite and the return value is discarded here, so after the FIRST checkpoint the pointer object never changes again. Discovery then returns checkpoint #1 for the life of the epoch. M4.9 resumes from that sequence and replays every delta written since -- the unbounded recovery this milestone exists to remove, restored silently and with the cost tests still green, because a stale pointer costs exactly one stat and one get.",
+      "suggested_fix": "In the writer seam test, commit twice (K=1) and assert the discovered checkpoint is the SECOND one -- sequence and a pod watermark that moved. One extra commitAll/observe pair.",
+      "blocks": true,
+      "blocks_under": "docs/internal/standards/review.md rule `major-blocks`; testing.md rule 13 (every acceptance criterion has a test that would fail without the change)"
+    },
+    {
+      "id": "M4.8c-tr-2",
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/RecordingBinStore.java:88",
+      "summary": "The new PUT is invisible to every request-count assertion in the tree. RecordingBinStore.checkpointKeys()/checkpointBodies()/lastCheckpointBody() all filter on endsWith(\".ckpt\"), and `ckpt/LATEST` does not match -- which correctly answers the question about M4.8b2's assertions not being weakened, but means the second PUT this commit adds is counted by nothing. No CountingBinStore is placed on the writer path either. The backlog row and ADR-0034 both assert 'two PUTs, both per trigger, neither scaling with streams or pods, so non-negotiable 6 holds'; that sentence has no test.",
+      "mutation_that_survives": "sequencer/src/main/java/binjava/sequencer/CheckpointWriter.java:243, wrap the pointer PUT in `for (RunKey perStream : pendingStreams.keySet()) { ... }` and leave the original PUT after it. Measured: :sequencer:test 282 tests, 0 failed. CheckpointWriterTriggerTest's own per-stream scaling test (line 250, `many.checkpointKeys().size() isEqualTo few...`) cannot see it, because it counts `.ckpt` keys only.",
+      "failure_scenario": "A checkpoint trigger issues one pointer PUT per stream in the window. At the cost model's target scale that is thousands of PUTs per trigger per chain -- a request rate scaling with partitions, which is non-negotiable 6 and the one line AGENTS.md calls the architecture. Nothing in the suite goes red, and nothing in the suite would go red if the same loop appeared in any later commit.",
+      "suggested_fix": "Assert the pointer PUT count directly: `assertThat(store.putKeys().stream().filter(k -> k.endsWith(\"ckpt/LATEST\")).count()).isEqualTo(1)` in the writer seam test, or give RecordingBinStore a pointerKeys() accessor beside checkpointKeys() and reuse the existing many-streams fixture.",
+      "blocks": true,
+      "blocks_under": "docs/internal/standards/review.md rule `major-blocks`; testing.md rule 22 (cost assertions are tests); cost.md"
+    },
+    {
+      "id": "M4.8c-tr-3",
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/LogKeysTest.java:109",
+      "summary": "LogKeys.latestCheckpointKey()'s javadoc claims 'IT DOES NOT END IN .delta, so isEntryKey refuses it and M4.8b1's filter skips it at both recovery sites -- the same protection that lets the ckpt/ objects live under this prefix at all'. Nothing tests it. LogKeysTest.aKeyThatIsNotThisChainsAtAllIsRefused pins the sibling grammar with LITERALS (`ckpt/0000000000000009.ckpt`, `ckpt/0000000000000009.delta`), so it does not co-mutate; the new key gained no case, and every other test derives the key from the production method, so any change to it moves the fixture with it.",
+      "mutation_that_survives": "sequencer/src/main/java/binjava/sequencer/LogKeys.java:67 `return logPrefix() + \"ckpt/LATEST\";` -> `return keyFor(0xffffffffffffffffL);`. Measured: :sequencer:test 282 tests, 0 failed.",
+      "failure_scenario": "The pointer is then parked at a CANONICAL chain-entry key, so isEntryKey accepts it: ChainReplay.chainEnd takes it as the chain end (it sorts last) and applyChain GETs and decodes it as a ChainEntry, hitting BCKP where CENT is expected. Takeover throws, LocalSequencer.start releases the lease, the next node repeats -- forever, since nothing deletes the object. That is precisely the outage M4.8b1 landed its filter to prevent, and this commit adds a second object type under the prefix without a single case pinning that it is refused. Related, and measured green in the same run: no test in the tree performs a takeover on a chain that HAS a checkpoint object at all.",
+      "suggested_fix": "One line in LogKeysTest: `assertThat(KEYS.isEntryKey(KEYS.latestCheckpointKey())).isFalse();` -- and, if cheap, a literal assertion on the key string itself, since an object key is a name that outlives the process.",
+      "blocks": true,
+      "blocks_under": "docs/internal/standards/review.md rule `major-blocks`; testing.md rule 13"
+    },
+    {
+      "id": "M4.8c-tr-4",
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/CheckpointDiscoveryTest.java:69",
+      "summary": "Every one of the five tests uses epoch 1 -- seeded() hardcodes `new LogKeys(\"bins\", 1)` and all four call sites pass 1 -- so the pointer's per-epoch scoping, which ADR-0034 states as a decision ('The pointer is per-epoch, because logPrefix() embeds the epoch. Two leaders can never contend for it, and a fenced leader's pointer is invisible to its successor'), and the `epoch` parameter of ChainReplay.newestCheckpoint are both entirely unconstrained.",
+      "mutation_that_survives": "Two, each measured green on :sequencer:test (282 tests, 0 failed): (a) sequencer/src/main/java/binjava/sequencer/LogKeys.java:67 -> `String.format(Locale.ROOT, \"%s/ctl/log/0/ckpt/LATEST\", prefix)`, dropping the epoch segment; (b) sequencer/src/main/java/binjava/sequencer/ChainReplay.java:344 -> `new LogKeys(prefix, 1L).latestCheckpointKey()`, ignoring the argument.",
+      "failure_scenario": "Under (a) every epoch of a slot shares ONE pointer object: a leader at epoch E+1 that has not yet checkpointed reads the fenced predecessor's checkpoint and treats it as its own, and a predecessor still finishing a write clobbers the successor's pointer -- the cross-epoch contamination the ADR rejects the lease pointer to avoid. Under (b) M4.9, whose only caller passes the recovering chain's epoch, always reads epoch 1's pointer. M4.8b2's row records exactly this defect being caught by review ('a HARDCODED epoch in the key survived everything, which after a failover puts checkpoints under the sealed ancestor's prefix where M4.8b1's own filter makes the loss SILENT'); the same hole is re-created here for the pointer.",
+      "suggested_fix": "Seed the pointer at epoch 1 and assert `newestCheckpoint(store, \"bins\", 2)` is empty -- three lines against the existing seeded() fixture, and it kills both mutants.",
+      "blocks": true,
+      "blocks_under": "docs/internal/standards/review.md rule `major-blocks`; testing.md rule 13"
+    },
+    {
+      "id": "M4.8c-tr-5",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/RecordingBinStore.java:55",
+      "summary": "There is no failure-path test for the new PUT. RecordingBinStore.failNextCheckpointPut and failEveryCheckpointPutUnchecked are both scoped to keys ending `.ckpt`, and the helper this commit adds (failEveryGet) is get-only, so no fixture in the tree can make the POINTER write fail. ADR-0034 states the ordering as a designed consequence: 'The pointer is written BEFORE the writer marks the checkpoint written, so a failure leaves the dirty flag set and the next trigger repeats both.'",
+      "mutation_that_survives": "sequencer/src/main/java/binjava/sequencer/CheckpointWriter.java:243-245, move `written = true;` ABOVE the pointer PUT. Measured: :sequencer:test 282 tests, 0 failed.",
+      "failure_scenario": "A store hiccup on the pointer PUT alone then clears the dirty flag, so the seq-keyed checkpoint is durable while the pointer still names the previous one and no retry is scheduled. On a quiet cluster the next trigger has nothing dirty to write, so the pointer stays stale until the next commit -- the wedged-writer failure the dirty-flag design exists to prevent, re-created on the new request. Narrower than findings 1-4 because it needs an injected IOException at that exact PUT, which is why it is minor rather than major.",
+      "suggested_fix": "Widen the arming predicate in RecordingBinStore to any key under `ckpt/` (or add failNextPointerPut) and assert the dirty flag survives -- the same shape as M4.8b2's existing wedged-writer test.",
+      "blocks": false,
+      "blocks_under": "does not block -- review.md rule `minors-land`; record in the commit body or as a backlog row. testing.md rule 14 (test the failure path)"
+    },
+    {
+      "id": "M4.8c-tr-6",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/CheckpointDiscoveryTest.java:82",
+      "summary": "discoveryCostsTheSAMEAtFiveHundredCheckpointsAndAtFiveThousand discards both return values and asserts only on counts, so it is green against a discovery that does nothing at all. Answering the author's question directly: yes, a zero-request implementation returning empty passes all three of its assertions (0 == 0, lists 0, 0 <= 4). The constraint is carried entirely by its siblings.",
+      "mutation_that_survives": "Nothing survives the SUITE -- `return Optional.empty()` at the head of ChainReplay.newestCheckpoint was measured failing three other tests. The weakness is local to this test: delete or weaken discoveryReturnsTheNEWESTCheckpointRatherThanAnyOther and the cost test is vacuous.",
+      "failure_scenario": "A later commit that reworks the discovery tests could leave the cost test standing alone, at which point it certifies as 'constant-request discovery' an implementation that issues no requests and finds nothing -- the same class of false confidence testing.md rule 8 describes for coverage.",
+      "suggested_fix": "Capture the Optional in both halves and assert isPresent() (or that both return the same sequence). One line, and it also pins that the two sample points measure the same work.",
+      "blocks": false,
+      "blocks_under": "does not block -- review.md rule `minors-land`"
+    },
+    {
+      "id": "M4.8c-tr-7",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/Invariants.java:337",
+      "summary": "PRE-EXISTING, not introduced by this commit, but this commit doubles the number of non-entry objects living under the log prefix so it is worth recording. Invariants.readChain lists logPrefix() and ChainEntry.decode()s EVERY key it returns, with no isEntryKey filter -- the very filter M4.8b1 landed for the production readers. The deterministic-simulation suite (testing.md rule 20) is green only because no simulated run ever triggers a checkpoint.",
+      "mutation_that_survives": "None -- this is the inverse. Forcing a pointer PUT on every commit (an extra store.put in CheckpointWriter.capture) made SEVEN tests fail with `java.io.IOException: not a chain entry: bad magic` at Invariants.readChain: CommitProtocolSimulationTest x5, InvariantsAcrossChainsTest, InvariantsTest -- i.e. the harness fails on the object's mere presence, not on any invariant.",
+      "failure_scenario": "When M4.9 or M4.10 turns checkpointing on inside the simulation (which is where I1-I5 are actually checked), the harness will throw on the pointer and the checkpoint objects rather than report an invariant, and the natural fix under time pressure is to loosen readChain -- at which point the simulation silently stops reading part of the chain. Filing it now, while the cause is known, is cheaper.",
+      "suggested_fix": "Give readChain the same LogKeys.isEntryKey allow-list the production readers use, in whichever commit next needs a checkpointing simulation; a backlog row is enough today.",
+      "blocks": false,
+      "blocks_under": "does not block -- review.md rule `minors-land`; pre-existing and outside this task's scope"
+    }
+  ],
+  "verified_as_claimed": [
+    "list-and-take-last: implemented as a paging LIST over `<logPrefix>ckpt/` + get. KILLED by discoveryCostsTheSAME... (lists().isZero()) and by discoveryIsEmptyOnAChainThatHasCheckpointedNothing. Confirms the row's own note that it dies at one checkpoint against a strict zero-LIST assertion.",
+    "stat-probe of the sequence space: forward stat from 0 until absent, then get. KILLED by the constant-total assertion (501 vs 5001) and by the writer seam test. So the TOTAL-requests discriminator does the job the row claims for it.",
+    "caught get with no stat: KILLED by anUNREACHABLEStoreIsNotReportedAsAChainThatNeverCheckpointed and by that test ALONE, with the right message ('Expecting code to raise a throwable') -- the author's claim that it survived the whole suite before this test existed reproduces exactly.",
+    "writer stops writing the pointer: KILLED by theWriterMAINTAINSThePointerSoDiscoveryFindsWhatItJustWrote and by that test alone, so the seam-vs-wiring test does its job.",
+    "M4.8b2's assertions are NOT weakened: no existing test file changed except two additive lines in RecordingBinStore (a null-defaulted field and an opt-in method). checkpointKeys()/checkpointBodies()/lastCheckpointBody() filter `.ckpt`, so `ckpt/LATEST` is excluded from them and is not hiding a doubled `.ckpt` write -- the `.ckpt` PUT is untouched and still putIfAbsent. testing.md rules 4-5 hold.",
+    "Tier and seeding as prescribed: T1 on MemoryBinStore, seq-keyed objects seeded as 1-byte bodies, ~10,500 puts across the class, whole class 54 ms wall. Not 190 MiB.",
+    "The 5,000 workload, honestly: it is not what kills anything today -- a 5/50 pair would kill the stat-probe and page-boundary forms just as dead, so its value is the row's stated one (defence against the bound reverting to a page count, plus a second sample point). At 54 ms for the class that is cheap insurance rather than decoration, and it is not a finding.",
+    "equality vs isLessThanOrEqualTo(4): neither is redundant in principle -- equality kills a cost that VARIES with n while staying small, the constant kills a cost that is constant but LARGE -- though against every mutant actually measured here the <= 4 alone would have sufficed. Both are one line; keeping both is right."
+  ],
+  "staged_tree": "2c60b4a75a961f97ba573388812139e07f7f1eb5"
+}

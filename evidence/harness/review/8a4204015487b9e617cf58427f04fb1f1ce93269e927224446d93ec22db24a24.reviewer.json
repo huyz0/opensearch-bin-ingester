@@ -1,0 +1,15 @@
+{
+  "diff_sha256": "8a4204015487b9e617cf58427f04fb1f1ce93269e927224446d93ec22db24a24",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "M0.7-R2-01",
+      "severity": "minor",
+      "file": "AGENTS.md (unstaged), .pre-commit-config.yaml (unstaged)",
+      "summary": "Shipping ci.yml in this diff makes two pre-existing, unstaged documentation claims concretely false rather than aspirational, and neither is corrected here: AGENTS.md's 'What CI can and cannot enforce' table still says 'the ten text/build gates | \u2705' (actual: 14 pre-commit-stage hooks declared, 12 execute after the two SKIPs) and marks check-test-integrity '\u2705 only with CHECK_RANGE', while .pre-commit-config.yaml's header comment says 'CI runs them explicitly, once per commit in the range' for the same hook.",
+      "failure_scenario": "check-test-integrity is stages:[commit-msg] in .pre-commit-config.yaml, and this diff's ci.yml only ever runs `pre-commit run --all-files` at the default pre-commit stage -- it never invokes the commit-msg stage, so check-test-integrity does not run in CI today regardless of CHECK_RANGE. A contributor who reads AGENTS.md's row 214 ('\u2705 only with CHECK_RANGE') rather than row 216 (correctly '\u26a0\ufe0f needs explicit invocation') on the same page, or reads .pre-commit-config.yaml's header, concludes a weakened test assertion will be caught in CI. It will not be -- the new M0.25 row this very diff adds already states the true fact ('Until it lands check-test-integrity does not run in CI at all'), so the tree now contains a self-contradiction across three files. Neither AGENTS.md nor .pre-commit-config.yaml is staged in this commit, so this cannot block M0.7 and is recorded as a follow-up rather than fixed here to avoid widening this commit's scope."
+    }
+  ],
+  "task": "M0.7",
+  "role": "reviewer"
+}

@@ -1,0 +1,66 @@
+{
+  "diff_sha256": "a2fe44ad875853313157a92dce98f45419eee57f89bb7f225198924e7b8c587c",
+  "verdict": "changes-requested",
+  "summary": "Round 2, tests. All four round-1 test gaps are genuinely closed and I re-measured every kill myself rather than trusting the claim: the stale-body mutant (pendingStreams computed once) fails 5 tests including the new eachCheckpointCarriesTheStateAtITSOwnMomentNotTheFirstOnes; seq = nextSequence() - 1 fails theBodysSequenceIsTheKeysSequenceAndBothAdvanceWithDeltas; a hardcoded epoch 1 in the key fails aCheckpointIsWrittenUnderITSOwnEpochsPrefix; deleting the success-path deltasSinceCheckpoint = 0 fails theKTriggerKeepsItsPeriodAcrossSeveralCheckpoints; clearing the dirty flag in the IOException catch fails the tick-driven wedge test; and Long.MAX_VALUE/ofDays(1) fails theShippedCheckpointPolicyActuallyBOUNDSRecovery. No assertion was weakened -- the two assertions this round touched (hasSizeGreaterThanOrEqualTo(2) -> hasSize(2), and isGreaterThanOrEqualTo(1) -> isBetween(1, 10_000)) both got stronger. The problem is the other direction: EVERY production behaviour ADDED this round is unconstrained by any test. Five distinct mutations survive the full suite -- put for putIfAbsent, both catch (Throwable) blocks never entered at all, the closed check in writeIfDirty deleted, fencing no longer closing the writer, checkPolicy deleted from start, and the counter reset in the IOException catch deleted. Two of them I closed with throwaway T0 probes of 15-20 lines built entirely from fixtures already in this commit, and measured each probe going red against the mutant and green against the tree -- so these are cheap to pin, not expensive. check-tdd.sh cannot see this: it refuses new tests with no red record, and this round added production without tests. On the race fix specifically: reverting it (reading nextSequence/offsets from CommitLog inside writeIfDirty again) leaves the whole suite green, and I do not think it can be pinned at this tier without a seam on CommitLog's reads -- saying so plainly rather than pretending a test exists.",
+  "findings": [
+    {
+      "severity": "major",
+      "location": "sequencer/src/main/java/binjava/sequencer/CheckpointWriter.java:113,171 (tests: sequencer/src/test/java/binjava/sequencer/CheckpointWriterTriggerTest.java:268)",
+      "title": "Both new catch (Throwable) blocks are entered by ZERO tests, and the path behind the observe one is measurably worse than the IOException path that IS tested",
+      "failure_scenario": "store.putIfAbsent throws an unchecked failure (an SdkClientException when the S3 backend lands, or anything Body's supplier raises). It leaves writeIfDirty, leaves capture, and is swallowed by observe's catch (Throwable) -- with deltasSinceCheckpoint NOT reset, because that reset lives only in the catch (IOException). The counter therefore stays at or above K forever and every subsequent commit issues another checkpoint PUT inline, which is exactly the thousandfold-rate-while-the-store-is-unhealthy hazard the IOException reset was added this round to prevent. MEASURED, not argued: rigging both catch bodies to `if (true) throw new AssertionError(...)` leaves ./gradlew :sequencer:test GREEN, so neither block is on any test's path. A throwaway probe (RecordingBinStore wrapping a delegate that throws IllegalStateException on .ckpt putIfAbsent, K=3, 9 deltas) recorded 7 attempted checkpoint PUTs where 3 are owed. testing.md rule 14: the failure path is not tested, only the happy one and the checked-exception one. The fixture cost is one extra armed field on RecordingBinStore beside failNextCheckpointPut.",
+      "blocks": true
+    },
+    {
+      "severity": "major",
+      "location": "sequencer/src/main/java/binjava/sequencer/CheckpointWriter.java:200 (tests: sequencer/src/test/java/binjava/sequencer/CheckpointWriterContentTest.java, CheckpointWriterTriggerTest.java)",
+      "title": "No test distinguishes putIfAbsent from put",
+      "failure_scenario": "MUTATION THAT SURVIVES: `store.putIfAbsent(keys.checkpointKeyFor(sequence), ...)` -> `store.put(...)`. Full suite green, measured. The M4 SPEC names putIfAbsent for 'the delta chain, the seal and checkpoints' and ADR-0008 makes the primitive choice a decision, and the javadoc added this round argues it protects a successor's checkpoint -- but nothing in the tests would notice the write-once property going away, and the lost-race branch (putIfAbsent returning an empty Optional, which this code treats as success) is not reached by any test at all. A 20-line T0 probe kills it: pre-PUT sentinel bytes at new LogKeys(\"bins\", 1).checkpointKeyFor(1), commit once at K=1, assert store.get(key) still returns the sentinel. Measured: green on the tree, red on the `put` mutant. (Caveat the author may want to argue with rather than test: the epoch is IN the key, so the stated cross-successor overwrite needs two writers at the SAME epoch -- if the real justification is narrower than the comment, the comment is what should shrink, but the line still needs one assertion.)",
+      "blocks": true
+    },
+    {
+      "severity": "minor",
+      "location": "sequencer/src/main/java/binjava/sequencer/LocalSequencer.java:234",
+      "title": "checkPolicy-before-tryAcquire is unpinned; a 15-line T0 test kills the mutant",
+      "failure_scenario": "MUTATION THAT SURVIVES: delete `CheckpointWriter.checkPolicy(checkpointEveryDeltas, CHECKPOINT_INTERVAL);` from start(). Full suite green, measured -- the constructor still throws, one line later and with the lease HELD and RENEWED, which is the whole defect this round fixed. A probe I wrote and measured (start with checkpointEveryDeltas = 0, assertThatThrownBy IllegalArgumentException, then assert a second pod's start(...) isPresent() on the same frozen TestClock) is green on the tree and RED on the mutant. Filed minor rather than major only because the invalid-policy path is unreachable in production today: the 5-arg start passes the validated constants and the 7-arg overload is package-private, so this strands a term only once a config path exists.",
+      "blocks": false
+    },
+    {
+      "severity": "minor",
+      "location": "sequencer/src/main/java/binjava/sequencer/LocalSequencer.java:130 and CheckpointWriter.java:188",
+      "title": "Neither half of 'a fenced or closed writer must not PUT into the chain prefix' is pinned",
+      "failure_scenario": "TWO MUTATIONS THAT SURVIVE, each measured against the full suite: (a) `if (fencedWriter != null)` -> `if (fencedWriter == null)` in renewForever, so fencing no longer closes the writer; (b) `if (!dirty || closed)` -> `if (!dirty)` in writeIfDirty, so a closed writer still PUTs. (b) is cheap to pin at T0 -- construct at K=1 with a frozen ticker, close(), then observe() one commit and assert zero checkpoint keys. (a) is harder, because after close() the SynchronousQueue ticker has no taker, so LocalSequencerRenewTest's real-takeover fixture would need a different rendezvous than tickAndAwait.",
+      "blocks": false
+    },
+    {
+      "severity": "minor",
+      "location": "sequencer/src/main/java/binjava/sequencer/CheckpointWriter.java:127-146",
+      "title": "The data-race fix cannot be pinned at this tier, and no test claims to",
+      "failure_scenario": "MUTATION THAT SURVIVES: revert the capture-on-the-commit-thread fix -- read log.nextSequence() and log.offsets() inside writeIfDirty again. Full suite green, measured. This is reported as untestable rather than as a hole: the two forms are behaviourally identical whenever the commit thread is not inside commitAll, and every test here is single-threaded by construction (frozen ticker, or a ManualTicker driven from the test thread between commits). Pinning the skew would need a seam on CommitLog's reads, which is more machinery than the bug is worth. The design point worth recording instead: CommitLog exposes a plain long and a plain HashMap with no synchronization, so ANY second reader of it is a race by default -- capturing on the commit thread is what keeps the writer T0-testable at all, and M4.9 will meet the same wall.",
+      "blocks": false
+    },
+    {
+      "severity": "minor",
+      "location": "sequencer/src/test/java/binjava/sequencer/LocalSequencerCheckpointTest.java:118-122",
+      "title": "The new policy bounds are argued, not derived -- and the boundary values themselves pass",
+      "failure_scenario": "MUTATIONS THAT SURVIVE: CHECKPOINT_EVERY_DELTAS = 10_000 (a 10x looser recovery bound) and CHECKPOINT_INTERVAL = Duration.ofMinutes(5) (a 5x rarer T trigger) both pass isBetween/isLessThanOrEqualTo. I checked whether a tighter bound could be DERIVED: requirements.md carries no recovery-time NFR and the M4 SPEC prices checkpoints at 'one PUT per K deltas or T seconds' without naming a number, so there is nothing to derive from and a tighter bound would be taste dressed as a requirement. Recording it because the honest reading of this test is 'the shipped constants are not absurd', which is weaker than its name promises -- and because an upper bound with no source is the kind of number a later task moves. Non-negotiable 2 is what has to catch that, not this test. Strictly stronger than the form it replaced, which Long.MAX_VALUE passed.",
+      "blocks": false
+    },
+    {
+      "severity": "minor",
+      "location": "sequencer/src/test/java/binjava/sequencer/CheckpointWriterTriggerTest.java:28-37,193",
+      "title": "The test file still carries the rationale this same commit records as measured false",
+      "failure_scenario": "CheckpointWriter's javadoc was corrected this round to say the NFR-2 argument 'was wrong in both legs' -- NFR-2 is about CONSUMERS, and an unconditional tick rewrites the same key so the object COUNT does not grow. The class javadoc here still says 'NFR-2 and cost.md forbid that outright, because an unconditional tick grows object count with UPTIME rather than with commits -- a new dimension, not a factor', and line 193 still reads .as(\"an idle cluster is not a billed cluster (NFR-2)\"). A reader who opens the test rather than the writer gets the retracted argument, which is how a corrected claim survives its own correction. The assertions are unaffected; only the prose is wrong.",
+      "blocks": false
+    },
+    {
+      "severity": "minor",
+      "location": "sequencer/src/test/java/binjava/sequencer/RecordingBinStore.java:334-342,358-370",
+      "title": "checkpointBodies() pairs two lists that capture() appends non-atomically",
+      "failure_scenario": "capture() does putKeys.add(key) then putBodies.add(bytes) with no lock, and both the commit thread (delta PUTs) and the ticker thread (checkpoint PUTs) go through it. Interleaved, the two CopyOnWriteArrayLists misalign and checkpointBodies() hands Checkpoint.decode a DELTA body -- a decode failure attributed to the writer rather than to the fixture. Latent today, not flaky: every test here uses either a frozen ticker or a ManualTicker driven from the test thread with no commit in flight. One synchronized block, or a single list of (key, bytes) pairs, removes it. Also worth a word in the javadoc: checkpointBodies()/checkpointKeys() record ATTEMPTED PUTs including the armed failure -- which is what the wedge test wants, and a trap for the next reader who assumes 'was written'.",
+      "blocks": false
+    }
+  ],
+  "task": "M4.8b2",
+  "role": "test-reviewer",
+  "staged_tree": "d0413dafd06eb0e01421db3fcc79b10d2144ae31"
+}

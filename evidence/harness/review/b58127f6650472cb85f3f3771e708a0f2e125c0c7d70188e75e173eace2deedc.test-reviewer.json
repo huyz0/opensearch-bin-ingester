@@ -1,0 +1,36 @@
+{
+  "diff_sha256": "b58127f6650472cb85f3f3771e708a0f2e125c0c7d70188e75e173eace2deedc",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "TR12-1",
+      "severity": "minor",
+      "location": "docs/internal/product/milestones/M4/SPEC.md:418-425",
+      "title": "No criterion requires a SUCCESSOR to ANSWER from the recovered pointer, so the pointer can still be write-only across a takeover",
+      "failure_scenario": "Criterion 6 now forces the most-recent-applied replay to be answered, which kills the round-11 record-but-never-populate no-op. It does not force the fixture to be a sequencer that rebuilt its state from a checkpoint. 'including when the replay arrives after a checkpoint recorded it' is satisfied by a LIVE sequencer that wrote a checkpoint and then answered from memory; nothing says the answering instance is a successor. The M4.10d note's cross-instance anchor is a REFUSAL by the successor on a strictly-lower replay (CheckpointWriterContentTest 9 then 4), which lands in the refuse branch and never exercises answering. So the only criterion that reads the pointer can be satisfied without the pointer ever being read back from a decoded Checkpoint -- and 'bound the window to the uncheckpointed tail', which the ADR rejects at line 155, is behaviourally indistinguishable from the shipped thing under the stated criteria.",
+      "mutation": "In M4.10d, keep a per-pod in-memory map podId -> the CommitDelta that last applied and answer every replay from it; write the (epoch, sequence) pointer into Checkpoint.pods and never read it back on recovery -- i.e. delete the pointer from the recovery fold, keeping only lastAppliedFlushSeq. Criterion 6 passes (a live sequencer answers post-checkpoint from memory), the T0 row at :478 passes, and the M4.10d successor anchor passes because its replay is below the watermark and refuses either way.",
+      "suggested_fix": "One clause on criterion 6: the instance that answers is one whose pod state came from a decoded checkpoint, not the instance that applied the commit."
+    },
+    {
+      "id": "TR12-2",
+      "severity": "minor",
+      "location": "docs/internal/product/decisions/0036-the-idempotency-key-carries-an-explicit-pod-incarnation.md:121-133",
+      "title": "The newly prescribed fixture shape kills the flushSeq/incarnation hoist and leaves the podId hoist alive",
+      "failure_scenario": "The round-11 fix names the field correctly -- segments must differ in flushSeq or incarnationId, NOT merely in podId -- and gives one concrete shape: two requests from ONE pod at flushSeq 0 and 1 in a single batch. I verified that shape is legal (CommitLog.java:292-300 rejects only a repeated segmentKey; BatchingSequencerTest's from(pod, flushSeq) derives the key from flushSeq) and that it does kill the partial hoist. But every segment in it shares a podId, so it cannot see podId being hoisted -- and the ADR argues at :112-118 that per-segment podId is the load-bearing half for M5's first forwarded multi-pod batch and for CheckpointWriter merging on request.podId(). Line 121's description of BatchedCommitDeltaTest as 'a three-segment three-pod delta' makes this likelier to be missed: that fixture's pods are only distinct key STRINGS (bins/pod-a|b|c at BatchedCommitDeltaTest.java:43-45), SegmentCommit carries no podId at all, and the backlog-notes M4.10c section says so explicitly -- so the ADR and the notes describe the same fixture in opposite terms, and an implementer who trusts the ADR's phrasing believes the podId half is already fixtured.",
+      "mutation": "Encode podId once per delta and flushSeq/incarnationId per SegmentCommit; fan podId out to every segment on decode. The ADR's prescribed one-pod fixture round-trips byte-identically and asserts identically. BatchedCommitDeltaTest's isEqualTo(original) at :54 also passes unless the new fixture sets DIFFERENT podIds per segment, which the ADR's corrected sentence no longer requires.",
+      "suggested_fix": "Name a fixture that varies both axes at once -- e.g. {(podA,0),(podA,1),(podB,0)}, three distinct segment keys, legal under commitAll -- or state that the three-pod BatchingSequencerTest fixture at :152 carries the podId half and the one-pod fixture the flushSeq half, and that both assertions are required."
+    },
+    {
+      "id": "TR12-3",
+      "severity": "minor",
+      "location": "docs/internal/product/milestones/M4/SPEC.md:418-425",
+      "title": "An acceptance criterion was loosened in the same commit as the decision that needs the loosening, and no gate can see it",
+      "failure_scenario": "The prior criterion 6 required 'returns the original assignment' for ANY already-applied replay. The new text admits a refuse branch for every flushSeq strictly below the watermark. That is a genuine narrowing of a stated obligation, made by the commit whose ADR cannot meet the wider one -- the testing.md rule 4 inversion in its documentation form. It is justified in the staged bytes (ADR :63-72: the slot holds one pointer, and returning the pointed delta's offsets for a flush it does not carry would hand back another flush's firstOffset), and no test yet depends on the old wording, which is why this is minor and not blocking. But check-test-integrity.sh reads production and test sources, so a loosened acceptance criterion in markdown is invisible to it; a future reader diffing SPEC.md sees only the loosening. Note also that the SPEC now PERMITS refusing a below-watermark replay that the pointed delta does carry, while the ADR at :69 REQUIRES answering it -- so a batch carrying flushSeq 5 and 6 from one pod in one delta has an answerable replay of 5 that the SPEC does not oblige anyone to answer.",
+      "mutation": "Implement 'refuse every flushSeq < lastApplied without reading the pointed delta at all'. The pointed-delta GET becomes dead code, criterion 6 stays green, and the co-batched replay of 5 -- which the ADR says must be answered -- is refused.",
+      "suggested_fix": "One sentence in the commit body naming the narrowing and its ground, and either align the SPEC's refuse clause to the ADR's 'answer if the pointed delta carries it' or state that the SPEC is deliberately the weaker floor."
+    }
+  ],
+  "task": "M4.10b",
+  "role": "test-reviewer",
+  "staged_tree": "007c85ffd7947a8a2b63d6da4650d8abfe381e7a"
+}

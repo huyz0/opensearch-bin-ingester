@@ -1,0 +1,135 @@
+{
+  "diff_sha256": "ae250f66ba63507346c6db48262795c41a7ccbd46968d660509b7fe1c2f2f326",
+  "verdict": "changes-requested",
+  "summary": "The headline correction (I1-I4 -> I1-I5) is verified correct against primary sources: architecture.md:84-90 defines exactly five, testing.md:94-96 (rule 20) requires all five, ADR-0011 is dated 2026-08-30 against ADR-0002's 2026-08-29, and the quoted 'the one ... a plausible implementation violates by accident' is real at 03-metadata-and-cas.md:219-221. The <slot> key decision is also right, and better supported than the spec says (ADR-0007 already binds chain paths to the slot dimension). What is wrong is elsewhere: the spec specifies a SINGLE-writer sequencer without ever saying how the other ingester pods' commits reach it, and its cost, acceptance criteria and decomposition all inherit that hole. Five further defects are concrete and checkable.",
+  "findings": [
+    {
+      "id": "B1",
+      "severity": "blocking",
+      "file": "docs/internal/product/milestones/M4/SPEC.md:66-93,95-102",
+      "title": "No path by which a non-leader pod's commit reaches the single sequencer -- neither In nor Out",
+      "detail": "Today (M3, ADR-0017) EVERY pod calls CommitLog.commit directly and races putIfAbsent; ingest/src/main/java/binjava/ingest/CommitLog.java:118-141 retries on a lost race by design, and M3/SPEC.md:55 says 'no forwarding'. M4 introduces a lease so that exactly one pod may write the chain (Scope items 2-4, and Cost impact:189 'written by exactly ONE writer'). Every other pod therefore needs a way to get its commit to the leader. The spec never names one. architecture.md:48-53 calls it 'commit forwarding' over the peer mesh (ADR-0012); no roadmap milestone owns it; the only mechanism the spec does name -- ctl/inbox/ at :97-102 -- is explicitly OUT, and it is described there as the DEGRADED path 'a pod that cannot reach the slot leader', which presupposes a primary path that does not exist. Scope item 6 and M4.9 dedupe commits on (podId, flushSeq) with a per-pod lastAppliedFlushSeq, which only makes sense if commits from many pods arrive at one sequencer -- so the spec half-assumes the mechanism it never scopes. The Sequencer seam (M4.1) is the natural home for it (a local impl on the leader, a forwarding impl elsewhere) but the spec never says what Sequencer exposes.",
+      "failure_scenario": "M4.3/M4.4/M4.6 land. In the HA-minimum 6-pod deployment (08-failure-domains-and-resilience.md, quoted by cost-model.md:202-205) one pod holds the lease. The other five flush segments and then either (a) write the chain anyway and are fenced/lose the CAS -- ingest visibility stops on 5/6 of the fleet -- or (b) have nowhere to send the commit and block. Every gate stays green because every test in the tree is single-pod, and the failure surfaces only at M6/M8 with a multi-node cluster, by which time the Sequencer seam and the commit record shape are fixed.",
+      "suggested_fix": "Either add a Scope item plus a task for the primary commit path (most likely: Sequencer has a local and a remote implementation, and the remote one is the forwarding client), or state explicitly in 'Out' that M4 is single-pod-only, name the milestone that adds forwarding, and say plainly that the cost figures and the simulation cover a one-pod system until then."
+    },
+    {
+      "id": "M1",
+      "severity": "major",
+      "file": "docs/internal/product/milestones/M4/SPEC.md:187-203,246-249",
+      "title": "The Cost impact section rests on a 'commitBatchInterval' no task builds, and AC #9 asserts the one dimension that already holds today",
+      "detail": "The whole cost table is parameterised on `1 / commitBatchInterval` and the prose says 'The commit batch interval IS the post-PUT latency dial', with '250 ms (default)'. Nothing in Scope and none of M4.1-M4.14 creates that knob or makes it configuration -- unlike TTL/renew (M4.3) and K/T (M4.7), which the spec is careful to defer to M8's measurement. The knob is load-bearing precisely because it is what collapses N pods' commits into one PUT: without sequencer-side batching the rate is (pods x flush rate). Separately, AC #9 asserts the count is equal 'at 1 and at 1,000 streams'. CommitLog.commit already writes exactly one putIfAbsent per call regardless of how many RunKeys are in recordCounts, so that assertion passes against the tree as it stands today, before any M4 code -- it constrains nothing new, while the dimension the $52 actually depends on (commits per pod per interval) is untested.",
+      "failure_scenario": "M4 completes with AC #9 green and VERIFIED.md reporting '$52/month, one PUT per batch'. In production at the HA minimum of 6 pods with one-delta-per-flush behaviour the commit chain runs at ~24 PUT/s ~ $311/month, 6x the figure the spec published, and no test in the milestone can distinguish the two because every test uses one pod and varies only stream count.",
+      "suggested_fix": "Scope the batching mechanism (or state that commits stay one-per-flush and correct the cost table accordingly), and restate AC #9 so it varies the dimension that can actually regress: one PUT per batch at 1 pod and at N pods committing concurrently, asserted through CountingBinStore."
+    },
+    {
+      "id": "M2",
+      "severity": "major",
+      "file": "docs/internal/product/milestones/M4/SPEC.md:230-233,111-112,205-208",
+      "title": "Newest-checkpoint discovery is unspecified, unbounded under ADR-0022, and AC #5's bound holds only at the test's scale",
+      "detail": "ADR-0022 removed lastModifiedMillis from ObjectStat and made list() one explicit ascending page (BinStore.java:82-101 -- 'ONE CALL IS ONE REQUEST', lexicographic order, no reverse). There is therefore no way to ask for the newest checkpoint: you must page the whole ckpt prefix. Nothing deletes checkpoints -- 'Out' at :111-112 defers only superseded DELTAS to M7's GC -- so the prefix grows forever at one object per T=60 s (~43,000/month at the spec's own defaults). AC #5 pins the bound with 5,000 deltas and K=1,000, i.e. five checkpoints, which fit in one LIST page, so the criterion is satisfied by an implementation whose recovery cost grows linearly with cluster uptime. The spec also never settles the checkpoint KEY, even though it cites 03-metadata-and-cas.md:240 -- the <podId> checkpoint path -- as one of the two sites of the contradiction it set out to resolve; it resolves the delta path only. And this is not only a recovery path: tier 3 of the consumer fallback ladder (04-discovery-and-tailing.md:238-249, the FR-10 the Requirements table cites) is 'resolve leases, read newest checkpoint, replay deltas', run by up to 300 plugin nodes on a cold start.",
+      "failure_scenario": "After a month of uptime a sequencer restart pages ~43 LIST requests before it can start replaying, and grows one more page per 1,000 checkpoints thereafter; at a cold start 300 plugin nodes on ladder tier 3 do the same simultaneously, against cost.md R15's hard ceiling of ~1 LIST/s sustained. AC #5 is green throughout, because it was written at five checkpoints.",
+      "suggested_fix": "Specify how the newest checkpoint is found in one request -- a descending-sortable key, a CAS'd pointer object, or a checkpoint-per-epoch at a fixed key -- state the checkpoint key grammar alongside the delta key grammar, say who deletes old checkpoints, and re-word AC #5 so the request count is asserted at a checkpoint count large enough to fail a full-prefix scan."
+    },
+    {
+      "id": "M3",
+      "severity": "major",
+      "file": "docs/internal/product/milestones/M4/SPEC.md:143-150,222-226",
+      "title": "The seal protocol is specified for one branch only, and the rule as written makes the NEW leader stop",
+      "detail": "Scope item 4 and the Design section say 'A new leader seals the old chain by racing for the next sequence number; the loser treats 412 as proof it is fenced, stops, and discards buffered commits', and AC #3 encodes the same rule: whoever loses the putIfAbsent 'treats it as proof it is fenced, stops sequencing'. That is true for the fenced old leader and false for the new one: the new leader holds the lease, so a lost race at N+1 means the old leader got there first and the seal must be redriven at N+2 with fresh state. The corpus is explicit that this is the dangerous case -- 03-metadata-and-cas.md:37 'redrive, don't blind-retry', 07-pluggable-store-abstraction.md:160-161 'blind-retrying a 412 turns a safe protocol into a livelock', 01-java-runtime-helidon-vthreads.md:120. Neither the redrive nor the argument that the race terminates (it terminates because the old leader stops on its own failed renewal) appears anywhere, and the test plan has only the winning branch: 'Seal: new leader claims N+1; old leader's N+1 loses and it stops'. This is the milestone's highest-risk protocol and the one sentence that defines it is ambiguous about which party the rule binds.",
+      "failure_scenario": "A leader is fenced by a lease takeover while a commit is in flight and wins N+1. The new leader's seal loses, applies the stated rule, concludes it is fenced and stops sequencing -- with a valid lease in hand and no other contender. Offset visibility stops cluster-wide until an operator intervenes; NFR-9 is violated by the failover path that exists to protect it. The alternative implementation, a bare retry loop, is the livelock the corpus names.",
+      "suggested_fix": "State the rule as 'a losing writer that does not hold the lease stops; the lease holder redrives the seal at the next sequence with re-read state', give the termination argument, and add a test-plan row for the new leader losing the seal race."
+    },
+    {
+      "id": "M4",
+      "severity": "major",
+      "file": "docs/internal/product/milestones/M4/SPEC.md:243-245",
+      "title": "AC #8 requires an early-challenge path no task builds, measures from the wrong instant, and does not label a simulated-clock figure as modelled",
+      "detail": "Three defects in one criterion. (1) 'with the early-challenge path exercised': early challenge is 'on K8s endpoint removal + failed health probe' (08-failure-domains-and-resilience.md:97) and appears in no Scope item and in none of M4.1-M4.14 -- M4.3 is acquire/renew/release only -- and it needs a membership signal that is not one of the four declared seams (architecture.md:67), so adding one is an ADR. (2) The measurement is 'from lease expiry to the new leader's first committed delta', but early challenge takes over BEFORE expiry; the two halves of the sentence measure different failovers. (3) ADR-0007's own consequences say NFR-9's <5 s is met BY early challenge and is '~10 s worst case on TTL expiry', so the TTL path as stated does not meet the criterion at ADR-0007's own default. Finally, an RTO read off a simulated clock with a TTL the spec elsewhere forbids hardcoding (Scope item 2: TTL is configuration, measured at M8) is a modelled figure and testing.md rule 19b / performance.md rule 7 require it to be labelled as one; unlabelled, it will be reported in VERIFIED.md as NFR-9 met.",
+      "failure_scenario": "M4.14 records 'NFR-9: RTO 1.2 s, criterion 8 green'. The number is an arithmetic consequence of the TTL the test chose, contains no store latency (the spec itself quotes 30-60 ms per conditional PUT) and no GC pause, and the early-challenge path it claims to exercise was never built -- so the first real failover, on the TTL path at ADR-0007's 10 s default, takes twice the requirement.",
+      "suggested_fix": "Either add a task for early challenge (with the evidence-of-death input as an injectable seam) or drop the clause and measure the TTL path only; fix the measurement start point; and label the figure modelled, with the real measurement deferred to M8/M9."
+    },
+    {
+      "id": "M5",
+      "severity": "major",
+      "file": "docs/internal/product/milestones/M4/SPEC.md:90-93,250-252",
+      "title": "AC #10 asks for a metric that observability.md rule 1 forbids and check-metric-cardinality.sh rejects, and attributes the threshold to the wrong milestone",
+      "detail": "'commit-log index entries per stream' as a metric requires `stream` as a label. observability.md rule 1 lists `stream` under 'Never a label' with a gate that runs on every commit, and cost.md R16 states the resolution outright: 'Count per index in memory; never export it as a metric label' -- attribution goes to top-K events and /admin/cost. Q17 asks for the DATA, not for a labelled series, so the criterion can be met with a histogram over streams or an event, but as written it cannot be satisfied by anything committable. Second defect in the same criterion: 'so M7's threshold is chosen from data' (repeated in the M4.13 backlog row). M7 is retention/GC; compaction is deferred to 'after M9' by roadmap.md:24 and by Q17 itself ('deferred with the feature').",
+      "failure_scenario": "M4.13 is implemented as written, check-metric-cardinality.sh refuses the commit, and the author either relabels under time pressure or works around the gate -- the exact rung-6 failure the project's gate ladder exists to prevent. Meanwhile a reader chasing the threshold opens M7's scope and finds no compaction there.",
+      "suggested_fix": "Restate the criterion as an unlabelled distribution (histogram of commit-log index entries per stream) or a top-K event per cost.md R16, and replace 'M7' with 'the compaction milestone (deferred to after M9)'."
+    },
+    {
+      "id": "m1",
+      "severity": "minor",
+      "file": "docs/internal/product/milestones/M4/SPEC.md:18-27",
+      "title": "The list of stale I1-I4 citations reads as exhaustive and omits the two that agents load every session",
+      "detail": ".agents/skills/spec/SKILL.md:40 ('Killing the sequencer mid-commit preserves invariants I1-I4 across 1,000 simulation seeds' -- the exemplar acceptance criterion for this exact milestone) and .agents/skills/review/SKILL.md:93 ('Does a claimed invariant (I1-I4) actually hold under the failure it names?' -- handed to every reviewer of every commit) both still say I1-I4 and are named neither in the spec, nor in the roadmap edit, nor in the backlog row. Fixing them inside M4.0 would widen scope; not recording them anywhere means nothing will.",
+      "failure_scenario": "The next spec author copies the skill's exemplar and writes I1-I4 again, and every reviewer is instructed to check four invariants for the rest of the project's life. Same defect this commit exists to correct, one layer down.",
+      "suggested_fix": "Add a backlog row (M0.x) for the two skill files, or extend the enumeration to say which citations are deliberately left."
+    },
+    {
+      "id": "m2",
+      "severity": "minor",
+      "file": "docs/internal/product/milestones/M4/SPEC.md:106-107",
+      "title": "W3's saving is quoted at the superseded $156/month that this spec's own banner citation replaces",
+      "detail": "Line 190 cites cost-model.md's 'Revised 2026-08-30' banner, which says the three-pod / 12 PUT/s / $156 row is wrong and the chain is $52/month with a single writer. Line 106 then quotes Q3's pre-revision '$156/month' as W3's saving. Q3's own line (50-open-questions.md:29) predates the banner.",
+      "failure_scenario": "W3 is revisited at M9 per Q3's instruction and evaluated against a saving three times larger than it can deliver.",
+      "suggested_fix": "Quote ~$52/month, noting that Q3's $156 predates the ADR-0007 revision."
+    },
+    {
+      "id": "m3",
+      "severity": "minor",
+      "file": "docs/internal/product/milestones/M4/SPEC.md:271",
+      "title": "The 1,000-seed simulation is labelled T2 but specified on MemoryBinStore, which is T1, and carries no time budget",
+      "detail": "testing.md's tier table binds T1 to MemoryBinStore and T2 to LocalFsBinStore, and notes that tiers map to Gradle tasks. Rows T0-T2 all 'run in every commit'. A 1,000-seed protocol simulation running on every commit has a suite-time cost and check-suite-time.sh exists, but no budget is stated, and the spec skill's required 'which suites this milestone extends' is not answered.",
+      "failure_scenario": "M4.11/M4.12 land in the wrong Gradle task, or land in the default `test` task and push the suite past its time budget, and the response is to reduce the seed count -- weakening the milestone's one compensating control for the absent mutation gate.",
+      "suggested_fix": "Call it T1, name the task/suite it extends, and give it a wall-clock budget."
+    },
+    {
+      "id": "m4",
+      "severity": "minor",
+      "file": "docs/internal/product/milestones/M4/SPEC.md:72-74",
+      "title": "<epoch> has no stated encoding while <seq:016x> does",
+      "detail": "The spec settles the chain key grammar but writes `ctl/log/<slot>/<epoch>/<seq:016x>.delta` with no width or radix for slot or epoch; CommitLog.keyFor currently emits unpadded literals ('0/0'). ADR-0007 records that retrofitting a persisted key path is 'exactly the kind of change we pay most for'.",
+      "failure_scenario": "Epoch 10 sorts before epoch 2 in any lexicographic enumeration, so a recovery or GC path that ever lists across epochs walks them out of order; changing the encoding afterwards is a format migration.",
+      "suggested_fix": "Pin the encoding (e.g. <epoch:016x>) or state that no path may enumerate epochs lexicographically."
+    },
+    {
+      "id": "m5",
+      "severity": "minor",
+      "file": "docs/internal/product/milestones/M4/SPEC.md:219-221,146-147",
+      "title": "'observe 412' is not an assertable outcome in this codebase",
+      "detail": "BinStore.putIfMatch/putIfAbsent contract an empty Optional for a lost race and reserve exceptions for unreachability (BinStore.java:31-71, quoted at length by ADR-0022). No caller sees an HTTP status. AC #3 gets this right ('receives an empty Optional'); AC #2 and the seal description do not.",
+      "failure_scenario": "A T1 criterion written literally has nothing to assert on MemoryBinStore, so the author reinterprets it and the criterion stops constraining what it named.",
+      "suggested_fix": "Say 'receives an empty Optional' in both places."
+    },
+    {
+      "id": "m6",
+      "severity": "minor",
+      "file": "docs/internal/product/milestones/M4/SPEC.md:66-71,253-255",
+      "title": "The Sequencer seam is never given a contract",
+      "detail": "The milestone is named for this seam and M4.1 ships its interface and fake, but nothing in the spec says what it exposes, what its error contract is, or how it relates to CommitLog -- which M4.2 moves into the same module without saying whether CommitLog becomes the implementation, a collaborator, or is subsumed. The only acceptance criterion touching it (#11) asserts that the module compiles.",
+      "failure_scenario": "M4.1's interface and fake are invented, then reshaped at M4.3/M4.6/M4.9 as the protocol's real needs appear, so the seam commit is churn and the fake other modules test against changes twice.",
+      "suggested_fix": "Sketch the operations and the local/remote split (see B1), or fold M4.1 into the first task that has a caller."
+    },
+    {
+      "id": "m7",
+      "severity": "minor",
+      "file": "docs/internal/product/milestones/M4/SPEC.md:187-208,31",
+      "title": "Cost impact never states requests-per-MiB and names only one of the R rules",
+      "detail": "The Requirements table cites NFR-1 (< 0.30 requests per MiB), but the section reports PUT/s and $/month and never converts to requests-per-MiB; the spec skill calls that out specifically ('a spec that does not say what it does to requests-per-MiB is incomplete'). Of R1-R11 only R2 is named; R6 appears as 'non-negotiable 6' and R15's LIST ceiling is not considered at all (see M2).",
+      "failure_scenario": "M4 lands with a cost claim in dollars that cannot be compared against the one NFR it cites, and the M4.14 VERIFIED.md has no number to put against NFR-1.",
+      "suggested_fix": "Add the requests-per-MiB delta at Scenario A/B rates and name the R rules the section touches."
+    },
+    {
+      "id": "m8",
+      "severity": "minor",
+      "file": "docs/internal/product/milestones/M4/SPEC.md:265,95-112",
+      "title": "Self-fencing on commit-latency SLO breach is neither In nor Out, and the test-plan row that mentions gray failure describes a different failure",
+      "detail": "F8 in 08-failure-domains-and-resilience.md:151 is a sequencer that renews its lease successfully and commits slowly; its named mitigation is 'self-fencing: release the lease on SLO breach' (also in the lease-policy table at :98). The spec's T0 row 'Renewal failure stops sequencing immediately' is annotated 'the gray-failure bug', but a failed renewal is F4, not F8. Self-fencing appears nowhere, in a Scope section that is otherwise careful to list what it defers.",
+      "failure_scenario": "A GC-thrashing sequencer keeps its lease and commits at 5 s intervals; no lease expires, so nothing in M4 detects it, and the visibility lag is invisible until M8's SIGSTOP chaos test.",
+      "suggested_fix": "Add self-fencing to 'Out' with its receiving milestone, and re-label the renewal-failure test row."
+    }
+  ],
+  "task": "M4.0",
+  "role": "reviewer"
+}

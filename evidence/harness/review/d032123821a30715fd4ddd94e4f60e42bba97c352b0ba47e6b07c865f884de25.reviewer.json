@@ -1,0 +1,13 @@
+{
+  "diff_sha256": "d032123821a30715fd4ddd94e4f60e42bba97c352b0ba47e6b07c865f884de25",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "M2.3-R1-1",
+      "severity": "minor",
+      "failure_scenario": "IndexOrdinalRegistry.ordinalFor() holds its synchronized lock across the entire read-modify-CAS-retry cycle, including network calls, for the whole instance regardless of which indexUUID is being registered. A burst of many distinct new indices registered through one shared instance serializes to one in-flight registration at a time. Does not violate request-rate scaling (still O(distinct new indices)); a latency/throughput tradeoff, not a defect, and plausible given ADR-0008 frames this workload as rare."
+    }
+  ],
+  "task": "M2.3",
+  "role": "reviewer"
+}

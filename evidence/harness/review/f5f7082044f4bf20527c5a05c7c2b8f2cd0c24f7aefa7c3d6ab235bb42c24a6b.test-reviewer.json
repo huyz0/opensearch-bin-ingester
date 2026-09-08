@@ -1,0 +1,50 @@
+{
+  "diff_sha256": "f5f7082044f4bf20527c5a05c7c2b8f2cd0c24f7aefa7c3d6ab235bb42c24a6b",
+  "verdict": "changes-requested",
+  "summary": "Rounds 1-3 all verified fixed by measurement: 17 of 17 named mutations now die, including tr-12 (log.commitAll(replays) before the pure-replay return), tr-13 (answer before applyFresh), tr-14 (drop the segmentKey conjunct), tr-15 (drop segmentKey from the fake's tripleOf) and tr-17 (drop the NUL separator; null-attribution answers true). The mutants.txt equal-case entry is now REACHED by a test -- throwing on the equal branch fails aFlushSubmittingTWOSegmentsUnderONETripleIsAnsweredPerSEGMENT -- and its equivalence argument holds because applied() has exactly one call site. One acceptance criterion remains under-constrained: the window's BOUND. pastTheBoundTheOLDESTIncarnationIsEVICTEDAndCommitsAgain asserts only that one named incarnation stopped being answered; it asserts nothing that is RETAINED, so eviction may drop everything, and the bound value may be lowered, with the whole suite green.",
+  "findings": [
+    {
+      "id": "M4.10d-tr-18",
+      "severity": "major",
+      "location": "sequencer/src/test/java/binjava/sequencer/SequencerDedupTest.java:341-360",
+      "summary": "The eviction test constrains only the LOSS, never the RETENTION. It commits 4096 further incarnations and then asserts that podx/i0 is committed again at new offsets. Nothing anywhere in the suite asserts that any OTHER incarnation is still answered after the bound is crossed, and nothing reads MAX_SLOTS, so the bound may be lowered or the eviction made wholesale and every test stays green. This is the second half of the criterion 'the window is bounded and evicts oldest-by-pointer, which costs the EVICTED incarnation its idempotency': the word doing the work is 'the evicted', and the test does not distinguish evicting one from evicting all.",
+      "failure_scenario": "MEASURED in my own worktree, three separate mutations, whole :sequencer:test green each time ('BUILD SUCCESSFUL'). (1) IdempotencyWindow.java:151, `for (int i = 0; i < byAge.size() - MAX_SLOTS; i++)` -> `for (int i = 0; i < byAge.size(); i++)`: crossing the bound CLEARS the window, so every live pod -- not the oldest one -- loses idempotency at the moment any 4097th incarnation commits, and its next retry commits the same records a second time at fresh offsets. That is the exact defect the row exists to remove, scoped to the whole fleet, and it is a one-token loop-bound typo. (2) Same line -> `byAge.size() - MAX_SLOTS / 2`: half the window discarded on every crossing. (3) IdempotencyWindow.java:54, `MAX_SLOTS = 4096` -> `MAX_SLOTS = 2`: the threshold moved in the direction that weakens the guarantee, invisible to every gate, which is precisely what non-negotiable 2 forbids and what no test here can see. The existing test survives all three because its first assertion runs BEFORE the bound is crossed and its last assertion is satisfied by any policy that drops i0. One added assertion closes all three: after the loop, replay a MIDDLE incarnation (say podx/i4000) and assert it is still answered with its ORIGINAL offsets -- that fails under (1), (2) and (3) and passes only for a policy that evicts the excess and keeps the rest.",
+      "surviving_mutations": [
+        "IdempotencyWindow.java:151 `byAge.size() - MAX_SLOTS` -> `byAge.size()` (evict everything past the bound)",
+        "IdempotencyWindow.java:151 `byAge.size() - MAX_SLOTS` -> `byAge.size() - MAX_SLOTS / 2` (evict down to half)",
+        "IdempotencyWindow.java:54 `MAX_SLOTS = 4096` -> `MAX_SLOTS = 2`"
+      ]
+    },
+    {
+      "id": "M4.10d-tr-19",
+      "severity": "minor",
+      "location": "sequencer/src/test/java/binjava/sequencer/SequencerDedupTest.java:352",
+      "summary": "'oldest-by-POINTER' is still unpinned, and by a second route beyond the one deferred to M4.10f. The fixture names incarnations i0..i4096 and commits them in that order, so lexicographic key order and pointer order COINCIDE -- the ordering the comparator computes is never the only thing that could produce the observed result.",
+      "failure_scenario": "MEASURED, whole :sequencer:test green. Replacing IdempotencyWindow.java:148-150 `byAge.sort(Comparator.comparingLong(...epoch()).thenComparingLong(...sequence()))` with `byAge.sort(Map.Entry.comparingByKey())` -- eviction by podId/incarnationId string order, ignoring the chain pointer entirely -- survives, because 'podx\\0i0' sorts first lexicographically AND is the oldest in this fixture. In the field the two orders are unrelated: a pod named 'aaa' that committed a second ago is evicted ahead of one named 'zzz' that last committed an hour back, so the bound sheds the incarnations most likely to still have a flush in flight. The author's M4.10f note covers the EPOCH half of the comparator (all slots here are at one epoch); this is the sequence half, and the same differing-epoch fixture will not reach it -- killing it needs incarnation NAMES whose lexicographic order is the reverse of their commit order.",
+      "surviving_mutations": [
+        "IdempotencyWindow.java:148-150 sort by `Map.Entry.comparingByKey()` instead of by (epoch, sequence)"
+      ]
+    },
+    {
+      "id": "M4.10d-tr-20",
+      "severity": "minor",
+      "location": "sequencer/src/test/java/binjava/sequencer/SequencerDedupTest.java:171-192",
+      "summary": "The mixed-batch test asserts both segments' offsets but never the returned delta's SEQUENCE, which LocalSequencer.java:397-400 states explicitly ('under a sequence naming the FRESH write'). The pure-replay and all-replay cases both pin their sequence; the mixed case does not.",
+      "failure_scenario": "MEASURED, whole :sequencer:test green. LocalSequencer.java:400 `return new CommitDelta(delta.sequence(), merged);` -> `return new CommitDelta(replays.isEmpty() ? delta.sequence() : window.sequenceOf(replays), merged);` -- a mixed batch then reports the OLDER slot the replay points at, so a caller told 'your records are in delta N' is pointed at a delta that does not contain the freshly committed segment at all. Nothing in this build reads that sequence back, which is why this is minor rather than major, but the production comment asserts it and no test does. Adding `assertThat(mixed.sequence()).isEqualTo(first.sequence() + 1)` to the existing test kills it.",
+      "surviving_mutations": [
+        "LocalSequencer.java:400 return the replay's sequence instead of the fresh write's for a mixed batch"
+      ]
+    },
+    {
+      "id": "M4.10d-tr-21",
+      "severity": "minor",
+      "location": "sequencer/src/main/java/binjava/sequencer/IdempotencyWindow.java:86-108",
+      "summary": "Split's third component, `answered`, is built empty at IdempotencyWindow.java:102 and never written to by anything, so it is dead and no test can constrain it. Its only consumer, LocalSequencer.java:380, therefore always starts from an empty list, and the `replays.isEmpty() ? requests : replays` ternary at LocalSequencer.java:391 is unreachable for the same reason: when `delta == null` and `answered` is non-empty, `replays` cannot be empty. Design finding, not a test one -- I report it because it is the shape a test CANNOT reach rather than one it failed to.",
+      "failure_scenario": "MEASURED, whole :sequencer:test green. Replacing LocalSequencer.java:380 `new ArrayList<>(split.answered())` with `new ArrayList<>()` changes nothing observable, which is the proof the component carries no value. It appears to be the seam M4.10e's ambiguous-PUT reconciliation will fill; until then it is an empty parameter a reader of `split()` must trace to discover is inert, and the `answered.isEmpty()` guard at LocalSequencer.java:381 reads as a live condition while being constant false."
+    }
+  ],
+  "round_judgement": "A FIFTH round is not the right answer to tr-18, and this is round 4 of a stated 2. review.md's own remedy for a heavy finding in a late round is that the commit is too big and gets SPLIT, not reviewed again. The dedup key, the answer path and the batch ordering are now pinned by tests that die under every mutation I can name for them -- that half is done. What is not done is the BOUND: MAX_SLOTS, its eviction policy and the cost it charges are orthogonal to the key (they share only the map), they are the only part still under-constrained after three rounds of fixes, and their fixture needs properties (slots at DIFFERING epochs, incarnation names whose lexicographic order opposes their commit order) that M4.10f's notes already say must be built there. Splitting the bound out -- landing the dedup with an UNBOUNDED window and a stated growth bound, or landing it with the bound and its three-assertion fixture as its own row -- ends the round sequence on a seam rather than on a fourth pass over the same file.",
+  "task": "M4.10d",
+  "role": "test-reviewer",
+  "staged_tree": "6921e1bb6f3595865f1f606e4a16bf67ccf5b2bc"
+}

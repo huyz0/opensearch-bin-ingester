@@ -1,0 +1,44 @@
+{
+  "diff_sha256": "0c9a821c6bb525e3cc11baa03656e02a66566440e1b853524730e3a250f9381b",
+  "verdict": "changes-requested",
+  "summary": "The one-line production fix is correct and I verified it against a synthetic tree. The two new tests are not: both reference binjava.ingest.security.CredentialSourceTest, which exists nowhere in this repository, so both FAIL today and both fail identically with the elif branch deleted. The tree is red and the fix is unconstrained. Separately, the mechanism asserted in the new comment, the test Javadoc and the backlog row is falsified twice by experiment.",
+  "findings": [
+    {
+      "id": "F1",
+      "file": "buildSrc/src/test/java/binjava/TddPlanScopeTest.java:37",
+      "severity": "blocking",
+      "title": "Both new tests fail: they name a test class that is not in this repository",
+      "failure_scenario": "TddPlanScopeTest lines 37 and 52 pass the id 'binjava.ingest.security.CredentialSourceTest#bearerMatchesOnlyTheExactSecret' to tdd_scan.py plan. ingest/ contains only README.md, build.gradle.kts and build/ -- there is no ingest/src, and no file named CredentialSourceTest.java anywhere in the tree (the only untracked sources are binstore-spi/src, M1.1). source_of() therefore returns None, plan() takes the bad-id path and prints 'FAIL cannot locate a test source for:' with exit 1. Verified: 'python3 scripts/tdd_scan.py plan binjava.ingest.security.CredentialSourceTest#bearerMatchesOnlyTheExactSecret binjava.CoverageGateTest#passesAboveTheFloors' exits 1 with that message, and './gradlew -p buildSrc test --tests binjava.TddPlanScopeTest' reports '2 tests completed, 2 failed' (AssertionFailedError at line 65, AssertionError at line 43). './scripts/check-harness-tests.sh' FAILs on the same run. The packet lists check-harness-tests.sh as PASSED, which is stale -- it can only have been captured while M1.0's untracked ingest/src was on disk. Committing this leaves the tree red, against AGENTS.md 'never commit a tree you know is broken'."
+    },
+    {
+      "id": "F2",
+      "file": "buildSrc/src/test/java/binjava/TddPlanScopeTest.java:43",
+      "severity": "blocking",
+      "title": "Surviving mutation: delete the entire elif branch and both tests still fail the same way",
+      "failure_scenario": "Because the ingest id resolves to no source, plan() short-circuits into the bad-id path BEFORE the task string is ever built, so the new 'elif task:' block is dead code for these inputs. I ran plan() with the elif block stripped out and got byte-identical output to the fixed version for both test invocations. So the mutation 'delete lines 134-144 of scripts/tdd_scan.py' changes neither test's result: both are red before the fix and red after it. A test that fails identically with and without the production change constrains nothing, and no honest red record can bind to it -- the observed failure is 'source not found', not 'task not scoped'. Remedy that works and needs no unlanded source: run tdd_scan.py with cwd set to a temp directory holding a synthetic layout, since source_of()'s glob '*/src/*/java/' is cwd-relative. Verified -- with $D containing ingest/src/test/java/binjava/ingest/security/CredentialSourceTest.java and buildSrc/src/test/java/binjava/CoverageGateTest.java, '(cd $D && python3 <abs>/scripts/tdd_scan.py plan ...)' prints ':ingest:test binjava.ingest.security.CredentialSourceTest.a' and 'buildSrc:test binjava.CoverageGateTest.b' with exit 0, and prints the FAIL text once the elif is removed. That version discriminates; this one does not."
+    },
+    {
+      "id": "F3",
+      "file": "scripts/tdd_scan.py:136",
+      "severity": "major",
+      "title": "The mechanism asserted in the comment, the Javadoc and the backlog row is false in two places",
+      "failure_scenario": "The comment says './gradlew test --tests <one class>' runs test in ALL EIGHT modules and 'the seven with no matching test fail on no tests found and kill the build before the owning module writes any JUnit XML', hence 'a red record was UNOBTAINABLE for every module test'. Both halves are wrong. (a) A module with no test source at all gets test = NO-SOURCE and is SKIPPED, not failed. Verified: './gradlew test --tests binjava.binstore.VersionTest' on the current tree is BUILD SUCCESSFUL, seven modules NO-SOURCE, and binstore-spi/build/test-results/test/TEST-binjava.binstore.VersionTest.xml is written. Only a module that already HAS test sources fails the filter. (b) Even then the build does not reliably die first: gradle.properties sets org.gradle.parallel=true and org.gradle.workers.max=2, so tasks run concurrently. Verified: with a throwaway test class added under format/src/test, the same command gives ':format:test FAILED / No tests found for given includes' and BUILD FAILED -- and binstore-spi STILL wrote its XML in the same run, so record-one would have succeeded. So the failure is a scheduling race, which is exactly what the row's own datum ('2 of 7 tests could be recorded red') reports; the row asserts an absolute and then reports the measurement that disproves it in the same sentence. The fix is still right -- scoping turns a race into a certainty -- but three permanent artifacts (scripts/tdd_scan.py:135-143, TddPlanScopeTest Javadoc lines 10-15, docs/internal/product/backlog.md:55) now teach a maintainer that seven sibling modules fail today, when today they are NO-SOURCE. Restate as 'unreliable / lost to a scheduling race, and guaranteed to break as soon as a second module has tests'."
+    },
+    {
+      "id": "F4",
+      "file": "buildSrc/src/test/java/binjava/TddPlanScopeTest.java:34",
+      "severity": "minor",
+      "title": "aModuleTestIsScopedToItsOwnModulesTask is subsumed by twoModulesGetTwoDifferentTasks",
+      "failure_scenario": "twoModulesGetTwoDifferentTasks asserts containsExactly(':ingest:test', 'buildSrc:test') on the first whitespace-delimited token of each line, which already pins the exact ingest task string and rules out both a hardcoded constant and a prefixed-rather-than-scoped line. Every mutation the first test kills, the second kills too, so it is dead weight that will need editing twice. Deleting the buildSrc-only third test was the right call for the opposite reason: containsExactly still pins 'buildSrc:test', so no coverage was dropped, and a test that passes before the change can carry no red record (testing.md rule 2)."
+    },
+    {
+      "id": "F5",
+      "file": "scripts/tdd_scan.py:144",
+      "severity": "minor",
+      "title": "The module name is taken from the directory, not from settings.gradle.kts",
+      "failure_scenario": "src.split('/', 1)[0] is correct for every layout source_of() can produce -- its glob is anchored at exactly one top-level component, all eight includes are top-level dirs, and the buildSrc branch still wins because it is the if and this is the elif (confirmed both by reading and by the synthetic-tree run). But it assumes directory name equals project name. If settings.gradle.kts ever sets project(\":x\").projectDir, plan() emits ':<dir>:test', gradlew exits non-zero with 'Project not found', tdd-red.sh does not treat non-zero as red, and record-one reports 'did not run -- no testcase in the results' -- the same misleading message this task exists to remove. ModuleListDerivationTest already derives the module list from settings.gradle.kts; the same source of truth would close this."
+    }
+  ],
+  "task": "M0.49",
+  "role": "reviewer"
+}

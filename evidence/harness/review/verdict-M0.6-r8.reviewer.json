@@ -1,0 +1,41 @@
+{
+  "diff_sha256": "0b346702ceda435d9edb1c11596e1a31154ffb4674afd2f77c98df032a9fbcf5",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "W26",
+      "severity": "blocking",
+      "file": "scripts/check-harness-tests.sh:39",
+      "summary": "The new input-declaration guard is vacuous for settings.gradle.kts -- the literal it greps for already appears in an unrelated comment at buildSrc/build.gradle.kts:13, so the rootSettings declaration can be deleted whole (comment and all) with the guard still green.",
+      "failure_scenario": "Reproduced: delete lines 43-49 of buildSrc/build.gradle.kts (the entire new hunk: the four comment lines plus inputs.file(...settings.gradle.kts).withPropertyName(\"rootSettings\")). `grep -qF -- 'settings.gradle.kts' buildSrc/build.gradle.kts` still matches, because line 13 reads `// ... (see settings.gradle.kts` in this directory ...`. Guard prints nothing and check-harness-tests proceeds. The buildSrc test task then goes UP-TO-DATE across a module rename, RuleListTest/ModulePlanTest/ModuleListDerivationTest never re-run, and the gate reports `ok 61 harness test(s) pass` having executed a cached green -- exactly the W23 defect the guard was written to make unrepresentable, on its fourth occurrence. Fix by anchoring to the declaration rather than the substring (e.g. grep -E '^[[:space:]]*inputs\\.file\\(.*settings\\.gradle\\.kts') or, better and one rung lower, by deriving it: run `./gradlew -p buildSrc test`, touch settings.gradle.kts, run again, and assert the task was not UP-TO-DATE."
+    },
+    {
+      "id": "W27",
+      "severity": "major",
+      "file": "scripts/check-module.sh:289",
+      "summary": "The CHECK_MODULE_PRINT_RULES door and the rule-count summary both sit BELOW the `no module changed` early exit, so all three RuleListTest cases silently depend on what happens to be in the developer's index. A scripts-only commit -- which does run the harness suite -- turns them red.",
+      "failure_scenario": "Reproduced in a scratch clone of the staged tree: stage only `scripts/check-links.sh`. check-harness-tests.sh's delta pathspec includes 'scripts/*.sh', so the buildSrc suite runs. check-module.sh's own delta selection returns MODULES='' and it exits at line 271 with `ok no module changed`. RuleListTest.value() then finds zero `NO_HTTP=` lines and throws `NO_HTTP not printed by the gate`, failing everyModuleNamedByARuleStillExists and theRuleListsDoNotOverlap; theGateAppliesBothRulesToTheRealTree fails its `contains(\"rule5 applied to 4, rule2 to 2\")`. Three red tests, for a commit that changed nothing they constrain. This passes today only because this commit happens to stage buildSrc/build.gradle.kts, a shared-build file that escalates to all eight. The next scripts-only task in the backlog (M0.13, M0.14, M0.19, M0.20) hits it, and the visible pressure will be to weaken the assertion. Fix: set GATE_SCOPE=full in the ProcessBuilder environment of both RuleListTest entry points, or move the rules door above the selection block."
+    },
+    {
+      "id": "W28",
+      "severity": "major",
+      "file": "scripts/check-module.sh:289",
+      "summary": "CHECK_MODULE_PRINT_RULES is the only test door that is an environment variable rather than an argv flag, and it exits 0 before the module loop -- an exported value turns the wired hook into a silent no-op.",
+      "failure_scenario": "`export CHECK_MODULE_PRINT_RULES=1` (a developer debugging RuleListTest, or a stale shell) makes every subsequent `git commit` run check-module.sh, print two NO_HTTP=/NO_CLOUD= lines, call finish and exit 0 -- no Gradle invocation, no rule applied, no `ok` line and no FAIL line. pre-commit renders the hook as Passed. That is a vacuous-pass channel installed into the gate by the very commit that puts it on every developer's commit, and unlike --plan/--select-modules/--check-drift/--list-modules it is reachable from the ambient environment rather than from argv. Fix: make it `--print-rules` alongside the other four doors, which also resolves W27 if the dispatch is placed after the NO_HTTP/NO_CLOUD assignments at line 223."
+    },
+    {
+      "id": "W29",
+      "severity": "minor",
+      "file": "scripts/check-module.sh:379",
+      "summary": "`rule5 applied to N` claims more than the counter can support: the count proves the branch was entered, not that the rule can still refuse anything.",
+      "failure_scenario": "Empty HTTP_GROUPS (the mutation the diff's own ModuleGateTest header and backlog row M0.23 admit survives) leaves the summary reading `rule5 applied to 4` while rule 5 matches nothing for any module. An operator reading the success line concludes rule 5 was enforced against four modules; it was tested against four modules with an inert pattern. The counter is worth keeping -- `8 module(s) checked` genuinely is true over skipped rules -- but the wording should say what it measured: `rule5 tested 4 module(s), rule2 2`. Same discipline as scope_note, which deliberately refuses to let a delta pass read like a full one."
+    },
+    {
+      "id": "W30",
+      "severity": "minor",
+      "file": "scripts/check-harness-tests.sh:39",
+      "summary": "The two remaining literals are substring checks over the whole file as well, so the guard states presence-of-text rather than presence-of-declaration.",
+      "failure_scenario": "Changing `include(\"*.py\", \"*.sh\")` to `include(\"*.py\") ... exclude(\"*.sh\")`, or moving the fileTree into a comment, satisfies `grep -qF -- '\"*.sh\"'` while the .sh files stop being declared inputs -- the suite goes UP-TO-DATE across a gate-script edit and prints a cached green. Lower probability than W26 because these literals occur only in the declaration today, but it is the same rung-6 text predicate over a rung-3 derivable fact (gate-design), and the up-to-date-check test named in W26 subsumes all three literals at once."
+    }
+  ]
+}

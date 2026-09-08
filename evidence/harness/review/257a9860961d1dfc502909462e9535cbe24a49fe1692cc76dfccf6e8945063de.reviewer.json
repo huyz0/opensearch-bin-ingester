@@ -1,0 +1,43 @@
+{
+  "diff_sha256": "257a9860961d1dfc502909462e9535cbe24a49fe1692cc76dfccf6e8945063de",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "replacement-justification-also-not-checkable",
+      "severity": "minor",
+      "title": "The narrower justification that replaced the false one is satisfied by three tests, not one",
+      "where": "sequencer/src/test/java/binjava/sequencer/LocalSequencerTest.java:350-356",
+      "failure_scenario": "The new sentence says this is 'the only test asserting the SEAL ENTRY, slot and continuation, at the end of a multi-entry chain through LocalSequencer'. Checked against the file: takingOverSealsThePredecessorsChainBeforeOpeningItsOwn asserts entryAt(store,1,2) == Seal(2,2) on a chain holding CONTINUE@0 + delta@1, and aThirdTermSealsItsImmediatePredecessorRatherThanTheFirstChain asserts entryAt(store,2,2) == Seal(2,3) on the same shape -- both multi-entry, both through LocalSequencer, both asserting the seal entry with its slot and continuation. So the predicate holds for three tests. The omitted discriminator is the REDRIVE BUDGET: this is the only test where the budget (1) is smaller than the number of entries the boundary probe must skip (5), which is what makes recoverChainEnd non-substitutable by seal's redrive loop. That correct justification is already three lines below, in the pre-existing comment ('five entries against a budget of ONE, which recovery clears in a single uncontended write and the redrive cannot'), so the new sentence adds a weaker and falsifiable claim above a true one. Concrete harm: someone applying testing.md rule 13 checks the stated uniqueness, finds it false, and either deletes a test that does constrain something uniquely or has to re-derive the real reason. \u26a0\ufe0f RECORDING RATHER THAN ASKING FOR A FIX. This hash exists only to correct a comment, and correcting the correction is review.md rule 11's named trap -- 'the next round's surface is the prose the fix just added' -- now demonstrated twice in a row on one comment. The cheapest disposition is to delete the added sentence rather than rewrite it, and to do that whenever this file is next touched for a reason of its own."
+    },
+    {
+      "id": "start-precondition-do-not-pre-acquire",
+      "severity": "minor",
+      "title": "Carried: a caller that acquires the lease itself before calling start() is told it is not the leader",
+      "where": "sequencer/src/main/java/binjava/sequencer/LocalSequencer.java:53-62",
+      "failure_scenario": "Unchanged at this hash and restated because a verdict binds to a diff. Measured at the previous hash: an election loop that owns the LeaseManager (it must, since nothing else renews it) wins epoch 1, then start's own tryAcquire sees that unexpired lease and returns empty -- 'start returned EMPTY (reports not-the-leader) ; lease still held = true ; chain 1 opened = false', with another pod also refused because the lease is unexpired. The round-1 outage shape by a different door. Not a code defect: start acquires the lease itself, so the precondition is 'do not acquire before calling', and the remedy is one sentence beside @return."
+    },
+    {
+      "id": "recoverchainend-must-not-commit-is-prose-only",
+      "severity": "minor",
+      "title": "Carried: 'THIS LOG MUST NOT THEN COMMIT' is enforced by a javadoc sentence and nothing else",
+      "where": "sequencer/src/main/java/binjava/sequencer/CommitLog.java, recoverChainEnd javadoc",
+      "failure_scenario": "Unchanged at this hash. recoverChainEnd leaves nextOffsets empty and says a commit through it would reassign offsets from 0 (I2), but the object is an ordinary CommitLog and commit() will do exactly that. Unreachable today because the only caller seals immediately and start drops the object on failure; M4.6d and M4.6e add callers. Non-negotiable 9 rung 7 where rung 1 is available -- a probe flag commit() refuses on, or returning the end sequence instead of mutating state."
+    },
+    {
+      "id": "start-succeeds-on-an-already-sealed-own-chain",
+      "severity": "minor",
+      "title": "Carried: start() returns a healthy-looking sequencer on a chain a successor already sealed",
+      "where": "sequencer/src/main/java/binjava/sequencer/LocalSequencer.java, after log.recover()",
+      "failure_scenario": "Unchanged at this hash. Measured earlier: start SUCCEEDED at epoch 1 on a chain sealed underneath it, and the first commit then threw 'chain sealed at seq 2, continued at epoch 2'. log.recover() sets sealedAt and open() adopts this node's own CONTINUE, so start hands back something its own javadoc calls 'anything a caller can commit through', which it is not. Fails closed, and in-protocol unreachable. A sealedAt accessor plus a refusal is a few lines."
+    },
+    {
+      "id": "carried-rows-agreed",
+      "severity": "minor",
+      "title": "Carried: the three agreed rows are the right disposition, and my round-2 caveat stays withdrawn",
+      "where": "sequencer/src/main/java/binjava/sequencer/",
+      "failure_scenario": "No renewal and no locking, recoverChainEnd and recover disagreeing about where a chain ends when content sits past a SEAL, and the unvalidated maxRedrives all belong in rows rather than this commit. open()'s inability to tell this node from a co-opener was load-bearing only while the held() fallback manufactured a second opener; with the fallback removed it is ordinary defence-in-depth against something the lease already prevents, and whatever row carries it should say so."
+    }
+  ],
+  "task": "M4.6c",
+  "role": "reviewer"
+}

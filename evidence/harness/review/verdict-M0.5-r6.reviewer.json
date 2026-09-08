@@ -1,0 +1,10 @@
+{"diff_sha256": "bf1add49a47bf526d837317f5b89df605450a79af1738c3b4940aabadec9ebc6",
+ "verdict": "pass",
+ "findings": [
+  {"id":"M11","severity":"minor","file":"scripts/check-module.sh:31",
+   "summary":"Module list is scraped from settings.gradle.kts with a regex requiring a single-quoted-style entry on its own line ('^\\s*\"[a-z][a-z-]*\",'); a module declared with a trailing entry without a comma, on a shared line, or with an uppercase/digit character in its name is invisible to the delta path.",
+   "failure_scenario":"Someone adds include(\"binstore-wal2\") as the last entry in settings.gradle.kts with no trailing comma. ALL omits it, the delta path never checks it, and the gate prints \"N module(s) checked\" green while the new module's dependency rules go unenforced."},
+  {"id":"M13","severity":"minor","file":"scripts/build-index.sh:112",
+   "summary":"The new cross-boundary guard is anchored on the literal prose 'Not yet existing' and stops at the first blank line; if that sentence is reworded or a blank line is introduced, `m` is None or truncated and the guard silently passes instead of failing.",
+   "failure_scenario":"An editor reflows the paragraph to 'Still to be built, named by skills and standards that say so:' or inserts a blank line after the colon. Verified both: with `**`check-module.sh`**` reinstated under the reworded heading, and again under a blank-line-separated list, `build-index.sh --check` exits 0 and prints 'generated index regions are current' -- the exact M12 defect ships again, undetected. A guard over prose should fail closed when its anchor is missing."}
+ ]}

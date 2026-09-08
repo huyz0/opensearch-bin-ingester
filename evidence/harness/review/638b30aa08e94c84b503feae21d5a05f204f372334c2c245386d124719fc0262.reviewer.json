@@ -1,0 +1,16 @@
+{
+  "diff_sha256": "638b30aa08e94c84b503feae21d5a05f204f372334c2c245386d124719fc0262",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "M4.13n-R2a",
+      "file": "sequencer/src/test/java/binjava/sequencer/BatchedDeltaInvariantsTest.java:79",
+      "severity": "minor",
+      "summary": "The I2-misnomer deferral is recorded only where the deferee will not look: M4.13f's backlog row and notes say nothing about renaming, so the obligation lives in a test javadoc alone.",
+      "failure_scenario": "Whoever picks up M4.13f reads its row ('I4's REORDER CLAUSE ... checkReader judges a reader's next-offset map ... needs a per-record consumer trace') and backlog-notes.md, which has no M4.13f section at all. Neither mentions that checkChain labels a permuted-but-disjoint batch 'I2'. M4.13f lands, the reorder clause is closed on the reader side, and the mislabel stays in checkChain permanently -- with a passing test whose assertion description now asserts the mislabel is intended. Fix is one clause on the M4.13f row, not a code change."
+    }
+  ],
+  "task": "M4.13n",
+  "role": "reviewer",
+  "staged_tree": "173df924a5c6385a8c0f00e38ab33a1cf85a5c9f"
+}

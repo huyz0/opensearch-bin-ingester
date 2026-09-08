@@ -1,0 +1,41 @@
+{
+  "diff_sha256": "9d7c55106eb3f24369e34cb5f7647c8d918a5e574ff7b93076e735f78c56a01e",
+  "verdict": "changes-requested",
+  "summary": "The reduction unpinned nothing. I re-ran the round-4 matrix as 28 mutations against the staged bytes in my own worktree: 26 die, and the two survivors are M4.10d-tr-20 (already recorded as a minor to land) and one I measured EQUIVALENT (deleting the replays.isEmpty() fast path, which produces an identical CommitDelta by the long route). Removing Split.answered left the key, the answer path and the batch ordering pinned: the epoch/sequence pointer args swapped, answer-before-applyFresh, log.commitAll(replays) appended anyway, merged.addAll(answered) dropped, and the Split components swapped all still die. Removing MAX_SLOTS/evictOldestBeyond removed the only test that referenced them and no other test regressed. tr-21 is gone with the field. One NEW finding, and it is the reduction's own residue: the backlog-done.md row this commit ARCHIVES still states the withdrawn bound as shipped behaviour, and its banner still says SPLIT TWICE while the commit files a third split. That is an acceptance criterion recorded as done with neither code nor test.",
+  "findings": [
+    {
+      "id": "M4.10d-tr-22",
+      "severity": "major",
+      "location": "docs/internal/product/backlog-done.md:151",
+      "summary": "The archived M4.10d row still claims the withdrawn bound as shipped: 'The window is bounded and evicts oldest-by-pointer, which costs the evicted incarnation its idempotency and says so.' Present tense, in a row marked done, in the same commit that (a) deletes MAX_SLOTS and evictOldestBeyond, (b) writes 'IT IS UNBOUNDED' into IdempotencyWindow's class javadoc, and (c) files M4.10g saying 'nothing evicts'. The same row's banner reads 'SPLIT TWICE UNDER REVIEW' and enumerates M4.10e and M4.10f only, while this commit makes it three splits. So the row is wrong either way: either the bound clause is a live claim with no implementation, or it is preserved source text whose banner undercounts the splits. This is the acceptance-criterion half of my remit -- a criterion in the task with no test that would fail without the change -- and here there is no production code either.",
+      "failure_scenario": "Not a mutation I had to invent: THIS COMMIT IS the mutation. Between the round-4 tree (6921e1bb6f) and the staged bytes, evictOldestBeyond, MAX_SLOTS and the call from applied() were deleted outright, and the whole :sequencer suite is green -- BUILD SUCCESSFUL, measured in my worktree. No test anywhere observed the loss, because the one test that touched it was deleted in the same delta. The archive row is therefore the only artifact in the tree still asserting the behaviour, and backlog.md's own header makes the archive the record of what shipped. Concrete harm: a session reading backlog-done.md to answer 'is the window bounded' gets yes; M4.10g in the open backlog says no; IdempotencyWindow's javadoc says no. Two of the three are right and the authoritative one is wrong. Remedy is one clause and touches NO code and NO test: strike the bound sentence (or mark it withdrawn to M4.10g) and make the banner name three splits.",
+      "surviving_mutations": [
+        "IdempotencyWindow: delete MAX_SLOTS, evictOldestBeyond and its call from applied() -- whole suite green (this is the staged change), while the archived row goes on claiming the bound"
+      ]
+    },
+    {
+      "id": "M4.10d-tr-20",
+      "severity": "minor",
+      "location": "sequencer/src/main/java/binjava/sequencer/LocalSequencer.java:399",
+      "summary": "Unchanged from round 4 and re-measured surviving at this hash: the mixed-batch test asserts both segments' offsets and never the returned delta's SEQUENCE, which the production comment states explicitly ('under a sequence naming the FRESH write'). The pure-replay and all-replay cases both pin their sequence; the mixed case does not. I agree with landing it as a minor -- nothing in this build reads that sequence back.",
+      "failure_scenario": "RE-MEASURED at this hash, whole :sequencer:test green with the mutation applied. LocalSequencer.java:399 `return new CommitDelta(delta.sequence(), merged);` -> `return new CommitDelta(replays.isEmpty() ? delta.sequence() : window.sequenceOf(replays), merged);`. A mixed batch then reports the OLDER slot the replay points at, so a caller told 'your records are in delta N' is pointed at a delta that does not contain the freshly committed segment at all. Adding `assertThat(mixed.sequence()).isEqualTo(first.sequence() + 1)` to aBatchMixingAReplayWithAFreshFlushCommitsTheFreshOneAndAnswersTheReplay kills it.",
+      "surviving_mutations": [
+        "LocalSequencer.java:399 return the replay's sequence instead of the fresh write's for a mixed batch"
+      ]
+    },
+    {
+      "id": "M4.10d-tr-23",
+      "severity": "minor",
+      "location": "sequencer/src/main/java/binjava/sequencer/IdempotencyWindow.java:176",
+      "summary": "The read cache is keyed on `at.epoch() + \"/\" + at.sequence()` and its comment gives a live reason ('a successor inherits pointers into the PREDECESSOR's chain, where the same sequence number names a different object'). Dropping the epoch from that key survives, because in this build every entry in a window carries the one epoch of the LocalSequencer that wrote it -- the window is process-local. \u26a0\ufe0f DO NOT FIX THIS ROUND. It is unreachable rather than untested, and the sibling comment twelve lines below (the orElseThrow refusal) already says so in exactly the right words: 'UNREACHABLE UNTIL THE WINDOW IS INHERITED (M4.10f)'. This comment does not, so it reads as a pinned property when nothing can pin it yet. It belongs in M4.10f's notes beside the differing-epoch fixture that row already requires, not in a sixth round.",
+      "failure_scenario": "MEASURED in my worktree, whole :sequencer:test green. IdempotencyWindow.java:176 `String slot = at.epoch() + \"/\" + at.sequence();` -> `String slot = \"\" + at.sequence();`. Once M4.10f seeds a window with a predecessor's pointers, two slots at the same sequence in different epochs collide in the cache, so a replay is answered from the WRONG chain's delta -- and if that delta happens to carry a segment matching the triple and key, the producer is handed offsets from another term. Killing it needs what M4.10f's fixture already needs: entries at two different epochs pointing at the same sequence number.",
+      "surviving_mutations": [
+        "IdempotencyWindow.java:176 drop the epoch from the read-cache key"
+      ]
+    }
+  ],
+  "round_judgement": "The code half of this round is DONE and I would have passed it. Every mutation I killed in round 4 still dies at this hash, measured rather than assumed: 26 of 28, with tr-20 the only real survivor and the replays.isEmpty() fast path measured equivalent (identical CommitDelta by the long route, so it is not a finding). The withdrawal cost nothing that was pinned -- the deleted test was the only reference to MAX_SLOTS, and Split.answered's removal left every ordering and key mutation dying. The one thing that blocks is the residue the withdrawal left in the record it is about to write: a done row claiming a bound that this commit deletes, with a banner counting two splits where there are now three. That is one clause and no code, so it does not reopen the review surface -- and it is precisely the class of thing that must not land, because backlog-done.md is what a later session trusts about what shipped.",
+  "task": "M4.10d",
+  "role": "test-reviewer",
+  "staged_tree": "bf1d9ec54a39ce8ec477d13c8286e2cb45cbfb52"
+}

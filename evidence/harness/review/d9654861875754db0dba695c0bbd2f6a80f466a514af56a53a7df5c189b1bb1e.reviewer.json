@@ -1,0 +1,29 @@
+{
+  "diff_sha256": "d9654861875754db0dba695c0bbd2f6a80f466a514af56a53a7df5c189b1bb1e",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "file": "sequencer/src/main/java/binjava/sequencer/BatchingSequencer.java",
+      "line": 313,
+      "severity": "major",
+      "what": "close() restores the interrupt flag in the finally around the join, which runs BEFORE failAll(drainRemaining()) and delegate.close(). The round-3 fix moved the defect one statement later rather than closing it: the join now waits, but the delegate -- the LocalSequencer whose close() is the lease release -- is entered with the interrupt flag set. LeaseManager.release() falls through to BoundedLock.takeOrFail whenever tryLock() loses to an in-flight renew, and takeOrFail's ReentrantLock.tryLock(timeout) throws InterruptedException IMMEDIATELY when the flag is already set. The JDK's own ExecutorService.close() puts the restore as its LAST statement for exactly this reason; here there is real, interruptible I/O after it.",
+      "failure_scenario": "MEASURED on the staged bytes, in a copy of the index. A BatchingSequencer over a delegate whose close() models LeaseManager.release (tryLock, then a bounded tryLock(5s)), with a renew holding the lease lock, closed from a thread that already carries an interrupt -- the shutdown path this method's own comment names as hitting 'every time'. Result: interruptAtDelegateClose=true leaseReleased=false closeThrew='interrupted waiting for the lease lock to release' flagStillSet=true. So the lease is NOT released and leadership only moves when the TTL expires -- the ~10 s failover the class javadoc and closingWithACallerParkedFailsItAndClosesTheDelegate both say close() exists to avoid -- and close() throws IOException, so anything the caller's shutdown sequence does after it is skipped. Moving the restore into a finally around delegate.close() flips it: interruptAtDelegateClose=false leaseReleased=true closeThrew=none flagStillSet=true, i.e. the caller still gets its interrupt back. Note the wider reachability too: any store backend whose PUT is interrupt-sensitive (ClosedByInterruptException, which this file's own drain-loop comment cites) aborts the lease release on this path without needing lock contention at all."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/BatchingSequencerTest.java",
+      "line": 309,
+      "severity": "minor",
+      "what": "Dead code left by the file split, unchanged since round 3: the private record ClosingSequencer is declared here and used only in BatchingSequencerLifecycleTest (where it is a second, identical copy), and commitConcurrently's QueuedTimer parameter (line 88) is never read in the method body.",
+      "failure_scenario": "No runtime failure. It costs a reader: the next person to add a lifecycle test to this file reads ClosingSequencer as an in-use fixture, and the unread timer parameter reads as a synchronisation dependency the method does not have -- which is precisely the kind of misreading that produced the latch-based window fixture the file's own comments say cost 2 PUTs where 1 was demanded."
+    },
+    {
+      "file": "sequencer/src/main/java/binjava/sequencer/BatchingSequencer.java",
+      "line": 212,
+      "severity": "minor",
+      "what": "The committer's own death is still unlogged. close()'s new WARNING covers only the join timeout; the drainLoop catch(Throwable) path -- a WindowTimer throw, an Error out of the delegate -- fails the held callers with the cause, shuts the door, and returns without a single log line. Later callers then get IOException('this sequencer is closed'), which is indistinguishable from an orderly shutdown.",
+      "failure_scenario": "A LinkageError from a lazily-loaded store SDK class, or an OOM in the encode, kills the committer at 03:00. The in-flight caller sees the Error; every caller after it sees 'this sequencer is closed' and the operator's logs say the sequencer was closed -- which it was not, by anyone. Diagnosis starts from the wrong hypothesis (a deliberate shutdown) with nothing in the log naming the batcher's permanent death or its cause."
+    }
+  ],
+  "task": "M4.7",
+  "role": "reviewer"
+}

@@ -1,0 +1,50 @@
+{
+  "diff_sha256": "4a0e52edc8ffdce312474ce6ee77ea99652c1e658a9dc7c07668674b094d8f95",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/BatchingSequencerLifecycleTest.java",
+      "line": 256,
+      "severity": "major",
+      "what": "aCallerWhoseEnqueueLANDSAFTERCloseIsRefusedRatherThanOrphaned does not exercise the race it names, because the beforeEnqueue seam is on the WRONG SIDE of the check. submit() is: new Pending; beforeEnqueue.run(); synchronized(lifecycle){ if(!running) throw; queue.add(...) }. The orphaning interleaving requires the caller to have ALREADY READ running==true and then be descheduled before queue.add. Parking at a seam that runs BEFORE the read reproduces nothing: in both the correct and the defective implementation the caller reads running AFTER close returned, sees false, and is refused. The test therefore asserts exactly what aCommitAfterCloseFAILSRatherThanHanging (line 105) already asserts, while the production class carries a volatile Runnable field and a package-private setter for it. The probabilistic stress test that DID detect the defect was deleted in the same change, so submit()'s atomicity now has zero constraint anywhere in the tree.",
+      "failure_scenario": "MEASURED SURVIVING MUTATION. Replaced the synchronized block in BatchingSequencer.submit with the round-1 blocking form: `if (!running) { throw new IOException(\"this sequencer is closed and must not commit again\"); } queue.add(pending);` (verified compiled: monitorenter count in the class drops from 2 to 1). `./gradlew test` across ALL modules: BUILD SUCCESSFUL, BatchingSequencerTest 7/7 and BatchingSequencerLifecycleTest 7/7 green. In production this is the defect a previous round measured directly: 24 concurrent callers racing one close orphaned a caller within 102 attempts, still parked on an uninterruptible CompletableFuture.join two seconds later, i.e. a producer thread hung until SIGKILL. To pin it the seam must sit BETWEEN the running read and queue.add (the correct implementation then blocks close on the monitor, which is itself the observable proof of atomicity), or the property must be constrained some other way."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/BatchingSequencerLifecycleTest.java",
+      "line": 217,
+      "severity": "major",
+      "what": "The class javadoc declares its subject to be 'whether a request can end up in neither the queue nor a batch, waiting on a future nobody holds', but every lifecycle test has AT MOST ONE in-flight caller, so the QUEUED caller is never exercised. On a real close mid-window the committer holds only the FIRST request (taken by queue.take()); every caller that arrived during the window is still in `queue`, and the only thing that completes them is the pair of `failAll(drainRemaining(), ...)` calls in drainForever's finally and in close(). That is the COMMON shutdown shape, not an edge case, and it has no test.",
+      "failure_scenario": "MEASURED SURVIVING MUTATION: delete BOTH `failAll(drainRemaining(), new IOException(\"this sequencer is closed\"))` calls (BatchingSequencer.java:224 in drainForever's finally, and :347 in close). :sequencer:test and :ingest:test both BUILD SUCCESSFUL. Each net individually is also removable and green, because they are redundant with one another. I verified the property is real and shipped-code-only: a probe with two callers (one taken into the batch behind a timer that never closes, one confirmed queued via queuedCount()==1) passes on the staged bytes and FAILS with both nets removed, with the queued thread still alive after a 10 s join. Production consequence: on pod shutdown with N concurrent flushes, N-1 producer threads park forever in Pending.await, which is CompletableFuture.join and uninterruptible -- they do not fail, they hang past the SIGTERM grace period."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/BatchingSequencerLifecycleTest.java",
+      "line": 184,
+      "severity": "major",
+      "what": "aFailedWindowFailsEVERYCallerInIt asserts only that both callers in a poisoned window are failed; nothing asserts that the batcher SURVIVES that window. commitBatch's `catch (IOException | RuntimeException failed)` is what distinguishes 'fail this window and keep serving' from 'shut down forever', and drainLoop's outer `catch (Throwable)` already covers the failing-callers half -- so the catch clause in commitBatch is constrained by nothing. The test even provokes the in-protocol RuntimeException case (two submissions sharing a segment key, refused by the delegate with IllegalArgumentException) and then closes without committing again.",
+      "failure_scenario": "MEASURED SURVIVING MUTATION: narrow commitBatch's catch to `catch (IOException failed)` (BatchingSequencer.java:266), so a RuntimeException from the delegate escapes to drainLoop's `catch (Throwable)`, which fails the batch and RETURNS. :sequencer:test and :ingest:test both BUILD SUCCESSFUL, all 14 BatchingSequencer tests green. I confirmed the behavioural difference is real: a probe committing twice against a delegate that throws IllegalStateException on the first call only passes on the staged bytes and fails under the mutation. Production consequence: one duplicate-segment-key batch, or any RuntimeException out of the store path, permanently kills the pod's committer -- every subsequent flush gets IOException(\"this sequencer is closed\") until the process restarts. That is the 'batcher dies and everything after it fails' mode theCommitterServesWindowAFTERWindowNotJustTheFirst was written for, reached by a different door."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/BatchingSequencerTest.java",
+      "line": 309,
+      "severity": "minor",
+      "what": "ClosingSequencer is declared here and never used -- it is a verbatim duplicate of the record in BatchingSequencerLifecycleTest.java:66, left behind by the 500-line split. commitConcurrently (line 88) likewise takes a QueuedTimer parameter it never reads, and returns a CommitDelta its one call site discards.",
+      "failure_scenario": "No behavioural risk. It is a second copy of a fixture that must stay in step with the first: a future change to how a delegate reports close reaches only one of them, and the dead copy reads as coverage that does not exist."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/BatchingSequencerTest.java",
+      "line": 268,
+      "severity": "minor",
+      "what": "theRealClockTimerActuallyWaitsItsInterval asserts a LOWER bound only, so the shipping timer is pinned against being too short but not against being arbitrarily long. The class javadoc calls the interval 'the latency dial' and the mission trades seconds of latency for cost, so an interval an order of magnitude longer than configured is a real regression.",
+      "failure_scenario": "SURVIVING MUTATION (BatchingSequencer.sleepFor): `return () -> Thread.sleep(millis * 10);`. The lower bound of 120 ms still holds and every test stays green, while in production every flush waits 2.5 s instead of the configured 250 ms before its offsets are durable and FR-4's ack can be sent. A generous upper bound (say < 10x) would pin it without flakiness."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/BatchingSequencerTest.java",
+      "line": 289,
+      "severity": "minor",
+      "what": "aZeroIntervalIsRefusedBecauseItSilentlyRestoresThePerPodRate covers only Duration.ZERO; the isNegative() half of the same guard has no case.",
+      "failure_scenario": "SURVIVING MUTATION (BatchingSequencer.sleepFor): drop `interval.isNegative() ||` from the guard. A negative Duration then reaches `Thread.sleep(negativeMillis)`, which throws IllegalArgumentException on the committer thread inside the window timer -- caught by drainLoop's `catch (Throwable)`, which fails the caller and shuts the batcher down. A misconfiguration that should be refused at construction instead produces a sequencer that accepts one commit, fails it, and is dead thereafter."
+    }
+  ],
+  "task": "M4.7",
+  "role": "test-reviewer"
+}

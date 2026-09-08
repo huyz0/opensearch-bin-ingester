@@ -1,0 +1,35 @@
+{
+  "verdict": "changes-requested",
+  "summary": "Round 7, test review, measured in my own tree at staged hash 87bc946fb5f9. BOTH round-6 minors are genuinely fixed, and I verified the fixes by mutation rather than by reading. (1) 17 is STABLE: five consecutive `--rerun-tasks` runs of both suites are green, so the two new absolute counts are not a flake risk. (2) The named mutant `epoch != ownEpoch && crossFromCheckpoint(...)` now DIES on exactly the two assertions that were relative -- measured 16 against the asserted 17 in both `takeoverCostIsCONSTANTInTheNumberOfPriorTerms` and `...InTheLengthOfTheAncestorsChain`, plus three more kills elsewhere; under the old relative form both sides read 16 and both comparisons passed, so the conversion did real work. (3) ALL FOUR mirror mutants I measured against the 26L assertion die against the two new 17L ones as well, not only elsewhere: `checkpoint.sequence() - 1` gives 27/18/18, `checkpoint.sequence() + 1` gives 25/16/16, `keyFor(hop.from())` gives 25/16/16, and an early `return` that skips the tail gives 24/15/15. Exactness is buying kills at every one of those sites. (4) The deleted comment clauses cost a reader nothing load-bearing: the correctness suite still says WHY it exists separately (`the cost suite is satisfied by a recovery that reads nothing and is wrong`) and now says it without counting the sibling's assertions, and the surviving sentence in LocalSequencerBoundedRecoveryTest -- the `-1` off-by-one measuring 27 -- I re-measured and it is true. (5) Rules 4-5 across the delta: nothing weakened. Two assertions were added and two were changed from relative to absolute, which is strengthening in both cases; no test was deleted; the LocalSequencerFailoverTest threshold move (28->30, 56->58, 20->22, 47->52) is unchanged since the round that already adjudicated it and is carried by ADR-0035. Also measured and NOT filed as findings: `offsets.merge(key, at.nextOffset(), Math::max)` -> `offsets.put(...)` survives both suites, but it is an EQUIVALENT mutant -- `applyChain` never runs before a `crossFromCheckpoint` call, so `offsets` is provably empty at that line and merge and put cannot differ; and the LocalSequencerFailoverTest numbers were re-verified honest in an earlier round. What blocks is new and is not in this round's delta: the I3 barrier on the BOUNDED crossing is unconstrained by any test in the repository, and I have the reproducer.",
+  "findings": [
+    {
+      "id": "M4.9-R7-T1",
+      "severity": "major",
+      "blocks": true,
+      "blocks_under": "docs/internal/standards/review.md rule 10 (major-blocks): on changes-requested, a major finding blocks.",
+      "file": "sequencer/src/main/java/binjava/sequencer/ChainReplay.java:255",
+      "also": "sequencer/src/test/java/binjava/sequencer/BoundedRecoveryCorrectnessTest.java:164 (the test whose NAME reads as covering this)",
+      "title": "The bounded crossing's I3 barrier is executed by every test and constrained by none: `upTo` on the checkpoint hop can be widened to Long.MAX_VALUE and `./gradlew test` is BUILD SUCCESSFUL",
+      "surviving_mutation": "In `crossFromCheckpoint`, replace `hops.add(new Hop(chainEpoch, checkpoint.sequence(), upTo));` with `hops.add(new Hop(chainEpoch, checkpoint.sequence(), Long.MAX_VALUE));`. MEASURED IN MY OWN TREE: `./gradlew test` BUILD SUCCESSFUL across every module, and `./gradlew :sequencer:test --rerun-tasks` reports zero failures.",
+      "why_the_existing_tests_miss_it": "`aCheckpointCoveringEntriesPASTTheBarrierIsNotUsed` pins the CHECKPOINT-level guard (`checkpoint.sequence() - 1 > upTo`) and its fixture has no entries past the barrier at all, so the tail bound is never exercised against one. `theDELTASAfterTheCheckpointAreReplayed` pins where the tail STARTS (measured: both `from` off-by-ones die there) and never where it ENDS -- its chain has no zombie. The mirror guard on the PRE-EXISTING unbounded path IS pinned: widening the other two `new Hop(chainEpoch, 0, limit)` sites the same way fails `CommitLogCrossEpochTest.theCrossingStopsAtTheSlotTheCONTINUENamesRatherThanReadingTheWholePredecessor` with `expected: 6L but was: 105L`. That asymmetry is the finding: the commit added a second construction of the same barrier and no second test.",
+      "not_an_equivalent_mutant": "Proven by reproducer, not argued. I wrote a 30-line T1 test in my own tree -- epoch 1 holding Continue(0,0,0), delta(1, 6 records), a ZOMBIE delta at slot 2 with 99 records, a LATEST pointer at Checkpoint(sequence 1) which is at or before the barrier and therefore ACCEPTED, and epoch 2 holding Continue(0, 1, 1) -- and recovered epoch 2. Against the staged tree it PASSES at nextOffset = 6. Against the mutant it FAILS at 105. It is the exact fixture shape `CommitLogCrossEpochTest` already uses for the unbounded path, plus one pointer PUT.",
+      "remedy": "One test in BoundedRecoveryCorrectnessTest, the sibling of `aCheckpointCoveringEntriesPASTTheBarrierIsNotUsed`: an ACCEPTED checkpoint plus entries past the barrier. Nothing in production changes. Note that this is a missing test rather than a live defect -- the shipped code is correct under it -- so the fix adds a test and no prose.",
+      "failure_scenario": "A leader is fenced and does not stop at once. Its successor lists the chain, sees the end at slot N-1 and writes a CONTINUE naming prevSeq = N-1; the fenced leader then wins the race for slot N and writes a delta there. Everything at or past slot N is a DISCARDED SUFFIX. `hop.upTo()` is the only thing that keeps it out of the history -- `applyChain` returns at `entry.sequence() > hop.upTo()` -- and on the bounded path nothing tests that it is passed correctly. Folding the suffix in re-counts records that were never acknowledged and moves every downstream stream offset, which is I3, silently, and specifically on the path M5's 300 plugin nodes will run."
+    },
+    {
+      "id": "M4.9-R7-T2",
+      "severity": "minor",
+      "blocks": false,
+      "blocks_under": "docs/internal/standards/review.md rule 11 (minors-land): on a pass this is recorded and the commit lands. Recorded here so it is not re-derived next round; fixing it is permitted and probably not worth a round.",
+      "file": "sequencer/src/test/java/binjava/sequencer/LocalSequencerBoundedRecoveryTest.java:15",
+      "also": "sequencer/src/test/java/binjava/sequencer/BoundedRecoveryCorrectnessTest.java:18",
+      "title": "Two dead imports left by the suite split -- `java.time.Duration` in the cost suite and `binjava.format.RunKey` in the correctness suite",
+      "surviving_mutation": "n/a -- not a test-strength claim.",
+      "failure_scenario": "No functional failure; no gate catches it (the build compiles with warnings only). It is the residue of the round that split the file, and it is the same class of leftover an earlier round recorded as M4.9-R3-T11."
+    }
+  ],
+  "diff_sha256": "87bc946fb5f9a570c04363287a66984fee5eb3f8b12a6a6d657937e22d10e162",
+  "task": "M4.9",
+  "role": "test-reviewer",
+  "staged_tree": "106e5ce6d5756c3642e35240cd96118f1ec28e6e"
+}

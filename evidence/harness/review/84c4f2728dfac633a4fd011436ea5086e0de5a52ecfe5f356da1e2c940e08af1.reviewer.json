@@ -1,0 +1,31 @@
+{
+  "diff_sha256": "84c4f2728dfac633a4fd011436ea5086e0de5a52ecfe5f356da1e2c940e08af1",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "M4.10c-r6-1",
+      "severity": "minor",
+      "title": "Checkpoint.java:32 is on the row's own list of falsified sites and is the one site not corrected",
+      "file": "format/src/main/java/binjava/format/Checkpoint.java:30-33",
+      "failure_scenario": "The row names the Java sites this commit owns and says 'THE LIST IS THE AUTHORITY': `Sequencer.java:35/:46/:48-50/:88`, `CommitRequest.java:19`, `FakeSequencer.java:27` and `:29`, `Checkpoint.java:32`, `IngestCommitPathTest.java:81`, `CommitProtocolSimulation.java:58`. MEASURED with `git grep -n '(podId, flushSeq)' -- '*.java'` in a review tree at the staged bytes: every other named production site was rewritten this commit; `Checkpoint.java:32` still reads \"for the reason {@code CommitRequest} carried {@code (podId, flushSeq)} from M4.1: adding a field later is a format change, and this is the one commit where a format change costs nothing\". The premise of that analogy -- that carrying the pair early avoided a later shape change -- is what this commit falsified by adding `incarnationId` to `CommitRequest`, and the sentence is the stated justification for carrying `oldestRetainedOffset`. Minor rather than major because unlike the other sites it does NOT state the idempotency key, so the harm the row gives for the group (an M4.10d session keying dedup on the pair) does not reach it, and the historical claim it makes is still true."
+    }
+  ],
+  "measured": [
+    "Baseline: :format:test :sequencer:test :ingest:test BUILD SUCCESSFUL in a reviewer worktree at the staged bytes.",
+    "FULL hoist of the attribution to once per delta (encode writes segments.get(0).attribution() before the loop; decode fans one triple out): KILLED -- AttributedDeltaTest.everySegmentKeepsItsOwnTripleAcrossABatch, aDeltaMixingAttributedAndUnattributedSegmentsIsREFUSED, GoldenAttributedTest x2 FAILED.",
+    "PARTIAL hoist (podId per segment, incarnationId and flushSeq once per delta) -- the mutation ADR-0036 names as the invisible one: KILLED, same four tests FAILED.",
+    "commitAll hoisting incarnationId/flushSeq from requests.get(0) onto every segment: KILLED -- CommitLogAttributionTest.aCommittedDeltaCarriesTheRequestsTriplePerSegment FAILED.",
+    "DefaultIngest minting the incarnation per FLUSH instead of per instance (ADR-0036's highest-risk clause): KILLED -- IngestCommitPathTest.theIncarnationIsMintedOncePerIngestInstanceAndDiffersBetweenTwoOfThem FAILED.",
+    "Round 5's two test-reviewer majors re-measured and both now closed: deleting SegmentCommit.Attribution's whole compact constructor -> AttributedDeltaTest.aBlankPodIdOnTheWireIsREFUSED FAILED; `pointerEpoch = 1L` -> CheckpointWriterContentTest.theSlotPointsAtTheDeltaThatAppliedNotTheOneAfterIt FAILED.",
+    "The three comments deleted this round are all still enforced by test: `version > VERSION_ATTRIBUTED` -> CheckpointDecodeRefusalTest.anUNKNOWNVersionSTOPSRatherThanGuessingTheLayout FAILED; `attributedSlot` reduced to `c.uvarint() == 1` -> aPodSlotPresenceFlagOtherThanZeroOrOneIsREFUSED FAILED; `attributed = true` in Checkpoint.encode -> GoldenAttributedTest.theLegacyGoldensAreUnchangedByThisChange and GoldenCheckpointTest.reEncodingTheGoldenCheckpointReproducesItByteForByte FAILED.",
+    "Pre-ADR-0036 merge lambda (bare Math::max across incarnations) in CheckpointWriter: KILLED -- CheckpointWriterContentTest.aRestartedPodsSecondCommitIsNotRefusedByTheDeadIncarnationsWatermark FAILED.",
+    "PodState.bare sentinel -1/-1 -> 0/0: KILLED (the pointer-both-or-neither invariant throws; ten CheckpointDecodeRefusalTest cases FAILED).",
+    "COST: `git diff --cached -- '*/src/main/*'` matched on store./get/put/list/stat/putIfAbsent shows NO added or moved store call anywhere in the change. Delta PUT rate, checkpoint PUT rate (2 per checkpoint) and recovery GET/LIST counts are unchanged. `Checkpoint.pods` stays one entry per pod -- ADR-0036's rejection of qualifying the pod id by incarnation is implemented as a VALUE in PodState, so the map does not grow with restart history (ADR-0033). Growth is in BYTES only: ~40 bytes per pod in the checkpoint and ~45 per segment in a delta, on the node axis, with no request on any per-record, per-shard, per-partition or per-index axis.",
+    "WIRE FORMAT: legacy goldens byte-untouched (`git diff --cached --name-status -- format/src/test/resources` shows only two ADDED files); FakeSequencer copies the triple onto each SegmentCommit as Sequencer.java's new javadoc claims; ChainEntry.decodeKinded dispatches KIND_DELTA_ATTRIBUTED and Checkpoint.decode accepts the enumerated {VERSION, VERSION_ATTRIBUTED}; Checkpoint.decodeBody still ends with the atEnd() trailing-byte refusal.",
+    "The three SPEC.md sites the row cites by text all now read `(podId, incarnationId, flushSeq)` (SPEC.md:55, :520, :530).",
+    "The CheckpointWriter javadoc's new claim 'NOTHING IN src/main READS EITHER BACK YET' verified: no production caller of Checkpoint.pods() (ChainReplay.crossFromCheckpoint uses only offsets and sequence) and no production reader of SegmentCommit.attribution() outside CommitDelta.encode's write path."
+  ],
+  "task": "M4.10c",
+  "role": "reviewer",
+  "staged_tree": "b6be1adce818e7a51e4da158dbecb5bbfbfcd0c8"
+}

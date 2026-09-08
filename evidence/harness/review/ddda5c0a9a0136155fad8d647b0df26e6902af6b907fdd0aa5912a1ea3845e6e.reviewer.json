@@ -1,0 +1,58 @@
+{
+  "task": "M4.10",
+  "role": "reviewer",
+  "diff_sha256": "ddda5c0a9a0136155fad8d647b0df26e6902af6b907fdd0aa5912a1ea3845e6e",
+  "verdict": "changes-requested",
+  "summary": "Round-4's P14/P15/P16/P12 fixes are present and the factual citations I spot-checked are accurate (SegmentKey.render, SegmentPublisher's 'unique WITHOUT coordination', ChainReplay's merge(key,lastOffset+1,Math::max), CommitLog returning the object it PUTs, Checkpoint.decode's single version constant, CheckpointCursor.newest letting IOException out, the M3.0 quote, GoldenCheckpointTest's two measurements, CheckpointWriterContentTest's strictly-lower replay, DefaultIngest as sole issuance site). But the P15 fix replaced one false claim with another, and two further prescriptions pre-answer M4.10b's ADR in ways the tree contradicts. The pattern is now five rounds old: every finding this round is in prose that prescribes a MECHANISM, none is in prose that states SCOPE.",
+  "findings": [
+    {
+      "id": "P17",
+      "severity": "major",
+      "file": "docs/internal/product/backlog-notes.md:215-218",
+      "title": "The replacement for P15's false claim is also false: nothing in the chain can be GET by a replayed key",
+      "detail": "The second property bullet now ends 'Note that ADR-0033's own shape - the index stays in the deltas, addressed by key - answers a replay with one GET and no growth.' Both halves fail against the tree. (a) The deltas carry no pod attribution at all: CheckpointWriter.java:106 says 'it is the only place the writer can see podId and flushSeq, which the chain does not carry', and Sequencer.commit's javadoc says 'neither CommitDelta nor RunCommit carries pod attribution'. There is no mapping from (podId, flushSeq) to a segment key anywhere durable. (b) Deltas are not addressed by any key derivable from a request: LogKeys.keyFor renders '<prefix>/ctl/log/0/<epoch:016x>/<seq:016x>.delta' - addressing is by chain SEQUENCE. The 'index stays in the deltas' in ADR-0033 means the offset-to-segment direction inside a delta body, not a GET-addressable index.",
+      "failure_scenario": "M4.10b's author accepts the sentence, writes an ADR that records only a watermark and resolves the replay 'from the deltas'. M4.10d then has to find the delta that carried the replayed segment, and the only way is to walk the chain backwards GETting entries: a request count proportional to the number of deltas written since the replayed commit, growing with uptime - non-negotiable 6 and cost.md R1. Worse for the case the parent row names explicitly (the replay arrives AFTER a checkpoint recorded it): that delta lies before the newest checkpoint, so the walk must cross the boundary M4.9 and ADR-0033 exist to make unnecessary, reinstating the unbounded full-chain replay in the idempotency path. The honest statement is that NOTHING in the current shapes answers a post-checkpoint replay with its original offsets, which is precisely the question the ADR is being convened to settle - so the row should ask it, not answer it."
+    },
+    {
+      "id": "P18",
+      "severity": "major",
+      "file": "docs/internal/product/backlog-notes.md:276-285, and backlog.md:125",
+      "title": "The prescribed chain assertion cannot run on the batch the same row mandates: Invariants.checkChain throws on a multi-segment delta",
+      "detail": "The row (backlog.md:125 'require zero I2 from `Invariants`') and the notes (line 285 'run `Invariants.checkChain` requiring zero I2') pair with line 297 '`commitAll` IS THE PRIMITIVE, so a batch may mix a replay with fresh segments'. Invariants.java:116 and :253 both iterate `delta.runs()`; CommitDelta.runs() delegates to only(), which throws IllegalStateException('this delta batches N segments; ask for segments()...') whenever a delta names more than one segment - deliberately, per CommitDelta's own javadoc. The limitation is latent because no existing checkChain caller ever produced a batched delta (CommitProtocolSimulation never calls commitAll with more than one request). The I2 classification itself is right: Invariants.java:128 fires I2 when run.firstOffset() < the folded high-water mark, which a same-offset re-append does.",
+      "failure_scenario": "The M4.10d implementer writes the mandated mixed-batch test (replay plus a fresh segment in one commitAll), then calls Invariants.checkChain over that chain and gets IllegalStateException, not a violations list. The three exits are all bad: widen scope into a shared test helper that CommitProtocolSimulation's invariant checking depends on (unowned by this row, and the class of change M4.8b1's notes record as producing a blinded checker); drop the mixed-batch case, losing the co-batched-flush requirement; or drop the checkChain assertion, which is the one the row calls load-bearing - leaving the re-append blindness the paragraph was written to close."
+    },
+    {
+      "id": "P19",
+      "severity": "major",
+      "file": "docs/internal/product/backlog-notes.md:200-203, and backlog.md:123",
+      "title": "'If it suffices, M4.10c is void' ignores the durable side: Checkpoint.pods is Map<String,Long>, one uvarint per pod",
+      "detail": "The SegmentKey observation is accurate as far as it goes (SegmentKey.render emits timestampMillis, podShortId, sequence; SegmentPublisher.java:137 calls it unique without coordination; and SegmentPublisher's `sequence` is itself an AtomicLong instance field, so timestampMillis really is the only restart-surviving component). What the row then concludes does not follow. The idempotency check must survive a checkpoint, and the checkpoint's side of it is Checkpoint.java:44 `Map<String, Long> pods`, encoded at line 137 as one uvarint per pod. A key of (timestampMillis, sequence), or a segment key, is not a single monotone long per pod, so adopting the SegmentKey token changes the checkpoint format regardless of what the chain already carries. M4.10c is void only under a further mechanism the row does not state (for instance a composite podId string, which CommitRequest.java:55 constrains by refusing '-' and '/').",
+      "failure_scenario": "The ADR takes the void branch at face value, concludes 'no format change needed - the chain already carries it', and M4.10c is closed as void. M4.10d then implements dedup whose durable half is still a per-pod long that cannot represent the chosen key, so a window recovered from a checkpoint compares a bare pair against a qualified one and post-restart flushSeq 0 matches pre-restart flushSeq 0 - the exact failure M4.10c's own notes (backlog-notes.md:225-228) describe, arrived at through the branch that was supposed to avoid the work."
+    },
+    {
+      "id": "P20",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:125 against backlog-notes.md:186",
+      "title": "P14 is now inverted rather than closed: the authoritative row understates M4.10d's ordering constraint",
+      "detail": "The M4.10 notes say 'M4.10d is blocked by M4.10b, and DEPENDS on M4.10c's outcome'. The M4.10d row says only 'Depends on M4.10b.', and the #m410d notes section - the only notes a session picking d is allowed to read, per next-task - says nothing about ordering at all. Round 4 found the rows overstating independence from c; they now silently omit the dependency instead.",
+      "failure_scenario": "M4.10b's ADR lands requiring a field; M4.10c is open. A session runs next-task, judges M4.10c 'conditional and possibly void' and therefore not the top unblocked row, reads M4.10d's row ('Depends on M4.10b' - satisfied) and its notes (silent), and builds the dedup against a checkpoint that cannot carry the qualified key. One clause in the M4.10d row and one line in the #m410d notes closes it; the recurrence is itself the argument that this ordering cannot be stated correctly until the ADR exists."
+    },
+    {
+      "id": "P21",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:243-244",
+      "title": "The paragraph that owns the end-to-end anchor names the wrong object",
+      "detail": "'a delta built with an EMPTY pod map passes version, readers, writers, fakes and a new golden'. A delta has no pod map; the pods map is Checkpoint.java:44, and one paragraph earlier this section insists the two formats are different and discriminate differently. The mutation being described is presumably a CommitDelta that carries the new per-segment attribution but is never populated on the commit path, or a Checkpoint whose pods map is never fed.",
+      "failure_scenario": "An implementer reads it as the checkpoint case, which the existing CheckpointWriterContentTest tripwire already half-covers, and never writes the delta-side anchor - so a CommitDelta with the new field present and never populated ships green, which is the exact hole the paragraph opens by naming."
+    },
+    {
+      "id": "P22",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:243-249, and backlog.md:124",
+      "title": "M4.10c owns folding into CheckpointWriter.pods but carries no bound on that map, and the existing size test brackets streams only",
+      "detail": "The no-growth property is stated only in M4.10b's notes. M4.10c - the row that actually lands the format and the fold - has no size or eviction criterion, and CheckpointWriter.java:78 holds `pods` as a plain HashMap that is never pruned. CheckpointTest.aCheckpointAt1600StreamsStaysNearItsSTATEDSize brackets 1,600 STREAMS; nothing brackets pod entries.",
+      "failure_scenario": "If the ADR qualifies the pod key with an incarnation token, every pod restart adds a pods entry that is never evicted, so the checkpoint - the object read first on every recovery - grows with fleet restart history rather than with fleet size. ADR-0033's own size assertion does not see it because it varies streams, not pods, and no criterion in M4.10c asks anyone to look."
+    }
+  ],
+  "staged_tree": "64678bd2806a80bb236920eb3c9ec751a7282206"
+}

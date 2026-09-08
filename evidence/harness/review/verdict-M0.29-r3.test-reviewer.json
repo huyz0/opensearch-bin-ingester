@@ -1,0 +1,48 @@
+{
+  "diff_sha256": "43d04787d619e1abe18b9462d61a697dd9bbcb4e1e93a60b40af75dcee4a4528",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "TR3-1",
+      "severity": "major",
+      "file": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java:171-187",
+      "summary": "The info/exclude plant SHADOWS the two personal-ignore plants (git precedence: .gitignore > $GIT_DIR/info/exclude > XDG/core.excludesFile), so the reported source is always .git/info/exclude and the personal-ignore case -- the one the deleted `-c core.excludesFile=/dev/null` used to cover -- is not constrained by any assertion. Measured, not inferred: with all three planted, `git check-ignore -v .tmp/probe` reports `.git/info/exclude:2:.tmp/`; deleting the xdg/.config plants changes nothing.",
+      "failure_scenario": "Relax the source anchor at scripts/check-gate-scope.sh:133 from `.gitignore:*)` to `.gitignore:*|*/ignore:*)`. MEASURED against the real gate in a fixture built exactly as freshCheckout() builds one: the refusing test still gets exit 1 + 'not gitignored' + 'matched instead by:' (all three assertions pass) and the accepting test still gets exit 0 -- the mutation SURVIVES the whole new suite. It is not benign: on a machine whose ~/.config/git/ignore lists .tmp/ and whose repository .gitignore has lost the pattern (no info/exclude entry -- the realistic shape), the mutated gate exits 0 and prints 'ok 27 gate scripts judge this repository only'. That is the vacuous pass the anchor replaced the deleted flag to prevent. The commit deletes a defence and the test written to constrain the replacement is blind to that defence's input. Kill it with two edits: assert `contains(\".git/info/exclude\")` in gateScopeRefusesWhenTmpIsNotIgnored, and add a case that plants ONLY the personal ignore (no info/exclude) and asserts refusal naming the personal path."
+    },
+    {
+      "id": "TR3-2",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java:187",
+      "summary": "The assertion checks the LABEL 'matched instead by:' but never the source it is supposed to name, so the stated contract ('the gate must name what matched instead, or the failure is unactionable') is asserted only as far as a fixed prefix.",
+      "failure_scenario": "Replace `${_tmp_rule%%<TAB>*}` at scripts/check-gate-scope.sh:138 with the literal string `an ignore rule`. MEASURED: the gate prints '(matched instead by: an ignore rule)', exit 1, 'not gitignored' present -- every assertion in the test passes while the failure message names nothing and the operator cannot tell a personal ignore from info/exclude from a nested .gitignore. Folded into TR3-1's fix: asserting the named source kills both."
+    },
+    {
+      "id": "TR3-3",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java:100-119",
+      "summary": "run()'s javadoc claims it 'Pins the same environment gate() does'. It does not: gate() sets HOME and XDG_CONFIG_HOME, scrub() sets neither, and GIT_CONFIG_GLOBAL=/dev/null does not disable $XDG_CONFIG_HOME/git/ignore -- the script's own comment at check-gate-scope.sh:115 says so. So the fixture's `git add -A` reads the real developer's personal excludes file. Answering the author's Q2 directly: yes, scrub() on trackedIn() changes what the post-condition compares -- with GIT_DIR leaked both sides resolved to the outer repository and the equality was a list compared to itself; it is now a real comparison. The residual gap is HOME/XDG on run(), not GIT_DIR.",
+      "failure_scenario": "MEASURED: a personal `~/.config/git/ignore` containing `docs/` causes `git add -A` in a freshly `git init`-ed tree to skip docs/a.md even with GIT_CONFIG_GLOBAL=/dev/null set. On such a machine every test in this class fails at 'the fixture must hold exactly the tracked tree' -- a false RED produced by the developer's environment, in the suite whose entire thesis is that the environment must not decide the answer. Loud rather than silent, hence minor, but the javadoc asserts the opposite of what the code does. Fix: move the HOME/XDG_CONFIG_HOME pinning out of gate() into scrub()."
+    },
+    {
+      "id": "TR3-4",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java:201,213-215",
+      "summary": "harnessTestsCreatesItsLogDirectoryBeforeRedirecting asserts the log EXISTS but never that anything was written to it, and the stub (`exit 7`, no output) makes content unassertable by construction. The gate's contract is not 'a file is at this path' but 'the message points at a log that explains the failure' -- line 49 greps that log for the failure detail.",
+      "failure_scenario": "MEASURED against the real gate with the test's own stub gradlew: keep `mkdir -p .harness`, add `: > .harness/harness-tests.log` and redirect Gradle to `> /dev/null 2>&1`. Result: no 'No such file or directory', log exists (size 0), exit 1, 'harness tests failed' present -- all four assertions pass while the cited log is empty and the grep prints nothing. Dropping `2>&1` from the redirect survives identically. Fix: stub `echo BOOM >&2; exit 7` and assert the log contains BOOM; that one assertion kills both mutations."
+    },
+    {
+      "id": "TR3-5",
+      "severity": "minor",
+      "file": "buildSrc/build.gradle.kts:46-53",
+      "summary": "The new `rootGitignore` input declaration is production configuration on which this commit's freshness claim rests, and nothing constrains it. The comment states the measurement ('without this, removing that line left `test` UP-TO-DATE and the gate printed ok'), but no test observes it.",
+      "failure_scenario": "Delete the three `inputs.file(rootGitignore)` lines. All 64 harness tests stay green; the regression only appears later, as gateScopeRefusesWhenTmpIsNotIgnored silently not running on the exact edit it exists to catch -- a gate reporting ok having executed nothing, which is the lens this review was given. M0.24 already scopes the `printTestInputs` assertion for declared inputs; this is a second member for that task, not new work here."
+    },
+    {
+      "id": "TR3-6",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java:138,156,196",
+      "summary": "testing.md rule 17: @TempDir resolves to java.io.tmpdir (/tmp) because neither buildSrc/build.gradle.kts nor a junit-platform properties file redirects it. Answering the author's Q3: deferring is right, and I am recording it as minor rather than asking for it here.",
+      "failure_scenario": "The concrete cost is bounded and does not hide a bug: the tracked tree is ~1.1 MB per fixture, /tmp is a 23 GB tmpfs, and the same violation already exists at 13 call sites in ModuleGateTest, so fixing it in this file alone would leave the standard half-applied and widen this commit's scope. The failure it could produce is a full /tmp on a constrained machine aborting the suite with an IOException rather than a test failure -- an unexplained RED, not a false GREEN. Name it in the commit body so the queued task inherits a list rather than a memory."
+    }
+  ]
+}

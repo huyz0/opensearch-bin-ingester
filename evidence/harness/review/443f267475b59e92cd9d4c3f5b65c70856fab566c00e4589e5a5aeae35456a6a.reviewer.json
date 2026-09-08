@@ -1,0 +1,8 @@
+{
+  "diff_sha256": "443f267475b59e92cd9d4c3f5b65c70856fab566c00e4589e5a5aeae35456a6a",
+  "verdict": "pass",
+  "findings": [],
+  "task": "M4.8b",
+  "role": "reviewer",
+  "staged_tree": "1bb59b1123f77f5df67fdb07dff0d1fbce88012f"
+}

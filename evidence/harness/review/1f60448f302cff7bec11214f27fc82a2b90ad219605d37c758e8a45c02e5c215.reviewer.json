@@ -1,0 +1,73 @@
+{
+  "diff_sha256": "1f60448f302cff7bec11214f27fc82a2b90ad219605d37c758e8a45c02e5c215",
+  "verdict": "changes-requested",
+  "summary": "The harness has real teeth in-chain -- measured: replacing CommitLog.commit's `throw fenced(seal)` with fold-and-continue makes aCleanRunViolatesNothing fail on I5, so the zombie mechanism is doing what its comment claims. But the ONE property the row and the class javadoc single out -- I2 across the epoch boundary -- is checked against the same input production used to compute it, so the checker cannot disagree with production and reports clean for a real cross-boundary I2. Measured, not argued.",
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/Invariants.java",
+      "line": "80, 137-177 (inheritedOffsets); flag at 67; consumed at 109-114",
+      "finding": "The cross-epoch I2 check derives the boundary ENTIRELY from the successor's own CONTINUE -- `from = opening.prevEpoch()`, `upTo = opening.prevSeq()` -- which is byte-for-byte the same pair LocalSequencer.start:110 passes to CommitLog.open -> crossFrom -> ChainReplay.inherited to compute the offsets it then commits at. The checker never reads the predecessor's SEAL, never checks that the predecessor IS sealed, never checks prevSeq == that Seal's sequence, and never checks Seal.continuedAt names this epoch. So every I2 caused by a wrong or missing link is invisible: production and the checker make the same mistake and agree. The javadoc at :133-135 claims the opposite ('a checker that shares state with what it checks agrees with it') and :151-154 claims the rule is 'DERIVED FROM THE PROTOCOL, not copied from ChainReplay' -- the mechanism is re-derived, the INPUT is not, and the input is where the defect lives. crossEpochOffsetsChecked() returning true (:67), asserted by InvariantsTest:159 as the API's honest-reporting claim, therefore over-states what a clean report means.",
+      "failure_scenario": "MEASURED on this tree. I mutated LocalSequencer.java:110 from `log.open(prevEpoch, prevSeq)` to `log.open(prevEpoch, 0)` -- i.e. a leader that seals its predecessor correctly but links to slot 0, so every successor restarts every stream at 0 after the predecessor acknowledged records. That is I2, NFR-11 and acceptance criterion 4 violated on every failover. Result: Invariants.checkChain returned EMPTY for BOTH chains (InvariantsTest:139 and :141 passed), and CommitProtocolSimulationTest.aCleanRunViolatesNothing stayed GREEN across a run with 18 takeovers. The only assertion that died was InvariantsTest:147 -- `resumed.runs().getFirst().firstOffset()` expected 6, was 0 -- which is a PRODUCTION-side assertion, not the checker. So M4.13's 1,000-seed sweep, whose entire evidence is `violations().isEmpty()`, would run green over a system that reassigns every offset at every failover. Available fix that stays re-derived rather than delegated: the protocol says a chain may only continue from one sealed before it (ChainReplay.java:158 states exactly this as an error), so fold the predecessor up to ITS OWN Seal sequence and emit a violation when the CONTINUE's prevSeq disagrees with it, when the predecessor carries no Seal, or when the predecessor's Seal.continuedAt does not name this epoch. That derivation reads a fact production did not supply and would have killed the mutation above."
+    },
+    {
+      "id": "F2",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSimulation.java",
+      "line": "188",
+      "finding": "The second `Invariants.checkChain(backing, PREFIX, epoch)` inside the `if` is provably dead as a disjunct: every `found.add` in checkChain is inside the `for (i < entries.size())` loop, so a non-empty violation list implies a non-empty chain, which implies `hasChain(backing, epoch)` is true. The first operand can therefore never change the branch, and it costs a full second walk of every chain -- one LIST plus one GET per entry -- on top of the walk already done at :184.",
+      "failure_scenario": "Not a correctness bug today; it is a cost bug on the path M4.13 is budgeted against. With rounds=120, pods=3 the check phase already scans 360 epochs at 3 LISTs each and re-decodes every entry of every real chain twice. M4.13's row states <60s for 1,000 seeds and a configurable seed count; landing the harness with the dominant phase doing exactly twice the necessary reads makes that budget half as reachable, and the redundancy is invisible once the seed sweep is the thing being tuned. A reader also cannot tell whether the second call is deliberate ('check again after something changed') -- nothing changes between :184 and :188."
+    },
+    {
+      "id": "F3",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSimulation.java",
+      "line": "183",
+      "finding": "The check phase scans epochs 1..pods*rounds with no guard that the run's actual highest epoch is inside that bound. Nothing in the harness asserts the relationship (today at most one epoch is burned per round, so the bound holds with 3x slack), and `highest` is computed by the same loop, so it can never report an epoch outside the range it scanned.",
+      "failure_scenario": "If a future round ever burns more than `pods` epochs -- M4.17 adds a renew tick, and a renew that self-fences takes over at E+1 without consuming a round; M4.16 is filed as burning epochs -- the highest chains fall outside the scan. Their violations are never read, `highestEpoch()` silently caps at the scan bound, and the run reports clean about chains nobody looked at. That is the exact shape the file's own anti-vacuity comments exist to prevent, arriving through the scan bound instead of through the fault store. A cheap guard: derive the bound from the last LocalSequencer's epoch() (or assert `!hasChain(pods*rounds + 1)`)."
+    },
+    {
+      "id": "F4",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/FaultInjectingStore.java",
+      "line": "38-42 and 64-66",
+      "finding": "`Faults` validates nothing, and `fires` is written as `p > 0 && random.nextDouble() < p`. A probability outside [0,1] -- the range the record's own javadoc states -- is accepted silently: a negative one disables that fault class entirely and a value above 1 makes it fire on every call. The class javadoc names 'a seed that silently injects nothing is a green test that proves the absence of testing' as THE risk this file exists to defend against, and then leaves the bad state representable.",
+      "failure_scenario": "M4.13 writes `new Faults(-0.05, 0.05, 0.1)` (a sign typo, or a probability computed from a seed sweep), the sweep reports 1,000 clean seeds, and the row records that the unreachable class was exercised across the whole range. Nothing fails, nothing logs, and `injected()` -- the defence -- shows the other two classes firing, so the aggregate 'faults were injected' assertion still passes. Non-negotiable 9 rung 1: reject it in the compact constructor and the state stops existing."
+    },
+    {
+      "id": "F5",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/FaultInjectingStore.java",
+      "line": "49, 64-66, 71-95",
+      "finding": "One `Random` is shared by all three fault classes, and `fires` returns early WITHOUT drawing when p == 0. So the number of draws per call depends on which classes are enabled and on whether an earlier class fired: turning one class on or off re-aligns every other class's fault positions for the same seed. Determinism itself is fine -- the simulation's own decisions come from a separate Random and the driver is single-threaded, so call order is reproducible -- but the classes are not independent knobs. (Secondary: the store and the simulation are both seeded from the SAME `seed` value, so fault positions and scheduling decisions are drawn from two identically-seeded streams.)",
+      "failure_scenario": "Criterion 1 requires 'each injected fault class must have at least one seed where it changes the outcome, reported by the harness'. The natural way to show that is to hold the seed and the schedule fixed and toggle one class -- which here also moves every other class's faults, so the observed difference in outcome cannot be attributed to the class that was toggled. M4.13 then either reports per-class evidence it did not establish, or has to change this decorator's internals after the sweep is written. One Random per fault class, all drawn unconditionally, makes the attribution sound."
+    },
+    {
+      "id": "F6",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/FaultInjectingStore.java",
+      "line": "129-139 (putIfMatch), 121-127 (getRange/put)",
+      "finding": "The backlog row states 'TWO OF THE FIVE FAULT CLASSES criterion 1 names are NOT MODELLED -- delayed writes and reordered completions'. Verified against the code, that UNDERSTATES the gap on the third: `putIfMatch` -- the ONLY primitive the lease uses for takeover, renew and release (LeaseManager:251, :303, :439) -- gets `ambiguousPut` but NOT `unreachable`, so a lease CAS can never fail cleanly. And the store has no notion of WHICH pod is calling, so `unreachable` is a global per-call coin flip rather than a per-node partition. What is actually modelled of 'partitioned leaders' is its CONSEQUENCE (the zombie list plus the clock advance, in the simulation) and not the fault itself. `put`, `getRange`, `multipart` and `delete` inject nothing at all, which is defensible for the ones the commit protocol does not use but is not stated anywhere.",
+      "failure_scenario": "M4.13 reads a row marked **done** that names exactly two gaps, believes 'partitioned leaders' is available from the harness, and writes the criterion-1 per-class evidence assertion for it. There is no fault to attribute the outcome change to -- a renew that fails while the store is up for everyone else cannot be produced -- so the sweep either asserts nothing for that class or credits the zombie mechanism with it. The row is the evidence a `done` task leaves behind; it should say partitioned leaders is modelled only as a consequence, and that the lease CAS path is exempt from the unreachable fault."
+    },
+    {
+      "id": "F7",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/Invariants.java",
+      "line": "84-88",
+      "finding": "The I1 arm of checkChain is unexercised. MEASURED: deleting lines 84-88 in full and running `./gradlew :sequencer:test --rerun-tasks` leaves the ENTIRE sequencer suite green (InvariantsTest 6/6, CommitProtocolSimulationTest 3/3, all other classes green). No test builds a chain with a repeated sequence, and the simulation cannot produce one for a store that honours putIfAbsent. The class javadoc :31-34 lists I1 as checked 'anyway, because a backend whose write-once primitive slipped would break I1 with nothing here being wrong' -- but a slipped write-once OVERWRITES one key, it does not create two, so the duplicate-sequence predicate as written would not see that case either; what it can actually catch is a key/content disagreement, which is not what the comment says.",
+      "failure_scenario": "The claim of I1 coverage is unfalsifiable, so if a later refactor breaks the arm (e.g. keying seenAt on the object key instead of the entry's sequence field) nothing reports it and the class continues to advertise I1 as checked. Either give it a chain with a key whose decoded entry repeats a sequence -- which also pins that entry.sequence() is trusted rather than derived from the key -- or say in the javadoc that I1 is held by the key grammar and by FaultInjectingStoreTest's write-once assertion, and that this arm covers only key/content disagreement."
+    },
+    {
+      "id": "F8",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/InvariantsTest.java",
+      "line": "60 and 154",
+      "finding": "Two tests build a LeaseManager on `java.time.Clock.systemUTC()` in the commit that introduces SimulatedClock precisely so nothing in this harness reads a wall clock (SimulatedClock.java:10-20, CommitProtocolSimulation.java:20-24). SimulatedClock is in the same package and would drop in unchanged.",
+      "failure_scenario": "The TTL is 10s of real time. If the JVM stalls between `start(store, \"pod1\")` and the assertions -- a WSL2 swap, a CI cold start, a long GC, or a debugger breakpoint -- pod1's lease expires mid-test, so `tryAcquire` for pod2 at :137 takes the expired-takeover branch instead of the acquire-after-release branch. The test still passes, which is worse than failing: which of the two failover paths it exercises is then decided by the machine rather than by the test, and those two paths are exactly the distinction CommitProtocolSimulation's javadoc :26-30 says the harness exists to keep separate."
+    }
+  ],
+  "task": "M4.12",
+  "role": "reviewer"
+}

@@ -1,0 +1,43 @@
+{
+  "diff_sha256": "fe9a213d5a22fdc1e7867e8e67aeaabb4958ab2fff43ee85f3830351061eda20",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "file": "buildSrc/src/test/java/binjava/ReviewTreeTest.java",
+      "line": 290,
+      "severity": "major",
+      "what": "aTmpdirInsideTheRepositoryIsREFUSEDAndLeavesNothingBehind passes a TMPDIR that DOES NOT EXIST (repo.resolve(\"scratch-inside-repo\"), never created), so the script is refused by the earlier `TMPROOT=$(cd ... )` branch with 'TMPDIR=... is not a directory' and NEVER REACHES the containment guard. The guard the test is named for, and its `pwd -P`, are both entirely unconstrained. The second assertion (doesNotExist) also cannot fail, because the script bailed before creating anything.",
+      "failure_scenario": "MEASURED, two surviving mutations, each green on all 11 tests in the issued tree. (1) Delete the whole `case \"$TMPROOT/\" in \"$ROOT\"/*) ... esac` block from scripts/review-tree.sh (lines 58-60): 11/11 pass. (2) Change `pwd -P` to `pwd` on line 55: 11/11 pass. Mutation (2) is a real regression, reproduced by hand: with TMPDIR a symlink to a directory inside the repository, the unmutated script prints 'TMPDIR resolves inside <ROOT>; set it elsewhere' and exits 1, while the logical-pwd mutant exits 0 and materialises a full copy of the tree plus a nested .git PHYSICALLY INSIDE the working tree -- exactly what round 2 found and what `pwd -P` was added to close. Fix: create the directory before invoking, and add a symlinked-TMPDIR case."
+    },
+    {
+      "file": "scripts/review-tree.sh",
+      "line": 99,
+      "severity": "major",
+      "what": "The GIT_* strip -- which the backlog row calls 'NOT cosmetic' and measures at 565 index entries to 5 -- is UNTESTED in both places it ships. The only test is strippingRemovesEveryInheritedGitVariable, which exercises GitEnv.stripped, a buildSrc TEST HELPER, not either shipped path. Deleting the `for v in $(env | sed -n ...); do unset \"$v\"; done` line from review-tree.sh's sh -c body, and deleting `env -u GIT_INDEX_FILE -u GIT_DIR -u GIT_WORK_TREE` from check-harness-tests.sh line 45, each leave the suite fully green. This is the 'correct, fully-tested, DEAD function' shape M0.56's round-1 test review already found in this repo: the falsifiable helper is tested and the shipped path is not.",
+      "failure_scenario": "MEASURED. Mutation A: remove the unset loop from review-tree.sh -- 11/11 ReviewTreeTest pass. Reproduced by hand in a scratch repository with GIT_DIR and GIT_WORK_TREE exported: unmutated, the caller's HEAD stays d355fa9, its index stays at 3 entries, and `git -C $DEST log` shows the single 'the staged bytes under review' commit. With the strip removed and the SAME input, the CALLER'S REPOSITORY gains a spurious commit (d355fa9 -> 8cd0cfa, subject 'the staged bytes under review'), its index goes 3 -> 7 entries, and the issued tree is not a self-contained repository. Suite green throughout. Mutation B: remove the `env -u` from check-harness-tests.sh -- the FULL buildSrc suite runs 238 tests, 0 failures. A test is cheap: theTreeIsMaterialisedFromTheCALLERSPrivateIndexNotTheRepositorysDefaultOne already builds the non-hermetic fixture; exporting GIT_DIR/GIT_WORK_TREE there and asserting the caller's HEAD and index entry count are unchanged, plus `git -C DEST rev-list --count HEAD == 1`, kills mutation A."
+    },
+    {
+      "file": "buildSrc/src/test/java/binjava/ReviewTreeTest.java",
+      "line": 226,
+      "severity": "major",
+      "what": "theTreeIsAGitRepositorySoGatesDoNotPassVACUOUSLYInsideIt asserts a PROXY (`git ls-files` contains subject.txt) that is strictly weaker than the property it is named for. `git ls-files` is lib.sh's `workspace_files`, i.e. the GATE_SCOPE=full input. Every gate's DEFAULT mode is delta, whose input is `changed_files()` = `git diff --cached`, and in the tree this script issues that is EMPTY -- because the script commits everything, so the index matches HEAD. The test therefore passes while the exact failure its own comment quotes is still live.",
+      "failure_scenario": "MEASURED on the UNMUTATED shipped script, in the tree it issued for this review: padded scripts/check-file-size.sh to 617 lines (the input that gate must reject) and ran `./scripts/check-file-size.sh` the default way -- output `ok   0 source file(s) within 500 lines (changed files only ...)`, rc=0. That is the row's own quoted vacuous-pass string, verbatim, produced by the tree that was supposed to eliminate it; `git diff --cached --name-only | wc -l` is 0 there. A reviewer verifying a gate change the intended way, by mutating the input the gate must reject, still gets green for every mutation unless it happens to set GATE_SCOPE=full, which neither the packet block nor review/SKILL.md mentions. Surviving mutation of the same shape: drop `git commit -qm ...` from the sh -c body -- 11/11 pass, even though it changes what every delta-mode gate sees. Fix: assert on a GATE's output in the issued tree (mutate a file, assert check-file-size.sh FAILS), which is the property, rather than on `git ls-files`, which is a proxy."
+    },
+    {
+      "file": "buildSrc/src/test/java/binjava/ReviewTreeTest.java",
+      "line": 144,
+      "severity": "minor",
+      "what": "thePacketSTILLIssuesTheTreeSoTheScriptCannotBecomeAnOrphan greps the SOURCE of review.sh for 'review-tree.sh' rather than the packet it EMITS, so it constrains presence of a string, not the wiring. Any change that keeps the text but stops emitting it survives. (It is not vacuous today -- there is exactly one occurrence, on line 45 -- so a plain deletion of the block is caught.)",
+      "failure_scenario": "MEASURED, two surviving mutations, 11/11 green. (1) Replace the whole `=== YOUR OWN TREE TO MUTATE IN ===` block with the single line `# dead reference: review-tree.sh`: the packet no longer issues the tree at all, and the test passes. (2) Wrap the block in `if false; then ... fi` (bash -n clean): the packet emits nothing and the test passes. Both are the exact regression the test names -- the script becomes an orphan and reviewers go back to improvising. A stronger form at the same cost: assert the string occurs on a line matching `^\\s*echo` inside the `context` branch, or capture the block by running the emitting function."
+    },
+    {
+      "file": "buildSrc/src/test/java/binjava/ReviewTreeTest.java",
+      "line": 84,
+      "severity": "minor",
+      "what": "strippingRemovesEveryInheritedGitVariable is named for 'every' and constrains exactly the four keys it seeds. It is genuinely stronger than the three-key list its comment argues against, but it does not constrain the `startsWith(\"GIT_\")` predicate itself, and GitEnv's javadoc claims 'every inherited GIT_* variable'.",
+      "failure_scenario": "MEASURED: replacing `b.environment().keySet().removeIf(k -> k.startsWith(\"GIT_\"))` with `removeAll(List.of(\"GIT_INDEX_FILE\", \"GIT_DIR\", \"GIT_WORK_TREE\", \"GIT_OBJECT_DIRECTORY\"))` passes 11/11, leaving GIT_COMMON_DIR (which git itself exports inside a worktree), GIT_ALTERNATE_OBJECT_DIRECTORIES and GIT_CEILING_DIRECTORIES inherited by every child this suite spawns. Killable by seeding one arbitrary key -- e.g. GIT_ZZZ_UNKNOWN -- and asserting no remaining key startsWith(\"GIT_\"), which constrains the predicate rather than a list."
+    }
+  ],
+  "task": "M0.57",
+  "role": "test-reviewer"
+}

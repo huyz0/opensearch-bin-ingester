@@ -1,0 +1,22 @@
+{
+  "diff_sha256": "9b961d5b9a337861ff05658c7778ae2559ca2e90f7df97d523f426c8eadb07c4",
+  "verdict": "pass",
+  "findings": [
+    {
+      "file": "ingest/src/main/java/binjava/ingest/SegmentPublisher.java",
+      "line": 130,
+      "severity": "minor",
+      "summary": "The 'read sequence once, before choosing the filter' fix has no test anywhere in the ingest module.",
+      "failure_scenario": "Reverting to two independent sequence.getAndIncrement() calls passes the entire :ingest:test suite with zero failures. Low-risk in practice: SegmentKey renders sequence via %016x, always exactly 16 hex characters for any long, so the desync cannot change the byte-length arithmetic the round-1 fix depends on; the only observable effect is burning one extra sequence number per flush."
+    },
+    {
+      "file": "format/src/main/java/binjava/format/SegmentKey.java",
+      "line": 139,
+      "severity": "minor",
+      "summary": "SegmentKey.filterBudgetBytes has no standalone unit test; exercised only indirectly through PathologicalKeySizeTest.",
+      "failure_scenario": "Not a live gap: hardcoding 900 and an off-by-one (+1) were both caught by everyPopulationFromOneToTenThousandIndicesNeverOverflowsTheKeyBudget. A dedicated unit test would localize a future failure faster, but integration coverage is currently adequate."
+    }
+  ],
+  "task": "M2.8",
+  "role": "test-reviewer"
+}

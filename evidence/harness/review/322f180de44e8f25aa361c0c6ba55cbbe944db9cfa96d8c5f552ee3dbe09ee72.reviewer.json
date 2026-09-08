@@ -1,0 +1,52 @@
+{
+  "diff_sha256": "322f180de44e8f25aa361c0c6ba55cbbe944db9cfa96d8c5f552ee3dbe09ee72",
+  "verdict": "changes-requested",
+  "summary": "Four majors, all of them false statements about what the sweep does. `sweep.seeds` does not reach the test JVM (MEASURED: -Dsweep.seeds=5 ran 1000 seeds), so the row's 'configurable seed count' criterion is unmet. The trace does NOT include the slot-0 CONTINUE the row claims and M4.13's notes require. The notes' second obligation -- assert a violation message's CONTENT on first consumption -- is unmet, and the exact mutant the notes name still survives the whole suite (MEASURED). And 'a pipelining writer would be caught the day it arrives' is false, because the driver synthesises the CONFIRMED event from the ACK. The honesty enumeration is accurate about what it lists and incomplete about what it omits.",
+  "findings": [
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSweepTest.java:58",
+      "severity": "major",
+      "title": "`sweep.seeds` is not configurable through the only runner this repo has",
+      "failure_scenario": "MEASURED in a review tree: `./gradlew :sequencer:test --tests binjava.sequencer.CommitProtocolSweepTest --rerun-tasks -Dsweep.seeds=5` printed `SWEEPSEEDS 1000 ELAPSED 15660`. Gradle does not forward arbitrary `-D` to the forked test worker, and `buildSrc/src/main/kotlin/binjava.java-conventions.gradle.kts:104-127` sets only `java.io.tmpdir` -- there is no `systemProperty(\"sweep.seeds\", ...)` passthrough. So the javadoc at :53-57 ('CONFIGURABLE ... A lower count is for bisecting a failure'), the archive row's 'seed count configurable via `sweep.seeds`' (docs/internal/product/backlog-done.md:177) and the task's own acceptance criterion 'a configurable seed count' are all false. The concrete cost is the case the javadoc names: an agent bisecting seed 55 sets the property, waits the full 15s x N, and gets the 1,000-seed run every time with no indication the flag was ignored. Fix is one line in the sequencer build or the conventions plugin: `systemProperty(\"sweep.seeds\", providers.systemProperty(\"sweep.seeds\").getOrElse(\"1000\"))`."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSimulation.java:272",
+      "severity": "major",
+      "title": "The slot-0 CONTINUE is not emitted, and the archive row says it is",
+      "failure_scenario": "The only `AckEvent`s the driver emits are the confirmed/acked pair at :272-273, on the leader's success path. `grep -rn AckEvent sequencer/src` finds no other emission. So no CONFIRMED event exists for the CONTINUE at slot 0, and `AckOrderInvariants.checkAckOrder`'s base (`base.merge(..., Math::min)`, :94-97) is the lowest COMMIT sequence, not 0. MEASURED with a probe through production (`LocalSequencer.start` then two commits): `PROBE epoch=1 first=1 second=2` -- the base is 1 for every epoch, exactly the hole `AckOrderInvariants.java:77-83` describes and assigns to this row ('it is for the caller to emit a CONFIRMED event for the slot-0 CONTINUE, which pins the floor at 0 and removes the hole. M4.13 owns that'), and that M4.13's own notes make a requirement (backlog-notes.md:917). Two consequences: (a) docs/internal/product/backlog-done.md:177 states 'checkAckOrder over a trace the driver emits including the slot-0 CONTINUE', which is false and, in a file whose header says rows that shipped are never rewritten, permanently so; (b) backlog-notes.md:917's obligation paragraph is left unamended while the row is marked done, so the tree carries one copy saying it must happen and another saying it did -- the failure mode baselines/review.txt records for M4.10d and M4.13f. Either emit `AckEvent.confirmed(epoch, 0)` at takeover, or amend both the row and the note to say the floor stays at 1 and name the row that closes it."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSweepTest.java:82",
+      "severity": "major",
+      "title": "The notes' second obligation is unmet: the first consumer of a violation message asserts no content, and the named mutant still survives",
+      "failure_scenario": "backlog-notes.md:927 assigns this row: 'AND WHEN IT FIRST CONSUMES A VIOLATION MESSAGE, ASSERT ITS CONTENT ... mutating it to name the EPOCH where the sequence belongs passes all 14 of that row's tests ... Both reviewers deferred it here.' The sweep is that first consumer -- it formats `v.invariant()` and `v.detail()` at :82 -- and asserts only `failing.isEmpty()`, so it constrains no message content at all. MEASURED in a review tree: swapping the two terms in `AckOrderInvariants.java:118-119` to `\"epoch \" + e.sequence() + \" acked sequence \" + e.epoch()` leaves `./gradlew :sequencer:test --rerun-tasks` BUILD SUCCESSFUL -- the whole suite including the new 1,000-seed sweep. `AckOrderTest`'s three own-write-arm tests each check only `invariant()`, `hasSize`, or `contains(\"epoch 2\")` on a trace where epoch and sequence are both 2, which is why the mutant survives. No new backlog row owns it either (`grep -rn 'own-write' docs/internal/product/` hits only the note). Concretely: the day a seed fails on that arm, the report names the sequence as the epoch and sends whoever pins the regression to the wrong slot -- which is the harm the note was written about."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSweepTest.java:37",
+      "severity": "major",
+      "title": "'a pipelining writer ... is caught the day it arrives' is false by the trace's construction",
+      "failure_scenario": "Both the test javadoc (:34-38) and CommitProtocolSimulation.java:311-315 justify keeping the ack checker in the sweep on the grounds that a pipelining writer would be caught when it arrives. It would not. The driver derives the CONFIRMED event FROM the ack: `CommitDelta acked = leader.commit(req)` returns, and only then are `confirmed(epoch, seq)` and `acked(epoch, seq)` appended as an adjacent pair (:266-273). There is no independent observation of the PUT. Combined with the driver being single-threaded by design -- this file's own javadoc at :34-41 forbids concurrency because it would break reproducibility -- the trace for any epoch is always a run of adjacent confirmed-then-acked pairs at non-decreasing sequences, and `checkAckOrder` cannot report a violation on that shape for ANY implementation of `commit` except one that returns a LOWER sequence than an earlier return in the same epoch (a rewind, which checkChain's I2/gap arms already report). So if `BatchingSequencer` became the shipping path and acked window N+1 before window N's PUT confirmed, this sweep stays green and the stated tripwire does not fire. The claim to make true instead: source the CONFIRMED event from the store -- `FaultInjectingStore` already sees every put -- or from a production callback, which is what `AckOrderInvariants.java:21-23` means by 'NOTHING IN PRODUCTION EMITS A TRACE YET'."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSimulation.java:250",
+      "severity": "minor",
+      "title": "The ack trace omits every fenced writer, and the enumeration does not say so",
+      "failure_scenario": "`zombies.get(z).commit(zombieReq)` succeeds and increments `zombieWrites` without emitting any AckEvent, so the trace fed to the I5 ack checker contains the current leader's commits only. This file's own comment at :130-136 says a zombie 'is the ONLY thing that makes I5 reachable, because I5 is about what a fenced writer manages to acknowledge', and :234-238 says a zombie write that lands past a seal AND IS ACKNOWLEDGED is I5. The structural half is caught by checkChain over the bytes, so nothing is currently missed -- but the test javadoc presents its list as the honest scope of what a green run proves, and 'the trace excludes every acknowledgement a fenced writer made' is a scope limit of the same kind as the two it does list. Add the pair on the zombie path, or add the exclusion to the enumeration."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSweepTest.java:103",
+      "severity": "minor",
+      "title": "A wall-clock threshold that fails a build, which performance.md rule 9 rules out",
+      "failure_scenario": "performance.md rule 9: 'Gate on allocation, trend on time. Wall-clock on a shared CI runner has double-digit variance and a threshold on it becomes noise that people learn to re-run until green', and its Trends table says timing may 'never fail a build'. This asserts `elapsed < 60_000` inside the L0 suite that runs on every commit, on a box where this repo's own review workflow runs two more Gradle builds concurrently (review.sh context: 'Both reviewers run CONCURRENTLY'). If it ever trips, the red says nothing about correctness and both in-tree remedies are closed: raising BUDGET_MILLIS is non-negotiable 2, and lowering SEEDS is what the javadoc at :53-57 forbids. \u26a0\ufe0f NOT MEASURED AS A FLAKE, and I say so rather than implying it: I measured 14.8s idle and 15.8s under a 20-way spin load on this 20-core box and could not push it near 60s, so the objection is rule 9's categorical one plus the fact that `scripts/check-suite-time.sh` already exists as the out-of-band home for a time budget (L0=90s). The budget can be stated in the archive row and enforced there instead of by an assertion."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSweepTest.java:94",
+      "severity": "minor",
+      "title": "The anti-vacuity guards are sums over 1,000 seeds, so 999 dead seeds pass",
+      "failure_scenario": "`commits`, `takeovers` and `faultsFired` are accumulated across the whole sweep and each asserted `isPositive()`. One seed that committed once, failed over once and drew one fault satisfies all three while the other 999 report clean about a cluster that did nothing -- which is the exact 'simulation proves the simulator' shape the comment above them names. `CommitProtocolSimulationTest`'s `aFAULTEDSWEEPKeepsCOMMITTINGRatherThanSTALLING` already carries a real floor over a 30-seed range, so the weak aggregate here adds a guard that reads stronger than it is. A per-seed floor (e.g. at most N seeds committing nothing across the 1,000) would constrain something."
+    }
+  ],
+  "task": "M4.13",
+  "role": "reviewer",
+  "staged_tree": "c30ef97c86c93e4c767b2fe11c3e78c98a1dbc88"
+}

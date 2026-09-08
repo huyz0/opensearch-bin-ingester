@@ -1,0 +1,22 @@
+{
+  "diff_sha256": "0e9f5d132e6974f4cda957f49b3245f60993d024f98436d47e99761f357cd839",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "blocking",
+      "file": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java:180-192",
+      "summary": "The '!.tmp/ourclone/README' row of gateScopeRefusesAnythingShortOfAQuarantine never reaches the negation-detection code it claims to test (scripts/check-gate-scope.sh:133-135, the `case \"$_rule\" in *:!*)` block). withGitignore() replaces the real '.tmp/' line outright, so with only a bare negation in .gitignore, `git check-ignore -q` on the probe path already returns 1 (not ignored) -- confirmed empirically -- and the loop breaks at the earlier 'is not ignored at all' branch, identical to the dedicated gateScopeRefusesWhenTmpIsNotIgnoredAtAll test. I deleted the two-line negation-check block from check-gate-scope.sh and re-ran the real suite (`./gradlew :buildSrc:test --tests binjava.FreshCheckoutTest`): BUILD SUCCESSFUL, all 12 tests green, byte-identical gate output for every row including this one. The task's own row table lists 'source-anchoring -- check-ignore -v exits 0 on a negation' as a required refusal case, and the packet's list of four red records (single literal probe, ignored-ness unchecked, any-source accepted, original bare-directory probe) notably omits negation -- consistent with this defense never having had a distinguishing red test. As written, this line of production is untested and, given check-ignore -q is evaluated before -v in every code path, appears structurally unreachable by any fixture built the way withGitignore() builds them.",
+      "failure_scenario": "Delete scripts/check-gate-scope.sh lines 133-135 (`case \"$_rule\" in *:!*) ... esac`). Every test in FreshCheckoutTest still passes (verified: `./gradlew :buildSrc:test --tests binjava.FreshCheckoutTest` -> BUILD SUCCESSFUL, 12/12 green). A regression that silently drops the negation defense -- the exact defect named 'source-anchoring' in the task's own acceptance table -- ships with a fully green suite."
+    },
+    {
+      "id": "F2",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java:180-192",
+      "summary": "Three of the seven @ValueSource rows (\"probe\", \".tmp/probe\", \"*probe*\") all fail through the exact same branch for the exact same reason -- none of the four diversified probe paths (README, Main.java, pom.xml, scratch.txt) contain the substring 'probe', so all three trivially hit 'is not ignored at all' regardless of the subtler loop logic (source-anchoring, negation, subtree coverage). Verified they are jointly killed only by a single mutation class (shrinking the probe-path list to one literal path, e.g. .tmp/probe) and jointly survive every other mutation tried (subtree collapse, source-anchoring removal, negation-check removal). They are not decorative in the strict sense -- each would go red if production reverted to checking a single '.tmp/probe' file -- but three rows are spent constraining one mutation while the table implies each row defeats a distinct historical fix.",
+      "failure_scenario": "This is a coverage-shape observation, not a mutation that survives undetected: no single mutation escapes all three, but a reviewer skimming the table could believe seven distinct fixes are separately pinned down when only five distinct code paths are actually exercised (see F1 for the sixth, unreachable one)."
+    }
+  ],
+  "task": "M0.31",
+  "role": "test-reviewer"
+}

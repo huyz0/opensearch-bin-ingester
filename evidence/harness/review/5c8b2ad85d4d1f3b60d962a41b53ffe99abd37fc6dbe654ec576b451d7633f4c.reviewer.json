@@ -1,0 +1,37 @@
+{
+  "diff_sha256": "5c8b2ad85d4d1f3b60d962a41b53ffe99abd37fc6dbe654ec576b451d7633f4c",
+  "verdict": "pass",
+  "summary": "Round 2 verification of M3.5. All five round-1 fixes are real and correct. (a) The cadence check is genuinely per-window: one 10s-forward window per start point, ~1s samples, so ~183 windows over a 200s load -- consistent with the claimed 182. Arithmetic is self-consistent: 4 files per flush (LocalFsBinStore writes data + .v per object; SegmentPublisher.put + CommitLog.putIfAbsent = 2 objects per flush -- verified in source), 4 files / 5.05s = 0.792 files/s = the claimed clean max, and a 10s window can hold at most 2 ceiling flushes so it cannot flake upward. The demonstrated round-1 mutation (permanent shorten at 4.33 files/s) is killed. (b) The removed Thread.sleep(300) calls: verified false justification -- DefaultIngest.append blocks on mine.done().join() until the flush future completes, so the 202 does prove the drain and adaptInterval ran; the warm-up sequence still reaches the ceiling and the probe still waits ~5s against a >2000ms bound with real margin. (c) build.gradle.kts: 256m, JaCoCo off, excluded from `test`, not in `check`, filter with failOnNoMatchingTests, JUnit @Timeout 900s inside Gradle's 20min -- all correct; build/tmp is created at configuration time by the java-conventions plugin's `scratch` val so the omitted mkdirs() is harmless. (d) The false 'average' sentence is gone from backlog.md; M0.52 is unique and above the current max M0.51, and its claim about tdd_scan.task_for mapping by source set is accurate (scripts/tdd_scan.py:133). (e) No src/main/ path is staged. Cost lens: nothing here changes a production request path, and the assertion this commit adds is itself in the right direction -- it bounds objects written per SECOND independently of the 24 producers and the record count, i.e. a rate that scales with segments, not with records or producers. Four minors, none blocking. The one that matters is F3: the round-2 fix moved filesystem I/O into a sampler thread that has no failure capture, and I measured the race rather than argued it.",
+  "findings": [
+    {
+      "id": "M3.5-r2-1",
+      "severity": "minor",
+      "file": "http/src/test/java/binjava/http/MemoryFlatAtIntervalCeilingTest.java:331",
+      "title": "The last sentence of the threshold comment contradicts the measurement three sentences above it",
+      "failure_scenario": "Line 331 says 'Over 10s the ceiling gives ~8 files (0.8/s) and the floor ~160 (16/s)'. Lines 304-308 of the same comment block say, correctly and with a measurement, that 16 files/s is the NAIVE derivation and that the floor regime here is producer-bound and really measures 4.33 files/s -- so over 10s the floor gives ~43 files, not ~160. Concretely: a later author raising PRODUCERS, or re-tuning after a machine change, reads the last and most concrete-looking sentence, concludes there is 8x headroom between 2.0 and the floor when there is 2.2x, and raises the threshold to 4.0 or 8.0 -- reinstating exactly the blindness the round-1 test review found and this commit exists to close. This is the same class of defect (a comment stating a number the run does not produce) that round 1 flagged; the backlog row was corrected for it, this comment was not."
+    },
+    {
+      "id": "M3.5-r2-2",
+      "severity": "minor",
+      "file": "http/src/test/java/binjava/http/MemoryFlatAtIntervalCeilingTest.java:325",
+      "title": "'catches that at the first floor-regime second' overstates the window's sensitivity by ~3.5x",
+      "failure_scenario": "With a 10s window, a mix of x seconds at the floor regime (4.33 files/s) and 10-x at the ceiling (0.79 files/s) yields 7.9 + 3.54x files, which exceeds the 20-file (2.0 files/s) threshold only when x >= 3.4s. The check therefore needs about three and a half seconds of floor regime inside a window, not one second. It kills the demonstrated round-1 mutation because that mutation shortens permanently, but a regression that drops to the floor in bursts of two seconds or less -- e.g. a transient high-fillRatio spike shortening the interval until the next lengthen -- passes green, while this comment tells the reader it would be caught at the first second. State the real sensitivity so the next person does not rely on a bound the code does not have."
+    },
+    {
+      "id": "M3.5-r2-3",
+      "severity": "minor",
+      "file": "http/src/test/java/binjava/http/MemoryFlatAtIntervalCeilingTest.java:223-243",
+      "title": "The round-2 fix put throwing I/O in the sampler thread, which still has no failure capture; a dead sampler silently truncates every assertion and the test still passes",
+      "failure_scenario": "countFiles (line 145) calls Files.walk, which throws UncheckedIOException(NoSuchFileException) when a file it has already enumerated disappears before it is stat'd. LocalFsBinStore.put creates put*.tmp IN THE STORE ROOT and renames it away on every segment PUT (~152 per run, binstore-backends/.../LocalFsBinStore.java:177-186) -- the same root the sampler walks once a second. Line 225-226 converts that into an IllegalStateException, which escapes the Runnable, kills the 'mem-sampler' thread (daemon, no uncaught handler, nothing joins on its outcome), and sampler.join() at line 296 then returns immediately. From that instant the cadence loop, the peak-heap max and the 10x-ratio loop judge only the prefix of the run and the test reports PASS; hasSizeGreaterThan(10) does not catch it, because 11 samples of a 200-second load satisfy it. I measured the race rather than asserting it: 600-file directory, ~2 renames/s, continuous walking for 60s gave 2 UncheckedIOExceptions in 120 renames; scaled by this test's ~0.09% walk duty cycle and ~152 renames that is roughly 1 run in 200-400. Called minor, not major, only because the probability is sub-1% and no production behaviour is affected -- but note the round-1 minor was about a sampler that could not throw, and this round made it one that can, so 'leave it per rule 11' is no longer the same decision. Three lines fix it: record the throwable into the existing `failures` list (or an AtomicReference) and assert it empty alongside line 299."
+    },
+    {
+      "id": "M3.5-r2-4",
+      "severity": "minor",
+      "file": "http/build.gradle.kts:99-107",
+      "title": "The sibling task keeps the identical tmpdir leak, now knowingly and with no record; and neither task deletes the store root it fills",
+      "failure_scenario": "The fix is correct for memoryBoundCeilingTest, but memoryBoundTest (lines 42-72) has the same standalone-tasks.register shape and still inherits no java.io.tmpdir, so M1.18 keeps leaving ~175 MB per run in the system temp directory. Not fixing it here is the right call under 'never widen scope silently' -- but the two tasks now sit adjacent in one file, one fixed and one not, with nothing saying which, and no backlog row carries the fact. The next reader cannot distinguish a deliberate scope boundary from an oversight, and the discovery is lost. Separately, both tests create their store root with Files.createTempDirectory and never delete it, so the new task relocates ~175 MB/run from /tmp to build/tmp rather than removing it: ten local runs while tuning the threshold leave ~1.75 GB under build/ until `./gradlew clean`. testing.md rule 17 is satisfied literally (location), not in effect (lifetime); @TempDir or a delete in @AfterEach would close it."
+    }
+  ],
+  "task": "M3.5",
+  "role": "reviewer"
+}

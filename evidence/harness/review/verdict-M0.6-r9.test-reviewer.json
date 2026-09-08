@@ -1,0 +1,48 @@
+{
+  "diff_sha256": "ec34f6b465b80bd56fb3b9b5ef2a747fb1ffe9a3f2b46f0ee1061e69fd085a2b",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "WT36",
+      "severity": "blocking",
+      "file": "buildSrc/src/test/java/binjava/ModuleGateTest.java:102",
+      "summary": "gate() inherits the ambient process environment and never clears the two variables the gate under test reads. Under the CI configuration this commit's own AGENTS.md row and backlog M0.7 mandate (GATE_SCOPE=full, CHECK_RANGE=<base>), the suite is 3 failures on CORRECT production code -- docsOnlyChangeSelectsNoModule, aModuleChangeSelectsThatModuleOnly, aSharedBuildChangeEscalatesToEveryModule -- and check-harness-tests.sh therefore cannot pass in CI. Worse than the red noise: the fourth delta test passes VACUOUSLY in that environment. Same class as WT29, one variable over: a test whose outcome is a function of ambient state. Fix is one line in gate(): pb.environment().remove(\"GATE_SCOPE\"); pb.environment().remove(\"CHECK_RANGE\"); -- verified to make the suite green under ambient full AND to restore the kill below.",
+      "surviving_mutation": "check-module.sh:211 `plan $(changed_files)` -> `plan \"$(changed_files)\"` (the SC2046 quoting defect aDocAlongsideASharedBuildFileStillEscalates was written to kill). Verified: `GATE_SCOPE=full ./gradlew -p buildSrc test --tests binjava.ModuleGateTest` -> that test PASSES with the mutation applied, because full scope selects all modules so \"2 module(s) checked\" and doesNotContain(\"no module changed\") hold whether or not escalation works. With the two remove() calls added it fails, as it should."
+    },
+    {
+      "id": "WT37",
+      "severity": "blocking",
+      "file": "scripts/check-harness-tests.sh:56",
+      "summary": "The new printTestInputs guard reproduces the exact blindness its own comment says it fixes. The comment at :37-43 says the previous grep 'could not see its own subject: settings.gradle.kts already appears in an unrelated comment, so deleting the whole declaration hunk still reported it present'. The replacement does an UNANCHORED substring match over the declared-input paths, and the drift fixtures added by THIS commit -- drift-fixtures/{clean,missing-build-file,missing-settings-entry}/settings.gradle.kts, pulled in by inputs.dir(src/test/resources) -- contain that substring in their paths. So the guard is satisfied by the fixtures, not by the declaration. This is the guard protecting the three suites named at :21-23 from going UP-TO-DATE across a module rename.",
+      "surviving_mutation": "Delete the whole `inputs.file(rootDir.parentFile.resolve(\"settings.gradle.kts\"))` block from buildSrc/build.gradle.kts. Verified: the guard still passes (`case \"$_declared\" in *\"settings.gradle.kts\"*` matches the fixture paths) and execution proceeds to the suite -- exactly the state the guard exists to refuse. Anchoring on \"$ROOT/settings.gradle.kts\" was verified to give pass/FAIL for present/deleted."
+    },
+    {
+      "id": "WT38",
+      "severity": "major",
+      "file": "buildSrc/src/test/java/binjava/ModuleGateTest.java:264",
+      "summary": "The two-fixture counting argument is arithmetically airtight (I verified all four constants r5=1, r5=2, r2=1, r2=2 die, each killed by exactly one fixture, so neither fixture is redundant) -- but it is airtight only over the modules the fixtures NAME. Between them the fixtures cover {format, ingest, client, plugin}. `binstore-spi` and `sequencer` are in NO_HTTP and in no fixture, so the counters cannot see rule 5 being narrowed to exclude them. RuleListTest does not compensate: `--print-rules` is a SECOND read site of NO_HTTP, so it reports the strong list while the loop uses a weaker one. This is 'the gate goes on printing ok while enforcing strictly less', which RuleListTest's own javadoc calls 'the failure mode this whole file exists to prevent'. Cheap fix: make one fixture name all four NO_HTTP modules and both NO_CLOUD modules (rule5 tested 4, rule2 tested 2), keeping the other at 1/2 so the non-constant property survives.",
+      "surviving_mutation": "check-module.sh:340 `case \" $NO_HTTP \" in *\" $m \"*)` -> `case \" format ingest \" in *\" $m \"*)`. All 61 tests pass. Rule 5 stops applying to binstore-spi and sequencer entirely, and --print-rules still prints all four so RuleListTest is satisfied. Same for :372 `case \" $NO_CLOUD \" in` -> `case \" client plugin \" in` (survives, currently harmless but the same seam). Related and also verified surviving: check-module.sh:267 `echo \"NO_HTTP=$NO_HTTP\"` -> `echo \"NO_HTTP=format binstore-spi sequencer ingest\"`, i.e. RuleListTest -- whose javadoc claims it 'reads the value the gate ACTUALLY USES' -- is satisfied by a literal copy."
+    },
+    {
+      "id": "WT39",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/ModuleDriftTest.java:18",
+      "summary": "The javadoc says the clean fixture 'deliberately contains a four-character module name (`http`)'. The fixture contains `zeta` and `omega`; there is no `http` anywhere under drift-fixtures/. The substance holds -- zeta is four characters and is the only sub-five-character name in any fixture -- but a reader verifying the claim greps for http and finds nothing, which is the comment-vs-fact drift this commit elsewhere spends 40 lines fighting.",
+      "surviving_mutation": "n/a -- documentation accuracy, not a missing constraint. The length-based derivation this sentence claims to kill IS killed, by zeta."
+    },
+    {
+      "id": "WT40",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/ModuleGateTest.java:32",
+      "summary": "The class javadoc names three inert-able enforcements (HTTP_GROUPS, the two-configuration loop, the rule-4 depends-on-http check) and then a blanket 'nothing in this repository asserts architecture.md rules 2, 4 or 5'. Rule 2 has a SECOND enforcement half -- the plugin -> binstore-backends project-dependency check at check-module.sh:366 -- which is covered only by the blanket sentence. Worth naming explicitly alongside the other three so M0.23's fixture list is complete.",
+      "surviving_mutation": "check-module.sh:366 `if [ \"$m\" = \"plugin\" ] && printf ...` -> `if false && printf ...`. Verified: all 61 tests pass. Also re-verified as surviving, as the javadoc states: HTTP_GROUPS hits forced empty; `for conf in runtimeClasspath compileClasspath` -> runtimeClasspath only; the rule-4 http check disabled; and HTTP_GROUPS/CLOUD_GROUPS swapped (WT32)."
+    },
+    {
+      "id": "WT35",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/ModuleSelectionTest.java:35",
+      "summary": "WITHDRAWN -- do not delete anything. You asked me to name rows. I measured instead: across 21 mutations of check-module.sh, every ModuleSelectionTest row except [10] (`format/A.java format/B.java nope/C.java`) was co-killed by ModulePlanTest or ModuleGateTest; row [10] uniquely kills `sort -u` -> `sort`. So my earlier read was right on the facts and wrong on the conclusion. A redundant-but-correct T0 row does not answer 'would this fail if the code were wrong' with a false yes -- it just adds nothing -- and deleting it risks losing a constraint against a mutation neither of us tried. Keep all rows.",
+      "surviving_mutation": "n/a -- withdrawn finding, no action requested."
+    }
+  ]
+}

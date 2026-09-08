@@ -1,0 +1,36 @@
+{
+  "diff_sha256": "717b2ba6b2bc7b6bce62d341125066d43d32f1906e1a133dbf54be6bc72d9c93",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitLogBatchTest.java",
+      "line": 92,
+      "severity": "major",
+      "what": "EVERY call to commitAll in the repository (grep: the nine sites are all in this file) is made against a freshly constructed, EMPTY CommitLog, so no test constrains a batch to start from the log's COMMITTED state. The assertion labelled 'the first contributor starts where the log had reached' is isZero() on a log that has reached zero -- it cannot distinguish reading nextOffset from a hardcoded 0. SURVIVING MUTATION, verified green on the whole :sequencer:test suite (209 tests, rc=0): change line 297 of CommitLog.java to `long base = submissions.size() > 1 ? cursor.computeIfAbsent(e.getKey(), k -> 0L) : cursor.computeIfAbsent(e.getKey(), this::nextOffset);`. The plain form of this mutation (seed 0 unconditionally) IS killed -- but only by pre-existing CommitLogTest cases that reach commitSubmissions through the SINGLE-submission commit(), never through commitAll. Confirmed behaviourally with a throwaway probe: commit 10 records, then commitAll two requests -- the mutant hands out bases 0 and 3 over a range already assigned. Fix is one line: give offsetsADVANCEAcrossSegmentsWhenTwoPodsShareAStreamInOneWindow a prior log.commit(...) so the expected bases are non-zero.",
+      "failure_scenario": "A batcher whose cursor seeds at zero rather than at the log's committed offset re-issues offsets 0..n for every stream in every window after the first. Two chain entries then claim the same offset range for the same stream -- invariant I2, the exact defect this task's backlog row and CommitLog's own javadoc say the running cursor exists to prevent -- and no conditional write catches it because each entry is written once and is internally consistent. The suite stays green and a consumer silently overwrites or replays committed records."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitLogBatchTest.java",
+      "line": 78,
+      "severity": "major",
+      "what": "No test drives a BATCH through the retry loop. Every commitAll call in the file is uncontended, so the property CommitLog.java:285-287 states in capitals -- 'RECOMPUTED INSIDE THE LOOP ... this cursor cannot be hoisted out' -- is unconstrained in the dimension this task added. SURVIVING MUTATION, verified green on the whole :sequencer:test suite (209 tests, rc=0): hoist the cursor above `while (true)` for batches only -- `Map<RunKey, Long> hoisted = new HashMap<>();` before the loop and `Map<RunKey, Long> cursor = submissions.size() > 1 ? hoisted : new HashMap<>();` inside it. The unconditional hoist is killed, but ONLY by the pre-existing CommitLogTest.aLostRaceRetriesAtTheNextSlotRatherThanFailing, which is a single-submission commit(); nothing in the new file kills either form. Confirmed behaviourally with a throwaway probe (a rival takes slot 0 with 4 records, then commitAll of two requests): correct bases are 4 and 7, the mutant emits 0 and 3. Fix: the CommitLogTest lost-race test, re-run with a two-request commitAll.",
+      "failure_scenario": "Under contention -- which the commit log is defined as a chain of -- a batched commit that loses slot N retries at N+1 with the bases it computed before folding in the winner's offsets. Every segment in the batch then overlaps the ranges the winner already assigned: invariant I2, cluster-wide, and only on the path that is contended, so it never shows up in an uncontended test or a single-writer deployment."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitLogBatchTest.java",
+      "line": 62,
+      "severity": "major",
+      "what": "sixPodsFlushingIntoOneWindowCostTheSAMEONEPutAsOne is the only test that submits more than two requests, and it asserts NOTHING about the entry that was written -- only the PUT count. Losing submissions makes the cost assertion MORE satisfied, not less. SURVIVING MUTATION, verified green on the whole :sequencer:test suite (209 tests, rc=0): truncate the batch in commitSubmissions -- rename the parameter to `all` and add `List<Submission> submissions = all.subList(0, Math.min(2, all.size()));`. Four of the six pods' commits vanish and every test in the repository still passes. The PUT-count assertion itself is sound (a per-submission PUT is killed by this test), so the fix is additive and cheap: assert `delta.segments()` has size 6 and that the six bases are 0, 3, 6, 9, 12, 15.",
+      "failure_scenario": "A batcher that drops submissions past some cap -- a window limit, an off-by-one, a dedup keyed on the wrong field -- acks every producer whose flush entered the window while committing only the first two. The dropped segments' records are durable in the store but never receive offsets, so they are acknowledged and never become visible, and the cost test that the backlog row cites as the acceptance-criterion-9 assertion goes green because losing work is cheaper than doing it."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitLogBatchTest.java",
+      "line": 68,
+      "severity": "minor",
+      "what": "Both of the author's stated judgement calls check out, recorded here so round 2 need not re-derive them. (1) The empty-batch guard is NOT an equivalent mutant as asserted: deleting `if (submissions.isEmpty())` was verified to be killed by anEmptyBatchIsRefused, because CommitDelta's message is 'a delta with no segments commits nothing' and hasMessageContaining(\"commit with no segments\") does not match it. (2) Deleting the stream-dimension test was right: CommitLogTest.committingCostsExactlyOneRequestWhenUncontended already commits TWO streams and asserts puts()==1 and total()==1, so a thousand-stream variant would add no constraint. Do not restore it. Also verified killed and needing no work: the duplicate-segment-key refusal, the per-submission empty-runs guard, one PUT per submission, dropping the cursor entirely, and sharing one cursor across streams (killed in the batch dimension by aStreamTOUCHEDByOnlyOneSegmentIsUnaffectedByTheOther). No existing assertion was weakened anywhere in the diff.",
+      "failure_scenario": "None -- informational. Recorded so that a round-2 reviewer does not spend the round re-verifying the two claims the author already got right, and does not restore the deleted stream-dimension test."
+    }
+  ],
+  "task": "M4.7b",
+  "role": "test-reviewer"
+}

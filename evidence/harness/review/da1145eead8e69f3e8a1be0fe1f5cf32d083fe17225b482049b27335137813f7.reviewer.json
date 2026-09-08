@@ -1,0 +1,56 @@
+{
+  "diff_sha256": "da1145eead8e69f3e8a1be0fe1f5cf32d083fe17225b482049b27335137813f7",
+  "verdict": "changes-requested",
+  "summary": "The driver change is correct and does fix both defects the row names: the per-pod allocator is taken BEFORE the attempt, is keyed on pod NAME so the zombie/leader collision is gone, consumes no randomness (verified: no new Random draw, and the HashMap is never iterated), and measurement over seeds 0..29 at ROUGH shows dense 0,1,2,... per pod in 30/30 seeds with two pods sharing a flushSeq value in 19/30. `commits`, `zombieWrites` and `zombieAttempts` keep their exact prior meaning; the Result argument order is right and the three adjacent Lists are distinct generic types, so the M4.27 swap cannot compile there. The new test does have teeth against the ORIGINAL defect: restoring `leaderSeq = commits` / `zombieSeq = zombieWrites` in my tree turned it red. What is wrong is (a) the commit implements M4.10a while filing its row as an OPEN todo, against the archive convention every recent commit follows, and (b) the assertion covers only the PER ATTEMPT half of the row -- two mutations that defeat PER POD leave the whole sequencer suite green.",
+  "findings": [
+    {
+      "id": "F1",
+      "file": "docs/internal/product/backlog.md:122",
+      "severity": "major",
+      "title": "The commit implements M4.10a and files its row as an OPEN todo instead of archiving it",
+      "detail": "backlog.md's own header says 'Open tasks only ... Completed rows move to backlog-done.md'. This diff adds `| M4.10a | ... | FR-3 | todo |` to backlog.md and adds nothing to backlog-done.md, while the same diff carries the implementation (the per-pod allocator and its test). Every comparable commit in the history does the opposite: M4.9 (e32c6e3) and M4.8c (15da3fb) each DELETE their row from backlog.md and ADD it to backlog-done.md in the implementing commit -- both rows are in backlog-done.md today and absent from backlog.md -- and M0.76 (847b727) put its own row straight into backlog-done.md while filing only the follow-ups it discovered (M0.77, M0.78) as todo in backlog.md. check-commit-msg accepts an ID from either file, so nothing forces the row to stay open.",
+      "failure_scenario": "After this lands, backlog.md advertises M4.10a as unstarted work. The next session runs `next-task`, picks M4.10a as an open row, reads its notes -- which describe the fleet-global counters as the CURRENT state ('issues flushSeq from two fleet-global counters ... line ~199') -- and either redoes work already in the tree or spends the session establishing that it is already done. M4.10's own row still reads 'THE FIX IN THE DRIVER ... has to land before this row's dedup can be tested at all', with nothing anywhere recording that it did land.",
+      "remedy": "Move the M4.10a row to backlog-done.md, as a summary of what LANDED, and drop it from backlog.md. (The backlog-notes.md \u00a7 M4.10a entry stays where it is; M4.9's note stays in backlog-notes.md after archiving, so that precedent is already set.)"
+    },
+    {
+      "id": "F2",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSimulationFlushSeqTest.java:67",
+      "severity": "major",
+      "title": "PER POD is unpinned: a single fleet-global per-ATTEMPT counter leaves the suite green",
+      "detail": "MEASURED in my own review tree at the staged bytes. Replacing both `nextFlushSeq.merge(pod, 1L, Long::sum) - 1` calls with one shared `globalSeq[0]++` -- a fleet-global counter that advances on every attempt -- passes `./gradlew :sequencer:test --tests '*CommitProtocolSimulation*'` with everything green. The uniqueness assertion cannot see it, because a counter that never repeats globally trivially never repeats per pod; `issuedCount > landed` still holds; and `pods.hasSizeGreaterThan(1)` still holds because more than one pod name still appears. The `as()` message on that last assertion -- 'one pod cannot show a per-POD allocator is per-pod' -- asserts by implication that more than one pod DOES show it, which the mutation proves false, so the message is not a true claim about what is being checked. The row's title is 'MAKE THE SIMULATION ISSUE flushSeq PER POD, PER ATTEMPT'; only the second half is pinned.",
+      "failure_scenario": "Per-pod-ness is exactly the property M4.10 will consume. With a true per-pod allocator, distinct pods issue overlapping values -- MEASURED on the staged code over seeds 0..29 at ROUGH: per-pod sequences are dense 0,1,2,... in 30/30 seeds, and in 19/30 seeds two different pods issue the same flushSeq value. With a fleet-global attempt counter no two pods ever share a value, so an M4.10 dedup that keyed on `flushSeq` alone and dropped `podId` from the key would be indistinguishable from a correct one under this simulation: the sweep would report clean about a dedup that drops pod1's commits in the field. Since nothing pins the property, a later refactor -- or a merge that reverts one line -- silently restores the fleet-global model this very row exists to remove, and no gate says so.",
+      "remedy": "Assert over the issued triples what per-pod means: group `result.issued()` by podId and assert each pod's flushSeq list is exactly 0..n-1 (holds today in 30/30 seeds), plus that somewhere in the sweep two DIFFERENT pods issued the same flushSeq value (holds in 19/30). Both die under the global-counter mutation."
+    },
+    {
+      "id": "F3",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSimulation.java:209",
+      "severity": "major",
+      "title": "Swapping podId and segmentKey in `new Issued(...)` compiles and leaves the suite green -- the M4.27 shape, reproduced",
+      "detail": "MEASURED in my own review tree. `Issued(String podId, long flushSeq, String segmentKey)` has two String components; rewriting both call sites as `new Issued(zombieSeg, zombieSeq, zombiePod)` and `new Issued(leaderSeg, leaderSeq, leaderPod)` compiles and passes the whole CommitProtocolSimulation suite. It survives because the test's only structural assertion is pair uniqueness, and segment keys carry the round number so `seg/<round>#seq` is unique by construction -- and because the segmentKey component is otherwise read by nothing: it appears only inside `putIfAbsent`'s value and the failure message, neither of which is reached on a green run. The row's own warning is 'THE ASSERTION MUST BE DERIVED, NOT DECLARED'; the recording is derived, but the assertion cannot tell the recorded fields apart. The staged code has the order right -- this is about what the pin would notice, not about a bug present today.",
+      "failure_scenario": "Under the swap the Result's `issued` list names segments as pods and pods as segments, and the invariant the whole task exists to establish -- 'no (podId, flushSeq) may ever be issued for two different segment keys' -- is not being checked at all, while the test that claims to check it stays green. M4.10 would then be built on evidence that pins nothing, which is precisely what M4.27 records happening to M4.20's Result constructor ('swapping the two adjacent int arguments ... compiles and leaves 9/9 green').",
+      "remedy": "The F2 remedy kills this one too: 'each pod's flushSeq list is exactly 0..n-1' is false under the swap, because each segment key is issued exactly once and mostly at a non-zero sequence. Asserting `podId` values match the `pod<N>` shape the driver generates would also do it."
+    },
+    {
+      "id": "F4",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSimulationTest.java:54",
+      "severity": "minor",
+      "title": "`issued` is a new Result field and the replay test does not compare it",
+      "detail": "`theSameSeedReplaysExactlySoAFailureIsAPermanentRegression` compares commits, takeovers, highestEpoch, faults and violations, and its own comment argues that comparing only counts and faults 'would let two runs of one seed disagree about what they found while this test passed'. `issued` is now the largest thing a run reports and is not compared. It IS deterministic today -- the change draws no randomness and `nextFlushSeq` is only merged, never iterated -- so this is a gap in the pin, not a defect in behaviour.",
+      "failure_scenario": "A later change that made issue order depend on iteration of `nextFlushSeq`, or on a set rather than a list, would leave the replay test green while two runs of one seed reported different issued triples -- and the new flushSeq sweep would then be an intermittently-red test with no named seed to reproduce it.",
+      "remedy": "One line: `assertThat(b.issued()).isEqualTo(a.issued())`. Cheap enough to fold in if F1-F3 are being addressed anyway; not worth a round on its own."
+    }
+  ],
+  "verified": [
+    "Baseline: `./gradlew :sequencer:test --tests '*CommitProtocolSimulation*'` green on an untouched checkout-index copy of the staged bytes.",
+    "Teeth against the original defect: restoring `leaderSeq = commits` and `zombieSeq = zombieWrites` (recording kept) makes CommitProtocolSimulationFlushSeqTest fail. The test is not vacuous.",
+    "Determinism: no new Random draw on any path; `nextFlushSeq` is only merged and never iterated, and `issued` is appended in loop order, so seed reproducibility is unaffected.",
+    "Result constructor order: `store.injected(), issued, violations` matches `List<Injected>, List<Issued>, List<Violation>` -- three distinct generic types, so the M4.27 adjacent-argument swap does not compile here.",
+    "Counter meanings: `commits++`, `zombieWrites++` and `zombieAttempts++` are untouched in placement and semantics; `zombieWrites < zombieAttempts` and the anti-vacuity assertions in CommitProtocolSimulationTest still read what they read before.",
+    "Retry compatibility: the assertion permits a repeated pair when the segment key is identical, so M4.10 adding an honest retry-after-ambiguous-failure path does not collide with it.",
+    "Cost lens: nothing added issues an object-store request. `issued` is in-memory and bounded by `rounds`; the scan loop and `hasChain` are unchanged."
+  ],
+  "scope": "The split out of M4.10 is justified: the harness fidelity fix has to precede the dedup it feeds, and the diff stays inside the driver, its new test, and the backlog. One modelling gap is deliberate and correctly deferred -- a re-picked pod name is a NEW process in the field and would restart flushSeq at 0, which the notes assign to M4.10 -- and the test tolerates it in the right direction, since M4.10 making the key durable changes the test's subject rather than weakening it.",
+  "task": "M4.10a",
+  "role": "reviewer",
+  "staged_tree": "686f1fdeb8122e0a23bb5573de86f2b679fc8a3b"
+}

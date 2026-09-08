@@ -1,0 +1,32 @@
+{
+  "diff_sha256": "06c5f08ddf458f3e1fd684e04cde44e4d59901ff76d35a8188da7722961ca41d",
+  "verdict": "changes-requested",
+  "summary": "Six of the seven tests kill the mutations they claim to. bearerSecretNeverAppearsInToString does not: for a byte[] record component the DEFAULT toString prints an identity hash, so deleting the redacting override keeps the assertion green. Verified by running a byte[] record on this JVM. Second finding: the compact constructor's stated invariant (a credential must not change under its holder) is asserted inbound only; the record accessor hands out the live array and no test constrains it.",
+  "findings": [
+    {
+      "id": "T1",
+      "severity": "major",
+      "file": "ingest/src/test/java/binjava/ingest/security/CredentialSourceTest.java:66-73",
+      "title": "bearerSecretNeverAppearsInToString cannot fail: the mutation it names survives it",
+      "surviving_mutation": "Delete the @Override toString() at Credential.java:44-47 and let the record's generated toString stand.",
+      "failure_scenario": "A record component of type byte[] is rendered by String.valueOf(component), i.e. an identity hash. Verified on this JVM: new Bearer(\"hunter2\".getBytes()) with the generated toString prints Bearer[secret=[B@646be2c3], and doesNotContain(\"hunter2\") is TRUE. Both assertions in the test (line 71 and line 72) are the same call, so the test passes identically against the very default its own comment says it exists to refuse. The redaction is therefore unprotected: a later change of the component to String or char[], or the addition of a subject/keyId component, silently starts printing the material into any log line that interpolates the credential (security.md, ADR-0021 handling rule 3) and this test stays green. Kill it by pinning the redacted form positively -- assertThat(bearer.toString()).isEqualTo(\"Bearer[secret=<redacted>]\") or .contains(\"<redacted>\") -- which fails the moment the override is removed."
+    },
+    {
+      "id": "T2",
+      "severity": "major",
+      "file": "ingest/src/test/java/binjava/ingest/security/CredentialSourceTest.java:85-92",
+      "title": "Only the inbound half of the stated aliasing invariant has a test",
+      "surviving_mutation": "None needed -- the untested half is already absent from production: Credential.Bearer's generated secret() accessor returns the internal array, so `bearer.secret()[0] = 0` mutates the credential in place.",
+      "failure_scenario": "Credential.java:18-20 states the invariant as 'a credential that changes under the holder is a live authentication bug' and bearerCopiesTheSecretItWasGiven pins only the caller's ORIGINAL array being cleared. Any holder of the Bearer -- a CredentialSource, a logging path, a retry that wipes buffers -- can obtain the live array via the record accessor and zero or overwrite it, after which matches() answers against different bytes than the ones presented: authentication silently starts failing (or, with an attacker-chosen overwrite, starts succeeding). No test in this file calls secret() at all, so the whole outbound direction is unconstrained. A T0 test of the shape `byte[] leaked = bearer.secret(); Arrays.fill(leaked, (byte) 0); assertThat(bearer.matches(bytes(\"hunter2\"))).isTrue();` fails today and would drive the accessor override that returns a clone. Resolution may land production-side; the missing test is the finding here."
+    }
+  ],
+  "notes": [
+    "Mutations explicitly checked and KILLED: canWriteTo returning true unconditionally and negating the contains (Principal.java:35) -- killed by principalRefusesAnIndexOutsideItsAllowList:44 and anEmptyAllowListPermitsNothing:51; an 'empty means allow all' variant (allowedIndices.isEmpty() || contains) -- killed by anEmptyAllowListPermitsNothing:51; dropping Set.copyOf, and the weaker Collections.unmodifiableSet(caller) variant (Principal.java:26) -- killed by both assertions of principalIsImmutableAgainstTheCallersSet:55-62; dropping .clone() on the Bearer secret (Credential.java:20) -- killed by bearerCopiesTheSecretItWasGiven:89; matches() returning a constant either way -- killed by bearerMatchesOnlyTheExactSecret:78-81, which also covers the prefix and empty-array cases; authenticate returning Optional.empty() (StaticCredentialSource.java:27) -- killed by staticSourceResolvesToTheConfiguredPrincipal:29 via .contains(configured), and AssertionError is an Error so the catch(Exception) wrapper at line 33 does not swallow it.",
+    "The disclosed constant-time gap is judged CORRECTLY and is not re-reported. MessageDigest.isEqual -> Arrays.equals does keep the suite green, a timing assertion on a JIT JVM is flaky, and testing.md rule 15 forbids the sleep-based alternatives. Naming it in the Javadoc is the honest form today. One follow-up when M0.14 lands check-mutants.sh: testing.md rule 9 says a surviving mutant is killed OR argued in baselines/mutants.txt -- this argument currently lives only in a Javadoc comment the gate will not read, so it will surface as an unargued survivor.",
+    "'Trust domain threaded through the write path' has no test, and correctly so: no write path exists before M1.6-M1.9. Not counted as an untested acceptance criterion.",
+    "Untested but minor, not blocking: the requireNonNull calls on trustDomain/subject (Principal.java:21-22) and on principal (StaticCredentialSource.java:19) -- deleting them survives the suite; Credential.ClientCertificate has no test but carries no logic; matches(null) is unspecified (MessageDigest.isEqual and Arrays.equals disagree on two nulls).",
+    "No existing assertion was weakened -- the test file is new. Tier is right: all seven are T0, no socket, clock, store, sleep, port or system temp."
+  ],
+  "task": "M1.0",
+  "role": "test-reviewer"
+}

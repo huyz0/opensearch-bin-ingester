@@ -1,0 +1,15 @@
+{
+  "diff_sha256": "38975de7c3fd913b0f090c543b61d192e4b9e477087d4577db0360010a49e734",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "file": "docs/internal/product/backlog.md",
+      "line": 31,
+      "severity": "major",
+      "what": "The rewritten M0.53 row's closing sentence states the opposite of what .harness/review records, and contradicts the baselines entry shipped in the same commit. It says: \"Every round was told `This is round 1 of 2` by the packet (M4.30), so no reviewer ever applied rule 12's split remedy -- and two reviewers who considered splitting independently rejected it, the second measuring that none of its findings touched a scanner.\" (a) A reviewer DID apply rule 12's remedy: .harness/review/c065ee7a5c22....reviewer.json (round 4) carries a major on scripts/test_integrity.py:78 that opens \"review.md rule 12: this is round 4, and rounds 1-3 each closed with a real major\" and closes \"This commit should be SPLIT rather than reviewed a fifth time, or the cap argued with a staged `rounds:M0.53` line in `baselines/review.txt`\" -- that reviewer counted the rounds himself from the open-findings list DESPITE the packet's wrong number, and the staged `rounds:M0.53` entry is the other branch of the very remedy the row says was never applied. The staged baselines/review.txt:12 says so in this same commit (\"The round-4 reviewer proposed three commits (rename-following / tier departure / package re-qualification)\"), so the two prose artifacts of one commit disagree on a checkable fact. (b) The trailing clause is inaccurate in detail too: the two reviewers who considered and rejected the split are round 5's pair (f5cfe1cec507, reviewer minor on baselines/review.txt and test-reviewer major 'Remedy is one added fixture, not a split'), and that test-reviewer's second finding IS on a scanner -- scripts/test_integrity.py:101, the `sources` predicate. What is true is that it found no scanner DEFECT, which is not what the row says. This is the same defect class the round-6 reviewer blocked on in this same cell (a status sentence reporting the process, contradicted by the record), one sentence over.",
+      "failure_scenario": "The row is the permanent record of this task's review history and is what a milestone review or a future `rounds:` argument reads instead of .harness/review/, which is gitignored and local. A reader auditing whether the round cap was respected on the seven-round commit reads 'no reviewer ever applied rule 12's split remedy', concludes the cap never bit and that the staged `rounds:M0.53` entry in baselines/review.txt is unmotivated boilerplate -- and either deletes it as such or cites M0.53 as evidence that M4.30's wrong round number suppresses rule 12 outright. Both conclusions are false and both are load-bearing: the entry exists because a round-4 reviewer demanded split-or-argue, and the one genuinely useful lesson in the sentence -- that a reviewer routed around M4.30 by counting the open-findings list -- is erased by the claim that nobody did."
+    }
+  ],
+  "task": "M0.53",
+  "role": "reviewer"
+}

@@ -1,0 +1,48 @@
+{
+  "diff_sha256": "af1885735ffa37f775b6300d0c4dcc22cf25785e74ad9d5b800200a7f482de2c",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "WT1",
+      "severity": "blocking",
+      "file": "scripts/check-module.sh:32",
+      "summary": "The M11 fix narrows the trigger, it does not remove it. The derivation still requires each module to be alone on its line, so two Kotlin-legal shapes silently shorten ALL, and the gate then prints ok over the exact violation the author verified it catches.",
+      "failure_scenario": "Constructed in a clone at /tmp/.../scratchpad/sb/repo. settings.gradle.kts line changed to '    \"ingest\", // bundling decisions' (Kotlin-legal, and this file comments everything) and ingest/build.gradle.kts given implementation(\"io.helidon.webserver:helidon-webserver:4.2.0\"). Both staged. Result: 'ok 7 module(s) checked (the shared build changed...)', hook Passed, exit 0 -- a Helidon dependency in ingest lands green. Second shape: '    \"binstore-spi\", \"binstore-backends\",' on one line yields 6 modules. Third: a digit in a module name ('client2') drops it, since [a-z][a-z-]* excludes digits. In every case the delta path then maps the touched module directory to nothing and prints 'ok no module changed'. This is verbatim the failure the header comment at lines 24-28 says the derivation exists to prevent. Nothing cross-checks the derived count against the build, so a short list is indistinguishable from compliance. A count assertion (e.g. compare against the quoted entries inside include(...), or against ./gradlew projects) would fail loudly instead."
+    },
+    {
+      "id": "WT2",
+      "severity": "major",
+      "file": "scripts/check-module.sh:32",
+      "summary": "A parser bug review found is fixed with no regression fixture, in a repository that already has the pattern for exactly this and a gate that runs it. The entire production change survives reversion with every gate green.",
+      "failure_scenario": "Mutation: restore the pre-fix line, ALL=$(grep -oE '^\\s*\"[a-z][a-z-]*\",' settings.gradle.kts | tr -d ' \",' | tr '\\n' ' '). Ran SKIP=check-reviewed,check-tdd,check-gate-scope pre-commit run --all-files in the sandbox: all 12 remaining hooks Passed, including check-harness-tests, which DOES fire (its delta filter matches scripts/*.sh) and DOES run the buildSrc suite -- the suite simply contains nothing about this parser. check-tdd cannot see a shell change either, so no red record was ever demanded. The repository's own precedent is buildSrc/src/test/java/binjava/JavaTestParserTest.java plus buildSrc/src/test/resources/java-fixtures/ ('one case per parser bug review actually found... execs the real script rather than reimplementing its logic'), and backlog M0.18 institutionalises it. Concretely missing: fixtures asserting the derivation yields all 8 for (a) a last entry with no trailing comma [the M11 case, currently untested], (b) an entry with an inline comment, (c) two entries on one line, and that it exits 1 for a file it cannot parse. Without them the next agent to touch this line re-derives M11 by hand, which is the cost M-1.2 paid five review rounds to stop paying."
+    },
+    {
+      "id": "WT3",
+      "severity": "minor",
+      "file": ".pre-commit-config.yaml:65",
+      "summary": "The comment justifying the hook's position states an ordering that is not the ordering in the file.",
+      "failure_scenario": "'it sits after the text gates -- they cost 412 ms together and catch more' -- but check-module is hook 4 of 14 and NINE text gates follow it (check-links, build-index-check, check-terminology, check-license-headers, check-dependency-licenses, check-metric-cardinality, check-test-budget, check-file-size, check-tdd). Measured per-hook durations on the shared-build route: check-module 14.58s, and those nine together 0.11s. So an author who stages a commit with a broken markdown link or a stale index region waits ~15s of Gradle before being told, and a reader who trusts the comment believes the cheap gates already ran. Either move the hook below check-file-size as the comment says, or correct the comment."
+    },
+    {
+      "id": "WT4",
+      "severity": "minor",
+      "file": ".pre-commit-config.yaml:68",
+      "summary": "The hook is not verbose, so in a real commit 'checked nothing' and 'checked all eight' are the same green line -- against lib.sh's own rule that a delta pass must not read like a full pass.",
+      "failure_scenario": "Verified by real `git commit` in the sandbox: the hook prints only 'architecture.md rules 2/4/5... Passed'. Only under `pre-commit run --verbose` is the difference between 'ok no module changed' (0.01s, nothing examined) and 'ok 8 module(s) checked' visible. Since most commits in this docs-heavy tree touch no module directory, the common case is a green line meaning nothing examined -- the shape AGENTS.md calls out for check-reviewed as 'worse than failing'. lib.sh line 49 says every gate PRINTS its mode; pre-commit swallows that on success unless `verbose: true` is set. This is true of every hook here, but it costs most on the one gate whose pass routinely means zero work."
+    },
+    {
+      "id": "WT5",
+      "severity": "minor",
+      "file": "docs/internal/standards/build.md:105",
+      "summary": "L0 budget still holds, but the measured statement in build.md that this commit invalidates was not updated.",
+      "failure_scenario": "Measured `pre-commit run --all-files` in a clone at the staged bytes: 1.37s for a commit touching no module, 13.6s warm / 30.4s with `./gradlew --stop` first on the shared-build route (8 modules, 24 Gradle invocations). scripts/check-suite-time.sh L0 31 -> 'ok L0 31s within 90s', so the gate passes today. But build.md:105 still reads 'The saving is currently nil -- the L0 suite is ~525 ms in both modes', which is now wrong by ~60x and, worse, wrong in its claim that delta and full cost the same: delta is 0.01s and full is ~15s for this gate. It is also the number a future author will quote when deciding whether another Gradle gate fits. Note for M0.9+: all eight modules are empty of production Java today; `:m:build` compiles and tests each one, so the 30s figure will grow with the codebase and the 90s budget is the thing to watch."
+    },
+    {
+      "id": "WT6",
+      "severity": "minor",
+      "file": ".pre-commit-config.yaml:10",
+      "summary": "The 'and CI' half of the task rests on an unwritten precondition: in CI, this hook passes vacuously unless GATE_SCOPE=full is set, and the config header's list of exactly that class of exception was not extended.",
+      "failure_scenario": "Verified in a fresh clone with an empty index: ./scripts/check-module.sh prints 'ok no module changed (changed files only -- CI runs GATE_SCOPE=full)' and exits 0, because changed_files reads `git diff --cached`, which is empty in a CI checkout. No workflow exists yet (M0.7 is todo), so there is no false green today; but AGENTS.md:213 now counts this among 'the ten text/build gates' enforced by `pre-commit run --all-files`. If M0.7 lands a workflow running that command without GATE_SCOPE=full or CHECK_RANGE, check-module reports ok on every PR having built nothing, forever. The header at .pre-commit-config.yaml:14-37 exists to state exactly these exceptions ('stated rather than papered over') and lists three; this is a fourth. One line there, or `GATE_SCOPE=full` as a hard requirement recorded on M0.7, closes it."
+    }
+  ]
+}

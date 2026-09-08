@@ -1,0 +1,45 @@
+{
+  "diff_sha256": "6ec236bf6c5550128463e08969c7ddf308266da4c554e2a6fe93d934702505cd",
+  "verdict": "changes-requested",
+  "summary": "Fact-checked every named test, class, number and command. All 30 test methods exist in the five named classes; the 285 = 122+93+36+34 breakdown, 0 failures, and XML freshness (all regenerated 00:27) check out; clusterTest is genuinely 9 tests / 0 failures across exactly the six named ITs, run 00:27:5x-00:28:24 (~33s); criterion 7's check-module output reproduces verbatim on re-run; check-milestone-verified.sh M3 is green; criterion 5 matches ADR-0026's AMENDED AC5 text, not the original; the segment-v0.bin not-regenerated claim is true (last touched by M1.5, 4de2a0f). One major: criterion 5's memoryBoundCeilingTest result is presented as a run for this record and provably was not, and is omitted from the not-re-run list that names its sibling. Three minors on scope and completeness.",
+  "findings": [
+    {
+      "id": "M3.7-1",
+      "severity": "major",
+      "file": "docs/internal/product/milestones/M3/VERIFIED.md:46-48",
+      "title": "Criterion 5's memoryBoundCeilingTest result was NOT re-run for this record, and the did-not-run list names its sibling but not it",
+      "detail": "The line reads 'run under a real 256 MB heap via ./gradlew :http:memoryBoundCeilingTest -- BUILD SUCCESSFUL, 200.0s, tests=1 failures=0 on the committed bytes'. Three checks say it was not run for this record: (a) there is no http/build/test-results/memoryBoundCeilingTest/ directory at all -- the only subdirectory under http/build/test-results is `test`, so nothing on disk backs the figure; (b) the timeline forbids it -- M3.5 committed at 00:25:39, the four module suites' XMLs are stamped 00:27:24-00:27:39, clusterTest's XMLs 00:28:24, VERIFIED.md itself written 00:29:21, leaving no 200-second window anywhere after the bytes were committed; (c) the figure is verbatim from the M3.5 commit body (2ebfc4d, 'Measured: 200.0s'), i.e. carried over from the M3.5 session. Corroborating: backlog.md's M3.5 row says 200.8s for what appears to be the same run, so the tree already carries two numbers for it. Line 15 ('The two -Xmx-bound tiers are separate tasks and are named per criterion below') is the only hedge, and it is not a freshness disclaimer -- while lines 107-108 explicitly declare memoryBoundTest 'NOT RE-RUN', making the silence about memoryBoundCeilingTest read as deliberate contrast.",
+      "failure_scenario": "A reader auditing NFR-6 at the M3 boundary sees a fresh-looking BUILD SUCCESSFUL / 200.0s / tests=1 failures=0 for the one criterion whose proof requires a bounded heap, concludes it was re-run for the record like everything else, and finds nothing on disk to check it against. If that run had actually been made against pre-round-4 bytes, or if the test had regressed between the M3.5 session and the commit, this record would show green either way -- which is precisely the state non-negotiable 4 and this file's own 'Gates that did NOT run' section exist to make impossible.",
+      "suggested_fix": "Add one clause to line 48 -- e.g. 'measured during M3.5 on the bytes commit 2ebfc4d carries; NOT re-run for this record' -- and a matching bullet in the 'Gates that did NOT run' list beside memoryBoundTest. Alternatively re-run :http:memoryBoundCeilingTest and quote the fresh figure."
+    },
+    {
+      "id": "M3.7-2",
+      "severity": "minor",
+      "file": "docs/internal/product/milestones/M3/VERIFIED.md:8-9",
+      "title": "The 285-test 'suite re-run fresh' covers four of eight modules; `client`, a real reader of the widened directory entry, is not among them and is unattributed",
+      "detail": "settings.gradle.kts includes eight modules. The quoted command runs :format :ingest :http :plugin only; binstore-spi (6 test classes), binstore-backends (3) and client (2) are excluded from the 285 and never named. client/src/main/java/binjava/client/ConsumerClient.java imports binjava.format.RunEntry and binjava.format.SegmentReader and calls reader.find(key) -- it is exactly one of the 'every existing reader and writer of the directory entry' that SPEC AC6 requires to pass at the new 49-byte width. Those three suites were in fact executed (XMLs stamped 00:26:27, 00:26:29, 00:26:39, by the GATE_SCOPE=full check-module.sh run whose output criterion 7 quotes), so the coverage exists -- it is only unattributed. M2's own VERIFIED.md named binstore-spi and binstore-backends in its suite line, so this is a narrowing against precedent.",
+      "failure_scenario": "A reader checking AC6's 'every existing reader and writer of the directory entry compiles and passes against the new 49-byte width' finds evidence for format, ingest, http and plugin and none for `client`, the only directory-entry reader outside those four, and cannot tell from this record whether ConsumerClient was exercised at all after the entry widened.",
+      "suggested_fix": "Either extend the quoted command to all eight modules, or add a clause noting that binstore-spi/binstore-backends/client were exercised by the GATE_SCOPE=full check-module run quoted under criterion 7."
+    },
+    {
+      "id": "M3.7-3",
+      "severity": "minor",
+      "file": "docs/internal/product/milestones/M3/VERIFIED.md:17",
+      "title": "Criterion 1's heading restates SPEC AC1 as only its lengthening half",
+      "detail": "SPEC AC1 is 'The flush interval lengthens toward intervalCeiling when fillRatio is sustained at or below 0.4, AND shortens toward intervalFloor (250 ms) when fillRatio reaches 0.9'. The VERIFIED heading is 'Lengthens toward the ceiling on sustained low fillRatio', and none of the four tests listed under it (theIntervalLengthensToTheCeiling..., theIntervalDoesNotLengthenBefore..., theIntervalStartsAtTheFloor, aMiddleBandFillRatioResetsTheLengthenStreak...) exercises the shorten branch. The shorten evidence exists but is filed under criterion 3 (theIntervalShortensToTheFloorImmediatelyOnceFillRatioReachesTheHighThreshold). check-milestone-verified.sh only enforces that each numbered criterion carries evidence, so a narrowed restatement passes while covering half the criterion.",
+      "failure_scenario": "If the shorten branch were later deleted, criterion 1 as written would still be fully satisfied by its four named tests, and a reader auditing AC1 against this record would not see that its second clause has no evidence under its own number.",
+      "suggested_fix": "Restore 'and shortens to the floor on high fillRatio' to the heading and cross-reference criterion 3's test, or state explicitly that AC1's shorten half is evidenced under criterion 3."
+    },
+    {
+      "id": "M3.7-4",
+      "severity": "minor",
+      "file": "docs/internal/product/milestones/M3/VERIFIED.md:102-106",
+      "title": "'Gates that did NOT run' is incomplete against AGENTS.md \u00a7 Gates, and omits the cost meter in the milestone where it matters most",
+      "detail": "AGENTS.md \u00a7 Gates names three things as present-but-unwired (check-coverage.sh, check-milestone-verified.sh, check-suite-time.sh) and three as not existing (check-mutants.sh, the cost meter for `cost-budget`, the benchmark gates). This section names check-coverage.sh and check-mutants.sh and asserts the gap is exactly two ('verified WITHOUT the two strongest automated quality gates'). It omits check-suite-time.sh -- unwired, not invoked, and relevant since the L0 budget is 90s and this suite ran roughly 00:26:00-00:27:39 -- and it omits the cost meter and the benchmark gates. The cost meter is the consequential omission for M3 specifically: the milestone's completion condition is a 20x request-rate reduction ($311 to $15.55/month, NFR-1), and no gate measures it -- only criterion 4's own IntervalPutRateTest does, which is a unit-level model, not a gate over the tree. AGENTS.md's own note that the cost gate waits on 'the store SPI landing with its counting decorator' is now stale, since CountingBinStore exists and criterion 4 uses it.",
+      "failure_scenario": "A future reader treats this section as the complete list of what was not checked and does not learn that the milestone whose entire justification is a request-rate number was verified with no request-rate gate, nor that the suite-time budget was never asserted. The section's stated purpose ('a green line for something that did not run is worth less than no line') depends on the list being exhaustive.",
+      "suggested_fix": "Add a bullet for the cost meter and the benchmark gates (naming AGENTS.md \u00a7 Gates, as the check-mutants bullet already does), and one for check-suite-time.sh; and soften 'the two strongest' to match the real count."
+    }
+  ],
+  "task": "M3.7",
+  "role": "reviewer"
+}

@@ -1,0 +1,17 @@
+{
+  "diff_sha256": "33b4071390b071de377432f806d9863ca4560fddcd4741f12af0a34f7ddf2fdf",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "M4.13a-TR1a",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/Invariants.java:453",
+      "summary": "RE-MEASURED, CONFIRMING THE DISCLOSURE: `neverOpened`'s `&& sealed.sequence() == 0` clause is killed by no test in this diff or anywhere in :sequencer. Mutation applied in the review tree -- `return entries.getFirst() instanceof Seal sealed && sealed.sequence() == 0;` -> `return entries.getFirst() instanceof Seal;` -- and the WHOLE `./gradlew :sequencer:test` suite exits 0, including both new files. This diff is what made the clause load-bearing (it widened the method from private to package-private and `checkReader` now consults it to decide whether it judges at all), so the gap is newly consequential even though the line is unchanged. Already filed as M4.13j, whose note records the same measurement and states the behaviour is undecided, which is why this is minor and not major.",
+      "failure_scenario": "A chain whose first visible entry is a SEAL at a NONZERO sequence -- the shape `checkChain` reports as a gap -- makes `checkReader` return NOT-JUDGED for every reader view. M4.13's sweep loop, written the natural way as `if (v.judged()) assertThat(v.violations()).isEmpty();`, then silently SKIPS those seeds, so a reader that over-applied a discarded suffix on such a chain is counted as a seed that passed. No test in the tree distinguishes the mutated predicate from the real one, so the widening lands green."
+    }
+  ],
+  "notes": "22 mutations applied to ReaderInvariants.checkReader/Verdict/ReaderView in an issued review tree; 22 killed, 0 survived. Killed: Math::max->Math::min in the fold; `break` on Seal -> `continue`; `applied > want` -> `>=`; `applied < want` -> `<=`; invented-stream arm disabled; inherited base replaced by an empty HashMap; inheritedOffsets violations propagated instead of discarded; expected-loop truncated to its first iteration (killed by TWOStreamsBrokenInOPPOSITEDirectionsAreBOTHReported); `applied` read from `expected` so the two sides cannot disagree; readChain at a constant epoch instead of view.epoch(); I3/I4 labels swapped, both directions; I3 detail's two offsets transposed; invented-stream arm relabelled I4; `new Verdict(true, found)` -> `new Verdict(!found.isEmpty(), found)` and -> `new Verdict(false, found)`; `notJudged()` carrying judged=true; the neverOpened guard removed entirely; ReaderView.of dropping offsets and ReaderView.of using epoch-1; checkReader returning List.of() unconditionally. Tier is right: T1 on MemoryBinStore, no sleep, no port, no system temp, no mock. No existing assertion was weakened -- the only non-javadoc change to Invariants.java is three private->package-private visibility edits, no test body or assertion outside the two new files is touched. The two acceptance-criteria caveats the row itself names (I4's reorder clause = M4.13f; never-opened chains = M4.13i) are pinned rather than merely described: ReaderInvariantsScopeTest asserts the decline for all three reader shapes on both arms, so closing M4.13i makes those tests fail as its note promises.",
+  "task": "M4.13a",
+  "role": "test-reviewer",
+  "staged_tree": "e15a3ddb97ce1c47b08b21922a21d368e8ac2ae4"
+}

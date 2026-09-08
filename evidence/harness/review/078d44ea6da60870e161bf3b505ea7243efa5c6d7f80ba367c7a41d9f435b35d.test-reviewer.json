@@ -1,0 +1,14 @@
+{
+  "diff_sha256": "078d44ea6da60870e161bf3b505ea7243efa5c6d7f80ba367c7a41d9f435b35d",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "severity": "major",
+      "file": "sequencer/src/main/java/binjava/sequencer/ChainReplay.java:174",
+      "summary": "Both 'atOrigin = false' assignments are individually unpinned, and each is non-equivalent. Deleting the one at line 174 (CONTINUE branch) survives the whole suite; measured on a CONTINUE naming an EMPTY chain, nextOffset goes 100 -> 0. Deleting the one at line 188 (never-opened branch) also survives; measured on an origin that is SEAL@0 whose own predecessor is empty, nextOffset goes 100 -> 0. Both silently lose all history beyond the empty chain and reassign offset 0, which is I2 -- the same defect the production reviewer called blocking this round, one shape over. THE CAUSE IS M0.67's SHAPE FOR THE THIRD CONSECUTIVE ROUND: anEMPTYChainMidAncestryDoesNotLoseTheHistoryBeyondIt walks CONTINUE(4->3), then SEAL@0 at 3, then the empty chain at 2 -- so it passes through BOTH branches before reaching the empty chain and either assignment alone suffices. Two fixtures close it, each one object smaller than the existing one: a CONTINUE leading straight to an empty chain, and an origin sealed-at-0 whose predecessor is empty.",
+      "failure_scenario": "A refactor of the ancestry loop -- extracting the branches, or replacing the boolean with a hop index -- drops or misplaces one of the two assignments. Recovery then stops at the first empty chain instead of stepping over it, every stream whose history lives beyond that chain restarts at offset 0, and the whole suite including the test written for exactly this shape stays green. The empty chain is reachable by the most correlated failure this path meets, which the fixture's own comment names: consecutive takeovers each failing at or before their first PUT during a store outage."
+    }
+  ],
+  "task": "M4.6e",
+  "role": "test-reviewer"
+}

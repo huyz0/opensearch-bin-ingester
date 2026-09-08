@@ -1,0 +1,38 @@
+{
+  "diff_sha256": "8d3193ad864ca76442c113d89f3c264cf9773fe494cc866d9ff7920230c6aa1b",
+  "verdict": "pass",
+  "summary": "Round 7 verify. Both majors round 6 raised are genuinely closed -- I reproduced each mutation in my own tree and watched the named test fail. Four other new tests each kill a distinct mutation uniquely. The changed lifecycle assertion is a strengthening, not the inversion: measured, hasRootCauseMessage catches a cause-discarding mutation the old hasMessageContaining(\"closed\") could not. Three minors, all measured surviving mutations on defensive/wiring lines, none touching the acceptance criteria.",
+  "findings": [
+    {
+      "id": "M4.7-R7a",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/BatchingSequencerTest.java:329",
+      "title": "The Duration -> installed-window wiring in the SHIPPING constructor is pinned only by a 120 ms lower bound, and the new test's comment claims otherwise",
+      "failure_scenario": "MEASURED SURVIVING MUTATION, twice, in a copy of the staged tree (restored afterwards). (a) BatchingSequencer.java:88, `this(delegate, sleepFor(interval))` -> `this(delegate, sleepFor(interval.multipliedBy(4)))`: :sequencer:test and :ingest:test BUILD SUCCESSFUL. (b) the constructor made `this(delegate, ignoring(sleepFor(interval)))` where `ignoring` discards its argument and returns `() -> Thread.sleep(200)` -- the guard still runs so the zero/negative tests pass, and the whole suite is green with the shipping constructor installing a 200 ms window that IGNORES commitBatchInterval. For a configured 5 s interval that is 25x the PUT rate, the exact NFR-1 dimension M4.7 exists to protect. The cause is that `sleepFor` was made package-private so the sub-millisecond test calls it DIRECTLY: both bounds of aSubMillisecondIntervalIsStillAWINDOWRatherThanNoneAtAll bypass the constructor, and the only assertion that does traverse it (theRealClockTimerActuallyWaitsItsInterval, BatchingSequencerTest.java:283) is a lower bound alone. So the comment at :329-335 -- 'Together with the 120 ms test above this pins that the configured interval is actually consulted -- a constant large enough to pass that one fails this' -- is true of `sleepFor` in isolation and NOT true of the code the public constructor installs. Remedy is one line: an upper bound on theRealClockTimerActuallyWaitsItsInterval."
+    },
+    {
+      "id": "M4.7-R7b",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/BatchingSequencer.java:272",
+      "title": "The once-only delegate close introduced this round has no detector",
+      "failure_scenario": "MEASURED SURVIVING MUTATION: `claimDelegateClose()` body `return delegateClosed.compareAndSet(false, true);` -> `{ delegateClosed.set(true); return true; }`. :sequencer:test and :ingest:test BUILD SUCCESSFUL -- the whole tree is green with the delegate, and therefore `LocalSequencer.close` -> `leases.release()`, closed TWICE when a died committer's exit path and an explicit `close()` both run. The field's own javadoc (BatchingSequencer.java:52-59) makes that an explicit correctness claim ('a second call would take the lock again for a lease this pod has already let go') and nothing constrains it: neither aCommitterThatDIEDDoesNotTELLTheNextCallerItWasCLOSED nor aCommitterThatDIEDReleasesTheLEASERatherThanHoldingItToItsTTL ever calls close() on the batcher, so the one interleaving the AtomicBoolean exists for is never reached. A close-count on DyingDelegate plus a close() after the death would pin it in two lines."
+    },
+    {
+      "id": "M4.7-R7c",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/BatchingSequencer.java:440",
+      "title": "Of the two failAll nets the comment calls 'NOT interchangeable', only one is pinned",
+      "failure_scenario": "MEASURED, both directions. Deleting `failAll(drainRemaining(), terminalFailure());` from `drainForever`'s finally (BatchingSequencer.java:256) FAILS aCallerQUEUEDBehindADyingCommitterIsFailedEvenWithNoCloseAtAll -- that half is now genuinely pinned, closing an earlier round's finding. Deleting the SAME call from `close()` (BatchingSequencer.java:440) leaves :sequencer:test and :ingest:test BUILD SUCCESSFUL. The direction the comment says it covers -- a close arriving while the committer is parked in take() -- is in fact also covered by drainForever's finally, which runs on the interrupt; the only state where close()'s net does work is the join-TIMEOUT branch, and that branch is unreachable from a test because `Duration.ofSeconds(10)` at BatchingSequencer.java:424 is a hardcoded constant rather than a seam. The same constant leaves `if (!stopped) { LOG.log(WARNING, ...) }` (:428) with no detector of any kind. Reported as a design signal about the constant, not a demand for a 10-second test."
+    },
+    {
+      "id": "M4.7-R7d",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/BatchingSequencerTerminationTest.java:47",
+      "title": "awaitSet synchronises on Thread.sleep(5) where a latch would be exact",
+      "failure_scenario": "No detection weakness -- the poll is deadline-bounded and fails loudly at 10 s, so no mutation survives because of it. It is a testing.md rule 15 tension: `awaitSet` waits for the committer's exit path by polling an AtomicBoolean every 5 ms, where a CountDownLatch counted down inside the delegate's `close()` and awaited by the test would be exact and would remove the sleep. The sibling bounded poll in BatchingSequencerTest.QueuedTimer:57-62 argues the rule explicitly; this one does not. Flagged for the record only -- fixing it is permitted and probably not worth a round."
+    }
+  ],
+  "task": "M4.7",
+  "role": "test-reviewer",
+  "staged_tree": "9bf28e67ed2824201bb26b23e00a5499bcc58168"
+}

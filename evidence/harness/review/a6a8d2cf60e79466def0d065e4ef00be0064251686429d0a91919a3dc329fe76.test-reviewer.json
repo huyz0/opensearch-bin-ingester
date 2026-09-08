@@ -1,0 +1,26 @@
+{
+  "diff_sha256": "a6a8d2cf60e79466def0d065e4ef00be0064251686429d0a91919a3dc329fe76",
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitLogSealWriteTest.java:290",
+      "detail": "recoverChainEndPAGESToTheRealEndRatherThanStoppingAtTheFirstPage is not self-sufficient: its whole discrimination rests on SmallPageStore's Math.min clamp, and it asserts nothing that would notice the clamp being gone. Measured composite -- delete the clamp AND collapse the paging loop, and the ONLY test that fires is M4.6a's theSamePaginatedChainWithoutASealTakesBothPages, in another class, about recover(). So the new test's guard is defended one class over by a control written for a different method. This is M4.6a's round-2 lesson at one remove rather than a repeat of it. Self-sufficient form: wrap in CountingBinStore(new SmallPageStore(backing, 2)) and assert lists() == 2 alongside nextSequence() == 3.",
+      "failure_scenario": "Someone deletes or rewrites M4.6a's control believing it only guards recover()'s test. The clamp is then deletable with the suite green, and TWO paging tests silently stop constraining paging at once -- the collapse-the-loop mutant returns, and a takeover on a chain past one page computes its end from the first page."
+    },
+    {
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/CommitLog.java:363",
+      "detail": "seal()'s new sealedAt guard returns a value nothing pins beyond its sequence. Surviving mutation: 'return new Seal(sealedAt.sequence(), continuedAt);' -- 126/126 green. Both tests that reach the guard (sealingAChainThisWriterALREADYKNOWSIsSealed... and recoverChainEndREMEMBERSASealSoTheGuardCanFire) seal first with 9 and then propose 9, so the real continuation and the proposed one coincide -- the same shape closed twice already, now on the guard added in round 2. Graded minor rather than major because the property IS pinned on the sibling adopt branch (sealingAChainAnotherLeaderAlreadySealed... asserts continuedAt()==9 with a comment saying why) and no production caller reads the returned continuedAt -- LocalSequencer takes only .sequence(). Fix: in one of the two guard tests seal with 9 and propose 3, asserting adopted.continuedAt() == 9.",
+      "failure_scenario": "The guard is later changed to synthesise its answer from the caller's argument rather than returning the seal actually on the chain. Every route that adopts an existing seal then reports the wrong continuation epoch; the two sibling branches go red, this one does not, and the first consumer of the guard's return value -- M4.6e's crossing reader is the obvious candidate -- follows it to a chain nobody opened."
+    },
+    {
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/LocalSequencerTest.java:348",
+      "detail": "The comment added in this round to justify keeping thePredecessorIsRECOVERED says it 'is still the sole killer of a two-slots-short end'. Measured at this hash: nextSequence = last.sequence() - 1 is killed by THREE tests -- this one, aTakeoverReads..., and recoverChainEndPAGES... The claim was true at 65bc1ea8 and was invalidated by this same commit's tightening of aTakeoverReads from isLessThan(5L) to isEqualTo(2L), which made that test catch any extra redrive GET. The test still earns its place (it is the only one asserting the SEAL ENTRY at the end of a multi-entry chain through LocalSequencer, which aTakeoverReads does not assert at all) -- so the fix is to correct the justification, not to delete the test.",
+      "failure_scenario": "The next person weighing this test for deletion checks the stated sole-kill claim, finds it false, and deletes the test -- losing the only assertion that the seal lands at the right SLOT on a long chain through LocalSequencer. That is the exact 'reads as coverage of the wrong thing' cost M4.6a recorded when it deleted a test for the opposite reason."
+    }
+  ],
+  "task": "M4.6c",
+  "role": "test-reviewer"
+}

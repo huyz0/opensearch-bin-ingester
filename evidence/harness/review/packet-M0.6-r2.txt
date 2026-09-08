@@ -1,0 +1,289 @@
+=== TASK M0.6 ===
+| M0.6 | Wire `check-module.sh` into `.pre-commit-config.yaml` and CI | — | todo |
+
+=== STANDARDS THE REVIEWER MUST READ (selected from paths, not by the author) ===
+docs/internal/standards/git.md
+docs/internal/standards/sdd.md
+docs/internal/standards/java-style.md
+docs/internal/standards/code-structure.md
+docs/internal/standards/testing.md
+docs/internal/standards/performance.md
+docs/internal/standards/cost.md
+docs/internal/standards/security.md
+
+=== WHAT TO LOOK AT (selected from paths, not improvised per commit) ===
+
+### Lens: a gate that reports success while checking nothing
+This change touches enforcement. Every defect of this class found in this
+repository so far looked green: a deny-list that could never match its own input,
+two gates that printed FAIL and exited 0, a budget that summed a key the runtime
+does not read, a parser blinded by one char literal.
+- Construct the input each check must REJECT and confirm it rejects it.
+- Confirm the check is wired (a task nothing depends on is a preference).
+- Confirm it cannot pass vacuously: empty input set, absent report, missing file.
+- Check the exit status actually propagates.
+
+### Lens: would this test fail if the code were wrong
+Mentally mutate the production code each test covers: flip a boundary, negate a
+condition, return a constant, drop a side effect. If the test still passes, name
+the surviving mutation -- that finding is worth more than every style comment.
+
+### Out of scope for this review
+- Anything the packet lists as already passed -- a script owns it.
+- Any path outside this repository. `../` and `.tmp/` are not ours.
+- Lenses not listed above: the change does not touch them.
+
+=== ROUNDS ===
+review.md rule 12: TWO rounds. Round one finds, round two verifies.
+If round two still carries a blocking finding, the commit is too big --
+the author splits it. Do not expect a round three.
+
+=== GATES THAT ALREADY PASSED (do not re-check these) ===
+  PASSED  check-dependency-licenses.sh
+  PASSED  check-file-size.sh
+  PASSED  check-gate-scope.sh
+  PASSED  check-harness-tests.sh
+  PASSED  check-license-headers.sh
+  PASSED  check-links.sh
+  PASSED  check-metric-cardinality.sh
+  PASSED  check-module.sh
+  PASSED  check-portability.sh
+  PASSED  check-tdd.sh
+  PASSED  check-terminology.sh
+  PASSED  check-test-budget.sh
+  PASSED  build-index.sh --check
+
+=== STAGED FILES BY STATUS ===
+  A    4
+  M    5
+
+=== STAGED DIFF (sha256 6e8b6b9b321a9a4d6019c3a1ae59f19a368665f1fad1c5106b583287d1c15e63) ===
+diff --git a/.pre-commit-config.yaml b/.pre-commit-config.yaml
+index c31b237..91c6d67 100644
+--- a/.pre-commit-config.yaml
++++ b/.pre-commit-config.yaml
+@@ -62,6 +62,19 @@ repos:
+         stages: [pre-commit]
+         pass_filenames: false
+         always_run: true
++      # Delta-routed: builds only the modules a change touches, and all of them
++      # when the shared build moves. ⚠️ A docs-only commit pays NO Gradle startup
++      # -- the delta branch exits at "no module changed" before any gradlew call.
++      # Measured: 1.4 s when no module changed, 13.6 s warm and 30.4 s cold for a
++      # shared-build change that selects all eight. Inside build.md's 90 s L0
++      # budget, and three orders of magnitude apart from the text gates.
++      - id: check-module
++        name: "architecture.md rules 2/4/5: each module stays inside its dependency surface"
++        entry: scripts/check-module.sh
++        language: system
++        stages: [pre-commit]
++        pass_filenames: false
++        always_run: true
+       - id: check-links
+         name: "every relative markdown link resolves"
+         entry: scripts/check-links.sh
+diff --git a/AGENTS.md b/AGENTS.md
+index a7d6957..1bb99ae 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -181,6 +181,7 @@ runs is exactly the list that goes stale:
+ | `check-portability.sh` | pre-commit | skills/README.md rules 2,3,5: skills are vendor-neutral and adapters are thin |
+ | `check-gate-scope.sh` | pre-commit | every gate judges this repository only, never .tmp/ or a sibling checkout |
+ | `check-harness-tests.sh` | pre-commit | the harness's own tests run -- buildSrc tests are NOT run by ./gradlew build |
++| `check-module.sh` | pre-commit | architecture.md rules 2/4/5: each module stays inside its dependency surface |
+ | `check-links.sh` | pre-commit | every relative markdown link resolves |
+ | `scripts/build-index.sh --check` | pre-commit | the generated index regions in AGENTS.md and skills/README.md are current |
+ | `check-terminology.sh` | pre-commit | glossary.md: one name per concept -- producer/ingester/writer/reader/consumer/plugin |
+@@ -194,7 +195,7 @@ runs is exactly the list that goes stale:
+ | `check-commit-msg.sh` | commit-msg | non-negotiable 1: the commit subject names a real backlog task |
+ | `check-test-integrity.sh` | commit-msg | testing.md rules 4-5: no assertion weakened alongside a production change |
+ 
+-Present in `scripts/` but **not** wired into `.pre-commit-config.yaml` — invoke by hand, from a skill, or from CI: `check-milestone-verified.sh`, `check-module.sh`, `check-suite-time.sh`.
++Present in `scripts/` but **not** wired into `.pre-commit-config.yaml` — invoke by hand, from a skill, or from CI: `check-milestone-verified.sh`, `check-suite-time.sh`.
+ <!-- index:gates:end -->
+ 
+ Not yet existing, and named by skills and standards that say so:
+@@ -213,6 +214,7 @@ than the claim:
+ | `check-test-integrity` | ✅ **only with `CHECK_RANGE`** | it reads the *staged* diff, which is empty in a fresh checkout; `CHECK_RANGE=<base-ref>` makes it compare against the push or pull-request base. Without it it prints `ok` having examined nothing |
+ | `check-tdd` | ❌ **cannot** | `CHECK_RANGE` lets it find the new tests, but the red records live in `.harness/tdd/red.json`, which `.gitignore` excludes — so it fails in CI with "no red record" no matter the range. Verified: `CHECK_RANGE=HEAD~1 ./scripts/check-tdd.sh` exits 1 in a clean tree |
+ | `check-commit-msg`, `check-test-integrity` | ⚠️ **needs explicit invocation** | `pre-commit run --all-files` runs the pre-commit stage only and never fires commit-msg hooks |
++| `check-module` | ✅ **only with `GATE_SCOPE=full`** | its default delta path selects modules from the *staged* diff, which is empty in a fresh checkout, so it would report "no module changed" having built nothing. CI sets `GATE_SCOPE=full` to build all eight |
+ | `check-reviewed` | ❌ **cannot** | its evidence lives in `.harness/review/`, gitignored and local to the machine that ran the review. ⚠️ It is a *pre-commit-stage* hook, so `--all-files` **does** invoke it — and with nothing staged it prints `ok nothing staged` and **passes vacuously**. It does not fail, which is worse: a green line that means nothing. CI runs `SKIP=check-reviewed` so the skip is visible in the log instead |
+ 
+ ⚠️ **Gates run in `delta` mode by default** — only the files a change touches —
+diff --git a/buildSrc/build.gradle.kts b/buildSrc/build.gradle.kts
+index 3bfee96..5e2f145 100644
+--- a/buildSrc/build.gradle.kts
++++ b/buildSrc/build.gradle.kts
+@@ -34,7 +34,7 @@ tasks.withType<Test>().configureEach {
+     // --rerun-tasks showed the case genuinely failing. A test that does not run
+     // on the change it guards is the same defect as a gate that reports success
+     // while checking nothing.
+-    inputs.files(fileTree(rootDir.parentFile.resolve("scripts")) { include("*.py") })
++    inputs.files(fileTree(rootDir.parentFile.resolve("scripts")) { include("*.py", "*.sh") })
+         .withPropertyName("harnessScripts")
+         .withPathSensitivity(PathSensitivity.RELATIVE)
+     inputs.dir(layout.projectDirectory.dir("src/test/resources"))
+diff --git a/buildSrc/src/test/java/binjava/ModuleListDerivationTest.java b/buildSrc/src/test/java/binjava/ModuleListDerivationTest.java
+new file mode 100644
+index 0000000..a6a2fb0
+--- /dev/null
++++ b/buildSrc/src/test/java/binjava/ModuleListDerivationTest.java
+@@ -0,0 +1,46 @@
++// SPDX-License-Identifier: Apache-2.0
++package binjava;
++
++import static org.assertj.core.api.Assertions.assertThat;
++
++import java.nio.file.Path;
++import java.util.List;
++import org.junit.jupiter.params.ParameterizedTest;
++import org.junit.jupiter.params.provider.CsvSource;
++
++/**
++ * check-module.sh derives its module list from settings.gradle.kts, and a short
++ * list is indistinguishable from compliance: the gate prints "ok N module(s)
++ * checked" over whatever it dropped.
++ *
++ * Two line-based derivations shipped before this one. The first required a
++ * trailing comma; the second anchored to end-of-line, so an inline comment
++ * dropped the entry. Both were caught in review, and reverting either left every
++ * hook green because nothing exercised the derivation. One fixture per drop.
++ */
++class ModuleListDerivationTest {
++
++  @ParameterizedTest
++  @CsvSource(
++      delimiter = '|',
++      value = {
++        "inline-comment.kts    | binstore-spi,ingest,plugin",
++        "no-trailing-comma.kts | binstore-spi,ingest,plugin",
++        "two-per-line.kts      | binstore-spi,ingest,plugin",
++      })
++  void derivesEveryModuleRegardlessOfLineShape(String fixture, String expected) throws Exception {
++    Path repo = Path.of("..").toAbsolutePath().normalize();
++    Path f =
++        repo.resolve("buildSrc/src/test/resources/settings-fixtures").resolve(fixture.trim());
++    assertThat(f).exists();
++    Process p =
++        new ProcessBuilder("scripts/check-module.sh", "--list-modules", f.toString())
++            .directory(repo.toFile())
++            .redirectErrorStream(true)
++            .start();
++    String out = new String(p.getInputStream().readAllBytes());
++    assertThat(p.waitFor()).as(out).isZero();
++    assertThat(out.lines().map(String::trim).filter(l -> !l.isEmpty()).toList())
++        .containsExactlyElementsOf(List.of(expected.trim().split(",")));
++  }
++}
+diff --git a/buildSrc/src/test/resources/settings-fixtures/inline-comment.kts b/buildSrc/src/test/resources/settings-fixtures/inline-comment.kts
+new file mode 100644
+index 0000000..3e04eca
+--- /dev/null
++++ b/buildSrc/src/test/resources/settings-fixtures/inline-comment.kts
+@@ -0,0 +1,6 @@
++rootProject.name = "x"
++include(
++    "binstore-spi",
++    "ingest", // bundling decisions
++    "plugin",
++)
+diff --git a/buildSrc/src/test/resources/settings-fixtures/no-trailing-comma.kts b/buildSrc/src/test/resources/settings-fixtures/no-trailing-comma.kts
+new file mode 100644
+index 0000000..f066159
+--- /dev/null
++++ b/buildSrc/src/test/resources/settings-fixtures/no-trailing-comma.kts
+@@ -0,0 +1,6 @@
++rootProject.name = "x"
++include(
++    "binstore-spi",
++    "ingest",
++    "plugin"
++)
+diff --git a/buildSrc/src/test/resources/settings-fixtures/two-per-line.kts b/buildSrc/src/test/resources/settings-fixtures/two-per-line.kts
+new file mode 100644
+index 0000000..275c026
+--- /dev/null
++++ b/buildSrc/src/test/resources/settings-fixtures/two-per-line.kts
+@@ -0,0 +1,5 @@
++rootProject.name = "x"
++include(
++    "binstore-spi", "ingest",
++    "plugin",
++)
+diff --git a/docs/internal/standards/build.md b/docs/internal/standards/build.md
+index 70e6409..ceaad46 100644
+--- a/docs/internal/standards/build.md
++++ b/docs/internal/standards/build.md
+@@ -102,8 +102,11 @@ Two rules keep `delta` sound:
+    being valid for a reason outside its own diff, so it is a speed optimisation,
+    never the authority.
+ 
+-⚠️ **The saving is currently nil** — the L0 suite is ~525 ms in both modes,
+-because the tree is small. This exists for the gates that are coming: compile,
++⚠️ **The saving is no longer nil.** Measured once `check-module` joined L0:
++**1.4 s** when a commit touches no module, **13.6 s** warm and **30.4 s** cold
++when a shared-build change selects all eight modules. Delta and full now differ
++by three orders of magnitude, where before `check-module` the whole suite was
++~525 ms either way. This exists for the gates that are coming: compile,
+ JaCoCo and PIT scale with the code they examine, and `check-mutants.sh` is
+ diff-scoped by design because a whole-tree mutation score is dominated by code
+ nobody touched and moves too slowly to gate a commit.
+diff --git a/scripts/check-module.sh b/scripts/check-module.sh
+index 9275f7d..b40b232 100755
+--- a/scripts/check-module.sh
++++ b/scripts/check-module.sh
+@@ -17,6 +17,23 @@
+ # endpoint are two front doors over one implementation.
+ source "$(dirname "$0")/lib.sh"
+ cd "$ROOT"
++# `--list-modules <settings-file>` prints the derived list and exits. It exists
++# so the derivation can be constrained by a test: two line-based versions of it
++# silently dropped a module, and reverting either left every hook green because
++# nothing exercised it.
++# ⚠️ ONE implementation. `--list-modules` first duplicated it, so the regression
++# test exercised a copy and mutating the gate's own derivation left the suite
++# green -- the two-copies-drift failure this project keeps hitting.
++derive_modules() {
++  sed -n '/^include(/,/^)/p' "${1:-settings.gradle.kts}" \
++    | grep -oE '"[^"]+"' | tr -d '"'
++}
++
++if [ "${1:-}" = "--list-modules" ]; then
++  derive_modules "${2:-settings.gradle.kts}"
++  exit 0
++fi
++
+ hdr "check-module"
+ 
+ [ -x ./gradlew ] || { fail "no ./gradlew"; finish; }
+@@ -26,7 +43,28 @@ hdr "check-module"
+ # silently skipped by the delta path -- which fails loudly for the same name
+ # given on the command line -- so the first module added after this landed would
+ # have gone unchecked while the gate printed "8 module(s) checked".
+-ALL=$(grep -oE '^\s*"[a-z][a-z-]*",' settings.gradle.kts | tr -d ' ",' | tr '\n' ' ')
++# ⚠️ Every quoted string inside the include(...) block, not a line pattern.
++# Two line-based regexes shipped before this and each silently dropped a module:
++# one required a trailing comma, the next anchored to end-of-line so an inline
++# comment (`"plugin", // the OpenSearch plugin`) dropped it. A short list is
++# indistinguishable from compliance -- the gate printed "ok 7 module(s) checked"
++# over a real Helidon dependency in the missing one.
++ALL=$(derive_modules settings.gradle.kts | tr '\n' ' ')
++
++# ⚠️ Cross-checked BOTH ways against the filesystem, because deriving the list
++# and trusting it is what failed twice. A module in settings.gradle.kts with no
++# build file, or a build file with no entry in settings.gradle.kts, is a drift
++# the gate must refuse rather than quietly skip.
++for _m in $ALL; do
++  [ -f "$_m/build.gradle.kts" ] || fail "settings.gradle.kts lists '$_m', which has no build.gradle.kts"
++done
++for _f in */build.gradle.kts; do
++  _d="${_f%%/*}"
++  [ "$_d" = "buildSrc" ] && continue
++  case " $ALL " in *" $_d "*) ;; *) fail "$_d has a build.gradle.kts but is not in settings.gradle.kts -- it would be silently unchecked" ;; esac
++done
++[ "$FAILED" -eq 0 ] || finish
++
+ [ -n "$ALL" ] || { fail "no modules found in settings.gradle.kts"; finish; }
+ 
+ # ⚠️ Rule 5 names exactly these four. NOT `client` or `plugin` -- the consumer

@@ -1,0 +1,27 @@
+{
+  "diff_sha256": "10441732ea385b4f648e8e516f443006d965e32dc1de6e38c2b5bd432769f851",
+  "verdict": "changes-requested",
+  "summary": "T1, T3, T4, T5 verified fixed by executing the named mutations. T2 is NOT fixed: the eagerness of the over-long check remains entirely unconstrained. Reds are honest -- all 8 new tests carry red records bound to the final test-source hash 7fc7ad44, and red.log shows genuine assertion/IOException failures at the right line numbers, not compile errors.",
+  "findings": [
+    {
+      "severity": "blocking",
+      "file": "binstore-spi/src/test/java/binjava/binstore/BodyTest.java:120",
+      "title": "T2 is not fixed: no test distinguishes the eager check from a lazy one, because readAllBytes reaches EOF",
+      "failure_scenario": "checkedStreamRefusesAnOverLongBody uses in.readAllBytes(), which drives the stream to EOF. At EOF read(byte[],int,int) returns -1 and calls verify(). So a lazy implementation ALSO throws from inside the readAllBytes() call -- the assertThatThrownBy(() -> in.readAllBytes()) wrapper cannot tell where the throw originated. VERIFIED SURVIVING MUTATION, executed: strip the throw from count() so it only does seen += n, and add `if (seen > length) throw new IOException(\"body declared \" + length + \" bytes but yielded more (\" + seen + \")\");` to the top of verify(). This is exactly the pre-fix lazy design with the new wording. All 17 tests pass (tests=17 failures=0, ./gradlew :binstore-spi:test --rerun-tasks). The comment on line 115 claims 'the throw must come from the READ, not from close()' -- true under both designs, so it constrains nothing. Consequence: the whole reason the eager check exists (stop the backend before it commits the S3 request) can be deleted and the suite stays green. FIX, verified to kill the mutant: a consumer that over-reads WITHOUT reaching EOF. Body(2, \"much longer\"), then assertThatThrownBy(() -> in.read(new byte[5], 0, 5)) -- the delegate has 11 bytes so read returns 5 and never sees EOF; eager throws, lazy returns 5 silently. Confirmed: added it, passes on HEAD, fails on the mutant (failures=1, probeEagerRefusalBeforeEof)."
+    },
+    {
+      "severity": "minor",
+      "file": "binstore-spi/src/test/java/binjava/binstore/BodyTest.java:114",
+      "title": "The eager-refusal path never closes the stream, so close()-after-eager-refusal is untested",
+      "failure_scenario": "checkedStreamRefusesAnOverLongBody obtains the stream outside try-with-resources and never closes it -- the one new test that leaks its delegate, in a commit whose T4 finding was about delegate leaks. Nothing covers the ordinary caller shape (try-with-resources around a body that is refused mid-read). VERIFIED SURVIVING MUTATION, executed: delete `verified = true;` from count(). All 17 tests pass. Under that mutant a try-with-resources caller gets a second IOException from close() suppressed onto the first, and `verified` as a latch is unconstrained."
+    },
+    {
+      "severity": "minor",
+      "file": "binstore-spi/src/test/java/binjava/binstore/BodyTest.java:187",
+      "title": "The mark() no-op override is asserted by a comment, not by an assertion",
+      "failure_scenario": "The test comment says 'mark() must be a no-op too', but reset() throws unconditionally regardless of whether mark() was called, so nothing observable distinguishes the override from a forwarding call. VERIFIED SURVIVING MUTATION, executed: replace the empty body of mark(int) with `super.mark(readlimit);`. All 17 tests pass. This is arguably an equivalent mutant at the API surface -- the point is that the production javadoc on mark() states a rationale the suite cannot check, so it should be recorded as disclosed-equivalent alongside the !sawEof one rather than left reading as tested behaviour."
+    }
+  ],
+  "task": "M1.1b",
+  "role": "test-reviewer"
+}

@@ -1,0 +1,22 @@
+{
+  "diff_sha256": "f5cfe1cec5070741045b76d43853a467808384317e0b47bb404fbb7bcf0cd9eb",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "file": "buildSrc/src/test/java/binjava/RenameBlindnessTest.java",
+      "line": 255,
+      "severity": "major",
+      "what": "aTestRenamedToANameTheLoopCannotReadIsStillALostTest is the only test covering the round-5 fix, and it pins `git config diff.renames false` -- the ONE configuration in which the `departed` half of that fix is a no-op. With detection off, `git diff --cached --name-only` already lists the rename's SOURCE, so `mod/src/test/java/binjava/FooTest.java` is in `paths` whether or not the `departed` comprehension puts it back. The test therefore constrains only the CONJUNCTION of the two reverted predicates (which is exactly the round-4 bytes); each half can be reverted alone with the suite green. This is round 3's own lesson recurring: the fixture verifies against a configuration nobody runs, and it is the configuration in which the line under test does not matter.",
+      "failure_scenario": "Measured end to end on the staged tree, not argued. Revert ONLY `departed` in scripts/test_integrity.py:113-114 to `TEST_PATH.search(src) and not TEST_PATH.search(dest)`, leaving `sources` as `reads(src) and reads(dest)`: `env -u GIT_INDEX_FILE ./gradlew -p buildSrc test` is BUILD SUCCESSFUL, zero failures. Then build this very fixture WITHOUT the `diff.renames false` pin -- mod/src/main/java/binjava/Foo.java 3 -> 4, `git mv mod/src/test/java/binjava/FooTest.java mod/src/test/java/binjava/FooTest.java.bak`, no trailer -- and the mutated gate prints `ok no test weakened, disabled or removed alongside the production change`, exit 0, where the staged bytes print two FAIL lines naming keepsItsPromise and alsoHoldsUnderLoad and exit 1. Identical for the `.java` -> `.kt` conversion the test's own comment names. So a future author who simplifies the `reads` lambda back out of `departed` -- plausible, since its use in `sources` is provably redundant (see the minor) -- reopens the blindness on every machine with git's default config, including CI, with nothing red. Remedy is one added fixture, not a split: the same shape as this test with the `diff.renames false` pin omitted, which turns that one-line revert red."
+    },
+    {
+      "file": "scripts/test_integrity.py",
+      "line": 101,
+      "severity": "minor",
+      "what": "`sources = {... if reads(src) and reads(dest)}` cannot be falsified by any input, so no test can be written for the half of the fix the comment at lines 87-96 credits with restoring HEAD's behaviour. Anything the round-4 predicate wrongly dropped is unconditionally re-appended two lines later by `paths = [q for q in paths if q not in departed] + departed`; anything it wrongly kept is skipped by the loop's own `p.endswith('.java')` guard at line 130. `departed` alone is what restores the refusal. The comment's `ONE PREDICATE ... asked of both ends of every rename` is therefore a stronger claim than the tree supports -- the same overclaim class this milestone has recorded twice (M4.3m, M4.3d).",
+      "failure_scenario": "Revert ONLY `sources` to `TEST_PATH.search(src) and TEST_PATH.search(dest)`: full buildSrc suite BUILD SUCCESSFUL, and the .bak fixture is still refused (exit 1, both methods named) under BOTH `diff.renames false` and the default. Equivalent mutant, so this cannot be closed by adding a test -- it is closed by not claiming the `sources` edit is what fixed the weakening. Recorded rather than fixed; the predicate is right on its face and should stay."
+    }
+  ],
+  "task": "M0.53",
+  "role": "test-reviewer"
+}

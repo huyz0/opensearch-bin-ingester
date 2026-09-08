@@ -1,0 +1,25 @@
+{
+  "diff_sha256": "fb36be7f99bcf7e753e6104828d0a1801bb3c966838ebe61159e04972f236199",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "M4.13c-R1a",
+      "severity": "minor",
+      "location": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSimulationTest.java:80",
+      "summary": "RESOLVED as argued, recorded not re-raised. enabledIn() excludes zero-rate classes, and both sibling ROUGH profiles now sit at withheldPut = 0, so the class this commit adds has ZERO sweep coverage. The remedy landed is a re-baseline owned by M4.13d plus the measured table in backlog-notes.md, not a silent list.",
+      "failure_scenario": "A future profile that zeroes a class drops it from the expected set and the test named 'every ENABLED fault class' stays green over a sweep that never exercised it. Today that is exactly withheldPut. Verified this is DOCUMENTED with numbers (seeds 0..29, 120 steps, 3 pods: seeds-committing-nothing 1/2/3/3 at withheldPut 0/0.01/0.02/0.05, reaching the asserted bound of 3 at 0.05) and OWNED by the staged M4.13d backlog row, so it is a deferral rather than a gap.",
+      "surviving_mutation": "none measured -- setting a rate to zero is a profile edit, not a production mutation. Every production mutation tried was killed (see M4.13c-R2-measured)."
+    },
+    {
+      "id": "M4.13c-R2-measured",
+      "severity": "minor",
+      "location": "sequencer/src/test/java/binjava/sequencer/FaultInjectingStore.java:1",
+      "summary": "Mutation record for round 2, taken in an independent copy of the staged bytes. Seven mutations of FaultInjectingStore, all killed; baseline 363 tests green.",
+      "failure_scenario": "Recorded so the next round does not re-measure. (A) putIfMatch: withheld branch hoisted above ambiguous -> 1/363 failed, onPUTIFMATCHTooTheLANDEDArmWinsAndTheVERSIONMoves. This is round-1's open major, and it is FIXED. (B) putIfAbsent: same flip -> 2 failed, whenBOTHFireTheLANDEDArmWinsAndTheWriteIsThere and enablingWITHHELDDoesNotMoveTheOtherClassesFaults; so precedence is now pinned on BOTH verbs. (C) duplicatePut never fires (draw kept, result && false) -> aROUGHSWEEPACTUALLYINJECTSEveryENABLEDFaultClassAndDRIVESFencedWritersAtTheChain failed. (D) unreachable never fires on all four sites -> same sweep test failed. C and D answer the question asked: enabledIn() DERIVES rather than restates -- an enabled class that stops firing is caught, and the switch from containsExactly to containsExactlyInAnyOrderElementsOf is not a weakening because kinds is a TreeSet and the three names were already in alphabetical order. (E) putIfMatch withheld draw replaced by a bare withheldDraws.nextDouble() so countDraw is skipped -> everyClassDrawsOnEVERYFaultingCallSoNoClassCanBeSKIPPEDSilently failed. (F) putIfMatch withheld arm made to delegate the write before throwing -> aWITHHELDPutIfMatchLeavesTheVERSIONUnchangedSoTheRetryWins failed. (G) putIfMatch ambiguous arm's delegate.putIfMatch deleted -> 2 failed, including the new test's second assertion, so both of its assertions earn their place.",
+      "surviving_mutation": "none"
+    }
+  ],
+  "task": "M4.13c",
+  "role": "test-reviewer",
+  "staged_tree": "fa9f216df50a3560dc3d6569194245182d9010b4"
+}

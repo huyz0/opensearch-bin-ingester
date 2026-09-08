@@ -1,0 +1,44 @@
+{
+  "diff_sha256": "f1fd08525abb18fe144c89b1b49aa62fb1f332b71fd246af34d2978c654778ec",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "M4.8a-r4-1",
+      "severity": "major",
+      "file": "baselines/mutants.txt:15",
+      "summary": "The fourth entry argues the `streamCount < 0` and `podLen < 0` halves as EQUIVALENT ON THE OBSERVABLE. Measured in a copy of the staged bytes, both flip REFUSE into ACCEPT, which is the same non-equivalence the entry's own next sentence uses to exclude podCount and partitionId. (1) With `streamCount < 0 ||` deleted, the 20-byte object `42 43 4b 50 00 00 00 00 | 01 | 81 80 80 80 f0 ff ff ff ff 01 | 00` decodes cleanly to `Checkpoint[sequence=1, streams={}, pods={}]`; with the half present it is refused. (2) With `podLen < 0 ||` deleted, an object whose podLen is `0xFFFFFFFF00000001` (narrows to int 1) decodes to `pods={p=1}` -- a one-byte podId carrying another pod's lastAppliedFlushSeq. The stated mechanism is also wrong twice over: the suite's own negative-streamCount fixture is refused by `Cursor.uvarint` (\"chain entry ends inside a varint\"), not by the trailing-bytes check the entry names, and podLen feeds `c.bytes((int) podLen)` rather than any loop, so 'enters a loop that runs zero times' describes neither field. Two of the six argued mutants are therefore live survivors, and the 87.5% (28/32) headline overstates the score it corrects.",
+      "failure_scenario": "M4.9 lands and someone simplifies the decode guards, reading this staged baseline as the measured licence it presents itself as, and drops `streamCount < 0`. A torn or hostile checkpoint whose stream count reads negative then decodes CLEAN with zero streams -- every stream's nextOffset and oldestRetainedOffset silently gone, and no IOException for the `catch (IOException)` path the wrap at Checkpoint.java:150 exists to feed. Recovery resumes from a checkpoint that claims the cluster has no streams. The podLen half fails the same way one field over: a truncated podId, so a lastAppliedFlushSeq is attributed to a pod that never wrote it."
+    },
+    {
+      "id": "M4.8a-r4-2",
+      "severity": "major",
+      "file": "baselines/mutants.txt:11",
+      "summary": "The second entry states that the `< 0` half of the podCount bound 'is not argued here' because `aNEGATIVEReadingLengthOrCountIsRefusedInEVERYFieldThatNarrows` kills it. Measured: it does not. With ONLY `podCount < 0 ||` removed from Checkpoint.java:212 and nothing else changed, `./gradlew :format:test --rerun-tasks` is green (CheckpointTest 8/8, CheckpointDecodeRefusalTest 10/10, module BUILD SUCCESSFUL). The reason is the same one that forced the r3 podLen correction: the spliced fixture leaves six bytes after the pod section, so `checkpoint has bytes after its last field` fires either way and the assertion is a bare `isInstanceOf(IOException.class)` with no message. The guard's real exposure is real -- a crafted object ending immediately after a negative podCount decodes to `pods={}`, measured -- but nothing in the tree holds it. So the mutant is an unstaged survivor, which this file's own header says 'counts against the floor', and the numerator 28 is overstated as well as the denominator.",
+      "failure_scenario": "A later reader refactors `podCount < 0 || podCount > c.remaining()` down to its second half -- the exact simplification finding M4.8a-tr-10 was raised about -- and every test in the module stays green. A checkpoint whose pod count reads negative then decodes as a valid checkpoint with no pods, so M4.9 resumes with every lastAppliedFlushSeq lost and re-applies flushes the checkpoint was written to make idempotent."
+    },
+    {
+      "id": "M4.8a-r4-3",
+      "severity": "minor",
+      "file": "format/src/main/java/binjava/format/Checkpoint.java:158-160",
+      "summary": "The corrected sentence now makes a closed claim -- 'FOUR routes reach this wrap, measured: offsets out of order, a blank podId, and full-width varints in `sequence` or a flushSeq' -- and the count is still wrong, in a way the previous wording ('five routes were MEASURED') did not assert. Six routes reach it, all measured against the staged bytes: `corrupt checkpoint: nextOffset is never negative: -4294967295`, `corrupt checkpoint: oldestRetainedOffset is never negative: -4294967295`, oldest > next, `sequence is never negative`, `a podId is never blank`, `lastAppliedFlushSeq is never negative`. A full-width varint reaches the wrap through FOUR fields, not two -- `nextOffset` and `oldestRetainedOffset` are missing from the enumeration, and neither is the 'offsets out of order' route, which has its own guard and its own message.",
+      "failure_scenario": "M4.9 is written against this comment as the inventory of what its `catch (IOException)` will see, and its author reasons that a wire-negative nextOffset must be caught somewhere else -- adding a redundant guard, or worse, concluding the field is already bounded upstream. The comment is the only inventory in the tree; nothing recomputes it when the next validating field is added."
+    },
+    {
+      "id": "M4.8a-r4-4",
+      "severity": "minor",
+      "file": "format/src/test/java/binjava/format/CheckpointDecodeRefusalTest.java:47-66",
+      "summary": "A split artifact left three doc comments around two constants. Line 47 is an orphan copy of WIDE_ONE's one-liner attached to nothing; lines 49-62 document WIDE_NEGATIVE ('0xFFFFFFFF00000001 -- NEGATIVE as a long') but sit directly above WIDE_ONE, whose own doc follows at 63 and whose declaration is at 64; WIDE_NEGATIVE at 66 ends up undocumented. The values themselves are right (WIDE_ONE decodes to 0x1_0000_0001, WIDE_NEGATIVE to 0xFFFFFFFF00000001, both verified by hand). The misplaced block also says 'the wide-value tests above feed only POSITIVE values' while sitting above every test in the file.",
+      "failure_scenario": "A reader hovering WIDE_ONE is told it is the negative constant, splices it where a negative-reading value is needed, and writes a test that asserts refusal against a value the `> limit` half already refuses -- the precise blind spot finding M4.8a-tr-10 was raised for, reintroduced by the doc that was written to prevent it."
+    },
+    {
+      "id": "M4.8a-r4-5",
+      "severity": "minor",
+      "file": "baselines/mutants.txt:7,13,15,17-20",
+      "summary": "Bookkeeping the file contradicts itself on. Line 7 says 'One line per mutant' and four lines carry six. Line 13 says of podLen '\u26a0\ufe0f AGAIN THE `< 0` HALF IS SEPARATE and is killed, not argued', while line 15 argues exactly that half -- so the file both claims and denies that `podLen < 0` is a survivor. Line 20 says 'six guards are message-only' when four guards are involved. And 73.7% (28/38) is presented as 'the one to beat next time' although `scripts/check-mutants.sh` does not exist (AGENTS.md \u00a7 Gates), so no run can reproduce the denominator; a future pitest run will enumerate a different mutant set entirely and the two numbers will not be comparable.",
+      "failure_scenario": "M0.14 lands check-mutants.sh, it reports a score against its own enumeration, and the comparison against 73.7% is meaningless -- while the `podLen < 0` entry is read by whoever triages the survivor list and is found to say both things at once, so the survivor is triaged twice or not at all."
+    }
+  ],
+  "task": "M4.8a",
+  "role": "reviewer",
+  "staged_tree": "ff8a86cd8d971c1acd51c05a264c7ecf8d55dd8c"
+}

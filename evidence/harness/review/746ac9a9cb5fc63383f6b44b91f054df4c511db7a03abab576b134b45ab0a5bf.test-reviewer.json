@@ -1,0 +1,56 @@
+{
+  "verdict": "pass",
+  "summary": "Round 3, scoped to the delta since a2fe44ad8758. Both round-2 majors are genuinely fixed and both new tests kill what the author claims, measured in my own tree: reverting the counter reset to the pre-fix shape (reset in catch(IOException) plus on the success path, no finally) fails anUNCHECKEDStoreFailureDoesNotTurnTheRateIntoOnePerDelta and nothing else; putIfAbsent -> put fails aCheckpointNeverOVERWRITESAnObjectAlreadyAtItsKey and nothing else. Neither passes for a wholly unrelated reason -- with the store call removed entirely the unchecked test is among the 15 that fail, so counting recorded attempts is a real observable and a writer that never calls the store does not pass it. The RecordingBinStore restructure weakens nothing: all four accessors preserve content and order, and collapsing two non-atomic appends into one pair removes a misalignment window rather than adding one. No assertion anywhere in the delta was loosened or deleted (rules 4-5 clean). Four minors, all measured, none blocking: the overwrite test's discriminating power is coupled to the seq derivation and nothing in the test asserts that coupling; the unchecked test pins the rate half but not the retry half; the new requireNonNull(checkpointTicker) line is unpinned; and the capture assignment reorder is unpinned (and untestable today). The three round-2 minors recorded rather than fixed are still unpinned -- re-measured this round -- and I still consider them land-and-record.",
+  "findings": [
+    {
+      "id": "T1",
+      "severity": "minor",
+      "blocks": false,
+      "file": "sequencer/src/test/java/binjava/sequencer/CheckpointWriterTriggerTest.java:277-299",
+      "title": "aCheckpointNeverOVERWRITESAnObjectAlreadyAtItsKey asserts only that the sentinel survived, so it goes vacuous silently if the key ever moves",
+      "mutation_that_survives": "pendingSequence = log.nextSequence() - 1 (combined with put in place of putIfAbsent, the pair is invisible to this test); and, in isolation, wrapping the store.putIfAbsent call in an if that never fires.",
+      "remedy": "One line binds it: assertThat(f.store().checkpointKeys()).containsExactly(key, key) -- the sentinel PUT plus the writer's attempt at the SAME key -- before reading the bytes back. Then a moved seq fails loudly instead of going quiet.",
+      "failure_scenario": "The test hardcodes new LogKeys(\"bins\", 1).checkpointKeyFor(1), which IS the key the writer uses today (fixture epoch 1, one commit, seq = nextSequence = 1) -- verified: putIfAbsent -> put fails this test and only this test. But its single assertion, 'the bytes at that key are still the sentinel', is satisfied by a writer that PUTs somewhere else, or that does not PUT at all. Two measurements: (a) pendingSequence = log.nextSequence() - 1 leaves this test GREEN (only CheckpointWriterContentTest.theBodysSequenceIsTheKeysSequenceAndBothAdvanceWithDeltas fails); (b) removing the store.putIfAbsent call entirely fails 15 tests, and this is not one of them. So today the test does its job only because other tests happen to hold the seq derivation still; if a future commit changes the derivation and updates the content test with it, this one stops testing anything and nothing says so."
+    },
+    {
+      "id": "T2",
+      "severity": "minor",
+      "blocks": false,
+      "file": "sequencer/src/test/java/binjava/sequencer/CheckpointWriterTriggerTest.java:256-274",
+      "title": "The unchecked-failure test pins the RATE half of the fix but not that the dirty flag survives an unchecked throw",
+      "mutation_that_survives": "catch (RuntimeException e) { dirty = false; } around store.putIfAbsent in writeIfDirty -- measured green over :sequencer:test.",
+      "remedy": "Give failEveryCheckpointPutUnchecked a way to disarm (its javadoc already says 'until cleared', but no clearing method exists), then in the same test disarm and tickAndAwait with no commit behind it and assert a 4th attempt. That mirrors the IOException test exactly.",
+      "failure_scenario": "Measured survivor: inserting `} catch (RuntimeException swallow) { dirty = false; }` before the `catch (IOException ...)` in CheckpointWriter.writeIfDirty leaves the whole :sequencer:test suite green. The new test still sees exactly 3 attempts for 9 deltas at K=3, because every commit re-arms `dirty` on its own -- which is precisely the insufficiency aFailedCheckpointPutDoesNotWedgeTheWriterForever's own comment names for the IOException path ('a second commit re-arms the dirty flag ... only a tick with no commit behind it tests that'). Under the mutant an unchecked store failure drops that checkpoint until the next commit arrives; on a quiet cluster the tick-driven retry is gone. The author's own argument is that the two paths differ and both need the flag left set, so both halves deserve pinning."
+    },
+    {
+      "id": "T3",
+      "severity": "minor",
+      "blocks": false,
+      "file": "sequencer/src/main/java/binjava/sequencer/LocalSequencer.java:238",
+      "title": "The new Objects.requireNonNull(checkpointTicker) added in this delta has no test",
+      "mutation_that_survives": "delete `Objects.requireNonNull(checkpointTicker, \"checkpointTicker\");` -- full build green; and independently, move `CheckpointWriter.checkPolicy(...)` below `leases.tryAcquire()` -- full build green.",
+      "remedy": "Record, or close both with one test asserting the lease is not held after a refused policy/ticker.",
+      "failure_scenario": "Deleting line 238 leaves the ENTIRE ./gradlew test green, measured. No test passes a null checkpointTicker, and the property the line exists for -- an invalid checkpoint policy or ticker must not leave the lease HELD AND RENEWED -- is asserted nowhere. This is the same open minor round 2 recorded about the checkPolicy ordering, extended by one argument: I re-measured that too this round, moving CheckpointWriter.checkPolicy below leases.tryAcquire leaves the whole build green. A T0 test on the package-private 7-arg start (invalid K or null ticker, then assert the LeaseManager fake shows no lease held) would close both at once."
+    },
+    {
+      "id": "T4",
+      "severity": "minor",
+      "blocks": false,
+      "file": "sequencer/src/main/java/binjava/sequencer/CheckpointWriter.java:141-154",
+      "title": "The capture reorder (offsets first, sequence last) is unpinned -- and unpinnable today",
+      "failure_scenario": "Swapping the two assignments back to the pre-fix order leaves :sequencer:test green, measured. It is defensive against a throw BETWEEN them, and no throw can occur there today: log.offsets() is a Map.copyOf of a plain HashMap and log.nextSequence() reads a long. Recorded rather than raised as a gap, because manufacturing the throw would mean a seam that exists only for the test -- but the commit body should say the ordering is argued, not measured, so a later reader does not take it for a tested invariant."
+    },
+    {
+      "id": "T5",
+      "severity": "minor",
+      "blocks": false,
+      "file": "sequencer/src/main/java/binjava/sequencer/LocalSequencer.java:130-133, sequencer/src/main/java/binjava/sequencer/CheckpointWriter.java:191",
+      "title": "Round-2 minors re-measured and still open: fenced-close and the closed guard",
+      "failure_scenario": "Both still unpinned, re-measured this round rather than assumed. (a) Deleting the fenced CheckpointWriter.close() block from the renewer's empty-renew branch leaves the whole ./gradlew test green -- a fenced node keeps a live writer that PUTs into the prefix it was just fenced out of, and nothing fails. (b) Narrowing `if (!dirty || closed)` to `if (!dirty)` in writeIfDirty also leaves the whole build green. Each is a real property with no assertion behind it; both are land-and-record at this round, consistent with round 2 and with minors-at-milestone."
+    }
+  ],
+  "diff_sha256": "746ac9a9cb5fc63383f6b44b91f054df4c511db7a03abab576b134b45ab0a5bf",
+  "task": "M4.8b2",
+  "role": "test-reviewer",
+  "staged_tree": "dff972a688a5599e4d6f21fa12bfaacf729ea5c8"
+}

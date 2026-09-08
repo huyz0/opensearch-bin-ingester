@@ -1,0 +1,29 @@
+{
+  "diff_sha256": "3d17f9d2138d42e8da201f81c160f65878a27f5391dc6eaecced1bf4e0c90d11",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "M0.13-TR-04",
+      "severity": "blocking",
+      "file": "buildSrc/src/test/java/binjava/CoverageGateTest.java",
+      "summary": "The delta-scope relevance predicate in check-coverage.sh (the --diff-filter=ACMRD check, the exact fix a prior round demanded so a deleted test is not invisible to the gate) is exercised by zero tests. CoverageGateTest's gate() helper hardcodes GATE_SCOPE=full for all 8 tests, so GATE_SCOPE!=full -- the default, and what pre-commit actually runs -- never executes under test.",
+      "failure_scenario": "Verified directly: with the diff applied as staged, edit scripts/check-coverage.sh to revert --diff-filter=ACMRD back to --diff-filter=ACMR (undoing precisely the fix for the earlier-round finding 'a commit that only does `git rm SomeTest.java` is invisible to the gate, which takes the unmeasured fast path printing ok'). Ran `./gradlew :buildSrc:test --tests binjava.CoverageGateTest`: all 8 tests still pass, build succeeds. The exact regression this task was told to close (delete a test to make a check pass) can be reintroduced with a one-line change and nothing in this diff notices."
+    },
+    {
+      "id": "M0.13-TR-05",
+      "severity": "major",
+      "file": "scripts/check-coverage.sh",
+      "summary": "Same root cause as M0.13-TR-04 but broader: the entire GATE_SCOPE!=full branch (lines ~34-41), including the 'no code change; coverage not re-measured' fast path that build.md's invariant (a docs-only commit makes NO gradle call at all) depends on, has no test in either direction. No test asserts that a docs-only staged change skips Gradle, nor that a code-shaped change does not skip it.",
+      "failure_scenario": "Someone deletes the whole `if [ \"$GATE_SCOPE\" != \"full\" ]; then ... fi` block, or changes the file globs it filters on ('*.java' '*.kt' '*.kts' 'gradle/*' 'gradle.properties'), or breaks the `head -1` short-circuit so it never matches. Every existing CoverageGateTest test still passes because all of them force GATE_SCOPE=full; the delta-mode behaviour that pre-commit relies on regresses silently, either making every commit pay for a full Gradle+JaCoCo run (cost regression) or making a code change wrongly skip measurement (the worse direction)."
+    },
+    {
+      "id": "M0.13-TR-06",
+      "severity": "major",
+      "file": "buildSrc/src/main/kotlin/binjava.java-conventions.gradle.kts",
+      "summary": "None of the new Gradle wiring in the conventions plugin -- jacoco { toolVersion = \"0.8.13\" }, tasks.named(\"check\") { dependsOn(tasks.withType<JacocoReport>()) }, and tasks.withType<JacocoReport>().configureEach { mustRunAfter(...); reports { xml.required.set(true); html.required.set(false) } } -- is exercised by any test. CoverageGateTest stubs ./gradlew entirely and never invokes real Gradle, so it cannot observe whether check actually depends on JacocoReport, whether JacocoReport is ordered after Test, or whether XML is actually emitted. These lines are the direct production fix for two defects a prior round found by hand (M0.13-stale-exec-data, M0.13-2 @ 7d62f83d551e: '`./gradlew check` runs test and stops, so the coverage gate read a report that existed only if someone had run a manual step').",
+      "failure_scenario": "Verified directly: deleted `mustRunAfter(tasks.withType<Test>())` from the real conventions file and ran `./gradlew :buildSrc:test --tests binjava.CoverageGateTest` -- all 8 tests pass, build succeeds. Repeated with `tasks.named(\"check\") { dependsOn(tasks.withType<JacocoReport>()) }` deleted instead -- same result, all green. Either line can be silently regressed (e.g. by someone who believes JacocoReport already depends on test, or refactors reports{}) and nothing in this repository's test suite will catch it; it would only resurface if a human manually reproduces the stale-report defect again, exactly as the prior review round had to do."
+    }
+  ],
+  "task": "M0.13",
+  "role": "test-reviewer"
+}

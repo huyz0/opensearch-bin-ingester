@@ -1,0 +1,13 @@
+{
+  "verdict": "changes-requested",
+  "diff_sha256": "0e9f5d132e6974f4cda957f49b3245f60993d024f98436d47e99761f357cd839",
+  "findings": [
+    {
+      "id": "M0.31-R1-1",
+      "severity": "major",
+      "file": "scripts/check-gate-scope.sh",
+      "summary": "The negation-detection branch (`case \"$_rule\" in *:!*) ... matched by a NEGATION ...`) is dead code: for every probe path/gitignore combination reachable through the loop, git's own `check-ignore -q` (queried first, and correctly, for final ignore status) already disagrees with a lone/overriding negation before the `-v` negation check is ever consulted, so the branch never executes and its removal changes no test outcome.",
+      "failure_scenario": "Deleted the three-line `case \"$_rule\" in *:!*) ...; esac` block from the staged script and re-ran every scenario the test adds for this task (the `!.tmp/ourclone/README` row of `gateScopeRefusesAnythingShortOfAQuarantine`, plus the unmodified real `.gitignore`, plus a `.gitignore` with both `.tmp/` and a same-line negation, plus a full directory-unignore chain `!.tmp/`+`!.tmp/ourclone`+`!.tmp/ourclone/README`): every one produced byte-identical gate output before and after the deletion, always resolved via the earlier `is not ignored at all` branch, never via the negation branch. Verified directly against the staged script (not a description): `sed -n` extract, `python3` removal of the case block, re-run under `GATE_SCOPE=full` against a repo tree built the same way `FreshCheckoutTest.freshCheckout` does -- same result with the block present or absent. The task's own history describes three prior rounds each finding a NEW false-green in the PREVIOUS attempt; a fourth round whose specific negation-handling code cannot be exercised by its own test (or, empirically, by any gitignore I could construct) reproduces exactly that pattern one level deeper: the code and its comment claim to defend against defect (c) from the backlog row, but the actual defense against that defect is provided entirely, and only, by the earlier `check-ignore -q` gate -- a fact nothing in this diff states or tests. If a future edit ever restructures the loop to query `-v` before `-q` (plausible, since `-v`'s own output already carries the boolean a naive reader would reach for), the untested negation branch is the only thing standing between that regression and a silent quarantine escape, and it has never been shown to catch anything."
+    }
+  ]
+}

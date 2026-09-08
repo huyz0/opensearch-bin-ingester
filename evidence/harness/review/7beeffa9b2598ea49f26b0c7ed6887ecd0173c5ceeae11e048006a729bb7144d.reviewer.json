@@ -1,0 +1,29 @@
+{
+  "diff_sha256": "7beeffa9b2598ea49f26b0c7ed6887ecd0173c5ceeae11e048006a729bb7144d",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "R7",
+      "severity": "minor",
+      "location": "docs/internal/product/backlog.md:252 (M4.6a)",
+      "title": "The M4.6a row still advertises the control test it later says was deleted, and undercounts the tests that justify the deletion",
+      "failure_scenario": "The row's third sentence is unchanged from round 1: 'A third test is the CONTROL for exactly that -- it passed at HEAD, so it earned its red against a mutation of the fix.' That test (recoverItselfStaysPermissiveSoASealedPrefixRemainsReadable) no longer exists -- grep returns 0 hits -- and the row itself says so eight sentences later under 'ONE TEST WAS DELETED'. The commit now has five tests in CommitLogSealTest and the third is recoveryDoesNotApplyTheDiscardedSuffixAfterASeal, which is not a control. A reader taking the earlier sentence at face value believes a named permissiveness control ships here and does not add one when reworking these tests in M4.6c. Separately the deletion's own safety argument miscounts: 'the mutation it named already fails four tests including the pre-existing recoveryAdvancesPastASealWithoutApplyingIt'. Under 'recover throws on a seal' five tests fail -- all four seal-recovering tests in CommitLogSealTest (lines 60, 101, 125, 147) plus the pre-existing one; only recoveryDoesNotStopAtAContinue survives, having no seal. The undercount is in the conservative direction, so the deletion is still justified, but it is a checkable number stated wrong in the sentence whose whole job is to justify removing a test. Fix: delete the now-false 'third test is the CONTROL' clause and say five."
+    },
+    {
+      "id": "R8",
+      "severity": "minor",
+      "location": "sequencer/src/test/java/binjava/sequencer/CommitLogSealTest.java:106-108",
+      "title": "The [SEAL@0] fixture's representability comment names a mechanism that would produce a seal at sequence 1",
+      "failure_scenario": "The comment justifies the new fixture with 'Representable, and M4.6c writes it: a leader that opened a chain and was fenced before committing anything is sealed at 0' (the backlog row repeats it as 'a leader fenced before committing anything'). Per M4.6c's own row the leader 'writes the CONTINUE that opens its chain', so a leader that OPENED a chain has consumed slot 0 and its seal lands at slot 1 -- exactly the shape every other fixture already builds. A seal at 0 requires the stronger case: a leader that acquired the lease and died before writing even its CONTINUE, leaving the chain wholly empty. That is what M4.5's prevSeq=0 ('truthfully saying that chain was EMPTY') actually describes, so the comment's second sentence is evidence against its first. Concrete failure: a reader auditing whether [SEAL@0] can arise follows the stated mechanism, computes that an opened chain seals at 1, concludes the fixture is unrepresentable, and deletes the test that closes the seal.sequence() > 0 mutation. The fixture IS representable and the test is right; only the sentence explaining why is wrong."
+    },
+    {
+      "id": "R9",
+      "severity": "minor",
+      "location": "sequencer/src/main/java/binjava/sequencer/SmallPageStore.java:17, sequencer/src/test/java/binjava/sequencer/CommitLogSealTest.java:151, docs/internal/product/backlog.md:252",
+      "title": "'the mutation survived all 96 tests' carries no scope word, in three places, beside rows whose counts mean the whole tree",
+      "failure_scenario": "96 is neither the tree's test count (644 @Test occurrences) nor the sequencer module's count now (98); it reconciles only as the sequencer module at the moment of measurement, before this commit's five new tests replaced the three it had (98 - 5 + 3 = 96). The adjacent backlog rows set the opposite convention -- M4.4 says '490 unit tests' and M4.4b '491 tests', both whole-tree -- so an unqualified 96 next to them reads as a suite that shrank by 80%. Concrete failure: rule 4 says a number must not be claimed without being measured, and the value of that record is that someone can re-measure it. A reader reproducing this applies the return -> break mutation, runs ./gradlew test, sees 644 tests and some other survival count, and cannot tell whether the tree changed, the mutation was different, or the original scope was narrower -- so the falsifiability record cannot be checked, which is the whole reason it was written down. Fix: 'all 96 tests in the sequencer module'. Note the number itself appears correct; only its scope is missing."
+    }
+  ],
+  "task": "M4.6a",
+  "role": "reviewer"
+}

@@ -1,0 +1,60 @@
+{
+  "diff_sha256": "69c75e747f44ee64cb43ece1e8f8c4217bd5e1005db8a154b0171686beab087f",
+  "verdict": "pass",
+  "summary": "Round 3, tests. All five requested verifications reproduce. Reverting M4.47's two production hunks reddens CommitProtocolSweepTest with exactly the claimed 'seed 55: I2 -- resumes at 0 but the chain had assigned up to 2' (53 distinct seeds named), so the sweep is a live I2 gate, not decoration. Six minors, all about lines that execute without being constrained; none produces a wrong result today.",
+  "findings": [
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSimulation.java:195",
+      "severity": "minor",
+      "title": "the slot-0 CONTINUE emission is unguarded -- deleting it leaves 388 tests green",
+      "failure_scenario": "MEASURED: replacing 'acks.add(AckOrderInvariants.AckEvent.confirmed(leader.epoch(), 0L));' with a comment leaves the whole sequencer suite green (388 tests, BUILD SUCCESSFUL). Nothing reads the trace back: CommitProtocolSimulation.Result does not expose the ack trace, so no test can assert its floor. This is the exact defect the notes record as having already shipped once in this task -- 'documented in three places and EMITTED NOWHERE' -- and it is reintroducible with no red. Verification that the fix landed: instrumenting the driver to publish the trace, over 200 ROUGH seeds at 120 rounds the trace holds 574 epochs and 574 of them have floor 0 (histogram {0=574}), against the 1-in-424-of-424 measured before. Cheapest guard is one field on Result plus a T0 assertion that every epoch appearing in the trace has minimum sequence 0.",
+      "surviving_mutation": "delete line 195 -- 388 tests pass"
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSimulation.java:279-282",
+      "severity": "minor",
+      "title": "the zombie ack arm is never executed; disposition should be keep-plus-file, not keep-silently",
+      "failure_scenario": "CONFIRMED INDEPENDENTLY: over seeds 0..199 at 120 rounds and 3 pods on the ROUGH profile, zombieWrites=0 and zombieAttempts=90. M4.47's seal-the-run fences every zombie before it can commit, so the two acks.add calls never run. Any mutation of them survives everything: swapping zombie.epoch() with zombieDelta.sequence(), or deleting both lines, leaves the suite green. The disposition of keeping it with an explicit caveat is right -- the arm is correct and M4.13e is the row that reaches it -- but the caveat lives only in comments and decays silently. The gap is that nothing tells anyone when the arm becomes live again, and the tree already contains a contradiction: CommitProtocolSimulationTest.java:141-151 (NOT in this diff, pre-existing) still says 'round-2 review measured a seed that lands one today, and M4.16 owns it' about the same quantity that now measures 0 across 200 seeds, with M4.16 landed. Recommend filing that the sweep can no longer produce a landed zombie write, so M4.13e re-measures rather than inherits the claim.",
+      "surviving_mutation": "swap zombie.epoch() and zombieDelta.sequence() in the confirmed/acked pair, or delete both -- 0 executions over 200 seeds, so the whole suite passes"
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSweepTest.java:84-85",
+      "severity": "minor",
+      "title": "the sweep's own Faults literal is the one threshold with no floor under it",
+      "failure_scenario": "The comment at line 112 says the floors were moved off isPositive() because 'isPositive() does not hold the WORKLOAD'. That is true for the ROUNDS dimension and false for the FAULT dimension. MEASURED at 1,000 seeds and 120 rounds: weakening the literal from Faults(0.05, 0.05, 0.1, 0) to Faults(0.0001, 0.0001, 0.0001, 0) drops injected faults from 122,096 to 247 -- a 494x reduction, effectively a clean run -- and all four anti-vacuity assertions still pass: commits 69,709 > 3,000; takeovers 20,786 > 1,000; epochs 21,004 > 10,000; faultsFired 247 > 0. Only Faults.none() reddens, and only on the last assertion. So the sweep can report 'I1-I5 hold' about a cluster that was barely faulted. A global damping of the injector is caught elsewhere (at tiny probabilities CommitProtocolSimulationTest's derived-kinds assertion sees only {ambiguousPut, unreachable} over 30 seeds and goes red) -- but that test carries its OWN ROUGH constant, so a change to the sweep's literal is invisible to it. Non-negotiable 2 has no script for this.",
+      "surviving_mutation": "Faults(0.05, 0.05, 0.1, 0) -> Faults(0.0001, 0.0001, 0.0001, 0): 494x fewer faults, sweep still green"
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSweepTest.java:136-140",
+      "severity": "minor",
+      "title": "a wall-clock threshold that fails the build is what performance.md rule 9 says not to build",
+      "failure_scenario": "performance.md rule 9: 'Gate on allocation, trend on time. Wall-clock on a shared CI runner has double-digit variance and a threshold on it becomes noise that people learn to re-run until green -- which is worse than no gate.' assertThat(elapsed).isLessThan(60_000) is exactly that. MEASURED green at 15.23s on a 20-core box, so the dead band is 3.9x: the O(E-squared) checkChain regression the notes worry about could get 3x worse and this assertion would still pass, while a 2-core CI runner can redden it with no defect at all. Both directions are wrong. The budget is genuinely this row's deliverable, so the fix is to record elapsed and let it trend, or to keep the assertion at a bound whose distance from the measurement is stated rather than left at 3.9x by accident.",
+      "surviving_mutation": "make checkChain 3x slower (e.g. restore the second dead-disjunct checkChain walk removed at line 318) -- elapsed goes to roughly 45s and the assertion still passes"
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSweepTest.java:122-124",
+      "severity": "minor",
+      "title": "the takeovers floor separates the two workloads by 3.2%, not by 'a wide margin in both directions'",
+      "failure_scenario": "The comment at lines 111-119 claims all three floors 'separate the two by a wide margin in both directions'. MEASURED at 1,000 seeds: commits 7,331 at 120 rounds vs 971 at 3 rounds against a floor of 3,000 (2.4x above, 3.1x below); epochs 80,838 vs 1,316 against 10,000 (8.1x / 7.6x); takeovers 2,872 vs 969 against 1,000 -- 2.9x above but only 3.2% below. At ROUNDS=4 takeovers is already 1,071 and that floor stops reddening, while commits (1,414) and epochs (1,553) still redden. So the takeovers floor is carried by the other two and the sentence overstates it. The whole test does redden at ROUNDS=3, verified by editing the constant. Small-N usability is fine: cumulative at N=1,2,5,10,20,50,100,200 all pass every floor, so -Dsweep.seeds bisecting does not manufacture a false red.",
+      "surviving_mutation": "ROUNDS 120 -> 4: the takeovers assertion alone goes from RED to green (969 -> 1,071 against a floor of 1,000)"
+    },
+    {
+      "file": "buildSrc/src/main/kotlin/binjava.java-conventions.gradle.kts:130-131",
+      "severity": "minor",
+      "title": "the -Dsweep.seeds forwarding has no test, and it is the fix for a defect that shipped once already",
+      "failure_scenario": "CONFIRMED WORKING: with -Dsweep.seeds=7, a probe test in the fork prints 'sweep.seeds=7', so the property reaches the test JVM. But nothing guards it. Deleting the two lines leaves the whole suite green, and check-harness-tests.sh green too -- buildSrc/src/test holds gate helpers, not a test of the conventions plugin -- so -Dsweep.seeds silently reverts to the advertised-but-dead knob this commit exists to fix, with no red anywhere. The property name is also hardcoded, so a second sweep knob needs another special case in a shared conventions file rather than a rule.",
+      "surviving_mutation": "delete the providers.systemProperty(\"sweep.seeds\") forwarding -- full suite and check-harness-tests.sh both green, knob dead again"
+    }
+  ],
+  "verified": [
+    "AckOrderTest:207,221 -- swapping the two terms in AckOrderInvariants.checkAckOrder's own-write arm (epoch <-> sequence in the message) now reddens exactly one test, ONECHAINSConfirmationsDoNotSatisfyANOTHERS, out of 388. The acked(2, 5) fixture is what makes the roles observable; the assertion is strictly stronger than the 'epoch 2' substring it replaced, so this is not an assertion weakening.",
+    "The slot-0 CONTINUE now pins the floor: 574 of 574 epochs appearing in the trace over 200 ROUGH seeds have minimum sequence 0, against 1 in 424 of 424 before.",
+    "zombieWrites = 0, zombieAttempts = 90 over seeds 0..199 at 120 rounds ROUGH. Reproduced.",
+    "The confirmed-then-acked ORDER in the leader arm is constrained: swapping the two acks.add calls reddens CommitProtocolSweepTest and two CommitProtocolSimulationTest cases. The javadoc's admission that checkAckOrder cannot catch a PRODUCTION pipelining bug (M4.50) is accurate -- the driver builds the order itself -- and both Java files now carry that correction.",
+    "The sweep is a live I2 gate: reverting M4.47's ChainReplay.java and LocalSequencer.java hunks reddens it with 'seed 55: I2 -- ... resumes at 0 but the chain had assigned up to 2' plus 52 other named seeds.",
+    "Acceptance criterion 1's fault classes (delayed writes, reordered completions, partitioned leaders, per-class outcome evidence) have no test in this commit. The split scoped this row to the sweep and its budget, and both the test javadoc and the notes name M4.13b/d/e rather than implying coverage."
+  ],
+  "task": "M4.13",
+  "role": "test-reviewer",
+  "staged_tree": "b0a5f54d0184647c385170e02c4e942a17189f6f"
+}

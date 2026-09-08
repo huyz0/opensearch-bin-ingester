@@ -1,0 +1,27 @@
+{
+  "diff_sha256": "d54402165603b6c4687d3f547e0f6050a3d73c13082944baa9afd903e601e172",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "TR6-1",
+      "severity": "minor",
+      "file": "scripts/check-harness-tests.sh:37",
+      "summary": "Re-verified TR5-5 empirically. Replacing `mkdir -p .harness` with `[ \"$GATE_SCOPE\" = \"full\" ] && mkdir -p .harness` SURVIVES the suite, because gate() pins GATE_SCOPE=full and the fixture never enters the delta door. Accepted by the author and recorded in the commit body; the delta door is M0.24's. Recorded here so the surviving mutation lives in the verdict, not only in prose.",
+      "failure_scenario": "In ordinary delta mode with a harness change staged, a fresh checkout evaluates the redirect before the command, Gradle never starts, and the gate prints `harness tests failed -- see .harness/harness-tests.log` about a log nothing wrote. That is precisely the false RED M0.29 exists to close, restored on the path the gate takes by default, with the whole suite green."
+    },
+    {
+      "id": "TR6-2",
+      "severity": "minor",
+      "file": "buildSrc/build.gradle.kts:46",
+      "summary": "The new `inputs.file(rootGitignore)` declaration is unconstrained by any test. Confirmed by grep: no test in buildSrc/src/test/java references task inputs at all. Its stated reason is now true (the fixture's `git add -A` honours the copied .gitignore), but nothing observes it. Owned by M0.24, which exists for exactly this.",
+      "failure_scenario": "Delete the three declaration lines. A later commit adds a .gitignore pattern matching a tracked path; the test task goes UP-TO-DATE across that edit, FreshCheckoutTest does not rerun, and the fixture post-condition that would have caught the divergence never executes. Suite green, gate inert."
+    },
+    {
+      "id": "TR6-3",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java:131",
+      "summary": "`Files.createDirectories(dir.resolve(\"xdg\"))` in gate() is vestigial now that scrub() pins XDG_CONFIG_HOME for all three call sites. Verified: git tolerates a non-existent XDG_CONFIG_HOME (`git init && git add -A && git ls-files` exits 0 and lists the file). Deleting the line leaves the suite green. Not an assertion, so it masks nothing today.",
+      "failure_scenario": "A future reader reads the createDirectories as load-bearing for gate(), concludes the XDG pin belongs there, and moves it back out of scrub() -- reintroducing the personal-ignore leak on run()'s `git add -A` and on both sides of trackedIn(), which is the exact hole TR5-4's fix closed."
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "diff_sha256": "05377366a10159c8b0bb86b66f8f3418fa6ee4ee555781353db71c2b7e45bd92",
+  "verdict": "pass",
+  "summary": "Round 4, TEST role, scoped to the delta since 746ac9a9. All three claimed kills were re-measured in my own tree and all three hold, each failing for the right reason and only in the intended test. (1) `pendingSequence = log.nextSequence() - 1` now fails `aCheckpointNeverOVERWRITESAnObjectAlreadyAtItsKey` at the NEW `containsExactly(key, key)` line -- the message shows the writer aiming at ...0000 where ...0001 is due, so it is the key binding that bites, not the sentinel read. (2) `catch (RuntimeException) { dirty = false; }` fails ONLY `anUNCHECKEDFailureLeavesTheWriterDirtySoALaterTickStillWrites`, at its own 'the tick retried' assertion, size 1 where 2 is due. (3) Both lease-stranding mutations -- `checkPolicy` moved below `tryAcquire`, and `Objects.requireNonNull(checkpointTicker)` deleted -- fail `aRefusedCheckpointPolicyLeavesTheLEASEFREEForTheNextNode` with NoSuchElementException from the FINAL `orElseThrow()`, i.e. podb could not take the term. Deleting the `checkPolicy` call outright kills it too. That answers the question asked directly: the three-manager fixture IS proving the term is free, because the shared frozen TestClock means a stranded lease never expires and `tryAcquire` returns empty -- measured, not argued. `stopFailingCheckpointPuts()` clearing both arms weakens nothing: the checked wedge test never calls it, `failNextCheckpointPut` already self-clears `armed` on throw, and `dirty = false` added to the IOException branch still fails `aFailedCheckpointPutDoesNotWedgeTheWriterForever`. The round-1 open major (putIfAbsent -> put) is now killed by the same overwrite test. testing.md rules 4-5 are clean: every test file in the staged diff is an ADDITION, no pre-existing assertion was touched, so there is no weakening to justify. Three minors carried forward or newly measured, all recorded rather than fixed -- none blocks. Verified in a private copy at /tmp/binjava-review-trees/test-reviewer.JM2lfzRZ; the repository's staged diff is byte-identical afterwards and `./gradlew test` is BUILD SUCCESSFUL on the unmutated tree.",
+  "findings": [
+    {
+      "id": "T5",
+      "severity": "minor",
+      "blocks": false,
+      "file": "sequencer/src/main/java/binjava/sequencer/LocalSequencer.java:126",
+      "title": "The fenced-close of the CheckpointWriter is still pinned by nothing -- unchanged since round 2",
+      "failure_scenario": "A renew comes back empty, the node is fenced, and it keeps a live CheckpointWriter able to PUT into a chain prefix it no longer owns. SURVIVING MUTATION, measured: delete the whole `CheckpointWriter fencedWriter = checkpoints; if (fencedWriter != null) { fencedWriter.close(); }` block from `renewForever` -- `./gradlew :sequencer:test` BUILD SUCCESSFUL. Same family, same result: deleting the `writer.close()` block from `LocalSequencer.close()` (line ~378) also leaves the whole build green, and that one additionally leaks the `ckpt-tick` virtual thread for the life of the process. Both are production behaviour introduced by this commit with no test at all. The fixture is reachable -- `LocalSequencerRenewTest` already drives a renew to empty via an injected RenewTicker -- so a test asserting zero further checkpoint PUTs after fencing is cheap; it is absent, not impossible. I record rather than request it: this is the same call I made in round 2, the finding has not grown, and review.md's round guidance says a minor is landed and filed, not fixed into a fifth round."
+    },
+    {
+      "id": "T6",
+      "severity": "minor",
+      "blocks": false,
+      "file": "sequencer/src/main/java/binjava/sequencer/CheckpointWriter.java:205",
+      "title": "The `closed` half of the writeIfDirty guard is still unconstrained",
+      "failure_scenario": "SURVIVING MUTATION, measured: `if (!dirty || closed)` -> `if (!dirty)` in `writeIfDirty`. Full `./gradlew :sequencer:test` BUILD SUCCESSFUL. The guard exists so a released or fenced node cannot PUT into the chain's prefix on the way out; nothing distinguishes it from its absence, because every test either closes the writer with nothing dirty pending or never races close against a trigger. Note this is the SAME hole as T5 seen from the other side -- T5 says nothing calls close on fencing, T6 says close would not be observable if it were called -- so one test (fence, then trigger, then assert zero further checkpoint PUTs) would close both. Recorded, not blocking, for the same reason as T5."
+    },
+    {
+      "id": "T7",
+      "severity": "minor",
+      "blocks": false,
+      "file": "sequencer/src/main/java/binjava/sequencer/CheckpointWriter.java:169",
+      "title": "Both production changes in this delta are unobservable at this tier -- stated plainly rather than filed as a test gap",
+      "failure_scenario": "Asked directly whether the InterruptedException change is testable here: it is not, and the honest reason is that it changes no behaviour. SURVIVING MUTATION, measured: delete the entire `if (!closed) { LOG.log(ERROR, ...); }` block, leaving the bare `Thread.currentThread().interrupt(); return;` that round 3 faulted -- full build green. The only difference between the old code and the new is one log record; the ticker thread still exits permanently in both, and the repository has no log-capture harness (no `System.LoggerFinder` or `java.util.logging.Handler` anywhere in the tree), so no assertion at T0/T1 can separate them. The `encode`-inside-the-try move is unobservable for a different reason: the only throw it newly covers is an OOME from `Checkpoint.encode`, and `Checkpoint` is a record with no seam to make it throw -- injecting one would be production surface invented for a test. This is the same class as the capture-reorder minor (T4) I recorded in round 3 and I treat it the same way: land it, and note in the commit body that the interrupt fix is an OBSERVABILITY change, not a recovery one -- a reader of the code comment could otherwise take 'this now logs ERROR' as meaning checkpointing survives, which it does not."
+    }
+  ],
+  "task": "M4.8b2",
+  "role": "test-reviewer",
+  "staged_tree": "e0e1bb03403a8eafb1fe4c337d4f7fb51843d564"
+}

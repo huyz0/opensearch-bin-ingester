@@ -1,0 +1,15 @@
+{
+  "diff_sha256": "09bd51cad163833162e6aad085b3e1a9fc5dcf99a289961a2c7e646001b0dd68",
+  "verdict": "pass",
+  "findings": [
+    {
+      "file": "docs/internal/product/backlog.md",
+      "line": 247,
+      "severity": "minor",
+      "what": "This bookkeeping change lands under M4.3n, a task whose own work was already delivered by 8a370ec, so M4.3n becomes the only task ID in this history carrying two commits (git.md rule 2, one task one commit -- verified: `git log --format=%s | uniq -d` on task IDs is empty across all 40+ commits). Four of the five flipped rows (M4.3i/j/k/l) have nothing to do with M4.3n; a new row would have owned all five.",
+      "failure_scenario": "review_rounds.rounds_for counts every distinct diff_sha256 recorded for a task, forever, with no filter for which commit the hash belonged to. .harness/review already holds one hash for M4.3n (58148fb..., both roles, from the matrix-test commit), so this docs change opens at round 2 of 2 -- exactly what the packet printed. If either reviewer had returned changes-requested here, the fix would produce a third hash for M4.3n and check-reviewed would refuse the commit until a `rounds:M4.3n` argument was staged in baselines/review.txt. The round budget of a finished task is spent on a status-cell edit, and a future reader running `git log --grep M4.3n` gets two commits for a row whose state cell names only one of them."
+    }
+  ],
+  "task": "M4.3n",
+  "role": "reviewer"
+}

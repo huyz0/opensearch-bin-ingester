@@ -1,0 +1,29 @@
+{
+  "diff_sha256": "896764c1f01601abe91ec4548162f7ab7a4c68c1847ff5231b7c2105bab58ec2",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "M0.7-R1-01",
+      "severity": "major",
+      "file": ".github/workflows/ci.yml",
+      "summary": "The comment justifying `SKIP=check-reviewed` says check-reviewed 'passes VACUOUSLY with nothing staged (\"ok nothing staged\")'. That is only true when CHECK_RANGE is unset. This very workflow exports CHECK_RANGE at the step level for the whole `Gates` step, so check-reviewed.sh takes its CHECK_RANGE branch, never reaches the 'nothing staged' vacuous check, computes a hash from `git diff \"$CHECK_RANGE\" HEAD`, and -- since .harness/review/ is gitignored and does not exist in a fresh CI checkout -- hard-FAILS with 'no reviewer verdict for the staged bytes'. Verified empirically: in a fresh clone of this repo, `CHECK_RANGE=HEAD~1 ./scripts/check-reviewed.sh` exits 1 with two FAIL lines, not 'ok nothing staged'.",
+      "failure_scenario": "The skip decision is (coincidentally) still correct, but the stated mechanism is wrong. A future engineer reading this comment could reasonably conclude that leaving check-reviewed unskipped is harmless ('it just no-ops'), and remove the SKIP once some later task appears to make it relevant -- at which point every single CI run (push, PR, and the nightly schedule) starts hard-failing on this step, because CHECK_RANGE is exported globally here and .harness/review/ never exists in CI. That is a much worse outage than the 'green line that means nothing' this comment claims to be guarding against, and the comment gives no warning that it will happen."
+    },
+    {
+      "id": "M0.7-R1-02",
+      "severity": "major",
+      "file": ".github/workflows/ci.yml",
+      "summary": "The file's header comment claims this workflow runs 'L0 and L1 of docs/internal/standards/build.md \u00a7 Execution layers', but build.md defines L1 as 'L0 + cost assertions + gate benchmarks' with a \u2264 5 min budget. The single job here is explicitly named `\"L0 \u2014 gates\"`, contains no cost assertions and no gate benchmarks (both are listed elsewhere in this repo's own gates as not yet existing), and its `timeout-minutes: 10` doesn't even match L1's stated \u2264 5 min budget. The job's own name and the header comment disagree about what this file is. This reads like prose left over from the earlier, rejected version of this workflow that had an L1 unit-test job (cut per M0.27, for recording a green result over zero product tests) -- the job was correctly removed, but the header claiming L1 exists was not updated to match.",
+      "failure_scenario": "Someone tracking milestone completion (e.g. a roadmap or check-milestone-verified.sh reader) trusts the file header and concludes CI already enforces L1's cost assertions and gate benchmarks, and skips adding a real L1 job later, or reports a milestone's L1 obligation as satisfied when nothing here checks a cost assertion or runs a benchmark. This is exactly the class of claim non-negotiable 4 forbids: a gate described as running when it does not."
+    },
+    {
+      "id": "M0.7-R1-03",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md",
+      "summary": "M0.6 ('Wire check-module.sh into .pre-commit-config.yaml and CI') is left at 'todo' even though check-module.sh was already wired into .pre-commit-config.yaml before this commit, and this commit's ci.yml now runs `pre-commit run --all-files`, which invokes it in CI too -- the literal text of M0.6's acceptance condition. The backlog and the tree now disagree about whether M0.6 is done.",
+      "failure_scenario": "A reader of the backlog (or next-task tooling) treats M0.6 as still outstanding work and either re-does it or is confused when picking the next task, because the backlog's 'todo' no longer matches what the tree actually does."
+    }
+  ],
+  "task": "M0.7",
+  "role": "reviewer"
+}

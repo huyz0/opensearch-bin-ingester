@@ -1,0 +1,22 @@
+{
+  "diff_sha256": "ca6ba0853443f5eb62de4bfc1c9ef1c73f7990e26db6d3afe76082b912bcdf6e",
+  "verdict": "pass",
+  "findings": [
+    {
+      "file": "ingest/src/test/java/binjava/ingest/SegmentKeyBackendRoundTripTest.java",
+      "line": 171,
+      "severity": "minor",
+      "summary": "The round-trip assertion never inspects the returned Version from put or ObjectStat.version() from stat -- a backend returning a stale/fixed Version on every write would not be caught.",
+      "failure_scenario": "Out of scope for this task's acceptance criterion (key escaping, not version correctness -- that is BinStoreConformance's job); named because the review prompt asked directly."
+    },
+    {
+      "file": "ingest/src/test/java/binjava/ingest/SegmentKeyBackendRoundTripTest.java",
+      "line": 160,
+      "severity": "minor",
+      "summary": "Files.createTempDirectory uses the system temp directory, not build/tmp, per testing.md rule 17; deleteOnExit() also silently fails to clean a non-empty directory.",
+      "failure_scenario": "Pre-existing identical pattern already in LocalFsBinStoreTest.java; not a new violation introduced by this task."
+    }
+  ],
+  "task": "M2.9",
+  "role": "test-reviewer"
+}

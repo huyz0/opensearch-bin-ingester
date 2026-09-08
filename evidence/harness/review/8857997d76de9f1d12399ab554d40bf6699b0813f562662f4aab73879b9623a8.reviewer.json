@@ -1,0 +1,38 @@
+{
+  "verdict": "pass",
+  "task": "M4.13i",
+  "role": "reviewer",
+  "findings": [
+    {
+      "id": "M4.13i-R2a",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/ReaderInvariants.java:140-146",
+      "summary": "The empty-chain discriminator is `Invariants.readChain(...).isEmpty()` -- a LIST filtered to `*.delta` keys -- while production's equivalent discriminator is `ChainReplay.firstEntry(slot 0) == null` PLUS `crossFromCheckpoint(hops, epoch, upTo)`, which runs FIRST and seeds offsets from `ckpt/LATEST` before the never-opened question is asked. The two disagree on one shape: an epoch whose chain holds no entry objects but does hold a checkpoint pointer. MEASURED in a copy of the staged tree: epoch 1 = Continue(0,0,0) + delta(3 records) + Seal(2,2); a `ckpt/LATEST` at epoch 9 carrying StreamOffsets(nextOffset=3) and no entry objects at epoch 9. `new CommitLog(store, PREFIX, 9).recover()` yields `{RA=3}`; `checkReader(store, PREFIX, ReaderView.of(reader))` yields `[I3: reader applied stream RA up to 3, which the sealed prefix never committed]` -- a false I3 against production's own reader, the mirror of the F1 defect this round verifies fixed. It is MINOR and not blocking because the shape is unreachable today: `CheckpointWriter` only writes `ckpt/LATEST` for a chain it has already committed into, and nothing deletes chain entries, so a checkpoint pointer never coexists with zero entries. Three other shapes were measured and AGREE with production: slot 0 missing with a delta at slot 1 (both {RA=7}, clean); slot-0 seal at epoch 3 over a completely empty epoch 2 (both {RA=3}, clean); slot-0 seal at epoch 1 (both {}, clean).",
+      "failure_scenario": "If retention, GC or a compaction step ever deletes chain entries below a checkpoint -- the obvious future use of a checkpoint's `oldestRetainedOffset` -- checkReader reports a false I3 against every reader whose chain was trimmed to nothing, and M4.13's 1,000-seed sweep fails on correct behaviour. A checker that cries I3 at correct behaviour gets silenced, which is the failure mode this file's own javadoc names."
+    },
+    {
+      "id": "M4.13i-R2b",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/ReaderInvariantsScopeTest.java:154",
+      "summary": "Truncated sentence left by the edit: `* \u26a0\ufe0f THE WRITER'S SIDE OF THAT SAME HISTORY STAYS VISIBLE, which bounds how` ends mid-clause, and the next line starts a new \u26a0\ufe0f paragraph. The old sentence read `... which bounds how `checkChain` reports the zombie ...`; the replacement paragraph absorbed the object but the opening clause was not deleted with it.",
+      "failure_scenario": "A reader of the test that pins BOTH sides of a slot-0-sealed chain reaches a sentence with no predicate and cannot tell whether a clause was lost from the claim or from the reasoning -- in a file whose entire value is the prose explaining which chain shape each case stands for."
+    },
+    {
+      "id": "M4.13i-R2c",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/ReaderInvariantsTest.java:359,388",
+      "summary": "The mechanical `.violations()` removal left a bare `)` alone on its own line in two assertions, e.g. `assertThat(ReaderInvariants.checkReader(store, PREFIX, new ReaderView(1, Map.of(RA, 5L)))\\n                )\\n                .as(...)`. Every other call site in the same file was joined back onto one line.",
+      "failure_scenario": "The next edit to either assertion reads as if an argument was dropped from the call, and a reviewer of that commit spends a round establishing that nothing was."
+    },
+    {
+      "id": "M4.13i-R2d",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:150",
+      "summary": "M4.13j's row is left stale by this commit and was not updated alongside M4.13 and M4.13i, which were. It says `Invariants.neverOpened`'s `sequence() == 0` clause `now decides whether checkReader judges at all`. After this change `neverOpened` decides only WHICH of two derivations supplies the base -- `offsetsSealedInto(epoch - 1)` versus `inheritedOffsets` through the link -- and never whether a chain is judged, since every chain now is. The row's MEASURED claim (dropping the clause leaves `:sequencer` green) may also no longer hold, since the clause now selects a branch that three tests constrain.",
+      "failure_scenario": "Whoever picks M4.13j reproduces its measurement against a description of `checkReader` that no longer exists, concludes the row was already closed or mis-stated, and either drops a real gap or re-derives the branch semantics from scratch."
+    }
+  ],
+  "notes": "Verified in a copy of the staged bytes (/tmp/binjava-review-trees/reviewer.n1kEmCfS), tests run with GIT_INDEX_FILE unset. Round-1 findings: F1 FIXED and the fix is pinned -- forcing the empty arm back into the never-opened branch (`if (entries.isEmpty())` -> `if (false)`) fails `anEMPTYOwnChainInheritsNOTHINGAndProductionAgrees`. F2 FIXED (Invariants class javadoc's I3 and I4 entries now read CHECKED on every chain, with the empty-vs-slot-0 distinction stated). F3 FIXED -- the depth guard removed from `offsetsSealedInto` is confirmed dead by reading: `inheritedOffsets` returns on `depth > 1000` BEFORE calling it, and `checkReader` passes a literal 0, while termination of the `while` loop comes from `from` strictly decreasing. F4 FIXED (the DISCARDED comment now sits above the branch block that passes `new ArrayList<>()`). F5 FIXED. F6 FIXED (HashSet/Set imports gone, `AckEvent.acked` package-private). `Verdict` is fully removed -- no reference survives anywhere in sequencer/ or docs/. The three-case split is correct against production, verified by probing `ChainReplay`/`CommitLog.recover()` rather than by reading: empty own chain -> production {} and checker {} (production has not crossed; `open()` writes the CONTINUE before `crossFrom`, and `LocalSequencer.start` releases the lease when that PUT fails, so a log with an empty chain and non-empty offsets is unreachable); slot-0 seal -> production {RA=3} and checker {RA=3} via `offsetsSealedInto(epoch-1)`; slot-0 seal over an empty ancestor -> both walk over it, since `Invariants.neverOpened(List)` is true for an empty list and `ChainReplay.neverOpened(null, atOrigin=false)` is true too; cold-start chain opening with a DELTA -> both derive the chain's own fold with nothing inherited; chain with slot 0 missing -> both derive the chain's own fold. Both branches are constrained: `if (false)` on the never-opened arm fails `anEpochSEALEDBeforeItsCONTINUEIsNOWJudgedAgainstItsInheritedBase` and `theWalkSTEPSOVERSeveralAbandonedEpochsNotJustOne`. The `epoch - 1` -> `epoch` mutant SURVIVES the whole `:sequencer` suite, which is exactly what the comment beside it claims (equivalent mutant, differing only in one extra readChain), so it is documented rather than a finding. No object-store request rate in production is touched by this change; the added requests are in the test-source invariant checker on MemoryBinStore, scale with EPOCHS walked, and M4.13h/M4.24 already own that cost.",
+  "diff_sha256": "8857997d76de9f1d12399ab554d40bf6699b0813f562662f4aab73879b9623a8",
+  "staged_tree": "626a16ed31d2265a3655e9c84efb7a5c8c6f1252"
+}

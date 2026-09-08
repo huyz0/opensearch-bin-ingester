@@ -1,0 +1,71 @@
+{
+  "diff_sha256": "d7714894be70458ce9fee16ed888e1970e8d2ac29e0c6ad26af6625199d34533",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/BatchingSequencerTest.java",
+      "line": 195,
+      "severity": "major",
+      "what": "NO TEST DRIVES THE COMMITTER THROUGH A SECOND WINDOW. Every test in the class opens exactly one window (six-pod: one; attribution: one; idle: one; failed-window: one; after-close: zero), so the `while (running)` loop in `drainForever` is never shown to iterate. MEASURED: inserting `if (batch.size() >= 0) { return; }` after `commitBatch(batch)` -- a committer that serves ONE window ever and then exits -- leaves :sequencer:test and :ingest:test fully green.",
+      "failure_scenario": "A batcher that dies after its first window passes CI. In production every caller after the first window blocks forever in `Pending.await()` -- it does not fail, it HANGS, so no ack is ever returned and no error is ever logged. Fix is cheap: commit twice in `anIdleSequencerOpensNOWindowAndIssuesNOStoreRequest` and assert windows == 2 and puts == 2."
+    },
+    {
+      "file": "sequencer/src/testFixtures/java/binjava/sequencer/FakeSequencer.java",
+      "line": 45,
+      "severity": "major",
+      "what": "THE FAKE'S ENTIRE MULTI-REQUEST PATH IS UNCONSTRAINED, including the property the new comment claims it models. No test anywhere submits more than one CommitRequest to FakeSequencer -- every FakeSequencerTest case calls `commit`, and the ingest callers go through the one-request default. TWO MUTATIONS MEASURED GREEN across :sequencer:test and :ingest:test: (a) `for (CommitRequest request : requests)` -> `requests.subList(0, 1)`, i.e. the fake silently commits the first flush and drops the rest; (b) snapshotting `nextOffsets` before the loop and reading each segment's base from the snapshot -- i.e. offsets do NOT advance across segments, which is precisely the I2 divergence the comment at line 45 says 'is exactly the bug a fake exists to make visible rather than hide'.",
+      "failure_scenario": "Every downstream module tests against this fake. Once any caller batches, a test can assert correct offsets against a fake that hands two segments the same range while the real CommitLog does not -- or against a fake that drops flushes entirely -- and the divergence surfaces only in production, as duplicated offsets (I2) or acked-but-never-committed records. The commit adds an unfalsified claim to a shared fixture; FakeSequencerTest's own header ('a fake that does not honour the contract is worse than no fake') is the standard being missed."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/BatchingSequencerTest.java",
+      "line": 237,
+      "severity": "major",
+      "what": "THE FAILURE PATH IS TESTED ONLY BY COUNTING. `aFailedWindowFailsEVERYCallerInIt` catches `Throwable` and asserts `hasSize(2)` -- nothing about the type or the message -- and it is the ONLY test that reaches `Pending.await()`'s failure branch. It also drives that branch with an IllegalArgumentException (duplicate segment key), so the IOException case -- the one the Sequencer contract exists to distinguish, because it means the PUT MAY HAVE LANDED -- is never exercised through the batcher at all. MEASURED GREEN: short-circuiting `Pending.await()` to a bare `return done.join();`, deleting the whole unwrap block.",
+      "failure_scenario": "With the unwrap gone, a caller gets an unchecked `CompletionException` where the interface declares `throws IOException`. `DefaultIngest`'s commit path catches IOException to decide whether a flush is ambiguous; the wrapper escapes that catch, so an ambiguous store failure propagates as an unchecked exception instead of the ambiguity M4.10 is being built to make safe. The whole rationale in the javadoc at BatchingSequencer.java:169 is unfalsified."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/BatchingSequencerTest.java",
+      "line": 241,
+      "severity": "major",
+      "what": "`close()` IS TESTED ONLY FOR 'A COMMIT AFTER CLOSE THROWS', which is satisfied by the `!running` guard in `commit` alone. THREE MUTATIONS OF `close()` MEASURED GREEN: (a) delete `delegate.close();` (BatchingSequencer.java:201); (b) delete `failAll(drainRemaining(), ...)` (line 200); (c) delete `committer.interrupt();` (line 199). The javadoc's stated contract -- 'a caller blocked in commit when close arrives must not wait for a window that will never close' -- has no test: nothing closes the batcher while a caller is parked.",
+      "failure_scenario": "(a) A BatchingSequencer wrapping a LocalSequencer never releases its lease on close: the node stops committing but still holds leadership until the TTL expires, extending every failover by a full TTL, with no test failing. (b) A caller queued but not yet batched when close arrives is never completed and blocks forever -- the exact hang the javadoc promises does not happen. Note there is also no test for the close/commit race (the `!running` check precedes `queue.add`), which is the same hang reached by a different route."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/BatchingSequencerTest.java",
+      "line": 200,
+      "severity": "major",
+      "what": "THE PRODUCTION (REAL-CLOCK) TIMER IS NEVER EXECUTED. `aZeroIntervalIsRefusedBecauseItSilentlyRestoresThePerPodRate` is the only test that touches the `Duration` constructor, and it asserts the constructor THROWS -- so `sleepFor`'s returned `() -> Thread.sleep(millis)` (BatchingSequencer.java:86) is never invoked by any test, and no test constructs a BatchingSequencer that batches on a real interval. MEASURED GREEN: rewriting line 86 to a timer that never waits. The negative-Duration half of the guard is likewise unexercised (only `Duration.ZERO` is tested), so dropping `interval.isNegative() ||` also survives.",
+      "failure_scenario": "The window timer the product actually ships with can be a no-op and the whole suite stays green -- which is, verbatim, the failure the class's own zero-interval guard exists to prevent ('close the window before anyone else can join, which restores the per-pod PUT rate this class exists to remove -- silently, and only under load'). Acceptance criterion 9 is 'PUTs bounded by window / commitBatchInterval'; every assertion of it here runs through an injected timer, so nothing binds `commitBatchInterval` to a window at all. A lower-bound wall-clock assertion (awaitWindowClose blocks >= interval) is not flaky and would kill it."
+    },
+    {
+      "file": "sequencer/src/main/java/binjava/sequencer/BatchingSequencer.java",
+      "line": 107,
+      "severity": "major",
+      "what": "`BatchingSequencer.commitAll` HAS NO TEST. No test in the tree calls it -- the six tests all go through `commit`. MEASURED GREEN: `return delegate.commitAll(List.of(requests.get(0)));`, i.e. the pass-through silently drops every request but the first. `return null;` survives for the same reason.",
+      "failure_scenario": "`commitAll` is the interface's PRIMITIVE, so any caller holding a batch reaches it polymorphically. A pass-through that loses requests acks flushes that were never committed -- silent record loss, with no exception and no counter moved. The deliberate 'do not hold an already-grouped batch back' decision documented at line 103 is equally unpinned: enqueuing the batch instead of passing it through also survives."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/BatchingSequencerTest.java",
+      "line": 79,
+      "severity": "minor",
+      "what": "QueuedTimer's condition `watching.queuedCount() < expected - 1` encodes an IMPLEMENTATION DETAIL of drainForever: that the committer holds exactly one request outside the queue while the window is open. I agree the fixture is deterministic as written -- the committer takes one and does not drain until the timer returns, so the condition becomes true if and only if all `expected` requests have arrived, and I saw no flake in 5 repeat runs -- but the `- 1` is a structural coupling, not a behavioural one.",
+      "failure_scenario": "A refactor that drains first and then opens the window (behaviourally identical: still one PUT per window) leaves queuedCount at 0, the timer spins to its 20 s bound, and the suite fails on an unrelated-looking assertion. testing.md rule 11: breaks on refactor while the behaviour is intact. Waiting on `queuedCount() + inFlight >= expected`, or having the timer receive the depth rather than reach into the sequencer, removes the coupling."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/BatchingSequencerTest.java",
+      "line": 81,
+      "severity": "minor",
+      "what": "THE FIXTURE'S OWN TIMEOUT IS INDISTINGUISHABLE FROM A PRODUCTION STOP. `throw new InterruptedException(\"the window never filled\")` is caught by drainForever's `catch (InterruptedException stopping)` branch, which discards it and fails the batch with `new IOException(\"the commit batcher was stopped\")`. On the `Thread.sleep(1)` itself I agree with the author: it is a bounded poll on a condition with a loud upper bound, not the fixed sleep testing.md rule 15 forbids, and no test in the class sleeps to synchronise.",
+      "failure_scenario": "A genuinely stuck window reports 'the commit batcher was stopped' for the one caller in the batch and leaves the remaining callers parked until the 30 s @Timeout fires -- so the diagnostic the fixture wrote is thrown away at the moment it is needed. Recording the reason in the fixture (an AssertionError field the test asserts on, or a flag) keeps it."
+    },
+    {
+      "file": "sequencer/src/main/java/binjava/sequencer/BatchingSequencer.java",
+      "line": 124,
+      "severity": "minor",
+      "what": "`queuedCount()` as a test observation point: the justification for watching real queue depth rather than a caller-tripped latch is correct and I reproduced the reasoning -- `commit` blocks, so a latch necessarily counts down before the enqueue and splits the batch. But the observation need not live on production. Passing the depth INTO the seam (`awaitWindowClose(IntSupplier queued)`) keeps the same determinism without adding a production member that exists only for tests.",
+      "failure_scenario": "Not a falsifiability gap -- a design note. The risk is drift: a member with no production caller is invisible to every gate, and the next reader has no way to tell it is load-bearing for the fixture other than the comment."
+    }
+  ],
+  "task": "M4.7",
+  "role": "test-reviewer"
+}

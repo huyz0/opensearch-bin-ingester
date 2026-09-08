@@ -1,0 +1,41 @@
+{
+  "diff_sha256": "0654cdc6c093d05675f484754ecd95b06161b42ce2859240a474461600c0f362",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "W19",
+      "severity": "major",
+      "file": "docs/internal/standards/build.md:116",
+      "summary": "The W13 rewrite replaced two false point values with a false dichotomy: \"the saving is all or nothing ... a change either touches no module (free) or touches the shared build (all eight). There is no cheap middle for this gate.\" There is a cheap middle and it is the modal case -- select_modules maps a module directory to that one module, and this diff's own tests assert it (ModuleSelectionTest 'format/README.md | 1', ModulePlanTest 'MODULES=format'). Verified in a scratch repo: staging one module's build.gradle.kts builds exactly one module. The same edit also welded the surviving clause 'This exists for the gates that are coming: compile, JaCoCo and PIT ...' onto the end of line 118, where its antecedent is now 'no cheap middle for this gate' rather than the delta/full mechanism it originally referred to.",
+      "failure_scenario": "build.md is the standard AGENTS.md cites for gate scope and the place the 90 s L0 budget is reasoned about. A developer sizing L0 reads 'all or nothing' and concludes every non-docs commit pays the eight-module build, overstating the common case by 8x -- and someone maintaining select_modules, seeing the standard sanction all-or-nothing, deletes the per-module branch as dead simplification. Every single-module commit then builds all eight and blows the budget the paragraph was rewritten to describe."
+    },
+    {
+      "id": "W20",
+      "severity": "minor",
+      "file": "scripts/check-module.sh:185",
+      "summary": "The stated residual under-scopes itself. 'the four lines below' is three lines (191-193), and it omits the second consumption site at 237-242 -- MODULES=\"$PLAN_MODULES\", the WHY case, and the empty guard. That block contains the one line whose mutation produces the exact false green the whole file exists to prevent. M0.22's backlog text is correctly scoped (it says 'run the gate with no flags', which covers both regions); only the inline comment is not.",
+      "failure_scenario": "A later author reads the comment, believes the untested surface is bounded by the three lines under it, edits MODULES=\"$PLAN_MODULES\" at 237 to \"$ALL\" or \"\" while refactoring, and the whole 38-test suite stays green while the gate prints 'ok no module changed' on every commit."
+    },
+    {
+      "id": "W21",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/ModulePlanTest.java:61",
+      "summary": "For the 'docs/internal/product/x.md | module-dirs |' row the trailing CSV column is null, so want is \"\" and the assertion degenerates to contains(\"MODULES=\"), which the script's unconditional echo \"MODULES=$PLAN_MODULES\" makes true for every possible selection. The one row that tests 'nothing outside a module selects nothing' constrains nothing about the selection. (The underlying behaviour is held by ModuleSelectionTest's hasSize(0), which is why this is minor and not major.)",
+      "failure_scenario": "PLAN_MODULES computed as anything at all -- ALL, a stray token, the changed directory name -- passes this row. Asserting on a whole line, e.g. out.lines().anyMatch(l -> l.equals(\"MODULES=\" + want)), makes it able to fail."
+    },
+    {
+      "id": "W22",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:22",
+      "summary": "The diff edits backlog.md to add M0.20/M0.21/M0.22 but leaves two rows contradicting the tree it is committed against: M0.5 is still 'todo' though cc8ceb2 landed check-module.sh, and M0.18 still says its parser regression suite 'lands inside M-1.2' though 965dc44 shipped without it and this commit lands those fixtures. This is the exact class M0.20 was added in this same diff to detect.",
+      "failure_scenario": "The next session runs next-task, is handed M0.5 as the highest unblocked todo, and either redoes shipped work or spends a round working out why the deliverable already exists."
+    },
+    {
+      "id": "W23",
+      "severity": "minor",
+      "file": "scripts/check-module.sh:126",
+      "summary": "derive_modules takes every quoted string inside the include(...) block and is therefore comment-blind. Verified in a scratch repo: '\"beta\", // see \"docs/beta.md\"' yields a phantom module and the gate fails with \"settings lists 'docs/beta.md', which has no build.gradle.kts\"; a commented-out '// \"gamma\",' does the same. The direction is safe -- loud, not silent, and the drift check is what makes it loud -- but the settings-fixtures/inline-comment.kts fixture implies a comment-safety that does not exist.",
+      "failure_scenario": "Someone comments a module out of settings.gradle.kts to bisect a build failure and every commit is then blocked by a message naming a module that no longer exists, with no hint that the cause is the comment."
+    }
+  ]
+}

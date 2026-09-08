@@ -1,0 +1,93 @@
+{
+  "verdict": "changes-requested",
+  "task": "M1.1",
+  "role": "test-reviewer",
+  "round": 2,
+  "summary": "Round-1 findings 1-8 are genuinely closed; the atomicity, prefix-range, resume, version-identity and delete-ordering cases now bite. Six NEW mutations were applied to the staged production code and survived the full 29-test suite, verified by running the build, not by reading. Four are the answer to the author's question 1: they are exactly the shapes a filesystem backend lands on by default.",
+  "findings": [
+    {
+      "id": 1,
+      "severity": "major",
+      "location": "binstore-spi/src/testFixtures/java/binjava/binstore/BinStoreConformance.java:305 aKeyLongerThanTheAdvertisedLimitIsRejected",
+      "claim": "The limit is probed only from ABOVE. Rejection at max+1 is asserted; acceptance AT max is not, so the exact failure the case's own comment claims to close still survives.",
+      "surviving_mutation": "MemoryBinStore.checkKey: `if (bytes > 255) throw` while capabilities().maxKeyBytes() stays 1024. VERIFIED GREEN, 17/17 conformance cases pass. Every other case writes keys of <= 7 bytes.",
+      "why_it_matters": "255 is NAME_MAX and 4096 is PATH_MAX; a LocalFsBinStore mapping keys to paths will advertise 1024 and reject far earlier, and M1.2 will ship green.",
+      "fix": "assert s.put(\"k\".repeat((int) max), ...) SUCCEEDS, then max+1 is refused. Add a multi-byte key so bytes-vs-chars is also probed.",
+      "failure_scenario": "Surviving mutation (verified by running the suite): MemoryBinStore.checkKey: `if (bytes > 255) throw` while capabilities().maxKeyBytes() stays 1024. VERIFIED GREEN, 17/17 conformance cases pass. Every other case writes keys of <= 7 bytes. 255 is NAME_MAX and 4096 is PATH_MAX; a LocalFsBinStore mapping keys to paths will advertise 1024 and reject far earlier, and M1.2 will ship green."
+    },
+    {
+      "id": 2,
+      "severity": "major",
+      "location": "binstore-spi/src/testFixtures/java/binjava/binstore/BinStoreConformance.java:150 getRangeIsInclusiveOfBothEnds / :296 rangeReadingAnAbsentKeyFailsToo",
+      "claim": "getRange has failure-path coverage for an ABSENT KEY only. Neither guard in the implementation is constrained: start past EOF, and an inverted or negative range.",
+      "surviving_mutation": "Delete the whole `if (start >= data.length) throw` block in MemoryBinStore.getRange. VERIFIED GREEN. The clamp then yields count = 0 and the caller gets an EMPTY STREAM where it must get an error - the identical failure readingAnAbsentKeyFailsRatherThanReturningEmptyBytes exists to forbid. Second: delete `if (start < 0 || endIncl < start)`; nothing asserts the exception type, so IllegalArgumentException-instead-of-IOException is invisible.",
+      "why_it_matters": "The case's own comment says RandomAccessFile.seek past EOF short-reads rather than throwing - so this is precisely the M1.2 default, and it is untested.",
+      "fix": "assertThatThrownBy on getRange(k, size, size+10), getRange(k, -1, 5) and getRange(k, 5, 2), each isInstanceOf(IOException.class).",
+      "failure_scenario": "Surviving mutation (verified by running the suite): Delete the whole `if (start >= data.length) throw` block in MemoryBinStore.getRange. VERIFIED GREEN. The clamp then yields count = 0 and the caller gets an EMPTY STREAM where it must get an error - the identical failure readingAnAbsentKeyFailsRatherThanReturningEmptyBytes exists to forbid. Second: delete `if (start < 0 || endIncl < start)`; nothing asserts the exception type, so IllegalArgumentException-instead-of-IOException is invisible. The case's own comment says RandomAccessFile.seek past EOF short-reads rather than throwing - so this is precisely the M1.2 default, and it is untested."
+    },
+    {
+      "id": 3,
+      "severity": "major",
+      "location": "binstore-spi/src/testFixtures/java/binjava/binstore/BinStoreConformance.java:132 putIfAbsentSucceedsExactlyOnceUnderConcurrentWriters",
+      "claim": "The winner-count half is strong and does what round-1 finding 1 asked. The BODY half - assertThat(read(...)).startsWith(\"writer-\") - constrains almost nothing: it accepts a truncated body, a blended body, and a body with trailing garbage.",
+      "surviving_mutation": "In putIfAbsent, after readFully: `if (data.length > 7) data = Arrays.copyOf(data, 7);`. VERIFIED GREEN across the full suite - the stored CAS record is silently TRUNCATED to \"writer-\" and startsWith passes. The sequential case does not catch it (its bodies are 5 and 6 bytes).",
+      "why_it_matters": "A truncated winner is exactly what a filesystem putIfAbsent that O_CREAT|O_EXCLs the FINAL path and then streams into it produces under a crash or a concurrent reader - the torn-write shape this case exists to catch.",
+      "fix": "collect the 16 candidate bodies into a List and assert the stored body isIn(candidates) - exact equality with SOME writer, not a prefix of one.",
+      "failure_scenario": "Surviving mutation (verified by running the suite): In putIfAbsent, after readFully: `if (data.length > 7) data = Arrays.copyOf(data, 7);`. VERIFIED GREEN across the full suite - the stored CAS record is silently TRUNCATED to \"writer-\" and startsWith passes. The sequential case does not catch it (its bodies are 5 and 6 bytes). A truncated winner is exactly what a filesystem putIfAbsent that O_CREAT|O_EXCLs the FINAL path and then streams into it produces under a crash or a concurrent reader - the torn-write shape this case exists to catch."
+    },
+    {
+      "id": 4,
+      "severity": "major",
+      "location": "binstore-spi/src/testFixtures/java/binjava/binstore/BinStoreConformance.java:162 aBodyWhoseLengthDisagreesWithItsStreamIsRefused",
+      "claim": "Length validation and the key-length limit are probed on the `put` path only. The `putIfAbsent` path - the one that writes commit-log records - is unconstrained on both.",
+      "surviving_mutation": "In MemoryBinStore.putIfAbsent replace `checkKey(key); byte[] data = body.readFully();` with a raw `try (InputStream in = body.open().get()) { data = in.readAllBytes(); }`. VERIFIED GREEN.",
+      "why_it_matters": "A truncated object written through put is a bad segment; a truncated object written through putIfAbsent is a bad COMMIT RECORD at a sequence number that can never be rewritten (I1). The weaker-covered path is the higher-consequence one.",
+      "fix": "run the lying-Body and over-long-key assertions through putIfAbsent as well - a parameterised case over both write methods.",
+      "failure_scenario": "Surviving mutation (verified by running the suite): In MemoryBinStore.putIfAbsent replace `checkKey(key); byte[] data = body.readFully();` with a raw `try (InputStream in = body.open().get()) { data = in.readAllBytes(); }`. VERIFIED GREEN. A truncated object written through put is a bad segment; a truncated object written through putIfAbsent is a bad COMMIT RECORD at a sequence number that can never be rewritten (I1). The weaker-covered path is the higher-consequence one."
+    },
+    {
+      "id": 5,
+      "severity": "major",
+      "location": "binstore-spi/src/testFixtures/java/binjava/binstore/BinStoreConformance.java:246 listPagesAtMaxKeysAndResumesWhereItStopped",
+      "claim": "The pagination TERMINATION boundary is never hit: no case lists n keys with maxKeys == n. Both existing pages are partial (2 of 3, then 1 of 2).",
+      "surviving_mutation": "Before returning, add `if (next == null && page.size() == maxKeys && !page.isEmpty()) next = page.getLast().key();`. VERIFIED GREEN. Every exactly-full listing now reports more remains, and any recovery or GC loop issues one extra LIST per listing.",
+      "why_it_matters": "Cost rule R2/R9: an off-by-one in listing termination is a per-listing billed request that no functional assertion sees, and it is the classic S3 IsTruncated bug.",
+      "fix": "list(\"p/\", null, 3) over exactly 3 keys: containsExactly all three AND nextStartAfter().isEmpty().",
+      "failure_scenario": "Surviving mutation (verified by running the suite): Before returning, add `if (next == null && page.size() == maxKeys && !page.isEmpty()) next = page.getLast().key();`. VERIFIED GREEN. Every exactly-full listing now reports more remains, and any recovery or GC loop issues one extra LIST per listing. Cost rule R2/R9: an off-by-one in listing termination is a per-listing billed request that no functional assertion sees, and it is the classic S3 IsTruncated bug."
+    },
+    {
+      "id": 6,
+      "severity": "major",
+      "location": "binstore-spi/src/main/java/binjava/binstore/Body.java:38 (readFully), CostTable.java:19 (free), ListPage.java:33 (compact ctor)",
+      "claim": "Round-1 finding 7 was Body untested; BodyTest closes most of it but three pieces of NEW production logic in this diff are still executed without being constrained. Same defect class, moved.",
+      "surviving_mutation": "All three VERIFIED GREEN together against :binstore-spi:test and :binstore-backends:test. (a) Body.readFully: replace `try (InputStream in = open.get())` with a bare `InputStream in = open.get();` - the stream is never closed; ByteArrayInputStream.close is a no-op so every test passes, while a file- or socket-backed Body leaks an fd per write attempt, and retries multiply it. (b) CostTable.free() returns new CostTable(1,1,1) - nothing asserts the zeros, and M1.3's meter is the next task to read them. (c) ListPage drops List.copyOf - the page a backend returns becomes caller-mutable.",
+      "fix": "(a) a supplier handing out an InputStream that records close(), asserted closed after readFully and after a mismatch throw; (b) one line asserting CostTable.free() is all zeros; (c) assert ListPage.objects() is unmodifiable and that mutating the source list after construction does not change the page.",
+      "failure_scenario": "Surviving mutation (verified by running the suite): All three VERIFIED GREEN together against :binstore-spi:test and :binstore-backends:test. (a) Body.readFully: replace `try (InputStream in = open.get())` with a bare `InputStream in = open.get();` - the stream is never closed; ByteArrayInputStream.close is a no-op so every test passes, while a file- or socket-backed Body leaks an fd per write attempt, and retries multiply it. (b) CostTable.free() returns new CostTable(1,1,1) - nothing asserts the zeros, and M1.3's meter is the next task to read them. (c) ListPage drops List.copyOf - the page a backend returns becomes caller-mutable."
+    },
+    {
+      "id": 7,
+      "severity": "minor",
+      "location": "binstore-spi/src/testFixtures/java/binjava/binstore/BinStoreConformance.java:100-128",
+      "claim": "CyclicBarrier.await() and Future.get() are both untimed. A backend that deadlocks under contention hangs the suite instead of failing it, and there is no per-test timeout.",
+      "surviving_mutation": "n/a - robustness, not a missed behaviour.",
+      "fix": "start.await(10, SECONDS), f.get(30, SECONDS), or @Timeout on the case.",
+      "failure_scenario": "CyclicBarrier.await() and Future.get() are both untimed. A backend that deadlocks under contention hangs the suite instead of failing it, and there is no per-test timeout."
+    },
+    {
+      "id": 8,
+      "severity": "minor",
+      "location": "binstore-spi/src/testFixtures/java/binjava/binstore/BinStoreConformance.java:325 conditionalWritesAreAdvertisedBecauseTheCommitLogRequiresThem",
+      "claim": "batchDelete and minPartSize are advertised and never probed; testing.md rule 19 asks Capabilities to be established by writing and asserting, not by reading the record. conditionalWrites IS properly probed by the concurrency case; the other two are not, and cannot be until M1.3's counter exists.",
+      "surviving_mutation": "Capabilities(true, false, ...) while delete() still takes many keys in one call - nothing fails.",
+      "fix": "acceptable to defer, but say so in the comment and name M1.3 as the case that closes batchDelete, so the gap is recorded rather than implied to be covered.",
+      "failure_scenario": "Surviving mutation (verified by running the suite): Capabilities(true, false, ...) while delete() still takes many keys in one call - nothing fails."
+    }
+  ],
+  "answers_to_author": {
+    "q1_filesystem_backend_passes_while_wrong": "Four: finding 1 (NAME_MAX 255 vs an advertised 1024), finding 2 (seek past EOF short-reads instead of throwing - your own comment names this and the case does not test it), finding 3 (a torn or truncated winner passes startsWith), finding 5 (IsTruncated off-by-one). One non-finding worth knowing: aPrefixIsAByteRangeNotADirectory stores p/a and p/a/x simultaneously, which no naive path-mapping backend can represent. That is a good constraint, and it means M1.2 must escape or encode keys rather than map them to paths. Expect that case to be the one that fails first, and do not relax it.",
+    "q2_equivalent_mutant_disclosure": "Disclosing is right and the analysis is correct - ByteArrayInputStream clamps count to min(offset+length, buf.length), so dropping Math.min is genuinely equivalent HERE and no in-memory assertion can kill it. Two riders. (1) testing.md rule 9 says a surviving mutant is killed or argued in baselines/mutants.txt; that file does not exist yet (M0.14), so the comment is the only available home - note in the commit body that the argument moves there when the gate lands, or it will be re-litigated. (2) The clamp has a NON-equivalent sibling in the same method that this backend CAN kill today and does not: start >= size must throw rather than clamp to zero bytes (finding 2). Test that, and the clamp boundary stops resting entirely on a backend that does not exist yet.",
+    "q3_reconstructed_reds": "Not blocking, agreed - the types predate their tests and the commit body is the right place. One rider: BodyTest, the concurrency case and the new list cases are new THIS round, and their reds must be genuine, not reconstructed. Do not let the disclosure sentence cover them."
+  },
+  "notes": "Method: applied each mutation to the staged working tree, ran :binstore-spi:test and :binstore-backends:test, then restored. Tree verified clean and staged sha256 unchanged (4ea0cab3...) after the last restore; suite green.",
+  "diff_sha256": "4ea0cab3b2c6a30774efa866aeda4d83f489d14e718c312ac704137da23a5d85"
+}

@@ -1,0 +1,50 @@
+{
+  "diff_sha256": "f1fd08525abb18fe144c89b1b49aa62fb1f332b71fd246af34d2978c654778ec",
+  "verdict": "changes-requested",
+  "summary": "Round 4, test review. tr-11 (pods() unmodifiable) and tr-12 (bytes.length < 8 -> < 7) are FIXED and verified by mutation. tr-10 is only TWO-THIRDS fixed: the new test kills the partitionId half (both disjuncts) but NOT the podCount half, which is the very half baselines/mutants.txt names as behavioural and claims this test kills. Re-ran a 38-mutant matrix against :format:test in the issued tree: 30 killed, 8 survived = 78.9% unargued. Of the six mutants baselines/mutants.txt argues as equivalent, THREE are genuinely message-only (verified by construction and by probe) and TWO are not -- `streamCount < 0` and `podLen < 0` each have an input that the original REFUSES and the mutant ACCEPTS. A three-line remedy (message assertions on the three bare isInstanceOf lines) was measured to kill all three open survivors, taking the matrix to 33/38 = 86.8%, or 94.3% with only the three real equivalences argued.",
+  "findings": [
+    {
+      "id": "M4.8a-tr-14",
+      "severity": "major",
+      "file": "format/src/test/java/binjava/format/CheckpointDecodeRefusalTest.java:250",
+      "title": "The podCount `< 0` half is STILL unconstrained -- the one half mutants.txt calls behavioural and claims this test kills",
+      "surviving_mutation": "In Checkpoint.decodeBody, `if (podCount < 0 || podCount > c.remaining())` -> `if (podCount > c.remaining())`. MEASURED: whole :format:test suite green (198 tests, 0 failed).",
+      "failure_scenario": "The assertion at :250-253 splices WIDE_NEGATIVE into the MIDDLE of a valid object, so six bytes (podLen, \"poda\", flushSeq) still trail it. Without the `< 0` half the negative podCount passes the bound, the loop runs zero times, and the TRAILING-BYTES check throws IOException(\"checkpoint has bytes after its last field\") -- so `isInstanceOf(IOException.class)` with no message constraint passes against the mutant. Compare :245-249, the partitionId case, which is the only one of the four carrying `.hasMessageContaining` and is the only `< 0` half actually killed (measured: D7 and D8 both KILLED). A distinguishing input exists and was run: bytes `42 43 4b 50 00 00 00 00 | 01 | 00 | <WIDE_NEGATIVE>` -- original REFUSES with 'a checkpoint claims -4294967295 pods but only 0 bytes remain'; the mutant ACCEPTS it as `seq=1 streams={} pods={}`. That is exactly the 'silently dropping every lastAppliedFlushSeq' outcome baselines/mutants.txt:11 says is not equivalent, and the same file asserts this test kills it. It does not. REMEDY, MEASURED: append `.hasMessageContaining(\"pods but only\")` at :253 -- re-ran the mutant, KILLED."
+    },
+    {
+      "id": "M4.8a-tr-15",
+      "severity": "major",
+      "file": "baselines/mutants.txt:15",
+      "title": "Two of the six argued mutants are NOT equivalent -- each has an input that flips REFUSE into ACCEPT",
+      "surviving_mutation": "(a) `if (streamCount < 0 || streamCount > c.remaining() / 18)` -> `if (streamCount > c.remaining() / 18)`; (b) `if (podLen < 0 || podLen > c.remaining())` -> `if (podLen > c.remaining())`. Both MEASURED surviving the whole :format:test suite, and both measured accepting an object the unmutated decoder refuses.",
+      "failure_scenario": "The line argues 'a negative count is not greater than a positive limit, so it passes the guard, enters a loop that runs zero times, and is then refused by the trailing-bytes check -- a different message for the same refusal'. The trailing-bytes check only fires if bytes are LEFT OVER, and a torn or hostile object need not leave any. (a) `42 43 4b 50 00 00 00 00 | 01 | <WIDE_NEGATIVE> | 01 | 04 'poda' | 01`: original REFUSES ('claims -4294967295 streams but only 7 bytes remain'); mutant ACCEPTS as `seq=1 streams={} pods={poda=1}` -- EVERY stream's nextOffset and oldestRetainedOffset silently dropped, which is strictly worse than the podCount case the same file calls non-equivalent, since bounding recovery from a stream-less checkpoint is what M4.9 is for. (b) the stated mechanism does not even apply: podLen is a LENGTH, not a loop bound; `(int) 0xFFFFFFFF00000001` is 1, so `c.bytes(1)` succeeds. `42 43 4b 50 00 00 00 00 | 01 | 00 | 01 | <WIDE_NEGATIVE> | 'a' | 01`: original REFUSES ('claims a -4294967295-byte podId but only 2 bytes remain'); mutant ACCEPTS as `pods={a=1}`, i.e. a non-canonical 10-byte encoding of length 1 is admitted, breaking the byte-identity property GoldenCheckpointTest rests on. The other four argued mutants HOLD -- I re-derived and probed the divisor (/18 -> /9 and divisor removed), the doubled podCount bound and the podLen bound widened to Integer.MAX_VALUE: acceptance requires 19 bytes per stream and >=3 bytes per pod, so the honest bounds never block an acceptable object and the widened ones only admit objects that then fail in Cursor. REMEDY, MEASURED: `.hasMessageContaining(\"streams but only\")` at CheckpointDecodeRefusalTest.java:244 and `.hasMessageContaining(\"-byte podId\")` at :256 kill both; the two lines then come OUT of mutants.txt instead of being argued."
+    },
+    {
+      "id": "M4.8a-tr-16",
+      "severity": "minor",
+      "file": "baselines/mutants.txt:8",
+      "title": "Two survivors are neither killed nor argued",
+      "surviving_mutation": "Deleting `Objects.requireNonNull(streams, \"streams\")` and, separately, `Objects.requireNonNull(pods, \"pods\")` from the Checkpoint compact constructor. Both MEASURED surviving :format:test.",
+      "failure_scenario": "testing.md rule 9 says a survivor is killed OR argued; these are neither, so the file's own claim that it enumerates the survivors is incomplete and the next session's 'number to beat' is wrong. They are genuinely message-only -- `new LinkedHashMap<>(null)` raises NPE either way, so the only loss is the parameter name in the message -- which is exactly the shape the other entries argue, so a line each is the whole fix. Recorded rather than requested: on a pass this lands in the commit body."
+    },
+    {
+      "id": "M4.8a-tr-17",
+      "severity": "minor",
+      "file": "format/src/main/java/binjava/format/Checkpoint.java:158",
+      "title": "The corrected route count is still wrong: measured SIX, not four, and nothing pins it",
+      "surviving_mutation": "Not a code mutation -- the comment is unfalsifiable by the suite. No test asserts how many distinct IllegalArgumentException routes reach the wrap, so any number in this comment survives every mutation.",
+      "failure_scenario": "This round corrects 'Five routes were measured' to 'FOUR routes reach this wrap, measured: offsets out of order, a blank podId, and full-width varints in `sequence` or a flushSeq'. Removing the negative-partitionId route is right, but the enumeration was already short by two and stays short: a full-width varint in nextOffset yields 'corrupt checkpoint: nextOffset is never negative: -1' and one in oldestRetainedOffset yields 'corrupt checkpoint: oldestRetainedOffset is never negative: -1'. Both measured against the staged decoder. So the count is six. A later reader trusting the enumeration -- e.g. deciding the nextOffset guard in StreamOffsets is unreachable from the wire -- reasons from a false premise, which is the class of defect the two other comment corrections in this round exist to remove."
+    },
+    {
+      "id": "M4.8a-tr-18",
+      "severity": "minor",
+      "file": "format/src/test/java/binjava/format/CheckpointDecodeRefusalTest.java:229",
+      "title": "The WIDE_NEGATIVE javadoc is attached to nothing and the WIDE_ONE one-liner is duplicated",
+      "surviving_mutation": "None -- documentation, not an assertion.",
+      "failure_scenario": "Lines 229 and 231-244 are dangling doc comments (javac emits two `dangling-doc-comments` warnings on every :format:compileTestJava). The 14-line explanation of why WIDE_NEGATIVE is the fixture this round turns on sits above a duplicate `/** The uvarint encoding of 0x1_0000_0001 ... */`, so the constant it documents (:248) carries no doc and WIDE_ONE (:246) carries two. A reader deleting what looks like a stray duplicate deletes the reasoning for the whole test; and the javadoc's claim that 'A pod count of it decodes to no pods at all' is currently TRUE of the code and NOT constrained by the test below it (see tr-14)."
+    }
+  ],
+  "task": "M4.8a",
+  "role": "test-reviewer",
+  "staged_tree": "ff8a86cd8d971c1acd51c05a264c7ecf8d55dd8c"
+}

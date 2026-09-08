@@ -1,0 +1,76 @@
+{
+  "diff_sha256": "213e8b1e9331883dcdc26508abdb48addc45376912f442303ef43ccfa165d38f",
+  "verdict": "changes-requested",
+  "summary": "Round-4 verify. Previous findings 1 (duplicatePut unobservable), 3 (Faults guard untested), 4 (SimulatedClock staged untested) and the Injected.key half of 5 are CLOSED, each measured: dup re-PUT deleted / duplicate's result returned / putIfAbsent->put / key dropped and guard body deleted / guard rewritten as p<0||p>1 all now die. Finding 2 is HALF closed: scramble->seed*3+stream now dies (and so do seed, seed+stream, seed*31+stream, seed*1000003+stream, (seed<<16)+stream, Long.hashCode, new Random(seed).nextLong()+k, seed^(stream*GOLDEN), and a constant), and the p==0 early return survives but is now an EQUIVALENT mutant because each class owns its Random. What is still unpinned is the OTHER half of the same property -- 'all three drawn before any branch' -- plus the fact that the `unreachable` class is never asserted to be RECORDED. Two majors, both with measured surviving mutations, both closable by assertions inside the existing file. All 9 tests and the whole 159-test :sequencer: suite green on the unmutated tree; every mutation reverted and the tree left byte-identical (staged diff still hashes 213e8b1e9331).",
+  "findings": [
+    {
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/FaultInjectingStoreTest.java:205",
+      "title": "The 'all three drawn before any branch' property has NO test -- the new decorrelation test never goes through the store, so it pins `scramble` and nothing else",
+      "surviving_mutations": [
+        "FaultInjectingStore.java:148-151 -- revert putIfAbsent to LAZY draws (`if (fires(unreachableDraws, faults.unreachable())) { add; throw; }` then draw ambiguous, then draw duplicate). All 9 tests PASS. This is verbatim the third of the three defects backlog M4.12 narrates ('drawing lazily let a FIRING class shift the streams after it, measured as moving the other two classes' positions in 2000 of 2000 seeds').",
+        "FaultInjectingStore.java:218 -- delete `fires(unreachableDraws, faults.unreachable());` in putIfMatch (the draw whose javadoc says it exists ONLY to keep the stream aligned). All 9 tests PASS.",
+        "FaultInjectingStore.java:220 -- delete `fires(duplicateDraws, faults.duplicatePut());` in putIfMatch. All 9 tests PASS.",
+        "FaultInjectingStore.java:130-132 -- `fires` -> `draws.nextFloat() < p`, and -> `draws.nextDouble(); return draws.nextDouble() < p;` (a second draw per call). Both PASS, which is the proof that `firesAt` is a RE-IMPLEMENTATION of the draw rather than an observation of it: the test builds its own `new Random(scramble(seed, k))` and its own `nextDouble()` loop, so nothing it asserts can constrain how or when the store actually draws."
+      ],
+      "failure_scenario": "The property is testable, cheap and deterministic -- I measured it. Hold the seed, record the CALL INDEXES at which ambiguousPut fires with unreachable=0, then with unreachable=0.05, and subtract the calls where unreachable fired (those are legitimately masked by its throw): the two sets are IDENTICAL on 200 of 200 seeds against the staged code and DIFFER on 200 of 200 against the lazy-draw mutant (on seed 1 the staged code gives ambiguousPut at [36,49,77,93,134,146,150,159,172,176,188] with unreachable both off and on -- the exact figures the backlog row cites -- while the lazy mutant gives [] with it on). So the regression is one seed and one assertion away from being pinned, and it is not pinned. The scenario: someone reads putIfAbsent, sees three coins drawn and two of them thrown away on the unreachable path, and 'tidies' the draws into their branches -- or hoists them into a helper called per branch, or adds a fourth fault class drawn lazily. The suite stays green, and M4.13's criterion 1 ('each class has a seed where IT changes the outcome') becomes unobtainable again, because toggling one class re-aligns the others and the observed difference cannot be attributed to the class that was toggled. That is the failure this commit's central design choice exists to prevent, so it is the one thing in the file that must not be believed on the strength of a comment. Note the two putIfMatch draws are PURE alignment bookkeeping -- they are unreachable by any behavioural assertion, so a test through the store's `injected()` positions is the only thing that can keep them alive."
+    },
+    {
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/FaultInjectingStoreTest.java:148",
+      "title": "The `unreachable` class is never asserted to be RECORDED in injected() -- the record can be deleted or mislabelled with the suite green",
+      "surviving_mutations": [
+        "FaultInjectingStore.java:152 -- delete `injected.add(new Injected(\"unreachable\", key));` from putIfAbsent, keeping the throw. All 9 tests PASS.",
+        "FaultInjectingStore.java:152 -- relabel the kind: `new Injected(\"unreachable\", key)` -> `new Injected(\"boom\", key)`. All 9 tests PASS.",
+        "FaultInjectingStore.java:187,195,238 -- the same record on stat/get/list (see the minor below, whose branches vanish entirely)."
+      ],
+      "failure_scenario": "The class javadoc says the file exists because 'the only defence is being able to ASSERT that a given run actually saw a given fault', and the backlog row says `injected()` 'is what lets a test say which fault a run actually saw'. For ambiguousPut and duplicatePut that is now true (both are pinned by kind, and duplicatePut by key too). For `unreachable` -- the only class the row describes as a global coin flip driving the whole sweep -- nothing asserts the record at all: `anInjectedFaultCHANGESWhatTheCommitLogDoes` asserts the IOException and the absent object but never looks at `injected()`, and `theSameSeedInjects...` only compares the list against itself and against another seed, so a list missing every unreachable entry still replays equal and still differs across seeds. The scenario is round-1's finding with the polarity flipped: M4.13 reports 'each fault class changed the outcome on at least one seed' by reading `injected()`, and the unreachable row of that report is computed from a record that could have been dropped, renamed, or attached to the wrong call. A run drowning in injected IOExceptions reports zero unreachable faults, and the reader concludes the class is disabled and turns the probability up -- or, worse, an aggregate 'faults fired' assertion stays green on the other two classes while the class under test is silently mute. One line inside the existing test (hoist the decorator into a local and assert extracting(kind).contains(\"unreachable\") plus the key) closes it."
+    },
+    {
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/FaultInjectingStoreTest.java:219",
+      "title": "The test named 'theTHREEFaultStreamsAreINDEPENDENT' checks two of the three -- stream 3 is never compared with anything",
+      "surviving_mutations": [
+        "FaultInjectingStore.java:94 -- `this.duplicateDraws = new Random(scramble(seed, 3));` -> `scramble(seed, 1)`, i.e. duplicatePut aliased onto unreachable's stream. All 9 tests PASS."
+      ],
+      "failure_scenario": "The loop only evaluates the (stream 1, stream 2) pair, so the third coin's independence rests on the same comment the other two rested on before this test existed. If streams 1 and 3 ever collide, duplicatePut fires exactly when unreachable fires -- and unreachable throws BEFORE the duplicate branch is reached, so the duplicatePut class becomes entirely unobservable whenever unreachable is enabled, which is criterion 1 defeated for that class by construction. Measured cost of closing it: one extra pair in the existing loop. Under the alias, co-firing at draw 1 for the (1,3) pair is 1116 against 50 expected, so the existing tolerance kills it immediately -- the assertion simply is not asked. Filed minor because the mutation needs someone to edit the stream indexes rather than the scrambler, but the consequence if it happens is the same class of silence this file exists to prevent."
+    },
+    {
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/FaultInjectingStoreTest.java:29",
+      "title": "Round-3's minor is still open: the stat/get/list injection sites are unexercised, and each can be deleted outright",
+      "surviving_mutations": [
+        "FaultInjectingStore.java:185-191 -- make stat a pure pass-through (delete the fires/throw block). All 9 tests PASS.",
+        "FaultInjectingStore.java:193-199 -- same for get. All 9 tests PASS.",
+        "FaultInjectingStore.java:235-242 -- same for list. All 9 tests PASS."
+      ],
+      "failure_scenario": "The backlog row enumerates what is deliberately not modelled ('put, getRange, multipart and delete inject nothing'), which tells a reader that stat, get and list DO inject -- and nothing checks that they still do. Every test in the file drives putIfAbsent or putIfMatch; `anInjectedFaultCHANGESWhatTheCommitLogDoes` goes through CommitLog.commit, which only calls putIfAbsent. So the read side of the store can silently become fault-free, and the sweep that is supposed to fault RECOVERY -- the chain walk in `recover`, which is all get/list/stat -- would then only ever be faulted on its writes while reporting 'unreachable' coverage. One test per verb, asserting the IOException and the injected record, is the whole fix."
+    },
+    {
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/FaultInjectingStoreTest.java:298",
+      "title": "Injected.key is pinned for duplicatePut only; the ambiguousPut and unreachable keys can be blanked",
+      "surviving_mutations": [
+        "FaultInjectingStore.java:162,225 -- `new Injected(\"ambiguousPut\", key/k)` -> `new Injected(\"ambiguousPut\", \"\")`. All 9 tests PASS.",
+        "FaultInjectingStore.java:152 -- `new Injected(\"unreachable\", key)` -> `\"\"`. All 9 tests PASS (subsumed by the major above).",
+        "FaultInjectingStore.java:123 -- `return List.copyOf(injected);` -> `return injected;`. All 9 tests PASS, so the defensive snapshot -- the thing that stops a caller mutating the run's own record -- is unconstrained."
+      ],
+      "failure_scenario": "Round 3 raised the key as a minor and it was closed for exactly one of the three classes. The two ambiguousPut tests already extract `kind`; adding `key` costs one chained assertion. Without it, a decorator that faults key X and records key Y reads as correct, and the first debugging session that trusts `injected()` to say WHICH object was lost spends its time in the wrong chain -- which is precisely the use the record was added for."
+    }
+  ],
+  "verified_closed": [
+    "Round-3 finding 1 (duplicatePut recorded but never observably injected): CLOSED. Deleting the re-PUT dies; returning the duplicate's result dies; putIfAbsent->put in the retry dies (against the pre-owned key fixture); dropping Injected.key dies.",
+    "Round-3 finding 2 (stream independence asserted only in a comment): HALF closed. `scramble` is now genuinely pinned -- seed*3+stream, seed, seed+stream, seed*31+stream, seed*1000003+stream, (seed<<16)+stream, Long.hashCode(seed*31+k), new Random(seed).nextLong()+k, seed^(stream*GOLDEN) and a constant all die. The p==0 early return survives, but it is an EQUIVALENT mutant now: each class owns its Random and a class with p==0 is the only consumer of its own stream, so the early return is unobservable by construction (which also makes the 'DRAWS EVEN WHEN p == 0' javadoc a claim no test can ever earn -- a production/doc note, not a test gap). The DRAW-ORDER half of the same property is not closed: see major 1.",
+    "Round-3 finding 3 (the Faults guard had no test): CLOSED. Deleting the guard body dies; rewriting it as `p < 0 || p > 1` dies on the NaN case, which is the discriminating input and is asserted.",
+    "Round-3 finding 4 (SimulatedClock staged with no test and no caller): CLOSED. `git diff --cached --name-only` is backlog.md plus the two FaultInjectingStore files; SimulatedClock.java is untracked, and no staged SOURCE file mentions it (the only staged mention is the M4.20 backlog row that now owns it).",
+    "Round-3 finding 5 (Injected.key never asserted; stat/get/list/getRange/delete unexercised): PARTLY closed -- key for duplicatePut only, read verbs still unexercised. See the two minors."
+  ],
+  "verified_still_constraining": [
+    "The six pre-existing tests each still die to a targeted mutation, so the refactor to eager draws did not hollow any of them: anAmbiguousPutLANDS... dies when the landing write is deleted from putIfAbsent; anAmbiguousPutIfMatchALSOLands... dies when the landing write is deleted from putIfMatch; aDuplicatedPutIsHarmless... dies when the retry uses put instead of putIfAbsent; aStoreConfiguredWithNoFaults... dies to fires->true; anInjectedFaultCHANGESWhatTheCommitLogDoes dies to fires->false; theSameSeedInjects... dies to fires->true, fires->false and scramble->constant.",
+    "The decorrelation test's tolerance is meaningful and cannot false-fail: it reads no clock and no global RNG (every draw is `new Random(scramble(seed, k))` over fixed loops), so it is a fixed computation. Staged code gives both={56,42,65,52} at draws {1,2,3,20} against bounds [16,150] -- a 2.3x margin to the ceiling and 2.6x to the floor. It catches over-firing (seed*3+stream gives 918 at draw 1) AND mutual exclusion (seed^(stream*GOLDEN) gives 0 at draws 1 and 3; the floor of 16 is what catches those). I tried eight plausible 'readable simplifications' and could not construct a phase-locked one that lands inside the 1/3..3x band; the only survivors (seed*GOLDEN+stream*GOLDEN, seed*2654435761+stream*40503) are genuinely decorrelated on this measure and so are equivalent mutants. 20,000 seeds x 4 draws costs ~0.1s, well inside the 60s @Timeout.",
+    "Tier is right: T0/T1 throughout, MemoryBinStore and CountingBinStore, no clock, no socket, no system temp, no Thread.sleep, no fixed port. CountingBinStore is the honest instrument for 'the retry REACHED the store' -- a mock would have asserted the call rather than the effect."
+  ],
+  "tree_state": "Every mutation was applied to the working tree and reverted with `git checkout --` immediately after its run. Final state: staged diff still hashes 213e8b1e9331883dcdc26508abdb48addc45376912f442303ef43ccfa165d38f, `git diff` (worktree vs index) is empty, and all five untracked M4.19/M4.20 files (Invariants.java, InvariantsTest.java, CommitProtocolSimulation.java, CommitProtocolSimulationTest.java, SimulatedClock.java) are present and untouched. Full :sequencer:test with --rerun-tasks --no-build-cache: 159 tests, 0 failures.",
+  "task": "M4.12",
+  "role": "test-reviewer"
+}

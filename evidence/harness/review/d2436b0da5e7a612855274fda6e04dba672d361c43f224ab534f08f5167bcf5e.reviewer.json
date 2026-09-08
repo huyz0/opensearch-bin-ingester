@@ -1,0 +1,29 @@
+{
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "M0.31-R4-1",
+      "severity": "blocking",
+      "file": "buildSrc/build.gradle.kts",
+      "summary": "The staged diff bundles an unrelated fix (a java.io.tmpdir pin for buildSrc's Test task) into the M0.31 commit, which the backlog names exclusively as 'check-gate-scope.sh: assert .tmp/ is quarantined by THIS repository'. Nothing in the backlog row, an ADR, or a baseline entry ties buildSrc/build.gradle.kts to M0.31; it is described (outside the diff) as fixing 'the test-reviewer's rule-17 minor', i.e. a separate finding with no task ID of its own.",
+      "failure_scenario": "A later `git revert` of this commit meant to undo the check-gate-scope.sh quarantine logic silently reverts the buildSrc tmpdir pin too (reintroducing FreshCheckoutTest's whole-repo fixtures under /tmp), and a bisect landing here attributes a build-system behavior change to the M0.31 backlog item. This is exactly the coupling non-negotiable 1 ('one task equals one commit') and the 'Never widen scope silently' rule exist to prevent, and no gate catches it: check-commit-msg.sh only checks the commit subject's task-ID prefix, not which files trace to that task."
+    },
+    {
+      "id": "M0.31-R4-2",
+      "severity": "major",
+      "file": "baselines/review.txt",
+      "summary": "The staged baseline entry reviewer:M0.31-R3-1 argues splitting doesn't fit because 'this diff is 3 files and one script'. The diff it is actually bound to (by the sha check-reviewed.sh will verify) is 5 files -- baselines/review.txt itself plus buildSrc/build.gradle.kts are outside the '3 files' the argument describes, and the latter is a second, unrelated concern (see M0.31-R4-1). The argument's premise about the commit's size/shape is stale relative to the diff it is stapled to at bind time.",
+      "failure_scenario": "A future reader trusts the baseline entry's characterization of the commit ('3 files and one script', 'the negation test in a different commit from the two lines it constrains') to conclude splitting was rightly rejected, without noticing the actual bound diff already contains a second, independent change that COULD have been (and should have been) its own commit -- which is itself evidence that splitting was both possible and warranted, undercutting the argument it is used to support."
+    },
+    {
+      "id": "M0.31-R4-3",
+      "severity": "minor",
+      "file": "scripts/check-gate-scope.sh",
+      "summary": "The in-code comment says 'Four earlier forms of this check were each wrong', while the completed backlog row for M0.31 and the staged baselines/review.txt entry both say 'five'. The four bullets in the script comment do embed a fifth wrong attempt (the explicit negation branch that was written and deleted as unreachable) inside bullet 3, so the two counts are reconciled only by reading closely.",
+      "failure_scenario": "Someone auditing the fix count against the backlog's 'five forms' claim, using only the script's own comment, undercounts by one and either re-derives a form that already exists or assumes one was silently dropped from the specification."
+    }
+  ],
+  "diff_sha256": "d2436b0da5e7a612855274fda6e04dba672d361c43f224ab534f08f5167bcf5e",
+  "task": "M0.31",
+  "role": "reviewer"
+}

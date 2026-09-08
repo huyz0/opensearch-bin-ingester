@@ -1,0 +1,16 @@
+{
+  "diff_sha256": "97bfe82bb43e37a0527094684de857fa9ab378e451986a58e30bfc78bb2631e1",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "file": "buildSrc/src/test/java/binjava/RenameFollowingBoundsTest.java",
+      "line": 54,
+      "severity": "major",
+      "what": "The origin guard `if not reads(origin)` in tdd_scan.py:123 is a TWO-conjunct predicate (`.endswith('.java')` AND `TEST_PATH`), and the fixture at line 54 varies only ONE of them. Its source is `docs/drafts/FooTest.java`: TEST_PATH fails, `.java` passes. So mutating the guard to `if not origin.endswith('.java')` dies (measured, 1 failed) but mutating it to `if not TEST_PATH.search(origin)` SURVIVES THE ENTIRE SUITE -- measured, `./gradlew -p buildSrc test --rerun-tasks` = 226 completed, 0 failed. The surviving mutant is not equivalent: it reopens the exact round-5 bypass one path variant over. Needs a second fixture whose source differs from a scanned path ONLY in extension, e.g. `mod/src/test/java/binjava/FooTest.java.bak`, which is the same one-fixture-per-surface discipline M0.56's row records learning over three rounds.",
+      "failure_scenario": "Measured end to end against the staged bytes, not argued. Fixture: commit 1 adds `mod/src/test/java/binjava/FooTest.java.bak` holding two @Test methods -- no gate reads it, because tdd_scan's `paths` filter requires `.java`. Commit 2 is `git mv mod/src/test/java/binjava/FooTest.java.bak mod/src/test/java/binjava/FooTest.java`, scored R100 under git's default config. STAGED BYTES: `python3 scripts/tdd_scan.py check` -> `FAIL 2 new test(s) staged but no red record`, exit 1 (correct). WITH ONLY `reads(origin)` REPLACED BY `TEST_PATH.search(origin)`: `ok no new tests in this diff`, exit 0 -- and every one of the 226 buildSrc tests still passes. That is a two-commit, green-tree bypass of non-negotiable 3, identical in class to the round-5 major, and the fact that the current code is right is unfalsified at this call site: the `.java` half of the unified `reads` predicate -- the very conjunct round 4 found missing -- is executed but not constrained.",
+      "id": "M0.53-r6-tr-1"
+    }
+  ],
+  "task": "M0.53",
+  "role": "test-reviewer"
+}

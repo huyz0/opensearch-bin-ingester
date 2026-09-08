@@ -1,0 +1,34 @@
+{
+  "diff_sha256": "f278e6763e083922c02b5e3d1492430a144842aa3a325c792a1cc05633448095",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "WT14",
+      "severity": "blocking",
+      "file": "buildSrc/src/test/java/binjava/ModulePlanTest.java:48",
+      "summary": "--plan is a FIFTH composition of the gate, not the gate's composition. It re-derives ALL, re-calls check_drift, re-tests is_shared_build_change and re-calls select_modules in its own block (scripts/check-module.sh:100-117), parallel to the gate's own lines at 151-206. Every mutation confined to the gate's copy survives the whole 38-test suite. This is exactly the WT9 hole, relocated: the doubling moved from is_shared_build_change into the composition itself.",
+      "failure_scenario": "Three mutations applied to scripts/check-module.sh, each run with `./gradlew -p buildSrc test --rerun-tasks`, all 38 tests green (0 failures): (A) line 200 `MODULES=$(select_modules \"$ALL\" $(changed_files) | tr '\\n' ' ')` replaced with the pre-M0.6 non-escalating form `MODULES=$(changed_files | cut -d/ -f1 | sort -u | while read -r m; do case \" $ALL \" in *\" $m \"*) echo \"$m\" ;; esac; done | tr '\\n' ' ')`. Verified behaviour under this mutation: a staged buildSrc/build.gradle.kts yields gate MODULES=[] and the gate prints `ok no module changed`, while `--plan buildSrc/build.gradle.kts` prints `WHY=shared-build` and `MODULES=<all eight>`. The suite believes the escalation; the gate does not have it. (B) line 153 `check_drift \"$ROOT\" \"$ALL\"` replaced with `true \"$ROOT\" \"$ALL\"` -- the gate stops drift-checking entirely; green, because ModulePlanTest's `DRIFT=ok checked=8` ran-signal only proves --plan's own call at line 107 (mutating THAT call to `true` correctly fails 7/7 ModulePlanTest cases). (C) line 151 `ALL=$(derive_modules settings.gradle.kts | tr '\\n' ' ')` replaced with a hardcoded eight-name literal -- the third-hardcoded-copy defect the comment at 140-144 exists to prevent; green, because ModulePlanTest reads --plan's derive_modules call at line 102. No test invokes scripts/check-module.sh without a flag; all four doors (--plan, --select-modules, --check-drift, --list-modules) are test-only. Fix: make the gate's delta branch call the plan and consume it (single code path), or add a case that runs the bare gate against a controlled staged set and asserts the WHY/module line it prints."
+    },
+    {
+      "id": "WT15",
+      "severity": "major",
+      "file": "buildSrc/src/test/java/binjava/ModulePlanTest.java:34",
+      "summary": "Every case in ModulePlanTest and ModuleSelectionTest passes exactly ONE changed path. In production changed_files yields many. Neither `for p in \"$@\"` in is_shared_build_change nor `printf '%s\\n' \"$@\"` in select_modules is constrained beyond its first element, so the multi-path behaviour of both functions is entirely untested.",
+      "failure_scenario": "Two mutations, each green across all 38 tests: (D) is_shared_build_change:81 `for p in \"$@\"` -> `for p in \"${1:-}\"`; (E) select_modules:68 `printf '%s\\n' \"$@\"` -> `printf '%s\\n' \"$1\"`. Under (D) a commit touching `format/Foo.java` and `buildSrc/build.gradle.kts` does not escalate whenever git orders the module path first -- the M0.6 defect restored, now order-dependent and therefore intermittent. Under (E) a commit touching two module directories builds only one and still prints `ok N module(s) checked`. Add at least one case per door with two or more paths, including one where the shared-build path is not first."
+    },
+    {
+      "id": "WT16",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/ModulePlanTest.java:61",
+      "summary": "The empty-expectation case asserts `contains(\"MODULES=\" + \"\")`, i.e. `contains(\"MODULES=\")`, which is true of every possible output. The class doc claims assertions are on exact names; for the docs-only row there is no assertion at all. This also means --plan does NOT subsume --select-modules, contrary to the shape it appears to have.",
+      "failure_scenario": "Mutation (M): select_modules:69 `case \" $all \" in *\" $m \"*) echo \"$m\" ;; esac` -> `echo \"$m\"` (drop the is-it-a-real-module guard). ModulePlanTest passes 7/7 -- `docs/internal/product/x.md` now yields `MODULES=docs` and the assertion still holds. Only ModuleSelectionTest's `hasSize(0)` row catches it. Assert the full line (e.g. match `MODULES=<want>` anchored to end-of-line) and the row becomes load-bearing."
+    },
+    {
+      "id": "WT17",
+      "severity": "minor",
+      "file": "scripts/check-module.sh:41",
+      "summary": "The `checked=N` ran-signal is sound as a boolean but N itself is unconstrained: no test asserts N tracks the derived list size. ModuleDriftTest never reads the `checked=` field, and ModulePlanTest only ever sees the real, always-eight-module repo.",
+      "failure_scenario": "Mutation (H): `DRIFT_CHECKED=0` + `DRIFT_CHECKED=$((DRIFT_CHECKED+1))` inside the loop replaced by a single `DRIFT_CHECKED=8` literal before the loop -- all 38 tests green. The field degenerates from 'N modules were examined' to 'check_drift was entered'. Assert `checked=` in ModuleDriftTest's fixture cases (2 for clean, 2 for missing-build-file, 1 for missing-settings-entry) so the count is tied to a list whose size is not 8."
+    }
+  ]
+}

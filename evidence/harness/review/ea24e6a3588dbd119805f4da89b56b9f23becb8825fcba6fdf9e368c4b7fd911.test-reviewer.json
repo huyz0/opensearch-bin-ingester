@@ -1,0 +1,14 @@
+{
+  "diff_sha256": "ea24e6a3588dbd119805f4da89b56b9f23becb8825fcba6fdf9e368c4b7fd911",
+  "verdict": "pass",
+  "findings": [
+    {
+      "file": "http/src/test/java/binjava/http/BulkEndpointTest.java",
+      "line": 264,
+      "severity": "minor",
+      "failure_scenario": "When aRequestOverTheRecordCeilingIsFourThirteenEvenWhenItIsSmallInBytes moved from a StringBuilder body to a streamed one, the prior runtime self-check that the fixture's own body size is under MAX_BODY_BYTES (proving only the record ceiling, not the byte cap, causes the 413) was dropped and not replaced with an equivalent counter on the streamed bytes. Currently harmless given today's constants (~46 MiB vs 256 MiB cap, verifiable by inspection), but a future MAX_RECORDS increase could silently conflate this test with the byte-cap test with no assertion to catch it."
+    }
+  ],
+  "task": "M1.18",
+  "role": "test-reviewer"
+}

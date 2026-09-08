@@ -1,0 +1,22 @@
+{
+  "diff_sha256": "f5cfe1cec5070741045b76d43853a467808384317e0b47bb404fbb7bcf0cd9eb",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "file": "scripts/tdd_scan.py",
+      "line": 112,
+      "severity": "major",
+      "what": "check-tdd follows a rename from ANY source path, not only from one it reads as a test. `origin = renamed.get(p, p)` is used unconditionally as the before-ref, so a file that was never inside a gated tier -- docs/, src/test/resources/, src/testFixtures/java/, an attic/*.java.txt -- becomes the 'before' of a test-tier file and every test in it is subtracted from `fresh`. This is exactly the round-4 defect class the sibling scanner just fixed with one shared `reads()` predicate: test_integrity.py:97 now asks `q.endswith('.java') and TEST_PATH.search(q)` of BOTH ends of every rename, tdd_scan.py asks it of neither end. The comment at tdd_scan.py:101 asserts 'the asymmetry with test_integrity is deliberate rather than an omission' -- true of the `sources` drop-list it discusses, but it does not cover the missing origin guard, so a future reader is told the asymmetry has been thought through when this half of it has not.",
+      "failure_scenario": "Measured end to end against HEAD, both diff.renames settings, using the staged bytes. Commit 1 adds docs/drafts/FooTest.java containing two @Test methods with `assertThat(new Foo().n()).isEqualTo(3)` -- no gate looks at it, tree green. Commit 2 runs `git mv docs/drafts/FooTest.java mod/src/test/java/binjava/FooTest.java` alongside the production code the tests cover. HEAD's tdd_scan exits 1: 'FAIL these new tests were never observed to fail: binjava.FooTest#keepsItsPromise, binjava.FooTest#alsoHoldsUnderLoad'. The staged tdd_scan exits 0: 'ok no new tests in this diff'. Same result for mod/src/test/resources/binjava/FooTest.java and mod/src/testFixtures/java/binjava/FooTest.java as the origin. So non-negotiable 3 -- every new test observed red before the code -- now has a two-commit, green-tree bypass that HEAD closed, in the commit whose subject is closing a hole in that same gate. Remedy measured: adding `if not (origin.endswith('.java') and TEST_PATH.search(origin)): origin = p` after line 112 restores exit 1 on all three origins, leaves the intended integrationTest -> test relaxation at exit 0, and `./gradlew -p buildSrc test` is green with it applied -- which also shows no test in the suite constrains the current permissive behaviour."
+    },
+    {
+      "file": "baselines/review.txt",
+      "line": 12,
+      "severity": "minor",
+      "what": "The argued round-cap entry is honest about the round-4 defect (I reproduced its claim: `git mv FooTest.java FooTest.java.bak` with diff.renames off gives HEAD exit 1 and the staged code exit 1, and the round-4 draft it describes would have given exit 0), and its central claim that a split would separate `reads()` from the two call sites that make it correct is true of this diff. But two of its numbers are about to be wrong: 'Five rounds against the cap of two' and 'Round 5 reviews the delta' both need updating once round 6 exists, and 'the fix is one shared reads() predicate asked of both ends of every rename' overstates the reach -- tdd_scan.py asks it of neither end (see the major above), which is why the entry's 'convergence rather than spiral' claim is not yet supported by the tree.",
+      "failure_scenario": "A future reader auditing whether the cap-lift was legitimate reads 'five rounds' and 'no round here closed on a minor' in a commit that actually took six, and reads that the fix is one shared predicate in a tree where only one of the two scanners has it. The entry is the only durable record of why the cap was lifted, so a number in it that the tree does not support is the same class of defect M4.21's own entry records having made twice."
+    }
+  ],
+  "task": "M0.53",
+  "role": "reviewer"
+}

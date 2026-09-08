@@ -1,0 +1,37 @@
+{
+  "diff_sha256": "a06609cd758c378fedf4606a115ea81f7a029aec2a0211ce175902a0cfe025a5",
+  "verdict": "pass",
+  "summary": "Round 5 (production). Re-verified the strict-decoder change and everything it touches against the staged blobs, not the working tree. decode(encode(x)) is identity over the whole legal domain I could construct (empty endpoint, single/double/ideographic-space endpoints, DEL, C1, NBSP, U+FFFD, U+FFFF, U+10FFFF, a well-formed astral pair including U+1DC00, emoji, Long.MAX_VALUE for both longs, values containing { } : , and the literal text 'epoch'); the strict decoder rejects nothing legal and correctly refuses CESU-8 lone surrogates and overlong forms, which the old new String(bytes, UTF_8) accepted as U+FFFD. 400,000 fuzzed inputs (single/triple byte flips, truncations, random bytes, character insertions) produced zero unchecked exceptions escaping decode -- the throws IOException contract M4.3b depends on holds. Python's json module parses all three sample encodings to the same field values, so the cat-legibility justification is true. 24 mutations run against the staged LeaseTest: 23 killed by a named test, 1 survived (F2, behaviourally equivalent). Suite 454/0 failures, BUILD SUCCESSFUL; GATE_SCOPE=full ./scripts/check-module.sh ok, 8 modules. Cost: zero object-store requests added; Lease is pure encode/decode with no I/O, decodes happen once per renew per slot, so the rate scales with slots and nodes, never with records, shards, partitions or indices. Scope: the record only -- no key grammar (M4.3b), no checkpoint-pointer field (M4.8), no BinStore dependency. The U+1DC00 arithmetic checks out in all four copies: 0x1DC00 & 0xFFFF = 0xDC00 is in the surrogate range, the pair is \\uD837\\uDC00 which is what the test writes, and 32768/1048576 = 3.125% rounds to the stated 3.13%. Four minors, none blocking.",
+  "findings": [
+    {
+      "id": "R5-F1",
+      "severity": "minor",
+      "file": "format/src/main/java/binjava/format/Lease.java:315-330",
+      "title": "The strict-decoder rejection is the one decode failure whose exception tells an operator nothing",
+      "failure_scenario": "MEASURED against the staged code: Lease.decode on a lease whose podId carries one corrupt byte throws java.nio.charset.MalformedInputException: 'Input length = 1'. Every other rejection in this class names the object and echoes it -- 'not a lease object: {...}', 'lease is missing holderPodId: {...}', 'lease is not in canonical form: {...}', 'lease has a non-numeric epoch: {...}'. This one says neither 'lease' nor how long the input was. Scenario: ctl/lease/0.json acquires a corrupt byte; M4.3b's LeaseManager catches IOException on the recovery path and logs 'MalformedInputException: Input length = 1'; the operator cannot tell from the log that it was the lease, let alone which slot -- which is exactly the outcome the class javadoc says the loud refusal exists to prevent ('the cluster would stop committing with no explanation in the object itself'). java-style.md rule 13: exceptions carry what an operator needs to act. The new test aLeaseWithAMalformedUtf8ByteIsRefusedRatherThanSilentlyReplaced asserts only isInstanceOf(IOException.class), so no message is pinned here either. Wrapping the decode in catch (CharacterCodingException e) { throw new IOException(\"lease is not valid UTF-8, \" + bytes.length + \" bytes\", e); } would close it."
+    },
+    {
+      "id": "R5-F2",
+      "severity": "minor",
+      "file": "format/src/main/java/binjava/format/Lease.java:388-394",
+      "title": "Surviving mutation: longField's non-numeric guard is deletable with all 22 green",
+      "failure_scenario": "MEASURED. Mutate `if (end == from) {` to `if (false) {`, deleting the 'lease has a non-numeric <name>' throw, and LeaseTest reports found=22 ok=22 failed=0 -- I ran it. The mutant is behaviourally equivalent: with the guard gone, s.substring(from, from) is \"\" and Long.parseLong(\"\") throws NumberFormatException, which the catch three lines below rethrows as IOException('lease has a malformed epoch: ...'). So the input is still refused as an IOException and no caller sees a difference; what is lost is the specific message and the reasoning the comment records ('a lease whose epoch is a string is a lease somebody hand-edited, and guessing what they meant is how a fenced writer gets mistaken for the current one'). Round 2 addressed precisely this class of equivalent-guard mutant for the two brace guards by asserting the message, and aLeaseTruncatedByASingleByteIsRefused now does so; aMalformedOrTruncatedLeaseIsRefused, which is the test that feeds \"epoch\":\"notanumber\", still asserts only the exception type. Either assert hasMessageContaining(\"non-numeric epoch\") there, or accept that the guard is measured-redundant."
+    },
+    {
+      "id": "R5-F3",
+      "severity": "minor",
+      "file": "format/src/main/java/binjava/format/Lease.java:11-13",
+      "title": "Class javadoc points at a class that does not exist, with a link that cannot resolve",
+      "failure_scenario": "The sentence reads: 'the CAS'd acquire/renew/release orchestration lives in {@code sequencer}'s {@code LeaseManager}, which is the thing that touches {@link binjava.binstore.BinStore}'. Two checkable problems. (a) LeaseManager does not exist -- grep over every module's src finds it only in this javadoc, in the comment at Lease.java:200 and in LeaseTest.java:234, and M4.3b is `todo` in the row this same diff adds. The other two occurrences say 'M4.3b's LeaseManager'; this one is bare present tense, so a reader who follows it looks for a class that is not there. (b) binjava.binstore.BinStore is not on format's compile classpath -- format/build.gradle.kts declares no dependencies at all -- so the {@link} cannot resolve and javadoc would emit 'reference not found' (nothing catches it today because doclint is not configured, as the M4.2 row records). IndexRegistry.java:14 writes the identical sentence with {@code BinStore}, not {@link}, which is the form that works from this module."
+    },
+    {
+      "id": "R5-F4",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:219",
+      "title": "The M4.3 row narrates four review rounds and then tallies three",
+      "failure_scenario": "The row describes round 1, round 2, round 3 and round 4 by name, including round 4's two boundary findings and its catch of round 3's U+1D800/U+1DC00 naming error, and then closes: 'Three rounds, and every one found a real defect the previous round's fix had introduced or left'. The count is four. A reader auditing how expensive this task actually was -- which is the row's stated purpose, and the reason review.md rule 12 caps rounds at two -- gets the wrong number from the one sentence that states it. Related and worth a line in the commit body rather than a fix here: review.md rule 12 says two rounds is the cap and that a further blocking finding means the commit is too big and should be split; this is round 5, and the deviation is not recorded anywhere in the row."
+    }
+  ],
+  "task": "M4.3",
+  "role": "reviewer"
+}

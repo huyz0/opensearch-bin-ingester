@@ -1,0 +1,23 @@
+{
+  "diff_sha256": "b70b1b180fda66f23ab0e38b7c9d12059a677c37cdf119eb7ac461a1bb34219a",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "M0.9-r1-1",
+      "severity": "minor",
+      "file": "AGENTS.md",
+      "summary": "The new 'Start here' entry claims index-registration.md covers 'which of [the declared fields] is immutable', but the document never states an immutable/mutable split explicitly -- the closest content is a numShards-change note (starts a new stream generation) and ADR-0006's separate 'numPartitions is fixed at registration', which is a different document.",
+      "failure_scenario": "A reader follows the new link expecting an explicit immutability table inside index-registration.md, does not find one, and either re-derives it by hand (duplicating ADR-0006) or trusts a wrong guess about which fields can change without a new registration epoch."
+    },
+    {
+      "id": "M0.9-r1-2",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md",
+      "summary": "The M0.9 row still reads 'numPartitions' as the acceptance field name, but index-registration.md's wire field is 'numShards' (annotated 'Primary shard count = partition count'). The mapping is traceable via ADR-0006's own use of 'numPartitions' for the same concept, so this is not a missing field, but the row and the artefact now permanently disagree on the field's literal name.",
+      "failure_scenario": "A future reader greps the wire table for 'numPartitions' to verify M0.9 is satisfied, finds nothing, and either reopens a task that is actually done or ships a producer client using a field name the frame never carries."
+    }
+  ],
+  "notes": "Verified independently: (1) index-registration.md (landed 2d74593) contains replicationMode (enum, SEGMENT/DOCUMENT), partitioningMode (enum, explicit/routing_key/os_routing, citing ADR-0006), and numShards annotated as the partition count -- all three fields the M0.9 acceptance text names, so closing the row is not crediting unrelated work. (2) The M0.34 row's factual claims were checked against the live files: 14 hooks carry stages:[pre-commit] in .pre-commit-config.yaml, ci.yml's SKIP=check-reviewed,check-tdd leaves 12 running (matches '12 run after the two SKIPs'), and ci.yml's single 'pre-commit run --all-files' step never invokes a commit-msg stage, so check-test-integrity does not run in CI today -- matching the row's claim and M0.25's already-recorded todo. (3) The M0.34 row's aside 'which M0.25 also states one row away' is not literally true in the merged table -- M0.25 sits five rows above M0.34 (lines 40 and 45) -- but this is a wording imprecision in a backlog note, not a defect in the row's substance, so it is folded into no separate finding beyond noting it here. (4) Agree with the author's own question 3: document-reachability is a predicate over the tree and belongs in a script per non-negotiable 9; a separate backlog row for it is the right call and does not need to land in this commit. No object-store request path, wire format, or code is touched by this diff, so cost.md and the request-rate lens do not apply.",
+  "task": "M0.9",
+  "role": "reviewer"
+}

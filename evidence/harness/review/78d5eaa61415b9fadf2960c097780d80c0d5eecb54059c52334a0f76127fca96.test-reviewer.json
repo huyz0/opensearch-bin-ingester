@@ -1,0 +1,36 @@
+{
+  "diff_sha256": "78d5eaa61415b9fadf2960c097780d80c0d5eecb54059c52334a0f76127fca96",
+  "verdict": "pass",
+  "summary": "Round 11, narrow scope. TR8 and TR9 both verified closed by reproduction against the real scripts, not by reading. blankLinesAndCommentsAreSkippedNotParsed kills BOTH named skip-clause mutations, each on two independent assertions. anExclusionWithoutAReasonIsRefused pins both halves of the locator: the line-number assertion kills lineno mutations, the quoted-name assertion kills name mutations, and neither is redundant. 17 tests, 0 failures confirmed from buildSrc/build/test-results XML. No assertion weakened: CoverageGateTest.java is added (status A) and no other test file is in the diff. One minor stale count recorded below.",
+  "findings": [
+    {
+      "id": "TR10",
+      "severity": "minor",
+      "location": "docs/internal/product/backlog.md:M0.42",
+      "claim": "The M0.42 row says \"delete the clause and all 14 CoverageGateTest cases stay green\". The file now carries 17 cases (verified: tests=\"17\" in buildSrc/build/test-results).",
+      "failure_scenario": "The substance of the claim still holds -- every fixture builds a module at repo/<name>/build.gradle.kts, so no fixture has p.count('/') > 1 and deleting the clause survives all 17. But the count is now wrong by three, and a future reader re-deriving the mutation experiment against '14' will not be able to reconcile it with the tree, which is how a recorded mutation-survival claim quietly stops being checkable. Not fixed this round per review.md rule 11: the fix's surface is prose in a row that is already todo.",
+      "mutation_that_survives": "n/a -- this is a stale prose count, not a weak test"
+    }
+  ],
+  "verified_this_round": [
+    {
+      "id": "TR8",
+      "status": "closed",
+      "location": "buildSrc/src/test/java/binjava/CoverageGateTest.java:285",
+      "evidence": "Reproduced both mutations against the exact fixture (comment header / #TODO / blank / real entry) by running the real check-coverage.sh. Baseline: exit 0, 'EXCLUDED:' printed. Mutation A (skip clause -> line.startswith('#') only, dropping 'not line'): the blank line reaches parts[0] and raises IndexError; gate exits 1 and prints a Traceback -- caught twice, by startsWith(\"0\") and by doesNotContain(\"Traceback\"). Mutation B (skip clause -> 'not line' only, dropping startswith('#')): '#TODO' parses as a single-token entry and the gate exits 1 with 'baselines/coverage.txt:2  \"#TODO\" is excluded with no reason' -- caught twice, by startsWith(\"0\") and by doesNotContain(\"is excluded with no reason\"). One fixture, both mutations, redundant assertions on each. Genuinely closed."
+    },
+    {
+      "id": "TR9",
+      "status": "closed",
+      "location": "buildSrc/src/test/java/binjava/CoverageGateTest.java:348",
+      "evidence": "Reproduced four locator mutations. enumerate(open(BASELINE)) without start=1 -> 'coverage.txt:1' and malformed.append((0, parts[0])) -> 'coverage.txt:0' are both killed by contains(\"coverage.txt:2\"). malformed.append((n, BASELINE)) and substituting BASELINE for name in the format args both print '\"baselines/coverage.txt\"' and are killed by contains(\"\\\"format\\\"\"); note both of these still satisfy the line-number assertion, so the two assertions are independently load-bearing rather than one covering for the other. The only surviving substitution is parts[0] -> line, which is behaviourally equivalent for every reachable input (a malformed entry is by definition a single token after strip). Genuinely closed."
+    }
+  ],
+  "out_of_scope_confirmed": [
+    "check-gate-scope.sh gains one ALLOWED entry for coverage.py with a stated reason -- that is the mechanism the gate provides, not an assertion weakened alongside a production change.",
+    "check-harness-tests.sh run in this session: 91 harness tests pass, CoverageGateTest tests=17 skipped=0 failures=0 errors=0. The packet's evidence claim is true in the tree as staged.",
+    "Per the narrow scope, no hunt was made for surviving mutations beyond TR8 and TR9."
+  ],
+  "task": "M0.13",
+  "role": "test-reviewer"
+}

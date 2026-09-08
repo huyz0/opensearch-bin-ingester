@@ -1,0 +1,14 @@
+{
+  "diff_sha256": "7c3bd65b4ae5db332738e76d88641666621377a123a04379f512c0cbda642bda",
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/ChainReplay.java:201",
+      "summary": "Two mutations survive the suite and BOTH are equivalent under well-formed data, verified and now documented in the code rather than left for the next reviewer to re-derive. (1) Reversing the oldest-first hop replay: fold() uses Math::max and both nextSequence and seal are gated on ownEpoch, so no observable differs -- the comment now says this instead of claiming the ordering is load-bearing. (2) Dropping '&& sealed.sequence() == 0' from neverOpened: firstEntry reads key 0 specifically and seal() writes at keyFor(nextSequence), so a Seal found at slot 0 always carries sequence 0. Recorded so neither is re-hunted in a later round. No action needed.",
+      "failure_scenario": "None reachable. Stated so that a future reviewer running a mutation pass sees two survivors and does not spend a round rediscovering that they are equivalent, or -- worse -- adds a test that pins an implementation detail no behaviour depends on."
+    }
+  ],
+  "task": "M4.6e",
+  "role": "test-reviewer"
+}

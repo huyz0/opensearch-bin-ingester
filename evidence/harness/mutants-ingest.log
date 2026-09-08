@@ -1,0 +1,111 @@
+5:38:54 PM PIT >> INFO : Verbose logging is disabled. If you encounter a problem, please enable it before reporting an issue.
+5:38:54 PM PIT >> INFO : Created 2 mutation test units in pre scan
+5:38:54 PM PIT >> INFO : Sending 36 test classes to minion
+5:38:54 PM PIT >> INFO : Sent tests to minion
+/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\5:39:15 PM PIT >> INFO : Calculated coverage in 21 seconds.
+5:39:15 PM PIT >> INFO : 1 tests took longer than 2000 ms
+5:39:15 PM PIT >> INFO : Slowest test ([engine:junit-jupiter]/[class:binjava.ingest.DefaultIngestTest]/[method:noAppendIsAckedBeforeItsCommitDeltaIsDurable()]) took 20003 ms
+5:39:15 PM PIT >> INFO : Largest test ([engine:junit-jupiter]/[class:binjava.ingest.IngestCommitPathTest]/[method:theIncarnationIsMintedOncePerIngestInstanceAndDiffersBetweenTwoOfThem()]) covered 987 blocks
+5:39:15 PM PIT >> WARNING : Found more than one mutation similar on same line in a finally block. Can't correct for inlining.
+5:39:15 PM PIT >> INFO : Created 2 mutation test units
+5:40:00 PM PIT >> WARNING : Minion exited abnormally due to TIMED_OUT
+5:40:45 PM PIT >> WARNING : Minion exited abnormally due to TIMED_OUT
+5:41:10 PM PIT >> WARNING : Minion exited abnormally due to TIMED_OUT
+5:41:35 PM PIT >> WARNING : Minion exited abnormally due to TIMED_OUT
+5:42:19 PM PIT >> WARNING : Minion exited abnormally due to TIMED_OUT
+5:42:44 PM PIT >> WARNING : Minion exited abnormally due to TIMED_OUT
+5:43:09 PM PIT >> WARNING : Minion exited abnormally due to TIMED_OUT
+5:43:54 PM PIT >> WARNING : Minion exited abnormally due to TIMED_OUT
+5:44:18 PM PIT >> WARNING : Minion exited abnormally due to TIMED_OUT
+5:44:43 PM PIT >> WARNING : Minion exited abnormally due to TIMED_OUT
+5:45:08 PM PIT >> WARNING : Minion exited abnormally due to TIMED_OUT
+5:46:12 PM PIT >> WARNING : Minion exited abnormally due to TIMED_OUT
+5:46:37 PM PIT >> WARNING : Minion exited abnormally due to TIMED_OUT
+5:47:22 PM PIT >> WARNING : Minion exited abnormally due to TIMED_OUT
+5:47:47 PM PIT >> WARNING : Minion exited abnormally due to TIMED_OUT
+5:48:11 PM PIT >> WARNING : Minion exited abnormally due to TIMED_OUT
+5:48:36 PM PIT >> WARNING : Minion exited abnormally due to TIMED_OUT
+5:49:01 PM PIT >> WARNING : Minion exited abnormally due to TIMED_OUT
+5:49:25 PM PIT >> WARNING : Minion exited abnormally due to TIMED_OUT
+5:50:10 PM PIT >> WARNING : Minion exited abnormally due to TIMED_OUT
+5:50:35 PM PIT >> WARNING : Minion exited abnormally due to TIMED_OUT
+5:51:19 PM PIT >> WARNING : Minion exited abnormally due to TIMED_OUT
+5:51:44 PM PIT >> WARNING : Minion exited abnormally due to TIMED_OUT
+5:52:29 PM PIT >> WARNING : Minion exited abnormally due to TIMED_OUT
+5:52:54 PM PIT >> WARNING : Minion exited abnormally due to TIMED_OUT
+5:53:38 PM PIT >> WARNING : Minion exited abnormally due to TIMED_OUT
+/-5:53:59 PM PIT >> INFO : Completed in 905 seconds
+================================================================================
+- Mutators
+================================================================================
+> org.pitest.mutationtest.engine.gregor.mutators.returns.PrimitiveReturnsMutator
+>> Generated 3 Killed 3 (100%)
+> KILLED 1 SURVIVED 0 TIMED_OUT 2 NON_VIABLE 0 
+> MEMORY_ERROR 0 NOT_STARTED 0 STARTED 0 RUN_ERROR 0 
+> NO_COVERAGE 0 
+--------------------------------------------------------------------------------
+> org.pitest.mutationtest.engine.gregor.mutators.ConditionalsBoundaryMutator
+>> Generated 1 Killed 0 (0%)
+> KILLED 0 SURVIVED 1 TIMED_OUT 0 NON_VIABLE 0 
+> MEMORY_ERROR 0 NOT_STARTED 0 STARTED 0 RUN_ERROR 0 
+> NO_COVERAGE 0 
+--------------------------------------------------------------------------------
+> org.pitest.mutationtest.engine.gregor.mutators.VoidMethodCallMutator
+>> Generated 43 Killed 25 (58%)
+> KILLED 14 SURVIVED 10 TIMED_OUT 11 NON_VIABLE 0 
+> MEMORY_ERROR 0 NOT_STARTED 0 STARTED 0 RUN_ERROR 0 
+> NO_COVERAGE 8 
+--------------------------------------------------------------------------------
+> org.pitest.mutationtest.engine.gregor.mutators.InvertNegsMutator
+>> Generated 1 Killed 1 (100%)
+> KILLED 1 SURVIVED 0 TIMED_OUT 0 NON_VIABLE 0 
+> MEMORY_ERROR 0 NOT_STARTED 0 STARTED 0 RUN_ERROR 0 
+> NO_COVERAGE 0 
+--------------------------------------------------------------------------------
+> org.pitest.mutationtest.engine.gregor.mutators.returns.NullReturnValsMutator
+>> Generated 4 Killed 3 (75%)
+> KILLED 3 SURVIVED 0 TIMED_OUT 0 NON_VIABLE 0 
+> MEMORY_ERROR 0 NOT_STARTED 0 STARTED 0 RUN_ERROR 0 
+> NO_COVERAGE 1 
+--------------------------------------------------------------------------------
+> org.pitest.mutationtest.engine.gregor.mutators.MathMutator
+>> Generated 9 Killed 8 (89%)
+> KILLED 5 SURVIVED 1 TIMED_OUT 3 NON_VIABLE 0 
+> MEMORY_ERROR 0 NOT_STARTED 0 STARTED 0 RUN_ERROR 0 
+> NO_COVERAGE 0 
+--------------------------------------------------------------------------------
+> org.pitest.mutationtest.engine.gregor.mutators.returns.EmptyObjectReturnValsMutator
+>> Generated 1 Killed 1 (100%)
+> KILLED 1 SURVIVED 0 TIMED_OUT 0 NON_VIABLE 0 
+> MEMORY_ERROR 0 NOT_STARTED 0 STARTED 0 RUN_ERROR 0 
+> NO_COVERAGE 0 
+--------------------------------------------------------------------------------
+> org.pitest.mutationtest.engine.gregor.mutators.NegateConditionalsMutator
+>> Generated 20 Killed 17 (85%)
+> KILLED 7 SURVIVED 2 TIMED_OUT 10 NON_VIABLE 0 
+> MEMORY_ERROR 0 NOT_STARTED 0 STARTED 0 RUN_ERROR 0 
+> NO_COVERAGE 1 
+--------------------------------------------------------------------------------
+================================================================================
+- Timings
+================================================================================
+> pre-scan for mutations : < 1 second
+> scan classpath : < 1 second
+> coverage and dependency analysis : 21 seconds
+> build mutation tests : < 1 second
+> run mutation analysis : 14 minutes and 43 seconds
+--------------------------------------------------------------------------------
+> Total  : 15 minutes and 5 seconds
+--------------------------------------------------------------------------------
+> 1 tests took longer than 2000 ms
+> Slowest test ([engine:junit-jupiter]/[class:binjava.ingest.DefaultIngestTest]/[method:noAppendIsAckedBeforeItsCommitDeltaIsDurable()]) took 20003 ms
+> Largest test ([engine:junit-jupiter]/[class:binjava.ingest.IngestCommitPathTest]/[method:theIncarnationIsMintedOncePerIngestInstanceAndDiffersBetweenTwoOfThem()]) covered 987 blocks
+================================================================================
+- Statistics
+================================================================================
+>> Line Coverage (for mutated classes only): 178/201 (89%)
+>> 36 tests examined
+>> Generated 82 mutations Killed 58 (71%)
+>> Mutations with no coverage 10. Test strength 81%
+>> Ran 292 tests (3.56 tests per mutation)
+Enhanced functionality available at https://www.arcmutate.com/

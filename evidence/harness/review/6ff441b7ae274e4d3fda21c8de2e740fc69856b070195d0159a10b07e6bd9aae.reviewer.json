@@ -1,0 +1,50 @@
+{
+  "diff_sha256": "6ff441b7ae274e4d3fda21c8de2e740fc69856b070195d0159a10b07e6bd9aae",
+  "verdict": "changes-requested",
+  "summary": "The seam itself is right -- record+codec, then the writer, then discovery is the same split M4.3/M4.3b already landed in this milestone, and a codec with no writer does not violate wire-format-change (there are no old bytes and no reader to desynchronise; the skill's step 3 explicitly prescribes shipping the read side first). Three defects: M4.8b as specified writes objects INTO the prefix ChainReplay lists and blindly decodes, and no row says so; the M4.8 notes row still says `todo` with no split banner, so the tree states two different things about whether M4.8 is implementable; and the split's justification asserts a round-count universal the review record falsifies.",
+  "findings": [
+    {
+      "id": "F1",
+      "file": "docs/internal/product/backlog.md:119",
+      "severity": "major",
+      "title": "M4.8b writes checkpoints into the prefix recovery LISTs and decodes as chain entries -- no row names the collision, so the piece does not leave the tree green alone",
+      "detail": "The key M4.8b mandates is `ctl/log/<slot>/<epoch:016x>/ckpt/<seq:016x>.ckpt`. CommitLog.logPrefix() (sequencer/src/main/java/binjava/sequencer/CommitLog.java:114-116) is `<prefix>/ctl/log/0/<epoch:016x>/` -- the checkpoint keys land UNDER it. BinStore.list is a flat lexicographic listing with no delimiter (binstore-spi/src/main/java/binjava/binstore/BinStore.java:83-101), and both ChainReplay.chainEnd (line 99) and ChainReplay.applyChain (line 312) list that prefix and pass EVERY returned key to read() -> ChainEntry.decode (line 377-381). There is no `.delta` suffix filter anywhere in the file. Worse for chainEnd, which takes the LAST key in the prefix: `ckpt/...` starts with 'c', and every delta key starts with the leading '0' of a 016x sequence, so a checkpoint key sorts last and becomes the value chainEnd reads as the chain's final entry. The split is the moment to record this, because AGENTS.md tells the M4.8b implementer to read the notes for the ONE task it picks -- it will read backlog-notes.md:325 and never open ChainReplay. Neither M4.8b's backlog row nor its note mentions the prefix, a suffix filter, or a recovery test.",
+      "failure_scenario": "M4.8b lands with production defaults for K and T large enough that no existing test crosses the trigger (the row makes both configuration and asserts only the PUT count), so the suite stays green. In production the first checkpoint appears under the epoch prefix; the next takeover calls ChainReplay.chainEnd, which picks the `ckpt/...` key as lastKey and GETs it into ChainEntry.decode. Either it throws IOException -- and LocalSequencer.start releases the lease on a failed write, so the next node repeats it and the cluster can no longer elect a sequencer, the same outage shape M4.6e's depth cap produced -- or applyChain trips over the same object mid-replay and the recovered offsets are wrong (I2). Cost dimension, which is the lens that matters here: even when it does not throw, recovery and the takeover path now issue one extra GET per checkpoint under that prefix, so the request count of a failover scales with UPTIME (nothing deletes checkpoints until M7) on exactly the path M4.9 exists to bound. One clause in M4.8b -- recovery's prefix LIST must not treat `ckpt/` keys as chain entries, asserted by a recovery test run after a checkpoint exists -- fixes it."
+    },
+    {
+      "id": "F2",
+      "file": "docs/internal/product/backlog-notes.md:169",
+      "severity": "major",
+      "title": "The M4.8 notes row still reads `todo` with no SPLIT banner while backlog.md:117 says `split` -- the fact was fixed in one copy and missed in the other",
+      "detail": "backlog.md:117 now carries the banner and the state `split`. Its own [notes](backlog-notes.md#m48) link points at backlog-notes.md:167-169, which is untouched by this diff: the full source text, no banner, state `todo`. Both precedents the split follows update both copies -- backlog-notes.md:161 (M4.6) carries `\u26a0\ufe0f SPLIT into M4.6a-d; this row is the source text and is not itself implemented.` AND the state `split`, and backlog-notes.md:165 (M4.6b) carries `folded into M4.6c` in the notes exactly as the backlog row does. M4.0's own archive row (backlog-done.md:109) names this failure by name: `the recurring failure mode across all four rounds was fixing ONE copy of a fact and missing its duplicates in the tables that decide what gets built` -- and the third of the three discovery defects it records was precisely a mechanism deleted from the SPEC but left standing in the backlog.",
+      "failure_scenario": "A session greps backlog-notes.md for M4.8 (or arrives at the anchor from any of the several rows that still cite `M4.8` as the owner of the checkpoint work -- backlog-done.md:113, backlog-done.md:131, SPEC.md:286) and reads an open `todo` row carrying the whole four-part task with no statement that it is superseded. It implements checkpoints, cadence and discovery as one commit, which is the exact outcome this commit exists to prevent, and check-commit-msg.sh accepts the subject because M4.8 is still a real backlog ID."
+    },
+    {
+      "id": "F3",
+      "file": "docs/internal/product/backlog.md:117",
+      "severity": "major",
+      "title": "\"the shape that made the round cap fire on every substantive task before it\" is falsified by this repository's own review record",
+      "detail": "Measured with the same method review.md's `two-round-cap` rule prescribes -- distinct `diff_sha256` grouped by `task` across `.harness/review/<64hex>.<role>.json` -- the M4 rounds are: M4.5 (ADR + the SEAL/CONTINUE wire-format change + golden files for every shape) 1 round; M4.4 (epoch fencing) 2; M4.6d 2; M4.6f 2; M4.7b 2; M4.32 2. None of those fired the cap, and none is a bookkeeping row. Under the only other available reading -- 'every substantive task that had this shape' -- the claim is unfalsifiable and carries nothing. review.md's `two-round-cap` rule spends sixty lines establishing that round counts in this tree are measured rather than remembered, records three drafts that got such a number wrong, and quotes floors for exactly this reason; non-negotiable 4 forbids claiming a number was measured without having measured it. The precedent this split follows needs no such claim: backlog.md:104 (M4.6) justifies itself on separability alone.",
+      "failure_scenario": "backlog.md is read whole at the start of every session (that is what check-session-load.sh exists to bound), so this sentence is loaded into every session as an established fact about the review record. The next agent deciding whether to split cites it as evidence, or repeats it in a further row, and the tree accumulates a policy premise its own .harness/review contradicts -- the same way the 8-versus-7 discrepancy recorded in review.md became unreconstructible."
+    },
+    {
+      "id": "F4",
+      "file": "docs/internal/product/backlog-notes.md:325",
+      "severity": "minor",
+      "title": "\"M4.8c's discovery depends on it\" pre-supposes an order-based mechanism that M4.8c and the SPEC deliberately refuse to pre-adopt",
+      "detail": "M4.8b's note asserts that lexicographic-equals-numeric ordering is load-bearing because M4.8c's discovery depends on it. None of the three candidates M4.8c carries needs that ordering to find the newest checkpoint: a pointer in the lease object, a separate `LATEST` pointer written with putIfMatch, and deriving the cursor from the chain head all NAME the key rather than order a set of them (the third needs the hex ENCODING to construct a key, which is a different property). SPEC.md:269-292 states the bound and stops, and M4.8c's own row repeats `none pre-adopted`.",
+      "failure_scenario": "Whoever picks M4.8c reads M4.8b's note as having already settled that discovery is key-order-based, and reaches for the greatest-key family -- which without a LIST means probing keys, and with one means the naive list-and-take-last that rounds 2 and 3 of M4.0 both caught. The zero-padding is independently justified (delta keys already rely on it, SPEC.md:269-272); only the sentence tying it to M4.8c needs to go."
+    },
+    {
+      "id": "F5",
+      "file": "docs/internal/product/backlog.md:117",
+      "severity": "minor",
+      "title": "\"four separable things\" announced, three rows produced",
+      "detail": "The row lists a record format, a write trigger, a discovery mechanism, and a >5,000-checkpoint workload as four separable things, then splits into M4.8a-c. The workload is not a separable task -- it is an acceptance constraint that correctly sits inside M4.8c. The cited precedent is exact and does not have this problem: backlog.md:104 says `The four pieces are separable` and produces M4.6a-d.",
+      "failure_scenario": "Separability is the whole criterion the split is justified by, so applying it to something that was not separated weakens the justification where it is most load-bearing; a reader counting rows against the claim looks for a missing fourth row and has to reconstruct which of the four it was."
+    }
+  ],
+  "task": "M4.8",
+  "role": "reviewer",
+  "staged_tree": "ad93dc7ba8fca839bfc720cef866aaa348a2230c"
+}

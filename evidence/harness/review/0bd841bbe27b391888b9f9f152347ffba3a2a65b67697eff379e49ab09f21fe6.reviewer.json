@@ -1,0 +1,29 @@
+{
+  "diff_sha256": "0bd841bbe27b391888b9f9f152347ffba3a2a65b67697eff379e49ab09f21fe6",
+  "verdict": "pass",
+  "findings": [
+    {
+      "file": "sequencer/src/main/java/binjava/sequencer/CommitLog.java",
+      "line": 67,
+      "severity": "minor",
+      "what": "The folded-in javadoc claims \"the seal depends on a losing writer treating its loss as proof it is fenced, and {@code commit} does the opposite by construction, folding the winner's offsets in and retrying at the next sequence forever\". That is contradicted by this same file's commit(): lines 249-266 test `taken instanceof Seal` and `throw fenced(seal)` -- commit fails CLOSED on a lost slot that turns out to be a SEAL, and has done since M4.5 (its own comment there says so). The true reason the epoch-0 chain cannot be sealed is the next sentence, \"there is no leader there to fence\": LocalSequencer.start only seals when `prevEpoch >= 1`, so nothing ever writes a SEAL into epoch 0's prefix. The prose is carried over verbatim from the deleted constructor's javadoc (and from the M4.6/M4.6d backlog rows), but this commit is what makes it permanent on the surviving constructor.",
+      "failure_scenario": "A reader of the surviving constructor's javadoc concludes that CommitLog.commit folds a SEAL in and keeps writing past the barrier, and either adds a redundant fencing guard in a caller or, worse, treats I5 (\"no acknowledged commit exists beyond a SEAL in its own chain\") as not held by commit and weakens the assertion in CommitLogTest/CommitLogSealTest that pins it."
+    },
+    {
+      "file": "sequencer/src/main/java/binjava/sequencer/ChainReplay.java",
+      "line": 141,
+      "severity": "minor",
+      "what": "Production comment left naming the deleted constructor: \"the reserved unleased chain, which every `CommitLog(store, prefix)` uses\". After this commit that expression does not compile and nothing uses epoch 0 by default. The deletion is otherwise complete at the call sites but not in the prose that documents why the epoch-0 branch in replayAncestry exists.",
+      "failure_scenario": "A future reader of replayAncestry looks for the `CommitLog(store, prefix)` callers this comment says exist, finds none, and concludes the `hops.add(new Hop(epoch, upTo))` line before the `chainEpoch >= 1` loop is dead defensive code for a caller that no longer exists -- and removes it, which is the exact regression the comment records (an epoch-0 log recovering NOTHING) and which no test in the tree would catch once no epoch-0 chain is recovered."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/LeaseManagerTest.java",
+      "line": 75,
+      "severity": "minor",
+      "what": "Two comments still assert the deleted default exists: line 75 \"`CommitLog`'s 2-arg constructor writes epoch 0 for every caller that has no lease yet -- `DefaultIngest` among them\" (false since M4.6d for DefaultIngest, false since this commit for the constructor) and line 469 \"a lease at epoch 0 would collide with `CommitLog`'s no-lease default\". These are the reasoning that justifies theFirstAcquisitionStartsAtEpochOneBecauseZeroMeansNoLease and noAcquisitionEverWritesEpochZeroBecauseItIsReservedForTheUnleasedChain, so they are the prose most likely to be read when someone asks whether M4.4b's reservation is still needed.",
+      "failure_scenario": "An agent revisiting M4.4b reads these comments, verifies that neither the 2-arg constructor nor a DefaultIngest caller exists, concludes the reservation of epoch 0 is obsolete, and changes LeaseManager's cold start to mint epoch 0 -- which re-opens the I3 hole (a first leader's chain byte-identical to the historical unleased one, so \"readers of the new epoch never look there\" is void) and simultaneously breaks CONTINUE's prevEpoch==0 \"no predecessor\" sentinel that ChainReplay.inherited and replayAncestry both gate on."
+    }
+  ],
+  "task": "M4.6f",
+  "role": "reviewer"
+}

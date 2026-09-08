@@ -1,0 +1,33 @@
+{
+  "diff_sha256": "0d4477142acfcf134518ca47f808a085811f4d90a3513815c27e772c74ffaaf0",
+  "verdict": "pass",
+  "task": "M4.43",
+  "role": "test-reviewer",
+  "findings": [
+    {
+      "id": "TR-M4.43-3",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-done.md:105",
+      "title": "The claim this commit corrects in backlog-notes.md ('the mutant is 7, not 6') survives verbatim in the done row -- one copy fixed, its duplicate standing, in the commit that files M4.42 for exactly that",
+      "summary": "backlog-notes.md M4.41 now reads: '2x mutant fastRate=7 slowRate=1 (3 of 3) in one tree and fastRate=6,7,7 in another. SO THE MUTANT IS 6 OR 7, BIMODAL AT 2000ms TOO -- 2000/300 is 6.67 ... and an earlier draft of THIS sentence reported \"7, not 6\" from three runs in one tree, reproducing the row's own subject inside the correction written for it.' The M4.43 done row, edited in the same commit, still says 'Round-1 review measured them -- the mutant is 7, not 6'. Verified against the artifacts rather than assumed: my own round-1 record (.harness/review/961791a8...test-reviewer.json) measured fastRate=7 slowRate=1 in 3 of 3 forced runs at a 2000ms window, and the concurrent production review measured 6,7,7, so 'the mutant is 7, not 6' is a true report of one tree's three runs and a false generalisation. The arithmetic supports 6-or-7 and I did not re-run it: 150ms doubled is 300ms, 2000/300 = 6.67, the same non-integer that produces the already-measured 3/4 bimodality at 1000ms. Nothing actionable changes -- a floor of 9 clears both modes, honest is 13 -- so this is prose, not a wrong remedy.",
+      "failure_scenario": "M4.15's milestone review reads M4's done rows, takes 'the mutant is 7, not 6' as the settled measurement, and carries a one-tree number forward as fact -- the precise error the row exists to record. It is a minor because the open row a fix session actually loads (backlog.md M4.41 -> notes M4.41) carries the corrected 6-or-7 and the floor-of-9 conclusion, so no fix is misled; unlike M4.17's minor 2, this fact is not lost if the sentence stays. Fixing it opens a fourth round whose surface is the new clause, which is the trade the packet warns about."
+    },
+    {
+      "id": "TR-M4.43-4",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-done.md:105",
+      "title": "'BOTH ROWS ARE ABOUT THE SAME AUTHOR ERROR' is a count the same edit made stale -- three rows are now filed, and M4.44 is the same error class again",
+      "summary": "The row's first clause was corrected this round from 'the two minors' to 'File as M4.41, M4.42 and M4.44 the four minors ... an earlier draft of this row said TWO and filed three of the four'. The second clause was not: 'BOTH ROWS ARE ABOUT THE SAME AUTHOR ERROR ... a number read from ONE run and reported as a measurement ..., and a false claim corrected in one copy while its duplicate stood' still enumerates two rows and two error classes. M4.44, added in this same commit, is stated in its own row to be 'the third distinct comment in this milestone stating a measurement nobody ran' -- i.e. the first of those two classes for the third time. So the row fixes one count and leaves a second count stale in the adjacent sentence. M4.38, cited by name in this very row as the precedent, records that the remedy for this class was to NAME what it files rather than count it.",
+      "failure_scenario": "A reader of the M4 archive counts two filed rows from the sentence that explains why the paperwork was worth it, and treats M4.44 as unrelated to M4.41's error class -- so the pattern the row exists to make visible (the same author error, three times, not twice) is recorded as twice. Bounded because the row's opening clause now names all three IDs explicitly, so no row can be lost the way the drainPermits minor nearly was."
+    },
+    {
+      "id": "TR-M4.43-5",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:309",
+      "title": "The band correction is right, but the reason attached to it is not: 0.56x is no more 'expressible as a multipliedBy/dividedBy mutation' than 0.75x, and it is not derived in the test comment",
+      "summary": "The number itself checks out and this is the finding's smallest part: the round-3 test-review record derives the band algebraically -- 'any scale factor m with floor(1000/(150m)) >= 3 and floor(1000/(600m)) <= 2, i.e. roughly m in [0.56, 2.22]' -- and the test comment at LocalSequencerRenewTest.java:386 states it. 0.75x traces to 70947f0's own commit body, and is indeed not derivable from those bounds, so replacing it is correct. Two things attached to the replacement are not. (1) 'not expressible as a multipliedBy/dividedBy mutation at all': Duration.multipliedBy(3).dividedBy(4) is 0.75x and is a legal chained mutation; more to the point, the argument does not discriminate, because 0.56x is not a single-op mutation either -- both are band ENDPOINTS, not proposed mutations, and the real defect in 0.75x is that no stated bound yields it. (2) 'derived there' attributes the derivation to the test comment, which states the band without deriving it; the derivation is in the review record. Cosmetic in effect: the row now carries the right number.",
+      "failure_scenario": "A session picking up M4.41 reads 'not expressible as a multipliedBy/dividedBy mutation at all' as the test for whether a band endpoint is real, applies it to 0.56x, finds it fails the same test, and either re-opens the corrected number or discards the band argument that justifies raising the floor -- leaving the 2x case unaddressed. Low likelihood, since the actionable instructions (2000ms window, floor 9, move the slowRate bound in the same change) do not depend on the clause."
+    }
+  ],
+  "staged_tree": "a2addfb65902138eefbe6bee8e6026e278c076be"
+}

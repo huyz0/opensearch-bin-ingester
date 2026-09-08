@@ -1,0 +1,57 @@
+{
+  "verdict": "pass",
+  "diff_sha256": "b141fbf18b21357085421a5bfab2445790f98ca2bd5134fdcc5376e0cd2114d9",
+  "findings": [
+    {
+      "id": "r4-1",
+      "severity": "minor",
+      "file": "scripts/check-reviewed.sh:103",
+      "finding": "A THIRD RENDERING OF THE SAME BYPASS SURVIVES: an already-committed `rounds:<task>` line re-arms the escape whenever a staged edit makes git render it as delete+add rather than as context. MEASURED: HEAD holds `rounds:M9.1  argued for an EARLIER commit` plus one other entry; the staged version inserts a new `reviewer:R8` line and moves the rounds line, git emits `-rounds:M9.1 ...` in one place and `+rounds:M9.1 ...` in another, and the gate prints WARN ... ARGUED and exits 0 over four rounds. Sorting the file, grouping entries, or any edit that shifts the line past another does it. `aROUNDSLineALREADYCOMMITTEDDoesNOTWaiveALATERCap` asserts the opposite property in its own `as(...)` message -- 'an argument in HISTORY is not an argument for THIS diff' -- and neither it nor `aROUNDSLineAppearingOnlyAsDIFFCONTEXTDoesNOTLiftTheCap` covers the moved rendering, so the mutation survives the suite. GRADED MINOR, NOT MAJOR, and the reason is the part worth keeping: in the moved case the line DOES appear as `+` in the diff under review, so the stated purpose of the narrowing -- 'the escape is reviewed with the commit it excuses' -- still holds. What fails is the stronger claim the test's message makes. The primitive is the cause: `git diff --cached | awk /^\\+/` answers 'does this text sit on an added line', which is neither 'the argument is new' (a moved line passes) nor 'the argument is staged' (r4-2). `git show :baselines/review.txt` present AND `git show HEAD:baselines/review.txt` absent answers 'newly present' and is immune to the rendering.",
+      "failure_scenario": "Task T argues the cap and the commit lands, putting `rounds:T  reason` in HEAD. Later, any staged edit to `baselines/review.txt` that reorders it -- an author sorting the file, or moving `rounds:` entries into their own section -- makes git render the old line as removed-and-added, and the next over-cap round for T is waived by an argument written for a commit that already shipped. The WARN is invisible under pre-commit (M4.28), so nothing surfaces. This is the exact 'a growing list of rounds: entries is a signal, not a workflow' failure the same diff adds to review.md, arriving through the one rendering the two new tests do not enumerate."
+    },
+    {
+      "id": "r4-2",
+      "severity": "minor",
+      "file": "scripts/check-reviewed.sh:124",
+      "finding": "THE REMEDY IS AGAIN UNACHIEVABLE IN A REACHABLE STATE -- the same defect class the task exists to close, one level in. The message says 'argue it with a STAGED baselines/review.txt line keyed rounds:<task>  <why>'. Neither it nor review.md rule 12's new text says the line must be ADDED BY THIS COMMIT. MEASURED: after an argued commit for M9.1 lands, a further staged change for the same task refuses at round 4, and `git add baselines/review.txt` -- doing precisely what the message instructs -- is a no-op that changes nothing, so the gate keeps refusing with the same text. The only routes out are to reword or move the line (undocumented, and see r4-1) or `SKIP=check-reviewed`, which is the outcome this whole commit exists to remove. Reachable via `git commit --amend` with content changes, or any second commit under one task id. One clause closes it in both places: the line must be NEWLY ADDED here, not merely present.",
+      "failure_scenario": "An author argues the cap, lands the commit, then has to amend it with a content fix. The gate demands fresh verdicts (new hash), the round count rises, the cap fires again, and the printed remedy tells them to stage a line that is already committed. Following the instruction produces no change in behaviour -- the situation recorded in this task's own row for M4.12 -- and the author reaches for SKIP, which disables both-roles and no-unresolved-majors as well."
+    },
+    {
+      "id": "r4-3",
+      "severity": "minor",
+      "file": "scripts/check-reviewed.sh:46",
+      "finding": "THE CAP FAILS OPEN ON ANY STDERR FROM python3, because the fix for the swallowed exit status routes stderr INTO the value the arithmetic then reads: `ROUNDS=$(python3 scripts/review_rounds.py \"$SHA\" 2>&1)`. MEASURED by making review_rounds.py print one line to stderr and exit 0: the gate prints `check-reviewed.sh: line 82: [: noise\\n2: integer expected`, the `[ \"${ROUNDS:-0}\" -gt 2 ]` test fails, the cap block is SKIPPED, and the gate finishes `ok   staged bytes reviewed by ... (round noise` -- exit 0. Trigger is environmental rather than author-controlled (an interpreter DeprecationWarning, a distro or pyenv shim notice, PYTHONWARNINGS, a broken sitecustomize), which is why this is minor rather than major. One line closes it: `case $ROUNDS in ''|*[!0-9]*) fail \"review_rounds.py did not return a count: $ROUNDS\"; finish;; esac`.",
+      "failure_scenario": "On a machine where python3 emits a single warning line to stderr, a task at round 12 with no argued entry prints a bash `integer expected` diagnostic among the hook output and then `ok`, and the cap -- the thing this file was changed to make countable -- does not fire. The diff's own comment argues that a gate unable to distinguish 'nothing recorded' from 'the records contradict each other' is the shape the file exists against; this is the same shape for 'a count' versus 'a count plus noise', and in the direction that passes."
+    },
+    {
+      "id": "r4-4",
+      "severity": "minor",
+      "file": "scripts/check-reviewed.sh:125",
+      "finding": "THE PRINTED REMEDY IS GARBLED, in the gate whose task is that its printed remedy match its code. Line 125 ends `...<why it cannot be split>'. \u26a0\ufe0f Only` -- a dangling fragment left by inserting the new re-record sentence after it -- and 'Only' then starts again on line 128. VERIFIED by running the gate: the block reads '... \u26a0\ufe0f Only / \u26a0\ufe0f Staging that line MOVES the staged hash ... / them before it looks at the cap again. Only / blocking and major findings block a commit'. Two spliced sentences and a duplicated word.",
+      "failure_scenario": "An author over the cap reads the one message the gate gives them and finds a sentence that stops mid-clause before an unrelated warning. The remedy for the round cap is now the most consequential text this script prints -- it is the difference between an argued exception and a SKIP -- and it is the text a reader will skim rather than parse."
+    },
+    {
+      "id": "r4-5",
+      "severity": "minor",
+      "file": "docs/internal/standards/review.md:62",
+      "finding": "A MONOTONICALLY GROWING COUNTER IS FROZEN INTO A STANDARD, and it is already stale. I counted `.harness/review` independently: 22 of 78 tasks over the cap (correct), M4.12 at 12 and M0.13 at 11 (correct), but **182** distinct reviewed hashes, not 179 -- three more than the sentence says, in the paragraph whose own subject is measuring rather than remembering and two clauses after the correction of '21 of 78 reviewed hashes'. Recording the hash total at all buys nothing the ratio does not, and it is wrong again after the next `record`. \u26a0\ufe0f AND THE DENOMINATOR IS SOFTER THAN STATED: 90 of the 385 verdict files in `.harness/review` carry no `task` at all, so the per-task counts are an undercount of unknown size -- the M4.29 defect this same commit adds a refusal for. Worth one clause, since the number is offered as measurement. The nine SKIP commits and the ordinal claim (only M4.19 'the second time' and M4.20 'the third' carry one) I verified against the log and both are exactly right.",
+      "failure_scenario": "A later reader checks the standard's figure against the tree, finds 179 does not reproduce, and discounts the whole paragraph -- including 22 of 78, which is the load-bearing half and is correct. The paragraph was written to model measuring over remembering; a stale literal in it teaches the opposite."
+    },
+    {
+      "id": "r4-6",
+      "severity": "minor",
+      "file": "scripts/check-reviewed.sh:37",
+      "finding": "A MEASURED NUMBER IS EDITED DOWNWARD WITH NO BASIS IN THE DIFF, in the commit that loosens the cap that number justifies: 'violated on 8 of 12 tasks in one session' becomes '7 of 12'. The tree still contradicts itself -- `docs/internal/product/backlog.md:69` (M0.47, done) says '8 of 12 tasks exceeded the two-round cap' and calls it 'this repository's own record' -- and nothing in the diff says which count was measured or how. `scripts/review_rounds.py:4` already said 7 before this change, so the edit harmonises two of three occurrences and leaves the third; neither figure is reconstructible from the tree, since '.harness/review' is local and the session is gone. Given this task's subject, the honest move was to note the discrepancy rather than pick the lower number silently.",
+      "failure_scenario": "A reader asks why the cap exists, finds 7 in the gate and in review.md and 8 in the backlog row that claims to be the measurement, and cannot tell which is the record. The direction matters because it is the number offered as evidence FOR the cap, reduced by one in the change that adds an escape from it."
+    },
+    {
+      "id": "r4-7",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/ReviewRoundCapTest.java:185",
+      "finding": "TWO TEST COMMENTS NAME A MECHANISM THE DIFF DELETED. `aROUNDSLineOnlyInTheWORKTREEOfASTAGEDFileDoesNOTLiftTheCap`'s javadoc explains itself as 'the reason the staged-NAME guard alone is not enough' and describes the gate as doing a `git show :` read; `aROUNDSLineALREADYCOMMITTEDDoesNOTWaiveALATERCap` opens 'THE STAGED-NAME GUARD IS WHAT STOPS THE ESCAPE BECOMING A WORKFLOW' (line 265). There is no staged-name guard and no `git show :` in the staged script -- both were replaced by the added-lines match. Both tests still pass and still constrain something real; only their explanations point at code that is gone. Raised because `review_rounds.py`'s own new docstring in this diff makes the argument for it: 'a docstring describing a filter that is not there is worse than no docstring: it tells the next reader not to look.'",
+      "failure_scenario": "A maintainer widening the escape reads `aROUNDSLineALREADYCOMMITTEDDoesNOTWaiveALATERCap`, is told the property is held by a staged-name guard, greps for one, finds nothing, and concludes the test is vestigial -- deleting the assertion that is currently the only thing standing between an old committed argument and a later cap."
+    }
+  ],
+  "task": "M4.21",
+  "role": "reviewer"
+}

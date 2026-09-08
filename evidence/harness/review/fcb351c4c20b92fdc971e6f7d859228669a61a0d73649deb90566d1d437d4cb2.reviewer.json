@@ -1,0 +1,64 @@
+{
+  "diff_sha256": "fcb351c4c20b92fdc971e6f7d859228669a61a0d73649deb90566d1d437d4cb2",
+  "verdict": "changes-requested",
+  "summary": "R3-1 and R3-3 verified fixed. R3-3 is genuinely fixed, not reworded: the cold-start exemption is now conjunctive (no lease AND no checkpoint), so it cannot be reached with 5,000 checkpoints present. R3-1's downstream sites (test-plan row, SPEC Tasks row, cost-impact sentence, scope item 6, backlog M4.8) all now carry the zero-LIST bound with no mechanism. AC5's >=5,000 does discriminate, and the bound is now 'zero list' rather than a page count, so any list at all fails. 16 backlog rows are 1:1 with the SPEC task table. R3-2 is NOT fixed: it was removed from the SPEC and left standing in backlog.md M4.3, which still declares the lease carries lastCheckpoint{epoch,seq} 'which is what makes recovery need no LIST at all' -- the exact mechanism the SPEC and backlog M4.8 both say is unchosen, in a task that lands five rows earlier. The R3-1 failure mode (fix one copy, miss another) has recurred a fourth time, at the site R3-2 named.",
+  "findings": [
+    {
+      "id": "R4-1",
+      "severity": "major",
+      "location": "docs/internal/product/backlog.md:218 (M4.3), contradicting backlog.md:223 (M4.8) and docs/internal/product/milestones/M4/SPEC.md:279-286",
+      "title": "backlog M4.3 pre-adopts the lease-carried lastCheckpoint pointer that the SPEC and backlog M4.8 both say is unchosen -- R3-2 survives at the one site the R3-2 fix did not reach",
+      "failure_scenario": "M4.3 is implemented from its backlog row, which reads: 'The lease also carries `lastCheckpoint{epoch, seq}`, which is what makes recovery need no LIST at all'. That is declarative, in the row that defines the Lease record's shape, and it lands five tasks before M4.8. The implementer therefore ships `ctl/lease/<slot>.json` containing lastCheckpoint and a writer that updates it at checkpoint time -- a second writer on the one CAS object whose lost race IS the fencing signal, which is precisely the hazard round 3 identified and which backlog.md:223 (M4.8) names in its own candidate list as a reason NOT to pre-adopt it ('none pre-adopted'). Two consequences. (a) M4.8's mandated ADR is decided before it is written: the choice is already in the tree, and an ADR that ratifies a fait accompli is not a decision record. (b) If M4.8's ADR instead chooses the `LATEST` pointer or the chain-head derivation, removing lastCheckpoint from an already-shipped lease object is a wire-format change on a durable object under non-negotiable 8 -- format, every reader, every writer, the fakes, the golden files and the ADR in one commit -- bought for nothing. Round 3's diagnosis was that the spec was specifying a mechanism it need not contain; the mechanism was deleted from the spec and left in the backlog, which is the document that actually decides what gets built. Fix: delete the lastCheckpoint clause from backlog.md:218 and let M4.3 build a lease whose contents are epoch, holder, expiry -- leaving the cursor, if any, to M4.8's ADR."
+    },
+    {
+      "id": "R4-2",
+      "severity": "minor",
+      "location": "docs/internal/product/milestones/M4/SPEC.md:123-124",
+      "title": "Scope item 2 ends in a truncated sentence, 'The lease also', where the lastCheckpoint clause was cut",
+      "failure_scenario": "Scope item 2 reads '... `putIfMatch` to take over an existing expired one or to renew. The lease also / Epoch is a **counter, not a clock**'. The sentence stem 'The lease also' has no predicate. A reader of a NORMATIVE scope item cannot tell what the lease also does, and a reader who cross-references backlog.md:218 (see R4-1) will complete it as 'also carries lastCheckpoint' -- restoring by inference the design the spec deliberately deleted. Fix with R4-1 in the same edit: delete the stem, or replace it with an explicit statement that the lease's contents beyond epoch/holder/expiry are M4.8's to decide."
+    },
+    {
+      "id": "R4-3",
+      "severity": "minor",
+      "location": "docs/internal/product/milestones/M4/SPEC.md:272-277 and 291-294",
+      "title": "The tier-3 / R15 LIST-ceiling paragraph is stated twice within twenty lines, once on each side of the cold-start note",
+      "failure_scenario": "Both paragraphs assert 'recovery is tier 3 of M5's fallback ladder, run by up to 300 plugin nodes against cost.md R15's ~1 LIST/s ceiling' with the same conclusion about scanning at fan-out. A later amendment that corrects one (the ladder moves, the node count changes, R15 is renumbered -- cost.md:10-13 warns that renumbering silently rewrites every citation) will correct one copy and leave the other, which is the same defect class this task has now hit four times. Fix: keep the copy inside 'The bound' paragraph, delete the one after the cold-start note."
+    },
+    {
+      "id": "R4-4",
+      "severity": "minor",
+      "location": "docs/internal/product/milestones/M4/SPEC.md:296-311 (Design), :492 (Tasks M4.5), :452 (test plan) -- absent from Scope and from the acceptance criteria",
+      "title": "The SEAL/CONTINUE wire-format change is in the Design, the Tasks table and one T0 row, but in no scope item and no acceptance criterion",
+      "failure_scenario": "R2-3 found CONTINUE demanded by a test row while owned by no scope item, criterion or task. It now has a task (M4.5) and a design section, but Scope 'In' items 1-11 do not mention it and none of acceptance criteria 1-11 assert it. AC3 exercises SEAL's behaviour incidentally via the two seal branches; nothing asserts CONTINUE, nothing asserts the version bump with v0 still parsing, and nothing asserts golden files for every shape. M4.15's VERIFIED.md enumerates the acceptance criteria (check-milestone-verified.sh enforces enumeration), so the milestone's only wire-format change -- the one non-negotiable 8 and the wire-format-change skill exist for -- is recorded nowhere in the completion evidence, and a SEAL variant that silently stops parsing v0 deltas ships with every criterion green."
+    },
+    {
+      "id": "R4-5",
+      "severity": "minor",
+      "location": "docs/internal/product/milestones/M4/SPEC.md:167-168",
+      "title": "Out-of-scope note has self-fencing wired one milestone before the number it needs is measured",
+      "failure_scenario": "'It needs a latency SLO that M9 measures; the mechanism it uses -- voluntary release -- ships here, so M8 wires a policy rather than building a path.' roadmap.md puts M8 at Resilience and M9 at 'Cost and performance proof; NFR-1/4/5 measured, not modelled'. M8 cannot wire a policy whose threshold M9 produces. Whoever plans M8 reads this as an M8 obligation, finds no SLO, and either invents a threshold (the thing measurement-deferred constants exist to prevent) or drops F8 silently. One of the two milestone numbers is wrong."
+    },
+    {
+      "id": "R4-6",
+      "severity": "minor",
+      "location": "docs/internal/product/backlog.md:215 (M4.0)",
+      "title": "The M4.0 row records round 1 exhaustively and does not say rounds 2, 3 and 4 happened",
+      "failure_scenario": "The row states 'Round-1 review returned 1 blocking + 5 major, all fixed before commit' and lists all six. Rounds 2 and 3 found six further majors, and their content is scattered into the rows they touched (M4.3 carries R2-2, M4.5 carries R2-3, M4.6 carries the redrive bound, M4.8 says 'three review rounds') -- but the M4.0 row, the one a reader opens to learn what this task's review history was, reads as a single round. It also records round-1 finding (2) as 'newest-checkpoint discovery was unspecified ... all fixed', while the shipped spec deliberately leaves the mechanism unspecified and delegates it. The precedent in this file (M3.5, M3.7) is to record each round in the row."
+    }
+  ],
+  "verified_from_previous_rounds": [
+    "R3-1 FIXED at every downstream site: no 'O(1) pages', no startAfter-based discovery and no page-count bound survives anywhere in the diff. SPEC test-plan row :452 now reads 'zero list calls with >=5,000 checkpoints'; SPEC Tasks M4.8 :498 reads 'zero list calls -- mechanism chosen here and recorded in an ADR'; scope item 6 reads 'a bounded discovery path'; the cost-impact sentence reads 'free of LISTs entirely'; backlog M4.8 :223 matches. SPEC and backlog agree with AC5 on the bound.",
+    "R3-2 NOT FIXED -- see R4-1. Removed from the SPEC, left standing in backlog.md:218.",
+    "R3-3 GENUINELY FIXED, not reworded. The exemption is now conjunctive -- SPEC:288 'no lease, no checkpoint, no chain', AC5 'no lease, no checkpoint' -- so a voluntary release or takeover that destroys only the lease does not reach it while checkpoints exist. With >=5,000 checkpoints present the exemption is unreachable by construction. Note the two statements of the exemption differ by one clause ('no chain'); AC5's is the looser and is still sound, since with no checkpoint present there is nothing to discover.",
+    "Round-3 minors CONFIRMED FIXED: the Tasks table now carries the two-acquisition-paths wording (:491) matching backlog M4.3 on putIfAbsent-vs-putIfMatch, the CONTINUE test row (:452) is matched by Tasks M4.5 (:492) and backlog M4.5; and .agents/skills/review/SKILL.md:93 is named in the stale-citation list at SPEC:23 -- verified against the file, which does read 'invariants (I1-I4)'."
+  ],
+  "questions_answered": [
+    "Internal consistency: AC5, the T1 test-plan row, Tasks M4.8, scope items 6 and 7 and the Cost impact section now all state the same zero-LIST bound. The only residue is SPEC:370 'Checkpoints reduce that LIST's span' sitting in the same sentence as 'free of LISTs entirely' -- vestigial from the pre-delegation design, not worth a finding on its own but worth deleting with R4-3.",
+    "Implementable: the M4.8 delegation IS sufficient, not a moved gap. The bound is stated, the three candidates are named with their costs and failure modes, and the ADR is mandated -- an implementer can start. But the delegation is defeated by backlog M4.3 (R4-1), which decides it first.",
+    "AC5 discriminates: at a 1,000-key page size (corpus 02-partition-bloom-in-key.md:47, 06-compaction-and-retention.md:92) 5,000 checkpoints is 5 pages, so list-and-take-last costs >=5 lists. More decisively, the bound is now ZERO lists rather than a page count, so any list at all fails -- the >=5,000 workload is now belt-and-braces rather than load-bearing.",
+    "16 backlog rows M4.0-M4.15 are 1:1 with the SPEC Tasks table, IDs and content matching, with the single exception of M4.3 (R4-1).",
+    "Cost lens: no request rate in this spec scales with records, shards, partitions or indices. The lease renews at ~0.33 PUT/s per slot (S=1); checkpoints cost one PUT per K deltas; commit batching is one delta per window across all pods and streams, asserted by AC9 on the pod dimension specifically; discovery and recovery are zero-LIST. R2 and R15 are both cited accurately against cost.md."
+  ],
+  "task": "M4.0",
+  "role": "reviewer"
+}

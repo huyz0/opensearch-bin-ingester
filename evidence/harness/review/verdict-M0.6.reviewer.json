@@ -1,0 +1,34 @@
+{
+  "diff_sha256": "af1885735ffa37f775b6300d0c4dcc22cf25785e74ad9d5b800200a7f482de2c",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "W1",
+      "severity": "major",
+      "file": "scripts/check-module.sh:32",
+      "summary": "The new ALL regex trades MT12's silent-drop trigger for a new one it did not have before: anchoring on `,?[[:space:]]*$` means any trailing text after a module entry -- an inline comment being the obvious case -- drops that module silently. Verified against the real derivation: with `    \"plugin\", // the OpenSearch plugin` in settings.gradle.kts, the OLD expression derives all 8, the NEW one derives 7. The comment at lines 29-31 says the trigger was removed; it was exchanged, and the replacement is at least as likely as the one it fixes, given this file's own commenting style. `^[[:space:]]*\"[a-z][a-z-]*\"[[:space:]]*,?` (no end anchor) handles the trailing-comma, no-comma, inline-comment and CRLF cases -- verified against all four.",
+      "failure_scenario": "Someone annotates the last entry in settings.gradle.kts: `\"plugin\", // the OpenSearch plugin`. ALL is now seven names. `GATE_SCOPE=full scripts/check-module.sh` prints a green `ok 7 module(s) checked` while `plugin` -- the one module carrying architecture.md rule 2, no cloud SDK in the OpenSearch JVM -- is never resolved. In the delta path a commit touching only `plugin/**` matches nothing in ALL and prints `ok no module changed`, so an AWS SDK added to the plugin lands green. This is verbatim the failure the comment at lines 24-28 exists to prevent."
+    },
+    {
+      "id": "W2",
+      "severity": "major",
+      "file": ".pre-commit-config.yaml:65",
+      "summary": "The placement comment claims the hook \"sits after the text gates -- they cost 412 ms together\", but it is inserted 4th of 14, ahead of nine text gates: check-links, build-index-check, check-terminology, check-license-headers, check-dependency-licenses, check-metric-cardinality, check-test-budget, check-file-size and check-tdd. Only two text gates precede it (check-portability, check-gate-scope); the third predecessor, check-harness-tests, is itself a Gradle hook. Measured on this tree, the gates that actually precede it cost 0.26 s and the ones that follow cost the rest; the full text-gate set measures 0.33 s (delta) / 0.80 s (full), so I could not reproduce 412 ms for any subset either. The stated cost-ordering rationale and the implemented ordering disagree.",
+      "failure_scenario": "A commit touches `format/**` and breaks a relative markdown link. The contributor waits out `:format:build` plus two `:format:dependencies` invocations (about 1.5 s warm, and up to 11.1 s measured when the change touches gradle/ or settings.gradle.kts and all eight modules are built) before the 10 ms check-links gate tells them the actual problem -- the exact inversion the comment says it is avoiding. Worse, the next author adding an expensive gate reads this comment as the map of where the text gates end and places their hook by it, compounding the error."
+    },
+    {
+      "id": "W3",
+      "severity": "minor",
+      "file": "AGENTS.md:198",
+      "summary": "M0.6 says \"and CI\"; there is no `.github/` and CI is M0.7, so the CI half is undelivered -- which is defensible, since the config header's design means M0.7 picks this hook up for free. What is not defensible is that this diff also deletes `check-module.sh` from the \"invoke by hand, from a skill, or from CI\" line, so after this commit no file in the tree associates check-module with CI at all, and the header's enumerated \"three exceptions that are stated rather than papered over\" (.pre-commit-config.yaml:14-37) was not extended to say this hook is delta-routed and checks nothing unless CI sets GATE_SCOPE=full.",
+      "failure_scenario": "M0.7's author writes the workflow from the exception list at .pre-commit-config.yaml:14-37, which now says nothing about check-module. CI runs `pre-commit run --all-files` with an empty index and no GATE_SCOPE; check-module takes the delta branch, finds no staged files, prints `ok no module changed (changed files only -- CI runs GATE_SCOPE=full)` and passes vacuously on every pull request -- green, and having resolved zero classpaths. This is the same vacuous-pass hole the header already documents for check-reviewed, reintroduced for a gate whose whole purpose is a classpath assertion."
+    },
+    {
+      "id": "W4",
+      "severity": "minor",
+      "file": "docs/internal/standards/build.md:105",
+      "summary": "This commit falsifies a standing warning in build.md that it does not update: \"⚠️ The saving is currently nil -- the L0 suite is ~525 ms in both modes\". Measured here, L0 is unchanged for a docs-only commit (check-module exits before any gradlew call -- it does NOT pay Gradle startup), about 1.5 s for a one-module commit, and 11.1 s warm when the shared build moves and all eight modules build. The delta-vs-full saving is now the largest in the repository, not nil.",
+      "failure_scenario": "Someone sizing the next L0 gate reads build.md's 525 ms baseline, concludes there is ~89 s of headroom and adds a 30 s gate, not knowing the true worst case is already 11 s warm and considerably more on a cold WSL2 daemon -- the case build.md's own memory section says kills sessions."
+    }
+  ]
+}

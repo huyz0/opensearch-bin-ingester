@@ -1,0 +1,41 @@
+{
+  "diff_sha256": "f278e6763e083922c02b5e3d1492430a144842aa3a325c792a1cc05633448095",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "W14",
+      "severity": "blocking",
+      "file": "scripts/check-module.sh:100-116",
+      "summary": "--plan is a SECOND composition of the helpers, not the production composition. It exits at line 116 and never executes hdr (:136), check_drift (:153) or the selection/WHY block (:200-201), so ModulePlanTest constrains a parallel copy. The comment at :104-105 -- 'The gate's CALL to check_drift, not just the function' -- asserts --plan's own call, not the gate's.",
+      "failure_scenario": "Verified by mutation against the staged bytes: replacing :153-154 (check_drift \"$ROOT\" \"$ALL\"; [ \"$FAILED\" -eq 0 ] || finish) with `true`, and :200 with MODULES=\"\", leaves `--plan buildSrc/build.gradle.kts` printing byte-identical output (DRIFT=ok checked=8, MODULES=<all eight>). bash -x confirms --plan reaches `exit 0` without ever entering the gate body. So the gate can be made to skip drift entirely, or to select no module on a shared-build change -- the exact SIGPIPE-class regression this round exists to close -- with ModulePlanTest, ModuleSelectionTest, ModuleDriftTest and ModuleListDerivationTest all green. Fix: one plan() function that computes ALL/DRIFT/WHY/MODULES; the gate consumes its variables and --plan prints them."
+    },
+    {
+      "id": "W15",
+      "severity": "major",
+      "file": "scripts/check-module.sh:47",
+      "summary": "check_drift's `for f in \"$root\"/*/build.gradle.kts` is an unscoped filesystem walk. check-gate-scope.sh cannot see it -- its detector matches only `find `, `glob.glob(` and `os.walk(` -- and check-module.sh carries no ALLOWED waiver, so that sibling gate passed vacuously on the one commit it exists to catch. Its header requires the waiver line, with its reason, in the same commit as the script it waives.",
+      "failure_scenario": "A gitignored reference clone at $ROOT/OpenSearch/ containing a build.gradle.kts -- the scenario check-gate-scope.sh's own header names -- fails every commit with 'OpenSearch has a build.gradle.kts but is not in settings'. Reproduced against the identical code path: `--check-drift` on a tree with an untracked sibling directory exits 1 with FAIL refclone. W12 answer: no, the glob is not acceptable. workspace_files DOES express this relationship, because 'present but unlisted' can only be committed if the file is tracked; `workspace_files '*/build.gradle.kts'` lists all eight plus buildSrc, and needs a depth-1 filter (grep -E '^[^/]+/build\\.gradle\\.kts$') so the staged drift fixtures under buildSrc/src/test/resources/ do not become false positives. Untracked build files are not part of the commit under test and must not fail it."
+    },
+    {
+      "id": "W16",
+      "severity": "minor",
+      "file": "scripts/check-module.sh:156",
+      "summary": "W11 is not fixed as described. The empty-list guard is still `[ -n \"$ALL\" ]` and still sits AFTER check_drift at :153, not before it, and still uses $ALL rather than ${ALL// /}.",
+      "failure_scenario": "If derive_modules ever returns nothing (settings.gradle.kts renamed, or an inline `include(\"a\",\"b\")` form the sed range never terminates on), check_drift's second loop emits eight 'X has a build.gradle.kts but is not in settings' FAILs and `[ \"$FAILED\" -eq 0 ] || finish` exits at :154, so :156 is unreachable. The operator is pointed at all eight module directories instead of at the broken parser, which is the diagnostic the line was written to give."
+    },
+    {
+      "id": "W17",
+      "severity": "minor",
+      "file": ".pre-commit-config.yaml:65-70",
+      "summary": "W13: the routing shape is confirmed (docs-only genuinely invokes no gradlew -- measured 0.03 s; the only gradlew reference before the early exit is the `[ -x ./gradlew ]` test). The point values should not stay. 11.0 s here vs 15.2 s on another machine for the same routing case is itself the argument against a point value in a checked-in comment, and both are warm-daemon numbers while the conclusion 'Inside build.md's 90 s L0 budget' is stated unconditionally.",
+      "failure_scenario": "A developer's first commit after a WSL2 session kill -- the case build.md exists to discuss -- starts a cold daemon and is covered by no number here, so a reader trusts a 90 s budget claim whose only evidence is the warm path. Give a range with the warm caveat, or drop the seconds and keep the routing fact. Separately, docs/internal/standards/build.md:105-113 splices 'This exists for the gates that are coming' onto the end of the new all-or-nothing paragraph, where 'This' now binds to the saving rather than to delta mode."
+    },
+    {
+      "id": "W18",
+      "severity": "minor",
+      "file": "AGENTS.md:217",
+      "summary": "The 'and CI' half of M0.6 is discharged by a prose row asserting 'CI sets GATE_SCOPE=full to build all eight'. No .github/ exists, and M0.7's backlog line still reads 'GitHub Actions workflow running `pre-commit run --all-files`' verbatim -- backlog.md is not staged, so nothing in this commit makes M0.7 honour the row.",
+      "failure_scenario": "M0.7 is implemented literally: the workflow runs `pre-commit run --all-files` with no GATE_SCOPE, check-module takes the delta path against an empty staged diff, and CI prints 'ok no module changed (changed files only -- CI runs GATE_SCOPE=full)' having built nothing. Green, permanently, on the gate the milestone was for. Amend the M0.7 backlog line to name GATE_SCOPE=full."
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "diff_sha256": "a0f5ee12dd18744629b530571a7ea5e400ae7555198e2fa199574e5b8d5aa2e1",
+  "verdict": "pass",
+  "summary": "Delta since the round I passed is javadoc, docs and one baselines line -- confirmed by git diff against the recorded staged_tree 2de2179: the only Java change is two javadoc paragraphs on SEEDS and BUDGET_MILLIS. I re-measured every new claim rather than trusting the round: the sweep runs 1000 seeds, 74172 readers judged, 15390 ms on this box (row says 14.6s -- same magnitude, shared machine); the systemProp.sweep.seeds=3 path the new SEEDS javadoc and M0.89's notes describe reproduces exactly (sweep: 3 seeds in 293 ms, BUILD SUCCESSFUL); ci.yml has no test job. check-session-load is green (M4.51 row now under the 600-byte cap), check-links resolves the new #m089 and #m451 anchors. The corrected baselines sentence now holds round-by-round against .harness/review: rounds 3-9 each carry an assertion-that-cannot-fail finding, round 4 (28bc2c0) carries one -- fenced writers absent from the ack trace -- alongside the refuted-pipelining-claim prose, which is what the weakened sentence now says; and the deleted 'both reviewers measured a one-token rewrite green at 10 seeds' clause was the false half, with the replacement 'both reviewers found it independently' confirmed by aae3b85's two verdicts. The strengthened AckOrderTest assertion kills its named mutant by inspection of the format string at AckOrderInvariants.java:118 -- swapping the terms yields 'epoch 5 acked sequence 2' against contains('epoch 2 acked sequence 5'). No assertion was weakened anywhere in the delta. Two minors, neither a wrong result.",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSweepTest.java",
+      "line": 262,
+      "title": "the failing-seed assertion's description still says 'every violation names the seed' -- the exact claim this round corrected one file over",
+      "failure_scenario": "The archive row was rewritten this round to 'Every FAILING SEED is reported on one line -- its first violation plus a count of the rest', which is what the loop at line 182 does. The as(...) on the assertion that actually reports it was not: it still reads 'every violation names the seed that reproduces it'. That string is printed ONLY on red, i.e. to exactly the reader chasing a failing seed, and it tells them every violation is on the list. A seed with 40 violations emits one line plus '(+39 more on this seed)', so the reader looks for 39 lines that were never written and concludes the report was truncated by the runner rather than by design. Not a surviving mutation: it is a description, not a predicate -- the assertion itself (failing isEmpty) is correctly pinned and no mutation of the loop survives it. Recorded as prose because it is the same fact in two copies with one updated, which baselines/review.txt records as this author's named recurring failure mode.",
+      "suggestion": "Make the description say what the loop emits: 'every FAILING SEED names itself, first violation plus a count of the rest'."
+    },
+    {
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSweepTest.java",
+      "line": 146,
+      "title": "ANSWER TO THE QUESTION ASKED: the objection to Assumptions.abort holds only for aborting BEFORE the sweep, not after it",
+      "failure_scenario": "The reasoning given -- 'aborting when the property is set destroys the bisect knob, since the test would not run at all' -- is correct for an abort placed at line 146, and I accept it there. It does not cover the variant: run the whole sweep, assert every invariant and every SEEDS*k floor, and abort on the LAST line when System.getProperty(\"sweep.seeds\") != null. The bisect knob survives intact (all 1000-seed logic runs at whatever count was asked, the failing seed still reds), and JUnit reports the run as aborted rather than passed, so the failure this guards against -- a green CI run that was actually a 3-seed sweep because a tracked gradle.properties set the property -- becomes visible in the report instead of indistinguishable from a full run. I still agree M0.89's grep is the stronger remedy and is rung 1; this is not a request to add the abort, only a correction to the stated reason, since the question was asked directly. Nothing here blocks: MEASURED, systemProp.sweep.seeds=3 in the tracked gradle.properties gives 'sweep: 3 seeds in 293 ms' and BUILD SUCCESSFUL today, which is the hole both halves agree exists.",
+      "suggestion": "Either leave it to M0.89 as staged, or narrow the javadoc's reason to 'aborting BEFORE the sweep destroys the knob' so the after-the-sweep variant is not silently ruled out for the next hand."
+    }
+  ],
+  "task": "M4.13",
+  "role": "test-reviewer",
+  "staged_tree": "924876a7065e968801fe88f8803659ee060cd8ce"
+}

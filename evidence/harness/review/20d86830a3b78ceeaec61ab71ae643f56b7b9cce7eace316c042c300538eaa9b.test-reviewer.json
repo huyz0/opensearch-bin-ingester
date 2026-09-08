@@ -1,0 +1,36 @@
+{
+  "diff_sha256": "20d86830a3b78ceeaec61ab71ae643f56b7b9cce7eace316c042c300538eaa9b",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "M0.53-tr-1",
+      "severity": "major",
+      "file": "buildSrc/src/test/java/binjava/RenameBlindnessTest.java:151 (and 178), covering scripts/git_renames.py:33",
+      "summary": "Only the STAGED branch of rename_map() is exercised. Both tests build the fixture with the move left in the index and invoke the gate with no CHECK_RANGE, so the `[base, 'HEAD'] if base else ['--cached']` line is only ever taken down its `--cached` arm. Mutating it to `args += ['--cached']` unconditionally -- i.e. ignoring `base` -- leaves the whole harness suite green (measured: 200 tests, BUILD SUCCESSFUL, combined with three other mutants), while `CHECK_RANGE=<base> scripts/check-test-integrity.sh` on the very same moved-and-gutted commit prints `ok no test weakened, disabled or removed alongside the production change` and exits 0. Measured both sides by hand in a scratch repo built to the fixture's exact shape: unmutated CI mode FAILs with `strength fell 3 -> 1`, mutant CI mode passes. An argument-order swap to `[ 'HEAD', base ]` is a second survivor of the same class. AGENTS.md's gate table says check-test-integrity runs in CI ONLY with CHECK_RANGE, so the mode with no test is the mode that runs on every push. Fix is small and reuses the fixture: commit the move, capture the pre-move sha, run the gate with CHECK_RANGE set, assert the same FAIL.",
+      "failure_scenario": "Someone simplifies rename_map to always diff the index (or reverses base/HEAD) while refactoring. Every harness test stays green, pre-commit still catches a moved-and-gutted test locally, and CI -- the only place the gate runs on a range -- silently returns to full rename-blindness: a `git mv` plus a gutted assertion pushed straight through a green pipeline, which is precisely the defect M0.53 exists to close."
+    },
+    {
+      "id": "M0.53-tr-2",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/RenameBlindnessTest.java:117",
+      "summary": "The `-M` flag is documented in git_renames.py as deliberately explicit ('diff.renames is configuration and therefore not the same on every machine') but the fixture never disables it: `git init` inherits the machine's config, and git >= 2.9 has diff.renames on by default. Measured: `git diff --cached --name-status` WITHOUT -M scores the fixture R091 identically, and deleting `-M` from rename_map leaves the whole suite green. So the one claim the flag makes is untested. One line in the fixture buys it -- `git config diff.renames false` next to the user.email/user.name lines -- which both kills the drop-`-M` mutant and stops the test's outcome depending on the reviewer's ambient git config.",
+      "failure_scenario": "`-M` is dropped in a cleanup ('git detects renames by default'). Suite green everywhere. A developer or CI image with `diff.renames=false` (or a future git default change, or a large-diff rename limit) then runs a rename-blind gate while the tests assert it is not."
+    },
+    {
+      "id": "M0.53-tr-3",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/RenameBlindnessTest.java:190-193",
+      "summary": "aMovedTestIsNotMistakenForANEWOneNeedingAFreshRedRecord asserts only ABSENCE (no id in output) plus exit 0, so it cannot distinguish 'the scanner followed the rename' from 'the scanner never looked at the file'. Concrete survivor, measured on the full suite: change tdd_scan.py's TEST_PATH to `r'/src/(?:test|clusterTest)/java/'` -- dropping integrationTest -- and the moved file is filtered out entirely, the gate prints `ok no new tests in this diff`, exit 0, and BUILD SUCCEEDS. Nothing else in the repo constrains tdd_scan's integrationTest arm (RedRecordWiringTest's fixture lives under /src/test/). Note that merely adding `.contains(\"no new tests in this diff\")` does NOT kill it, since an empty path list prints the same line; the discriminating shape is to add one genuinely NEW method to the moved file and assert the scanner demands a record for exactly that id and for none of the three that moved -- positive proof the file was examined, plus the negative that already exists. The rename-blind mutation itself IS caught (verified: reverting `renamed.get(p, p)` to `p` in both scanners fails exactly these two tests and nothing else, 200 tests, 2 failed), which is why this is minor and not major.",
+      "failure_scenario": "A future edit to TEST_PATH, to the `paths` filter, or an early return in check() stops tdd_scan examining moved/integrationTest sources at all. This test still passes -- silence is what it asserts -- and the gate reports `ok no new tests in this diff` on a commit full of unrecorded new tests."
+    },
+    {
+      "id": "M0.53-tr-4",
+      "severity": "minor",
+      "file": "scripts/git_renames.py:41",
+      "summary": "The `parts[0].startswith('R')` guard is unconstrained: dropping it leaves the whole harness suite green (measured). Under `-M` alone only R lines carry three tab-separated fields, so the guard is defence-in-depth today and only becomes load-bearing if `-C` (copy detection) is ever added, at which point a C-line would be recorded as a rename with no test noticing. Either accept it as unfalsifiable-by-construction and say so in the docstring, or cover it -- a copied file plus `-C` in a fixture line would do.",
+      "failure_scenario": "Someone adds `-C` to the diff invocation, or a future git status letter grows a third field. Copies start being treated as renames, `before` is taken from the wrong blob, and every test in the copied file reads as pre-existing -- the same silent-pass class M0.53 fixes -- with no test failing."
+    }
+  ],
+  "task": "M0.53",
+  "role": "test-reviewer"
+}

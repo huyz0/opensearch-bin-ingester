@@ -1,0 +1,39 @@
+{
+  "diff_sha256": "3893ebde7112a21072707c2cf5a5be795c7d4a3d911263c861156ec836931a2f",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "TR-M4.17-6",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/LocalSequencerRenewTest.java:403",
+      "failure_scenario": "TR-M4.17-2 is closed for the mutations it named -- I re-measured all four independently, forcing execution with --rerun-tasks and reading TEST-*.xml every time: multipliedBy(4) -> 1 failure (fastRate), constant Thread.sleep(200) -> 1 failure (slowRate), ofDays(1) -> 1 failure (liveness poll), dividedBy(100) -> 1 failure (fastRate). But the two bounds together still only pin the wiring to within a factor of ~2. MEASURED SURVIVING MUTATION: replace LocalSequencer.java:174 sleepFor(leases.renewInterval()) with sleepFor(leases.renewInterval().multipliedBy(2)). Whole :sequencer:test suite green (28 classes, 0 failures), and the class alone green 5/5 on an idle machine with instrumented values fastRate=3 slowRate=0 every run -- the 2x mutant lands EXACTLY on the inclusive floor isBetween(3L, 30L). Algebraically the surviving band is any scale factor m with floor(1000/(150m)) >= 3 and floor(1000/(600m)) <= 2, i.e. roughly m in [0.56, 2.22]. multipliedBy(2) is not a harmless mutation: LeaseConfig only refuses renewInterval >= ttl, so a legal renewInterval of 9s against a 10s ttl becomes an 18s renew and M4.17's own defect is reinstated with the fix in place. CONSEQUENCE FOR THE STAGED PROSE: baselines/review.txt rounds:M4.17 says 'with a second sequencer at a different interval so no single mutation satisfies both' -- that sentence is measurably false as written. Cheapest remedy, if taken: raise the floor from 3 to 4, which kills 2x while leaving the honest value of 7 with 1.75x downward slack. Recorded as minor rather than major because the unbounded case round 2 found is genuinely gone and the residual is a bounded factor of two; the false sentence in baselines/review.txt is the part worth correcting in the commit body."
+    },
+    {
+      "id": "TR-M4.17-7",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/LocalSequencerRenewTest.java:113",
+      "failure_scenario": "The drainPermits comment states a measurement I could not reproduce: 'Measured: with a stale permit present, the fence-on-IOException mutation survives again.' I injected the stale permit (an extra ticker.parked.release() immediately before store.startFailing()) and applied the fence-on-IOException mutation (fenced = true inside catch (IOException)). With drainPermits REMOVED the mutant still DIES, 3/3 -- but at 20.007s, on 'the renewer survived the failure and renewed after it', not on the seq.commit() the rendezvous exists to guard. With drainPermits present it dies on the intended path in ~0.02s. So drainPermits is a real and correct hardening -- it is what keeps the direct assertion the detector rather than the 20-second backstop, which is exactly what the comment 30 lines above already says about the deleted Thread.sleep(50) -- but the claim that the mutant SURVIVES is not supported by the tree. The risk: a reader trusts the sentence, later removes the backstop believing drainPermits alone carries the kill. This is the same overstatement class baselines/review.txt already records for BatchingSequencer round 7. Also note that in the current tests drainPermits is a no-op on every call, since tickAndAwaitProcessed is only ever reached with exactly one permit outstanding."
+    },
+    {
+      "id": "TR-M4.17-8",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/LocalSequencer.java:314",
+      "failure_scenario": "close()'s comment still ends 'which is why no test pins them and why that is filed as M4.40 rather than left implied.' In the staged tree aCallerAfterCLOSEIsToldCLOSEDRatherThanFENCED does pin the double mutation, and M4.40 has been retargeted at the interrupt-BEFORE-release ORDER. A reader following the pointer now lands on a row about a different subject, and the sentence reads as though the close/renewer race is still untested in this very commit. Strictly, 'no test pins THEM' (the two mechanisms individually) is still true -- I confirmed both single mutations survive the whole :sequencer:test suite: deleting only renewer.interrupt() -> 0 failures, deleting only the post-tick if (closed) return -> 0 failures across all 28 classes. It is the 'filed as M4.40' clause that is now stale. Same defect shape as the M4.7 round-6 finding this file records: a comment block and the row it names telling different stories."
+    },
+    {
+      "id": "TR-M4.17-9",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:305",
+      "failure_scenario": "M4.40's residual is STRUCTURALLY CORRECT and I verified it rather than reading it: swapping close() to leases.release(); renewer.interrupt(); survives the whole :sequencer:test suite (28 classes, 0 failures), and LeaseManager is declared final, so there is no subclass seam either -- 'no seam exists between the post-tick closed check and leases.renew()' holds. Two claims around it overstate. (a) 'logs a fence at every graceful shutdown' -- it does not. The reversal is only reachable when the renewer is ALREADY past the post-tick closed check at the moment close() runs; with the shipping 3s ticker the renewer is parked on the tick essentially always, so the reversal is silent in practice. It is the same narrow race the row's own first sentence describes, not 'every'. (b) 'the comment there calls that load-bearing' -- close()'s comment argues SIGNALLED-NOT-JOINED and what the signal buys; it never discusses interrupt-before-release ordering and never uses that phrase. The row attributes to the comment a claim the comment does not make, which is the M4.38 lesson this file records (a review comment is a hypothesis, a backlog row is a prescription)."
+    },
+    {
+      "id": "TR-M4.17-10",
+      "severity": "minor",
+      "file": "baselines/review.txt:17",
+      "failure_scenario": "The rounds:M4.17 cap argument reaches the right conclusion by a mechanism that is the one case already covered. 'the node renews, is told it has been fenced, ignores it, and keeps committing into a chain a successor has already sealed -- I2': if the chain is already sealed, CommitLog refuses the append with the word 'fenced' -- this task's own test comment (LocalSequencerRenewTest.java:203-211) records a draft test passing against a tree with NO renewer for exactly that reason. The genuinely unprotected window is the other one: after the successor has taken the lease (so renew returns empty) and BEFORE its seal has landed or become visible, where the seal redrive is still contending with the old leader's in-flight commits. Naming that window makes the tick-and-fence-are-one-behaviour argument airtight instead of resting on the case the seal protocol already handles. The argument itself stands; only its cited mechanism is imprecise."
+    }
+  ],
+  "task": "M4.17",
+  "role": "test-reviewer",
+  "staged_tree": "3f60cd86baa61d2ffb097aa7df2b541a148aa2b8"
+}

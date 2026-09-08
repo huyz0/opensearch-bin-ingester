@@ -1,0 +1,27 @@
+{
+  "diff_sha256": "14257c07dd3660b933dd48b0b1a7832e3e40ba1150fdee53697b73f73dab1ee6",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "M6",
+      "severity": "blocking",
+      "file": "scripts/check-module.sh:84",
+      "summary": "The gate reads only `--configuration runtimeClasspath`, but rule 5's claim is a COMPILE-time one (\"compile without Helidon on the classpath\"). A `compileOnly` dependency never appears in runtimeClasspath, so any HTTP library declared `compileOnly` in format/binstore-spi/sequencer/ingest is invisible to this gate — including to the exact scenario the file header describes.",
+      "failure_scenario": "Add to ingest/build.gradle.kts: `dependencies { compileOnly(\"io.helidon.webserver:helidon-webserver:4.1.1\") }`, and add `import io.helidon.webserver.http.ServerRequest;` to an ingest production class. `:ingest:build` compiles green (compileOnly is on compileClasspath and -Werror does not object). `check-module.sh` then resolves runtimeClasspath, sees only `project :binstore-spi / :format / :sequencer`, matches no group, and prints `ok 1 module(s) checked (changed module directories)`. Verified on this tree: adding `compileOnly(libs.assertj.core)` to ingest, `:ingest:dependencies --configuration runtimeClasspath` shows only the three project deps, while `--configuration compileClasspath` shows `\\--- org.assertj:assertj-core:3.27.3`. Fix: iterate both runtimeClasspath and compileClasspath (and consider testCompileClasspath/testRuntimeClasspath, since a T0 test in `format` starting a Helidon server is also a rule-5 reference), checking exit status and emptiness for each."
+    },
+    {
+      "id": "M7",
+      "severity": "minor",
+      "file": "scripts/check-module.sh:47",
+      "summary": "HTTP_GROUPS is a hand-maintained denylist, and the header now presents the script as \"the gate architecture.md rule 5 has promised\". Several mainstream HTTP stacks are not in it, and JDK `java.net.http` needs no coordinate at all, so a green line overstates what was proved.",
+      "failure_scenario": "Checked against a synthetic runtimeClasspath report: `io.undertow:undertow-core`, `io.vertx:vertx-web`, `org.apache.tomcat.embed:tomcat-embed-core`, `com.linecorp.armeria:armeria`, `org.jboss.resteasy:resteasy-core`, `io.projectreactor.netty:reactor-netty-http` and `io.grpc:grpc-netty-shaded` all pass unmatched (note `io.projectreactor.netty` does not contain the substring `io.netty`). Separately, `sequencer` can `import java.net.http.HttpClient` and issue real HTTP with zero declared dependency. Not blocking — a denylist is inherently incomplete — but the success line and header should say \"no listed HTTP group\" rather than imply rule 5 is fully asserted. The durable form is an allowlist over the catalogue once M0.19 (`check-catalog-only.sh`) forbids literal coordinates."
+    },
+    {
+      "id": "M8",
+      "severity": "minor",
+      "file": "scripts/check-module.sh:112",
+      "summary": "The index moved during this review and no longer matches the hash under review. The blob staged as of this verdict has a stray trailing `# probe` line appended after `finish` (staged diff is now 114 lines, sha 21a1383798f1d4bd2c6f6078dd2b4a0b4c74277c7a95b1c9d53949d6727c50a3, not 14257c07...). scripts/lib.sh and scripts/review.sh also have unstaged edits that appeared mid-review.",
+      "failure_scenario": "`check-reviewed.sh` recomputes the staged hash and will not find a verdict for 21a1383..., so this verdict cannot bind and the commit is blocked regardless of its content. Restore the index (drop `# probe`) or re-run the round against the new hash. The findings above were read at 14257c07... and the two blobs differ only by that trailing comment, so M6 and M7 apply unchanged."
+    }
+  ]
+}

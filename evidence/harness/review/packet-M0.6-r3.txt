@@ -1,0 +1,62 @@
+=== TASK M0.6 ===
+| M0.6 | Wire `check-module.sh` into `.pre-commit-config.yaml` and CI | — | todo |
+
+=== STANDARDS THE REVIEWER MUST READ (selected from paths, not by the author) ===
+docs/internal/standards/git.md
+docs/internal/standards/sdd.md
+docs/internal/standards/java-style.md
+docs/internal/standards/code-structure.md
+docs/internal/standards/testing.md
+docs/internal/standards/cost.md
+docs/internal/standards/performance.md
+docs/internal/standards/security.md
+
+=== WHAT TO LOOK AT (selected from paths, not improvised per commit) ===
+
+### Lens: a gate that reports success while checking nothing
+This change touches enforcement. Every defect of this class found in this
+repository so far looked green: a deny-list that could never match its own input,
+two gates that printed FAIL and exited 0, a budget that summed a key the runtime
+does not read, a parser blinded by one char literal.
+- Construct the input each check must REJECT and confirm it rejects it.
+- Confirm the check is wired (a task nothing depends on is a preference).
+- Confirm it cannot pass vacuously: empty input set, absent report, missing file.
+- Check the exit status actually propagates.
+
+### Lens: would this test fail if the code were wrong
+Mentally mutate the production code each test covers: flip a boundary, negate a
+condition, return a constant, drop a side effect. If the test still passes, name
+the surviving mutation -- that finding is worth more than every style comment.
+
+### Out of scope for this review
+- Anything the packet lists as already passed -- a script owns it.
+- Any path outside this repository. `../` and `.tmp/` are not ours.
+- Lenses not listed above: the change does not touch them.
+
+=== ROUNDS ===
+review.md rule 12: TWO rounds. Round one finds, round two verifies.
+If round two still carries a blocking finding, the commit is too big --
+the author splits it. Do not expect a round three.
+
+=== GATES THAT ALREADY PASSED (do not re-check these) ===
+  PASSED  check-dependency-licenses.sh
+  PASSED  check-file-size.sh
+  PASSED  check-gate-scope.sh
+  PASSED  check-harness-tests.sh
+  PASSED  check-license-headers.sh
+  PASSED  check-links.sh
+  PASSED  check-metric-cardinality.sh
+  PASSED  check-module.sh
+  PASSED  check-portability.sh
+  FAILED  check-tdd.sh
+          [1mcheck-tdd[0m
+            [31mFAIL[0m these new tests were never observed to fail:
+                     binjava.ModuleDriftTest#refusesDriftInEitherDirection
+                   A test written after the code, or never run red, constrains nothing.
+  PASSED  check-terminology.sh
+  PASSED  check-test-budget.sh
+  PASSED  build-index.sh --check
+
+!!! A deterministic gate is failing. Fix it before spending a review:
+!!! the reviewer's attention is the scarce thing, and a script already
+!!! knows the answer to whatever it would find.

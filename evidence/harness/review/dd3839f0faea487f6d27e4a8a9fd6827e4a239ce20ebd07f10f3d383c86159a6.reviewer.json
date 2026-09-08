@@ -1,0 +1,37 @@
+{
+  "diff_sha256": "dd3839f0faea487f6d27e4a8a9fd6827e4a239ce20ebd07f10f3d383c86159a6",
+  "verdict": "pass",
+  "summary": "allRuns() is correct at all three fold sites; none of them needs per-segment pairing, and the order-sensitivity the first site keeps agrees with the writer. Two minors, both about untrue statements in the new test file: one 'MEASURED' claim that is measurably false, and one assertion description that is false of its own fixture. One out-of-diff observation about the same runs()/allRuns() confusion in production.",
+  "findings": [
+    {
+      "id": "F1",
+      "file": "sequencer/src/test/java/binjava/sequencer/BatchedDeltaInvariantsTest.java:100",
+      "severity": "minor",
+      "title": "The javadoc's 'measured' claim that this test does not pin any checker site is false -- it is the ONLY test that pins site 2",
+      "failure_scenario": "The javadoc on aSUCCESSORInheritsFromABatchedPredecessor states: 'Reverting any of the three CHECKER sites to runs() leaves it green -- measured -- because its assertions run through ChainReplay, which was never wrong.' MEASURED in a review tree, that is false for Invariants.java:323 (offsetsSealedInto). Reverting only that line to runs() and running the full :sequencer:test suite gives 368 tests, 1 failed, and the single failure is this test: 'IllegalStateException: this delta batches 2 segments' at CommitDelta.only -> CommitDelta.runs -> Invariants.offsetsSealedInto(Invariants.java:323) -> Invariants.checkChain(Invariants.java:116) -> aSUCCESSORInheritsFromABatchedPredecessor. Its final assertion, Invariants.checkChain(store, PREFIX, 2), reaches site 2 through inheritedOffsets on the batched epoch-1 predecessor. (Sites 1 and 3 were measured separately: reverting Invariants.java:156 fails tests 1 and 2 only, reverting ReaderInvariants.java:177 fails test 3 only -- for those two the javadoc's claim is true.) Concrete cost: site 2 has exactly one pin in the whole suite, and the javadoc actively tells a future maintainer that this test is not it. A later cleanup that trusts the comment and deletes or narrows this test unpins offsetsSealedInto's allRuns() completely, and the checker silently goes back to throwing on every batched predecessor at a failover -- the exact defect M4.13n exists to close. This is also a false 'measured' claim, which non-negotiable 4 names as the rule every other rule rests on; escalate if the project treats that as more than cosmetic."
+    },
+    {
+      "id": "F2",
+      "file": "sequencer/src/test/java/binjava/sequencer/BatchedDeltaInvariantsTest.java:60-82",
+      "severity": "minor",
+      "title": "aBatchedDeltaWhoseSECONDSegmentREWINDSIsStillCaught describes its fixture wrongly: no offset is handed out twice",
+      "failure_scenario": "The javadoc says 'over the bytes it is an I2, because the same offset was handed out twice' and the assertion description says 'segment B hands out offsets segment A already claimed'. MEASURED on the fixture's own bytes: RunCommit(RA, 3, 4) is recordCount=3 at firstOffset=4, covering offsets 4..6; RunCommit(RA, 4, 0) is recordCount=4 at firstOffset=0, covering 0..3. The two ranges are DISJOINT and together cover 0..6 exactly once with no hole -- nothing was reassigned. checkChain returns two violations for it: gap ('resumes at 4, skipping 4') and I2 ('resumes at 0 but the chain had assigned up to 7'). Both fire only because allRuns() returns runs in segment-list order and this delta lists its segments out of offset order. The DETECTION is right -- SubscriptionHub pairs runs with segments and would deliver 4..6 before 0..3, which is I4's reorder clause -- but 'I2' and its detail string name a reassignment that did not happen, which is precisely the conflation the comment at Invariants.java:159-169 warns against ('Conflating them makes every severed CONTINUE read as data corruption and buries the real thing'). No wrong result on any delta the writer can build: CommitLog.commitSubmissions advances its offset cursor in submission-list order, so a legitimate batch never permutes, which is why checkChainREADSABatchedDeltaRatherThanThrowing returns empty. The cost is that M4.13f -- which the backlog note points at this exact shape -- will be built on a checker whose violation names disagree with what happened, and on a test whose stated reason for the I2 is untrue."
+    },
+    {
+      "id": "F3",
+      "file": "ingest/src/main/java/binjava/ingest/DefaultIngest.java:359",
+      "severity": "minor",
+      "title": "The same runs()/allRuns() confusion is still live in production, outside this diff",
+      "failure_scenario": "OUT OF DIFF and pre-existing -- reported because it is the same defect class the task names and this diff fixed only the checker side. DefaultIngest.flushLocked does 'for (RunCommit run : delta.runs())' on the delta the Sequencer returned. BatchingSequencer.commitBatch calls delegate.commitAll(requests) with every PendingCommit's requests concatenated and then hands the SAME full batched delta to every waiter (p.complete(delta), BatchingSequencer.java:382; PendingCommit.complete just completes the future, no narrowing). So the first window that groups two submissions makes flushLocked throw IllegalStateException on the append path rather than completing its waiters. Note allRuns() would be the WRONG fix here -- two pods committing the same stream give two runs and firstOffsets.put keeps the last, so the caller gets another pod's base -- this site needs segments() plus its own published.key(). Not reachable today: nothing in ingest/ or app/ constructs a BatchingSequencer, so no production wiring puts a batched delta in front of it. Belongs in a backlog row, not in this commit -- widening M4.13n to cover it would break one-task-one-commit."
+    }
+  ],
+  "verified": [
+    "allRuns() is correct at all three sites; none needs per-segment pairing. Sites 2 (Invariants.java:323) and 3 (ReaderInvariants.java:177) merge with Math::max keyed by RunKey, byte-identical in semantics to ChainReplay.fold (lastOffset()+1 == firstOffset()+recordCount()), so segment order is irrelevant there.",
+    "Site 1 (Invariants.java:156) IS order-sensitive -- it is a sequential rewind/gap detector, not a max-fold -- and that is safe: CommitLog.commitSubmissions builds segments in submission order sharing one offset cursor, so runs across a batched delta are per-stream ascending and contiguous in exactly the order allRuns() returns them.",
+    "Nothing newly reachable produces a wrong result. Previously the throw aborted the entire checkChain walk at the first batched delta, so every later entry's I1/chain/I5 arm was skipped too; those now run. Full :sequencer:test suite is 368 tests green on the staged bytes.",
+    "Cost lens: no object-store request added, moved into a loop, or made per-record/shard/partition/index. The checkers' LIST/GET pattern in readChain and applyChain is untouched, and the new fixtures run against MemoryBinStore."
+  ],
+  "task": "M4.13n",
+  "role": "reviewer",
+  "staged_tree": "38b53b148cf30d37c3ae4b9e854e12e2799f9cd3"
+}

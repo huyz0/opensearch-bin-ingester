@@ -1,0 +1,22 @@
+{
+  "verdict": "changes-requested",
+  "diff_sha256": "3d17f9d2138d42e8da201f81c160f65878a27f5391dc6eaecced1bf4e0c90d11",
+  "findings": [
+    {
+      "id": "M0.13-3",
+      "severity": "major",
+      "file": "scripts/check-gate-scope.sh",
+      "summary": "The M0.13 diff adds ALLOWED-list waivers for scripts/review_rounds.py and scripts/review_delta.py, neither of which is part of this commit (both are untracked by git; `git ls-files` does not know them) and neither has anything to do with the coverage gate. This is scope creep into an M0.13-scoped commit, and it violates the rule stated in the very comment above the map being edited: 'add it in the SAME commit as the script it waives... A waiver granted ahead of the code is a decision made in a review that cannot see what it is waiving.'",
+      "failure_scenario": "Verified directly: removing just the review_rounds.py/review_delta.py lines from the staged check-gate-scope.sh and running the real script against the current working tree fails with 'review_delta.py walks the filesystem instead of using workspace_files' and the same for review_rounds.py -- confirming those two scripts already exist on disk, uncommitted, for an unrelated feature, and this commit's real purpose (beyond coverage.py) is to silently paper over a pre-commit failure caused by that unrelated work. If that unrelated feature's commit never lands (or lands differently), M0.13 ships a waiver for scripts that do not exist in the tracked tree -- exactly the 'ahead of the code' anti-pattern the file's own comment forbids, and a future reader of check-gate-scope.sh has no way to find the script the waiver is supposedly justified by."
+    },
+    {
+      "id": "M0.13-4",
+      "severity": "minor",
+      "file": "scripts/coverage.py",
+      "summary": "counters() returns an empty dict when the JaCoCo report XML parses but has no <counter> children (well-formed, zero elements), and pct() then defaults missing LINE/BRANCH to (0,0), which is treated as 100%. A report that is 'valid XML but empty of measurements' is therefore indistinguishable from 'fully covered' and prints ok, not NOT-MEASURED -- the same class of defect (reporting success while measuring nothing) the rest of this gate was built to refuse for the missing-report and malformed-report cases.",
+      "failure_scenario": "A module whose report is `<report name=\"x\"></report>` (well-formed, zero counters -- e.g. a build tool truncation different from the empty-string/ParseError case already tested) parses successfully, LINE and BRANCH both default to (0,0) -> pct() returns 100.0/100.0, and coverage.py prints 'ok ... line 100.0% branch 100.0%' for a module whose coverage was never actually measured. No test in CoverageGateTest constructs this input (only the fully-empty-string malformed case and the missing-report case are covered), so this survives."
+    }
+  ],
+  "task": "M0.13",
+  "role": "reviewer"
+}

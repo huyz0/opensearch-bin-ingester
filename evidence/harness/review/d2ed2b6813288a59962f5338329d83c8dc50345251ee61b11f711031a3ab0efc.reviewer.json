@@ -1,0 +1,15 @@
+{
+  "diff_sha256": "d2ed2b6813288a59962f5338329d83c8dc50345251ee61b11f711031a3ab0efc",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "R13-1",
+      "severity": "minor",
+      "file": "docs/internal/standards/review.md (rule 12, the '89 ... draft inputs' paragraph)",
+      "summary": "Calls the 89 name-mismatched files in .harness/review 'review.sh-written draft inputs'. Measured: review.sh's 'context' subcommand only prints a packet to stdout and never writes to .harness/review; 'record' writes exactly '<sha>.<role>.json'. Nothing in the script writes a 'verdict-<task>-r<n>.<role>.json' file -- those were written by hand/agent as the --file input to a later 'record' call, then left behind. The substantive claim the paragraph exists to support (89 of 90 untasked files are in a shape rounds_for's glob never reads, and the one that matches has a same-hash sibling naming M0.6, so zero rounds count against nothing) is independently verified true regardless of who wrote the 89 files.",
+      "failure_scenario": "A future reader trying to stop the accumulation of these files greps review.sh for where they come from, finds nothing, and either concludes the paragraph is wrong about the count too (it is not) or spends time looking for a nonexistent code path -- kept as informational since it does not change any gate's behavior or the correctness of the escape mechanism itself."
+    }
+  ],
+  "task": "M4.21",
+  "role": "reviewer"
+}

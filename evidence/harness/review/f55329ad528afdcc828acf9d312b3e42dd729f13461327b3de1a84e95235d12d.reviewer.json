@@ -1,0 +1,22 @@
+{
+  "diff_sha256": "f55329ad528afdcc828acf9d312b3e42dd729f13461327b3de1a84e95235d12d",
+  "verdict": "pass",
+  "findings": [
+    {
+      "file": "ingest/src/main/java/binjava/ingest/SubscriptionHub.java",
+      "line": 114,
+      "severity": "minor",
+      "what": "The new comment on the no-payload publish(CommitDelta) calls it \"SAFE FOR A BATCHED DELTA\" and says \"a subscriber that needs the records fetches them\". No subscriber can fetch. This class's own Push javadoc, twenty lines up, says the bytes travel INLINE and that \"proxy and direct are M5\" (ADR-0004), and ConsumerClient.decodeInto calls SegmentReader.open(delivery.segment()) on that inline array with no store-read fallback. The key pairing in this overload is correct; the claim about the payload is not.",
+      "failure_scenario": "M4.7's batcher reads this comment as the sanctioned route for a batched delta and calls hub.publish(delta) instead of building the per-segment payload API. Every run is delivered with new byte[0]; each consumer's sink calls SegmentReader.open on an empty array, which throws, and publishRun's catch(RuntimeException slowOrDeadSubscriber) swallows it. Every record in the commit window is lost, no exception escapes, and no gate sees it -- the same silent-loss class the paired overload's new refusal exists to prevent, one method over."
+    },
+    {
+      "file": "format/src/main/java/binjava/format/Cursor.java",
+      "line": 42,
+      "severity": "minor",
+      "what": "The new remaining() javadoc asserts the count-as-allocation-size hole is now closed -- \"The length-prefixed case was already closed; the repeat-count case was not\" -- and the new test is named aSegmentCountLargerThanTheOBJECTIsRefusedRatherThanAllocated. The invariant does not hold: CommitDelta.readSegment (CommitDelta.java:221-222) still does `int runCount = (int) c.uvarint(); new ArrayList<>(runCount)` with no bound, and readSegment is on BOTH the v0 and the new batched path. Measured on the staged bytes with -Xmx256m: a v0 delta claiming 0x7FFFFFFF runs, and a batched delta with a perfectly legal segment count of 2 whose first segment claims 0x7FFFFFFF runs, both raise java.lang.OutOfMemoryError rather than IOException. The runCount hazard is pre-existing (identical code at HEAD), so this is not a regression and I am not asking for it to be fixed here -- but the comment that says it is fixed is new, and the one-line bound is now available (`runCount > c.remaining()`).",
+      "failure_scenario": "A truncated PUT or a foreign writer leaves a chain object whose RUN count -- rather than its segment count -- is large. CommitLog.recover dies with an unchecked OutOfMemoryError straight past its own `throws IOException` and every caller catching it: exactly the round-1 scenario, one field along. Secondarily, whoever adds the next repeated field to a chain entry reads Cursor's javadoc, believes this class bounds repeat counts, and adds none."
+    }
+  ],
+  "task": "M4.7a",
+  "role": "reviewer"
+}

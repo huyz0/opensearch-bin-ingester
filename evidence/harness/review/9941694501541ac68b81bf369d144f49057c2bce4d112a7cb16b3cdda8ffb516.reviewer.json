@@ -1,0 +1,44 @@
+{
+  "diff_sha256": "9941694501541ac68b81bf369d144f49057c2bce4d112a7cb16b3cdda8ffb516",
+  "verdict": "pass",
+  "task": "M4.13g",
+  "role": "reviewer",
+  "findings": [
+    {
+      "id": "M4.13g-R1a",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-done.md:173",
+      "summary": "The archive row added for M4.13g has 2 columns where the table's header declares 4 (`| ID | Task | Serves | State |`). MEASURED with `tail -4 docs/internal/product/backlog-done.md | awk -F'|' '{print NF}'`: the three preceding rows (M0.86, M4.13a, M4.13c) each yield NF=6, the new M4.13g row yields NF=4. The row ends `...M4.13i needs to extract the backward walk. |` with no `| FR-11 | done |`. Every other row in the file carries both, and the M4.13g row being archived is itself derived from an open row that carried `| FR-11 | todo |`.",
+      "failure_scenario": "The row renders with an empty Serves cell and an empty State cell, so M4.13g appears in the completed archive with no requirement it serves and no `done` marker -- it reads as an unfinished row parked in the wrong file. FR-11 traceability for this task is lost: a later sweep of which rows serve FR-11 (the mechanism sdd.md's FR/NFR IDs exist for) will not return M4.13g. No gate catches it: check-archive-row-size.sh measures row LENGTH only, and check-commit-msg.sh greps for the bare ID, which is still present."
+    },
+    {
+      "id": "M4.13g-R1b",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:918,928",
+      "summary": "Two references to the symbol `Invariants.checkAckOrder` survive under the `### M4.13` heading (line 915), a row that is still OPEN: line 918 \"when it feeds `Invariants.checkAckOrder` (M4.11)\" and line 928 \"left the own-write arm of `Invariants.checkAckOrder` unpinned\". After this diff that symbol does not exist; it is `AckOrderInvariants.checkAckOrder`. The same commit did edit this file (the M4.13i note at lines 1160-1165), so the notes were in scope. Excluded deliberately: backlog-done.md:152 (M4.11's row) also names `Invariants.checkAckOrder`, but the archive's own header says rows that already shipped are not rewritten, so leaving that one is correct.",
+      "failure_scenario": "M4.13 is the sweep row these notes were written for. Its implementer reads the note, greps `Invariants.checkAckOrder` to find the checker it must emit a slot-0 CONTINUE event into, gets no hit in the source tree, and has to rediscover that the class moved -- the exact cost the note exists to save. The second reference (line 928) is worse because it names a specific unpinned assertion arm that M4.13 is told to close; a stale class name on a to-do makes the to-do harder to act on."
+    },
+    {
+      "id": "M4.13g-R1c",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-done.md:173, docs/internal/product/backlog-notes.md:1163",
+      "summary": "Both new prose claims state the line count wrong. The archive row says \"`Invariants` goes from 490 lines to 397\" and the notes edit says \"took `Invariants` from 490 lines to 397\". MEASURED with the same tool check-file-size.sh uses (`wc -l`): `git show HEAD:sequencer/src/test/java/binjava/sequencer/Invariants.java | wc -l` is 493, and the staged file is 397. The real delta is 493 -> 397 (96 lines), not 490 -> 397 (93). The 490 figure is inherited verbatim from the pre-existing M4.13i note and from the M4.13g open row this diff deletes (\"SITS 10 LINES UNDER THE 500-LINE CAP\"), i.e. it was carried forward rather than re-measured against HEAD.",
+      "failure_scenario": "M4.13i is told, in the note this diff just edited, that its blocker is gone and it has headroom; it will size the backward-walk extraction against a starting point stated as 490 when the file was 493, and against a headroom figure that was never re-measured. Small here, but non-negotiable 4 is that a number in the tree was measured -- a figure copied from an older row and re-asserted as the result of THIS change is the failure mode that rule names, and nothing else in the repository can catch it."
+    },
+    {
+      "id": "M4.13g-R1d",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/AckOrderInvariants.java:7,10",
+      "summary": "`import java.util.HashSet;` and `import java.util.Set;` are added and never used. The moved body kept the original's fully-qualified forms: line 101 `Map<Long, java.util.Set<Long>> confirmed = new HashMap<>();`, line 104 `java.util.Set<Long> seen =`, line 105 `new java.util.HashSet<>()`. These two imports are the only content in the new file that is not part of the move (verified byte-identical otherwise: the moved block diffs against `git show HEAD:.../Invariants.java` lines 96-198 with exactly three differences -- `public record AckEvent` -> `record AckEvent`, `public static AckEvent confirmed` -> `static AckEvent confirmed`, `public static List<Violation> checkAckOrder` -> `static List<Violation> checkAckOrder`, plus `{@link #checkChain}` -> `{@link Invariants#checkChain}`).",
+      "failure_scenario": "No runtime or compile effect -- javac does not warn on unused imports and there is no checkstyle in this build. The cost is to the reader: an import of `java.util.Set` sitting above a body that writes `java.util.Set` fully qualified reads as deliberate disambiguation from a second `Set` in scope, and someone tidying the file later will either delete the imports (correct) or expand the imports into the body (a second, unreviewed edit to a file whose whole claim is that it is a pure move)."
+    },
+    {
+      "id": "M4.13g-R1e",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/AckOrderInvariants.java:55",
+      "summary": "The visibility narrowing is asymmetric. `AckEvent` itself went `public record` -> `record` (line 47) and `confirmed` went `public static` -> `static` (line 49), but `acked` kept `public static AckEvent acked(long epoch, long sequence)` inside a now package-private record. The `public` is unreachable -- a package-private type cannot expose a member outside its package -- and its sibling factory, used by the same call sites in AckOrderTest, is not marked that way.",
+      "failure_scenario": "No behaviour change: both factories are callable from AckOrderTest, which is in `binjava.sequencer`. The cost is that the one remaining `public` reads as a signal that `acked` has an out-of-package caller the narrowing had to spare, which it does not -- every reference is in AckOrderTest (verified by grep across *.java: 32 call sites, all in that one file). A later move or module split will preserve the `public` for a reason that was never there."
+    }
+  ],
+  "staged_tree": "c97fbbe3552bb8d87dfa9f941e36c4e7859ed94e"
+}

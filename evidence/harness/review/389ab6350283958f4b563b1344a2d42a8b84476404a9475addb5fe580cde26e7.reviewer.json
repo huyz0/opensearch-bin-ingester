@@ -1,0 +1,36 @@
+{
+  "diff_sha256": "389ab6350283958f4b563b1344a2d42a8b84476404a9475addb5fe580cde26e7",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "blocking",
+      "file": "sequencer/src/main/java/binjava/sequencer/ChainReplay.java:189-191",
+      "title": "An ancestor chain that is COMPLETELY EMPTY still breaks the walk and loses all history -- the second shape of the P1 defect, unfixed",
+      "failure_scenario": "The round-2 fix reconstructs the missing link for one of the two shapes a never-opened chain can take (a SEAL at slot 0, ChainReplay.java:173-188) but not the other: a chain with NOTHING in it at all. firstEntry returns null and the walk hits `else break`, dropping every ancestor beyond it. MEASURED end-to-end through LocalSequencer on the staged tree, using only RefuseKeyStore error injection on the store: pod1 acks 7 records at epoch 1; pod2 acquires epoch 2 and fails on its FIRST write (sealing chain 1) so start releases the lease and chain 2 stays empty; pod3 acquires epoch 3 and fails on its first write (sealing chain 2) so chain 3 stays empty AND chain 2 is still empty; pod4 acquires epoch 4, seals the empty chain 3 at slot 0, crosses to chain 3, hops by arithmetic to chain 2, finds it empty, and breaks. Probe output: 'E2E pod2 failed: injected: the store refused .../0000000000000001/0000000000000002.delta', 'E2E pod3 failed: injected: the store refused .../0000000000000002/0000000000000000.delta', 'E2E pod4 epoch=4 firstOffset=0 (want 7)'. Confirmed independently at the CommitLog layer: chain 1 = [CONTINUE, delta(100)], chain 2 = absent entirely, chain 3 = [SEAL@0], chain 4 = [CONTINUE(0,3,0)] -> nextOffset 0 where 100 is correct. Chain E is left empty exactly when epoch E's start and epoch E+1's start both fail at or before their first PUT -- two consecutive failed takeovers, which is a store outage spanning a failover, the single most correlated failure this code will meet, and the moment several pods try in quick succession. The same epoch arithmetic that ChainReplay.java:180-185 argues is sound for a seal-at-slot-0 chain is equally sound for an empty one (a chain holding nothing carries no link either), so the two shapes want one branch, not one branch and a break. Per review.md rule 12 a blocking finding in round two says the commit is too big and should be split rather than taken to a third round -- that call is the coordinator's, but the severity is what it is: silent offset reassignment across a failover, which is I2, NFR-11 and acceptance criterion 4."
+    },
+    {
+      "id": "R2",
+      "severity": "major",
+      "file": "docs/internal/product/backlog.md:261",
+      "title": "M4.9's new cost table says MEASURED and four of its five numbers are wrong for the staged code",
+      "failure_scenario": "The row states 'MEASURED at 12 deltas per term: 1 prior term costs 17 GETs, 2 costs 30, 4 costs 58, 8 costs 114, 16 costs 226'. Measured on the staged tree with exactly that workload: 17, 32, 62, 122, 242. Those published numbers are my ROUND-1 measurements (16, 30, 58, 114, 226) with only the first entry updated for the ancestry probe round 2 added -- so they describe no version of the code that has ever existed, while carrying the word MEASURED. Non-negotiable 4 covers exactly this. It is major rather than cosmetic because this table is the evidence carrying the non-negotiable-2 exception for the relaxed cost threshold: it is what M4.9's author will size bounded recovery against, and it under-states the per-term slope (7 GETs/term at 12 entries, not 6.5) while hiding that the probe added a request per ancestor. R2 also under-states the growth in the other direction: LISTs go 3, 4, 6, 10, 18 and stats go 3, 4, 6, 10, 18 for 1, 2, 4, 8, 16 terms, so 'with LISTs growing too' is true but stats grow identically and are not mentioned."
+    },
+    {
+      "id": "R3",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:261",
+      "title": "M4.9's addition landed in the Serves column, not the Task column",
+      "failure_scenario": "The table header is '| ID | Task | Serves | State |'. M4.9's Serves cell now reads 'FR-10, FR-11 \u26a0\ufe0f AND IT MUST BOUND THE CROSSING, not merely own-chain replay ... Bounding own-chain replay alone would leave that untouched' -- a hundred-word paragraph in the cell that elsewhere holds 'FR-11' and 'FR-3'. Two consequences: rendered, the requirement appears in a narrow FR-ID column rather than in the Task description, so an M4.9 author scanning the Task column reads it ending at '~1 LIST/s ceiling' and never sees the crossing requirement -- which partly defeats what the fix to P5 was for; and the Serves column stops being a list of FR/NFR IDs, which is what sdd.md says specs and tasks cite and what a future cross-reference gate (M0.20) would parse."
+    },
+    {
+      "id": "R4",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/LocalSequencerFailoverTest.java:166-175",
+      "title": "The new TERMS dimension pins only GETs, and per-ancestor LISTs and stats both grow there unasserted",
+      "failure_scenario": "The entries dimension correctly pins gets AND lists, with a comment saying why counting only GETs was not enough. The terms dimension then derives perTerm from gets() alone. Measured at 4 entries per term for 1, 2, 4, 8, 16 prior terms: gets 9, 16, 30, 58, 114 (pinned); lists 3, 4, 6, 10, 18 (unpinned in this dimension -- both fixtures of the lists assertion hold terms=1); stats 3, 4, 6, 10, 18 (never asserted anywhere in the file). So the exact mutation class the comment above it names -- one extra request per ancestor -- survives here for two of the three request kinds, including the stat that ChainReplay.firstEntry newly issues once per chain. Asserting perTerm on StoreCounts.total() rather than gets() closes it in one token, and StoreCounts exists with that method for this reason. Relatedly, `perTerm = (fourTerms.gets() - oneTerm.gets()) / 3` is integer division, so a total drift of up to 2 GETs across three added terms rounds away."
+    }
+  ],
+  "task": "M4.6e",
+  "role": "reviewer"
+}

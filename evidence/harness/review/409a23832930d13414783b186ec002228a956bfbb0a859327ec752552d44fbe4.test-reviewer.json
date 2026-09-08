@@ -1,0 +1,56 @@
+{
+  "diff_sha256": "409a23832930d13414783b186ec002228a956bfbb0a859327ec752552d44fbe4",
+  "verdict": "changes-requested",
+  "summary": "All five claimed mutations are killed, each by exactly the test named -- verified by running them against the staged bytes in an extracted checkout-index tree. The disclosed equivalent mutant is genuinely equivalent. But the failure the task ROW names -- a consumer that reads exactly `length` bytes from an over-long body and never reaches EOF -- is still accepted silently by the staged code (measured), and no test fails; the prescribed fix ('at seen == length, attempt one more read') is not in the staged bytes. Three further mutations survive the new cases: the over-long test separates eager from lazy only through the message word 'more'; the skip test cannot tell count(skipped) from count(n); and nothing asserts the delegate is closed on the HONEST path.",
+  "findings": [
+    {
+      "id": "T1",
+      "severity": "blocking",
+      "file": "binstore-spi/src/test/java/binjava/binstore/BodyTest.java:114-127",
+      "title": "The acceptance criterion the task row states has no test that would fail -- and the staged code still fails it",
+      "surviving_mutation": "None needed: the behaviour is absent from the staged production code. The task row's fix -- 'at seen == length, attempt one more read' -- is not in Body.java, and the eager `seen > length` check in count() (Body.java:54-61) fires only when the consumer VOLUNTARILY reads past the declared length.",
+      "failure_scenario": "Measured against the staged bytes: `Body(5, () -> new ByteArrayInputStream(\"hello world\".getBytes()))`, then `in.readNBytes(5)` and `in.close()` -> close returns normally, OUTCOME=ACCEPTED-SILENTLY. That is verbatim the scenario the M1.1b row calls blocking for M1.2: 'a content-length-driven backend reads exactly length bytes and never reaches EOF, and S3 then stores a truncated object that reads back as a valid short segment'. checkedStreamRefusesAnOverLongBody does not cover it, because readAllBytes over-reads by construction (8 KiB chunk) and so trips the eager check on the first read; the real S3 consumer reads content-length bytes and stops. Add the case as written above -- it fails today, which is the point -- and let it drive the one-byte probe."
+    },
+    {
+      "id": "T2",
+      "severity": "major",
+      "file": "binstore-spi/src/test/java/binjava/binstore/BodyTest.java:114-127",
+      "title": "checkedStreamRefusesAnOverLongBody separates EAGER from LAZY only through the message text",
+      "surviving_mutation": "Move the over-long throw out of count() into verify(), keeping the wording: delete the `if (seen > length)` block from count() (Body.java:56-60) and insert `if (seen > length) throw new IOException(\"body declared \" + length + \" bytes but yielded more\");` above the `seen != length` line in verify(). Ran it against the staged test file: BUILD SUCCESSFUL, all ten cases green.",
+      "failure_scenario": "That mutation is precisely the pre-fix design -- detection deferred to EOF/close -- which the code comment at Body.java:51-53 says must not happen because 'waiting for EOF lets a content-length-driven backend commit the truncated object first'. The observable difference is WHEN the exception is raised: eagerly, the read() call that overshoots throws and the consumer never gets the bytes; lazily, that read returns the over-long data successfully and the consumer can hand it to S3 before the next read fails. The test asserts only that some IOException with 'more' in it escapes the try-with-resources, so the timing -- the whole content of the fix -- is unconstrained, and the guard survives being relocated to the place the fix moved it from. Kill it by pinning the throwing call: `Body(2, ...\"much longer\")`, `assertThatThrownBy(() -> in.read(new byte[8], 0, 8))`, i.e. the FIRST read throws, rather than asserting on the aggregate readAllBytes."
+    },
+    {
+      "id": "T3",
+      "severity": "major",
+      "file": "binstore-spi/src/test/java/binjava/binstore/BodyTest.java:180-186",
+      "title": "checkedStreamCountsSkippedBytes cannot distinguish the bytes actually skipped from the bytes requested",
+      "surviving_mutation": "Body.java:105 `count(skipped)` -> `count(n)`. Ran it: BUILD SUCCESSFUL, all ten cases green.",
+      "failure_scenario": "The test skips 5 on a 5-byte ByteArrayInputStream, where requested and actual are equal, so the argument to count() is unobservable. InputStream.skip is explicitly permitted to skip FEWER bytes than asked, and a network- or file-backed delegate routinely does. Under the mutation such a body is over-counted, count() then throws 'yielded more' on an entirely honest body, and a legitimate upload is refused permanently -- the same class of false refusal the markSupported() comment exists to prevent. One-line kill, no new test: `assertThat(in.skip(99)).isEqualTo(5)` -- ByteArrayInputStream returns min(n, remaining), so the honest path stays green and the mutant counts 99 > 5 and throws."
+    },
+    {
+      "id": "T4",
+      "severity": "major",
+      "file": "binstore-spi/src/test/java/binjava/binstore/BodyTest.java:159-178",
+      "title": "Only the REFUSAL path asserts that the delegate is closed; the honest path -- the common one -- asserts nothing",
+      "surviving_mutation": "Body.java:129-133 `try { verify(); } finally { in.close(); }` -> `try { verify(); } catch (IOException e) { in.close(); throw e; }`. Ran it: BUILD SUCCESSFUL, all ten cases green.",
+      "failure_scenario": "Under that mutation the delegate is closed only when the body is a lie, so every SUCCESSFUL streaming write leaks the descriptor it opened -- strictly worse than the leak the new test guards, since the retry contract at Body.java:16 multiplies attempts and the happy path is the one that runs a million times a day. The suite cannot see it because both honest-path cases use Body.ofBytes, whose ByteArrayInputStream.close is a no-op with no counter -- the exact trap that readFullyClosesTheStreamItOpened:55-74 was written to escape, using a counting delegate. Kill it the same way: give checkedStreamPassesAHonestBodyThrough (or a sibling) a counting ByteArrayInputStream subclass and assert closed == 1 after the try-with-resources."
+    },
+    {
+      "id": "T5",
+      "severity": "major",
+      "file": "binstore-spi/src/test/java/binjava/binstore/BodyTest.java:102-106",
+      "title": "The comment that justifies deleting the removed case states coverage that does not exist",
+      "surviving_mutation": "Add `private boolean sawEof;`, set it in both `n < 0` branches, and make verify() throw when it is false -- i.e. make verify() DEMAND EOF, the exact regression the comment says checkedStreamPassesAHonestBodyThrough guards. Ran it: the only failure is checkedStreamCountsSkippedBytes. checkedStreamPassesAHonestBodyThrough passes.",
+      "failure_scenario": "readAllBytes reads until it sees -1 by construction, so in that test verify() is reached from the EOF branch and never from close(); the claim that it 'also covers the ordinary S3 path -- a reader that consumes exactly length bytes and closes without seeing EOF' is false. The close-time ACCEPT of an honest body is pinned by exactly one case, checkedStreamCountsSkippedBytes, and only via skip() -- the read-path form (readNBytes(length) then close) is covered by nothing. Deleting the unredable case was defensible on its own terms and nothing left the tree (it is not in HEAD, so testing.md rule 5 does not bite), but the surviving comment will tell the next reader the shape is covered where it is not -- and it becomes load-bearing the moment the T1 probe lands, because a probe that mishandles an honest exact-length read is caught today only by an incidental assertion in the skip test. Restore the case as the natural companion to T1's failing test, where it will have a red record."
+    }
+  ],
+  "notes": [
+    "Q1 -- all five claims verified by running each mutation against the staged bytes (extracted with `git checkout-index` into a scratch tree, because the author's working tree moved during the review; staged hash re-confirmed 409a2383). Eager check deleted -> only checkedStreamRefusesAnOverLongBody fails. Single-arg read() deleted -> only checkedStreamCountsAByteAtATimeReader fails. markSupported -> true -> fails. skip override deleted -> only checkedStreamCountsSkippedBytes fails. try/finally -> `verify(); in.close();` -> only checkedStreamClosesTheDelegateEvenWhenItRefusesTheBody fails. Each separates cleanly; no two cases collide.",
+    "Q2 -- the disclosed equivalent mutant is CORRECT. Ran `seen != length` -> `seen < length`: green, as claimed. The reasoning also holds analytically: seen is only ever written by count(), which throws and sets verified whenever seen > length, so verify() either returns early or observes seen <= length; seen never decreases (a delegate returning a negative skip only lowers it, which `<` still catches) and a long overflow wraps negative, which `<` also catches. Caveat worth one line in baselines/mutants.txt when M0.14 lands: the equivalence is CONTINGENT on the eager check living in count(), which is exactly what T2 shows is unprotected -- so the argument for the equivalence and the gap in T2 are the same fact seen twice.",
+    "Q3 -- answered in T5. The shape is covered, but by checkedStreamCountsSkippedBytes rather than by the test the comment names, and only in the skip form.",
+    "Q4 -- still untested, all measured surviving but MINOR, not blocking: (a) deleting the `if (verified) return;` guard and the `verified = true` in count() (Body.java:57,64-67) is green -- effect is confined to a duplicate, suppressed close-time exception, and to the close-time message naming the count instead of 'more'; (b) checkedStreamCountsAByteAtATimeReader asserts the COUNT but not the bytes, so `return b == 0 ? 0 : (b ^ 1)` inside the single-arg read() override is green -- the bulk path has its content pinned by checkedStreamPassesAHonestBodyThrough, the byte-wise path does not; (c) mark() itself is not overridden and no case calls it, and read(buf, off, 0) is unexercised.",
+    "No existing assertion was weakened: the three checkedStream cases present in HEAD are byte-identical apart from the added comment at 102-106. Tier is right -- all ten are T0, no socket, clock, store, sleep, fixed port or system temp, and the fakes are anonymous ByteArrayInputStream subclasses rather than mocks (testing.md rule 18)."
+  ],
+  "task": "M1.1b",
+  "role": "test-reviewer"
+}

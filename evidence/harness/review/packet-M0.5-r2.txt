@@ -1,0 +1,189 @@
+=== TASK M0.5 ===
+| M0.5 | `scripts/check-module.sh` — compile, test, and assert the module's dependency surface | — | todo |
+
+=== STANDARDS THE REVIEWER MUST READ (selected from paths, not by the author) ===
+docs/internal/standards/git.md
+docs/internal/standards/sdd.md
+
+=== WHAT TO LOOK AT (selected from paths, not improvised per commit) ===
+
+### Lens: a gate that reports success while checking nothing
+This change touches enforcement. Every defect of this class found in this
+repository so far looked green: a deny-list that could never match its own input,
+two gates that printed FAIL and exited 0, a budget that summed a key the runtime
+does not read, a parser blinded by one char literal.
+- Construct the input each check must REJECT and confirm it rejects it.
+- Confirm the check is wired (a task nothing depends on is a preference).
+- Confirm it cannot pass vacuously: empty input set, absent report, missing file.
+- Check the exit status actually propagates.
+
+### Out of scope for this review
+- Anything the packet lists as already passed -- a script owns it.
+- Any path outside this repository. `../` and `.tmp/` are not ours.
+- Lenses not listed above: the change does not touch them.
+
+=== ROUNDS ===
+review.md rule 12: TWO rounds. Round one finds, round two verifies.
+If round two still carries a blocking finding, the commit is too big --
+the author splits it. Do not expect a round three.
+
+=== GATES THAT ALREADY PASSED (do not re-check these) ===
+  PASSED  check-dependency-licenses.sh
+  PASSED  check-file-size.sh
+  PASSED  check-gate-scope.sh
+  PASSED  check-harness-tests.sh
+  PASSED  check-license-headers.sh
+  PASSED  check-links.sh
+  PASSED  check-metric-cardinality.sh
+  PASSED  check-portability.sh
+  PASSED  check-tdd.sh
+  PASSED  check-terminology.sh
+  PASSED  check-test-budget.sh
+  PASSED  build-index.sh --check
+
+=== STAGED FILES BY STATUS ===
+  A    1
+
+=== STAGED DIFF (sha256 87be12910de10be2211a2a98dd2a114b1ca98aaf9d973b1ceb8770f8b1114c6a) ===
+diff --git a/scripts/check-module.sh b/scripts/check-module.sh
+new file mode 100755
+index 0000000..ae82f2c
+--- /dev/null
++++ b/scripts/check-module.sh
+@@ -0,0 +1,136 @@
++#!/usr/bin/env bash
++# SPDX-License-Identifier: Apache-2.0
++# architecture.md § Dependency rules: a module stays inside its declared
++# dependency surface.
++#
++#   scripts/check-module.sh              modules this change touches
++#   GATE_SCOPE=full scripts/check-module.sh   all eight
++#   scripts/check-module.sh format       one module, named
++#
++# ⚠️ The default is `delta` and may check NOTHING when a change touches no module
++# directory. The success line says which it did -- an earlier header claimed a
++# bare invocation checks "every module", which was false exactly when it mattered.
++#
++# This is the gate architecture.md rule 5 has promised since before the build
++# existed. A Helidon type reaching `ingest` compiles fine and passes every test;
++# it is wrong only against ADR-0019, which says the in-process API and the HTTP
++# endpoint are two front doors over one implementation.
++source "$(dirname "$0")/lib.sh"
++cd "$ROOT"
++hdr "check-module"
++
++[ -x ./gradlew ] || { fail "no ./gradlew"; finish; }
++
++ALL="binstore-spi binstore-backends format sequencer ingest http client plugin"
++
++# ⚠️ Rule 5 names exactly these four. NOT `client` or `plugin` -- the consumer
++# must talk to the ingester, so an HTTP client there is the design, not a
++# violation. NOT `binstore-backends` -- S3, GCS and Azure SDKs all pull netty or
++# httpcomponents transitively, and failing that module would tell its author the
++# decision "belongs in ingest", pressuring them to widen this list or delete a
++# group. A gate whose only escape is to weaken it is a gate that gets weakened.
++NO_HTTP="format binstore-spi sequencer ingest"
++# architecture.md rule 2: no cloud SDK in the OpenSearch JVM.
++NO_CLOUD="client plugin"
++
++# Groups, matched with a following `.` OR `:` so a sub-namespace cannot slip
++# through. `io\.helidon:` alone missed io.helidon.webserver, io.helidon.common
++# and io.helidon.http -- i.e. every real Helidon artifact, which is the library
++# rule 5 names. The two groups that happened to be verified by hand
++# (io.netty, software.amazon.awssdk) are the only two with no sub-namespace.
++HTTP_GROUPS='io\.helidon|org\.eclipse\.jetty|io\.netty|jakarta\.servlet|org\.apache\.httpcomponents|com\.squareup\.okhttp3|org\.glassfish\.jersey'
++CLOUD_GROUPS='software\.amazon\.awssdk|com\.amazonaws|com\.google\.cloud|com\.azure'
++
++if [ $# -gt 0 ]; then
++  MODULES="$*"; WHY="named on the command line"
++elif [ "$GATE_SCOPE" = "full" ]; then
++  MODULES="$ALL"; WHY="GATE_SCOPE=full"
++else
++  # ⚠️ A change to the shared build alters EVERY module's resolved classpath
++  # while touching no module directory. The conventions plugin already injects a
++  # `dependencies {}` block into all eight, so adding Helidon there is precisely
++  # the change this gate must catch -- and mapping paths to module names would
++  # route around it.
++  if changed_files | grep -qE '^(buildSrc/|gradle/|settings\.gradle\.kts|build\.gradle\.kts|gradle\.properties)'; then
++    MODULES="$ALL"; WHY="the shared build changed, so every module's classpath may have"
++  else
++    MODULES=$(changed_files | cut -d/ -f1 | sort -u \
++              | while read -r m; do case " $ALL " in *" $m "*) echo "$m" ;; esac; done)
++    WHY="changed module directories"
++    [ -n "$MODULES" ] || { ok "no module changed$(scope_note)"; finish; }
++  fi
++fi
++
++checked=0
++for m in $MODULES; do
++  case " $ALL " in *" $m "*) ;; *) fail "unknown module: $m"; continue ;; esac
++  mkdir -p .harness
++  if ! ./gradlew ":$m:build" --console=plain -q > ".harness/check-module-$m.log" 2>&1; then
++    fail "$m: build failed -- see .harness/check-module-$m.log"
++    tail -10 ".harness/check-module-$m.log" | sed 's/^/           /'
++    continue
++  fi
++
++  # ⚠️ BOTH configurations. Rule 5's text is "compile without Helidon on the
++  # classpath", and a `compileOnly` dependency never reaches runtimeClasspath --
++  # so a compileOnly netty plus a production class calling io.netty.util.Version
++  # passed a runtime-only check. Rule 4 (nothing depends on `http`) is also a
++  # compile-time fact.
++  #
++  # ⚠️ The exit status is checked. Discarding it made an empty `deps` grep clean
++  # and print the success line over bytes never read: a failed resolution, a
++  # daemon killed under the 512 MiB cap, and a typo'd module name all looked
++  # identical to compliance.
++  deps=""
++  bad_conf=""
++  for conf in runtimeClasspath compileClasspath; do
++    if ! one=$(./gradlew ":$m:dependencies" --configuration "$conf" \
++               --console=plain -q 2>".harness/check-module-$m.err"); then
++      bad_conf="$conf"; break
++    fi
++    [ -n "$one" ] || { bad_conf="$conf (empty report)"; break; }
++    deps="$deps
++$one"
++  done
++  if [ -n "$bad_conf" ]; then
++    fail "$m: could not resolve $bad_conf -- see .harness/check-module-$m.err"
++    head -5 ".harness/check-module-$m.err" | sed 's/^/           /'
++    continue
++  fi
++  checked=$((checked+1))
++
++  case " $NO_HTTP " in *" $m "*)
++    hits=$(printf '%s\n' "$deps" | grep -oE "($HTTP_GROUPS)[.:][a-zA-Z0-9.-]*" | sort -u || true)
++    if [ -n "$hits" ]; then
++      fail "$m resolves an HTTP dependency (architecture.md rule 5, ADR-0019):"
++      printf '%s\n' "$hits" | sed 's/^/           /'
++      echo "         Two front doors, one implementation. If this module needs HTTP,"
++      echo "         the decision belongs in \`ingest\` and the adapter in \`http\`."
++    fi ;;
++  esac
++
++  # architecture.md rule 2, as written: `plugin` depends on `client`, never on
++  # `binstore-backends`. The cloud-SDK grep below does NOT cover it -- the
++  # backend has no external dependencies yet, so a direct project dependency
++  # passed clean and would only start failing once someone added an SDK to it.
++  if [ "$m" = "plugin" ] && printf '%s\n' "$deps" | grep -qE "project '?:binstore-backends'?"; then
++    fail "plugin depends on binstore-backends (architecture.md rule 2)"
++    echo "         The plugin's dependency surface is deliberately minimal: no cloud"
++    echo "         SDK in the OpenSearch JVM. Route through \`client\` and \`format\`."
++  fi
++
++  case " $NO_CLOUD " in *" $m "*)
++    hits=$(printf '%s\n' "$deps" | grep -oE "($CLOUD_GROUPS)[.:][a-zA-Z0-9.-]*" | sort -u || true)
++    if [ -n "$hits" ]; then
++      fail "$m resolves a cloud SDK (architecture.md rule 2):"
++      printf '%s\n' "$hits" | sed 's/^/           /'
++      echo "         This runs inside someone else's JVM; its dependency surface is"
++      echo "         a liability, not a convenience."
++    fi ;;
++  esac
++done
++
++[ "$FAILED" -eq 0 ] && ok "$checked module(s) checked ($WHY)$(scope_note)"
++finish
++
++# probe

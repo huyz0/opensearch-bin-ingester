@@ -1,0 +1,22 @@
+{
+  "diff_sha256": "3b68525a03f38899b8890a5ca848af6716a90ce032c89e079014a764e497b823",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "M0.13-7",
+      "severity": "blocking",
+      "file": "scripts/build-index.sh",
+      "summary": "The staged diff retargets build-index.sh's 'gates' splice from AGENTS.md to docs/internal/standards/gates.md, but gates.md (and the AGENTS.md/build.md edits that go with the split) are NOT staged -- gates.md and licensing.md are untracked working-tree-only files, and the AGENTS.md/build.md edits are unstaged modifications. `git diff --cached -- AGENTS.md` and `-- docs/internal/standards/build.md` are both empty.",
+      "failure_scenario": "Committing exactly what is staged now produces a tree where scripts/build-index.sh points at docs/internal/standards/gates.md, which does not exist in that tree, and AGENTS.md still carries the OLD inline '<!-- index:gates:start -->' region that nothing splices into anymore. Verified by `git write-tree` (no repo mutation) + `git archive` into a scratch dir and running `bash scripts/build-index.sh --check` there: it FAILS with 'docs/internal/standards/gates.md does not exist'. The packet's 'PASSED build-index.sh --check' is an artifact of running the gate against the real working directory, which happens to contain the untracked gates.md/licensing.md and the unstaged AGENTS.md/build.md edits -- none of which are part of this diff. Any reviewer or CI run that checks out just this commit gets a broken pre-commit gate immediately, on the very commit whose task is to add a gate."
+    },
+    {
+      "id": "M0.13-8",
+      "severity": "blocking",
+      "file": "scripts/build-index.sh, scripts/which-standards.sh, scripts/lib.sh",
+      "summary": "Unrelated scope bundled into an M0.13 (coverage gate) commit: (a) build-index.sh's gates.md/licensing.md splice retarget and which-standards.sh's new routing rules for gates.md/licensing.md/build.md belong to an undocumented standards-doc split with no backlog entry anywhere; (b) lib.sh gains mark_review_inflight/warn_if_index_moved, which implement review.md rule 12b for backlog item M0.21 (still 'todo'), and are called by nothing staged (review.sh is not in this diff) -- dead, untested code shipped ahead of the task that would exercise it.",
+      "failure_scenario": "AGENTS.md non-negotiable: 'Never widen scope silently. Doing more than the task asked is as much a problem as doing less, because it breaks the one-task-one-commit property.' A later `git blame` on the gates.md/licensing.md split or on M0.21's inflight-tracking lands on the M0.13 commit, which is about neither. Because the split's own files are missing from this commit (see M0.13-7), reverting just this commit to back out the coverage gate also silently reverts half of an unrelated, half-finished restructuring, and the other half (gates.md, licensing.md, AGENTS.md, build.md) is left orphaned in whoever's working tree happens to have it."
+    }
+  ],
+  "task": "M0.13",
+  "role": "reviewer"
+}

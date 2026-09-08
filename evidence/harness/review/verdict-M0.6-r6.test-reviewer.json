@@ -1,0 +1,48 @@
+{
+  "diff_sha256": "f827e5ac8c9eb5811362a316519ee90ff98c5cc76cecf456bcad9e1869231c07",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "WT21",
+      "severity": "major",
+      "file": "buildSrc/src/test/java/binjava/ModulePlanTest.java:62; buildSrc/src/test/java/binjava/ModuleGateTest.java:86",
+      "summary": "WT16's structural defect was fixed only in ModuleSelectionTest. ModulePlanTest passes exactly one path in all seven CsvSource rows and both drift rows, and every one of ModuleGateTest's six scenarios stages exactly one file, so plan() -- the composition the script calls THE seam -- and the production door have zero multi-path coverage. ModuleSelectionTest cannot cover it: --select-modules calls select_modules directly and never enters plan().",
+      "surviving_mutation": "Two, both run and confirmed. (a) In plan(): 'is_shared_build_change \"${1:-}\"' and 'select_modules \"$PLAN_ALL\" \"${1:-}\"' -- output byte-identical on all 7 --plan rows, both --root drift rows and all 6 gate scenarios. (b) check-module.sh:205 'plan $(changed_files)' -> 'plan \"$(changed_files)\"' (exactly what shellcheck SC2046 advises) -- all six gate scenarios byte-identical, but a commit staging docs/x.md and settings.gradle.kts together prints 'ok no module changed' rc=0 instead of escalating to every module. Killed by one two-path CsvSource row and one two-file staging scenario."
+    },
+    {
+      "id": "WT22",
+      "severity": "major",
+      "file": "buildSrc/src/test/resources/drift-fixtures/missing-build-file/settings.gradle.kts:1; buildSrc/src/test/java/binjava/ModuleDriftTest.java:24; buildSrc/src/test/java/binjava/ModuleGateTest.java:141",
+      "summary": "Every fixture expresses 'module in settings with no build file' as 'the directory does not exist at all' -- ghost has no directory in the fixture, and ModuleGateTest's ghost case never creates one. The drift shape the failure message actually names (directory present, build.gradle.kts deleted or renamed) is expressed nowhere.",
+      "surviving_mutation": "'[ -f \"$root/$m/build.gradle.kts\" ]' -> '[ -e \"$root/$m\" ]' passes all three ModuleDriftTest cases, both ModulePlanTest drift rows and ModuleGateTest.aGhostModuleInSettingsFails, while a tree whose ghost/ exists with the build file removed goes from FAIL to 'ok no module drift' (demonstrated on a scratch tree). Secondary, same fixture: 'local root=\"$ROOT\"' -- ignoring check_drift's root parameter -- also survives everything, because the clean fixture's modules are named ingest and http, which are real directories at the repo root. That is the coincidence removed from ModuleGateTest and left here."
+    },
+    {
+      "id": "WT23",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/ModuleGateTest.java:28",
+      "summary": "The javadoc overclaims: 'not the dependency rules, which ModuleSelectionTest and the rule-5 denylist cover separately'. ModuleSelectionTest constrains select_modules only, and nothing in the repository constrains the rule-5 denylist, the rule-4 http check or the rule-2 plugin check. Line 55's 'the gate only needs SOME dependency output to apply rule 5 to' implies a rule is applied to a verdict; the stub emits '+--- project :alpha', which matches no group, so no rule branch is ever taken. The blocks are pre-existing from M0.5 and closing the gap is not this commit's job -- pointing a reader at cover that does not exist is.",
+      "surviving_mutation": "HTTP_GROUPS='__never_matches__', or deleting the whole 'if [ \"$m\" != \"http\" ] && ... grep -qE \"project .?:http\"' block, leaves all 49 tests green."
+    },
+    {
+      "id": "WT24",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/ModuleGateTest.java:153",
+      "summary": "The gradlew-invocations recorder has no positive control: the file is only ever asserted to be absent. If the stub stops writing where the test looks, the ghost assertion goes silently vacuous -- absence proving presence, the error check_drift's own DRIFT_CHECKED comment exists to prevent. The recorder does fire today (verified). Asserting in aModuleChangeSelectsThatModuleOnly that the file exists and contains ':alpha:build' but not ':beta:build' fixes it and upgrades that case from a count to a name.",
+      "surviving_mutation": "Change the stub's append target to \"$PWD/.harness/gradlew-invocations\": the ghost case still passes, and it now passes for a reason unrelated to the drift halt it guards."
+    },
+    {
+      "id": "WT25",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/ModuleGateTest.java:87",
+      "summary": "testing.md rule 17 requires scratch under build/tmp, never the system temp directory. @TempDir resolves java.io.tmpdir; the Gradle worker command line carries -Dorg.gradle.internal.worker.tmpdir=buildSrc/build/tmp/test/work, so under ./gradlew it is very likely compliant, but I did not observe the created path and nothing in the test or in buildSrc/build.gradle.kts pins it -- run from an IDE it lands in the system temp. One line of configuration turns a probable into a fact.",
+      "surviving_mutation": "n/a -- standards compliance, not a weak assertion."
+    },
+    {
+      "id": "WT26",
+      "severity": "minor",
+      "file": ".pre-commit-config.yaml:65",
+      "summary": "Criterion coverage: the task is 'wire into .pre-commit-config.yaml AND CI'. The pre-commit half is a file fact carried by build-index.sh --check, which is stronger than a test -- no finding. The CI half has no artefact: git ls-files finds no .github/, .gitlab-ci.yml or any CI file, so AGENTS.md:217 'CI sets GATE_SCOPE=full to build all eight' describes a runner that does not exist in this tree. Consistent with pre-existing rows that already say 'CI runs ...', so this is the production reviewer's call on scope, not a test defect.",
+      "surviving_mutation": "n/a -- criterion with no test and no artefact."
+    }
+  ]
+}

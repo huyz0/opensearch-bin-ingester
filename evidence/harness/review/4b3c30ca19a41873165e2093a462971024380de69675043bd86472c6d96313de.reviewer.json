@@ -1,0 +1,22 @@
+{
+  "diff_sha256": "4b3c30ca19a41873165e2093a462971024380de69675043bd86472c6d96313de",
+  "verdict": "pass",
+  "findings": [
+    {
+      "file": "ingest/src/test/java/binjava/ingest/SegmentPublisherTest.java",
+      "line": 171,
+      "severity": "minor",
+      "summary": "Test helper extracts the embedded filter via key.substring(key.lastIndexOf('-') + 1, ...), the same unanchored-dash pattern SegmentKey.headerLenOf was specifically fixed to stop using; only works here because the fixture's filter payload happens not to contain a trailing embedded '-'.",
+      "failure_scenario": "A future edit to this test using a Bloom or larger exact-bitmap filter whose payload tail contains '-' would truncate the substring; MembershipFilter.decode would likely throw rather than silently pass wrong -- low risk, but the same hazard class production code was hardened against."
+    },
+    {
+      "file": "format/src/test/java/binjava/format/SegmentKeyTest.java",
+      "line": 137,
+      "severity": "minor",
+      "summary": "Same unanchored lastIndexOf('-') extraction pattern, used to pull the embedded filter back out of the key for theFilterIsEmbeddedInTheKeyAndRoundTripsThroughDecode.",
+      "failure_scenario": "Benign for the All filter fixture used here (no dash in \"A\"), but fragile if the test is later adapted to a filter type whose payload can end in '-'."
+    }
+  ],
+  "task": "M2.6",
+  "role": "reviewer"
+}

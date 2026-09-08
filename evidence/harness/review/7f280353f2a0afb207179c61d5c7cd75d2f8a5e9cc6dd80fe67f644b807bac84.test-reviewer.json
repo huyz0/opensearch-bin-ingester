@@ -1,0 +1,24 @@
+{
+  "diff_sha256": "7f280353f2a0afb207179c61d5c7cd75d2f8a5e9cc6dd80fe67f644b807bac84",
+  "verdict": "pass",
+  "task": "M4.1",
+  "role": "test-reviewer",
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "minor",
+      "location": "sequencer/src/main/java/binjava/sequencer/CommitRequest.java:72-81",
+      "title": "The copy-FIRST-then-validate ordering is claimed in the backlog row and in a code comment, but no test constrains it",
+      "surviving_mutation": "Move `recordCounts = Map.copyOf(recordCounts);` (line 74) to BELOW the validation for-loop (lines 75-81), so the caller's own map is validated and copied afterwards. All 17 sequencer tests pass. Verified by running the suite with the mutation applied: total=17 failed=0.",
+      "failure_scenario": "The backlog row for M4.1 states as delivered behaviour that recordCounts is 'copied FIRST then validated, so a caller cannot mutate between check and copy', and CommitRequest.java:72-73 carries the same claim as a comment. testing.md rule 13 requires every acceptance criterion to have a test that would fail without the change; this one has none. A future refactor that reorders those two statements -- the natural order a reader would write, validate-then-copy -- reopens a check-then-use window in which a concurrent caller can smuggle a non-positive or extra recordCount past the seam into a record that then crosses a network from M5, and nothing in the suite goes red. Note this is a concurrency TOCTOU and is genuinely awkward to pin deterministically at T0: an attempt to build a hostile Map that mutates itself between reads was inconclusive here because Map.copyOf reads entrySet() more than once. testing.md rule 9's own escape hatch applies -- a surviving mutant is 'killed OR argued' -- so recording it in baselines/mutants.txt is an equally correct resolution, and neither is required to land this commit."
+    },
+    {
+      "id": "F2",
+      "severity": "minor",
+      "location": "sequencer/src/test/java/binjava/sequencer/FakeSequencerTest.java:155-161",
+      "title": "The run-ordering assertion kills the sort-deletion mutation only probabilistically, because CommitRequest normalises recordCounts through Map.copyOf whose iteration order is SALT-randomized per JVM",
+      "surviving_mutation": "Delete `.sorted(Map.Entry.comparingByKey())` at FakeSequencer.java:50. This was round 1's headline mutation and it now fails MOST of the time, but not always: the very first suite run with it applied reported total=17 failed=0. Measured directly -- Map.copyOf over the three RunKeys this test uses produced the sorted permutation in 1 of 20 fresh JVMs, and the theoretical escape rate for 3 keys is 1 in 6.",
+      "failure_scenario": "The test controls neither the input order nor the output order it is comparing against: it hands FakeSequencer a LinkedHashMap, but CommitRequest's compact constructor replaces it with Map.copyOf, so the fake always receives a map whose iteration order is decided by the JVM's ImmutableCollections SALT. With the production sort present the test is deterministic and never flaky in the green direction, so this is not a flakiness bug; the defect is one-sided. But a future commit that removes or breaks the sort has a real chance of a green CI run, and the byte-identical-replay property the assertion description invokes would then be silently lost. Cheapest fix: raise the number of streams in this one test from 3 to 5 or 6, which drops the escape probability from 1/6 to 1/120 or 1/720 without changing what is asserted. Recorded rather than demanded -- the assertion is correct as written and the multi-run gap round 1 raised is genuinely closed."
+    }
+  ]
+}

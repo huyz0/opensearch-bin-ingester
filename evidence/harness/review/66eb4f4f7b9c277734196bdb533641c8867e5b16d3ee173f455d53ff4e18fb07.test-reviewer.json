@@ -1,0 +1,18 @@
+{
+  "diff_sha256": "66eb4f4f7b9c277734196bdb533641c8867e5b16d3ee173f455d53ff4e18fb07",
+  "verdict": "pass",
+  "summary": "Round 8, verify-only. The delta since the tree my round-7 pass was bound to (be1f1267) is exactly ONE file: docs/internal/product/backlog-done.md. Verified by git diff --name-status be1f1267..86ed282, not by taking the author's word -- no test file, no production file, no baselines/mutants.txt, no red record moved. The two test files are byte-identical blobs to the ones already passed, so every kill matrix I measured in rounds 6 and 7 still binds and none was re-derived. The corrected sentence's guard attribution is accurate and I checked it against the code rather than the prose: ChainReplayNonDeltaKeyTest seeds exactly three interlopers (logPrefix+ckpt/%016x.ckpt at line 90, logPrefix+0000000000000001.delta.tmp at line 101, logPrefix+ckpt/%016x.delta at line 194); the first two fail !key.endsWith(SUFFIX) at LogKeys.java:70 and the third passes both length guards, slices digits 'ckpt/0000000000000009' and dies in Long.parseUnsignedLong at LogKeys.java:75. None reaches key.equals(keyFor(sequence)), which is precisely why 'return true' there survives the end-to-end file and is killed only by LogKeysTest -- the row now states this correctly where it previously attributed all three refusals to the parse. check-tdd.sh: 8 new tests, all observed failing first, unchanged since. check-test-integrity.sh against a minimal commit message: no test weakened, disabled or removed. One minor is CARRIED FORWARD unchanged from round 7 because the bytes it describes are still staged and a verdict is bound to a hash -- it must not vanish when the earlier hash's record is superseded. It did not block then and does not block now. Nothing in the shared tree was mutated: git diff --cached still hashes to 66eb4f4f.",
+  "findings": [
+    {
+      "file": "baselines/mutants.txt:51",
+      "severity": "minor",
+      "blocks": false,
+      "title": "CARRIED FORWARD from round 7, unchanged and deliberately not fixed: the contains(SUFFIX) entry is headed EQUIVALENT while its own last sentence names a reachable input that kills it",
+      "detail": "The entry for `key.endsWith(SUFFIX)` widened to `key.contains(SUFFIX)` is filed under EQUIVALENT ON THE OBSERVABLE, then closes by stating that with `prefix = \"a.delta\"` the match lands early and `<logPrefix>x` throws. That is a survivor with a named killing input, not an equivalent mutant -- the argument is conditional on a deployment property (`logPrefix` contains no `.`) that the entry itself says nothing validates. The honest forms are a one-line LogKeysTest case constructing LogKeys with a dotted prefix, or re-filing the entry as ARGUED-CONDITIONAL naming the condition in its heading rather than its last line. Author elected on my round-7 recommendation to record it in the commit body rather than fix it, which is the right call under review.md's minor-lands rule: fixing a minor makes the next round's surface the prose the fix just added.",
+      "failure_scenario": "A future session reads mutants.txt for the surviving-mutant inventory, sees EQUIVALENT in the heading, and does not read to the last sentence. If a deployment ever configures a prefix containing '.', isEntryKey under this widening slices with begin > end and throws StringIndexOutOfBoundsException out of recovery -- the exact unchecked-throw-kills-takeover failure mode M4.8b1 exists to remove -- and the one file whose header exists to warn about laundered survivors will have recorded it as benign."
+    }
+  ],
+  "task": "M4.8b1",
+  "role": "test-reviewer",
+  "staged_tree": "86ed282ab2c2b707e5c9e2642fd22decfcbf60c2"
+}

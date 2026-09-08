@@ -1,0 +1,18 @@
+{
+  "diff_sha256": "55efbfba63a6d7cc96ba72afa6072d61aa4b8e9cadcbea5dbfb7cc7fb2318ece",
+  "verdict": "pass",
+  "summary": "All four round-2 findings re-measured closed in my own tree: while->if dies only in legalPipeliningAtDepthTHREEIsPERMITTED; watermark keyed on 0L dies in aSUCCESSORChainAckingOutOfOrderIsCaught and TWOChainsAtDIFFERENTFloorsAreJudgedSeparately; base flattened to a global min dies in TWOChainsAtDIFFERENTFloorsAreJudgedSeparately; the message's + w replaced by the chain floor dies in theMessageNamesTheLOWESTUnconfirmedWriteNotTheFloor and aSUCCESSORChainAckingOutOfOrderIsCaught. Six further mutations of the round-1 watermark and round-2 per-epoch maps all die (base Math::min->max, confirmed set keyed on a constant, seen.contains(w+1) off-by-one, watermark.put dropped, watermark advance before seen.add, else-if->if). w < seq -> w <= seq survives but is semantically equivalent: the else-if is reached only when e.sequence() is in seen, and w is by construction the lowest sequence at or above the floor not in seen, so w != e.sequence(). This round's delta is tests and javadoc only, so there is no new production code to leave unconstrained. The documented floor hole is not blocking: its stated mitigation rests on checkChain arms that already carry tests (InvariantsTest.aHOLEInTheChainIsReported, InvariantsTest.anEntryBEYONDASealIsReportedAsI5), and M4.13's notes carry the CONTINUE-emission and run-both-checkers requirements. Full :sequencer:test green on the staged bytes.",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/Invariants.java:167",
+      "title": "The own-write branch's report may name the wrong sequence and every test still passes",
+      "failure_scenario": "M4.13 feeds a failing seed's trace in and the sweep reports 'epoch 2 acked sequence 2 while its own write was unconfirmed' when the ack was actually of sequence 7. The violation is still counted, so the seed still fails; the engineer pinning it as a named regression test is sent to the wrong slot. This is the exact harm theMessageNamesTheLOWESTUnconfirmedWriteNotTheFloor was added this round to prevent on the other branch, and the symmetric branch is unpinned.",
+      "surviving_mutation": "In the first arm, replace `+ e.sequence() +` with `+ e.epoch() +` in the message: `new Violation(\"I5\", \"epoch \" + e.epoch() + \" acked sequence \" + e.epoch() + \" while its own write was unconfirmed\")`. MEASURED in the reviewer tree: all 14 AckOrderTest tests pass. ackingAWriteThatWasNEVERConfirmedIsAVIOLATION asserts only invariant()==\"I5\"; ONECHAINSConfirmationsDoNotSatisfyANOTHERS asserts only detail contains \"epoch 2\", which the mutant still produces; anAckThatIsBothUnconfirmedAndOutOfOrderCountsONCE asserts only hasSize(1). No test asserts 'acked sequence <n>' on this arm.",
+      "note": "Non-blocking, and fixing it in a fourth round is probably the wrong trade -- the arm is round-1 code that already carries a verdict. A one-line assertion added when M4.13 first consumes the message would close it."
+    }
+  ],
+  "task": "M4.11",
+  "role": "test-reviewer",
+  "staged_tree": "f24e3ac6f64ff93af91921729a70a71f6d38351e"
+}

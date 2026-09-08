@@ -1,0 +1,37 @@
+{
+  "diff_sha256": "68c714405ad5156656e637e4fca90e16677c62935ba51cb5ea355d3ba1668557",
+  "verdict": "changes-requested",
+  "task": "M4.43",
+  "role": "reviewer",
+  "findings": [
+    {
+      "id": "M4.43-R1a",
+      "severity": "major",
+      "file": "docs/internal/product/backlog-done.md:105",
+      "summary": "The row says it files \"the two minors M4.17's round-4 reviews recorded rather than fixed\". M4.17 (70947f0) records FOUR under \"Recorded minors from the final round, both roles, none blocking\": (1) the bimodal 2x mutant, (2) the `drainPermits` comment, (3) the surviving pre-correction sentence, (4) \"strictly WORSE than no tick\". This commit files (1) as M4.41 and bundles (3)+(4) into M4.42. Minor (2) is filed NOWHERE: `grep -rn 'drainPermits|rendezvous|tickAndAwaitProcessed|stale permit' docs/ baselines/` returns no hit, and `grep -c drainPermits` over all three backlog files returns 0,0,0. It is still live at HEAD, and I checked the statically decidable half rather than trusting the commit body: `parked.drainPermits()` (sequencer/src/test/java/binjava/sequencer/LocalSequencerRenewTest.java:123) sits in `tickAndAwaitProcessed`, whose ONLY call site is line 291, and that is the FIRST tick in its test -- the next `ticker.tick()` is line 301, after it. The drain therefore always drains zero, so the premise of the comment above it (lines 113-117: \"`parked` accumulates one per completed loop, so after any earlier `tick()` the second acquire below would take a leftover permit\") describes a state the file cannot reach, and its \"it still dies, but at `awaitExpiryPast`'s twenty-second deadline instead of at the `commit` two lines below\" is the sentence both roles measured false. The count \"two minors\" is also simply wrong whichever way it is read: four were recorded, three are filed.",
+      "failure_scenario": "The row's stated purpose is that these minors \"survive in the authoritative task list rather than only in a commit body nothing loads\". For minor (2) that is exactly what happens -- it survives only in 70947f0's body, which no session loads -- so the false `drainPermits` comment and the dead `drainPermits()` call are never picked up by anyone. The commit reproduces, in the act of recording it, the failure mode M4.42 is about: part of a fact carried across, the rest dropped. Fix is one more row (or one clause in M4.41/M4.42 naming it), not a re-review of the rows already here."
+    },
+    {
+      "id": "M4.43-R1b",
+      "severity": "major",
+      "file": "docs/internal/product/backlog-notes.md:313",
+      "summary": "M4.42 states \"THE CORRECTION WAS APPLIED TO ONE COPY ONLY\" and names exactly one survivor -- `LocalSequencerRenewTest`'s fenced-test comment, which is really there (LocalSequencerRenewTest.java:234-237: \"worse than no tick: the old leader keeps committing into a chain a successor has already sealed, reassigning offsets it has issued. I2.\"). There is a THIRD uncorrected copy, and it is in PRODUCTION, on the branch that latches the fence: sequencer/src/main/java/binjava/sequencer/LocalSequencer.java:109-113 -- \"\u26a0\ufe0f EMPTY MEANS FENCED, and it is the ONLY thing that does. Another node holds the term now, and it has sealed this chain; committing on would reassign offsets a successor has already issued, which is I2.\" That is the pre-correction claim entire: it asserts the seal has already landed at the instant of the empty renew, which is what baselines/review.txt:17 now corrects (\"THE WINDOW IS BEFORE THE SEAL LANDS, not after\"). The same comment block contradicts itself five lines on -- \"\u26a0\ufe0f NOT NECESSARILY A TAKEOVER, and an earlier draft of this line said it was\" (LocalSequencer.java:114-121) -- so under ADR-0027's self-fence even \"Another node holds the term now\" is denied by its own successor sentence. The row's `CommitLog` half is correct and I verified it: `sealedAt != null` -> `throw fenced(sealedAt)` (CommitLog.java:284-289), the lost-race `throw fenced(seal)` (CommitLog.java:338), message at CommitLog.java:464-468.",
+      "failure_scenario": "A session picks M4.42, fixes the single location the row names, closes the row, and the false claim goes on standing in the production comment that explains why `fenced` is a one-way latch -- the comment a reader consults before deciding whether the fence can be relaxed, and the one whose wrongness would make relaxing it look safe. The row whose whole thesis is \"ONE COPY OF A FACT FIXED AND ITS DUPLICATE MISSED ... reached again\" would have caused that a third time. Naming LocalSequencer.java:109-113 alongside the test file costs one clause."
+    },
+    {
+      "id": "M4.43-R1c",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:309",
+      "summary": "\"the surviving band of roughly 0.75x-2.22x\" disagrees with the number in the very file the row says must be corrected: LocalSequencerRenewTest.java:386 says \"a whole surviving band of roughly 0.56x to 2.22x\". 0.56x is the derivable figure -- the lower end is set by the slow sequencer's `isLessThan(3L)`, which fires when 1000/(600m) reaches 3, i.e. m = 0.56; at m = 0.5 the slow interval is 300ms and the count is 3 (killed), at m = 0.6 it is 360ms and the count is 2 (survives). Neither the fast ceiling of 30 (m >= 0.22) nor the slow bound produces 0.75, and 0.75x is not expressible as a `multipliedBy`/`dividedBy` mutation in any case. The backlog.md headline (line 141) has already dropped the figure; only the note still carries it.",
+      "failure_scenario": "The two numbers disagree across exactly the pair of artefacts M4.41 says must be reconciled, and neither shows its derivation, so whoever does the fix cannot tell which was computed and which was copied. The error is in the conservative direction (it understates the surviving band), so nothing breaks; it costs a round."
+    },
+    {
+      "id": "M4.43-R1d",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:309",
+      "summary": "The clause added to correct a point value taken from too few runs states another point value taken from too few runs: \"Measured at a 2000ms window, `--rerun-tasks`, read from the result XML: ... 2x mutant `fastRate=7 slowRate=1` (3 of 3). So the mutant is 7, not 6\". I measured the same configuration in my own tree (2000ms window, `sleepFor(leases.renewInterval().multipliedBy(2))`, `--rerun-tasks`, values read from TEST-binjava.sequencer.LocalSequencerRenewTest.xml, load average ~206) and got fast=6, fast=7, fast=7. The mutant is bimodal at 6/7 for exactly the arithmetic the row itself gives for 3/4 one window down: 2000/300 = 6.67. \"The mutant is 7, not 6\" is one mode reported as the value.",
+      "failure_scenario": "No consequence for the remedy -- 6 and 7 both sit two or more units below a floor of 9, and the row's conclusion that the floor separates it survives either reading. The cost is that the row about numbers read from one run and reported as measurements contains one, in the sentence written to correct one. Fix is a word: \"6 or 7\"."
+    }
+  ],
+  "staged_tree": "a4dd9e318995b5473ff0d2f575ea7179100ad5c0"
+}

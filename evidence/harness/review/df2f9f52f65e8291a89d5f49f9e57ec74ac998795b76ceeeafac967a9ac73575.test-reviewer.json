@@ -1,0 +1,29 @@
+{
+  "diff_sha256": "df2f9f52f65e8291a89d5f49f9e57ec74ac998795b76ceeeafac967a9ac73575",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "file": "sequencer/src/main/java/binjava/sequencer/LocalSequencer.java",
+      "line": 157,
+      "severity": "major",
+      "what": "MEASURED SURVIVING MUTATION. This diff turns `Sequencer.commitAll` into THE PRIMITIVE and rewrites the only production implementation, LocalSequencer, from `commit(request)` to `commitAll(requests)` -- and nothing in the tree ever calls it with more than one request. Replace line 157 with `return log.commitAll(List.of(requests.get(0)));` (silently drop every request but the first) and `./gradlew test` is green across ALL modules. The batched path of the FAKE was strengthened this round (aBATCHEDCommitAdvancesOffsetsACROSSSegments...), while the batched path of the REAL sequencer has no test at all; BatchingSequencer is only ever composed with the test-local `DirectSequencer`/`ClosingSequencer` records, never with LocalSequencer. CommitLogBatchTest covers the layer BELOW. A 3-line test in LocalSequencerTest -- commitAll two distinct segment keys, assert both come back with their own runs -- kills it.",
+      "failure_scenario": "The request-losing delegation is exactly the defect class round 1 already found once on this task (`commitAll` as a pass-through: 'a pass-through that loses requests acks flushes that were never committed'). It was closed on BatchingSequencer and left unpinned one layer down, on the class that actually reaches the object store. The moment M4.7c wires BatchingSequencer over LocalSequencer, a delegation that drops window-mates returns a durable delta to every caller in the window while only one segment's offsets were ever written -- FR-4's ack fires for flushes that are not in the chain, and no conditional write catches it because the entry that was written is internally consistent."
+    },
+    {
+      "file": "sequencer/src/main/java/binjava/sequencer/BatchingSequencer.java",
+      "line": 344,
+      "severity": "major",
+      "what": "MEASURED SURVIVING MUTATION. The restore of the caller's interrupt flag is placed in a `finally` AFTER `delegate.close()`, and 12 lines of comment above it claim the ordering was measured both ways ('leaseReleased=false, closeThrew' before, 'leaseReleased=true, closeThrew=none' after). Move the restore to BEFORE the `try { delegate.close(); }` -- i.e. revert to the ordering the comment says was wrong -- and `./gradlew test` is green across ALL modules. Round 4's finding on line 308 (`Thread.interrupted()` -> `false`) IS now killed by closeJOINSTheCommitterBeforeClosingTheDelegate, via its `closedMidCommit` assertion; the ORDERING of the restore is a separate, separately-argued decision in the same method and nothing constrains it. Every delegate in both test files has an interrupt-insensitive `close()` (`{}`, `closed.set(true)`, `closedMidCommit.set(...)`), so the property the comment describes is unreachable from the fixtures.",
+      "failure_scenario": "A pod shuts down from a thread that already carries an interrupt -- the shape the class's own comment says 'would hit it every time', and the shape closeJOINSTheCommitterBeforeClosingTheDelegate already constructs. With the restore moved earlier, `LocalSequencer.close()` -> `leases.release()` -> `BoundedLock.takeOrFail` -> `tryLock(bound, NANOSECONDS)` throws immediately on the set flag: the lease is NOT released and survives to its TTL (the ~10s failover this method exists to avoid), and `BatchingSequencer.close` throws, so the caller's remaining shutdown never runs. A T0 fake closes it: a delegate whose `close()` records `Thread.currentThread().isInterrupted()` and throws IOException when set, asserted released-and-did-not-throw."
+    },
+    {
+      "file": "sequencer/src/main/java/binjava/sequencer/BatchingSequencer.java",
+      "line": 118,
+      "severity": "minor",
+      "what": "The empty-batch guards added in this diff -- BatchingSequencer.commitAll:118 and FakeSequencer.commitAll:43, both `throw new IllegalArgumentException(\"a commit with no segments commits nothing\")` -- have no test. Deleting BatchingSequencer's guard leaves the tree green: an empty submission is enqueued, occupies a whole window, reaches CommitLog.commitAll and is refused there, so the caller still sees an IllegalArgumentException, just one window later and after the committer thread has churned. Deleting FakeSequencer's guard is a plain no-op for the suite. CommitLogBatchTest:217 pins the guard at the log; neither new copy is pinned where it was added.",
+      "failure_scenario": "A caller that submits an empty batch gets no fast, local refusal from either the fake or the batcher; the fake in particular is the fixture every downstream module tests against, so its validation can be deleted with nothing noticing."
+    }
+  ],
+  "task": "M4.7",
+  "role": "test-reviewer"
+}

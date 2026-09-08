@@ -1,0 +1,41 @@
+{
+  "diff_sha256": "94eb42b754d2d886cc0bf2c449b09eed79d70ce1ed3fcc0f32a1381bececb3c4",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "BT1",
+      "severity": "minor",
+      "file": "buildSrc/src/main/kotlin/binjava.java-conventions.gradle.kts:36",
+      "summary": "-Xlint:all -Werror is applied via tasks.withType<JavaCompile>, so it governs compileTestJava / compileIntegrationTestJava / compileClusterTestJava as well as main. Verified empirically: two ordinary test idioms are rejected outright.",
+      "failure_scenario": "Measured in a scratch copy of the staged tree. (1) A test that exercises a deprecated production path -- assertThat(Legacy.old()).isEqualTo(1) where Legacy.old() is @Deprecated -- fails compileTestJava with 'warning: [deprecation] ... error: warnings found and -Werror specified'. (2) A test that opens a fake purely for its close() -- try (var ignored = new FakeStore()) { ... } -- fails with 'warning: [try] auto-closeable resource ignored is never referenced'. Neither is a bad test; both are the normal way to write those tests. The author's cheapest repair is not @SuppressWarnings on the test but editing this one shared line to '-Xlint:all,-serial,-processing,-deprecation,-try', which silently removes the same two lints from production compilation -- weakening a gate to make a check pass (AGENTS.md non-negotiable 2). The safe form is to keep -Werror on main and relax -deprecation/-try only for the test source sets."
+    },
+    {
+      "id": "BT2",
+      "severity": "minor",
+      "file": "buildSrc/src/main/kotlin/binjava.java-conventions.gradle.kts:72",
+      "summary": "integrationTest and clusterTest are correctly kept out of `check`, but `check` does not compile their sources either, so T3/T4 test code can be committed broken with every local gate green.",
+      "failure_scenario": "Verified: `./gradlew check` on the scratch copy ran only compileJava, compileTestJava, test and check -- compileIntegrationTestJava and compileClusterTestJava never appeared in the task graph, while a deliberately failing test placed in src/integrationTest was picked up and run by `./gradlew integrationTest`. So: a rename of a production method in `ingest` breaks the T3 store-conformance suite in src/integrationTest; `./gradlew check` passes, pre-commit passes, the commit lands claiming to leave the tree green, and the breakage surfaces only in nightly CI a day later (build.md's L2 path filter or the nightly). `tasks.named(\"check\") { dependsOn(\"integrationTestClasses\", \"clusterTestClasses\") }` is one line, costs a compile and no container, and preserves the 'default task starts no container' property this file exists to guarantee."
+    },
+    {
+      "id": "BT3",
+      "severity": "minor",
+      "file": "buildSrc/src/main/kotlin/binjava.java-conventions.gradle.kts:53",
+      "summary": "implementation(project()) is applied to every suite by configureEach, including the built-in `test` suite where it is redundant. It puts a second copy of every production class -- the module jar -- on the unit-test classpath and pulls :jar onto the critical path of `./gradlew test` in all eight modules.",
+      "failure_scenario": "Verified by printing tasks.test.classpath in the scratch copy: it contains BOTH build/classes/java/main AND build/libs/format.jar, and `./gradlew :format:test` executes :format:jar before :format:compileTestJava. Two consequences. (a) Eight extra jar tasks inside build.md's 90 s L0 pre-commit budget, for no benefit -- the default test source set already extends main's implementation configuration and sees main's output. (b) When PIT is attached for testing.md rule 9 (M0.14), the minion classpath will hold both a mutated build/classes/java/main and an unmutated jar copy of the same class; which one loads is classloading order, and a mutant that never loads is scored as survived, understating exactly the number the 80%-killed gate is supposed to measure. I confirmed JaCoCo is NOT affected (jacocoTestReport attached cleanly under the configuration cache and reported 100% on the sample class), so this is a PIT-shaped risk, not a coverage one. Scoping implementation(project()) to the two registered suites removes it."
+    },
+    {
+      "id": "BT4",
+      "severity": "minor",
+      "file": "buildSrc/src/main/kotlin/binjava.java-conventions.gradle.kts:12",
+      "summary": "Neither java-test-fixtures nor any shared test source set is configured, and the three suites are mutually invisible, so there is no home for a fake or a base test class that has to be shared across tiers or across modules.",
+      "failure_scenario": "Verified by printing the classpaths: tasks.integrationTest.classpath contains build/classes/java/integrationTest and format.jar but NOT build/classes/java/test, and there is no testFixtures variant for another module to consume. testing.md rule 19 names the store conformance suite as carrying disproportionate weight and requires it to run against every supported backend; binstore-spi/README.md in this same diff calls it 'the conformance suite'. That suite must execute at T1 against MemoryBinStore/LocalFsBinStore (src/test) and at T3 against MinIO (src/integrationTest). With the source sets isolated, the cheapest path open to the author who writes it is to copy the abstract suite into both, and two copies drift -- which produces precisely the silent per-provider CAS divergence rule 19 exists to detect, while both copies stay green. Same gap for the Clock and SubscriptionTransport fakes that architecture.md requires be 'kept in step in the same commit': ingest cannot use a fake defined in sequencer's test source set. Adding `java-test-fixtures` to this plugins block is one line and costs nothing today, whereas retrofitting it after the fakes are written means moving them."
+    },
+    {
+      "id": "BT5",
+      "severity": "minor",
+      "file": "gradle.properties:10",
+      "summary": "org.gradle.java.compile-daemon.jvmargs is not a property Gradle reads. The file's opening comment claims 'Memory caps live here because this is where the runtime enforces them', which is true of the other three lines and false of this one.",
+      "failure_scenario": "Verified two ways. (1) The string 'compile-daemon' appears in zero of the 345 jars in the Gradle 9.7.0 distribution, while the control string 'org.gradle.workers.max' is found in gradle-core-9.7.0.jar -- so Gradle never reads this key. (2) Watching processes during :format:compileJava, no javac worker is spawned at all: the toolchain JDK matches the daemon JVM, so compilation runs in-process inside the 1 GiB daemon. The exposure is small -- I forced options.isFork = true and the worker came up with -Xmx512m from Gradle's own compiler-daemon default, so the real cap happens to match build.md's budget line by accident. The defect is that the line is inert: when scripts/check-test-budget.sh is written to 'assert these are present' (the comment above says exactly that), it will certify a 512 MiB compile cap on the evidence of a string nothing parses, and anyone who later edits the number will observe no change. Either drop it and rely on options.forkOptions.memoryMaximumSize in the conventions plugin, or set it there and delete the inert key."
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "diff_sha256": "e46903273cdc7355f128fee5b2e855917fb8f75baecbc97f71ebd2ba314b8e42",
+  "verdict": "pass",
+  "findings": [
+    {
+      "file": "plugin/src/clusterTest/java/binjava/plugin/DeleteAndVersionIT.java",
+      "line": 166,
+      "severity": "minor",
+      "failure_scenario": "Thread.sleep(3_000) settle window asserting an absence (no resurrection). Literal testing.md rule-15 violation but matches existing precedent (ShardFanOutIT.java:127, SearchableIT.java:185); empirically confirmed to still catch a dropped/omitted _version mutation within the window."
+    },
+    {
+      "file": "plugin/src/clusterTest/java/binjava/plugin/DeleteAndVersionIT.java",
+      "line": 201,
+      "severity": "minor",
+      "failure_scenario": "Same Thread.sleep(3_000) pattern in testAnOlderReplayDoesNotOverwriteANewerLiveWrite, same rationale/precedent as line 166."
+    },
+    {
+      "file": "plugin/src/clusterTest/java/binjava/plugin/DeleteAndVersionIT.java",
+      "line": 118,
+      "severity": "minor",
+      "failure_scenario": "sourceField() helper returns null silently when the id is not found among hits, so a missing document surfaces as an NPE at the call site rather than a named assertion failure. Diagnostics-quality only; confirmed it still fails loudly rather than passing silently."
+    },
+    {
+      "file": "plugin/src/clusterTest/java/binjava/plugin/DeleteAndVersionIT.java",
+      "line": 81,
+      "severity": "minor",
+      "failure_scenario": "Files.createTempDirectory uses the system temp dir (testing.md rule 17), a pre-existing pattern across all clusterTest ITs, not introduced by this change."
+    }
+  ],
+  "task": "M1.21",
+  "role": "test-reviewer"
+}

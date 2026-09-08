@@ -1,0 +1,13 @@
+{
+  "diff_sha256": "f03952c50c12fd445d0be2afd2ae80b7fe0d26e3fc0e383eb609847799bc7df7",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "M2.0-2",
+      "severity": "minor",
+      "failure_scenario": "Replacing current.version().equals(expected) with reference equality (!=) in MemoryBinStore.putIfMatch leaves every test green, since no test constructs a fresh Version instance carrying the same token as a genuinely-current one; LocalFsBinStore is only accidentally immune because readMeta always reconstructs a new Version from disk."
+    }
+  ],
+  "task": "M2.0",
+  "role": "test-reviewer"
+}

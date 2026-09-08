@@ -1,0 +1,48 @@
+{
+  "diff_sha256": "94a61ead50ea4d47cf327867eeb27baf70fc502db70b502bf613c26d60bcfcaf",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "TR5-1",
+      "severity": "minor",
+      "file": "buildSrc/build.gradle.kts:46",
+      "summary": "The new `rootGitignore` test-task input and its `Measured:` comment are justified entirely by `FreshCheckoutTest asserts check-gate-scope refuses when .gitignore stops ignoring .tmp/` -- a test that is not in this commit (it went out with the M0.31 revert). No remaining test in the tree reads the root .gitignore; grep confirms the only other references are prose. Residue of the reverted half.",
+      "failure_scenario": "Over-declaring an input can only cause extra reruns, so there is no false green here. The cost is a comment that names a nonexistent test as its evidence: the next reader either deletes the input as unused -- and M0.31's test then goes UP-TO-DATE across exactly the .gitignore edit it exists to catch, the defect the comment describes -- or trusts a `Measured:` claim that cannot be reproduced against this tree."
+    },
+    {
+      "id": "TR5-2",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java:57",
+      "summary": "The fixture's post-tar sanity assertion pins `scripts/check-gate-scope.sh`, and line 69 asserts `.tmp/` is absent. Neither is needed by the one remaining test, whose subject is scripts/check-harness-tests.sh and whose only load-bearing fixture invariant is line 70 (`.harness` absent). The tracked-list equality at 66 already subsumes the existence check, more strongly.",
+      "failure_scenario": "M0.31 edits check-gate-scope.sh and may rename or split it; the moment it moves, this unrelated test goes red reporting `sanity: the tar copy must have produced the tree` -- a false RED in the class written to eliminate false REDs. Pinning scripts/check-harness-tests.sh instead would make the sanity check fail only for a reason the test is about."
+    },
+    {
+      "id": "TR5-3",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java:6",
+      "summary": "`import java.io.IOException` is unused -- no method in the file declares or catches it; every helper throws Exception. Left behind by the four removed tests.",
+      "failure_scenario": "No behavioural risk. It is the cheapest available signal that the file was narrowed rather than rewritten, and it survives because no gate in scripts/ checks unused imports."
+    },
+    {
+      "id": "TR5-4",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java:133",
+      "summary": "gate() sets HOME and XDG_CONFIG_HOME to exactly the values scrub(pb, dir) already set two lines earlier, under a comment justifying them by `the personal ignore file, which decides check-gate-scope's answer`. The rationale belongs to a removed test; the assignment is a no-op duplicate.",
+      "failure_scenario": "Harmless today. It becomes harmful the moment scrub()'s HOME handling is changed for a reason: the duplicate silently overrides it for gate() only, and the divergence is invisible because both sites currently agree."
+    },
+    {
+      "id": "TR5-5",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java:131",
+      "summary": "The gate is only ever exercised at GATE_SCOPE=full. The staged production line is unconditional and at top level, so the direct mutations all die -- but the delta path, which is the mode pre-commit actually runs, reaches the same redirect and is unconstrained.",
+      "failure_scenario": "Surviving mutation: replace `mkdir -p .harness` (scripts/check-harness-tests.sh:37) with `[ \"$GATE_SCOPE\" = \"full\" ] && mkdir -p .harness`. This test stays green because gate() pins full scope. In a fresh checkout at the default delta scope with any scripts/*.sh or buildSrc/* file staged -- the ordinary pre-commit case -- `relevant` is non-empty, control falls through to the redirect with .harness absent, and the original false RED is reproduced exactly. M0.24 already owns the delta pathspec of this script, so that is where a delta-mode fresh-checkout case belongs rather than widening M0.29."
+    },
+    {
+      "id": "TR5-6",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/FreshCheckoutTest.java:154",
+      "summary": "testing.md rule 17 says scratch goes under build/tmp, never the system temp directory. `@TempDir` resolves to java.io.tmpdir; buildSrc/build.gradle.kts sets no `systemProperty(\"java.io.tmpdir\", ...)` and there is no junit-platform.properties. Pre-existing convention -- ModuleGateTest does the same -- so this is a consistency note, not a defect introduced alone.",
+      "failure_scenario": "This fixture tars the entire tracked tree per test, so unlike ModuleGateTest's smaller fixtures it puts the whole repository into the system temp directory on every run. On a constrained tmpfs that is a failure mode outside Gradle's clean path, and it is the case rule 17 exists for."
+    }
+  ]
+}

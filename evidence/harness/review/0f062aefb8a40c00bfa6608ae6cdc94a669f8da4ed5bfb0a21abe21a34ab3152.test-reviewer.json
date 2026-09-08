@@ -1,0 +1,44 @@
+{
+  "diff_sha256": "0f062aefb8a40c00bfa6608ae6cdc94a669f8da4ed5bfb0a21abe21a34ab3152",
+  "verdict": "changes-requested",
+  "summary": "Round-4 remedy 1 (ack trace) is real and MEASURED. Remedy 2 is not: aBrokenReaderViewIsREPORTED is a duplicate of ReaderInvariantsTest:145 and the exact round-4 mutation still survives the whole suite. Separately, the completion condition's own number -- 1,000 seeds -- is pinned by nothing: every floor is SEEDS-relative, so 1/200th of the stated workload runs green.",
+  "findings": [
+    {
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSweepTest.java:75",
+      "title": "aBrokenReaderViewIsREPORTED does not constrain the sweep's wiring, and duplicates ReaderInvariantsTest:145",
+      "failure_scenario": "The sweep stops consuming checkReader's verdict -- the exact defect this test was added to close -- and every test in the repository still reports green, so the archive row's claim that the sweep carries I3 and I4's DROP clause becomes false with nothing able to tell.",
+      "surviving_mutation": "In sequencer/src/test/java/binjava/sequencer/CommitProtocolSimulation.java:352, change `violations.addAll(ReaderInvariants.checkReader(backing, PREFIX, ReaderInvariants.ReaderView.of(reader)));` to `ReaderInvariants.checkReader(backing, PREFIX, ReaderInvariants.ReaderView.of(reader));` -- keep the call, discard the verdict. MEASURED in a staged-bytes tree: `./gradlew :sequencer:test` BUILD SUCCESSFUL in 24s, aBrokenReaderViewIsREPORTED included. It calls checkReader directly, so the sweep's addAll is not on its path.",
+      "evidence": "The mutation the new test DOES kill is killed by five pre-existing tests. MEASURED: neutralising ReaderInvariants' I4 drop arm (`else if (applied < want.getValue())` -> `else if (false)`) reddens aBrokenReaderViewIsREPORTED AND ReaderInvariantsTest.aReaderThatSAWNoStreamsAtAllVIOLATESI4, .aReaderThatDROPPEDACommittedRecordVIOLATESI4, .TWOStreamsBrokenInOPPOSITEDirectionsAreBOTHReported, .aSTALEViewIsReportedAsI4AndTheCONTRACTSaysSo and ReaderInvariantsScopeTest.anEpochSEALEDBeforeItsCONTINUEIsNOWJudgedAgainstItsInheritedBase. ReaderInvariantsTest.java:145 is byte-for-byte the same shape: `checkReader(store, PREFIX, new ReaderView(1, Map.of()))` asserting I4. The new test's only difference is that its fixture comes from CommitProtocolSimulation.run instead of a hand-built chain, and that difference is not asserted on -- run.violations() is never read.",
+      "answer_to_the_direct_question": "Yes, it is a duplicate wearing a sweep-shaped name. Its javadoc says it constrains 'checker, wiring and plumbing together rather than the loop counter alone'; measured, it constrains the checker only, which was already constrained. Delete it and record the gap, or make it go through CommitProtocolSimulation.run and assert on run.violations(). Do not keep it under that javadoc.",
+      "note": "The sweep's reader arm is not entirely dead -- MEASURED: dropping `reader.recover()` at CommitProtocolSimulation.java:351 reddens theInvariantsHoldAcrossEverySeed plus two CommitProtocolSimulationTest cases. The unpinned line is precisely the addAll: a broken READER is caught, a discarded VERDICT is not."
+    },
+    {
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSweepTest.java:79",
+      "title": "The completion condition's number is asserted by nothing -- 1/200th of the stated workload runs green",
+      "failure_scenario": "Someone shortens the sweep to get the suite under a time budget -- the pressure the test's own budget comment anticipates -- and M4's completion condition 'I1-I5 hold across 1,000 seeds' is reported met by a run that covered 10 seeds at half depth. No gate sees it: non-negotiable 2 has no script, and check-test-integrity.sh looks for weakened assertions, not weakened inputs.",
+      "surviving_mutation": "Two independent constant changes in CommitProtocolSweepTest, each MEASURED green on its own and green together: (a) line 79, `Integer.getInteger(\"sweep.seeds\", 1000)` -> `Integer.getInteger(\"sweep.seeds\", 10)`; (b) line 84, `ROUNDS = 120` -> `ROUNDS = 60`. Combined, `./gradlew :sequencer:test` BUILD SUCCESSFUL in 8s against a 25s baseline -- 1/200th of the stated workload, every floor satisfied.",
+      "why_the_floors_miss_it": "All six floors are of the form `SEEDS * k`, deliberately, so they measure work PER SEED and are invariant under the seed count. The javadoc's 'wide margin in both directions' was measured against ROUNDS=3; ROUNDS=60 -- exactly half -- clears every one of them, including the takeovers floor the comment already flags as the flattest at 3.2% separation.",
+      "remedy": "One line, and it costs nothing: assert the DEFAULT rather than the resolved value, so `-Dsweep.seeds` still bisects. e.g. `assertThat(Integer.getInteger(\"sweep.seeds\", 0)).as(\"the completion condition's own number; override only downward for bisecting, never in the committed default\").satisfiesAnyOf(n -> assertThat(n).isNotZero(), n -> assertThat(SEEDS).isGreaterThanOrEqualTo(1000));` -- or make one floor absolute for the unset case. ROUNDS wants the same treatment or a tightened floor."
+    },
+    {
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSimulation.java:365",
+      "title": "The checkAckOrder wiring is deletable in full, suite green -- the DECLARED instance of finding 1's class",
+      "failure_scenario": "The sweep stops running checkAckOrder at all and nothing reports it; the javadoc's list of what a green run proves silently loses its third bullet.",
+      "surviving_mutation": "Delete `violations.addAll(AckOrderInvariants.checkAckOrder(acks));` entirely. MEASURED: `./gradlew :sequencer:test` BUILD SUCCESSFUL in 23s.",
+      "note": "Filed as minor, not major, because the javadoc declares this arm cannot fail and M4.50 owns it; the ackEvents and ackFloorAlwaysZero floors pin the TRACE, not the checker's consumption of it. Raised only so the author can see that finding 1 is the same defect UNDECLARED -- the two would be closed by one seam, and the M4.50 fix that makes checkAckOrder falsifiable is the natural place to add it."
+    }
+  ],
+  "confirmed_remedies": [
+    "Round-4 finding 1 (ack trace pinned 1 of 3 emission sites) is FIXED and MEASURED here: deleting only the two leader emissions at CommitProtocolSimulation.java:317-318 reddens CommitProtocolSweepTest.theInvariantsHoldAcrossEverySeed via the `ackEvents >= SEEDS * 5` floor.",
+    "AckOrderTest.java:212's strengthening is real and MEASURED: swapping the two terms in AckOrderInvariants' own-write arm (`\"epoch \" + e.epoch() + \" acked sequence \" + e.sequence()` -> `e.sequence()` / `e.epoch()`) now reddens ONECHAINSConfirmationsDoNotSatisfyANOTHERS. This was the M4.11 residue the notes deferred here.",
+    "No assertion was weakened. AckOrderTest's only changed assertion went from `contains(\"epoch 2\")` to `contains(\"epoch 2 acked sequence 5\")`, with the fixture changed from acked(2, 2) to acked(2, 5) so the two roles are distinguishable at all -- a strengthening, and the fixture change is what makes it one.",
+    "The sweep is a live tripwire on production code, MEASURED rather than taken from the archive row: mutating ChainReplay.java:456 `into.merge(run.key(), run.lastOffset() + 1, Math::max)` to `run.lastOffset()` reddens CommitProtocolSweepTest at line 227 -- the `failing` isEmpty assertion, i.e. through the named-seed report."
+  ],
+  "not_re_reported": "The -Dsweep.seeds forwarding in buildSrc has no guard (deleting the forwarding leaves everything green) and the @Timeout(300) dead band remains -- both already filed as M0.89 and M0.90.",
+  "task": "M4.13",
+  "role": "test-reviewer",
+  "staged_tree": "f66f2ca4113d81f4e6d922a4e341ac05918aa767"
+}

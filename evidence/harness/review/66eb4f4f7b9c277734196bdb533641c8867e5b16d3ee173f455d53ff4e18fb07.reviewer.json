@@ -1,0 +1,18 @@
+{
+  "diff_sha256": "66eb4f4f7b9c277734196bdb533641c8867e5b16d3ee173f455d53ff4e18fb07",
+  "verdict": "pass",
+  "summary": "Round 8, verify-only. Diffed the staged tree against the tree recorded with the round-7 verdict (be1f126): exactly one line moved, the M4.8b1 row in docs/internal/product/backlog-done.md, and the change is exactly the sentence named. No code, test, baseline or other prose moved. The replacement sentence is TRUE, traced against LogKeys.isEntryKey and the three interlopers ChainReplayNonDeltaKeyTest seeds: <logPrefix>ckpt/<016x>.ckpt (seedCheckpoint, seqs 3..12) and <logPrefix>0000000000000001.delta.tmp (seedInterposed) both fail !key.endsWith(SUFFIX) in the combined first guard; <logPrefix>ckpt/0000000000000009.delta (aValidEntryAtAKeyThisLogNeverWroteIsNotPartOfItsChain) passes both length guards, slices digits=\"ckpt/0000000000000009\", and Long.parseUnsignedLong(digits,16) throws on 'k' and '/'. None of the three reaches key.equals(keyFor(sequence)), so the clause it supports -- why neutering the round trip to `return true` left the suite green -- now holds as written, and the surrounding claim that the end-to-end tests do pin the PARSE also holds (making the catch return true admits the third key and fails that test). No copy of the old false claim survives: the only other statement of the same fact, LogKeysTest.java:11-18, already enumerates it correctly (\"two at the suffix guard, one at Long.parseUnsignedLong\"), and baselines/review.txt:22 says only \"refused by an earlier guard\". Cost lens re-checked despite nothing having changed: the filter adds no request, removes GETs for foreign keys, leaves the LIST count identical, and keeps recovery's GET count scaling with chain entries rather than with the checkpoints beside them. R7-2, R7-3 and R7-4 are land-and-record; I do not disagree.",
+  "findings": [
+    {
+      "id": "R8-1",
+      "file": "docs/internal/product/backlog-done.md:107",
+      "severity": "minor",
+      "blocks": false,
+      "title": "\"whose digits are not hex at all\" contradicts the placeholder it modifies -- keep it, do not redraft",
+      "failure_scenario": "The new clause reads \"`ckpt/<hex>.delta` at the parse, whose digits are not hex at all\". The sequence field of that key IS hex -- the row itself writes it as <hex>, and the fixture puts sixteen hex digits there. What is not a hex numeral is the whole slice isEntryKey takes between the guards, \"ckpt/0000000000000009\", because the ckpt/ segment is inside it. A future session reading only this row could conclude the fixture seeds a key with non-hex digits in the sequence position, and go looking for a case that does not exist, or weaken the parse-guard reasoning on the belief that the ckpt/ segment is already excluded by the slice. Precise wording would be \"whose slice carries the ckpt/ segment and so is not a hex numeral\". \u26a0\ufe0f RECORD, DO NOT FIX THIS ROUND: the operative claim -- the parse is what refuses it -- is true, and review.md's minors-land rule applies with extra force here, since the surface of a ninth round would be the prose an eighth-round fix just added, which is the loop the M4.8b1 row and baselines/review.txt:22 already document twice."
+    }
+  ],
+  "task": "M4.8b1",
+  "role": "reviewer",
+  "staged_tree": "86ed282ab2c2b707e5c9e2642fd22decfcbf60c2"
+}

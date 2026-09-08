@@ -1,0 +1,13 @@
+{
+  "diff_sha256": "c3182b79e0368f1b49a5a5f70778ae182c28d124ed6b0b6825254f742affb855",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "M2.2-r3-1",
+      "severity": "minor",
+      "failure_scenario": "No .harness/review verdict file exists for task M2.2 at any prior round (review.sh context reports round 1 of 2 throughout), so round 3's claim of matching round 2's approved production diff rests on reading the whole current diff and finding it self-consistent, not on a mechanical delta against a recorded baseline. Consistent with this session's established practice of recording only the final round's verdict; a process observation, not a defect in the diff."
+    }
+  ],
+  "task": "M2.2",
+  "role": "reviewer"
+}

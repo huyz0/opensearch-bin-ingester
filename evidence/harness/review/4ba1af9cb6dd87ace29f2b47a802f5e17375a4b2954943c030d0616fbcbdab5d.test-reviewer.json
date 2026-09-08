@@ -1,0 +1,41 @@
+{
+  "task": "M4.13i",
+  "role": "test-reviewer",
+  "round": 1,
+  "diff_sha256": "4ba1af9cb6dd87ace29f2b47a802f5e17375a4b2954943c030d0616fbcbdab5d",
+  "verdict": "changes-requested",
+  "verified": [
+    "Baseline :sequencer suite green in the review tree: 364 tests, 0 failed.",
+    "CONFIRMED the author's measurement 1: replacing the never-opened branch body with `expected = new HashMap<>()` fails 3 tests -- anEpochWithNOObjectsAtAllIsJudgedAgainstItsInheritedBaseToo, anEpochSEALEDBeforeItsCONTINUEIsNOWJudgedAgainstItsInheritedBase, theWalkSTEPSOVERSeveralAbandonedEpochsNotJustOne. The base VALUE is pinned in BOTH directions by the clean-reader isEmpty assertions (too high -> I4, too low -> I3), so the two isEmpty-only tests are not vacuous on that axis.",
+    "CONFIRMED the author's measurement 2: `return new ArrayList<>()` at the head of checkReader fails 9 tests, but of the three never-opened tests only anEpochSEALEDBeforeItsCONTINUEIsNOWJudgedAgainstItsInheritedBase is among them. The other two survive a checker that reports nothing. Class-level coverage is adequate for the WHOLE-checker no-op (theZOMBIEOnANeverOpenedChainIsStillReportedByCheckChain and aColdStartChainOpeningWithADELTAIsSTILLJudged also die), so the surviving pair is not a hole on its own -- the hole is the ARM-SCOPED decline, finding 1.",
+    "CONFIRMED the author's measurement 3: `while (from >= 1 && neverOpened(prior))` -> `if` in Invariants.offsetsSealedInto fails 3 tests including theWalkSTEPSOVERSeveralAbandonedEpochsNotJustOne. That test does require a loop.",
+    "CONFIRMED `view.epoch() - 1` -> `view.epoch()` is an equivalent mutant, as the comment claims: whole suite green.",
+    "Negating the branch selector, `if (Invariants.neverOpened(entries))` -> `if (!...)`, fails 3 tests. The branch selector is constrained.",
+    "judged() removal: no test became vacuous. Every site that lost `assertThat(verdict.judged())` retained an isEmpty/containsExactly assertion on the violation list (ReaderInvariantsTest.aReaderThatSTOPSAtTheSealViolatesNothing:96, theREALReaderAppliesNothingBeyondTheSeal:167). No existing assertion was weakened; ReaderInvariantsScopeTest.theZOMBIEOnANeverOpenedChainIsStillReportedByCheckChain:139 was STRENGTHENED from judged()==false to containsExactly(\"I3\")."
+  ],
+  "findings": [
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/ReaderInvariantsScopeTest.java",
+      "line": 42,
+      "severity": "major",
+      "finding": "The empty-epoch arm is judged only in the CLEAN direction, so half the hole this row exists to close can be reinstated with the whole suite green. anEpochWithNOObjectsAtAllIsJudgedAgainstItsInheritedBaseToo builds one reader shape (correct, RA=3) and asserts `isEmpty()`. A checker that DECLINES on this arm also returns an empty list, so the assertion cannot tell 'examined and clean' from 'not examined'. The `Verdict` type was the only thing that could distinguish them, and it was removed in this commit; the sister test on the seal-at-slot-0 arm compensates by asserting I4 and I3 for a broken reader, and this one does not.",
+      "mutation": "Add to the head of ReaderInvariants.checkReader, after `List<ChainEntry> entries = Invariants.readChain(...)`:\n\n    if (entries.isEmpty()) {\n        return found;\n    }\n\nThis is exactly the pre-M4.13i behaviour for one of the two arms. MEASURED: full :sequencer suite, 364 tests, BUILD SUCCESSFUL -- zero failures.",
+      "failure_scenario": "A future change re-adds an emptiness short-circuit to checkReader (a plausible micro-optimisation: an epoch with no objects has nothing to iterate). checkReader then silently returns no violations for every never-opened epoch that has NO objects at all -- one of the two shapes M4.13's fault injection produces on purpose. M4.13's sweep counts each such seed as passing, so a reader that restarted every stream at 0 across a failover (I4) or applied a wild 500 (I3) is reported CLEAN while the invariant list records I3/I4 as CHECKED. That is the exact defect this row was written to close, and no test in the tree fails. Fix measured: adding to this test\n\n    assertThat(ReaderInvariants.checkReader(store, PREFIX, new ReaderView(9, Map.of())))\n            .extracting(Violation::invariant).containsExactly(\"I4\");\n    assertThat(ReaderInvariants.checkReader(store, PREFIX, new ReaderView(9, Map.of(RA, 500L))))\n            .extracting(Violation::invariant).containsExactly(\"I3\");\n\npasses against the staged code and FAILS against the mutation above (365 tests, 1 failed)."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/ReaderInvariantsScopeTest.java",
+      "line": 50,
+      "severity": "minor",
+      "finding": "The assertion description is off by one: `.as(\"epoch 9 inherits epoch 1's three records through six dead epochs\")`. Epochs 2,3,4,5,6,7,8 have no objects -- seven dead epochs, not six.",
+      "failure_scenario": "The walk depth is the only thing this test distinguishes from the one-hop case, so a reader who trusts the description miscounts what the fixture covers and writes the next multi-hop test against the wrong span. The failure message printed when the test breaks names a span the store does not contain."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/ReaderInvariantsScopeTest.java",
+      "line": 124,
+      "severity": "minor",
+      "finding": "Rewritten javadoc no longer parses as a sentence, and the test name now understates the test. The old text read 'which bounds how bad M4.13i is: `checkChain` still reports...'; the rewrite deleted 'bad M4.13i is:' leaving 'STAYS VISIBLE, which bounds how `checkChain` reports the zombie'. Separately, the test is still named theZOMBIEOnANeverOpenedChainIsStillReportedByCheckChain while its strongest assertion is now the checkReader one -- containsExactly(\"I3\"), the reader's side, which the javadoc itself says is what criterion 3(a) actually asks for. (The other rewritten javadoc, ReaderInvariantsTest.aReaderThatSTOPSAtTheSealViolatesNothing:84, does describe what its test does.)",
+      "failure_scenario": "A later reader looking for the reader-side pin on a never-opened chain greps for it by name, does not find it here, and either adds a duplicate test or concludes the reader side is unpinned and reopens M4.13i."
+    }
+  ],
+  "staged_tree": "c73d87734bd102dad7aae46585f07aea0bcc0707"
+}

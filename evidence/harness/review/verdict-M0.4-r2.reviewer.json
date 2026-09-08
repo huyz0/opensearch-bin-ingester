@@ -1,0 +1,62 @@
+{
+  "diff_sha256": "8b3099f38da54edc6660993ddc835754941c6ed76a95c08006beef9ca3f0907a",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "B8",
+      "severity": "major",
+      "file": "buildSrc/src/main/kotlin/binjava.java-conventions.gradle.kts:100-168",
+      "summary": "The POM-scraping licence mechanism was NOT replaced wholesale -- its per-module half, `licenseData`, is still staged, and its comment names a root `licenseReport` task that does not exist anywhere in the build.",
+      "failure_scenario": "Verified by execution. `./gradlew licenseReport` fails with \"Task 'licenseReport' not found in root project 'opensearch-bin-ingester' and its subprojects\", so the comment on line 106 (\"The root `licenseReport` task merges what these produce\") is false in the same commit that introduces it. `./gradlew :format:licenseData` succeeds and prints `Configuration cache entry discarded with 6 problems` (invocation of Task.project at execution time, DefaultProject not serialisable) -- so any invocation that pulls this task in silently loses the configuration cache that gradle.properties turns on. It is also 57 of the 175 lines of the conventions plugin, it fetches `@pom` artifacts over the network at execution time, and it produces build/reports/licenses/module.json which nothing reads. The next reader trying to answer 'how are licences checked here' finds two mechanisms, one of which DependencyLicensesTask's own KDoc calls \"wrong in five ways at once\", and has no way to tell which is live. Delete it, or the misdirection outlives the commit."
+    },
+    {
+      "id": "B9",
+      "severity": "major",
+      "file": "build.gradle.kts:75",
+      "summary": "`./gradlew build` does not run `dependencyLicenses`. Only the literal task name `check` reaches it, because the root project has no `base` plugin and the subprojects' `build` tasks depend on their own `check`, not the root's.",
+      "failure_scenario": "Verified by execution: `./gradlew build --rerun-tasks` on this tree completes BUILD SUCCESSFUL with no `> Task :dependencyLicenses` line, while `./gradlew check --rerun-tasks` does run it. `build` is the conventional full-verification entry point and the one a CI job or an agent reaching for 'the whole thing' types first; on that path a jar with no pinned sha, no committed licence, or a denied SPDX id ships green. The comment two lines above claims the gate \"runs with `check`, not as a separate step someone has to remember\" -- but remembering `check` rather than `build` is exactly such a step. Applying `base` to the root project (which makes root `build` depend on root `check`) or making each subproject's `check` depend on `:dependencyLicenses` closes it."
+    },
+    {
+      "id": "B10",
+      "severity": "major",
+      "file": "buildSrc/src/main/kotlin/binjava/DependencyLicensesTask.kt:43-44",
+      "summary": "`@Classpath` normalisation erases exactly the byte-level difference the SHA-1 pin exists to detect, so a jar whose bytes disagree with its pin can be reported UP-TO-DATE or restored FROM-CACHE and never checked.",
+      "failure_scenario": "Verified by execution. I registered a DependencyLicensesTask over a single jar with a matching pin, ran it green, then repacked the jar with identical entries but different timestamps and compression (sha1 changed from 31f5d58a... to 076dbc85...). Re-running gave `> Task :probe UP-TO-DATE` -- no mismatch reported. Deleting build/ and re-running with the build cache gave `> Task :probe FROM-CACHE`, still green, with the on-disk jar's sha1 disagreeing with the committed pin. (A content change IS caught: adding an entry produced the expected `sha mismatch` failure, so the hole is specifically metadata-only repacking.) The consequence is that the task's own failure message -- \"The published artifact changed. Do NOT run updateShas until you know why\" -- promises a byte-identity guarantee the input normalisation cannot support, and on a machine with a warm build cache the check does not execute at all. The doc comment on line 42 states the property as a feature (\"so order and timestamps do not matter\") without noticing it is the thing being verified. `@InputFiles` with `@PathSensitive(PathSensitivity.NAME_ONLY)` hashes whole file contents and preserves cacheability."
+    },
+    {
+      "id": "B11",
+      "severity": "major",
+      "file": "scripts/check-file-size.sh:14",
+      "summary": "The whole M-1.1 harness (22 files under scripts/) is staged in the M0.4 commit, in a form older than the working-tree copies whose green results the packet reports -- and without the docs/ those scripts read.",
+      "failure_scenario": "`git diff --cached --name-only` lists scripts/build-index.sh, check-commit-msg.sh, check-reviewed.sh, review.sh, tdd-red.sh, which-standards.sh, java_tests.py, test_budget.py, test_integrity.py and 13 more. backlog.md line 34 assigns the gate scripts to M-1.1 and line 7 says the first two commits land M0.4 then M-1.1, so this commit carries two tasks and its subject can name only one (non-negotiable 1). Worse, seven of them are staged stale: `git show :scripts/check-file-size.sh` ends `done < <(git ls-files '*.java' '*.sh' '*.py' '*.gradle.kts')` -- no `*.kt` pattern and tracked-files-only -- whereas the working-tree version reads `scoped_files ... '*.kt'`. So the file-size gate reported PASSED by the version on disk, but the version this commit actually ships exempts every Kotlin file (including the 171-line DependencyLicensesTask.kt) from the 500-line limit, and on the first commit, with nothing yet tracked, `git ls-files` returns nothing and it checks zero files. Finally, docs/ is not staged: I ran `scripts/check-commit-msg.sh` in a copy of the tree with docs/ removed and it printed `FAIL docs/internal/product/backlog.md does not exist, so the ID cannot be verified`. The tree left behind by this commit contains a harness that cannot verify anything and gates weaker than the ones that were run."
+    },
+    {
+      "id": "B12",
+      "severity": "minor",
+      "file": "build.gradle.kts:20",
+      "summary": "The comment asserts `scripts/check-catalog-only.sh` \"keeps that true\"; the script does not exist (it is backlog M0.19, todo), so the licence gate's completeness claim rests on nothing today.",
+      "failure_scenario": "Verified by execution: I added `implementation(\"com.mysql:mysql-connector-j:9.1.0\")` (GPL-2.0) to format/build.gradle.kts in a copy of the tree and `./gradlew check` was BUILD SUCCESSFUL with `> Task :dependencyLicenses` running and finding nothing -- the artifact never enters the root `licenseCheck` configuration, which is built only from `libs.libraryAliases`. The gap itself is tracked as M0.19, so the defect here is the present-tense claim: a reader of build.gradle.kts concludes the escape route is closed. AGENTS.md is explicit that a rule whose script is missing is a preference. Phrase it as the pending obligation it is."
+    },
+    {
+      "id": "B13",
+      "severity": "minor",
+      "file": "buildSrc/src/main/kotlin/binjava/DependencyLicensesTask.kt:78-85",
+      "summary": "The hand-written \"licenses dir does not exist -- run ./gradlew updateShas\" guidance is unreachable, because `@InputDirectory` fails snapshotting before the task action runs.",
+      "failure_scenario": "Verified by execution: with licenses/ moved aside, `./gradlew dependencyLicenses` fails at configuration validation with \"Type 'binjava.DependencyLicensesTask' property 'licensesDir' specifies directory '.../licenses' which doesn't exist\" and never reaches the action. A developer on a tree where licenses/ was lost gets a Gradle validation error instead of the actionable recovery instruction the author wrote for exactly that case. Either drop the dead branch or make the property optional so the message can fire."
+    },
+    {
+      "id": "B14",
+      "severity": "minor",
+      "file": "buildSrc/src/main/kotlin/binjava/DependencyLicensesTask.kt:161",
+      "summary": "`prefixFor` is correct on every artifact name I tried except the `name-<digits>-suffix` shape, where the version regex truncates part of the artifact name.",
+      "failure_scenario": "Exercised against the regex directly: log4j-api-2.24.1 -> log4j-api, jakarta.json-api-2.1.3 -> jakarta.json-api, commons-io-2.16.1 -> commons-io, asm-9.7 -> asm, netty-codec-http2-4.1.115.Final -> netty-codec-http2, guava-33.3.1-jre -> guava, and a jar with no version at all (noversion.jar) -> noversion. All correct. But log4j-1.2-api-2.24.1 -> `log4j`, because the leftmost `-\\d+` match is `-1.2` and `.*$` eats the rest. If a `log4j-LICENSE.txt` already exists for a differently-licensed sibling, `log4j-1.2-api` is silently attributed to it and the deny-list is evaluated against the wrong SPDX id; if it does not, the gate fails with a prefix name the developer cannot map back to the jar. Anchoring the version at the end (`-\\d+(\\.\\d+)*(-[A-Za-z0-9.]+)*$` or matching only the final hyphen-group) removes the case."
+    },
+    {
+      "id": "B15",
+      "severity": "minor",
+      "file": "gradle.properties:7",
+      "summary": "The memory budget counts one compile daemon at 512 MiB while `org.gradle.workers.max=2` with `org.gradle.parallel=true` permits two concurrent forked compiler daemons; the test-JVM term is multiplied by workers, the compile-daemon term is not.",
+      "failure_scenario": "With parallel project execution and two workers, two modules compile at once; a Gradle compiler daemon serves one compilation at a time, so a second is started with the same `forkOptions.memoryMaximumSize = \"512m\"`. Real peak is 1024 MiB, not the 512 MiB the comment and scripts/test_budget.py line 97 account for. The stated sum stays under the 6144 MiB ceiling today (3072 vs 2560), so nothing breaks now -- but the ceiling is the number build.md says keeps WSL2 from killing the session, and it is being computed from a term that does not scale the way the others do. Multiply by `workers` as the test-JVM term already does."
+    }
+  ]
+}

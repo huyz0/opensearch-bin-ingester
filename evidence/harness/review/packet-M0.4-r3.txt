@@ -1,0 +1,1985 @@
+=== TASK M0.4 ===
+⚠️ **The first two commits land M0.4 before M-1.1.** Task IDs are stable
+suite (M0.18), those tests are Java, and Java needs the build that M0.4 brings —
+| M0.4 | Gradle build, JDK 25 toolchain, module skeleton per `architecture.md` | — | todo |
+
+=== STANDARDS THE REVIEWER MUST READ (selected from paths, not by the author) ===
+docs/internal/standards/git.md
+docs/internal/standards/sdd.md
+docs/internal/standards/java-style.md
+docs/internal/standards/code-structure.md
+docs/internal/standards/testing.md
+docs/internal/standards/cost.md
+docs/internal/standards/performance.md
+docs/internal/standards/security.md
+
+=== GATES THAT ALREADY PASSED (do not re-check these) ===
+  PASSED  check-dependency-licenses.sh
+  PASSED  check-file-size.sh
+  PASSED  check-gate-scope.sh
+  PASSED  check-license-headers.sh
+  PASSED  check-links.sh
+  PASSED  check-metric-cardinality.sh
+  PASSED  check-portability.sh
+  PASSED  check-tdd.sh
+  PASSED  check-terminology.sh
+  PASSED  check-test-budget.sh
+  PASSED  build-index.sh --check
+
+=== STAGED DIFF (sha256 11fc2410154a5f53d87898c999a7c76a44a0d603828e715f68158905021a4d30) ===
+diff --git a/.gitignore b/.gitignore
+new file mode 100644
+index 0000000..cab2403
+--- /dev/null
++++ b/.gitignore
+@@ -0,0 +1,5 @@
++.tmp/
++build/
++.gradle/
++*.class
++__pycache__/
+diff --git a/binstore-backends/README.md b/binstore-backends/README.md
+new file mode 100644
+index 0000000..2464114
+--- /dev/null
++++ b/binstore-backends/README.md
+@@ -0,0 +1,10 @@
++# binstore-backends
++
++Implementations of `BinStore`: in-memory, local filesystem, and later S3, GCS and
++Azure.
++
++**Depends on:** `binstore-spi`.
++
++⚠️ Nothing in `plugin` may depend on this module. Keeping cloud SDKs out of the
++OpenSearch JVM is a stated architectural property, not an accident —
++[architecture.md](../docs/internal/product/architecture.md) § Dependency rules.
+diff --git a/binstore-backends/build.gradle.kts b/binstore-backends/build.gradle.kts
+new file mode 100644
+index 0000000..911e494
+--- /dev/null
++++ b/binstore-backends/build.gradle.kts
+@@ -0,0 +1,7 @@
++// SPDX-License-Identifier: Apache-2.0
++
++plugins { id("binjava.java-conventions") }
++
++dependencies {
++    api(project(":binstore-spi"))
++}
+diff --git a/binstore-spi/README.md b/binstore-spi/README.md
+new file mode 100644
+index 0000000..5358b1f
+--- /dev/null
++++ b/binstore-spi/README.md
+@@ -0,0 +1,13 @@
++# binstore-spi
++
++The object-store seam. `BinStore`, `Version`, `Capabilities`, and the decorators
++that wrap any backend: retry, rate-limit, and **counting**.
++
++**Depends on:** nothing. That is deliberate — it is the one interface both the
++ingester and the conformance suite compile against, and a dependency here would
++be inherited by every module in the build.
++
++The counting decorator is why this module exists as a seam rather than as an
++S3 client: every object-store request in the project passes through one type, so
++`docs/internal/standards/cost.md` can be asserted in a test rather than reviewed
++by eye.
+diff --git a/binstore-spi/build.gradle.kts b/binstore-spi/build.gradle.kts
+new file mode 100644
+index 0000000..8ab9fa7
+--- /dev/null
++++ b/binstore-spi/build.gradle.kts
+@@ -0,0 +1,3 @@
++// SPDX-License-Identifier: Apache-2.0
++
++plugins { id("binjava.java-conventions") }
+diff --git a/build.gradle.kts b/build.gradle.kts
+new file mode 100644
+index 0000000..6490bb7
+--- /dev/null
++++ b/build.gradle.kts
+@@ -0,0 +1,81 @@
++// SPDX-License-Identifier: Apache-2.0
++
++import binjava.DependencyLicensesTask
++import binjava.UpdateShasTask
++
++// `base` gives the root project the `check` and `build` lifecycle tasks. Without
++// it, `tasks.register("check")` silently created a THIRD, unrelated task and
++// `./gradlew build --rerun-tasks` completed green without ever running the
++// licence gate -- a gate that is not wired is a preference.
++plugins { base }
++
++// The root project holds no code. Modules apply `binjava.java-conventions`
++// from buildSrc; this file names the build and owns the licence gate.
++description = "Bundled object-store ingestion for OpenSearch pull-based ingest"
++
++// ---------------------------------------------------------------------------
++// Dependency licences, modelled on OpenSearch's own precommit task.
++//
++// Every dependency jar has a pinned SHA-1 and a committed licence under
++// licenses/. Both live in the tree, so accepting a dependency is a diff someone
++// reads rather than a line in a report regenerated on every build.
++//
++// ⚠️ One configuration, at the root, built from the version catalogue. Gradle 9
++// forbids resolving another project's configuration, and every module takes its
++// dependencies from the catalogue, so this is the complete set --
++// scripts/check-catalog-only.sh keeps that true.
++// ---------------------------------------------------------------------------
++val licenseCheck = configurations.create("licenseCheck") {
++    isCanBeConsumed = false
++    isCanBeResolved = true
++}
++
++val libs = extensions.getByType<VersionCatalogsExtension>().named("libs")
++libs.libraryAliases.forEach { alias ->
++    libs.findLibrary(alias).ifPresent { dependencies.add(licenseCheck.name, it) }
++}
++
++val licensesDirectory = layout.projectDirectory.dir("licenses")
++
++// A family of artifacts shares one licence file: every junit-* is `junit`.
++// ⚠️ opentest4j and apiguardian are Apache-2.0, NOT EPL-2.0 like the junit-*
++// artifacts they ship alongside. Folding them under `junit` would attribute
++// them to the wrong licence.
++val licenceMappings = mapOf(
++    "^junit-.*" to "junit",
++    "^opentest4j$" to "opentest4j",
++    "^apiguardian-api$" to "apiguardian",
++    "^assertj-.*" to "assertj",
++    "^byte-buddy.*" to "byte-buddy",
++)
++
++tasks.register<DependencyLicensesTask>("dependencyLicenses") {
++    group = "verification"
++    description = "Every dependency jar has a pinned sha and a committed licence"
++    dependencies.from(licenseCheck)
++    licensesDir.set(licensesDirectory)
++    mappings.set(licenceMappings)
++    // build.md rule 2, as EXACT SPDX identifiers matched against licenses/SPDX.txt.
++    // Enumerated rather than matched by substring: "GPL-2.0" as a substring also
++    // hits LGPL-2.0, and LGPL is a licence this project has not ruled out.
++    denied.set(setOf(
++        "GPL-1.0-only", "GPL-1.0-or-later", "GPL-2.0-only", "GPL-2.0-or-later",
++        "GPL-3.0-only", "GPL-3.0-or-later", "GPL-2.0", "GPL-3.0",
++        "AGPL-1.0-only", "AGPL-1.0-or-later", "AGPL-3.0-only", "AGPL-3.0-or-later", "AGPL-3.0",
++        "SSPL-1.0", "EUPL-1.0", "EUPL-1.1", "EUPL-1.2",
++        "CDDL-1.0", "BUSL-1.1",
++    ))
++    stamp.set(layout.buildDirectory.file("dependency-licenses.stamp"))
++}
++
++tasks.register<UpdateShasTask>("updateShas") {
++    group = "verification"
++    description = "Write missing licenses/*.jar.sha1 pins for new dependencies"
++    dependencies.from(licenseCheck)
++    licensesDir.set(licensesDirectory)
++}
++
++// It runs with `check` -- and therefore with `build` -- not as a separate step
++// someone has to remember. The old script-based gate needed a report generated
++// first, so a fresh clone failed its first commit.
++tasks.named("check") { dependsOn("dependencyLicenses") }
+diff --git a/buildSrc/build.gradle.kts b/buildSrc/build.gradle.kts
+new file mode 100644
+index 0000000..3e8315a
+--- /dev/null
++++ b/buildSrc/build.gradle.kts
+@@ -0,0 +1,7 @@
++// SPDX-License-Identifier: Apache-2.0
++
++// Convention plugins live here rather than in `subprojects {}` blocks: cross-
++// project configuration is what makes a build resist ever being split up.
++plugins { `kotlin-dsl` }
++
++repositories { mavenCentral() }
+diff --git a/buildSrc/settings.gradle.kts b/buildSrc/settings.gradle.kts
+new file mode 100644
+index 0000000..72cf8ed
+--- /dev/null
++++ b/buildSrc/settings.gradle.kts
+@@ -0,0 +1,9 @@
++// SPDX-License-Identifier: Apache-2.0
++rootProject.name = "build-conventions"
++
++dependencyResolutionManagement {
++    repositories { mavenCentral() }
++    versionCatalogs {
++        create("libs") { from(files("../gradle/libs.versions.toml")) }
++    }
++}
+diff --git a/buildSrc/src/main/kotlin/binjava.java-conventions.gradle.kts b/buildSrc/src/main/kotlin/binjava.java-conventions.gradle.kts
+new file mode 100644
+index 0000000..e08a273
+--- /dev/null
++++ b/buildSrc/src/main/kotlin/binjava.java-conventions.gradle.kts
+@@ -0,0 +1,105 @@
++// SPDX-License-Identifier: Apache-2.0
++
++// Everything every module of this project agrees on: the toolchain, the test
++// tiers, and the memory caps. Applied by each module's build.gradle.kts, which
++// then declares only its own dependencies.
++//
++// Rationale: docs/internal/standards/build.md and java-style.md.
++
++import java.time.Duration
++
++plugins {
++    `java-library`
++    `jvm-test-suite`
++    // testing.md rule 19: the store conformance suite runs against every
++    // backend, so it needs a home shared by T1 and T3 rather than a copy each.
++    `java-test-fixtures`
++}
++
++// JDK 25 LTS. OpenSearch 3.8 bundles 25.0.3+9, so one toolchain serves both the
++// ingester and the plugin -- java-style.md rule 1. JEP 491 removed the
++// `synchronized` pinning that made JDK 21 the wrong target for a service built
++// on virtual threads.
++java {
++    toolchain { languageVersion = JavaLanguageVersion.of(25) }
++}
++
++val libs = extensions.getByType<VersionCatalogsExtension>().named("libs")
++// Resolved once, at configuration time. Reading `layout` from inside a task
++// action instead would capture the Project, which the configuration cache
++// cannot serialise -- and a build that silently drops its configuration cache
++// is a build nobody notices getting slower.
++val scratch = layout.buildDirectory.dir("tmp").get().asFile.also { it.mkdirs() }
++
++tasks.withType<JavaCompile>().configureEach {
++    options.encoding = "UTF-8"
++    options.compilerArgs.add("-Xlint:all,-serial,-processing")
++
++    // build.md: the compile daemon's heap is set HERE, because
++    // `org.gradle.java.compile-daemon.jvmargs` in gradle.properties is not a
++    // key Gradle reads -- the string does not occur anywhere in the 9.7.0
++    // distribution. It was declared, counted in the budget, and enforcing
++    // nothing: exactly the failure build.md is written against.
++    options.isFork = true
++    options.forkOptions.memoryMaximumSize = "512m"
++
++    // -Werror because a warning nobody fails on is a warning nobody reads --
++    // but on PRODUCTION code only. A test legitimately exercises a deprecated
++    // path or ignores a resource, and -Werror there pushes an author toward a
++    // weaker test or toward switching the lint off for everyone.
++    if (name == "compileJava") {
++        options.compilerArgs.add("-Werror")
++    }
++}
++
++// The three tiers of docs/internal/standards/testing.md map onto three Gradle
++// tasks, and only the first is wired into `check`:
++//
++//   ./gradlew test             T0-T2, no container      every commit
++//   ./gradlew integrationTest  T3,    MinIO             on demand + CI
++//   ./gradlew clusterTest      T4,    OpenSearch        on demand + CI
++//
++// The default task starting no container is the point. A developer, or an agent
++// running /milestone, gets a fast light loop; the heavy tiers are explicit.
++testing {
++    suites {
++        withType<JvmTestSuite>().configureEach {
++            useJUnitJupiter(libs.findVersion("junit").get().requiredVersion)
++            dependencies {
++                implementation(libs.findLibrary("assertj-core").get())
++            }
++            targets.configureEach {
++                testTask.configure {
++                    // build.md: set where the runtime enforces it, so a runaway
++                    // dies as a JVM OutOfMemoryError rather than as WSL2 killing
++                    // an unrelated session.
++                    maxHeapSize = "512m"
++                    jvmArgs("-XX:+HeapDumpOnOutOfMemoryError", "-XX:HeapDumpPath=$scratch")
++                    // A hung test holds its memory until something reclaims it.
++                    timeout.set(Duration.ofMinutes(10))
++                    // testing.md rule 17: scratch under build/tmp, never the
++                    // system temp directory. Enforced here so it is automatic.
++                    systemProperty("java.io.tmpdir", scratch.absolutePath)
++                    testLogging { events("failed") }
++                }
++            }
++        }
++        // The built-in `test` suite already sees the production classes. The
++        // registered ones do not, and adding it to all three put both
++        // build/classes and the module jar on the default test classpath --
++        // harmless for JaCoCo, a mutant-loading hazard for PIT at M0.14.
++        register<JvmTestSuite>("integrationTest") {
++            dependencies { implementation(project()) }
++        }
++        register<JvmTestSuite>("clusterTest") {
++            dependencies { implementation(project()) }
++        }
++    }
++}
++
++// `check` runs the T0-T2 suite only, but it must still COMPILE the slower tiers:
++// otherwise broken integration- or cluster-test code commits green and is not
++// discovered until CI runs a tier nobody triggered.
++tasks.named("check") {
++    dependsOn("compileIntegrationTestJava", "compileClusterTestJava")
++}
+diff --git a/buildSrc/src/main/kotlin/binjava/DependencyLicensesTask.kt b/buildSrc/src/main/kotlin/binjava/DependencyLicensesTask.kt
+new file mode 100644
+index 0000000..ebf6086
+--- /dev/null
++++ b/buildSrc/src/main/kotlin/binjava/DependencyLicensesTask.kt
+@@ -0,0 +1,202 @@
++// SPDX-License-Identifier: Apache-2.0
++package binjava
++
++import org.gradle.api.DefaultTask
++import org.gradle.api.GradleException
++import org.gradle.api.file.ConfigurableFileCollection
++import org.gradle.api.file.DirectoryProperty
++import org.gradle.api.file.RegularFileProperty
++import org.gradle.api.provider.MapProperty
++import org.gradle.api.tasks.InputFiles
++import org.gradle.api.tasks.Input
++import org.gradle.api.tasks.InputDirectory
++import org.gradle.api.tasks.Optional
++import org.gradle.api.tasks.OutputFile
++import org.gradle.api.tasks.PathSensitive
++import org.gradle.api.tasks.PathSensitivity
++import org.gradle.api.tasks.TaskAction
++import java.io.File
++import java.security.MessageDigest
++
++/**
++ * Every dependency jar has a pinned SHA-1 and a committed licence, both in the
++ * tree and both reviewable in a diff.
++ *
++ * Modelled on OpenSearch's `DependencyLicensesTask`, deliberately. The version
++ * this replaced scraped POM `<licenses>` over the network at build time and was
++ * wrong in five ways at once: it emitted POM prose ("Eclipse Public License
++ * v2.0") while the gate grepped SPDX ids, so the deny-list could essentially
++ * never match; it never followed `<parent>`, so byte-buddy came back UNKNOWN;
++ * an unresolvable POM was indistinguishable from a licence-less one; it saw
++ * only runtime classpaths, so a `compileOnly` OpenSearch SPI would never be
++ * examined; and it could not be cached at all.
++ *
++ * The difference that matters is where the truth lives. Scraped metadata is a
++ * claim re-fetched on every build. A `licenses/` directory is a fact, committed
++ * once, changed only by a diff someone reads.
++ */
++abstract class DependencyLicensesTask : DefaultTask() {
++
++    init {
++        // ⚠️ Deliberately NOT @CacheableTask, and a deliberate divergence from
++        // OpenSearch's version.
++        //
++        // Gradle treats ~/.gradle/caches/modules-2 as immutable and does not
++        // re-hash it, so a jar whose bytes changed under an unchanged version
++        // left this task UP-TO-DATE and the mismatch unreported -- measured,
++        // not theorised. A supply-chain check that a cache can skip is not a
++        // check.
++        //
++        // The cost of always running it is nil: 567 ms up-to-date versus 543 ms
++        // forced, because the time is Gradle startup, not the hashing of ten
++        // small jars. Re-measure before reinstating caching.
++        outputs.upToDateWhen { false }
++    }
++
++    /**
++     * The jars to account for.
++     *
++     * ⚠️ `@InputFiles`, deliberately NOT `@Classpath`. Classpath normalisation
++     * ignores entry timestamps and order -- which is precisely what a SHA-1 pin
++     * exists to detect. Under `@Classpath`, a jar repacked with identical
++     * entries and different timestamps changed its sha1 and the task still
++     * reported UP-TO-DATE, then FROM-CACHE. Byte content is the input here.
++     */
++    @get:InputFiles
++    @get:PathSensitive(PathSensitivity.NAME_ONLY)
++    abstract val dependencies: ConfigurableFileCollection
++
++    // @Optional so the explicit message below is reachable; Gradle's own
++    // validation failure for a missing @InputDirectory says far less.
++    @get:InputDirectory
++    @get:Optional
++    @get:PathSensitive(PathSensitivity.RELATIVE)
++    abstract val licensesDir: DirectoryProperty
++
++    /**
++     * Regex -> licence-file prefix, so a family of artifacts shares one licence:
++     * `junit-jupiter-api`, `junit-jupiter-engine` and `junit-platform-commons`
++     * are all `junit`. Same idea as OpenSearch's `mapping` block.
++     */
++    @get:Input
++    @get:Optional
++    abstract val mappings: MapProperty<String, String>
++
++    /** A stamp, so the task has an output and Gradle can call it up to date. */
++    @get:OutputFile
++    abstract val stamp: RegularFileProperty
++
++    /**
++     * SPDX identifiers this project cannot ship (build.md rule 2), matched
++     * EXACTLY against the id declared in licenses/SPDX.txt.
++     *
++     * ⚠️ Not matched against licence prose. EPL-2.0's text names "GNU General
++     * Public License" in its Secondary License clause, so a prose scan rejects
++     * JUnit -- and a substring scan for "GPL-2.0" also rejects LGPL-2.0, which
++     * is a different licence. The declared identifier is the claim; the text is
++     * attribution.
++     */
++    @get:Input
++    abstract val denied: org.gradle.api.provider.SetProperty<String>
++
++    @TaskAction
++    fun check() {
++        val dir = licensesDir.get().asFile
++        if (!dir.isDirectory) {
++            throw GradleException(
++                "$dir does not exist. Every dependency needs a pinned sha and a " +
++                    "committed licence; run `./gradlew updateShas` to create the shas, " +
++                    "then add <prefix>-LICENSE.txt for each new dependency."
++            )
++        }
++
++        // prefix -> SPDX id. Adding a dependency means adding a line here, which
++        // is a decision someone makes and a reviewer sees.
++        val manifestFile = File(dir, "SPDX.txt")
++        if (!manifestFile.exists()) {
++            throw GradleException("$manifestFile is missing. It declares the SPDX id of each licence.")
++        }
++        val manifest = manifestFile.readLines()
++            .map { it.substringBefore('#').trim() }
++            .filter { it.isNotEmpty() }
++            .associate { line ->
++                val parts = line.split(Regex("\\s+"), limit = 2)
++                if (parts.size != 2) throw GradleException("SPDX.txt: expected '<prefix> <SPDX-ID>', got: $line")
++                parts[0] to parts[1]
++            }
++
++        val problems = mutableListOf<String>()
++        val usedPrefixes = mutableSetOf<String>()
++        val seenSha = mutableSetOf<String>()
++        val seenLicence = mutableSetOf<String>()
++
++        for (jar in dependencies.files.filter { it.name.endsWith(".jar") }.sortedBy { it.name }) {
++            val shaFile = File(dir, jar.name + ".sha1")
++            if (!shaFile.exists()) {
++                problems += "missing sha for ${jar.name} -- run ./gradlew updateShas"
++            } else {
++                seenSha += shaFile.name
++                val actual = sha1(jar)
++                val expected = shaFile.readText().trim()
++                if (actual != expected) {
++                    // The artifact changed under a version we already reviewed.
++                    problems += "sha mismatch for ${jar.name}: expected $expected, got $actual. " +
++                        "The published artifact changed. Do NOT run updateShas until you know why."
++                }
++            }
++
++            val prefix = prefixFor(jar.name)
++            usedPrefixes += prefix
++            val licence = File(dir, "$prefix-LICENSE.txt")
++            if (!licence.exists()) {
++                problems += "missing ${licence.name} for ${jar.name} -- commit the licence text"
++            } else {
++                seenLicence += licence.name
++            }
++            val spdx = manifest[prefix]
++            if (spdx == null) {
++                problems += "SPDX.txt has no entry for '$prefix' (needed by ${jar.name}). " +
++                    "Add: $prefix <SPDX-ID>"
++            } else if (spdx in denied.get()) {
++                problems += "${jar.name} is $spdx, which this project cannot ship -- build.md rule 2. " +
++                    "Replace the dependency, or record an exception in baselines/licenses.txt."
++            }
++        }
++
++        // A sha with no jar means a dependency was removed and its pin left
++        // behind. Harmless today, and the reason a stale pin survives a version
++        // bump unnoticed tomorrow.
++        dir.listFiles { f: File -> f.name.endsWith(".sha1") }?.forEach {
++            if (it.name !in seenSha) problems += "unused sha file ${it.name} -- delete it"
++        }
++        manifest.keys.forEach {
++            if (it !in usedPrefixes) problems += "SPDX.txt names '$it', which no dependency uses -- delete it"
++        }
++
++        if (problems.isNotEmpty()) {
++            throw GradleException(
++                "dependency licences (${problems.size} problem(s)):\n" +
++                    problems.joinToString("\n") { "  - $it" }
++            )
++        }
++        stamp.get().asFile.apply { parentFile.mkdirs() }
++            .writeText("ok ${dependencies.files.count { it.name.endsWith(".jar") }} jar(s)\n")
++    }
++
++    private fun prefixFor(jarName: String): String {
++        // Strip only the trailing `-<version>` segment. A greedy
++        // `-\d+(\.\d+)*.*$` turned `log4j-1.2-api-2.24.1` into `log4j`,
++        // attributing it to whatever licence `log4j` happens to name.
++        val noExt = jarName.removeSuffix(".jar")
++        val cut = noExt.lastIndexOf('-')
++        val base = if (cut > 0 && noExt.getOrNull(cut + 1)?.isDigit() == true) noExt.substring(0, cut) else noExt
++        for ((pattern, name) in mappings.getOrElse(emptyMap())) {
++            if (Regex(pattern).matches(base)) return name
++        }
++        return base
++    }
++
++    private fun sha1(f: File): String =
++        MessageDigest.getInstance("SHA-1").digest(f.readBytes())
++            .joinToString("") { "%02x".format(it) }
++}
+diff --git a/buildSrc/src/main/kotlin/binjava/UpdateShasTask.kt b/buildSrc/src/main/kotlin/binjava/UpdateShasTask.kt
+new file mode 100644
+index 0000000..9dd5401
+--- /dev/null
++++ b/buildSrc/src/main/kotlin/binjava/UpdateShasTask.kt
+@@ -0,0 +1,45 @@
++// SPDX-License-Identifier: Apache-2.0
++package binjava
++
++import org.gradle.api.DefaultTask
++import org.gradle.api.file.ConfigurableFileCollection
++import org.gradle.api.file.DirectoryProperty
++import org.gradle.api.tasks.Classpath
++import org.gradle.api.tasks.TaskAction
++import java.io.File
++import java.security.MessageDigest
++
++/**
++ * Write the missing `.jar.sha1` pins. The sanctioned way to accept a new
++ * dependency, so accepting one is a visible diff rather than a silent resolve.
++ *
++ * ⚠️ It writes only MISSING pins. It will not overwrite one that exists and
++ * disagrees -- that case is a published artifact changing under a version we
++ * already reviewed, and the right response is to find out why, not to re-pin.
++ */
++abstract class UpdateShasTask : DefaultTask() {
++
++    @get:Classpath
++    abstract val dependencies: ConfigurableFileCollection
++
++    @get:org.gradle.api.tasks.Internal
++    abstract val licensesDir: DirectoryProperty
++
++    @TaskAction
++    fun update() {
++        val dir = licensesDir.get().asFile.apply { mkdirs() }
++        var written = 0
++        for (jar in dependencies.files.filter { it.name.endsWith(".jar") }) {
++            val sha = File(dir, jar.name + ".sha1")
++            if (sha.exists()) continue
++            sha.writeText(
++                MessageDigest.getInstance("SHA-1").digest(jar.readBytes())
++                    .joinToString("") { "%02x".format(it) } + "\n"
++            )
++            logger.lifecycle("pinned ${sha.name}")
++            written++
++        }
++        if (written == 0) logger.lifecycle("updateShas: nothing missing")
++        else logger.lifecycle("updateShas: wrote $written pin(s) -- review them, then add any missing <prefix>-LICENSE.txt")
++    }
++}
+diff --git a/client/README.md b/client/README.md
+new file mode 100644
+index 0000000..910a654
+--- /dev/null
++++ b/client/README.md
+@@ -0,0 +1,9 @@
++# client
++
++The consumer: subscription, fetch-mode dispatch, coalescing and decode. Bundled
++into the plugin and running inside the OpenSearch process.
++
++**Depends on:** `format` only.
++
++That single dependency is the point. This code runs in someone else's JVM, so its
++dependency surface is a liability rather than a convenience.
+diff --git a/client/build.gradle.kts b/client/build.gradle.kts
+new file mode 100644
+index 0000000..217e105
+--- /dev/null
++++ b/client/build.gradle.kts
+@@ -0,0 +1,7 @@
++// SPDX-License-Identifier: Apache-2.0
++
++plugins { id("binjava.java-conventions") }
++
++dependencies {
++    api(project(":format"))
++}
+diff --git a/format/README.md b/format/README.md
+new file mode 100644
+index 0000000..982b289
+--- /dev/null
++++ b/format/README.md
+@@ -0,0 +1,10 @@
++# format
++
++Pure encode and decode: segment layout, the key grammar, membership filters and
++commit-log records. No I/O, no clock, no configuration.
++
++**Depends on:** nothing, and it must stay that way. This is where T0 tests live,
++and its purity is what makes them cheap enough to run on every commit.
++
++A change to anything here is a wire-format change: see
++[`wire-format-change`](../.agents/skills/wire-format-change/SKILL.md).
+diff --git a/format/build.gradle.kts b/format/build.gradle.kts
+new file mode 100644
+index 0000000..8ab9fa7
+--- /dev/null
++++ b/format/build.gradle.kts
+@@ -0,0 +1,3 @@
++// SPDX-License-Identifier: Apache-2.0
++
++plugins { id("binjava.java-conventions") }
+diff --git a/gradle.properties b/gradle.properties
+new file mode 100644
+index 0000000..cf434c0
+--- /dev/null
++++ b/gradle.properties
+@@ -0,0 +1,18 @@
++# Memory caps live here because this is where the runtime enforces them.
++# docs/internal/standards/build.md: WSL2 does not kill the offending process,
++# it kills whatever it likes -- so a runaway must die as a JVM OutOfMemoryError
++# or a Docker OOM-kill, never as a lost session.
++#
++# Budget (build.md): daemon 1 GiB + compile daemon 512 MiB + test JVM 512 MiB,
++# two workers, leaving headroom inside the 8 GiB per-session share of 32 GiB.
++# scripts/check-test-budget.sh asserts these are present and sum below the ceiling.
++#
++# ⚠️ The COMPILE DAEMON's heap is not set here. `org.gradle.java.compile-daemon.jvmargs`
++# looks like a Gradle property and is not one -- the string appears nowhere in the
++# 9.7.0 distribution. It lives in the conventions plugin as
++# `options.forkOptions.memoryMaximumSize`, where the runtime actually reads it.
++org.gradle.jvmargs=-Xmx1g -XX:MaxMetaspaceSize=512m
++org.gradle.workers.max=2
++org.gradle.parallel=true
++org.gradle.caching=true
++org.gradle.configuration-cache=true
+diff --git a/gradle/libs.versions.toml b/gradle/libs.versions.toml
+new file mode 100644
+index 0000000..cfe37b2
+--- /dev/null
++++ b/gradle/libs.versions.toml
+@@ -0,0 +1,11 @@
++# Version catalogue. One place a version is written, so an upgrade is one edit
++# and a divergence between modules is impossible rather than merely unlikely.
++[versions]
++junit = "5.14.0"
++assertj = "3.27.3"
++
++[libraries]
++junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
++junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
++junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
++assertj-core = { module = "org.assertj:assertj-core", version.ref = "assertj" }
+diff --git a/gradle/wrapper/gradle-wrapper.jar b/gradle/wrapper/gradle-wrapper.jar
+new file mode 100644
+index 0000000..eddabd2
+Binary files /dev/null and b/gradle/wrapper/gradle-wrapper.jar differ
+diff --git a/gradle/wrapper/gradle-wrapper.properties b/gradle/wrapper/gradle-wrapper.properties
+new file mode 100644
+index 0000000..69dd0d0
+--- /dev/null
++++ b/gradle/wrapper/gradle-wrapper.properties
+@@ -0,0 +1,9 @@
++distributionBase=GRADLE_USER_HOME
++distributionPath=wrapper/dists
++distributionUrl=https\://services.gradle.org/distributions/gradle-9.7.0-bin.zip
++networkTimeout=10000
++retries=0
++retryBackOffMs=500
++validateDistributionUrl=true
++zipStoreBase=GRADLE_USER_HOME
++zipStorePath=wrapper/dists
+diff --git a/gradlew b/gradlew
+new file mode 100755
+index 0000000..249efbb
+--- /dev/null
++++ b/gradlew
+@@ -0,0 +1,248 @@
++#!/bin/sh
++
++#
++# Copyright © 2015 the original authors.
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#      https://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++#
++# SPDX-License-Identifier: Apache-2.0
++#
++
++##############################################################################
++#
++#   gradlew start up script for POSIX generated by Gradle.
++#
++#   Important for running:
++#
++#   (1) You need a POSIX-compliant shell to run this script. If your /bin/sh is
++#       noncompliant, but you have some other compliant shell such as ksh or
++#       bash, then to run this script, type that shell name before the whole
++#       command line, like:
++#
++#           ksh gradlew
++#
++#       Busybox and similar reduced shells will NOT work, because this script
++#       requires all of these POSIX shell features:
++#         * functions;
++#         * expansions «$var», «${var}», «${var:-default}», «${var+SET}»,
++#           «${var#prefix}», «${var%suffix}», and «$( cmd )»;
++#         * compound commands having a testable exit status, especially «case»;
++#         * various built-in commands including «command», «set», and «ulimit».
++#
++#   Important for patching:
++#
++#   (2) This script targets any POSIX shell, so it avoids extensions provided
++#       by Bash, Ksh, etc; in particular arrays are avoided.
++#
++#       The "traditional" practice of packing multiple parameters into a
++#       space-separated string is a well documented source of bugs and security
++#       problems, so this is (mostly) avoided, by progressively accumulating
++#       options in "$@", and eventually passing that to Java.
++#
++#       Where the inherited environment variables (DEFAULT_JVM_OPTS, JAVA_OPTS,
++#       and GRADLE_OPTS) rely on word-splitting, this is performed explicitly;
++#       see the in-line comments for details.
++#
++#       There are tweaks for specific operating systems such as AIX, CygWin,
++#       Darwin, MinGW, and NonStop.
++#
++#   (3) This script is generated from the Groovy template
++#       https://github.com/gradle/gradle/blob/3d91ce3b8caaf77ad09f381f43615b715b53f72c/platforms/jvm/plugins-application/src/main/resources/org/gradle/api/internal/plugins/unixStartScript.txt
++#       within the Gradle project.
++#
++#       You can find Gradle at https://github.com/gradle/gradle/.
++#
++##############################################################################
++
++# Attempt to set APP_HOME
++
++# Resolve links: $0 may be a link
++app_path=$0
++
++# Need this for daisy-chained symlinks.
++while
++    APP_HOME=${app_path%"${app_path##*/}"}  # leaves a trailing /; empty if no leading path
++    [ -h "$app_path" ]
++do
++    ls=$( ls -ld "$app_path" )
++    link=${ls#*' -> '}
++    case $link in             #(
++      /*)   app_path=$link ;; #(
++      *)    app_path=$APP_HOME$link ;;
++    esac
++done
++
++# This is normally unused
++# shellcheck disable=SC2034
++APP_BASE_NAME=${0##*/}
++# Discard cd standard output in case $CDPATH is set (https://github.com/gradle/gradle/issues/25036)
++APP_HOME=$( cd -P "${APP_HOME:-./}" > /dev/null && printf '%s\n' "$PWD" ) || exit
++
++# Use the maximum available, or set MAX_FD != -1 to use that value.
++MAX_FD=maximum
++
++warn () {
++    echo "$*"
++} >&2
++
++die () {
++    echo
++    echo "$*"
++    echo
++    exit 1
++} >&2
++
++# OS specific support (must be 'true' or 'false').
++cygwin=false
++msys=false
++darwin=false
++nonstop=false
++case "$( uname )" in                #(
++  CYGWIN* )         cygwin=true  ;; #(
++  Darwin* )         darwin=true  ;; #(
++  MSYS* | MINGW* )  msys=true    ;; #(
++  NONSTOP* )        nonstop=true ;;
++esac
++
++
++
++# Determine the Java command to use to start the JVM.
++if [ -n "$JAVA_HOME" ] ; then
++    if [ -x "$JAVA_HOME/jre/sh/java" ] ; then
++        # IBM's JDK on AIX uses strange locations for the executables
++        JAVACMD=$JAVA_HOME/jre/sh/java
++    else
++        JAVACMD=$JAVA_HOME/bin/java
++    fi
++    if [ ! -x "$JAVACMD" ] ; then
++        die "ERROR: JAVA_HOME is set to an invalid directory: $JAVA_HOME
++
++Please set the JAVA_HOME variable in your environment to match the
++location of your Java installation."
++    fi
++else
++    JAVACMD=java
++    if ! command -v java >/dev/null 2>&1
++    then
++        die "ERROR: JAVA_HOME is not set and no 'java' command could be found in your PATH.
++
++Please set the JAVA_HOME variable in your environment to match the
++location of your Java installation."
++    fi
++fi
++
++# Increase the maximum file descriptors if we can.
++if ! "$cygwin" && ! "$darwin" && ! "$nonstop" ; then
++    case $MAX_FD in #(
++      max*)
++        # In POSIX sh, ulimit -H is undefined. That's why the result is checked to see if it worked.
++        # shellcheck disable=SC2039,SC3045
++        MAX_FD=$( ulimit -H -n ) ||
++            warn "Could not query maximum file descriptor limit"
++    esac
++    case $MAX_FD in  #(
++      '' | soft) :;; #(
++      *)
++        # In POSIX sh, ulimit -n is undefined. That's why the result is checked to see if it worked.
++        # shellcheck disable=SC2039,SC3045
++        ulimit -n "$MAX_FD" ||
++            warn "Could not set maximum file descriptor limit to $MAX_FD"
++    esac
++fi
++
++# Collect all arguments for the java command, stacking in reverse order:
++#   * args from the command line
++#   * the main class name
++#   * -classpath
++#   * -D...appname settings
++#   * --module-path (only if needed)
++#   * DEFAULT_JVM_OPTS, JAVA_OPTS, and GRADLE_OPTS environment variables.
++
++# For Cygwin or MSYS, switch paths to Windows format before running java
++if "$cygwin" || "$msys" ; then
++    APP_HOME=$( cygpath --path --mixed "$APP_HOME" )
++
++    JAVACMD=$( cygpath --unix "$JAVACMD" )
++
++    # Now convert the arguments - kludge to limit ourselves to /bin/sh
++    for arg do
++        if
++            case $arg in                                #(
++              -*)   false ;;                            # don't mess with options #(
++              /?*)  t=${arg#/} t=/${t%%/*}              # looks like a POSIX filepath
++                    [ -e "$t" ] ;;                      #(
++              *)    false ;;
++            esac
++        then
++            arg=$( cygpath --path --ignore --mixed "$arg" )
++        fi
++        # Roll the args list around exactly as many times as the number of
++        # args, so each arg winds up back in the position where it started, but
++        # possibly modified.
++        #
++        # NB: a `for` loop captures its iteration list before it begins, so
++        # changing the positional parameters here affects neither the number of
++        # iterations, nor the values presented in `arg`.
++        shift                   # remove old arg
++        set -- "$@" "$arg"      # push replacement arg
++    done
++fi
++
++
++# Add default JVM options here. You can also use JAVA_OPTS and GRADLE_OPTS to pass JVM options to this script.
++DEFAULT_JVM_OPTS='"-Xmx64m" "-Xms64m"'
++
++# Collect all arguments for the java command:
++#   * DEFAULT_JVM_OPTS, JAVA_OPTS, and optsEnvironmentVar are not allowed to contain shell fragments,
++#     and any embedded shellness will be escaped.
++#   * For example: A user cannot expect ${Hostname} to be expanded, as it is an environment variable and will be
++#     treated as '${Hostname}' itself on the command line.
++
++set -- \
++        "-Dorg.gradle.appname=$APP_BASE_NAME" \
++        -jar "$APP_HOME/gradle/wrapper/gradle-wrapper.jar" \
++        "$@"
++
++# Stop when "xargs" is not available.
++if ! command -v xargs >/dev/null 2>&1
++then
++    die "xargs is not available"
++fi
++
++# Use "xargs" to parse quoted args.
++#
++# With -n1 it outputs one arg per line, with the quotes and backslashes removed.
++#
++# In Bash we could simply go:
++#
++#   readarray ARGS < <( xargs -n1 <<<"$var" ) &&
++#   set -- "${ARGS[@]}" "$@"
++#
++# but POSIX shell has neither arrays nor command substitution, so instead we
++# post-process each arg (as a line of input to sed) to backslash-escape any
++# character that might be a shell metacharacter, then use eval to reverse
++# that process (while maintaining the separation between arguments), and wrap
++# the whole thing up as a single "set" statement.
++#
++# This will of course break if any of these variables contains a newline or
++# an unmatched quote.
++#
++
++eval "set -- $(
++        printf '%s\n' "$DEFAULT_JVM_OPTS $JAVA_OPTS $GRADLE_OPTS" |
++        xargs -n1 |
++        sed ' s~[^-[:alnum:]+,./:=@_]~\\&~g; ' |
++        tr '\n' ' '
++    )" '"$@"'
++
++exec "$JAVACMD" "$@"
+diff --git a/gradlew.bat b/gradlew.bat
+new file mode 100644
+index 0000000..8508ef6
+--- /dev/null
++++ b/gradlew.bat
+@@ -0,0 +1,82 @@
++@rem
++@rem Copyright 2015 the original author or authors.
++@rem
++@rem Licensed under the Apache License, Version 2.0 (the "License");
++@rem you may not use this file except in compliance with the License.
++@rem You may obtain a copy of the License at
++@rem
++@rem      https://www.apache.org/licenses/LICENSE-2.0
++@rem
++@rem Unless required by applicable law or agreed to in writing, software
++@rem distributed under the License is distributed on an "AS IS" BASIS,
++@rem WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++@rem See the License for the specific language governing permissions and
++@rem limitations under the License.
++@rem
++@rem SPDX-License-Identifier: Apache-2.0
++@rem
++
++@if "%DEBUG%"=="" @echo off
++@rem ##########################################################################
++@rem
++@rem  gradlew startup script for Windows
++@rem
++@rem ##########################################################################
++
++@rem Set local scope for the variables, and ensure extensions are enabled
++setlocal EnableExtensions
++
++set DIRNAME=%~dp0
++if "%DIRNAME%"=="" set DIRNAME=.
++@rem This is normally unused
++set APP_BASE_NAME=%~n0
++set APP_HOME=%DIRNAME%
++
++@rem Resolve any "." and ".." in APP_HOME to make it shorter.
++for %%i in ("%APP_HOME%") do set APP_HOME=%%~fi
++
++@rem Add default JVM options here. You can also use JAVA_OPTS and GRADLE_OPTS to pass JVM options to this script.
++set DEFAULT_JVM_OPTS="-Xmx64m" "-Xms64m"
++
++@rem Find java.exe
++if defined JAVA_HOME goto findJavaFromJavaHome
++
++set JAVA_EXE=java.exe
++%JAVA_EXE% -version >NUL 2>&1
++if %ERRORLEVEL% equ 0 goto execute
++
++echo. 1>&2
++echo ERROR: JAVA_HOME is not set and no 'java' command could be found in your PATH. 1>&2
++echo. 1>&2
++echo Please set the JAVA_HOME variable in your environment to match the 1>&2
++echo location of your Java installation. 1>&2
++
++"%COMSPEC%" /c exit 1
++
++:findJavaFromJavaHome
++set JAVA_HOME=%JAVA_HOME:"=%
++set JAVA_EXE=%JAVA_HOME%/bin/java.exe
++
++if exist "%JAVA_EXE%" goto execute
++
++echo. 1>&2
++echo ERROR: JAVA_HOME is set to an invalid directory: %JAVA_HOME% 1>&2
++echo. 1>&2
++echo Please set the JAVA_HOME variable in your environment to match the 1>&2
++echo location of your Java installation. 1>&2
++
++"%COMSPEC%" /c exit 1
++
++:execute
++@rem Setup the command line
++
++
++
++@rem Execute gradlew
++@rem endlocal doesn't take effect until after the line is parsed and variables are expanded
++@rem which allows us to clear the local environment before executing the java command
++endlocal & "%JAVA_EXE%" %DEFAULT_JVM_OPTS% %JAVA_OPTS% %GRADLE_OPTS% "-Dorg.gradle.appname=%APP_BASE_NAME%" -jar "%APP_HOME%\gradle\wrapper\gradle-wrapper.jar" %* & call :exitWithErrorLevel
++
++:exitWithErrorLevel
++@rem Use "%COMSPEC%" /c exit to allow operators to work properly in scripts
++"%COMSPEC%" /c exit %ERRORLEVEL%
+diff --git a/http/README.md b/http/README.md
+new file mode 100644
+index 0000000..d47b805
+--- /dev/null
++++ b/http/README.md
+@@ -0,0 +1,11 @@
++# http
++
++The Helidon adapter. Parses `_bulk` as a stream, maps errors to status codes, and
++delegates to `ingest`. It owns no decision of its own.
++
++**Depends on:** `ingest`.
++
++Nothing depends on `http`
++([architecture.md](../docs/internal/product/architecture.md) § Dependency rules,
++rule 4). It is a front door, and a front door that something else depends on has
++stopped being one.
+diff --git a/http/build.gradle.kts b/http/build.gradle.kts
+new file mode 100644
+index 0000000..aaea78c
+--- /dev/null
++++ b/http/build.gradle.kts
+@@ -0,0 +1,7 @@
++// SPDX-License-Identifier: Apache-2.0
++
++plugins { id("binjava.java-conventions") }
++
++dependencies {
++    api(project(":ingest"))
++}
+diff --git a/ingest/README.md b/ingest/README.md
+new file mode 100644
+index 0000000..b783890
+--- /dev/null
++++ b/ingest/README.md
+@@ -0,0 +1,12 @@
++# ingest
++
++The library: accumulators, the flush trigger, the writer, the reader, subscription
++fan-out and GC. Everything an ingester node does, expressed with no HTTP on the
++classpath.
++
++**Depends on:** `binstore-spi`, `format`, `sequencer`.
++
++⚠️ **No HTTP dependency, ever.** Two delivery surfaces share one implementation
++([ADR-0019](../docs/internal/product/decisions/0019-two-delivery-surfaces.md)):
++the in-process API is this module, and `http` is a thin adapter over it. If a
++routing or flush decision can be made in `http`, it is in the wrong module.
+diff --git a/ingest/build.gradle.kts b/ingest/build.gradle.kts
+new file mode 100644
+index 0000000..49d972d
+--- /dev/null
++++ b/ingest/build.gradle.kts
+@@ -0,0 +1,9 @@
++// SPDX-License-Identifier: Apache-2.0
++
++plugins { id("binjava.java-conventions") }
++
++dependencies {
++    api(project(":binstore-spi"))
++    api(project(":format"))
++    api(project(":sequencer"))
++}
+diff --git a/licenses/SPDX.txt b/licenses/SPDX.txt
+new file mode 100644
+index 0000000..309961b
+--- /dev/null
++++ b/licenses/SPDX.txt
+@@ -0,0 +1,13 @@
++# The declared SPDX identifier of each licence in this directory.
++#
++# This file, not the licence prose, is what the deny-list is matched against.
++# EPL-2.0's text names "GNU General Public License" in its Secondary License
++# clause, so a prose scan rejects JUnit; and a substring scan for "GPL-2.0"
++# also rejects LGPL-2.0, which is a different licence. The identifier is the
++# claim, the text is the attribution.
++#
++#   <licence-file-prefix>  <SPDX-ID>
++junit        EPL-2.0
++assertj      Apache-2.0
++byte-buddy   Apache-2.0
++opentest4j   Apache-2.0
+diff --git a/licenses/assertj-LICENSE.txt b/licenses/assertj-LICENSE.txt
+new file mode 100644
+index 0000000..d645695
+--- /dev/null
++++ b/licenses/assertj-LICENSE.txt
+@@ -0,0 +1,202 @@
++
++                                 Apache License
++                           Version 2.0, January 2004
++                        http://www.apache.org/licenses/
++
++   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
++
++   1. Definitions.
++
++      "License" shall mean the terms and conditions for use, reproduction,
++      and distribution as defined by Sections 1 through 9 of this document.
++
++      "Licensor" shall mean the copyright owner or entity authorized by
++      the copyright owner that is granting the License.
++
++      "Legal Entity" shall mean the union of the acting entity and all
++      other entities that control, are controlled by, or are under common
++      control with that entity. For the purposes of this definition,
++      "control" means (i) the power, direct or indirect, to cause the
++      direction or management of such entity, whether by contract or
++      otherwise, or (ii) ownership of fifty percent (50%) or more of the
++      outstanding shares, or (iii) beneficial ownership of such entity.
++
++      "You" (or "Your") shall mean an individual or Legal Entity
++      exercising permissions granted by this License.
++
++      "Source" form shall mean the preferred form for making modifications,
++      including but not limited to software source code, documentation
++      source, and configuration files.
++
++      "Object" form shall mean any form resulting from mechanical
++      transformation or translation of a Source form, including but
++      not limited to compiled object code, generated documentation,
++      and conversions to other media types.
++
++      "Work" shall mean the work of authorship, whether in Source or
++      Object form, made available under the License, as indicated by a
++      copyright notice that is included in or attached to the work
++      (an example is provided in the Appendix below).
++
++      "Derivative Works" shall mean any work, whether in Source or Object
++      form, that is based on (or derived from) the Work and for which the
++      editorial revisions, annotations, elaborations, or other modifications
++      represent, as a whole, an original work of authorship. For the purposes
++      of this License, Derivative Works shall not include works that remain
++      separable from, or merely link (or bind by name) to the interfaces of,
++      the Work and Derivative Works thereof.
++
++      "Contribution" shall mean any work of authorship, including
++      the original version of the Work and any modifications or additions
++      to that Work or Derivative Works thereof, that is intentionally
++      submitted to Licensor for inclusion in the Work by the copyright owner
++      or by an individual or Legal Entity authorized to submit on behalf of
++      the copyright owner. For the purposes of this definition, "submitted"
++      means any form of electronic, verbal, or written communication sent
++      to the Licensor or its representatives, including but not limited to
++      communication on electronic mailing lists, source code control systems,
++      and issue tracking systems that are managed by, or on behalf of, the
++      Licensor for the purpose of discussing and improving the Work, but
++      excluding communication that is conspicuously marked or otherwise
++      designated in writing by the copyright owner as "Not a Contribution."
++
++      "Contributor" shall mean Licensor and any individual or Legal Entity
++      on behalf of whom a Contribution has been received by Licensor and
++      subsequently incorporated within the Work.
++
++   2. Grant of Copyright License. Subject to the terms and conditions of
++      this License, each Contributor hereby grants to You a perpetual,
++      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
++      copyright license to reproduce, prepare Derivative Works of,
++      publicly display, publicly perform, sublicense, and distribute the
++      Work and such Derivative Works in Source or Object form.
++
++   3. Grant of Patent License. Subject to the terms and conditions of
++      this License, each Contributor hereby grants to You a perpetual,
++      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
++      (except as stated in this section) patent license to make, have made,
++      use, offer to sell, sell, import, and otherwise transfer the Work,
++      where such license applies only to those patent claims licensable
++      by such Contributor that are necessarily infringed by their
++      Contribution(s) alone or by combination of their Contribution(s)
++      with the Work to which such Contribution(s) was submitted. If You
++      institute patent litigation against any entity (including a
++      cross-claim or counterclaim in a lawsuit) alleging that the Work
++      or a Contribution incorporated within the Work constitutes direct
++      or contributory patent infringement, then any patent licenses
++      granted to You under this License for that Work shall terminate
++      as of the date such litigation is filed.
++
++   4. Redistribution. You may reproduce and distribute copies of the
++      Work or Derivative Works thereof in any medium, with or without
++      modifications, and in Source or Object form, provided that You
++      meet the following conditions:
++
++      (a) You must give any other recipients of the Work or
++          Derivative Works a copy of this License; and
++
++      (b) You must cause any modified files to carry prominent notices
++          stating that You changed the files; and
++
++      (c) You must retain, in the Source form of any Derivative Works
++          that You distribute, all copyright, patent, trademark, and
++          attribution notices from the Source form of the Work,
++          excluding those notices that do not pertain to any part of
++          the Derivative Works; and
++
++      (d) If the Work includes a "NOTICE" text file as part of its
++          distribution, then any Derivative Works that You distribute must
++          include a readable copy of the attribution notices contained
++          within such NOTICE file, excluding those notices that do not
++          pertain to any part of the Derivative Works, in at least one
++          of the following places: within a NOTICE text file distributed
++          as part of the Derivative Works; within the Source form or
++          documentation, if provided along with the Derivative Works; or,
++          within a display generated by the Derivative Works, if and
++          wherever such third-party notices normally appear. The contents
++          of the NOTICE file are for informational purposes only and
++          do not modify the License. You may add Your own attribution
++          notices within Derivative Works that You distribute, alongside
++          or as an addendum to the NOTICE text from the Work, provided
++          that such additional attribution notices cannot be construed
++          as modifying the License.
++
++      You may add Your own copyright statement to Your modifications and
++      may provide additional or different license terms and conditions
++      for use, reproduction, or distribution of Your modifications, or
++      for any such Derivative Works as a whole, provided Your use,
++      reproduction, and distribution of the Work otherwise complies with
++      the conditions stated in this License.
++
++   5. Submission of Contributions. Unless You explicitly state otherwise,
++      any Contribution intentionally submitted for inclusion in the Work
++      by You to the Licensor shall be under the terms and conditions of
++      this License, without any additional terms or conditions.
++      Notwithstanding the above, nothing herein shall supersede or modify
++      the terms of any separate license agreement you may have executed
++      with Licensor regarding such Contributions.
++
++   6. Trademarks. This License does not grant permission to use the trade
++      names, trademarks, service marks, or product names of the Licensor,
++      except as required for reasonable and customary use in describing the
++      origin of the Work and reproducing the content of the NOTICE file.
++
++   7. Disclaimer of Warranty. Unless required by applicable law or
++      agreed to in writing, Licensor provides the Work (and each
++      Contributor provides its Contributions) on an "AS IS" BASIS,
++      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
++      implied, including, without limitation, any warranties or conditions
++      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
++      PARTICULAR PURPOSE. You are solely responsible for determining the
++      appropriateness of using or redistributing the Work and assume any
++      risks associated with Your exercise of permissions under this License.
++
++   8. Limitation of Liability. In no event and under no legal theory,
++      whether in tort (including negligence), contract, or otherwise,
++      unless required by applicable law (such as deliberate and grossly
++      negligent acts) or agreed to in writing, shall any Contributor be
++      liable to You for damages, including any direct, indirect, special,
++      incidental, or consequential damages of any character arising as a
++      result of this License or out of the use or inability to use the
++      Work (including but not limited to damages for loss of goodwill,
++      work stoppage, computer failure or malfunction, or any and all
++      other commercial damages or losses), even if such Contributor
++      has been advised of the possibility of such damages.
++
++   9. Accepting Warranty or Additional Liability. While redistributing
++      the Work or Derivative Works thereof, You may choose to offer,
++      and charge a fee for, acceptance of support, warranty, indemnity,
++      or other liability obligations and/or rights consistent with this
++      License. However, in accepting such obligations, You may act only
++      on Your own behalf and on Your sole responsibility, not on behalf
++      of any other Contributor, and only if You agree to indemnify,
++      defend, and hold each Contributor harmless for any liability
++      incurred by, or claims asserted against, such Contributor by reason
++      of your accepting any such warranty or additional liability.
++
++   END OF TERMS AND CONDITIONS
++
++   APPENDIX: How to apply the Apache License to your work.
++
++      To apply the Apache License to your work, attach the following
++      boilerplate notice, with the fields enclosed by brackets "[]"
++      replaced with your own identifying information. (Don't include
++      the brackets!)  The text should be enclosed in the appropriate
++      comment syntax for the file format. We also recommend that a
++      file or class name and description of purpose be included on the
++      same "printed page" as the copyright notice for easier
++      identification within third-party archives.
++
++   Copyright [yyyy] [name of copyright owner]
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
+diff --git a/licenses/assertj-core-3.27.3.jar.sha1 b/licenses/assertj-core-3.27.3.jar.sha1
+new file mode 100644
+index 0000000..ccd05cb
+--- /dev/null
++++ b/licenses/assertj-core-3.27.3.jar.sha1
+@@ -0,0 +1 @@
++31f5d58a202bd5df4993fb10fa2cffd610c20d6f
+diff --git a/licenses/byte-buddy-1.15.11.jar.sha1 b/licenses/byte-buddy-1.15.11.jar.sha1
+new file mode 100644
+index 0000000..db27b6a
+--- /dev/null
++++ b/licenses/byte-buddy-1.15.11.jar.sha1
+@@ -0,0 +1 @@
++f61886478e0f9ee4c21d09574736f0ff45e0a46c
+diff --git a/licenses/byte-buddy-LICENSE.txt b/licenses/byte-buddy-LICENSE.txt
+new file mode 100644
+index 0000000..d645695
+--- /dev/null
++++ b/licenses/byte-buddy-LICENSE.txt
+@@ -0,0 +1,202 @@
++
++                                 Apache License
++                           Version 2.0, January 2004
++                        http://www.apache.org/licenses/
++
++   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
++
++   1. Definitions.
++
++      "License" shall mean the terms and conditions for use, reproduction,
++      and distribution as defined by Sections 1 through 9 of this document.
++
++      "Licensor" shall mean the copyright owner or entity authorized by
++      the copyright owner that is granting the License.
++
++      "Legal Entity" shall mean the union of the acting entity and all
++      other entities that control, are controlled by, or are under common
++      control with that entity. For the purposes of this definition,
++      "control" means (i) the power, direct or indirect, to cause the
++      direction or management of such entity, whether by contract or
++      otherwise, or (ii) ownership of fifty percent (50%) or more of the
++      outstanding shares, or (iii) beneficial ownership of such entity.
++
++      "You" (or "Your") shall mean an individual or Legal Entity
++      exercising permissions granted by this License.
++
++      "Source" form shall mean the preferred form for making modifications,
++      including but not limited to software source code, documentation
++      source, and configuration files.
++
++      "Object" form shall mean any form resulting from mechanical
++      transformation or translation of a Source form, including but
++      not limited to compiled object code, generated documentation,
++      and conversions to other media types.
++
++      "Work" shall mean the work of authorship, whether in Source or
++      Object form, made available under the License, as indicated by a
++      copyright notice that is included in or attached to the work
++      (an example is provided in the Appendix below).
++
++      "Derivative Works" shall mean any work, whether in Source or Object
++      form, that is based on (or derived from) the Work and for which the
++      editorial revisions, annotations, elaborations, or other modifications
++      represent, as a whole, an original work of authorship. For the purposes
++      of this License, Derivative Works shall not include works that remain
++      separable from, or merely link (or bind by name) to the interfaces of,
++      the Work and Derivative Works thereof.
++
++      "Contribution" shall mean any work of authorship, including
++      the original version of the Work and any modifications or additions
++      to that Work or Derivative Works thereof, that is intentionally
++      submitted to Licensor for inclusion in the Work by the copyright owner
++      or by an individual or Legal Entity authorized to submit on behalf of
++      the copyright owner. For the purposes of this definition, "submitted"
++      means any form of electronic, verbal, or written communication sent
++      to the Licensor or its representatives, including but not limited to
++      communication on electronic mailing lists, source code control systems,
++      and issue tracking systems that are managed by, or on behalf of, the
++      Licensor for the purpose of discussing and improving the Work, but
++      excluding communication that is conspicuously marked or otherwise
++      designated in writing by the copyright owner as "Not a Contribution."
++
++      "Contributor" shall mean Licensor and any individual or Legal Entity
++      on behalf of whom a Contribution has been received by Licensor and
++      subsequently incorporated within the Work.
++
++   2. Grant of Copyright License. Subject to the terms and conditions of
++      this License, each Contributor hereby grants to You a perpetual,
++      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
++      copyright license to reproduce, prepare Derivative Works of,
++      publicly display, publicly perform, sublicense, and distribute the
++      Work and such Derivative Works in Source or Object form.
++
++   3. Grant of Patent License. Subject to the terms and conditions of
++      this License, each Contributor hereby grants to You a perpetual,
++      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
++      (except as stated in this section) patent license to make, have made,
++      use, offer to sell, sell, import, and otherwise transfer the Work,
++      where such license applies only to those patent claims licensable
++      by such Contributor that are necessarily infringed by their
++      Contribution(s) alone or by combination of their Contribution(s)
++      with the Work to which such Contribution(s) was submitted. If You
++      institute patent litigation against any entity (including a
++      cross-claim or counterclaim in a lawsuit) alleging that the Work
++      or a Contribution incorporated within the Work constitutes direct
++      or contributory patent infringement, then any patent licenses
++      granted to You under this License for that Work shall terminate
++      as of the date such litigation is filed.
++
++   4. Redistribution. You may reproduce and distribute copies of the
++      Work or Derivative Works thereof in any medium, with or without
++      modifications, and in Source or Object form, provided that You
++      meet the following conditions:
++
++      (a) You must give any other recipients of the Work or
++          Derivative Works a copy of this License; and
++
++      (b) You must cause any modified files to carry prominent notices
++          stating that You changed the files; and
++
++      (c) You must retain, in the Source form of any Derivative Works
++          that You distribute, all copyright, patent, trademark, and
++          attribution notices from the Source form of the Work,
++          excluding those notices that do not pertain to any part of
++          the Derivative Works; and
++
++      (d) If the Work includes a "NOTICE" text file as part of its
++          distribution, then any Derivative Works that You distribute must
++          include a readable copy of the attribution notices contained
++          within such NOTICE file, excluding those notices that do not
++          pertain to any part of the Derivative Works, in at least one
++          of the following places: within a NOTICE text file distributed
++          as part of the Derivative Works; within the Source form or
++          documentation, if provided along with the Derivative Works; or,
++          within a display generated by the Derivative Works, if and
++          wherever such third-party notices normally appear. The contents
++          of the NOTICE file are for informational purposes only and
++          do not modify the License. You may add Your own attribution
++          notices within Derivative Works that You distribute, alongside
++          or as an addendum to the NOTICE text from the Work, provided
++          that such additional attribution notices cannot be construed
++          as modifying the License.
++
++      You may add Your own copyright statement to Your modifications and
++      may provide additional or different license terms and conditions
++      for use, reproduction, or distribution of Your modifications, or
++      for any such Derivative Works as a whole, provided Your use,
++      reproduction, and distribution of the Work otherwise complies with
++      the conditions stated in this License.
++
++   5. Submission of Contributions. Unless You explicitly state otherwise,
++      any Contribution intentionally submitted for inclusion in the Work
++      by You to the Licensor shall be under the terms and conditions of
++      this License, without any additional terms or conditions.
++      Notwithstanding the above, nothing herein shall supersede or modify
++      the terms of any separate license agreement you may have executed
++      with Licensor regarding such Contributions.
++
++   6. Trademarks. This License does not grant permission to use the trade
++      names, trademarks, service marks, or product names of the Licensor,
++      except as required for reasonable and customary use in describing the
++      origin of the Work and reproducing the content of the NOTICE file.
++
++   7. Disclaimer of Warranty. Unless required by applicable law or
++      agreed to in writing, Licensor provides the Work (and each
++      Contributor provides its Contributions) on an "AS IS" BASIS,
++      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
++      implied, including, without limitation, any warranties or conditions
++      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
++      PARTICULAR PURPOSE. You are solely responsible for determining the
++      appropriateness of using or redistributing the Work and assume any
++      risks associated with Your exercise of permissions under this License.
++
++   8. Limitation of Liability. In no event and under no legal theory,
++      whether in tort (including negligence), contract, or otherwise,
++      unless required by applicable law (such as deliberate and grossly
++      negligent acts) or agreed to in writing, shall any Contributor be
++      liable to You for damages, including any direct, indirect, special,
++      incidental, or consequential damages of any character arising as a
++      result of this License or out of the use or inability to use the
++      Work (including but not limited to damages for loss of goodwill,
++      work stoppage, computer failure or malfunction, or any and all
++      other commercial damages or losses), even if such Contributor
++      has been advised of the possibility of such damages.
++
++   9. Accepting Warranty or Additional Liability. While redistributing
++      the Work or Derivative Works thereof, You may choose to offer,
++      and charge a fee for, acceptance of support, warranty, indemnity,
++      or other liability obligations and/or rights consistent with this
++      License. However, in accepting such obligations, You may act only
++      on Your own behalf and on Your sole responsibility, not on behalf
++      of any other Contributor, and only if You agree to indemnify,
++      defend, and hold each Contributor harmless for any liability
++      incurred by, or claims asserted against, such Contributor by reason
++      of your accepting any such warranty or additional liability.
++
++   END OF TERMS AND CONDITIONS
++
++   APPENDIX: How to apply the Apache License to your work.
++
++      To apply the Apache License to your work, attach the following
++      boilerplate notice, with the fields enclosed by brackets "[]"
++      replaced with your own identifying information. (Don't include
++      the brackets!)  The text should be enclosed in the appropriate
++      comment syntax for the file format. We also recommend that a
++      file or class name and description of purpose be included on the
++      same "printed page" as the copyright notice for easier
++      identification within third-party archives.
++
++   Copyright [yyyy] [name of copyright owner]
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
+diff --git a/licenses/junit-LICENSE.txt b/licenses/junit-LICENSE.txt
+new file mode 100644
+index 0000000..78756b5
+--- /dev/null
++++ b/licenses/junit-LICENSE.txt
+@@ -0,0 +1,80 @@
++Eclipse Public License - v 2.0
++THE ACCOMPANYING PROGRAM IS PROVIDED UNDER THE TERMS OF THIS ECLIPSE PUBLIC LICENSE (“AGREEMENT”). ANY USE, REPRODUCTION OR DISTRIBUTION OF THE PROGRAM CONSTITUTES RECIPIENT'S ACCEPTANCE OF THIS AGREEMENT.
++
++1. DEFINITIONS
++“Contribution” means:
++
++a) in the case of the initial Contributor, the initial content Distributed under this Agreement, and
++b) in the case of each subsequent Contributor:
++i) changes to the Program, and
++ii) additions to the Program;
++where such changes and/or additions to the Program originate from and are Distributed by that particular Contributor. A Contribution “originates” from a Contributor if it was added to the Program by such Contributor itself or anyone acting on such Contributor's behalf. Contributions do not include changes or additions to the Program that are not Modified Works.
++“Contributor” means any person or entity that Distributes the Program.
++
++“Licensed Patents” mean patent claims licensable by a Contributor which are necessarily infringed by the use or sale of its Contribution alone or when combined with the Program.
++
++“Program” means the Contributions Distributed in accordance with this Agreement.
++
++“Recipient” means anyone who receives the Program under this Agreement or any Secondary License (as applicable), including Contributors.
++
++“Derivative Works” shall mean any work, whether in Source Code or other form, that is based on (or derived from) the Program and for which the editorial revisions, annotations, elaborations, or other modifications represent, as a whole, an original work of authorship.
++
++“Modified Works” shall mean any work in Source Code or other form that results from an addition to, deletion from, or modification of the contents of the Program, including, for purposes of clarity any new file in Source Code form that contains any contents of the Program. Modified Works shall not include works that contain only declarations, interfaces, types, classes, structures, or files of the Program solely in each case in order to link to, bind by name, or subclass the Program or Modified Works thereof.
++
++“Distribute” means the acts of a) distributing or b) making available in any manner that enables the transfer of a copy.
++
++“Source Code” means the form of a Program preferred for making modifications, including but not limited to software source code, documentation source, and configuration files.
++
++“Secondary License” means either the GNU General Public License, Version 2.0, or any later versions of that license, including any exceptions or additional permissions as identified by the initial Contributor.
++
++2. GRANT OF RIGHTS
++a) Subject to the terms of this Agreement, each Contributor hereby grants Recipient a non-exclusive, worldwide, royalty-free copyright license to reproduce, prepare Derivative Works of, publicly display, publicly perform, Distribute and sublicense the Contribution of such Contributor, if any, and such Derivative Works.
++b) Subject to the terms of this Agreement, each Contributor hereby grants Recipient a non-exclusive, worldwide, royalty-free patent license under Licensed Patents to make, use, sell, offer to sell, import and otherwise transfer the Contribution of such Contributor, if any, in Source Code or other form. This patent license shall apply to the combination of the Contribution and the Program if, at the time the Contribution is added by the Contributor, such addition of the Contribution causes such combination to be covered by the Licensed Patents. The patent license shall not apply to any other combinations which include the Contribution. No hardware per se is licensed hereunder.
++c) Recipient understands that although each Contributor grants the licenses to its Contributions set forth herein, no assurances are provided by any Contributor that the Program does not infringe the patent or other intellectual property rights of any other entity. Each Contributor disclaims any liability to Recipient for claims brought by any other entity based on infringement of intellectual property rights or otherwise. As a condition to exercising the rights and licenses granted hereunder, each Recipient hereby assumes sole responsibility to secure any other intellectual property rights needed, if any. For example, if a third party patent license is required to allow Recipient to Distribute the Program, it is Recipient's responsibility to acquire that license before distributing the Program.
++d) Each Contributor represents that to its knowledge it has sufficient copyright rights in its Contribution, if any, to grant the copyright license set forth in this Agreement.
++e) Notwithstanding the terms of any Secondary License, no Contributor makes additional grants to any Recipient (other than those set forth in this Agreement) as a result of such Recipient's receipt of the Program under the terms of a Secondary License (if permitted under the terms of Section 3).
++3. REQUIREMENTS
++3.1 If a Contributor Distributes the Program in any form, then:
++
++a) the Program must also be made available as Source Code, in accordance with section 3.2, and the Contributor must accompany the Program with a statement that the Source Code for the Program is available under this Agreement, and informs Recipients how to obtain it in a reasonable manner on or through a medium customarily used for software exchange; and
++b) the Contributor may Distribute the Program under a license different than this Agreement, provided that such license:
++i) effectively disclaims on behalf of all other Contributors all warranties and conditions, express and implied, including warranties or conditions of title and non-infringement, and implied warranties or conditions of merchantability and fitness for a particular purpose;
++ii) effectively excludes on behalf of all other Contributors all liability for damages, including direct, indirect, special, incidental and consequential damages, such as lost profits;
++iii) does not attempt to limit or alter the recipients' rights in the Source Code under section 3.2; and
++iv) requires any subsequent distribution of the Program by any party to be under a license that satisfies the requirements of this section 3.
++3.2 When the Program is Distributed as Source Code:
++
++a) it must be made available under this Agreement, or if the Program (i) is combined with other material in a separate file or files made available under a Secondary License, and (ii) the initial Contributor attached to the Source Code the notice described in Exhibit A of this Agreement, then the Program may be made available under the terms of such Secondary Licenses, and
++b) a copy of this Agreement must be included with each copy of the Program.
++3.3 Contributors may not remove or alter any copyright, patent, trademark, attribution notices, disclaimers of warranty, or limitations of liability (‘notices’) contained within the Program from any copy of the Program which they Distribute, provided that Contributors may add their own appropriate notices.
++
++4. COMMERCIAL DISTRIBUTION
++Commercial distributors of software may accept certain responsibilities with respect to end users, business partners and the like. While this license is intended to facilitate the commercial use of the Program, the Contributor who includes the Program in a commercial product offering should do so in a manner which does not create potential liability for other Contributors. Therefore, if a Contributor includes the Program in a commercial product offering, such Contributor (“Commercial Contributor”) hereby agrees to defend and indemnify every other Contributor (“Indemnified Contributor”) against any losses, damages and costs (collectively “Losses”) arising from claims, lawsuits and other legal actions brought by a third party against the Indemnified Contributor to the extent caused by the acts or omissions of such Commercial Contributor in connection with its distribution of the Program in a commercial product offering. The obligations in this section do not apply to any claims or Losses relating to any actual or alleged intellectual property infringement. In order to qualify, an Indemnified Contributor must: a) promptly notify the Commercial Contributor in writing of such claim, and b) allow the Commercial Contributor to control, and cooperate with the Commercial Contributor in, the defense and any related settlement negotiations. The Indemnified Contributor may participate in any such claim at its own expense.
++
++For example, a Contributor might include the Program in a commercial product offering, Product X. That Contributor is then a Commercial Contributor. If that Commercial Contributor then makes performance claims, or offers warranties related to Product X, those performance claims and warranties are such Commercial Contributor's responsibility alone. Under this section, the Commercial Contributor would have to defend claims against the other Contributors related to those performance claims and warranties, and if a court requires any other Contributor to pay any damages as a result, the Commercial Contributor must pay those damages.
++
++5. NO WARRANTY
++EXCEPT AS EXPRESSLY SET FORTH IN THIS AGREEMENT, AND TO THE EXTENT PERMITTED BY APPLICABLE LAW, THE PROGRAM IS PROVIDED ON AN “AS IS” BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED INCLUDING, WITHOUT LIMITATION, ANY WARRANTIES OR CONDITIONS OF TITLE, NON-INFRINGEMENT, MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE. Each Recipient is solely responsible for determining the appropriateness of using and distributing the Program and assumes all risks associated with its exercise of rights under this Agreement, including but not limited to the risks and costs of program errors, compliance with applicable laws, damage to or loss of data, programs or equipment, and unavailability or interruption of operations.
++
++6. DISCLAIMER OF LIABILITY
++EXCEPT AS EXPRESSLY SET FORTH IN THIS AGREEMENT, AND TO THE EXTENT PERMITTED BY APPLICABLE LAW, NEITHER RECIPIENT NOR ANY CONTRIBUTORS SHALL HAVE ANY LIABILITY FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING WITHOUT LIMITATION LOST PROFITS), HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OR DISTRIBUTION OF THE PROGRAM OR THE EXERCISE OF ANY RIGHTS GRANTED HEREUNDER, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
++
++7. GENERAL
++If any provision of this Agreement is invalid or unenforceable under applicable law, it shall not affect the validity or enforceability of the remainder of the terms of this Agreement, and without further action by the parties hereto, such provision shall be reformed to the minimum extent necessary to make such provision valid and enforceable.
++
++If Recipient institutes patent litigation against any entity (including a cross-claim or counterclaim in a lawsuit) alleging that the Program itself (excluding combinations of the Program with other software or hardware) infringes such Recipient's patent(s), then such Recipient's rights granted under Section 2(b) shall terminate as of the date such litigation is filed.
++
++All Recipient's rights under this Agreement shall terminate if it fails to comply with any of the material terms or conditions of this Agreement and does not cure such failure in a reasonable period of time after becoming aware of such noncompliance. If all Recipient's rights under this Agreement terminate, Recipient agrees to cease use and distribution of the Program as soon as reasonably practicable. However, Recipient's obligations under this Agreement and any licenses granted by Recipient relating to the Program shall continue and survive.
++
++Everyone is permitted to copy and distribute copies of this Agreement, but in order to avoid inconsistency the Agreement is copyrighted and may only be modified in the following manner. The Agreement Steward reserves the right to publish new versions (including revisions) of this Agreement from time to time. No one other than the Agreement Steward has the right to modify this Agreement. The Eclipse Foundation is the initial Agreement Steward. The Eclipse Foundation may assign the responsibility to serve as the Agreement Steward to a suitable separate entity. Each new version of the Agreement will be given a distinguishing version number. The Program (including Contributions) may always be Distributed subject to the version of the Agreement under which it was received. In addition, after a new version of the Agreement is published, Contributor may elect to Distribute the Program (including its Contributions) under the new version.
++
++Except as expressly stated in Sections 2(a) and 2(b) above, Recipient receives no rights or licenses to the intellectual property of any Contributor under this Agreement, whether expressly, by implication, estoppel or otherwise. All rights in the Program not expressly granted under this Agreement are reserved. Nothing in this Agreement is intended to be enforceable by any entity that is not a Contributor or Recipient. No third-party beneficiary rights are created under this Agreement.
++
++Exhibit A – Form of Secondary Licenses Notice
++“This Source Code may also be made available under the following Secondary Licenses when the conditions for such availability set forth in the Eclipse Public License, v. 2.0 are satisfied: {name license(s), version(s), and exceptions or additional permissions here}.”
++
++Simply including a copy of this Agreement, including this Exhibit A is not sufficient to license the Source Code under Secondary Licenses.
++
++If it is not possible or desirable to put the notice in a particular file, then You may include the notice in a location (such as a LICENSE file in a relevant directory) where a recipient would be likely to look for such a notice.
++
++You may add additional accurate notices of copyright ownership.
+diff --git a/licenses/junit-jupiter-5.14.0.jar.sha1 b/licenses/junit-jupiter-5.14.0.jar.sha1
+new file mode 100644
+index 0000000..6e2a556
+--- /dev/null
++++ b/licenses/junit-jupiter-5.14.0.jar.sha1
+@@ -0,0 +1 @@
++0df30c385c7c8ea0e74e3b63d8c6c0fc2b0ecb55
+diff --git a/licenses/junit-jupiter-api-5.14.0.jar.sha1 b/licenses/junit-jupiter-api-5.14.0.jar.sha1
+new file mode 100644
+index 0000000..0bd191c
+--- /dev/null
++++ b/licenses/junit-jupiter-api-5.14.0.jar.sha1
+@@ -0,0 +1 @@
++4cc3acff995a4ce56ebf735a485800ddede31cb0
+diff --git a/licenses/junit-jupiter-engine-5.14.0.jar.sha1 b/licenses/junit-jupiter-engine-5.14.0.jar.sha1
+new file mode 100644
+index 0000000..a0c1f02
+--- /dev/null
++++ b/licenses/junit-jupiter-engine-5.14.0.jar.sha1
+@@ -0,0 +1 @@
++9da8a108759444556e759f30e663a416a80f402c
+diff --git a/licenses/junit-jupiter-params-5.14.0.jar.sha1 b/licenses/junit-jupiter-params-5.14.0.jar.sha1
+new file mode 100644
+index 0000000..3c6caff
+--- /dev/null
++++ b/licenses/junit-jupiter-params-5.14.0.jar.sha1
+@@ -0,0 +1 @@
++3027dc3529237b2285b261640134daa217068c96
+diff --git a/licenses/junit-platform-commons-1.14.0.jar.sha1 b/licenses/junit-platform-commons-1.14.0.jar.sha1
+new file mode 100644
+index 0000000..e504247
+--- /dev/null
++++ b/licenses/junit-platform-commons-1.14.0.jar.sha1
+@@ -0,0 +1 @@
++e7e1bbf2044652efc5a2a21f6b8c21173a9b91a1
+diff --git a/licenses/junit-platform-engine-1.14.0.jar.sha1 b/licenses/junit-platform-engine-1.14.0.jar.sha1
+new file mode 100644
+index 0000000..696baae
+--- /dev/null
++++ b/licenses/junit-platform-engine-1.14.0.jar.sha1
+@@ -0,0 +1 @@
++77386b812c0e3ba96cdd7c018d2a2f61940ccd8f
+diff --git a/licenses/junit-platform-launcher-1.14.0.jar.sha1 b/licenses/junit-platform-launcher-1.14.0.jar.sha1
+new file mode 100644
+index 0000000..b92705b
+--- /dev/null
++++ b/licenses/junit-platform-launcher-1.14.0.jar.sha1
+@@ -0,0 +1 @@
++b61418170bd0b204429b9ae77af681a1ac74579d
+diff --git a/licenses/opentest4j-1.3.0.jar.sha1 b/licenses/opentest4j-1.3.0.jar.sha1
+new file mode 100644
+index 0000000..8d276b9
+--- /dev/null
++++ b/licenses/opentest4j-1.3.0.jar.sha1
+@@ -0,0 +1 @@
++152ea56b3a72f655d4fd677fc0ef2596c3dd5e6e
+diff --git a/licenses/opentest4j-LICENSE.txt b/licenses/opentest4j-LICENSE.txt
+new file mode 100644
+index 0000000..d645695
+--- /dev/null
++++ b/licenses/opentest4j-LICENSE.txt
+@@ -0,0 +1,202 @@
++
++                                 Apache License
++                           Version 2.0, January 2004
++                        http://www.apache.org/licenses/
++
++   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
++
++   1. Definitions.
++
++      "License" shall mean the terms and conditions for use, reproduction,
++      and distribution as defined by Sections 1 through 9 of this document.
++
++      "Licensor" shall mean the copyright owner or entity authorized by
++      the copyright owner that is granting the License.
++
++      "Legal Entity" shall mean the union of the acting entity and all
++      other entities that control, are controlled by, or are under common
++      control with that entity. For the purposes of this definition,
++      "control" means (i) the power, direct or indirect, to cause the
++      direction or management of such entity, whether by contract or
++      otherwise, or (ii) ownership of fifty percent (50%) or more of the
++      outstanding shares, or (iii) beneficial ownership of such entity.
++
++      "You" (or "Your") shall mean an individual or Legal Entity
++      exercising permissions granted by this License.
++
++      "Source" form shall mean the preferred form for making modifications,
++      including but not limited to software source code, documentation
++      source, and configuration files.
++
++      "Object" form shall mean any form resulting from mechanical
++      transformation or translation of a Source form, including but
++      not limited to compiled object code, generated documentation,
++      and conversions to other media types.
++
++      "Work" shall mean the work of authorship, whether in Source or
++      Object form, made available under the License, as indicated by a
++      copyright notice that is included in or attached to the work
++      (an example is provided in the Appendix below).
++
++      "Derivative Works" shall mean any work, whether in Source or Object
++      form, that is based on (or derived from) the Work and for which the
++      editorial revisions, annotations, elaborations, or other modifications
++      represent, as a whole, an original work of authorship. For the purposes
++      of this License, Derivative Works shall not include works that remain
++      separable from, or merely link (or bind by name) to the interfaces of,
++      the Work and Derivative Works thereof.
++
++      "Contribution" shall mean any work of authorship, including
++      the original version of the Work and any modifications or additions
++      to that Work or Derivative Works thereof, that is intentionally
++      submitted to Licensor for inclusion in the Work by the copyright owner
++      or by an individual or Legal Entity authorized to submit on behalf of
++      the copyright owner. For the purposes of this definition, "submitted"
++      means any form of electronic, verbal, or written communication sent
++      to the Licensor or its representatives, including but not limited to
++      communication on electronic mailing lists, source code control systems,
++      and issue tracking systems that are managed by, or on behalf of, the
++      Licensor for the purpose of discussing and improving the Work, but
++      excluding communication that is conspicuously marked or otherwise
++      designated in writing by the copyright owner as "Not a Contribution."
++
++      "Contributor" shall mean Licensor and any individual or Legal Entity
++      on behalf of whom a Contribution has been received by Licensor and
++      subsequently incorporated within the Work.
++
++   2. Grant of Copyright License. Subject to the terms and conditions of
++      this License, each Contributor hereby grants to You a perpetual,
++      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
++      copyright license to reproduce, prepare Derivative Works of,
++      publicly display, publicly perform, sublicense, and distribute the
++      Work and such Derivative Works in Source or Object form.
++
++   3. Grant of Patent License. Subject to the terms and conditions of
++      this License, each Contributor hereby grants to You a perpetual,
++      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
++      (except as stated in this section) patent license to make, have made,
++      use, offer to sell, sell, import, and otherwise transfer the Work,
++      where such license applies only to those patent claims licensable
++      by such Contributor that are necessarily infringed by their
++      Contribution(s) alone or by combination of their Contribution(s)
++      with the Work to which such Contribution(s) was submitted. If You
++      institute patent litigation against any entity (including a
++      cross-claim or counterclaim in a lawsuit) alleging that the Work
++      or a Contribution incorporated within the Work constitutes direct
++      or contributory patent infringement, then any patent licenses
++      granted to You under this License for that Work shall terminate
++      as of the date such litigation is filed.
++
++   4. Redistribution. You may reproduce and distribute copies of the
++      Work or Derivative Works thereof in any medium, with or without
++      modifications, and in Source or Object form, provided that You
++      meet the following conditions:
++
++      (a) You must give any other recipients of the Work or
++          Derivative Works a copy of this License; and
++
++      (b) You must cause any modified files to carry prominent notices
++          stating that You changed the files; and
++
++      (c) You must retain, in the Source form of any Derivative Works
++          that You distribute, all copyright, patent, trademark, and
++          attribution notices from the Source form of the Work,
++          excluding those notices that do not pertain to any part of
++          the Derivative Works; and
++
++      (d) If the Work includes a "NOTICE" text file as part of its
++          distribution, then any Derivative Works that You distribute must
++          include a readable copy of the attribution notices contained
++          within such NOTICE file, excluding those notices that do not
++          pertain to any part of the Derivative Works, in at least one
++          of the following places: within a NOTICE text file distributed
++          as part of the Derivative Works; within the Source form or
++          documentation, if provided along with the Derivative Works; or,
++          within a display generated by the Derivative Works, if and
++          wherever such third-party notices normally appear. The contents
++          of the NOTICE file are for informational purposes only and
++          do not modify the License. You may add Your own attribution
++          notices within Derivative Works that You distribute, alongside
++          or as an addendum to the NOTICE text from the Work, provided
++          that such additional attribution notices cannot be construed
++          as modifying the License.
++
++      You may add Your own copyright statement to Your modifications and
++      may provide additional or different license terms and conditions
++      for use, reproduction, or distribution of Your modifications, or
++      for any such Derivative Works as a whole, provided Your use,
++      reproduction, and distribution of the Work otherwise complies with
++      the conditions stated in this License.
++
++   5. Submission of Contributions. Unless You explicitly state otherwise,
++      any Contribution intentionally submitted for inclusion in the Work
++      by You to the Licensor shall be under the terms and conditions of
++      this License, without any additional terms or conditions.
++      Notwithstanding the above, nothing herein shall supersede or modify
++      the terms of any separate license agreement you may have executed
++      with Licensor regarding such Contributions.
++
++   6. Trademarks. This License does not grant permission to use the trade
++      names, trademarks, service marks, or product names of the Licensor,
++      except as required for reasonable and customary use in describing the
++      origin of the Work and reproducing the content of the NOTICE file.
++
++   7. Disclaimer of Warranty. Unless required by applicable law or
++      agreed to in writing, Licensor provides the Work (and each
++      Contributor provides its Contributions) on an "AS IS" BASIS,
++      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
++      implied, including, without limitation, any warranties or conditions
++      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
++      PARTICULAR PURPOSE. You are solely responsible for determining the
++      appropriateness of using or redistributing the Work and assume any
++      risks associated with Your exercise of permissions under this License.
++
++   8. Limitation of Liability. In no event and under no legal theory,
++      whether in tort (including negligence), contract, or otherwise,
++      unless required by applicable law (such as deliberate and grossly
++      negligent acts) or agreed to in writing, shall any Contributor be
++      liable to You for damages, including any direct, indirect, special,
++      incidental, or consequential damages of any character arising as a
++      result of this License or out of the use or inability to use the
++      Work (including but not limited to damages for loss of goodwill,
++      work stoppage, computer failure or malfunction, or any and all
++      other commercial damages or losses), even if such Contributor
++      has been advised of the possibility of such damages.
++
++   9. Accepting Warranty or Additional Liability. While redistributing
++      the Work or Derivative Works thereof, You may choose to offer,
++      and charge a fee for, acceptance of support, warranty, indemnity,
++      or other liability obligations and/or rights consistent with this
++      License. However, in accepting such obligations, You may act only
++      on Your own behalf and on Your sole responsibility, not on behalf
++      of any other Contributor, and only if You agree to indemnify,
++      defend, and hold each Contributor harmless for any liability
++      incurred by, or claims asserted against, such Contributor by reason
++      of your accepting any such warranty or additional liability.
++
++   END OF TERMS AND CONDITIONS
++
++   APPENDIX: How to apply the Apache License to your work.
++
++      To apply the Apache License to your work, attach the following
++      boilerplate notice, with the fields enclosed by brackets "[]"
++      replaced with your own identifying information. (Don't include
++      the brackets!)  The text should be enclosed in the appropriate
++      comment syntax for the file format. We also recommend that a
++      file or class name and description of purpose be included on the
++      same "printed page" as the copyright notice for easier
++      identification within third-party archives.
++
++   Copyright [yyyy] [name of copyright owner]
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
+diff --git a/plugin/README.md b/plugin/README.md
+new file mode 100644
+index 0000000..09375db
+--- /dev/null
++++ b/plugin/README.md
+@@ -0,0 +1,9 @@
++# plugin
++
++The OpenSearch `IngestionConsumerPlugin` implementation: the factory, the shard
++consumer, the pointer type and the message type.
++
++**Depends on:** `client`, and through it `format`. Never on `binstore-backends`.
++
++Built against the OpenSearch 3.8 pull-based ingestion SPI —
++[docs/research/20-opensearch/01-pull-based-ingestion-spi.md](../docs/research/20-opensearch/01-pull-based-ingestion-spi.md).
+diff --git a/plugin/build.gradle.kts b/plugin/build.gradle.kts
+new file mode 100644
+index 0000000..fae25c8
+--- /dev/null
++++ b/plugin/build.gradle.kts
+@@ -0,0 +1,7 @@
++// SPDX-License-Identifier: Apache-2.0
++
++plugins { id("binjava.java-conventions") }
++
++dependencies {
++    api(project(":client"))
++}
+diff --git a/sequencer/README.md b/sequencer/README.md
+new file mode 100644
+index 0000000..8de4eeb
+--- /dev/null
++++ b/sequencer/README.md
+@@ -0,0 +1,11 @@
++# sequencer
++
++Leases, epoch fencing, the write-once commit log, and checkpoints. The coordination
++layer, built on compare-and-swap against the object store rather than on a
++consensus cluster ([ADR-0011](../docs/internal/product/decisions/0011-no-consensus-cluster.md)).
++
++**Depends on:** `binstore-spi`, `format`.
++
++Invariants I1-I5 in [architecture.md](../docs/internal/product/architecture.md)
++are this module's obligation. They are tested by deterministic simulation, not
++by hoping.
+diff --git a/sequencer/build.gradle.kts b/sequencer/build.gradle.kts
+new file mode 100644
+index 0000000..8ba5b9c
+--- /dev/null
++++ b/sequencer/build.gradle.kts
+@@ -0,0 +1,8 @@
++// SPDX-License-Identifier: Apache-2.0
++
++plugins { id("binjava.java-conventions") }
++
++dependencies {
++    api(project(":binstore-spi"))
++    api(project(":format"))
++}
+diff --git a/settings.gradle.kts b/settings.gradle.kts
+new file mode 100644
+index 0000000..5a003c1
+--- /dev/null
++++ b/settings.gradle.kts
+@@ -0,0 +1,21 @@
++// SPDX-License-Identifier: Apache-2.0
++
++// The module list is docs/internal/product/architecture.md § Modules, in
++// dependency order. Adding a module here without adding it there is how a
++// component map stops being true.
++rootProject.name = "opensearch-bin-ingester"
++
++dependencyResolutionManagement {
++    repositories { mavenCentral() }
++}
++
++include(
++    "binstore-spi",
++    "binstore-backends",
++    "format",
++    "sequencer",
++    "ingest",
++    "http",
++    "client",
++    "plugin",
++)

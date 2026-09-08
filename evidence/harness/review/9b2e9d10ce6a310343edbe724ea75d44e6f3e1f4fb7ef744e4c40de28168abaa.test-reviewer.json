@@ -1,0 +1,16 @@
+{
+  "diff_sha256": "9b2e9d10ce6a310343edbe724ea75d44e6f3e1f4fb7ef744e4c40de28168abaa",
+  "verdict": "pass",
+  "findings": [],
+  "notes": [
+    "Round 10, test-reviewer. Verified independently, not taken from the author's summary.",
+    "TEST FILE UNCHANGED EXCEPT ONE JAVADOC SENTENCE. Recovered the superseded index blobs with `git fsck --dangling`: six prior versions of ReviewRoundCapTest.java exist (262/9 tests, 324/11, 383/13, 388/13, 482/15, 492/15). The newest, e09477913f9310c7addbdc8a71247227db78438e (492 lines, 15 tests), is the round-8/9 blob -- every one of the six carries the OLD 'three that called themselves first, second and third' wording, so none is a post-edit intermediate. diff against the staged blob is ONE hunk, lines 27-31, inside the class javadoc. Stronger check: with comments mechanically stripped (block, line, and string-literal-aware), the round-9 blob and the staged blob are byte-identical -- 12964 bytes each. No test body, name, assertion, fixture or @TempDir wiring changed, so `check-tdd` reporting all 15 red records unchanged is the correct answer, not a blind spot.",
+    "BASELINE MEASURED, 15/15. Ran the suite in a throwaway copy of gradlew+buildSrc+scripts under /tmp (the working tree was never edited; staged hash still 9b2e9d10ce6a at the end). TEST-binjava.ReviewRoundCapTest.xml: tests=15 failures=0 errors=0 skipped=0.",
+    "BOTH EARLIER MAJORS STAY CLOSED, mutations re-run against the staged gate. (T1) deleting ` -- baselines/review.txt` from check-reviewed.sh:143 -> 2 failures, anArgumentInADIFFERENTSTAGEDFileDoesNOTLiftTheCap and aFILENAMEThatMerelyMATCHESTheGuardAsAPatternDoesNOTLiftTheCap. (T2) replacing the no-task guard at check-reviewed.sh:97 with `if false; then` -> 1 failure, verdictsThatNameNOTASKRefuseRatherThanCountingAsROUNDZERO. Gate restored and baseline re-run green afterwards.",
+    "THE COMMENT'S OWN CLAIM IS TRUE, checked against the log rather than the comment. `git log --grep=SKIP=check-reviewed` returns nine commits; reading the body around each SKIP mention, exactly two carry an ordinal for the skip itself -- 2e0f1d9 'THE THIRD TIME' and 2953b5a 'THIS IS THE SECOND TIME' -- and none calls itself the first. So the new wording ('Only two of the nine carry an ordinal at all') is accurate and the round-9 R1 finding it answers is genuinely closed.",
+    "NO EXECUTABLE LINE MOVED IN EITHER GATE SCRIPT. Same dangling-blob recovery for scripts/check-reviewed.sh (newest prior e0d0e2ad) and scripts/review_rounds.py (newest prior a6af352b): each differs from staged by a comment/docstring hunk only -- the NF>1 rationale in the awk comment, and the 'compared' -> 'REFUSED' correction in the module docstring. Nothing the suite constrains changed, so no test could have been weakened.",
+    "T3, T4, T5 and T8 remain open under rule 11 and none got worse: the assertions they concern are byte-identical to round 9's. Not re-filed."
+  ],
+  "task": "M4.21",
+  "role": "test-reviewer"
+}

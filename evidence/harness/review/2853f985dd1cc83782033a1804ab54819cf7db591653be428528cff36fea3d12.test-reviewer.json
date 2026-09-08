@@ -1,0 +1,41 @@
+{
+  "diff_sha256": "2853f985dd1cc83782033a1804ab54819cf7db591653be428528cff36fea3d12",
+  "verdict": "pass",
+  "summary": "No tests and no production code change, so there is nothing to mutate in the diff itself. What IS in this reviewer's remit is that all three rows assert MEASURED SURVIVING MUTATIONS -- claims about test strength. I reproduced every one of them in my own tree (built from the staged index, i.e. HEAD's code) and all three survive: (M4.37a) replacing terminalFailure()'s body with `return new IOException(\"this sequencer is closed\")`, (M4.37b) reverting catch (Throwable releaseFailed) to catch (Exception releaseFailed) in closeDelegateQuietly, and (M4.36) deleting failAll(drainRemaining(), terminalFailure()) from close(). Each was run as a full `./gradlew test` after a green baseline; all three BUILD SUCCESSFUL. M4.37's reasoning that aCommitterThatDIEDDoesNotTELLTheNextCallerItWasCLOSED does not cover terminalFailure() is correct: submit() throws its own inline IOException at BatchingSequencer.java:178-179 and never calls terminalFailure(). M4.37's correction of the '~400 ms of slack' comment is also correct and I measured the number: the 200 ms-constant mutation lands at 203.9 ms against a 300 ms floor, ~96 ms of margin, not ~400. No row overstates a mutation as surviving when a test in fact kills it -- which is the failure mode that would have blocked. Two minors, both prose.",
+  "findings": [
+    {
+      "id": "T1",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:293",
+      "title": "M4.36 states the join-timeout branch is unreachable without ten real seconds, two sentences after naming the route that reaches it in milliseconds",
+      "detail": "The row says 'the only state where that net does work is the join-timeout branch, and no test can reach it without waiting ten real seconds', and uses that to justify bundling the timeout seam with the message defects. The first half is right -- I checked every other exit: if the committer runs its own finally, drainRemaining() at BatchingSequencer.java:246 has already emptied the queue, and stop() at :423 is under the same lock submit() enqueues under, so nothing can arrive afterwards; close()'s net at :459 therefore only has work when the committer is still alive, i.e. !stopped. But !stopped is reached by the InterruptedException catch at :444-446, which this same row correctly identifies one sentence earlier. A test that holds the committer inside a delegate commitAll on a latch, queues a second caller behind it, calls close() on its own thread and has a helper interrupt that thread reaches the identical branch with no production change and no ten-second wait. The one honest caveat is that there is no seam marking 'the closer has entered join', so an interrupt that lands before Thread.interrupted() at :440 is swallowed and the test degrades to the 10 s timeout -- slow, never wrong. So the claim is 'awkward without a seam', not 'impossible'.",
+      "failure_scenario": "Whoever picks up M4.36 reads the row's own justification, treats a production seam as a precondition for any detector of close()'s drain net, and adds an injectable timeout to BatchingSequencer whose only consumer is a test -- production structure bought for a test that could have been written against the interrupt path today. In the other direction, a reviewer of that future commit is told by the row that no cheaper detector exists and does not look for one."
+    },
+    {
+      "id": "T2",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:293",
+      "title": "The three new notes rows backslash-escape their double quotes; no other row in the file does",
+      "detail": "Lines 289, 293 and 297 carry \\\" around every quoted production string ('\\\"closing the delegate with a commit possibly still in flight\\\"', '\\\"this sequencer is closed\\\"', '\\\"~400 ms of slack\\\"'). Every pre-existing row in backlog-notes.md -- M0.70 and M0.71 immediately above -- uses bare double quotes. CommonMark unescapes \\\" so the rendered output is fine; the raw text is what review.sh context prints into the packet and what an agent greps, and there it reads with the backslashes. It looks like a shell or JSON round-trip artifact rather than a choice, and nothing else in the rows is mangled.",
+      "failure_scenario": "An implementer copies the quoted WARNING text out of the row, including its delimiters, into a grep or an assertion and gets no match against BatchingSequencer.java, because the source string has no backslashes. Small, but the row's whole purpose is to point at exact strings in the code."
+    }
+  ],
+  "verified": [
+    "Baseline: full `env -u GIT_INDEX_FILE GRADLE_USER_HOME=/tmp/binjava-review-trees/gradle-home ./gradlew test` in /tmp/binjava-review-trees/test-reviewer.mZURcIak -- BUILD SUCCESSFUL in 2m 16s.",
+    "M4.37(a) SURVIVES, measured: terminalFailure() body replaced with `return new IOException(\"this sequencer is closed\");` (cause chain and abnormal-death wording both gone) -- full ./gradlew test BUILD SUCCESSFUL in 1m 51s.",
+    "M4.37(b) SURVIVES, measured: `catch (Throwable releaseFailed)` at BatchingSequencer.java:303 reverted to `catch (Exception releaseFailed)` -- full ./gradlew test BUILD SUCCESSFUL in 1m 54s.",
+    "M4.36 SURVIVES, measured: line 459 `failAll(drainRemaining(), terminalFailure());` deleted from close() ONLY -- the identical call in drainForever's finally (line 246) left intact -- full ./gradlew test BUILD SUCCESSFUL in 2m 13s.",
+    "M4.37's reasoning about aCommitterThatDIEDDoesNotTELLTheNextCallerItWasCLOSED is correct: BatchingSequencerTerminationTest.java:100-106 asserts on the exception submit() constructs INLINE at BatchingSequencer.java:178-179; terminalFailure() is never on that path. terminalFailure()'s result reaches a caller only when the queue is non-empty, which is exactly two tests -- BatchingSequencerLifecycleTest.aCallerQUEUEDBehindADyingCommitterIsFailedEvenWithNoCloseAtAll (asserts only !queued.isAlive() and outcomes.hasSize(2)) and BatchingSequencerTerminationTest.aQUEUEDCallerIsFailedWithoutWaitingForTheLeaseReleaseToFinish (asserts only isInstanceOf(IOException.class)). Neither touches message or cause, which is why (a) survives. Note that terminalFailure() is EXECUTED by every test that closes a batcher -- it is coverage without constraint, the exact shape the row names.",
+    "M4.37's comment correction is right, and I measured the number rather than taking it: installing a constant `() -> Thread.sleep(200)` in the public Duration constructor while still calling sleepFor(interval) for its guard makes theRealClockTimerActuallyWaitsItsInterval fail at 203,911,796 ns against the 300 ms floor. The floor kills that mutation by ~96 ms, not the '~400 ms of slack' the comment at BatchingSequencerTest.java:286-288 claims for both bounds; the 4x mutation clears the 700 ms ceiling by ~500 ms, so '~400 ms' is fair for the ceiling only. The row states this correctly, and 202 vs 204 ms is machine noise.",
+    "M4.35's comment claim checks out: closeDelegateQuietly's comment (BatchingSequencer.java:294-296) says release() 'reaches BoundedLock.takeOrFail' flatly; LeaseManager.release() at :419-421 does `if (!lock.tryLock()) { lock.takeOrFail(\"release\", ttl); }`; close()'s own comment at :479-482 carries the 'whenever tryLock loses to an in-flight renew' qualification; and baselines/review.txt's M4.7 entry (round-7 item (d)) does carry the unqualified form verbatim.",
+    "FR-11 and NFR-9 both resolve in requirements.md (lines 20 and 40)."
+  ],
+  "not_verified": [
+    "M4.35's production argument -- whether the interleaving actually loses the lease on an NIO/S3 backend -- is the production reviewer's, not mine. I checked only that the code shape the row describes is the code that is there.",
+    "I did not attempt to WRITE the interrupt-path test described in T1; the finding rests on reading the branch conditions at BatchingSequencer.java:440-456, not on a running detector.",
+    "No test file changed in this diff, so there was no existing assertion to check for weakening; check-test-integrity.sh covers that case anyway."
+  ],
+  "task": "M4.35",
+  "role": "test-reviewer",
+  "staged_tree": "188c1bfeeb0d94ac9224f8151105453a1543fe21"
+}

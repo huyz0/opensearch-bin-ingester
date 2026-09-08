@@ -1,0 +1,37 @@
+{
+  "diff_sha256": "8c78763b1073ca3d29c67d0044b01743a0fe4fbe5b87118b8dae548257b1fba7",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "M4.8b-tr-16",
+      "severity": "major",
+      "file": "docs/internal/product/backlog-notes.md:329",
+      "summary": "The chainEnd clause's closing sentence -- 'One fixture covers both if epoch 4's Seal@0 already exists when the new leader starts: firstInheritableAncestor then steps over 4 to 3 and recoverChainEnd runs against the checkpoint-bearing chain -- chainEnd first, applyChain second' -- is FALSE for the applyChain half, by the exact mechanism this row states two clauses earlier. Traced through the code: LocalSequencer.start:228-255 runs firstInheritableAncestor(4) -> 3 (ChainReplay.java:301, Seal@0 makes neverOpened true), then predecessor.recoverChainEnd() (chainEnd IS covered), then `prevSeq = predecessor.seal(...).sequence()` -- start SEALS epoch 3 -- then log.recover() on the still-empty epoch 5 (replayAncestry breaks immediately, firstEntry(5) == null at origin, so it reads nothing), then log.open(3, prevSeq) -> crossFrom -> ChainReplay.inherited(3, prevSeq) -> replayAncestry(3, prevSeq) with the hop BOUNDED at the seal's sequence. applyChain then applies the Seal and returns at ChainReplay.java:339, before any `ckpt/` key, because `ckpt/` sorts after every `<seq:016x>.delta`. The two coverages are MUTUALLY EXCLUSIVE in the ancestry route: epoch 4 empty gives applyChain an unbounded hop but leaves recoverChainEnd listing an empty chain with no GET (the round-2 TR11 hole); epoch 4 sealed gives chainEnd its GET but bounds applyChain at the seal start itself writes. No single takeover fixture reaches both sites.",
+      "failure_scenario": "An implementer takes the row's explicitly offered cheaper option -- one fixture instead of two -- builds the epoch-4-Seal@0 takeover, and lands a filter applied to ChainReplay.chainEnd ONLY, leaving applyChain's `read(store, stat.key())` at ChainReplay.java:314 unfiltered. The fixture is green: chainEnd no longer reads the ckpt key, and applyChain returned at the Seal without ever seeing one. That is precisely the mutation TR1/F3 named in round 1 and TR11 re-named in round 2, surviving a third time. In production the first unsealed-ancestor recovery (the neverOpened branch, ChainReplay.java:186, limit = Long.MAX_VALUE) then decodes a checkpoint as a ChainEntry, start releases the lease, and the next node repeats -- the failure the row opens with. The one-clause remedy: delete 'One fixture covers both ...' and state that chainEnd's fixture is a PLAIN takeover with checkpoints seeded in the opened predecessor (firstInheritableAncestor returns prevEpoch, recoverChainEnd lists it, last key is `ckpt/...`, red today), separate from the simple-shape applyChain test -- and say the two cannot be the same fixture, because start seals between the two calls."
+    },
+    {
+      "id": "M4.8b-tr-17",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:329",
+      "summary": "'One extra key kills all three' is a claim about test strength that holds for the deny-list and `contains` mutants (both now throw on the undecodable `.delta.tmp` body) but NOT for `return` instead of `continue`, whose only observable is an assertion the row never names. Under `return`, recovery does not throw and the GET count stays constant in the number of checkpoint-shaped keys seeded -- it goes DOWN, and the row's only stated count assertion is constancy in N, not equality to the delta count.",
+      "failure_scenario": "The implementer writes the prescribed b1 test as `assertThatCode(recover).doesNotThrowAnyException()` plus the GET-count-constant-in-N assertion, and implements the filter as `if (!isDeltaKey(stat.key())) { return; }`. Green. Every delta after the interposed `<seq:016x>.delta.tmp` key is dropped, so nextOffsets rewinds and the next commit reassigns offsets already handed out -- I2 -- and nextSequence rewinds under it. The row should name the assertion, as it did for M4.8b2's runtime failure path: the per-stream offsets AND nextSequence after recovery must equal what the full chain implies, with at least one delta sorting AFTER the interposed key."
+    },
+    {
+      "id": "M4.8b-tr-18",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:333",
+      "summary": "The conditional seq criterion is correct and kills the two mutations it was rewritten for (`seq = 0` fails 'strictly increasing across two triggers with deltas between'; a per-checkpoint counter fails 'the SAME key for a T tick with no deltas between'). But the third derivation the same clause names as wrong -- 'a constant body Checkpoint.sequence while keys increment' -- has no assertion anywhere in the row: 'decode what was PUT and assert per-stream and per-pod values' names streams and pods, and the grammar clause pins KEY strings only.",
+      "failure_scenario": "The writer derives the key from the chain sequence correctly and passes `new Checkpoint(0L, streams, pods)` -- or any constant -- as the body. Every assertion the row prescribes is green: keys are distinct, strictly increasing, identical across a no-delta T tick, exactly the padded strings for 9 and 16; the decoded per-stream and per-pod values match. M4.9 then bounds replay from a body sequence that names slot 0, replaying the whole chain it was built to avoid, or worse trusts it and skips deltas. One clause fixes it: the decoded body's `sequence` must equal the seq in its own key."
+    },
+    {
+      "id": "M4.8b-tr-19",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:333",
+      "summary": "The new oldestRetainedOffset clause replaces a value assertion with a strictly weaker relational one: 'the assertion that kills it is that the two fields differ, not that either holds a particular number', in the same sentence that states '0 IS THE TRUTHFUL VALUE until M7 retention exists'. If 0 is the truthful value, `isZero()` is both simpler and strictly stronger than 'they differ', and 'they differ' additionally fails on a legitimate stream whose nextOffset is 0.",
+      "failure_scenario": "The writer emits `new StreamOffsets(next, next - 1)`, or `(next, 1)`, for every stream -- a checkpoint asserting records below that offset are no longer retained when they are. The prescribed assertion ('the two fields differ') is green, and the target mutation `StreamOffsets(next, next)` is the only one it excludes. M7's GC and M4.9 then read a retention floor that was never true, and no test in the tree says otherwise. The clause's own first half already gives the right assertion -- pin it to 0 until M7 changes it."
+    }
+  ],
+  "task": "M4.8b",
+  "role": "test-reviewer",
+  "staged_tree": "d36d6922b3ebcede58c36e3b05784a8992807b82"
+}

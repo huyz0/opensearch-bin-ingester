@@ -1,0 +1,67 @@
+{
+  "diff_sha256": "cbd669d086c912d9ed6898e23fd4d86fd8c5d5ba407a71f51696467d88930f02",
+  "verdict": "changes-requested",
+  "summary": "A decomposition commit, no code. The split itself is sound and follows the M4.8/M4.6 precedent (both copies say `split`, source text preserved, sub-rows ordered by the deciding ADR). Two majors, both in prose that a future session will execute against. (1) The one cost property in the whole packet cites cost.md R6, which is about INDEX count, for a claim about POD count; cost.md's own invariant block lists nodes as a PERMITTED axis, so a session that opens the citation finds it licensing the thing the bullet forbids. The repo's own precedent for this exact dimension is AGENTS.md non-negotiable 6, cited by name in three landed rows. (2) M4.10b's property list offers epoch-qualification (`\"poda\" -> \"poda@e7\"`) as its only concrete key shape, while the caution that the epoch MUST NOT be inherited was placed under `### M4.10` -- a section the notes' own read-one-entry rule tells a session picking M4.10b not to read. Three minors, all stale or unmeasured numbers in the added prose, including a second `four` the heading fix missed.",
+  "findings": [
+    {
+      "id": "R8-1",
+      "severity": "major",
+      "file": "docs/internal/product/backlog-notes.md:222",
+      "title": "cost.md R6 does not say what the cost property attributes to it, and the rule it does state permits the axis the property forbids",
+      "detail": "The bullet reads `No request added to the COMMIT path may scale with pods (cost.md R6).` cost.md rule 6 is `Commit/metadata write rate is independent of index count.` -- INDEX count, not pod count. cost.md's invariant block four lines above the rules reads `request rate may scale with: segments, AZs, nodes` and lists only `records, shards, partitions, indices, documents` as forbidden; pods are ingester nodes, and ADR-0017 has every pod writing. So the cited rule and the standard's headline invariant both fail to support the constraint, and the invariant reads as licensing it. The repository's own precedent for exactly this dimension is AGENTS.md non-negotiable 6, cited BY NAME in three landed rows: M4.7a (`the commit rate scaling with pods, which non-negotiable 6 forbids by name`), M4.8b2 and M4.8c (`neither scaling with streams or pods, so non-negotiable 6 holds`). ADR-0007:35 is the counter-example that pins the meaning of R6: it cites `cost rule R6` for index count, which is what R6 is. The same wrong citation is repeated in the backlog.md summary row (docs/internal/product/backlog.md:123), which is the copy a session reads first. Nothing checks cost.md citations -- check-rule-citations.sh covers review.md only.",
+      "failure_scenario": "A session picks M4.10b, reads the property, opens cost.md to ground it in the ADR it is writing, and finds R6 is about index count while the invariant block above it names nodes as a permitted axis. It records in an accepted ADR that a per-pod `ctl/pods/<podId>` object rewritten on every commit is within budget, because no rule it can find forbids pod-scaling on the commit path. M4.10d then implements it and the commit-path PUT rate becomes pods/interval again -- undoing M4.7a/M4.7b, whose CountingBinStore assertion measures six pods flushing into one window at exactly ONE PUT. The regression is invisible to every gate the project has today (the cost meter does not exist) and reaches production as a bill multiplied by the fleet size.",
+      "remedy": "Cite AGENTS.md non-negotiable 6 by name as the three landed rows do, or state the constraint on its own evidence (M4.7b's measured one-PUT-per-window property), and drop the R6 reference or move it to the index-count claim it actually supports."
+    },
+    {
+      "id": "R8-2",
+      "severity": "major",
+      "file": "docs/internal/product/backlog-notes.md:234",
+      "title": "M4.10b's only concrete key shape is the epoch, which the same diff retires -- and the retirement is in a section M4.10b's reader is told not to read",
+      "detail": "The sixth property illustrates key qualification with `\"poda\" -> \"poda@e7\"`. `e7` is the lease epoch. In the same diff, docs/internal/product/backlog-notes.md:177 adds `the lease's own epoch was the original candidate -- MUST NOT INHERIT THAT: the epoch is the SEQUENCER's term, not the pod's incarnation`. That caution appears ONLY under `### M4.10`. backlog-notes.md's own header (line ~172) says a session loads the entry for the ONE task it picks and nothing loads the file whole; AGENTS.md repeats it (`Read the notes for the ONE task you pick, never whole`). backlog.md:123's M4.10b summary does not carry the caution either. So the session that writes this ADR reads `#m410b`, whose text says five rounds of these rows guessing the mechanism produced five falsifiable guesses, and whose single worked example is the sixth guess -- the one the parent row just withdrew. This is the failure the M4.10a entry in baselines/review.txt names in its own words: fixing one copy of a fact and missing its duplicates.",
+      "failure_scenario": "M4.10b's ADR adopts an epoch-qualified pods key. It is correct on every test that can be written today, because M4 ships only LocalSequencer and producer and sequencer share a process, so a pod restart does take a fresh epoch. M5's commit forwarding lands (roadmap.md:14 assigns it there): a non-leaseholder pod restarts, the leaseholder's epoch is unchanged, the qualifier stops varying, and dedup on `(podId, flushSeq)` again matches a restarted pod's flushSeq 0 against the pre-restart flushSeq 0 -- suppressing a REAL commit. That is the precise harm the M4.10 row exists to prevent, reintroduced by an accepted ADR, and by then the decision is expensive to reverse.",
+      "remedy": "Either move the epoch caution into `### M4.10b` (and the backlog.md M4.10b row), or make the illustration mechanism-neutral -- `\"poda\" -> \"poda<qualifier>\"` carries the format-invariance argument without nominating a candidate."
+    },
+    {
+      "id": "R8-3",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:223",
+      "title": "`the four above` -- only two bullets precede the cost bullet",
+      "detail": "The cost bullet says `this is the axis the four above do not constrain`. In the list as staged the cost bullet is THIRD of six: only `a replay must be ANSWERED` and `no object may grow with history` precede it. The count is stale from an ordering in which this bullet was last of five. Note the shape: the sibling `Four properties` heading was corrected in this same round and this instance of the same stale number was not -- the one-copy-fixed pattern that baselines/review.txt records for M4.8, M4.10a and M0.76.",
+      "failure_scenario": "The ADR author counts back four bullets from the cost property, lands on bullets that do not exist, and either treats the sentence as covering constraints it does not (concluding the size/rate distinction is already handled elsewhere) or discounts the bullet's framing entirely. Low blast radius, but it is an unmeasured number in the one bullet carrying the cost constraint.",
+      "remedy": "`the two above`, or drop the count and say `the axis the preceding properties do not constrain`."
+    },
+    {
+      "id": "R8-4",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:235",
+      "title": "`all three goldens round-trip` -- there is one checkpoint golden, and three TESTS",
+      "detail": "format/src/test/resources/golden/ holds exactly one checkpoint golden, checkpoint-v0.bin. GoldenCheckpointTest has three @Test methods, and its own javadoc says `leave all three tests here GREEN`. The staged sentence transcribes that as `all three goldens`. The other six goldens (two segment, four chain) are not touched by a Checkpoint.pods key change and cannot be what is meant. This sits inside the one sentence this round ADDS, which is where a number is least affordable.",
+      "failure_scenario": "A reader checking the no-format-change argument goes looking for three checkpoint goldens, finds one, and cannot tell whether the argument was measured against something that no longer exists or was never measured at all -- so the strongest leg of the added property (that a String-content change provably touches no bytes on disk) becomes unverifiable at the moment someone needs it.",
+      "remedy": "`GoldenCheckpointTest's three tests stay green` -- or name the file: `checkpoint-v0.bin still round-trips`."
+    },
+    {
+      "id": "R8-5",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:237",
+      "title": "The added property's reason contains a clause this same diff falsifies: `nothing owning it`",
+      "detail": "The sixth property's justification is `so this hazard can survive an answer of \"no formats change\", which would leave M4.10c void and nothing owning it`. But `### M4.10c` in the same diff says `everything that needs no format change is M4.10d's, deliberately, so that a \"no format change\" finding cannot take the end-to-end anchor down with it`, and `### M4.10d` opens `THIS ROW OWNS THE END-TO-END ANCHOR, and it needs NO format change`. If M4.10c is void, the residue is M4.10d's by construction -- that routing is the stated purpose of the c/d boundary. So `nothing owning it` is not true of the tree this commit leaves. The property itself survives without the clause: its other leg -- that the ADR must state the answer, and that the failure direction is a real replay ACCEPTED TWICE against a pre-upgrade checkpoint rather than a real commit suppressed -- is correct and I verified the direction against Checkpoint.decodeBody (a pre-change checkpoint carries the bare key, a post-change lookup of the qualified key misses, the window reads empty, the replay commits again). Since the author's stated method this round is that every edit is a deletion or a narrowing, this clause is the one that should have been deleted rather than added.",
+      "failure_scenario": "A session picking M4.10b reads that a no-format-change answer leaves the hazard unowned, and to avoid orphaning it either forces a format change it does not need -- pulling in M4.10c, its ADR, goldens, readers, writers and fakes under non-negotiable 8 for nothing -- or writes a fourth sub-row for work M4.10c already assigns to M4.10d.",
+      "remedy": "Delete `and nothing owning it`; the property stands on `the ADR must say what happens` plus the accepted-twice direction."
+    }
+  ],
+  "verified": [
+    "ChainReplay:441 folds `into.merge(run.key(), run.lastOffset() + 1, Math::max)` -- the offsets-are-blind-to-a-re-append claim holds.",
+    "Invariants:116,253 use `delta.runs()`, which refuses a batched delta -- the `Invariants IS NOT THAT ASSERTION` claim holds on the leg I could check statically.",
+    "CheckpointWriterContentTest:156 `doesNotContainKey(\"poda\")`, :123-124 replays 9 then 4, :145 `containsEntry(\"poda\", 42L)` -- all three cited fixtures exist as described.",
+    "No production code reads `Checkpoint.pods()` anywhere under */src/main -- `written, but recovered by nothing` is accurate.",
+    "DefaultIngest:63 holds `flushSeq` as an instance field and :349 is the only `flushSeq++` -- sole issuance site, increments unconditionally.",
+    "SegmentPublisher:53 `private final AtomicLong sequence`, :137 the `unique WITHOUT coordination` comment; SegmentKey.render emits timestampMillis, podShortId, sequence.",
+    "ChainEntry:45,48 VERSION_DELTA = 0 / VERSION_KINDED = 1; Checkpoint:47,49 own MAGIC 0x42434B50 and VERSION 0, decode compares one constant at :151; CheckpointCursor:67 records BinStore's `the store is unreachable`.",
+    "Sequencer:108 `@return the durable delta carrying every submitted segment`; :111 commitAll is the primitive; FaultInjectingStore.Faults:60 carries ambiguousPut and duplicatePut arms.",
+    "ADR-0031 is about two LIVE same-podId processes at the lease level; roadmap.md:14 assigns commit forwarding to M5. The R7c annotation's reasoning is sound on both legs.",
+    "Split hygiene follows precedent: both copies of the M4.10 row say `split` (the M4.8 one-copy-fixed failure), source text preserved as M4.6 did, and backlog.md's `Six properties` matches the six bullets."
+  ],
+  "task": "M4.10",
+  "role": "reviewer",
+  "staged_tree": "de059a34ea7acc9aef20c168b396613c3e414502"
+}

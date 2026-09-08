@@ -1,0 +1,55 @@
+{
+  "diff_sha256": "1e916032a72234254c3b91eaa2e6e6d8336bc9a2d17665ede237fd91c1b208ca",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "DT1",
+      "severity": "major",
+      "file": "docs/internal/product/milestones/M1/SPEC.md:95",
+      "summary": "Criterion 3 and its two rows (T8 line 135, T8b line 144) name a 5-minute idle window but never name the clock, and the row's mutation ('poll the store on an empty queue') does not say at what interval. The project's most valuable test is specified in a way that admits a vacuous pass.",
+      "failure_scenario": "Two ways this test passes while the bug ships. (a) Real time: L0's budget is 90 s (build.md:110, enforced today by scripts/check-suite-time.sh BUDGET=90), so a 5-minute wall-clock test cannot run at T1 in ./gradlew test. The author shortens the window to ~10 s; a poller that issues one HEAD per shard on a 60 s idle timer then never fires inside the window, totalRequests()==0, and the $21,600/hour regression cost.md:61 names ships green. (b) Virtual time: runIdle(minutes(5), 1600) in cost.md:50 implies an injected clock, but nothing in the SPEC or cost.md says the poller must READ that clock. If the production poller calls System.nanoTime or a real ScheduledExecutor while the test advances a fake clock, advancing 5 virtual minutes drives nothing at all: the assertion is true for a reason unrelated to the code, which is exactly the failure testing.md rule 2 exists to name. Every mutation survives. The row must state the clock seam (testing.md rule 15, non-negotiable 7) and the poll interval the window is sized to expose."
+    },
+    {
+      "id": "DT2",
+      "severity": "major",
+      "file": "docs/internal/product/milestones/M1/SPEC.md:108",
+      "summary": "Criterion 8 ('200 MB body, 256 MB heap, no OOM') has no covering row. T12 (line 142) asserts a ratio ('memoryFlatUnderTenXBodySize'), not an absolute, and it is T2, so it runs in ./gradlew test where the committed build gives every suite 512m.",
+      "failure_scenario": "buildSrc/src/main/kotlin/binjava.java-conventions.gradle.kts sets maxHeapSize = \"512m\" inside withType<JvmTestSuite>().configureEach, so no documented Gradle task provides the 256 MB heap the criterion names. Mutation: the bulk path streams correctly but makes a constant 3x copy per record (parse buffer + envelope + accumulator slice). Peak scales linearly, so T12's flatness ratio under a 10x body is unchanged and T12 passes; peak at a 200 MB body is ~600 MB, which does not OOM in the 512 MiB test JVM and does OOM against the 256 MB heap the criterion promises. Criterion 8's number is therefore asserted nowhere. Either name a task with -Xmx256m for the soak (and say so in build.md's tier table) or restate the criterion as the flatness bound T12 actually measures."
+    },
+    {
+      "id": "DT3",
+      "severity": "minor",
+      "file": "docs/internal/product/milestones/M1/SPEC.md:88",
+      "summary": "Criterion 0's middle clause, 'the delete removes the document', is not named in any row's mutation column. T5b is a T0 record-framing round-trip and T5c's stated mutation is about _version only.",
+      "failure_scenario": "Mutation in the consumer's DEFAULT-envelope assembly (M1.12): map _op_type 'delete' to an index operation with an empty source. T5b (line 128, T0) still passes because the segment format round-trips _op_type unchanged; T11/T11b/T11c only index. T5c catches it ONLY if it is written as index v5 -> delete v6 -> replay v3 -> assert absent; its mutation column ('assemble the envelope without _version') fully permits the simpler index v5 -> replay v3 -> assert version still 5, which never involves a delete. Written that way, the deleted document is silently resurrected as an empty doc and no row fails. Say in T5c's row that the document under replay must have been deleted first."
+    },
+    {
+      "id": "DT4",
+      "severity": "minor",
+      "file": "docs/internal/product/milestones/M1/SPEC.md:86",
+      "summary": "Criterion -1 requires the replay and the live write to run concurrently; T5d (line 130) neither says so nor names a mutation that requires it.",
+      "failure_scenario": "Mutation: the replay path compares versions with a check-then-act (read current _version, then write if older) rather than relying on OpenSearch's external-version conditional write. A sequential T5d - live write at v5, then backfill at v3, assert still v5 - passes, because nothing interleaves. Under the concurrency the criterion actually demands, the replay reads v4, the live write lands v5, the replay then overwrites with v3, and lane -1 has eaten a newer live write. The row must require the two to be in flight together, or criterion -1's distinguishing clause is untested."
+    },
+    {
+      "id": "DT5",
+      "severity": "minor",
+      "file": "docs/internal/product/milestones/M1/SPEC.md:123",
+      "summary": "T1's named mutation (swap byteStart/byteLen in a directory entry) survives an encode/decode round-trip when the swap is in the shared layout, which is the same blindness T1b (line 146) already articulates.",
+      "failure_scenario": "If the 48-byte directory layout is one constant or one record read by both writer and reader, swapping the two fields is symmetric: the writer puts byteLen where byteStart belongs, the reader reads it back from the same slot, and segmentRoundTripsAllRuns is bit-for-bit identical. Only T1b's committed golden file fails. As written, T1's row claims a mutation it does not necessarily catch. Say 'in the writer only, reader unchanged', which is the asymmetric form the round-trip does catch."
+    },
+    {
+      "id": "DT6",
+      "severity": "minor",
+      "file": "docs/internal/standards/testing.md:44",
+      "summary": "Rule 6's disclosure condition is already stale: 'Does not exist until the build does' now reads as satisfied, because the build landed in de66330 and check-coverage.sh still does not exist (and no JaCoCo plugin is applied anywhere in buildSrc).",
+      "failure_scenario": "An author reads rule 6 today, knows M0.4 is committed, and concludes ./gradlew check enforces 95%/90%. It enforces nothing - the conventions plugin applies no jacoco plugin and scripts/check-coverage.sh is absent (backlog M0.13, todo). The commit lands at 40% line coverage with a green build and a rule that read as gated. Rule 9's formulation - 'aspirations until their scripts are in scripts/' - is the accurate one and should replace the M0.4-conditional wording at rule 6."
+    },
+    {
+      "id": "DT7",
+      "severity": "minor",
+      "file": "docs/internal/standards/build.md:25",
+      "summary": "The memory table's Total (~4.9 GiB) counts one compile daemon and one test JVM, but org.gradle.workers.max=2, and the gate that exists (scripts/test_budget.py) multiplies both by the worker count. The Gradle daemon's -XX:MaxMetaspaceSize=512m appears in neither the table nor the sum.",
+      "failure_scenario": "check-test-budget.sh prints 'compile daemons (2 x 512 MiB)' and 'test JVMs (2 x 512 MiB)', so the doc's table understates its own gate by ~1 GiB before containers, and by a further 512 MiB of off-heap metaspace that nothing counts. A developer sizing a session from the table provisions for 4.9 GiB, runs clusterTest with two workers plus the OpenSearch and MinIO containers, and takes the WSL2 kill this whole section exists to prevent - and it kills an unrelated session, so the number that was wrong is never suspected."
+    }
+  ]
+}

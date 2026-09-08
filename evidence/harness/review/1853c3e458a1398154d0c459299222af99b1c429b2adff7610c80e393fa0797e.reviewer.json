@@ -1,0 +1,22 @@
+{
+  "diff_sha256": "1853c3e458a1398154d0c459299222af99b1c429b2adff7610c80e393fa0797e",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "M0.13-stale-exec-data",
+      "severity": "blocking",
+      "file": "scripts/check-coverage.sh:27",
+      "summary": "check-coverage.sh invokes `./gradlew jacocoTestReport` directly. jacocoTestReport is wired with `mustRunAfter(tasks.withType<Test>())` (binjava.java-conventions.gradle.kts:68), not `dependsOn`. `mustRunAfter` only orders tasks already in the task graph; it never puts `test` into the graph. Since the gate never invokes `test` or `check`, the JaCoCo execution data (build/jacoco/test.exec) the report is built from is whatever already sits on disk and is never forced to regenerate by this gate.",
+      "failure_scenario": "Reproduced against a throwaway project using this repo's exact Gradle version (9.7.0) and the exact conventions block copied verbatim. Baseline: `./gradlew test jacocoTestReport` with a test that exercises a branch gives LINE missed=0 covered=2 (100%). Weaken the test to a no-op (delete its only assertion) WITHOUT re-running `test` -- exactly what non-negotiable #2 and check-test-integrity.sh exist to catch. Run the command check-coverage.sh actually runs, `./gradlew jacocoTestReport`: Gradle prints `:jacocoTestReport UP-TO-DATE`, no new report is written, and coverage is unchanged (still 100%) even though the currently-committed test no longer constrains that code. This is the same class of defect this round's commit message claims to have closed ('the gate now GENERATES the report it reads') -- that claim only holds for the specific case reproduced in this round (a brand-new untested class, whose bytecode has no prior exec data at all, so JaCoCo correctly shows it as 0%). It does not hold for an EXISTING test being weakened or deleted while production bytecode is untouched, because JaCoCo's staleness detection is keyed to main-class bytecode identity, not test source, and mustRunAfter never forces `test` to re-run. Separately, buildSrc/src/test/java/binjava/CoverageGateTest.java cannot catch this: its scratch() helper replaces `gradlew` with a stub that exits 0 without running anything ('A stub keeps this test hermetic; what is under test is the verdict logic over a given report'), so none of the six new tests exercise the Gradle wiring this round changed -- the property the commit message claims to have fixed has zero test coverage, and is demonstrably false for the test-weakening case above."
+    },
+    {
+      "id": "M0.13-unscoped-gradle-invocation",
+      "severity": "major",
+      "file": "scripts/check-coverage.sh:16-28",
+      "summary": "check-coverage.sh runs `./gradlew jacocoTestReport` for the whole tree unconditionally -- no GATE_SCOPE check, no relevant-files check -- unlike every other Gradle-invoking gate in this repo. check-harness-tests.sh prints 'ok -- no harness change; suite not run' and skips Gradle entirely when GATE_SCOPE != full and nothing relevant changed; check-module.sh builds only the touched modules. build.md documents 'a docs-only or script-only commit makes no Gradle call at all' as load-bearing.",
+      "failure_scenario": "check-coverage.sh is correctly listed today as present but not wired into .pre-commit-config.yaml, so this has no effect on the current pre-commit budget. But the moment it is wired into pre-commit or CI's fast (L1, <=5 min) layer -- the only reason AGENTS.md lists it as 'invoke by hand, from a skill, or from CI' rather than 'unused' -- every commit, including a one-line markdown fix, pays the cost of a full-tree Gradle test run across every module with JaCoCo instrumentation, contradicting the delta/full pattern documented for every sibling gate and the L0/L1 time budgets in build.md."
+    }
+  ],
+  "task": "M0.13",
+  "role": "reviewer"
+}

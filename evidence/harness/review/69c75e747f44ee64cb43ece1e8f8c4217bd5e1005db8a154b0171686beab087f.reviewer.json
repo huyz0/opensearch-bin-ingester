@@ -1,0 +1,28 @@
+{
+  "diff_sha256": "69c75e747f44ee64cb43ece1e8f8c4217bd5e1005db8a154b0171686beab087f",
+  "verdict": "pass",
+  "summary": "Round 3. Both round-2 majors verified fixed. No production code in the diff, so no object-store request-rate surface. MEASURED in a review tree: the sweep is live (an inherited-offsets mutation reddens it naming seeds), checkReader is non-vacuous (a zeroed ReaderView yields a violation on every judged epoch), -Dsweep.seeds forwards and the configuration cache invalidates correctly, 1000 seeds in 17.9s, zombieWrites=0 / zombieAttempts=432 over all 1000 sweep seeds, and every chain's ack floor is 0 in 200/200 seeds so the archive row's floor claim is true. Three minors, none blocking.",
+  "findings": [
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSimulation.java:127",
+      "severity": "minor",
+      "title": "the whole ack trace is unfalsifiable -- deleting every acks.add leaves the entire sequencer suite green",
+      "failure_scenario": "MEASURED in a review tree: neutralising all six acks.add(...) calls (lines 195, 279, 281, 304, 305) so checkAckOrder(acks) at line 348 is fed an empty list leaves CommitProtocolSweepTest green in 15.4s and all 47 :sequencer:test classes green. Result does not expose the trace, so no test can observe it, and check-mutants cannot reach it because it is test code. This is the identical shape the row's own notes record as having already happened once -- 'the edit did not apply and nothing read it back, so the ack floor sat at 1 in 424 of 424 traces' -- and the archive row now restates the claim ('a driver-emitted trace whose floor is pinned by the slot-0 CONTINUE') with nothing enforcing it. I verified the claim is TRUE today (200/200 seeds, every chain's floor is 0), which is why this is minor rather than major: the arm has no detection power either way until M4.50. The concrete future failure is that the slot-0 CONTINUE emission, or the round-2 zombie emission, silently stops and the sweep still reports 'I1-I5 hold across 1,000 seeds'. Rung-1 remedy: put the trace (or its size and per-epoch floor) on Result and assert in the sweep that it is non-empty and floors at 0."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSweepTest.java:140",
+      "severity": "minor",
+      "title": "a wall-clock threshold that fails the build, which performance.md rule 9 names as worse than no gate",
+      "failure_scenario": "assertThat(elapsed).isLessThan(BUDGET_MILLIS) turns a timing measurement into a red commit gate. performance.md rule 9: 'Gate on allocation, trend on time. Wall-clock on a shared CI runner has double-digit variance and a threshold on it becomes noise that people learn to re-run until green -- which is worse than no gate.' MEASURED standalone at 17.9s, so the headroom is 3.4x; M0.88 records two reviewers plus the author running Gradle concurrently on this machine, and under that load plus a concurrent PIT run a 3.4x slowdown is reachable. The failure is 'AssertionError: 1000 seeds took 61234 ms' on a commit with no defect, at which point the next person re-runs rather than reads. check-suite-time.sh already exists as the designated home for a suite-time budget; the number is worth keeping as a printed measurement rather than an assertion."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSweepTest.java:74",
+      "severity": "minor",
+      "title": "the newly-forwarded -Dsweep.seeds scales every anti-vacuity floor with it, so a 5-seed run is indistinguishable from a 1000-seed one",
+      "failure_scenario": "Before this commit -Dsweep.seeds was inert because Gradle never forwarded it; the buildSrc change makes it live. Every floor is proportional to SEEDS (SEEDS*3, SEEDS, SEEDS*10), so nothing survives the scaling. MEASURED: ./gradlew :sequencer:test --tests CommitProtocolSweepTest -Dsweep.seeds=5 gives BUILD SUCCESSFUL in 2s, and on a pass nothing prints the seed count -- the run is indistinguishable in the build output from the 1000-seed run. The task did ask for a configurable seed count, so the knob is in scope; what is missing is any record of which count ran. Concrete failure: someone bisecting sets -Dsweep.seeds=1 in a shell or a wrapper, forgets, and every subsequent green sweep covers one seed while the archive row still says 1,000. Cheapest fix: System.out the seed count unconditionally, or fail unless SEEDS == 1000 without an explicit bisect marker."
+    }
+  ],
+  "task": "M4.13",
+  "role": "reviewer",
+  "staged_tree": "b0a5f54d0184647c385170e02c4e942a17189f6f"
+}

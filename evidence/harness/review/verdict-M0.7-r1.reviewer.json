@@ -1,0 +1,69 @@
+{
+  "diff_sha256": "4ce6e1ff79a4be430299783bb3f616cb4332f7111269841062d2c11e6a900439",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "C1",
+      "severity": "blocking",
+      "file": ".github/workflows/ci.yml:93",
+      "summary": "`pre-commit run --all-files --hook-stage commit-msg` is rejected by pre-commit: `--commit-msg-filename` is REQUIRED for that stage. The step exits 1 on every run, so every CI run is red and check-test-integrity/check-commit-msg never execute. AGENTS.md's new row claiming them '✅ only via a second invocation' is therefore false.",
+      "failure_scenario": "Reproduced locally with pre-commit 4.6.2 (what `pip install pre-commit` on line 44 installs): `pre-commit run --all-files --hook-stage commit-msg` prints `[ERROR] --commit-msg-filename is required for --hook-stage commit-msg` and exits 1. Source: pre_commit/commands/run.py:361. Every push to main and every PR fails at the last step of the gates job, red for a reason unrelated to the change under test; the team learns to ignore a red ci, and the pre-commit-stage gates that DID pass are drowned. Second half: even with a filename, run.py:_all_filenames returns `(commit_msg_filename,)` for this stage, so `--all-files` is ignored -- one fabricated message file would be checked, not 'once per commit in the range' as .pre-commit-config.yaml's own comment promises, and there is no commit message in a CI checkout at all. check-commit-msg exits 2 without a file argument."
+    },
+    {
+      "id": "C2",
+      "severity": "major",
+      "file": ".github/workflows/ci.yml:56-93",
+      "summary": "CHECK_RANGE is inert in the step that actually runs. With GATE_SCOPE=full every pre-commit-stage gate resolves files through workspace_files (lib.sh scoped_files) and ignores CHECK_RANGE; the only three CHECK_RANGE consumers are check-tdd and check-reviewed (both SKIPped, line 82) and check-test-integrity (in the broken step, C1). So the fail-closed base-ref step, `fetch-depth: 0`, and AGENTS.md's new 'the base ref itself | ✅ fails closed' row describe a protection that today guards nothing that executes.",
+      "failure_scenario": "grep CHECK_RANGE scripts/ returns check-reviewed.sh, check-tdd.sh, check-links.sh and check-test-integrity.sh. check-links.sh:14 uses it only to decide whether to escalate to full, which GATE_SCOPE=full already did. check-module.sh:287 short-circuits to MODULES=$ALL under full, never reaching `plan $(changed_files)`; check-harness-tests.sh:19 skips its changed_files branch entirely under full. Concrete consequence: an operator reads AGENTS.md and believes range-reading gates are real in CI. They are not -- the one gate that reads the range is the one that never runs. Related: the comment on line 74-76 ('WITHOUT THIS three gates read an empty staged diff') is wrong about GATE_SCOPE -- with CHECK_RANGE set, delta mode reads the range, not an empty index; and the fetch-depth justification on line 34-35 names three gates of which two are skipped ten lines later."
+    },
+    {
+      "id": "C3",
+      "severity": "major",
+      "file": ".github/workflows/ci.yml:22-24",
+      "summary": "`cancel-in-progress: true` with a group keyed on github.ref cancels in-progress runs for pushes to main and for the nightly, so a commit can land on main with no gate verdict at all -- and non-negotiable 5's local-only enforcement means nothing else will ever look at it.",
+      "failure_scenario": "Two commits pushed to main 30 seconds apart (normal for this project: one task = one commit, and the milestone skill runs several in a session). Run A for commit 1 is cancelled mid `pre-commit run --all-files`; run B examines commit 2 only. If commit 1 broke check-terminology or check-module in a way commit 2's tree no longer exhibits, nothing ever reported it. The schedule trigger shares the group (github.ref = the default branch), so a nightly and a push cancel each other too. The usual form is `cancel-in-progress: ${{ github.event_name == 'pull_request' }}`."
+    },
+    {
+      "id": "C4",
+      "severity": "major",
+      "file": ".github/workflows/ci.yml:14-17",
+      "summary": "The cron's stated justification is not supported by the file. The comment says the nightly is what makes a wrong L2/L3 path filter safe -- but this workflow has no L2/L3 jobs and no path filter, so the nightly runs exactly the same two jobs as a push, over the same tree, with a HEAD~1 range. build.md § 'Selective triggering for L2/L3' item 3 is quoted for a mechanism this file does not contain.",
+      "failure_scenario": "A reader (or a future agent doing M0.x for integrationTest/clusterTest) sees the cron and its comment, concludes the nightly already covers T3/T4, and does not add the jobs. Nothing runs MinIO or OpenSearch on any schedule, and the coupling the path filter guesses wrong about is caught at release rather than within a day -- which is exactly the failure build.md:155 names. Either add the L2/L3 jobs (out of scope for M0.7) or state the honest reason for the cron: full-tree gates on a schedule, catching a file that stopped being valid for a reason outside its own diff."
+    },
+    {
+      "id": "C5",
+      "severity": "major",
+      "file": "scripts/review-lenses.sh:79",
+      "summary": "M0.7 introduces a new class of enforcement artifact -- .github/workflows/*.yml -- and does not teach the review routers about it. review-lenses.sh classifies this commit as docs-only ('No code changed. Do NOT review for code defects.') and does not fire the 'a gate that reports success while checking nothing' lens; which-standards.sh does not route build.md, the standard this file implements.",
+      "failure_scenario": "This very review packet, generated for a commit whose entire content is an unattended executable workflow, instructed the reviewer not to look for code defects and withheld build.md. C1 -- a step that fails on 100% of runs -- is precisely what the withheld lens asks for ('confirm the exit status actually propagates', 'confirm it cannot pass vacuously'). Every future edit to ci.yml inherits the same blind packet. Fix is one case arm in each script: add `*.github/workflows/*` to the enforcement lens in review-lenses.sh:33 and add build.md in which-standards.sh."
+    },
+    {
+      "id": "C6",
+      "severity": "minor",
+      "file": ".github/workflows/ci.yml:47-48",
+      "summary": "The comment (and the AGENTS.md row that repeats it) says github.event.before is all-zeros 'on a force-push or a new branch'. It is all-zeros on branch creation only; on a force-push it is the real, now-unreachable previous SHA, which a fetch-depth-0 checkout does not have.",
+      "failure_scenario": "Someone force-pushes main to drop a bad commit. before=<orphaned sha>, not zeros, so the line-65 fallback does not fire; `git cat-file -e` fails on an object no ref reaches; the run dies with 'cannot resolve a base ref' and the whole tree goes unchecked for that push. Failing closed is defensible, but the message blames the base ref rather than the force-push, and falling back to HEAD~1 when cat-file fails would be both correct and quieter."
+    },
+    {
+      "id": "C7",
+      "severity": "minor",
+      "file": ".github/workflows/ci.yml:63",
+      "summary": "Under `set -euo pipefail`, `base=$(git rev-parse HEAD~1)` aborts the step with git's raw 'unknown revision' before the crafted ::error:: on line 69 can print. The intended message is nearly unreachable -- it fires only when rev-parse resolves a name cat-file cannot.",
+      "failure_scenario": "A scheduled run on a repository whose main has a single commit (or the first push creating main, where the zeros fallback also lands on HEAD~1): the step fails with `fatal: ambiguous argument 'HEAD~1': unknown revision or path not in the working tree`, and the operator gets no hint that this is the fail-closed path deliberately chosen. Guard it: `base=$(git rev-parse HEAD~1 2>/dev/null || true)` and let the line-68 check own the message."
+    },
+    {
+      "id": "C8",
+      "severity": "minor",
+      "file": "AGENTS.md:212",
+      "summary": "The diff makes the CI table claim to describe ci.yml, but the row 'the ten text/build gates' no longer matches: twelve pre-commit-stage hooks run in CI (fourteen in .pre-commit-config.yaml minus the two SKIPped), and the generated Gates table directly above lists sixteen.",
+      "failure_scenario": "The row was honest as an intention; as a description of a file it is a count anyone can check and that is wrong. A reader reconciling 'the ten' against the sixteen-row generated table above concludes six gates are not in CI and cannot tell which -- the same two-copies-drift the surrounding prose exists to prevent. Say 'every pre-commit-stage gate except the two skipped below' and the number cannot go stale."
+    },
+    {
+      "id": "C9",
+      "severity": "minor",
+      "file": ".github/workflows/ci.yml:105-112",
+      "summary": "The L1 budget is asserted over a subset of L1 and cannot detect a vacuous run. build.md defines L1 as 'L0 + cost assertions + gate benchmarks ≤ 5 min', but check-suite-time.sh L1 is fed only the `./gradlew test` wall clock; the gates job (the L0 half, run at full scope) is unmeasured behind a 10-minute timeout. And nothing asserts a test actually ran.",
+      "failure_scenario": "All eight modules are empty today (0 java files, 0 tests), so this step passes having executed zero tests and records a timing line that is pure Gradle bootstrap. When tests exist, a build misconfiguration that makes `test` a no-op leaves the job green -- the exact case check-harness-tests.sh:36-38 refuses ('the harness suite reported 0 tests -- it did not run'). The precedent for the assertion is already in the tree. Separately, with no Gradle cache configured, the number compared against the 300 s budget is dominated by distribution download and dependency resolution rather than by the suite."
+    }
+  ]
+}

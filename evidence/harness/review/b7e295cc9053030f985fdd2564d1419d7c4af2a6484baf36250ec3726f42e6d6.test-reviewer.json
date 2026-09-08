@@ -1,0 +1,60 @@
+{
+  "diff_sha256": "b7e295cc9053030f985fdd2564d1419d7c4af2a6484baf36250ec3726f42e6d6",
+  "verdict": "changes-requested",
+  "round": 2,
+  "summary": "Round 2, tests. All five round-1 items I was asked to verify are genuinely fixed and I killed each mutant myself in my own tree: put->putIfAbsent dies on 'the pointer moved' (1L not > 1L); the per-stream pointer PUT dies on pointerKeys().hasSize(2) at 4 PUTs, and the three-stream widening is doing exactly what the author says -- per-pod dies at 3 too; latestCheckpointKey()->keyFor(...) dies on isEntryKey; the reader's hardcoded epoch dies on the two-epoch fixture, and that same fixture ALSO kills the dropped-epoch-segment half I named, so R1a-4 is closed in both directions; and the cost test's isPresent() kills a zero-request always-empty implementation. On Invariants.readChain: the new allow-list hides nothing today -- I instrumented it to throw when it fires and NOTHING in 285 tests fires it, so no key that used to be decoded is now skipped, and corrupt bytes at a canonical entry key still throw. But that same measurement is a finding: deleting the filter outright leaves the whole suite green, so the guard the commit body calls 'a landmine defused' is asserted nowhere (I proved it load-bearing only with a scratch test of my own). One MAJOR remains, and it is the un-fixed mirror of round-1's own finding: the WRITER's pointer key epoch is unconstrained. Full ./gradlew test green in my tree; staged bytes unchanged (b7e295cc).",
+  "findings": [
+    {
+      "id": "M4.8c-tr-r2-1",
+      "severity": "major",
+      "blocks": true,
+      "file": "sequencer/src/test/java/binjava/sequencer/CheckpointWriterContentTest.java:223",
+      "title": "The WRITER's pointer key epoch is unconstrained -- the mirror of R1 finding 4, fixed only on the reader",
+      "surviving_mutation": "In CheckpointWriter.writeIfDirty, replace `store.put(keys.latestCheckpointKey(), ...)` with `store.put(new LogKeys(keys.prefix(), 1).latestCheckpointKey(), ...)`. MEASURED: 285 tests, BUILD SUCCESSFUL, zero failures. The identical mutation on the sibling line one statement above -- `store.putIfAbsent(new LogKeys(keys.prefix(), 1).checkpointKeyFor(sequence), ...)` -- is MEASURED killed by CheckpointWriterContentTest.aCheckpointIsWrittenUnderITSOwnEpochsPrefix. So the .ckpt key is pinned on this dimension and the pointer key, which is the one discovery actually reads, is not.",
+      "failure_scenario": "After any failover to epoch E > 1 the pointer is written under epoch 1's prefix. newestCheckpoint(store, prefix, E) then stats a key that does not exist and returns empty, so M4.9 replays the WHOLE term believing that is correct -- the exact silent outcome round 1 raised for the reader half and the exact one M4.8b1's key filter makes invisible to an operator. Second effect: epoch 1's pointer is OVERWRITTEN with epoch E's bytes, so a reader asking for epoch 1 gets another term's offsets. The commit's own backlog row names this mutant class by hand ('the READER's epoch was hardcodable to 1, which is the same mutant M4.8b2's review caught on the WRITER ... and which I did not think to check the mirror of') and then reproduces it on the new key.",
+      "remedy": "One assertion, on the test that already exists for exactly this mutant and already runs a CommitLog at epoch 2 -- CheckpointWriterContentTest.aCheckpointIsWrittenUnderITSOwnEpochsPrefix asserts only on store.checkpointKeys(), which filters `.ckpt` and is blind to `/LATEST`. Add the pointerKeys() accessor this commit already introduces: assertThat(store.pointerKeys()).singleElement(STRING).startsWith(new LogKeys(\"bins\", 2).logPrefix()). This is a missing assertion on surface already inside the diff -- it is NOT an argument that the commit is too big or should be split."
+    },
+    {
+      "id": "M4.8c-tr-r2-2",
+      "severity": "minor",
+      "blocks": false,
+      "file": "sequencer/src/test/java/binjava/sequencer/Invariants.java:346",
+      "title": "The new readChain allow-list is asserted nowhere -- deleting it leaves the whole suite green",
+      "surviving_mutation": "Replace `if (!keys.isEntryKey(stat.key())) { continue; }` with `if (false) { continue; }` -- i.e. restore the pre-commit behaviour exactly. MEASURED: 285 tests, BUILD SUCCESSFUL. Any loosening of the predicate survives equally. I separately instrumented the branch to `throw new AssertionError(\"FILTER FIRED: \" + stat.key())` and the suite still passed, so the line is never executed by any test in the tree.",
+      "failure_scenario": "The commit body claims a landmine for M4.13 was defused here. I verified the claim is true -- a scratch test that seeds a chain plus a `/LATEST` pointer and a `.ckpt` object under the same prefix passes with the filter and fails without it ('not a chain entry') -- but that test is mine and is not in the commit. So the guard's effect is real and its evidence is absent: a later edit to the predicate, or a change to latestCheckpointKey that no longer sorts under the filter, gets no signal until M4.13's 1,000-seed run, which is the milestone completion condition. Graded MINOR rather than major on two measured grounds: nothing that used to be caught is now skipped (the filter never fires today, and decode failures at canonical entry keys still throw -- readChain returning nothing fails 15 tests, so the checker is not toothless), and the production property that actually matters, isEntryKey refusing the pointer key, IS pinned by thePointerKeyIsNOTAValidChainEntryKey (measured). The residual failure mode is loud and late, not silent.",
+      "remedy": "Promote roughly my scratch test: seed a chain through the production path, put a `/LATEST` pointer and a `<seq>.ckpt` under the same logPrefix, assert Invariants.checkChain reports no violation. That is the test that makes the defusal a fact in the tree rather than a claim in a commit body. Recorded rather than fixed is acceptable here."
+    },
+    {
+      "id": "M4.8c-tr-r2-3",
+      "severity": "minor",
+      "blocks": false,
+      "file": "sequencer/src/test/java/binjava/sequencer/CheckpointDiscoveryTest.java:164",
+      "title": "The pointer's PUT rate is pinned per-stream and per-pod but not per batched CommitRequest",
+      "surviving_mutation": "Record the size of the last observed request list and wrap the pointer PUT in `for (int i = 0; i < lastRequestCount; i++)`. MEASURED: 285 tests, BUILD SUCCESSFUL. The identical mutant on the `.ckpt` PUT is MEASURED killed by CheckpointWriterTriggerTest.theCheckpointCountScalesWithDeltasAndNeverWithStreamsOrPods, whose fixture batches four CommitRequests into one delta. The new fixture commits ONE request per commit, so requests and triggers coincide in it and the dimension is not separable.",
+      "failure_scenario": "M4.7's whole point is that one window batches many pod flushes into one delta. A pointer PUT issued once per contributing flush would be invisible here while the sibling `.ckpt` assertion forbids it -- an asymmetry between two PUTs written on adjacent lines. Consequence is bounded (per-flush is per-pod, which non-negotiable 6 tolerates more readily than per-stream, and the per-pod form IS killed at 3 PUTs by the new test), which is why this is minor rather than major.",
+      "remedy": "One line in the existing test that already varies 40 streams, 4 pods AND 4 requests: assertThat(many.store().pointerKeys().size()).isEqualTo(few.store().pointerKeys().size()). That covers all three dimensions for the pointer at once."
+    },
+    {
+      "id": "M4.8c-tr-r2-4",
+      "severity": "minor",
+      "blocks": false,
+      "file": "sequencer/src/test/java/binjava/sequencer/RecordingBinStore.java:144",
+      "title": "Carried from round 1 (recorded, not fixed): no fixture can fail a pointer PUT, so `written = true`'s position is unpinnable",
+      "surviving_mutation": "Move `written = true;` ABOVE the pointer `store.put(...)`. MEASURED: 285 tests, BUILD SUCCESSFUL. RecordingBinStore.capture arms armed/armedUnchecked only when `key.endsWith(\".ckpt\")`, and the pointer key ends in `/LATEST`, so failNextCheckpointPut and failEveryCheckpointPutUnchecked cannot reach the statement whose failure the ordering exists to survive.",
+      "failure_scenario": "With `written = true` set before the pointer PUT, a pointer write that fails clears the dirty flag on the way out, the trigger never retries, and discovery is frozen at the previous checkpoint until the next K deltas or T tick happen to coincide with a new commit -- on a quiet cluster, forever. That is precisely the wedged-writer failure M4.8b2 built the arming fixture to forbid, on the statement this commit adds beside it.",
+      "remedy": "Widen the arming predicate in RecordingBinStore.capture from endsWith(\".ckpt\") to the checkpoint SEGMENT (key.contains(\"/ckpt/\")), which covers both objects and leaves the existing scoping rationale intact -- it still misses the delta that commitAll writes first. Then a failEveryCheckpointPutUnchecked variant can pin the ordering. Author recorded this in round 1; re-stated with the measurement so it does not live only in a commit body."
+    }
+  ],
+  "verified_closed": [
+    "R1 tr-1 / R1a (put -> putIfAbsent): MEASURED killed by thePointerADVANCESAndIsWrittenExactlyOncePerTrigger, failing on 'the pointer moved with the second checkpoint' (actual 1L, expected > 1L). Right reason.",
+    "R1 tr-2 (per-stream pointer PUT invisible): BOTH halves confirmed. RecordingBinStore.pointerKeys() is the accessor checkpointKeys() could not provide, and a per-stream loop MEASURED fails hasSize(2) at 4 PUTs (1 + 3). The per-pod loop MEASURED fails at 3 PUTs, so the as() message 'not per stream, not per pod' is honest on both. The three-stream widening is load-bearing, not luck: with the second commit at one stream both mutants land on exactly 2.",
+    "R1 tr-3 (latestCheckpointKey -> a canonical entry key): MEASURED killed by thePointerKeyIsNOTAValidChainEntryKey on 'the recovery filter must refuse the pointer', plus thePointerADVANCES as collateral.",
+    "R1 tr-4 / R1b (reader epoch unconstrained): MEASURED killed by discoveryReadsITSOwnEpochsPointerAndNotEpochOnes. The extra half I asked about IS covered: dropping the epoch segment from latestCheckpointKey collapses both seeded pointers onto one key and MEASURED fails that test AND thePointerKeyIsNOTAValidChainEntryKey's startsWith(logPrefix).",
+    "R1 tr-6 (cost test discarded its result): MEASURED -- an implementation returning Optional.empty() with zero requests now fails 6 tests including discoveryCostsTheSAMEAtFiveHundredCheckpointsAndAtFiveThousand.",
+    "Invariants.readChain narrowing under testing.md rules 4-5: no existing assertion was weakened in effect. The new branch never executes in the current suite (measured by making it throw), so no key that was previously decoded is now skipped, and the checker's teeth are intact -- making readChain return nothing fails 15 InvariantsTest/InvariantsAcrossChainsTest cases. The predicate chosen is the production allow-list rather than a caught decode failure, which is the correct call."
+  ],
+  "method": "Own tree /tmp/binjava-review-trees/test-reviewer.QcvOgu7A from scripts/review-tree.sh, GIT_INDEX_FILE unset. 13 mutations run individually against :sequencer:test, each failure read from the JUnit XML to confirm it failed for the intended reason. Tree restored (sha256 of every touched file matches the staged blob), scratch probe deleted, full ./gradlew test BUILD SUCCESSFUL, staged diff hash unchanged at b7e295cc.",
+  "task": "M4.8c",
+  "role": "test-reviewer",
+  "staged_tree": "c00674059e0c9c338c2aeefd285dd04cd27d6359"
+}

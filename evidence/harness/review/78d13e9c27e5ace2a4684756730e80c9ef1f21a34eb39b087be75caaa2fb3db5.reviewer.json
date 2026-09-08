@@ -1,0 +1,26 @@
+{
+  "task": "M4.21",
+  "diff_sha256": "78d13e9c27e5ace2a4684756730e80c9ef1f21a34eb39b087be75caaa2fb3db5",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "minor",
+      "file": "docs/internal/standards/review.md:62",
+      "title": "rule 12's pointer names only ReviewRoundCapTest, not the new ReviewRoundCapArgumentValidityTest",
+      "detail": "The '\u2192 `ReviewRoundCapTest`' cross-reference is the only test pointer in rule 12, but several of the requirements the paragraph just spelled out -- the argument must live in a staged baselines/review.txt specifically (not any staged file), must be an ADDED line rather than context, a decoy filename does not count, disagreeing verdicts refuse, and a no-task verdict refuses -- are pinned in the six tests of the newly-split ReviewRoundCapArgumentValidityTest, not in ReviewRoundCapTest. A reader following the arrow to verify one of those specific claims lands in the wrong file.",
+      "kill": "Change the pointer to name both classes, or split it into two pointers next to the specific clauses each test covers.",
+      "non_blocking_because": "Purely a documentation-completeness gap -- both files exist, compile, and their tests pass (verified: buildSrc:test reports 10/10 and 6/6 green, check-file-size passes on both, check-tdd reports all 16 new tests unchanged-since-red). Nothing is unenforced; a reader who searches the package instead of following the arrow finds the coverage.",
+      "failure_scenario": "A future reader trying to verify one of the specific escape-argument rules -- e.g. 'must the rounds: line be in baselines/review.txt specifically' or 'does a disagreeing verdict refuse' -- follows review.md's only pointer to ReviewRoundCapTest, does not find the assertion there, and concludes (wrongly) that the rule is undertested or that the arrow is stale, rather than knowing to look in the sibling file the split produced."
+    }
+  ],
+  "confirmations": {
+    "substring_match_mutation": "reproduced by hand in a scratch repo: replacing `f[1] == k && rest ~ /[^[:space:]]/` with `index(line, k) > 0` makes the gate wrongly print ARGUED and exit 0 on the exact fixture in aROUNDSKeyThatAppearsMIDLINERatherThanAsTheFIRSTFieldDoesNOTLiftTheCap ('reviewer:R7  already fixed elsewhere, see rounds:M9.1 in the parent commit'); the staged awk correctly refuses (exit 1) on the same fixture -- the new test is falsifiable and tests what its javadoc claims",
+    "split_soundness": "./gradlew :buildSrc:test --tests binjava.ReviewRoundCapTest --tests binjava.ReviewRoundCapArgumentValidityTest -> 10 tests/0 failures and 6 tests/0 failures respectively; scripts/check-file-size.sh reports both files within 500 lines; scripts/check-tdd.sh reports '16 new test(s), all observed failing first, unchanged since' -- consistent with the 10 surviving tests keeping their red records and the 6 moved tests getting fresh ones",
+    "duplication_claim": "diffed the run/gate/Gate/scratch/verdict/out helper bodies between the two files byte-for-byte -- identical, matching the javadoc's 'DUPLICATED here rather than extracted' claim",
+    "measured_numbers_in_review.md": "independently recomputed against this checkout's .harness/review/: 22 tasks over the 2-round cap with M4.12=12 and M0.13=11 (exact match); 90 files with no task, 89 of which do not match the <sha>.<role>.json glob shape, exactly 1 that does, and that one file's same-hash sibling names task M0.6 (exact match, including the sibling detail); git log --grep=SKIP=check-reviewed restricted to M4.* gives exactly the nine commits named (M4.0, M4.1, M4.3, M4.3b, M4.4b, M4.6c, M4.6e, M4.19, M4.20)",
+    "review_rounds_py_7_vs_8_discrepancy": "confirmed real and pre-existing: review_rounds.py's docstring still says 'violated on 7 of 12 tasks' unchanged by this diff, while check-reviewed.sh and backlog M0.47/M4.21 say 8 -- but this is explicitly disclosed in both check-reviewed.sh's added comment and review.md's new paragraph ('the split is recorded rather than settled'), not silently left, so it is not a new defect introduced by this commit",
+    "no_scope_creep": "diff touches only scripts/check-reviewed.sh, scripts/review_rounds.py, the two test files, and docs (review.md, backlog.md) -- no ingest/store/plugin code, so the object-store request-rate rule does not apply here; the 8 new backlog rows (M4.26-M4.34) filed alongside are follow-up findings from review, not implementation, consistent with numstat (+11/-3) across 3 amended rows + 8 new ones"
+  },
+  "role": "reviewer"
+}

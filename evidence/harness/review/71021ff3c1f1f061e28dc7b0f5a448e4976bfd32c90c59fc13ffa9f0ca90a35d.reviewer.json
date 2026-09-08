@@ -1,0 +1,50 @@
+{
+  "diff_sha256": "71021ff3c1f1f061e28dc7b0f5a448e4976bfd32c90c59fc13ffa9f0ca90a35d",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "M4.21-r6-1",
+      "severity": "minor",
+      "file": "docs/internal/standards/review.md:65",
+      "finding": "The dated ratio is already wrong on the date it names. The paragraph says 'Grouping distinct diff_sha256 by task across .harness/review on 2026-09-05: 22 of 79 reviewed tasks had gone over the cap'. Recomputed today with that exact grouping: 22 of 80. M4.16 first reviewed 08:03 and M4.32 08:22 today (a peer session), so the denominator moved twice within the named date. Everything else in the paragraph reproduces exactly -- the nine SKIP commits and their ids, 'only two of the nine carry an ordinal', M4.12 at 12 and M0.13 at 11, 90/391 verdict files with no task, and the 7-vs-8 split.",
+      "failure_scenario": "A reader reproduces the stated command on the stated date and gets a different denominator, in the paragraph whose explicit subject is measuring rather than remembering. The paragraph asserts that dating the measurement is the fix; the observation that falsifies that assertion is the measurement itself, because the denominator counts reviewed TASKS and tasks are reviewed several times a day. Day-granularity dating cannot carry it. The load-bearing numerator (22) and the two exemplars are exact, so the argument survives -- the honest repair is to drop the denominator (say '22 tasks, over a quarter of those reviewed') or to derive it, not to re-count it into a fourth stale draft."
+    },
+    {
+      "id": "M4.21-r6-2",
+      "severity": "minor",
+      "file": "docs/internal/standards/review.md:43",
+      "finding": "The standard and the M4.21 row both describe a LOOSER primitive than the code enforces, and omit both operative requirements. review.md rule 12 says only 'keyed rounds:<task> in a staged baselines/review.txt'. The M4.21 backlog row says 'matched against the INDEX rather than the worktree'. The code (check-reviewed.sh, the awk block) requires (a) the key on a line ADDED by this commit -- the HEAD->index diff, /^\\+/ -- so a key present in the index but already committed does NOT lift the cap, which is what aROUNDSLineALREADYCOMMITTED and aROUNDSLineAppearingOnlyAsDIFFCONTEXT pin; and (b) a non-whitespace reason after the key (verified: 'rounds:M9.1<TAB>' refuses, '  rounds:M9.1  reason' with leading indent also refuses). Neither requirement appears in rule 12 or in the row; 'matched against the INDEX' actively names a different primitive.",
+      "failure_scenario": "An agent at the cap reads rule 12 -- the standard the packet hands it -- writes 'rounds:M4.40' with no reason, or runs the literal remedy 'git add baselines/review.txt' on a line already committed (a no-op), is refused, and concludes the escape does not work. That is the exact state M4.21 was filed to end, and M4.33 (added by this diff) records that the milestone loop reads skill and standard bodies rather than gate output. A later reviewer reading the M4.21 row would also check the wrong property -- 'is it staged' instead of 'was it added here' -- which is the property that stops the escape becoming a workflow. Mitigated because check-reviewed.sh prints the full remedy at the moment of refusal, which is why this is minor and not major."
+    },
+    {
+      "id": "M4.21-r6-3",
+      "severity": "minor",
+      "file": "scripts/review_rounds.py:11",
+      "finding": "The replacement docstring inverts the control flow it describes, and the M0.51 row repeats it verbatim. Both say the count-is-survivable reason is that 'the argument is consulted BEFORE the count is compared'. In check-reviewed.sh the count is compared FIRST -- `if [ \"${ROUNDS:-0}\" -gt 2 ]; then` -- and the argument is consulted only inside that branch. The true statement is that the argument is consulted before the count is REFUSED, so the argued round is the last one. That consequence is correct and pinned (verified: 3 rounds + staged argument -> WARN, exit 0).",
+      "failure_scenario": "M0.51 is closed on precisely the ground that this docstring now describes the code accurately -- 'a docstring describing a filter that is not there is worse than no docstring: it tells the next reader not to look'. A reader who takes the ordering literally goes looking for an argument lookup above the `-gt 2` test, does not find one, and cannot tell whether the docstring or the code is the stale one. Same defect class as the claim it replaced, one degree milder: no behaviour is misdescribed, only the order of two steps. Answering the question posed: the substance of M0.51 and of M0.66's items (1)/(2)/(3) checks out against the code -- item (1) is gone, item (2) is fixed by putting the cap ABOVE the argue loop and warn-continuing into it (verified: an argued cap still refuses an unresolved major, and still refuses a missing second role), item (3) genuinely survives because rounds_for still counts every distinct hash for the task. Only this one clause does not hold."
+    },
+    {
+      "id": "M4.21-r6-4",
+      "severity": "minor",
+      "file": "scripts/check-reviewed.sh:36",
+      "finding": "The comment asserting that a discrepancy was recorded rather than settled is falsified by the hunk that carries it. The same hunk changes this file's own number from '8 of 12' to '7 of 12' and then says 'the discrepancy is recorded in review.md rule 12 rather than settled by preferring a number' -- having just preferred 7. review.md then reports the result as a finding about the tree: 'review_rounds.py and check-reviewed.sh say 7 of 12 tasks, backlog M0.47 says 8'. Before this commit the tree read 8 (check-reviewed.sh), 8 (M0.47), 7 (review_rounds.py); after it, 7-7 against 8. Verified by reading HEAD's copies of all three.",
+      "failure_scenario": "A later reader trying to settle the 7-vs-8 question weights the witnesses, sees two files saying 7 against one saying 8, and concludes 7 is corroborated -- when one of the two 7s is this commit's own edit, made in the sentence that disclaims making it. The contradiction being recorded is genuine (review_rounds.py vs M0.47 predates this diff); what is not supported is the tally the paragraph reports, or the claim that no number was preferred. Leaving check-reviewed.sh at 8 and recording the split, or changing all three to cite one source, would both be honest; changing one witness and then counting witnesses is not."
+    },
+    {
+      "id": "M4.21-r6-5",
+      "severity": "minor",
+      "file": "scripts/check-reviewed.sh:150",
+      "finding": "The new failure message asserts a guarantee this same diff records as false. It prints 'One added line then covers every further round of THIS commit ... Landing it ends its effect.' M4.31, added by this diff, records the opposite as MEASURED: 'git renders a MOVED committed line as delete+add, so sorting the file or inserting an entry above an already-argued rounds:<task> line re-arms the escape for a later commit -- measured by inserting one reviewer: entry above it, after which the gate WARNed ARGUED at round 4.' So landing it does not end its effect whenever the file is later reordered while the same task id is under review.",
+      "failure_scenario": "An author or reviewer takes the gate's own output as the specification of the escape's lifetime -- it is the only place the added-line semantics is written down at all (see M4.21-r6-2) -- and does not check whether an old rounds: line for this task has been re-rendered as added by an unrelated edit to baselines/review.txt. The cap is then waived at round 4+ with no new argument written and nothing in the diff that reads as an argument. Narrow (needs the same task id and a reordering edit) and owned by M4.31 with the rendering-immune primitive already designed, which is why it is minor -- but the sentence is an unqualified promise, and 'the gate prints a remedy its code does not implement' is M4.21's own subject, so the replacement message should not make a second one. 'Landing it ends its effect for this commit; M4.31 replaces the primitive' would cost four words."
+    },
+    {
+      "id": "M4.21-r6-6",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:2",
+      "finding": "Two claim-accuracy slips in the rewritten rows. (a) M0.66 confesses 'AND THIS ROW'S OWN WARNING WAS BREACHED', quoting 'must not ride with the commit it would unblock'. The row's warning is conditioned on its opening clause -- 'Doing this as a means of landing M4.6a' -- and M4.21 is a task of its own, which is what the same sentence demanded. What actually happened is that item (2) was filed twice under two ids (M0.66(2) and M4.21) and item (1) is M0.51's subject; that is duplication and an id-scope overlap, not the breach the row now attributes to itself. (b) check-reviewed.sh's new comment and review.md's new paragraph both say a SKIP disables 'both roles present' / 'keeps both-roles ... enforced', in a file whose own header twenty lines above explains that the role set is DERIVED from the staged paths and may be one role -- the same imprecision round 5 removed from the M4.21 row for M4.0's docs-only hashes.",
+      "failure_scenario": "(a) The authoritative list is the thing agents read to decide what is still owed; a row that mis-states which of its own constraints was violated sends the next reader to look for a wrong-commit-ID defect that is not there, and understates the one that is (two ids for one defect, which is what non-negotiable 1 turns on). (b) A reader of either new passage concludes the gate always requires two verdicts, and reads a one-role commit as a bypass rather than as review.md rule 3's derivation working -- the confusion that produced round 5's own false claim about M4.0. Say 'the required roles' rather than 'both roles' and both passages become true for the docs-only case as well."
+    }
+  ],
+  "task": "M4.21",
+  "role": "reviewer"
+}

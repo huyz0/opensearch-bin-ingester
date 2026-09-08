@@ -1,0 +1,20 @@
+{
+  "diff_sha256": "7d84b94abe97b31de8c99ee551d3a291b82d20cceae6792f552fdb3a3639660e",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "D19",
+      "severity": "minor",
+      "file": "docs/internal/product/decisions/0013-fast-mode-wal-and-quorum.md",
+      "summary": "R1/R2 record labels in ADR-0013 collide with the R1/R2 cost-rule namespace used by cost.md and M1/SPEC.md's cost table; carry as a note in the commit body.",
+      "failure_scenario": "A reader following M1/SPEC.md's 'R1, R1b' cost row into ADR-0013 reads 'R1' as the bundling cost rule rather than an ADR-local record label, and mis-scopes a later fast-mode cost budget."
+    },
+    {
+      "id": "D20",
+      "severity": "minor",
+      "file": "docs/internal/product/milestones/M1/SPEC.md:204",
+      "summary": "M1.17b claims LICENSE/NOTICE were 'delivered by de66330 (M0.4)', but LICENSE and NOTICE are added by this staged commit; de66330's tree contains licenses/ and the licence gate but no root LICENSE or NOTICE.",
+      "failure_scenario": "A later agent auditing licence compliance greps the M0.4 commit for LICENSE, finds nothing, and either re-adds a duplicate root LICENSE or reopens M1.17b as unfinished."
+    }
+  ]
+}

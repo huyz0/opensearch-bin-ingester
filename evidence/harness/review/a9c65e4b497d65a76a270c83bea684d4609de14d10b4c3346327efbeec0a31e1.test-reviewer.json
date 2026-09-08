@@ -1,0 +1,57 @@
+{
+  "diff_sha256": "a9c65e4b497d65a76a270c83bea684d4609de14d10b4c3346327efbeec0a31e1",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/BatchingSequencerTest.java",
+      "line": "131-166 (assertion at 165, helper at 41)",
+      "severity": "major",
+      "what": "everyCallerInAWindowGetsTheDurableDeltaCarryingItsOwnSegment does NOT constrain attribution, which is the one thing it exists for. All three requests come from from(pod, 0), which hardcodes the SAME RunKey(A,0) and the SAME count of 3, so the assertion containsExactlyInAnyOrder(0L, 3L, 6L) is a MULTISET that is invariant under EVERY permutation of key-to-runs pairing. Each caller filters the delta by its own segmentKey, gets some firstOffset, and the set is the same no matter whose range it received.",
+      "failure_scenario": "MEASURED SURVIVING MUTATION (BatchingSequencer.commitBatch, after `CommitDelta delta = delegate.commitAll(requests);`): rebuild the delta pairing every segmentKey with the NEXT segment's runs -- `rot.add(new SegmentCommit(segs.get(i).segmentKey(), segs.get((i+1)%segs.size()).runs()))`. EVERY caller is then told another pod's offset range while its own range is handed to someone else. Ran :sequencer:test and :ingest:test --rerun-tasks: 0 failures. This is exactly the silent corruption the M4.7a row names (label right, bytes wrong) -- a consumer is sent to fetch someone else's records and nothing crashes. Also survives Collections.reverse(requests) in commitBatch (measured, 0 failures), which is harmless but shows the assertion sees no ordering at all. Remedy: give each pod a DISTINCT record count (1, 2, 4) so the offset a caller must see is derivable from its own submission, and assert the (segmentKey -> firstOffset, recordCount) pairs rather than a bag of longs."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/BatchingSequencerTest.java",
+      "line": "305-330 (round count at 316)",
+      "severity": "major",
+      "what": "aCallerRACINGCloseIsEitherServedOrRefusedButNeverORPHANED is PROBABILISTICALLY green against the very defect it was written for. The assertion (no thread alive) is sound and the shape is right, but 40 rounds does not reliably reach the interleaving: the 8 callers are started and then close() is called with no synchronisation forcing a caller to be between the running-check and the enqueue when the drain happens.",
+      "failure_scenario": "MEASURED: with submit() mutated back to the non-atomic form (`if (!running) throw; queue.add(pending);` outside the lifecycle lock -- the exact round-1 blocking defect), the staged 40-round test was killed in only 2 of 8 full-class runs. Raising the loop to 400 rounds gave 3 of 5, and the orphaning round was observed at 36, 40, 202 and 216 -- i.e. the failure is NOT concentrated in the first 40 rounds and volume alone does not fix it. So a future change that reverts to check-then-enqueue lands green about three times in four, and the review round that measured this as blocking leaves behind a guard weaker than its own finding. Remedy: force the interleaving with a seam rather than hoping for it -- e.g. a package-private hook invoked between the running-check and queue.add that the test uses to park exactly one caller until close() has drained, making the orphan deterministic in ONE round."
+    },
+    {
+      "file": "sequencer/src/main/java/binjava/sequencer/BatchingSequencer.java",
+      "line": "282-299 (Pending.await); test assertion at BatchingSequencerTest.java:234",
+      "severity": "major",
+      "what": "The CompletionException unwrap -- an open round-1 finding, fixed in production -- has NO test. Every test that observes a failed commit either catches Throwable and asserts only a COUNT (aFailedWindowFailsEVERYCallerInIt:400 hasSize(2); closingWithACallerParkedFailsItAndClosesTheDelegate:300 hasSize(1)) or asserts the weakest supertype that both the correct and the broken behaviour satisfy (aCommitterKilledByItsTimer:234 isInstanceOf(RuntimeException.class) -- CompletionException IS a RuntimeException).",
+      "failure_scenario": "MEASURED SURVIVING MUTATION: delete the entire `catch (CompletionException wrapped)` block so await() is just `return done.join();`. Ran :sequencer:test and :ingest:test --rerun-tasks: 0 failures. In production every caller of a failed window then receives an UNCHECKED CompletionException where Sequencer declares `throws IOException`; DefaultIngest's commit path catches IOException, so the wrapper escapes the ingest error handling entirely and the ambiguous-PUT case (M4.10's whole subject) becomes indistinguishable from a programming error. Remedy is one word each: assert IllegalStateException + hasMessageContaining(\"the timer is broken\") at line 234, and assert the element type in aFailedWindow (the delegate refuses a duplicate key with IllegalArgumentException) -- either kills this mutation."
+    },
+    {
+      "file": "sequencer/src/main/java/binjava/sequencer/BatchingSequencer.java",
+      "line": "262-267 (committer.join in close); no test",
+      "severity": "major",
+      "what": "close()'s 'JOINED, NOT MERELY SIGNALLED' guarantee -- the other open round-1 finding, whose stated consequence is I2 (a redriving committer wins a slot after the successor sealed the chain) -- is unpinned. closingWithACallerParkedFailsItAndClosesTheDelegate pins that the delegate IS closed and that the caller IS failed, but nothing pins that the delegate is closed only AFTER the committer has stopped touching it.",
+      "failure_scenario": "MEASURED SURVIVING MUTATION: delete the `try { committer.join(Duration.ofSeconds(10)); } catch (InterruptedException ...)` block from close(). Ran :sequencer:test and :ingest:test --rerun-tasks: 0 failures. In production close() then releases the lease (delegate.close()) while the committer may still be inside CommitLog's redrive loop, so a retry can land a conditional PUT after this node gave up its term -- the fork LocalSequencer's javadoc says must not exist, silently reassigning offsets a successor leader has already issued. Testable at T1: a delegate whose commitAll blocks on a latch and whose close() records whether a commitAll is still in flight; assert close() did not reach the delegate until the in-flight commit returned."
+    },
+    {
+      "file": "sequencer/src/main/java/binjava/sequencer/BatchingSequencer.java",
+      "line": "117-119 and sequencer/src/testFixtures/java/binjava/sequencer/FakeSequencer.java:42-44",
+      "severity": "minor",
+      "what": "Both new empty-batch guards ('a commit with no segments commits nothing') have no test in the diff; grep finds no commitAll(List.of()) anywhere in sequencer or ingest tests. Deleting either guard changes only which exception a caller gets (the delegate/CommitDelta refuses later), so nothing observes it.",
+      "failure_scenario": "Delete `if (requests.isEmpty()) throw ...` from BatchingSequencer.commitAll: an empty submission is then enqueued, OPENS A WINDOW and is failed by the delegate instead of being refused at the seam. No test fails."
+    },
+    {
+      "file": "sequencer/src/main/java/binjava/sequencer/BatchingSequencer.java",
+      "line": "79 (guard); test at BatchingSequencerTest.java:329-337",
+      "severity": "minor",
+      "what": "Only Duration.ZERO is tested. No test passes a NEGATIVE interval, so half the guard is unconstrained.",
+      "failure_scenario": "Mutate `if (interval.isNegative() || interval.isZero())` to `if (interval.isZero())`. aZeroIntervalIsRefusedBecauseItSilentlyRestoresThePerPodRate still passes (it passes ZERO). A negative interval then reaches `Thread.sleep(-n)` on the committer thread, which throws IllegalArgumentException out of the timer and kills the committer at the first request -- the failure mode the timer-death test exists to prevent, reached from a constructor argument."
+    },
+    {
+      "file": "sequencer/src/main/java/binjava/sequencer/BatchingSequencer.java",
+      "line": "268-270 (failAll(drainRemaining()) in close)",
+      "severity": "minor",
+      "what": "The post-join failAll in close() is unreachable-by-test and may be dead: stop() under the lock means nothing new can enqueue, and drainForever's own trailing failAll already drains the queue.",
+      "failure_scenario": "MEASURED SURVIVING MUTATION: delete `failAll(drainRemaining(), new IOException(\"this sequencer is closed\"));` from close(). :sequencer:test 0 failures. Either it is defensive code that no state can reach (a production-review question) or there is a close-path state no test constructs."
+    }
+  ],
+  "task": "M4.7",
+  "role": "test-reviewer"
+}

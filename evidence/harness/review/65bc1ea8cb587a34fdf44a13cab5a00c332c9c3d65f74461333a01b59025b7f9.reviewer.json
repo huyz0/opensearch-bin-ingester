@@ -1,0 +1,43 @@
+{
+  "diff_sha256": "65bc1ea8cb587a34fdf44a13cab5a00c332c9c3d65f74461333a01b59025b7f9",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "held-fallback-makes-start-repeatable-and-expensive",
+      "severity": "major",
+      "title": "The held() fallback turns a repeat start() into a full re-read of the LIVE chain and hands out a second sequencer on the same term -- 62 GETs per call, and a commit that succeeds after close() released the lease",
+      "where": "sequencer/src/main/java/binjava/sequencer/LocalSequencer.java:59-95",
+      "failure_scenario": "MEASURED, two halves of one regression. COST: one extra start() on a live 61-entry chain costs 62 GETs, 1 LIST and 1 PUT ('PROBEG one extra start() on a live 61-entry chain: gets=62 lists=1 puts=1') -- log.recover() at line 93 reads one GET per delta of the CURRENT term's chain, and the slot-0 putIfAbsent loses. Before this round the same call returned Optional.empty() after one stat and one get. The repeat call is not hypothetical: LeaseManager.tryAcquire's javadoc anticipates exactly it ('a supervisor tick or a restarted election loop is enough'), start's own @return reads as a leadership query, and LocalSequencer offers no other way to ask 'am I the leader?'. So a supervisor polling start() pays one GET per delta of a chain that only grows, on a repeating timer -- a request rate scaling with the log's own length, which is the round-1 major moved off the once-per-takeover path and onto a per-tick one. CORRECTNESS: the same three calls return three DISTINCT sequencers on one term ('PROBED s1 epoch=1 s2=epoch 1 s3=epoch 1 sameObject=false'), because open() adopts the byte-identical CONTINUE at slot 0 and reports success -- it cannot tell this node from a co-opener, since Continue carries no writer identity. close() on any one of them releases the shared lease and sets `closed` on that instance only: measured, 'after s1.close(), lease held = false' and then 's2 STILL COMMITTED after the lease was released: seq=2 firstOffset=5'. That is a commit succeeding after the lease was released, which committingAfterCloseFailsRatherThanSilentlySucceeding in this same file exists to forbid, reached through a sibling instance. The write itself is safe (it lands before any successor's seal, and the seal check closes the window afterwards), so this is not an outage -- but it is a new hole opened by this round's fix and it will bite M4.6d's wiring. Third facet: start now also ADOPTS and DISPOSES OF a lease it did not acquire -- a caller that acquired the term itself and passes the manager in has that term released by the new catch block on any failure. Remedy, and either exit is legitimate: refuse the second start before doing any work (held() backing the entry AND this chain already open means this process already started this term -- a crash-restart cannot reach it, because a new LeaseManager's held() is empty and tryAcquire mints a new epoch), or argue it in baselines/review.txt as bounded and file the guard as a row. It should not force a split."
+    },
+    {
+      "id": "recoverchainend-adopts-a-discarded-suffix",
+      "severity": "minor",
+      "title": "recoverChainEnd() and recover() disagree about where a chain ends, and the disagreeing one decides where the CONTINUE points",
+      "where": "sequencer/src/main/java/binjava/sequencer/CommitLog.java:188-212",
+      "failure_scenario": "MEASURED on a chain holding [CONTINUE@0? no -- delta@0, SEAL@1, delta@2]: 'recover() nextSequence=2 ; recoverChainEnd() nextSequence=3', and the seal taken through the new path 'landed at seq=3 (real barrier is at 1)'. recover() stops at the FIRST seal because everything past it is a discarded suffix; recoverChainEnd() reads only the LAST key, so a post-seal entry makes it treat the discarded suffix as the chain end, leave sealedAt null, and walk straight past the guard that was added to seal() this round. The CONTINUE then names a slot beyond the real boundary -- what M4.6e's crossing reader follows. In-protocol such a chain should not exist (commit refuses on losing to a seal, and consecutiveness forces the collision), and the one generator of post-seal entries was the seal() bug fixed in this commit -- so this is unreachable against a store written only by fixed code. Worth stating because the method's javadoc argues only from key order and never states the assumption it actually rests on: that nothing is ever written past a SEAL. Cheapest fix is that sentence, plus the protocol argument for why it holds."
+    },
+    {
+      "id": "recoverchainend-must-not-commit-is-prose-only",
+      "severity": "minor",
+      "title": "'THIS LOG MUST NOT THEN COMMIT' is enforced by a javadoc sentence and nothing else",
+      "where": "sequencer/src/main/java/binjava/sequencer/CommitLog.java:180-186",
+      "failure_scenario": "recoverChainEnd() deliberately leaves nextOffsets empty and says a commit through it would reassign offsets from 0 -- I2. Nothing represents that: the object is an ordinary CommitLog and commit() will happily assign from 0 on a chain that already has offsets. Today the only caller seals immediately and seal() sets sealedAt, so commit() refuses; but on the tested budget-exhaustion path seal() THROWS, leaving a probe-only log with empty offsets and sealedAt null, and any caller that catches and reuses it silently reassigns the whole term's offsets. start() currently rethrows and drops the object, so it is unreachable now -- and M4.6d/M4.6e add callers. Per non-negotiable 9 this is rung 7 where rung 1 is available: make it unrepresentable (a probe flag commit() refuses on, or return the end sequence instead of mutating state) rather than asking the next caller to remember."
+    },
+    {
+      "id": "start-succeeds-on-an-already-sealed-own-chain",
+      "severity": "minor",
+      "title": "start() returns a healthy-looking sequencer on a chain a successor already sealed; the failure surfaces only at the first commit",
+      "where": "sequencer/src/main/java/binjava/sequencer/LocalSequencer.java:92-95",
+      "failure_scenario": "MEASURED: with chain 1 sealed underneath a node that still believes it holds the term, 'start on the sealed chain = SUCCEEDED at epoch 1' and the first commit then throws 'chain sealed at seq 2, continued at epoch 2'. log.recover() sets sealedAt and open() adopts this node's own CONTINUE at slot 0, so start reports success and hands back something the class javadoc calls 'anything a caller can commit through' -- which it is not. It fails closed, and in-protocol it is unreachable (sealing chain E requires acquiring E+1, which requires this node's lease to have lapsed, after which held() is empty), so this is defence-in-depth. I raised it in round 1 folded into the blocking finding's remedy ('if start becomes re-enterable it must also refuse when its own chain recovered a SEAL'); start is now re-enterable and the check was not added. A sealedAt accessor plus a refusal is a few lines."
+    },
+    {
+      "id": "carried-minors-unchanged",
+      "severity": "minor",
+      "title": "The three round-1 minors are correctly recorded rather than fixed -- with one caveat",
+      "where": "sequencer/src/main/java/binjava/sequencer/LocalSequencer.java, CommitLog.java:337-352",
+      "failure_scenario": "I agree with rule 11 on all three: no renewal and no locking, open() being unable to tell self from a co-leader, and the unvalidated maxRedrives all belong in rows rather than in this commit. The caveat is that open()'s identity blindness is no longer standalone -- it is the link that lets the duplicate sequencer above report a successful open, so whichever row carries it should say that the held() fallback is what makes it reachable, or the next reader will file it as cosmetic. Concretely, if the major above is argued rather than fixed, this minor becomes the load-bearing half of it."
+    }
+  ],
+  "task": "M4.6c",
+  "role": "reviewer"
+}

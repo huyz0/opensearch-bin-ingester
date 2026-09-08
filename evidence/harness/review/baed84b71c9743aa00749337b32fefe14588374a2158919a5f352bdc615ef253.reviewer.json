@@ -1,0 +1,50 @@
+{
+  "diff_sha256": "baed84b71c9743aa00749337b32fefe14588374a2158919a5f352bdc615ef253",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "R1",
+      "file": "scripts/review-tree.sh:329-336",
+      "severity": "major",
+      "title": "checkout-index's exit status is discarded: the script prints the path and exits 0 over a partial or empty tree",
+      "failure_scenario": "lib.sh sets `set -uo pipefail` but not `set -e`, and neither `mkdir -p` nor `git checkout-index` is checked. Reproduced in a scratch repo with a 3-file index in which one blob is unreachable: git printed `error: unable to read sha1 file of b.txt (f719efd4...)` and returned non-zero, review-tree.sh printed `/tmp/binjava-review-trees/<key>/reviewer` and exited 0, and the tree held a.txt and c.txt but not b.txt. Also reproduced with TMPDIR=/ (mkdir: Permission denied, then `fatal: cannot create directory`, still exit 0) and with a GIT_INDEX_FILE inherited from another repository -- the exact failure GitEnv.java's own javadoc says was measured (`git checkout-index then failed on it`). The packet's own one-liner is `TREE=$(./scripts/review-tree.sh <your-role>) && cd \"$TREE\"`: errors go to stderr, the path still goes to stdout, so `&&` succeeds and the reviewer cds into a tree that is silently not the staged bytes. Every finding and every non-finding it then reports is bound by hash to bytes it never had. This is the packet's own first lens -- a step that reports success while checking nothing, and whose exit status does not propagate. Fix: `mkdir -p \"$DEST\" || exit 1` and `git checkout-index -a --prefix=\"$DEST/\" || { echo 'review-tree: could not materialise the index' >&2; exit 1; }`."
+    },
+    {
+      "id": "R2",
+      "file": "scripts/review-tree.sh:334 and scripts/review.sh:50-61",
+      "severity": "major",
+      "title": "the tree carries no .git, so every gate run inside it passes vacuously and 13 harness tests fail -- while the packet says to do every build and test run there",
+      "failure_scenario": "Measured in the tree this script issued for this very review. (a) `./gradlew -p buildSrc test`: `202 tests completed, 13 failed` -- all thirteen are FreshCheckoutTest, all from `fatal: not a git repository (or any parent up to mount point /)`, because FreshCheckoutTest.freshCheckout runs `git ls-files` against `Path.of(\"..\")`. The same suite is green in the repository (check-harness-tests.sh passed in this packet), so the tree creates the failures. A reviewer whose method is `mutate, run the suite, see which test fails` now reads that signal against a baseline with 13 unrelated reds. (b) Worse: every per-file gate resolves its input through lib.sh's workspace_files/scoped_files, i.e. `git ls-files`, so in the tree they all pass having examined nothing. Verified with GATE_SCOPE=full inside the tree: check-file-size prints `ok 0 source file(s) within 500 lines (full tree: 0 tracked/staged)` and exits 0; check-terminology prints `ok no markdown or Java in scope`; check-license-headers prints `ok 0 source file(s) carry the SPDX header`. So a reviewer verifying a gate change the intended way -- mutate the input the gate must reject, run the gate in the tree, expect FAIL -- gets a green `ok` for every mutation and would report `this gate catches nothing` about a gate that is fine, or accept a real hole. That is precisely the false-green class the packet's first lens lists four prior instances of, now aimed at the gates during review. The packet mentions the missing .git only to say where to record a verdict; it does not say the suite is red there and the gates are blind there. Fix, verified in a copy of the issued tree: after checkout-index, `git init -q . && git config user.email ... && git config user.name ... && git add -A && git commit -qm staged` inside DEST -- FreshCheckoutTest then goes 13/13 green and `git ls-files` resolves for every gate. The repository already does exactly this to build a checkout fixture (FreshCheckoutTest.freshCheckout)."
+    },
+    {
+      "id": "R3",
+      "file": "scripts/review-tree.sh:318-329",
+      "severity": "major",
+      "title": "rm -rf of a live tree: DEST is keyed on repo+role but not on the invocation, and there is no lock",
+      "failure_scenario": "The row exists because two reviewers in one tree corrupt each other's evidence (M4.3). The script closes that across ROLES and leaves it open across INVOCATIONS: any second run for the same repository and role `rm -rf`s the first one's tree, mid-build, silently, with no lock, no staleness check and no signal to the reviewer already inside it. Observed in the field during this review: the tree issued to me at 10:56 was removed and re-created at 10:57 between two of my own commands -- a `cp` out of it failed with `No such file or directory` and the directory's mtime had moved -- with no invocation of mine in between. The packet prints the command to BOTH roles with a `<your-role>` placeholder, so a test-reviewer that substitutes `reviewer`, or a coordinator that runs the line once to check it works, destroys the production reviewer's mutated tree; the symptom is a build that suddenly cannot find files, or worse a re-materialised tree that silently discards the mutation whose result is about to be reported. That is the M4.3 corruption re-created one level up, with an rm -rf instead of an overwrite. Cheap fixes: include $$ or a mkdtemp suffix in DEST, or take an flock on the key directory and refuse when it is held."
+    },
+    {
+      "id": "R4",
+      "file": "scripts/review-tree.sh:322",
+      "severity": "minor",
+      "title": "DEST is neither forced absolute nor forced outside the repository; only the default TMPDIR makes the header comment true",
+      "failure_scenario": "rm -rf itself is safe under every input I could construct -- ROLE is validated before the rm, the usage path exits 2 first, DEST always ends `.../binjava-review-trees/<12 hex>/<validated role>`, and the quoting survives spaces and a literal `*` in TMPDIR (all checked). The location claim is what is unenforced. With TMPDIR=.. the script prints the RELATIVE path `../binjava-review-trees/<key>/reviewer`, which the caller's `cd \"$TREE\"` resolves against the caller's cwd rather than $ROOT (the script's own `cd \"$ROOT\"` is in its subshell), so the reviewer lands somewhere else or nowhere. With a repo-local TMPDIR -- which several agent and CI harnesses set -- the tree is materialised INSIDE the repository, contradicting the header's `OUTSIDE THE REPOSITORY, deliberately` and putting an rm -rf inside the working tree; ReviewTreeTest's outside-the-repository assertion only demonstrates the default TMPDIR and would still pass on the relative-path variant, since a relative path never startsWith the repo. One line fixes both: resolve DEST to an absolute path and refuse if it is under $ROOT."
+    },
+    {
+      "id": "R5",
+      "file": "scripts/review-tree.sh:305-308",
+      "severity": "minor",
+      "title": "the stated reason for living outside the repository is not true of the three gates it names",
+      "failure_scenario": "The comment says a copy under the tree `would be scanned by every full-scope gate -- check-file-size, check-links, check-license-headers -- doubling every count they report`. All three resolve their input through lib.sh's scoped_files/workspace_files, which is `git ls-files` plus the staged list, so an untracked copy under the repository is invisible to them; that is what check-gate-scope.sh exists to guarantee, and the comment cites check-gate-scope as its own support. The placement is still right (git status noise, and mutation happening inside the repository), but the reason given is false, and the next person to weigh a change against it will weigh it against something that does not hold."
+    },
+    {
+      "id": "R6",
+      "file": "scripts/review-tree.sh:322-329",
+      "severity": "minor",
+      "title": "nothing ever reclaims /tmp/binjava-review-trees",
+      "failure_scenario": "Each (checkout, role) keeps a full 4.4 MB copy of the tree forever, and the key is the repository path, so every checkout ever reviewed on the machine leaves one behind. ReviewTreeTest additionally keys on its @TempDir, which is fresh per run, so every suite execution leaks two or three more directories into that shared global location and never removes them: 44 key directories were present after a single day's runs. On a small /tmp this fills up, and the first symptom is R1 -- checkout-index failing on ENOSPC while the script still prints a path and exits 0."
+    }
+  ],
+  "task": "M0.57",
+  "role": "reviewer"
+}

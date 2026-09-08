@@ -1,0 +1,41 @@
+{
+  "diff_sha256": "8da566e2eb036656858d568913cdb5a1e0dc049745e7dbad7e28e1db407ed44b",
+  "verdict": "changes-requested",
+  "summary": "The mechanism claims are almost all true of the staged bytes -- 9 SKIP commits, the two ordinals, 22 tasks over cap, M4.12=12/M0.13=11, ~a quarter of verdicts with no task, and 8/8/8 vs review_rounds.py's 7 all measured and correct. Two claims are not, and both are the defect class this commit exists to record: a mechanism cited that the code does not contain, and two sites of one commit contradicting each other.",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "major",
+      "file": "docs/internal/standards/review.md:70-73",
+      "title": "rule 12 and backlog M4.33, both added by this commit, contradict each other about whether the milestone loop reads review.md -- and rule 12 is the wrong one",
+      "detail": "review.md rule 12 justifies putting the escape's full requirements in review.md with 'Stated here because the milestone loop reads this file and the skills, not the gate's output'. backlog.md M4.33, filed by this same commit, states the opposite as its load-bearing premise: 'the milestone loop reads layer-2 skill bodies and does NOT read layer-3 standards, so an agent at the cap follows the skill, stops, and reports -- never using the escape M4.21 built'. AGENTS.md's progressive-disclosure table puts standards at layer 3. Checked against .agents/skills/milestone/SKILL.md: it never instructs reading review.md; the only mention is the parenthetical '(review.md rule 12)' in the bounds table at line 31, whose breach action is 'Stop and report'. So M4.33's premise is the correct one and rule 12's is false.",
+      "failure_scenario": "An agent driving the milestone loop hits round 3, reads .agents/skills/milestone/SKILL.md's bounds table, stops and reports -- exactly as M4.33 predicts -- having never loaded review.md and never learned the rounds:<task> escape exists. Separately, whoever picks up M4.33 opens review.md, reads that the milestone loop does read this file, and closes M4.33 as already-covered, leaving the skill bodies describing the pre-escape world permanently. This is the round-7 MAJOR-2 shape one row over: two new sites of one commit disagreeing about a mechanism, with the wrong one sitting in the document that decides what gets fixed."
+    },
+    {
+      "id": "R2",
+      "severity": "major",
+      "file": "docs/internal/product/backlog.md:273 (M4.26), scripts/check-reviewed.sh:138",
+      "title": "M4.26 prescribes `NF > 1` as the worked example for requiring a reason; the staged awk contains no NF, and NF > 1 is the mechanism this same commit records as insufficient",
+      "detail": "M4.26 reads 'M4.21 made its new key require one (`NF > 1`) and left the heavier key without'. `git show :scripts/check-reviewed.sh | grep -n NF` returns exactly one hit, line 138, inside a comment; the awk at lines 141-155 requires a reason with `rest ~ /[^[:space:]]/` after `sub(/^[^[:space:]]+[[:space:]]*/, \"\", rest)`. The file itself records why NF was abandoned, at lines 148-152: 'A NON-SPACE REASON, not just a field. A trailing tab split into a second, EMPTY field, so `rounds:M9.1<TAB>` argued the cap again'. aROUNDSKeyWithNOREASONDoesNOTLiftTheCap pins that case with the fixture \"rounds:M9.1\\t\\n\". The same stale citation heads the awk block at check-reviewed.sh:138 ('NF > 1 REQUIRES A REASON'), where it is at least corrected six lines later; in M4.26 nothing corrects it.",
+      "failure_scenario": "An implementer of M4.26 -- whose third listed fix is literally 'require a reason' for the <role>:<finding-id> key -- copies the worked example the row hands them and writes `NF > 1` (or its python equivalent, len(line.split()) > 1) into the finding-argue loop. A baseline line `reviewer:R1<TAB>` then splits into a key and an empty second field, silences a blocking finding with no justification at all, and the gate prints ok: the exact bug already found and fixed once in the rounds: path, reintroduced from the row that was supposed to prevent it. M4.26 retracts one wrong worked example in this very commit ('A DRAFT OF THIS ROW SAID reading the INDEX via git show :, WHICH M4.21 DID NOT SHIP ... the wrong one was the worked example an implementer of THIS row would have copied') while shipping a second one in the same row."
+    },
+    {
+      "id": "R3",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:273 (M4.26)",
+      "title": "'fourteen lines below' is the distance in the pre-change file, not the one this commit leaves",
+      "detail": "M4.26 says M4.21 'closed exactly this hole for its new rounds: key ... and left it open fourteen lines below'. In the staged file the pathspec-matched read is check-reviewed.sh:141 and the worktree read (`if os.path.exists(p)`) is :193 -- 52 lines. Fourteen was true of HEAD's version (the cap block's last echo at :48, os.path.exists at :62), so the locator describes the file before the change it is describing.",
+      "failure_scenario": "A reader following M4.26 to the surviving hole counts fourteen lines from the git diff --cached line, lands in the middle of the cap's failure message, and concludes the row is describing code that no longer exists -- the same distrust the row's own retraction paragraph is trying to buy back."
+    },
+    {
+      "id": "R4",
+      "severity": "minor",
+      "file": "scripts/review_rounds.py:44-47",
+      "title": "review_rounds.py gained a raising failure mode and a --task flag; one of its two callers was updated",
+      "detail": "This commit makes rounds_for raise SystemExit when two verdicts for one hash disagree about the task, and check-reviewed.sh is rewritten specifically so that refusal is not swallowed ('THE EXIT STATUS IS CHECKED, not swallowed'). scripts/review.sh, the other caller, still wraps the same script and is not staged, so in the packet the deliberate stop becomes 'round 0'. M4.30 files it with the reason 'Filed rather than fixed in M4.21 because review.sh is outside its staged files' -- which is a property of the chosen staged set rather than a constraint on it, and non-negotiable 8's shape (change the producer, update every reader in one commit).",
+      "failure_scenario": "Two verdicts for one hash are recorded under different --task values. check-reviewed.sh refuses and names the disagreement; scripts/review.sh context, run first, reports a round number computed from a swallowed error, so the reviewer reads a packet that is confidently wrong about the one number rule 12 turns on. Not raised higher because the gate decision itself stays correct and fail-closed."
+    }
+  ],
+  "task": "M4.21",
+  "role": "reviewer"
+}

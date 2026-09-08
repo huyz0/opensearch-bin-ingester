@@ -1,0 +1,13 @@
+{
+  "diff_sha256": "af5ecccc9f29ea8f2599e4bbdd7c96737c912c1bb1805d9e69c2d3a7c40bc256",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "BT02",
+      "severity": "minor",
+      "file": "build.gradle.kts:27",
+      "summary": "Carried forward unchanged from verdict-M0.4-final. The licence gate checks the root `licenseCheck` configuration derived from the version catalogue, not each module's resolved graph, so a module declaring a literal coordinate (or a compileOnly SPI jar, or a platform()) bypasses sha pinning and the SPDX deny-list while the gate still reports BUILD SUCCESSFUL. Disclosed in the diff at :27-30 and deferred to M0.19; recorded, not blocking. Re-checked only to the extent that the BT01 fix adds no new licence surface: the three added testFixturesImplementation coordinates are all catalogue aliases (junit-bom, junit-jupiter, assertj-core) already pinned under licenses/, and `./gradlew build` remains green.",
+      "failure_scenario": "A GPL-2.0-only dependency introduced by literal coordinate in a module build file never enters `licenseCheck`, acquires no sha pin and no licence file, and `check` stays green with a stamp reading 'ok 10 jar(s)'. Until M0.19 makes membership a predicate, completeness is enforced by habit."
+    }
+  ]
+}

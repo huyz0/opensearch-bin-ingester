@@ -1,0 +1,107 @@
+{
+  "diff_sha256": "dad58c4bcc8a5b98463672e7717319d76df30bb67d1747ab063c236196457321",
+  "verdict": "changes-requested",
+  "role_note": "test-reviewer, round 7 (verify). One question per test: would it fail if the production code were wrong? Every claim below was MEASURED by mutating sequencer/src/test/java/binjava/sequencer/FaultInjectingStore.java, deleting sequencer/build/test-results/test, running ./gradlew :sequencer:test --tests 'binjava.sequencer.FaultInjectingStore*' --rerun-tasks --no-build-cache, reading the JUnit XML, then reverting with git checkout --. 24 mutants run this round. Scope kept to the decorator and its two staged test classes; the five untracked M4.19/M4.20 files were neither read nor reasoned about. Tree left exactly as found: 3 staged adds + backlog.md modified, 5 untracked files present, staged diff still hashes to dad58c4b, no probe file left behind.",
+  "method": "Baseline 16 tests green (FaultInjectingStoreTest 11, FaultInjectingStoreStreamsTest 5, counted from the JUnit XML). All seven round-6 findings re-tested. 11 mutations that died in round 6 were re-run to check for regression -- all 11 still die. Three NEW surviving mutations were found and each was quantified with a throwaway probe test (created, run, deleted, absence verified in git status) so the 'what would close it' is measured rather than argued: the probe passes against the correct code and fails against each mutant.",
+  "round6_status": {
+    "V1_putIfMatch_draw_ORDER": "CLOSED, measured three ways. (a) both alignment draws moved BELOW the `if (ambiguous)` block -> everyClassDrawsOnEVERYFaultingCall... FAILS (only that test). (b) the unreachable draw alone deleted -> same test FAILS. (c) the two draws moved INSIDE the ambiguous branch above the throw, so the firing arm still counts 1/1/1 -> same test FAILS, because phase 1 runs fault-free and loses them there. The two phases together pin POSITION, not merely presence, and I found no route by which the second phase passes with the draws below the branch.",
+    "V2_read_verb_wiring": "CLOSED, measured on all three read verbs individually. stat -> ambiguousDraws FAILS; get -> duplicateDraws FAILS; list -> ambiguousDraws FAILS. The asymmetric 7/4/4 map does the work claimed for it.",
+    "V3_countDraw_label_swap": "NOT closed; argued. The author's argument is CORRECT as far as counting goes -- see finding W1 -- but its stronger claim ('the design cannot fix it') is false. Remains minor, non-blocking.",
+    "V4_orphaned_javadoc_and_unused_import": "PARTIALLY closed. Imports are clean. But a NEW dangling javadoc was introduced -- see W4; javac warns on every build.",
+    "V5_duplicated_body_helper": "Left as-is by the author. Accepted, not re-raised: two four-line fixtures in two test classes is not a defect a mutation can express.",
+    "V6_pass_through_verbs": "PARTIALLY closed. getRange bounds swapped -> theVerbsThatInjectNOTHING... FAILS. delete made a no-op -> FAILS. But close, multipart and capabilities remain unconstrained, and the new test's own comment claims close as a killed mutation -- see W2.",
+    "V7_test_count_in_the_row": "CLOSED. The row states no count and names both test classes."
+  },
+  "regression_check_mutants_that_still_die": [
+    "putIfAbsent reverted to lazy draws (throw before the other two fires) -> aFIRINGClassDoesNotSHIFTTheStreamsOfTheClassesAfterIt",
+    "duplicate retry's second delegate.putIfAbsent deleted -> aDUPLICATEDPutREALLYREACHESTheStoreTwice...",
+    "ambiguous putIfAbsent no longer lands -> anAmbiguousPutLANDSWhileReportingFailure",
+    "ambiguous putIfMatch no longer lands -> anAmbiguousPutIfMatchALSOLands...",
+    "unreachable's recorded key blanked in putIfAbsent -> EVERYClassRecordsWHICHKeyItFaultedOnTheWritePathToo",
+    "injected() returns the live list -> theInjectedRecordIsASNAPSHOTACallerCannotMutate",
+    "scramble reverted to `seed * 3 + stream` -> theTHREEFaultStreamsAreINDEPENDENTCoinsAndNotOnePhaseLocked",
+    "duplicateDraws aliased onto stream 1 -> eachClassIsWIREDToItsOWNStream...",
+    "ambiguousDraws aliased onto stream 3 -> eachClassIsWIREDToItsOWNStream...",
+    "Faults.check body emptied -> aProbabilityOUTSIDEZeroToOneIsREFUSED...",
+    "caller gets the duplicate retry's result instead of the first -> aDUPLICATEDPut...",
+    "one shared Random for all three fields -> everyClassDrawsOnEVERYFaultingCall...",
+    "duplicate retry clobbers with delegate.put instead of putIfAbsent -> aDuplicatedPutIsHarmlessBecausePutIfAbsentIsWriteOnce"
+  ],
+  "findings": [
+    {
+      "id": "W1",
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/FaultInjectingStoreTest.java:46-67",
+      "also": "sequencer/src/test/java/binjava/sequencer/FaultInjectingStore.java:191-200",
+      "title": "The ambiguous putIfAbsent can be degraded to an UNCONDITIONAL put and the whole suite stays green -- the injector may CLOBBER a slot another writer owns",
+      "surviving_mutations": "MEASURED. In putIfAbsent's ambiguous arm I changed `delegate.putIfAbsent(key, new Body(...))` to `delegate.put(key, new Body(...))` and left everything else identical. ALL 16 TESTS PASSED. Killed by a probe: pre-occupy \"k\" with B's bytes on the backing store, then an ambiguous putIfAbsent of A's bytes, then assert the stored value is still B's -- the probe passes against the correct code and fails against the mutant (measured, then deleted).",
+      "failure_scenario": "This is verbatim the defect the author already identified and pinned for the duplicatePut class -- the comment at FaultInjectingStoreTest.java:76-83 says 'THE SLOT MUST ALREADY BELONG TO SOMEBODY ELSE ... an implementation that clobbered with `put` was indistinguishable from one that lost with `putIfAbsent`' -- and the identical reasoning was never applied to the ambiguousPut arm, which writes into the same key space. Every ambiguousPut test uses a FREE key (\"k\", \"wb\", \"a\"), where putIfAbsent and put are indistinguishable. The consequence lands on the very next task: putIfAbsent is the write-once primitive I1 rests on, the simulation drives many logical pods racing for the same commit-log slot keys, and an ambiguous write that clobbers the winner MANUFACTURES an I1 violation with nothing in this repository being wrong. M4.13's 1,000-seed sweep would report it as a protocol defect, which is exactly the 'the simulation proves the simulator' risk this file's javadoc says it exists to defend against, inverted.",
+      "what_would_close_it": "One assertion, and it costs three lines: change anAmbiguousPutLANDSWhileReportingFailure so the key is already occupied by another writer's bytes, assert the throw AND that the incumbent's bytes survive, plus a fresh-key case asserting the payload landed intact (see W3, same test). Measured: that probe kills the mutant and passes on the correct code."
+    },
+    {
+      "id": "W2",
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/FaultInjectingStoreTest.java:143-169",
+      "also": "sequencer/src/test/java/binjava/sequencer/FaultInjectingStore.java:257-263",
+      "title": "The ambiguous putIfMatch can IGNORE the version it was handed and the suite stays green -- the injector fabricates the exact zombie write M4.16 is chasing",
+      "surviving_mutations": "MEASURED. In putIfMatch's ambiguous arm I changed `delegate.putIfMatch(k, new Body(...), v)` to `delegate.put(k, new Body(...))`, dropping the precondition. ALL 16 TESTS PASSED. Killed by a probe: seed \"k\", advance it once via putIfMatch so the held Version is STALE, then an ambiguous putIfMatch with the stale version, then assert the stored value is unchanged -- passes on the correct code, fails on the mutant (measured, then deleted).",
+      "failure_scenario": "Both putIfMatch tests (:143-169 and :302-313) seed a version that STILL MATCHES, so the arm is only ever exercised on a CAS that would have succeeded, and nothing constrains what happens when it would have FAILED. putIfMatch is the lease's only CAS, so the mutant is a fenced leader whose ambiguous lease write LANDS despite a stale epoch -- the zombie write M4.16 spent three rounds diagnosing as an I2 violation and M4.13's sweep is about to hunt. A defect in the injector here is indistinguishable in the sweep's output from a defect in the protocol, and it points the investigation at LocalSequencer. \u26a0\ufe0f The same missing test also leaves an open SEMANTIC question the author should answer rather than the reviewer: on a stale version the current code discards the CAS result, records `ambiguousPut` and throws IOException even though NOTHING landed -- so injected() claims a landing that did not happen, and the caller cannot tell it from a clean lost race. Whichever semantics is chosen, it needs the assertion that today does not exist.",
+      "what_would_close_it": "One test on the stale-version path: seed the key, advance it so the held Version is stale, run the ambiguous putIfMatch, and assert (a) the store's bytes are unchanged and (b) whatever injected() is meant to say in that case. MemoryBinStore.putIfMatch returns empty without writing on a moved version, so the two implementations are cleanly distinguishable. Measured: the probe kills the mutant."
+    },
+    {
+      "id": "W3",
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/FaultInjectingStoreTest.java:60-62",
+      "also": "sequencer/src/test/java/binjava/sequencer/FaultInjectingStore.java:196-197, 201-203",
+      "title": "Nothing reads back the bytes putIfAbsent writes, so the decorator's hand-rolled body rewrap can CORRUPT every record and the suite stays green",
+      "surviving_mutations": "MEASURED. In BOTH putIfAbsent paths (the ambiguous arm and the clean path) I replaced `byte[] bytes = read(body)` with `byte[] bytes = new byte[read(body).length]` -- same declared length, zeroed payload. ALL 16 TESTS PASSED. Killed by a probe asserting the exact payload after an ambiguous putIfAbsent and after a clean one (measured, then deleted).",
+      "failure_scenario": "The decorator buffers the Body into a byte[] and re-wraps it by hand at three sites, because a Body opens once -- that hand-rolled copy is precisely the code that can be wrong, and putIfAbsent is the primary write verb of the commit log. The ambiguous test asserts only `backing.stat(\"k\")).isPresent()`, i.e. 'something exists at that key', which is a strictly WEAKER assertion than the sibling putIfMatch test at :162-165 already makes (it reads back \"v2\"), and the asymmetry has no stated reason. No test in this commit ever reads back a byte written through putIfAbsent, faulted or clean. A decorator that silently alters the payload makes every downstream run diagnose a garbled commit log as a format or protocol defect -- and this test class's own opening line is 'The injector has to be tested before anything it tests can be believed.'",
+      "what_would_close_it": "Replace the stat-presence assertion at :60-62 with a read-back of the exact bytes, and add one clean-path round trip (Faults.none(), putIfAbsent, read it back). Two lines, both measured to kill the mutant."
+    },
+    {
+      "id": "W4",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/FaultInjectingStore.java:147-163",
+      "also": "sequencer/src/test/java/binjava/sequencer/FaultInjectingStoreStreamsTest.java:238-243",
+      "title": "V3 judged: the author's argument that no workload can distinguish the countDraw labels is CORRECT, but 'the design cannot fix it' is not -- the mapping can be made unrepresentable",
+      "surviving_mutations": "MEASURED, still surviving: swapping countDraw's ternary so ambiguousDraws reports \"duplicatePut\" and duplicateDraws reports \"ambiguousPut\" leaves ALL 16 TESTS GREEN. And the argument for why counting cannot see it checks out by exhaustive call-site inspection: fires(ambiguousDraws,..) and fires(duplicateDraws,..) occur at exactly two sites each (FaultInjectingStore.java:185-186 and :255-256), adjacent, unconditional, with no branch or throw between them, and at no read verb -- so their totals are equal in EVERY workload expressible through this BinStore surface. There is no distinguishing workload; the author is right about that.",
+      "failure_scenario": "What the javadoc overstates is 'the design cannot fix it'. The mapping exists only because countDraw re-derives a label from reference identity, which is gate-design rung 6 (an agent/reader checks it) where rung 1 is available: give each stream an object that carries its own name -- `record Stream(String name, Random draws)`, `unreachable.fires(p)` -- and there is no mapping left to get wrong, so the mutation stops being representable rather than staying unkillable. Concrete cost today is small and bounded: the unreachable label IS pinned by the asymmetric map (all three mis-wiring mutants die), so the residual is that a mislabel between ambiguousPut and duplicatePut would send a reader of drawCounts() to the wrong stream while debugging. Non-blocking; recording it because the javadoc asserts an impossibility that is only an impossibility for the chosen instrument.",
+      "what_would_close_it": "Either narrow the javadoc to 'no COUNT can distinguish these two labels', which is what was proved, or remove the mapping by making each stream self-naming."
+    },
+    {
+      "id": "W5",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/FaultInjectingStoreTest.java:316-339",
+      "also": "sequencer/src/test/java/binjava/sequencer/FaultInjectingStore.java:267-269, 284-290",
+      "title": "The pass-through test's own comment claims `close` as a killed mutation; close, multipart, capabilities and put's return value are all still unconstrained",
+      "surviving_mutations": "MEASURED, four survivors, all with the whole suite green. (a) close() emptied to a no-op -- SURVIVES, yet the comment at :322-324 lists 'making close a no-op' among the mutations this test was written to close, so the file states a coverage claim that is false. (b) multipart(k) changed to delegate.multipart(k + \"-mutant\") -- SURVIVES; the verb is never called. (c) capabilities() rewritten to report conditionalWrites=false -- SURVIVES; nothing calls it. (d) put() changed to `delegate.put(k, b); return new Version(\"fabricated-by-mutant\")` -- SURVIVES; the test at :329 discards put's return value and checks only that the object appeared.",
+      "failure_scenario": "The comment is the problem more than the gap: a future reader (and the next reviewer) reads :322-324 as 'close is pinned' and will not re-measure it. Substantively, a decorator that does not close its delegate leaks whatever the delegate holds once the simulation is pointed at anything other than MemoryBinStore, capabilities() is the ADR-0008 startup check requireConditionalWrites() reads, and put()'s Version is what a caller would pass to a later putIfMatch -- a fabricated one turns every subsequent CAS into a spurious lost race. None of it bites today, hence minor; but the comment should not claim what the test does not do.",
+      "what_would_close_it": "Either extend the test to call close (assert the delegate saw it, via CountingBinStore or a tiny recording fake), multipart and capabilities and to check put's returned Version resolves, or delete the false clause from the comment and say plainly which verbs are unpinned."
+    },
+    {
+      "id": "W6",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/FaultInjectingStore.java:137-146",
+      "title": "A DANGLING javadoc: the round-5 rationale for counting is detached from countDraw and javac warns on every build",
+      "surviving_mutations": "n/a -- not a weak-test finding. Observed, not argued: every run of ./gradlew :sequencer:test prints `FaultInjectingStore.java:137: warning: [dangling-doc-comments] documentation comment is not attached to any declaration`. Two consecutive /** */ blocks sit before countDraw and only the second (:147-158) attaches.",
+      "failure_scenario": "This is round 6's V4 (orphaned javadocs) re-opened by round 6's own fix: the new limits-of-the-instrument block was inserted between the old javadoc and the method. The paragraph explaining WHY counting exists is now invisible to javadoc output, and a real warning is normalised in the build log where the next genuine one will be missed.",
+      "what_would_close_it": "Merge the two blocks into one javadoc, or make the first a // comment."
+    },
+    {
+      "id": "W7",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:265",
+      "title": "The row's coverage sentence over-claims against its own gap paragraph",
+      "surviving_mutations": "n/a -- an acceptance-criteria surface, checked against the tests rather than mutated. 'What is covered: the three fault classes on both conditional writes and on the three read verbs' is contradicted two sentences later by 'putIfMatch ... gets ambiguousPut but never unreachable ... and its duplicatePut draw is taken and DISCARDED', and by the code: only ambiguousPut acts on putIfMatch, and only unreachable acts on the read verbs.",
+      "failure_scenario": "The row is what the next reader takes as the statement of what this commit delivers, and the two halves disagree about whether three fault classes reach both conditional writes. The gap paragraph is the accurate one. Left uncorrected, a reader of M4.13 plans against coverage that does not exist -- the same 'coverage claimed by prose' failure this row records three times about itself.",
+      "what_would_close_it": "Reword the coverage sentence to what the tests assert: ambiguousPut and unreachable and duplicatePut on putIfAbsent, ambiguousPut on putIfMatch, unreachable on the three read verbs."
+    }
+  ],
+  "questions_answered": {
+    "is_the_asymmetric_7_4_4_map_brittle": "No, not confusingly. The expected values sit in the same method as the calls that produce them, and the as() message states the derivation ('four conditional writes draw all three streams; the three read verbs draw ONLY unreachable'), so an innocent change to the fixture's call mix fails with a message that tells the reader how to recompute. I found no way for it to fail for a reason other than the one it names. The residual risk is a future author 'fixing' the numbers rather than asking why they moved, which no assertion can prevent.",
+    "does_the_second_phase_require_the_draws_to_precede_the_branch": "Yes, and I tried to defeat it. Both draws moved below the branch -> fails (counts 0/1/0). One draw deleted -> fails. Both draws moved INSIDE the ambiguous branch above the throw, which restores 1/1/1 in the firing case -> still fails, because the fault-free phase 1 then loses them (unreachable 6, not 7). The two phases together pin position, not merely presence. I found no alternate route by which it passes."
+  },
+  "what_did_not_change": "The staged diff adds three files and edits backlog.md only. No existing assertion was touched, loosened or deleted, so there is no 'production changed to satisfy the test' inversion in this commit. Tiers are right (T1 on MemoryBinStore throughout, per testing.md 19a and the row), no Thread.sleep, no fixed port, no system temp, fakes not mocks, both classes carry a 60s SEPARATE_THREAD timeout.",
+  "task": "M4.12",
+  "role": "test-reviewer"
+}

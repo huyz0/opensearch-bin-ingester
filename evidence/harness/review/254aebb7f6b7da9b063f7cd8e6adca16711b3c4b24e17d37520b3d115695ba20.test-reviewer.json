@@ -1,0 +1,65 @@
+{
+  "task": "M4.7",
+  "role": "test-reviewer",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "file": "sequencer/src/main/java/binjava/sequencer/LocalSequencer.java",
+      "line": 157,
+      "severity": "major",
+      "what": "UNCHANGED SINCE ROUND 5 AND RE-MEASURED SURVIVING. Round 5 (df2f9f52f65e) raised this as a major; the test files are byte-identical at this hash (BatchingSequencerTest.java:268/289/309 and BatchingSequencerLifecycleTest.java line numbers all still match round 4/5's citations), only the docs and baselines/review.txt changed, and neither the M4.7c backlog row nor the staged rounds:M4.7 entry mentions it. Mutation applied to my own tree: `return log.commitAll(requests);` -> `return log.commitAll(List.of(requests.get(0)));`. `./gradlew :sequencer:test :ingest:test --rerun-tasks` BUILD SUCCESSFUL, and full `./gradlew test` BUILD SUCCESSFUL. This diff makes commitAll THE PRIMITIVE and rewrites the only production Sequencer to implement it, and nothing in the tree calls that implementation with more than one request: BatchingSequencer is only ever composed with the test-local DirectSequencer/ClosingSequencer records, and CommitLogBatchTest covers the layer below. The fake's batched path was strengthened; the real sequencer's was not. A 3-line case in LocalSequencerTest -- commitAll two distinct segment keys, assert both segments come back with their own runs -- kills it.",
+      "failure_scenario": "A delegation that drops window-mates returns a durable-looking delta to every caller in the window while only one segment's offsets were ever written. FR-4's ack fires for flushes that are not in the chain, and no conditional write catches it because the entry that WAS written is internally consistent. This is the same defect class round 1 found on BatchingSequencer.commitAll ('a pass-through that loses requests acks flushes that were never committed'); it was closed one layer up and left unpinned on the class that actually reaches the object store. M4.7c wires exactly this composition."
+    },
+    {
+      "file": "sequencer/src/main/java/binjava/sequencer/BatchingSequencer.java",
+      "line": 344,
+      "severity": "major",
+      "what": "UNCHANGED SINCE ROUND 5 AND RE-MEASURED SURVIVING. Mutation applied to my own tree: hoist the restore out of the finally to before `try { delegate.close(); }` -- i.e. revert to the ordering the 12 lines of comment at 331-343 say was measured wrong ('leaseReleased=false, closeThrew' before, 'leaseReleased=true' after). `./gradlew :sequencer:test :ingest:test` BUILD SUCCESSFUL. Round 4's separate finding on line 308 IS now killed (I confirmed: `boolean wasInterrupted = Thread.interrupted();` -> `false` fails 1 test), so the flag-CLEARING is pinned and only the restore ORDERING is not. Every delegate in both new test files has an interrupt-insensitive close() -- `{}`, `closed.set(true)`, `closedMidCommit.set(committing.get())` -- so the property the comment describes is unreachable from any fixture. A T0 fake closes it: give ClosingSequencer a close() that records Thread.currentThread().isInterrupted() (or throws IOException when the flag is set, modelling BoundedLock.takeOrFail), and assert released-and-did-not-throw.",
+      "failure_scenario": "A pod shuts down from a thread that already carries an interrupt -- the shape the class's own comment says 'would hit it every time', and the shape closeJOINSTheCommitterBeforeClosingTheDelegate already constructs at line 369. With the restore moved earlier, LocalSequencer.close() -> leases.release() -> BoundedLock.takeOrFail -> tryLock(bound, NANOSECONDS) throws immediately on the set flag: the lease is NOT released, survives to its TTL (the ~10s failover this method exists to avoid), and close() throws so the caller's remaining shutdown never runs."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/BatchingSequencerLifecycleTest.java",
+      "line": 333,
+      "severity": "minor",
+      "what": "A FALSE COVERAGE CLAIM, and it contradicts the block 25 lines above it. The comment at 308-324 states plainly and correctly that 'THE ENQUEUE/CLOSE ATOMICITY IS NOT PINNED BY A TEST' and that the seam was DELETED from production. The comment at 326-335 then ends: 'The deterministic test above pins the same property every run, by parking a caller at the enqueue seam until close has fully returned.' No such test exists in the file -- the enqueue seam is gone, and the nearest test above (closingWithACallerParkedFailsItAndClosesTheDelegate) parks the caller in the WINDOW TIMER, not at an enqueue seam. It is a leftover from the draft that still had the seam-based test. I verified the underlying gap independently: replacing submit()'s `synchronized (lifecycle) { check; queue.add }` with the non-atomic round-1 form leaves :sequencer:test and :ingest:test green. I accept the author's argument for why no deterministic fixture exists (a seam before the check reproduces nothing; a seam between check and enqueue sits inside the monitor close() must take), and I accept deleting the 2-in-8 stress detector under testing.md rule 2 -- both are recorded in place, which is the right disposal. Only the dangling last sentence needs to go.",
+      "failure_scenario": "A reader who reaches the second block first is told the atomicity property is pinned every run when nothing pins it, which is exactly the unknown-converted-to-false-confidence this comment set otherwise exists to prevent."
+    },
+    {
+      "file": "baselines/review.txt",
+      "line": 14,
+      "severity": "minor",
+      "what": "THE ROUNDS ARGUMENT IS SOUND ON SIZE AND SILENT ON STATE. I accept the split refusal: the batcher's window logic and its failure handling are one thread and one lifecycle, and shipping half of it ships a class that can hang -- the diff is that class, its two test files, the interface change that makes commitAll the primitive, and the fake, and I found nothing in it that belongs to a different task. I also accept 'TWO TESTS WERE DELETED RATHER THAN KEPT': neither had landed, a detector measured at 2 hits in 8 runs cannot be red-recorded under testing.md rule 2, and a production member existing for a fixture that does not work is worse than none; both are recorded in the test file rather than dropped silently. What the entry does not say is that TWO MAJORS FROM ROUND 5 ARE STILL OPEN at this hash, both re-measured above. Its narrative ('EVERY ROUND FOUND A REAL HANG, none found a scope problem') stops at round 3 and reads as convergence, and rule 12 is explicit that an argued exception keeps no-unresolved-majors enforced -- so the entry cannot excuse them and should not imply they are gone. M0.53's row is the precedent worth copying: 'THIS ENTRY DOES NOT CLAIM CONVERGENCE'.",
+      "failure_scenario": "An entry that argues the round count while omitting the findings still open is the one artifact a later reader will trust instead of re-running the mutations, and it is the same shape as the M4.21 defect the same file records: a claim about the tree that the tree does not support."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/BatchingSequencerTest.java",
+      "line": 268,
+      "severity": "minor",
+      "what": "CARRIED FROM ROUNDS 3, 4 AND 5, RE-MEASURED. theRealClockTimerActuallyWaitsItsInterval asserts only a lower bound of 120ms, so the shipping timer is pinned against being too short and not at all against being wrong. MEASURED SURVIVING MUTATION: replace `return () -> Thread.sleep(millis);` (BatchingSequencer.java:87) with `return () -> Thread.sleep(200);` -- the configured interval is ignored entirely -- and :sequencer:test passes, confirmed with --rerun-tasks. The class javadoc calls the interval 'THE LATENCY DIAL' and says the trade is deliberate, so a timer that ignores its argument is a real regression against the thing the comment says must not be tuned away. Two 120ms runs with a 1000ms cap would bracket it without flakiness (a sleep may overrun, and a 10x overrun is not a timing race).",
+      "failure_scenario": "An operator sets commitBatchInterval=50ms for latency and gets whatever the constant is; the suite says nothing."
+    },
+    {
+      "file": "sequencer/src/main/java/binjava/sequencer/BatchingSequencer.java",
+      "line": 79,
+      "severity": "minor",
+      "what": "CARRIED FROM ROUNDS 3, 4 AND 5, RE-MEASURED. aZeroIntervalIsRefusedBecauseItSilentlyRestoresThePerPodRate (BatchingSequencerTest.java:289) passes only Duration.ZERO. MEASURED SURVIVING MUTATION: `if (interval.isNegative() || interval.isZero())` -> `if (interval.isZero())`; :sequencer:test and :ingest:test green. One parameterised case or one extra assertThatThrownBy with Duration.ofMillis(-1) closes it.",
+      "failure_scenario": "A negative interval is accepted at construction and surfaces as an IllegalArgumentException from Thread.sleep on the committer thread, which the drain loop's catch(Throwable) converts into a batcher that has already shut its door -- a construction-time misconfiguration turned into a runtime shutdown."
+    },
+    {
+      "file": "sequencer/src/main/java/binjava/sequencer/BatchingSequencer.java",
+      "line": 118,
+      "severity": "minor",
+      "what": "CARRIED FROM ROUNDS 4 AND 5, RE-MEASURED. The two empty-batch guards added by this diff -- BatchingSequencer.commitAll:118 and FakeSequencer.commitAll:43 -- have no test; grep finds no commitAll(List.of()) anywhere. MEASURED SURVIVING MUTATION: delete BatchingSequencer's guard; :sequencer:test and :ingest:test green. Related and also measured green: deleting `failAll(drainRemaining(), ...)` in close() (line 328) while keeping the one in drainForever's finally. That second one I do NOT think needs a test -- after a successful join, drainForever's finally has already drained, so close()'s copy is reachable only on the !stopped path -- but the production comment at 173-186 asserts the two nets are 'NOT INTERCHANGEABLE' and describes close()'s net as covering 'a close arriving while the committer is parked in take()', which is a case the finally also covers. That claim is the production reviewer's, not mine; I record only that no test distinguishes them.",
+      "failure_scenario": "An empty submission occupies a whole window and is refused one layer down, so a bad caller's collateral is a poisoned window rather than a local refusal -- and the guard that prevents it can be deleted with nothing noticing."
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/BatchingSequencerTest.java",
+      "line": 309,
+      "severity": "minor",
+      "what": "CARRIED FROM ROUNDS 3, 4 AND 5, unchanged. ClosingSequencer at line 309 is declared and never used in this file (one occurrence, the declaration itself) -- a verbatim duplicate of the record at BatchingSequencerLifecycleTest.java:66, left behind by the 500-line split. commitConcurrently at line 88 still takes a `QueuedTimer timer` parameter its body never reads, and returns a CommitDelta its one call site discards.",
+      "failure_scenario": "No behavioural risk; recorded only because it has now been carried across four rounds and is what a fifth reader will spend time on."
+    }
+  ],
+  "diff_sha256": "254aebb7f6b7da9b063f7cd8e6adca16711b3c4b24e17d37520b3d115695ba20",
+  "staged_tree": "f81ff8de4a71c6bf88b84097367a3175389729aa"
+}

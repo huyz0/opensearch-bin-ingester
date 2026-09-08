@@ -1,0 +1,79 @@
+{
+  "diff_sha256": "033eea11f7bae6986f01102e4a59f314ece5ffcb677634bbc9198729a50690d3",
+  "verdict": "changes-requested",
+  "summary": "Round-2 verification of 1 blocking + 5 major from round 1. B1 (multi-pod gap), M1 (commitBatchInterval / AC9), M3 (seal's two branches, table + AC3a/b split), M4 (AC8 modelled, NFR-9 deferred to M5) and M5 (histogram + top-K, no stream label) are genuinely and completely fixed; arithmetic and every corpus/ADR citation I sampled checks out. M2 (checkpoint discovery) is NOT fixed: the discovery mechanism rests on a cursor whose derivation is circular, and AC5's chosen magnitude (>=50 checkpoints) sits below any plausible list page size, so the unbounded implementation it was written to catch passes it. Two further defects that the fixes did not introduce but that make the spec unimplementable as written: the redrive termination bound is stated tighter than is true, and the test plan demands a CONTINUE header that no scope item, criterion or task builds.",
+  "findings": [
+    {
+      "id": "R2-1",
+      "severity": "major",
+      "location": "docs/internal/product/milestones/M4/SPEC.md:251-255, :361-366, :409",
+      "title": "MAJOR 2 is not fixed: the newest-checkpoint cursor is circular, and AC5's magnitude is below one list page so the unbounded implementation still passes",
+      "failure_scenario": "Two legs, one location. (a) The mechanism: 'recovery already knows which epoch it is recovering (from the lease) and which sequence it is recovering to, so it asks for the checkpoint page at or below that sequence using startAfter'. Nothing in the spec says where that sequence comes from. On a cold start the new leader knows only the epoch; the chain head is found today by CommitLog.recover() paging the whole delta prefix (ingest/src/main/java/binjava/ingest/CommitLog.java:69-81), and the whole point of the checkpoint is to avoid that. So the cursor needed to find the checkpoint is the thing the checkpoint exists to supply. With ascending-only paging (BinStore.java:101, 'ONE page of keys under prefix, in lexicographic order') and no lastModifiedMillis (ADR-0022 sec 2), finding the MAX key in a prefix without a cursor is inherently O(n/pageSize); the spec neither derives the cursor (the lease object could carry it -- it is putIfMatch'd on every renew anyway) nor concedes O(log n) via exponential startAfter probing. It asserts O(1) instead. (b) The criterion cannot falsify the bug: AC5 requires '>=5,000 deltas and >=50 checkpoints present' and 'a constant number of list pages'. CommitLog already calls list(prefix, startAfter, 1000). At maxKeys=1000, 50 checkpoints are ONE page, so the naive implementation -- list(ckptPrefix, null, 1000), take the last entry -- issues exactly one LIST and passes AC5 and its T1 test-plan row ('fails first against a discovery that pages the whole ckpt/ prefix'), while line 254-255 claims 'a chain long enough that an unbounded implementation would visibly differ'. It would not. Concretely: M4.8 lands green; after a month of uptime under one epoch (an epoch only advances on lease acquisition, so a stable leader keeps one epoch for weeks) the ckpt/ prefix holds ~100,000 keys and every recovery pages ~100 LISTs; at M5 this same path is tier 3 of the fallback ladder run by up to 300 plugin nodes, and it breaches cost.md R15's ~1 LIST/s hard ceiling -- the exact 'cost bug that surfaces two milestones later' the spec's own line 257-260 warns about. Round 1 said 'a bound stated in checkpoints rather than in pages would stay green while cost grew'; this fix states the bound in pages but the WORKLOAD in checkpoints, at a magnitude below the page size, which reproduces the defect one level down. Minimum fix: derive the cursor explicitly (e.g. the lease carries lastCheckpointSeq) or state the search as O(log n) probes, and size AC5 in terms of the page size actually used -- e.g. '>= 3x maxKeys checkpoints', or better, assert the LIST count is unchanged between two runs at 10x different checkpoint counts, since a bound measured at a single magnitude cannot distinguish O(1) from O(n)."
+    },
+    {
+      "id": "R2-2",
+      "severity": "major",
+      "location": "docs/internal/product/milestones/M4/SPEC.md:226-229; docs/internal/product/backlog.md M4.6",
+      "title": "The termination argument's bound is wrong: a fenced leader keeps originating commits until its renew fails, not only until its in-flight writes drain",
+      "failure_scenario": "'the new leader's redrive loop terminates because the only writer that can beat it is the old leader, whose lease has expired and which stops on its own first loss. The loop is therefore bounded by the number of writes the old leader had in flight at the moment of fencing.' The conclusion (it terminates) is right; the bound is not. A fenced leader does not know it is fenced at the moment of fencing -- the spec's own test-plan row ':404' says it stops on a FAILED RENEW (F4) -- so between fencing and its next renew attempt it keeps accepting producer traffic and issuing NEW commits at its own commit rate. Each of those can win a race against the new leader's seal attempt and force another redrive. The true bound is the commits the old leader issues within one renew interval (at TTL 30 s, renew TTL/3 = 10 s, 4 commits/s: ~40 redrives), not the handful it had in flight. The backlog row repeats the wrong bound verbatim ('the redrive is bounded by the old leader's in-flight writes'), so it is what M4.6's implementer will build against. Concretely: M4.6 sizes its redrive cap at the in-flight write depth (say 8) and aborts the seal beyond it; a busy fenced leader in a partition emits 40 more commits, the new leader exhausts the cap and gives up sealing -- surrendering sequencing cluster-wide while holding a valid lease, which is precisely the outage round 1's MAJOR 3 was raised to prevent, reintroduced through the fix's own termination clause. The mirror risk is the opposite reading: an uncapped while(true) redrive with no backoff spins one GET plus one putIfAbsent per iteration for a whole renew interval, an object-store request rate tied to nothing in cost.md's allowed list. The spec's own Risks table already flags the GC-pause variant as 'believed safe by I3; needs proof', which is the case where this bound matters most. Minimum fix: state the bound as the old leader's commits within one renew interval, and say what the redrive loop does while it waits (bounded backoff, or wait out the renew interval)."
+    },
+    {
+      "id": "R2-3",
+      "severity": "major",
+      "location": "docs/internal/product/milestones/M4/SPEC.md:407 (test plan) vs :96-133 (Scope) and :429-446 (Tasks)",
+      "title": "The test plan requires a CONTINUE header that no scope item, acceptance criterion or task builds -- and it would be a second wire-format change outside M4.5's golden files",
+      "failure_scenario": "Test-plan row ':407' demands a T0 test: 'CONTINUE header lets a reader follow across an epoch boundary', failing first against 'a reader that stops at the sealed prefix and silently misses the new epoch'. CONTINUE appears exactly once in the whole spec. It is not in Scope (In) items 1-11, not in any of the 11 acceptance criteria, and not in any of the 16 task rows. It comes from 03-metadata-and-cas.md:192 ('the new leader starts new_epoch/<0>.delta with a CONTINUE{prevEpoch:e, prevSeq}'), which the spec cites elsewhere but not here. Two failure paths, both real. (1) The implementer drops the row as unowned: M4 ships a SEAL that terminates the old chain and nothing that lets a reader cross into the new one, so after every failover consumers stall at the sealed prefix -- a cluster-wide visibility outage on exactly the path NFR-9 governs -- and I3's second half ('or a later epoch's chain') is never exercised even though AC1 claims I1-I5 hold across 1,000 seeds. (2) The implementer builds it inside M4.5, whose stated obligation is 'golden files for BOTH shapes' meaning CommitDelta v0 and SEAL. CONTINUE is a third shape, so it lands with no ADR, no golden file and no fake update -- non-negotiable 8, and the wire-format-change skill M4.5 explicitly invokes. Minimum fix: either add CONTINUE to Scope, to M4.5's shapes and to an acceptance criterion, or delete the test-plan row and say where epoch-boundary continuation is owned."
+    },
+    {
+      "id": "R2-4",
+      "severity": "minor",
+      "location": "docs/internal/product/milestones/M4/SPEC.md:139-141; docs/internal/product/backlog.md M4.14",
+      "title": "The compaction observable is attributed to M7; compaction is deferred to after M9",
+      "failure_scenario": "Scope item 11 and the M4.14 backlog row both say the metric exists 'so M7's threshold is chosen from data'. roadmap.md:24 says 'Compaction (FR-14) | after M9 -- deliberately deferred', and 50-open-questions.md:151 puts measurement M4 (the compaction trigger threshold) 'after M9, from the metric collected from M4'. M7 is retention/GC/watermarks. Consequence: whoever plans M7 looks for a compaction-threshold task that does not belong there, or reads the roadmap's deferral as overturned by a milestone spec. The rest of the spec gets this right ('Deleting superseded deltas or checkpoints. M7's GC.'), so it is one wrong milestone name in two places, not a design error."
+    },
+    {
+      "id": "R2-5",
+      "severity": "minor",
+      "location": "docs/internal/product/milestones/M4/SPEC.md:349-351 (AC2) and :107-113 (Scope item 2)",
+      "title": "putIfMatch cannot acquire a lease that does not exist yet, so AC2's 'unheld lease' case contradicts the SPI contract",
+      "failure_scenario": "Scope item 2 specifies acquire/renew/release entirely via putIfMatch, and AC2 asserts that with N contenders 'racing an unheld or expired lease, exactly one acquires it and every other receives an empty Optional'. BinStore.java:60-73 is explicit that empty means VERSION MOVED and that 'An ABSENT key is a different failure and is NOT folded into that empty case ... so this throws instead'. On a fresh cluster ctl/lease/<slot>.json does not exist, so every contender's putIfMatch throws rather than returning empty and no pod can ever take leadership. Bootstrap needs putIfAbsent; only takeover of an expired lease is putIfMatch. This surfaces on M4.3's first red test so it is largely self-correcting, but AC2 as written is not satisfiable by a correct implementation, and the wrong way to satisfy it is to fold the absent case into the empty Optional -- which would rewrite the contract ADR-0022 and ADR-0008 fixed, across every backend and the conformance suite."
+    },
+    {
+      "id": "R2-6",
+      "severity": "minor",
+      "location": "docs/internal/product/milestones/M4/SPEC.md:56-57",
+      "title": "'A single-sequencer deployment is fully correct at the end of M4' invites the misreading the section exists to prevent",
+      "failure_scenario": "ADR-0007 fixes S = 1, so EVERY deployment of this system is a single-sequencer deployment. A planner reading line 57 in isolation concludes their 6-pod HA deployment qualifies and is therefore fully correct at the end of M4 -- the exact conclusion the section was added to block. Line 63 corrects it six lines later ('at the end of M4 a multi-pod deployment is not yet correct'), so the harm is bounded, but the load-bearing sentence should say 'single-POD' or 'a deployment in which every commit originates on the leaseholder'."
+    },
+    {
+      "id": "R2-7",
+      "severity": "minor",
+      "location": "docs/internal/product/milestones/M4/SPEC.md:155-158 (Out, self-fencing F8)",
+      "title": "F8's deferral is temporally impossible: M8 cannot wire a policy from an SLO M9 measures",
+      "failure_scenario": "'It needs a latency SLO that M9 measures; the mechanism it uses -- voluntary release -- ships here, so M8 wires a policy rather than building a path.' M8 (Resilience) precedes M9 (Cost and performance proof) in roadmap.md. Whoever plans M8's gray-failure chaos row goes looking for a commit-latency SLO that will not exist until the milestone after. One of the two milestone numbers is wrong; the corpus (08-failure-domains:151) does not pin either."
+    },
+    {
+      "id": "R2-8",
+      "severity": "minor",
+      "location": "docs/internal/product/milestones/M4/SPEC.md:377-382 (AC9)",
+      "title": "AC9's 'unchanged' is not literally true of a correct batching implementation unless the workload saturates the batch interval",
+      "failure_scenario": "With batching, commit PUTs over a window W are min(aggregate flush rate, 1/commitBatchInterval) * W. If the 1-pod configuration offers less than 1/commitBatchInterval (e.g. 1 flush/s against a 250 ms interval), 1 pod produces W PUTs and 6 pods produce 4W -- correct behaviour, criterion fails as literally worded. The likely response is to relax the assertion by feel until it passes, which is how a criterion that carries the entire $52/month claim loses its teeth. The right assertion is already implied by the Cost impact section: PUTs <= W / commitBatchInterval regardless of pod count, which still fails 6x against today's one-PUT-per-flush-per-pod CommitLog. State either that, or that both configurations must saturate the window."
+    },
+    {
+      "id": "R2-9",
+      "severity": "minor",
+      "location": "docs/internal/product/milestones/M4/SPEC.md:20-26; docs/internal/product/backlog.md M4.0",
+      "title": "The enumeration of stale I1-I4 citations reads as complete and is not",
+      "failure_scenario": "'The I1-I4 citations in roadmap.md, ADR-0002 :43, 40-implementation/03-benchmarking-plan.md:118 and 30-design-space/08-failure-domains-and-resilience.md:213 all predate I5' lists four sites; grep finds two more: .agents/skills/spec/SKILL.md:40 (the worked example of a good acceptance criterion, which the next milestone's spec author copies) and .agents/skills/review/SKILL.md:93 ('Does a claimed invariant (I1-I4) actually hold'). Leaving them unfixed is right per review.md rule 11 -- they were round-1 minors and the surface of a fix is new prose. What is not right is stating an incomplete list as the set. The spec skill's example is the highest-leverage of the six, because it is the template that propagates I1-I4 into M5's spec after this commit has argued it is wrong."
+    },
+    {
+      "id": "R2-10",
+      "severity": "minor",
+      "location": "docs/internal/product/backlog.md, M4 task table (16 rows, none writing M5's spec)",
+      "title": "M4 repeats the omission that forced M4.0 into M4: no task writes M5's spec",
+      "failure_scenario": "M4.0's own text sets the precedent -- M0.8 wrote M1's spec inside M0, M1.26 wrote M2's inside M1, M2.17 wrote M3's inside M2, 'M3 had no such row, so it lands here'. M4's 16 rows end at M4.15 (VERIFIED.md and the milestone review) with no 'M5 spec written and reviewed'. So M5 will open unspecified and its spec task will land inside M5, reproducing exactly the situation this task's first sentence exists to explain. It matters more than usual here because the B1 resolution rests entirely on M5 picking up commit forwarding; the roadmap M5 row does carry the obligation, so nothing is lost, but the mechanism that would have forced someone to read it before M5 starts is missing."
+    }
+  ],
+  "task": "M4.0",
+  "role": "reviewer"
+}

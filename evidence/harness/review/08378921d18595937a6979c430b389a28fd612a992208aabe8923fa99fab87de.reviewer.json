@@ -1,0 +1,29 @@
+{
+  "diff_sha256": "08378921d18595937a6979c430b389a28fd612a992208aabe8923fa99fab87de",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "file": "scripts/test_integrity.py",
+      "line": 88,
+      "severity": "major",
+      "what": "The rename fix only covers renames whose DESTINATION is a test path. A rename OUT of a test source set is still invisible under git's default diff.renames=true, because --name-only never emits the source. The `sources` guard and its comment ('a test moved to testFixtures hid a real gutting (exit 0) ... A source is redundant only when its destination is examined in its place') read as if that shape is now handled; it is not. The guard can only preserve a source path that is already in `paths`, and with rename detection on it never is. Every RenameBlindnessTest fixture sets `git config diff.renames false`, so the whole suite exercises a configuration neither this repository nor CI uses, and the one shape that differs under the default is exactly the shape the comment claims to have fixed.",
+      "failure_scenario": "Measured on the staged bytes, default git config (diff.renames unset): a repo with mod/src/main/java/binjava/Foo.java and mod/src/test/java/binjava/FooTest.java; `git mv mod/src/test/java/binjava/FooTest.java mod/src/main/java/binjava/FooTest.java` plus a change to Foo.java, staged together. `git diff --cached --name-status -M` reports `R100 mod/src/test/.../FooTest.java -> mod/src/main/.../FooTest.java`, `--name-only` reports only the destination, and check-test-integrity.sh prints 'ok no test weakened, disabled or removed alongside the production change', exit 0. An entire test class left the test tier alongside a production change and the gate certified it. The same holds for a move to src/testFixtures/java with a gutted assertion (also measured: exit 0). Fix direction: rename sources whose destination is not examined by this loop must be ADDED to `paths`, not merely not-removed from it."
+    },
+    {
+      "file": "scripts/test_integrity.py",
+      "line": 89,
+      "severity": "major",
+      "what": "The `TEST_PATH.search(src) and TEST_PATH.search(dest)` guard -- the fix for the previous round's finding about `sources = set(renamed.values())` -- is unfalsified. Reverting it to exactly the version the previous round rejected leaves the entire buildSrc suite green (204 tests, 0 failures, measured with `./gradlew -p buildSrc test`). Every other new behaviour in this diff is properly killed by a mutation (rekey in both scanners, the -M flag, the R guard in parse_name_status, the base/HEAD ordering, the whole `sources`/`paths` filter), so this is the one line the suite does not constrain.",
+      "failure_scenario": "A later refactor simplifies the comprehension back to `sources = set(renamed.values())`; no test fails. The input that then slips through, measured on both versions of the script: repo with `git config diff.renames false`, FooTest.java moved from mod/src/test/java to mod/src/testFixtures/java with one `isEqualTo(3)` rewritten to `isNotNull()`, plus a Foo.java production change. Guarded (as staged): FAIL, exit 1, 'binjava.FooTest#keepsItsPromise removed alongside a production change'. Unguarded: 'ok no test weakened, disabled or removed', exit 0. The gutting is waved through and nothing in the suite notices the regression."
+    },
+    {
+      "file": "scripts/java_tests.py",
+      "line": 359,
+      "severity": "minor",
+      "what": "`package_of`'s docstring names two constructible inputs that require the `normalise(src)` call ('a block comment whose line begins `package x;`, and a package-less file with a text-block line that looks like one'), and says the raw-text version produced `binjava.sequencer.binjava.ingest.FooTest#m`. Neither input is asserted anywhere: changing `PKG.search(normalise(src))` to `PKG.search(src)` leaves the suite green (measured). A named, reproducible input that no test constructs is a claim rather than a constraint.",
+      "failure_scenario": "Someone reads `normalise(src)` here as redundant with `_scan`'s own normalisation and drops it while simplifying. A moved test file carrying a block comment whose line starts `package binjava.ingest;` then rekeys its before-ids into a double-qualified package, the ids no longer match the after-ids, and a pure module move is reported as a wholesale removal of every test in the file -- the exact false accusation this commit exists to prevent. No test fails."
+    }
+  ],
+  "task": "M0.53",
+  "role": "reviewer"
+}

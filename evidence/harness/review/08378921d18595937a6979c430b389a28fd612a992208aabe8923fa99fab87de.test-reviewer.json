@@ -1,0 +1,22 @@
+{
+  "diff_sha256": "08378921d18595937a6979c430b389a28fd612a992208aabe8923fa99fab87de",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "file": "scripts/test_integrity.py",
+      "line": 94,
+      "severity": "major",
+      "what": "The `sources` NARROWING -- the fix for round-2's finding M0.53-r2-1 -- has no test. Three mutations of it leave the whole buildSrc suite green (204 tests, 0 failed, measured with --rerun-tasks): (a) `sources = set(renamed.values())`, i.e. the exact pre-fix behaviour; (b) dropping the `TEST_PATH.search(src)` conjunct; (c) dropping the `TEST_PATH.search(dest)` conjunct. Only the PRESENCE of some filter is constrained -- deleting the two lines entirely fails 1 test. RenameBlindnessTest's six cases all move test->test within TEST_PATH, so every case that distinguishes the narrowing from the broad filter is absent.",
+      "failure_scenario": "Measured end to end, not argued. Fixture: mod/src/main/java/binjava/Foo.java changed 3->4, and mod/src/test/java/binjava/FooTest.java `git mv`d to mod/src/testFixtures/java/binjava/FooTest.java with one isEqualTo(3) gutted to isNotNull(), all staged, commit body carrying no trailer. Under the staged bytes check-test-integrity.sh exits 1 and names the three methods. Under mutation (a) or (c) it prints `ok no test weakened, disabled or removed alongside the production change` and exits 0 -- the identical silent pass this whole task exists to close, restored by a one-line edit no test would notice. The production comment at that line asserts round-2 review measured both this shape and a main-file-moved-into-a-test-source-set shape; neither measurement is preserved as an executable test, so the next refactor of that set comprehension re-opens M0.53 with the suite green."
+    },
+    {
+      "file": "scripts/java_tests.py",
+      "line": 368,
+      "severity": "minor",
+      "what": "`package_of` normalises before searching, and its own docstring names two constructible inputs where searching the RAW text disagrees and `rekey` then produces `binjava.sequencer.binjava.ingest.FooTest#m`. No test constrains that choice: changing `PKG.search(normalise(src))` to `PKG.search(src)` leaves the whole buildSrc suite green (204 tests, 0 failed). The docstring records the falsifying input; the suite does not contain it. Contrast `rekey`'s `startswith` guard, which the docstring honestly declares unfalsifiable by fixture -- this one is falsifiable and simply untested.",
+      "failure_scenario": "A Java source whose block comment contains a line beginning `package binjava.wrong;` at column 0, above the real `package binjava.ingest;`. Verified directly against the staged java_tests.py: package_of returns 'binjava.ingest', while PKG.search(raw) returns 'binjava.wrong'. Under the mutation, `from_pkg` no longer prefixes the ids (which come from normalise), rekey's guard declines to strip, and every before-id is double-qualified -- so a pure module move of such a file reads as a wholesale REMOVAL in test_integrity and as all-new in tdd_scan. That is a false accusation whose documented workaround, a `Test-removed:` trailer matched over the whole commit body, would then also downgrade a genuine deletion in the same commit to a WARN."
+    }
+  ],
+  "task": "M0.53",
+  "role": "test-reviewer"
+}

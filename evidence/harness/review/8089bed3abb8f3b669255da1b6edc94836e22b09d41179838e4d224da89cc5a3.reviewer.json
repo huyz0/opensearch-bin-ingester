@@ -1,0 +1,66 @@
+{
+  "diff_sha256": "8089bed3abb8f3b669255da1b6edc94836e22b09d41179838e4d224da89cc5a3",
+  "verdict": "changes-requested",
+  "summary": "Every claim in the round-9 fix list is present in the staged bytes and I verified each against the tree. Two of them are landed on premises the tree falsifies, and a third cost claim in the ADR is unqualified where the ADR's own answer path breaks it.",
+  "findings": [
+    {
+      "id": "R10-1",
+      "file": "docs/internal/product/decisions/0036-the-idempotency-key-carries-an-explicit-pod-incarnation.md:157",
+      "severity": "major",
+      "title": "\"No commit-path request scales with pods\" is unqualified, and the ADR's own answer path issues one GET per replayed pod against ONE shared object",
+      "failure_scenario": "The Decision (line 60) requires a detected replay be answered by READING the pointed delta: 'read the pointed delta and answer only if it carries that exact (podId, incarnationId, flushSeq)'. The checkpoint slot is per pod, so N replaying pods mean N lookups. MEASURED shape of a replay under M4.7: a batched delta is ONE object shared by every pod in the window (BatchedCommitDeltaTest's whole premise; sequencer/src/test/.../BatchingSequencerTest.java:109 'sixPodsCommittingInOneWindowCostONEPutNotSix'), and an ambiguous PUT failure is ambiguous for EVERY caller in that window at once -- so the normal shape of a replay is six pods retrying together, six slots all pointing at the same (epoch, sequence). The ADR bounds nothing: as written the leader issues six GETs of one object inside one commitAll. That is cost.md R5 verbatim ('One fetch per object per node') and R4 (a coalesced read split into many), on the COMMIT path, on the pod axis the M4.10b row's own third property forbids ('It must add no COMMIT-PATH request that scales with the number of pods -- the rate M4.7 was built to remove'). The Consequences paragraph answers that property with 'Detection is an in-memory comparison', which is true of DETECTION and says nothing about ANSWERING -- the half the same ADR spent two rounds adding. Fix is one clause, not a redesign: at most one GET per distinct (epoch, sequence) per batch, stated where the claim is made, or the claim qualified to detection only.",
+      "measured": "MEASURED: sequencer/src/test/java/binjava/sequencer/BatchingSequencerTest.java:109,131,259 (one PUT for six pods, one delta returned to every caller); cost.md R4/R5 read. INFERRED: that all N slots point at the same delta after a batched commit -- it follows from one delta per window, but no test pins it."
+    },
+    {
+      "id": "R10-2",
+      "file": "docs/internal/product/decisions/0036-the-idempotency-key-carries-an-explicit-pod-incarnation.md:131",
+      "severity": "major",
+      "title": "'Both delta encodings change, VERSION_DELTA and the kinded batch' cannot coexist with 'Existing goldens are untouched', and this commit deletes the note that named the only exit",
+      "failure_scenario": "MEASURED: format/src/test/java/binjava/format/GoldenChainEntryTest.java:54 and :81 do not merely parse the goldens -- each asserts `delta.encode()` is BYTE-IDENTICAL to the golden bytes ('a v0 delta is still written as v0', 'and re-encoding a MULTI-segment delta is byte-identical too'). ChainEntry.java:18-21 states the rule those assertions enforce: 'THE VERSION DISTINGUISHES LAYOUTS, NOT RELEASES. Version 0 IS a delta ... every delta already in a bucket stays readable for the whole retention window without being rewritten.' If the body under VERSION_DELTA gains a mandatory per-segment triple, a CommitDelta decoded from chain-delta-v0.bin re-encodes with the new field, both assertions fail, and every v0 delta sitting in a bucket is misparsed or unreadable mid-retention. The M4.10c session then has exactly three exits: regenerate the golden (the same commit forbids it, backlog-notes.md:270), delete or weaken the encode assertion (non-negotiable 2), or bump the version -- and this commit DELETES the only sentence that named the third ('ADR-0028 leaves the version path open, and the kind value ADR-0032 used had been RESERVED -- ChainEntry records that reservation consumed', removed from the M4.10c section). The ADR answers this question for the OTHER format it changes (Checkpoint.decode must accept an enumerated {0,1}, lines 167-173) and leaves the delta half with a consequence claim -- 'Existing goldens are untouched' -- that its own mandate makes unreachable. Note the M3.0 precedent quoted right beside it argues the opposite of the sentence it supports: segment v0's encoding did NOT change, a new version was added.",
+      "measured": "MEASURED: GoldenChainEntryTest.java:54,81; ChainEntry.java:18-21,44-48; the deleted paragraph is visible in the staged diff of backlog-notes.md."
+    },
+    {
+      "id": "R10-3",
+      "file": "docs/internal/product/backlog-notes.md:261",
+      "severity": "major",
+      "title": "The ground for deleting the fixture-data requirement is false -- no SegmentCommit fixture carries a podId at all -- and the assertion property alone does not kill the full hoist the notes rely on BatchedCommitDeltaTest to kill",
+      "failure_scenario": "The notes now say 'every fixture already varies by `podId`, so \"vary one field per segment\" is satisfied today and buys nothing', and drop the data requirement on that ground. MEASURED false for the two fixtures that matter: format/src/main/java/binjava/format/SegmentCommit.java:25 is `record SegmentCommit(String segmentKey, List<RunCommit> runs)` -- there is no podId field anywhere in the delta today, so BatchedCommitDeltaTest's three segments vary only in a key STRING, and the same paragraph four lines above argues a key string is NOT pod attribution ('SegmentKey exposes no parser for the pod'); and golden/chain-delta-batched-v1.bin holds `bins/a.seg` / `bins/b.seg` with no pod at all (GoldenChainEntryTest.java:75-79) and by line 270 must never be regenerated, so it can never satisfy it. The only fixture that does vary by a real podId is BatchingSequencerTest's CommitRequests -- the one the same sentence says cannot see the hoist. Consequence: an M4.10c author follows the surviving instruction ('assert the PER-SEGMENT triple after round-trip'), gives BatchedCommitDeltaTest's three segments the same podId/incarnation/flushSeq because nothing requires otherwise, and `assertThat(decoded).isEqualTo(original)` passes under the FULL hoist -- encode once per delta, fan the same value out to every segment on decode. That is the mutation the notes name BatchedCommitDeltaTest as the killer of, and it is the shape the row says 'drops every pod but one on M5's first multi-pod batch'. ADR-0036:121 still carries the correct requirement ('on a fixture whose triple varies in at least one field per segment'), so the tree now prescribes opposite things in one commit, with the notes' side dressed as the correction of the ADR's side.",
+      "measured": "MEASURED: SegmentCommit.java:25; BatchedCommitDeltaTest.java:43-45,54; GoldenChainEntryTest.java:75-79; BatchingSequencerTest.java:259-261."
+    },
+    {
+      "id": "R10-4",
+      "file": "docs/internal/product/backlog-notes.md:294",
+      "severity": "minor",
+      "title": "The site count is still off by one, in the direction that makes the grep look complete",
+      "failure_scenario": "MEASURED: `git grep -n 'podId, flushSeq' -- '*.java'` returns ELEVEN lines (Checkpoint:32, IngestCommitPathTest:81, CommitRequest:19, Sequencer:35/46/88, CommitProtocolSimulation:58, CommitProtocolSimulationFlushSeqTest:23, FakeSequencerTest:178, FakeSequencer:27/29). The paragraph enumerates all eleven PLUS the un-greppable javadoc at Sequencer.java:48-50 -- twelve sites -- under a heading that says ELEVEN and a claim that the grep 'finds all but one'. A session that greps, counts eleven and matches the stated total concludes the sweep is complete and leaves the one site the sentence exists to rescue: the promise that M4.10 needs no record-shape change, which this row falsifies. The caveat sentence does name it explicitly, which is why this is minor rather than major -- but it is the third round this count has been wrong, and TWELVE is the number.",
+      "measured": "MEASURED: grep run against the working tree, output counted."
+    },
+    {
+      "id": "R10-5",
+      "file": "docs/internal/product/backlog-notes.md:266",
+      "severity": "minor",
+      "title": "'hasSize(2) is its only assertion on the delta' is false, and it hides the better fixture",
+      "failure_scenario": "MEASURED: BatchingSequencerTest.java:131-190 (`everyCallerInAWindowGetsTheDurableDeltaCarryingItsOwnSegment`) asserts on the delta too -- THREE pods in one window, each caller locating its own SegmentCommit in the returned delta and asserting its run's recordCount and the offset tiling. The conclusion still holds (all its requests use flushSeq 0 and it asserts nothing about a triple, so it sees neither hoist), but the reason given is wrong, and the test it denies exists is the strongest per-segment fixture in the class: three pods, distinct counts, already matching per segment. An M4.10c session reading this sentence adds its per-segment triple assertion only to the two-pod hasSize(2) test and leaves the three-pod one carrying no triple.",
+      "measured": "MEASURED: BatchingSequencerTest.java:88-190 read in full."
+    },
+    {
+      "id": "R10-6",
+      "file": "baselines/review.txt:30",
+      "severity": "minor",
+      "title": "The argued-cap entry understates the cap it is arguing past",
+      "failure_scenario": "The new entry opens 'Past the cap of two'. MEASURED: scripts/review.sh:129 defaults REVIEW_ROUND_BUDGET to 4, and the packet for this task says 'Round 11 for M4.10b exceeds the budget of 4'. The entry is the durable record of an overrun; naming a cap of two makes the overrun read as five rounds past rather than seven, in the one file whose purpose is that somebody can later notice a growing argued-list. The entry is also silent on the rounds it is actually paying for -- rounds 7-10 -- while describing rounds 1 and 2 at length.",
+      "measured": "MEASURED: scripts/review.sh:129-130; packet header."
+    }
+  ],
+  "verified_claims": [
+    "ASSERTION-PROPERTY guidance is in the notes at :259-268, not only in the ADR -- PRESENT. Names BatchedCommitDeltaTest's whole-record equality (verified: BatchedCommitDeltaTest.java:54 assertThat(decoded).isEqualTo(original)) and BatchingSequencerTest's hasSize(2) with both requests at from(\"pod0\",0)/from(\"pod1\",0) (verified: BatchingSequencerTest.java:259-261, identical flushSeq). But see R10-3 and R10-5 for the two premises it rests on.",
+    "DO NOT REGENERATE golden/chain-delta-batched-v1.bin -- PRESENT at backlog-notes.md:270, with the reason and with the discriminating golden named as a NEW file. Quote verified against GoldenChainEntryTest.java:21.",
+    "COUNT: eleven/eight and Sequencer.java:48-50 rather than :51 -- PRESENT, and :48-50 is the correct span for 'without changing the record shape'. FakeSequencer.java:29 is named. The total is still wrong: see R10-4.",
+    "ADR pre-change-checkpoint paragraph names the COST of accepting -- PRESENT (ADR:167-177): 'during the window a genuine replay is assigned a SECOND offset range', with the direction argued. The final clause says the same thing twice ('chosen because the alternative suppresses real commits: refusing would suppress legitimate commits'); not worth a round.",
+    "'Checkpoint is not a ChainEntry' restored to the notes -- PRESENT at backlog-notes.md:279-281, with MAGIC/VERSION/no-kind-byte and the ADR-0033 constraint.",
+    "Spot-checked and TRUE: Checkpoint.java:47-49,151 (own MAGIC, VERSION 0, strict equality decode); CheckpointWriter.java:129 (merge on request.podId() with Math::max); CheckpointTest.java:153-170 (1,600 streams, ~38 KiB, <64 KiB); ChainReplay.java:50,362-371 (LIST from the seeded checkpoint, entries below never GET); DefaultIngest.java:349 (flushSeq++ evaluated before commit, so a throw consumes it); IngestCommitPathTest.java:81 and its Recording seam; SPEC.md :55, :501, :511 all say (podId, flushSeq); SegmentKey.MAX_KEY_BYTES is 1024; SegmentPublisher.java:137 carries the 'unique WITHOUT coordination' comment M4.46 is filed against."
+  ],
+  "task": "M4.10b",
+  "role": "reviewer",
+  "staged_tree": "2ceaca4e74d19ac1d52d99d30eb0d462fae6a165"
+}

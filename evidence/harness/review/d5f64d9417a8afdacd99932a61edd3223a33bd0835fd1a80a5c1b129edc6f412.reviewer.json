@@ -1,0 +1,44 @@
+{
+  "diff_sha256": "d5f64d9417a8afdacd99932a61edd3223a33bd0835fd1a80a5c1b129edc6f412",
+  "verdict": "pass",
+  "summary": "M1.1 lands. checkedStream() preserves C8 (nothing materialised; FilterInputStream counting only) and its EOF+close double check is correct, including delegate closure when verify throws: verify() sets verified=true BEFORE throwing, and close() runs verify() in a try with in.close() in the finally, so a short body throws exactly once and never leaks the descriptor. ADR-0022 is accurate and doc 07 carries the banner and the withdrawal. Five minor findings, all latent: checkedStream() has ZERO production callers today, so none of them can fire before M1.2 wires the first streaming backend -- but findings 1 and 2 are major-in-impact the moment it does, and should block M1.2 rather than be carried further.",
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "minor",
+      "file": "binstore-spi/src/main/java/binjava/binstore/Body.java:45-83",
+      "title": "checkedStream() cannot detect an OVER-long body, which is the truncation case readFully's own javadoc names",
+      "failure_scenario": "verify() only runs when the delegate returns -1, or at close(). A content-length-driven backend reads exactly `length` bytes and stops -- it never reaches EOF. So a Body declaring 4 MiB whose supplier yields 8 MiB (a segment builder that computes length before a late append) makes S3 store a 4 MiB object with no error anywhere: seen == length at close, verify passes. That object reads back as a VALID SHORT SEGMENT, which is verbatim the failure Body.java:106-110 says the length check exists to prevent. readFully() catches it (BodyTest.readFullyRefusesAStreamShorterOrLongerThanTheDeclaredLength asserts both directions); checkedStream() has no long-body case in BodyTest and could not pass one, so the javadoc claim at Body.java:36-38 ('REFUSES ... a body whose length disagrees') and the BodyTest:79 comment ('readFully enforces the same rule') are both overstated -- checkedStream enforces short-body only. Fix is one line: when seen == length at verify time, attempt one more super.read() and refuse if it yields a byte. Must be closed before M1.2 or any S3 backend uses it."
+    },
+    {
+      "id": "F2",
+      "severity": "minor",
+      "file": "binstore-spi/src/main/java/binjava/binstore/Body.java:46-47",
+      "title": "checkedStream() inherits FilterInputStream's mark/reset/skip, none of which adjust `seen`",
+      "failure_scenario": "markSupported(), mark(), reset() and skip() are not overridden, so they delegate straight to the wrapped stream while the byte counter is untouched. Two live consequences for the streaming backend this method exists for: (a) an HTTP client that mark()s at 0, streams `length` bytes, then reset()s to retry a 500 re-reads the whole body and close() sees seen == 2*length, so a RETRYABLE upload fails permanently with 'body declared N bytes but yielded 2N' -- a transient error converted into a lost segment; (b) any skip() on the body undercounts, so an honest body is refused as short. Fix: override markSupported() to false (a Body already re-opens via the supplier for retries, so mark/reset is redundant), and route skip() through read(). BodyTest has no case for either."
+    },
+    {
+      "id": "F3",
+      "severity": "minor",
+      "file": "binstore-backends/src/main/java/binjava/binstore/backend/MemoryBinStore.java:132-133",
+      "title": "list(prefix, startAfter, 0) throws IndexOutOfBoundsException instead of an IOException or an empty page",
+      "failure_scenario": "On the first matching entry, page.size() == 0 == maxKeys, so `next = page.get(page.size() - 1).key()` calls get(-1). A caller that computes maxKeys from a remaining budget -- exactly what M1.3b's LIST ceiling will do -- passes 0 at the boundary and gets an unchecked IndexOutOfBoundsException out of a method whose contract is IOException, so a governor-throttled recovery walk dies instead of backing off. BinStore.list's javadoc does not forbid maxKeys <= 0 and no conformance case pins it; either the contract states maxKeys >= 1 and the backend refuses below it, or the empty page is returned."
+    },
+    {
+      "id": "F4",
+      "severity": "minor",
+      "file": "docs/internal/product/decisions/0022-store-spi-pages-explicitly.md:1-66",
+      "title": "ADR-0022 has no `Alternatives considered` section, and its Consequences overstate the doc-07 edit",
+      "failure_scenario": "The adr skill's format requires `## Alternatives considered` and states that an ADR listing no rejected alternative is a description, not a decision. The rejected alternative (the lazy Stream) is argued inside `## Decision`, so the information is present but not where the next reader or a future structural gate looks -- and the second decision (dropping lastModifiedMillis) records no rejected alternative at all, e.g. keeping the field and forbidding its use. Separately, Consequences says 'Doc 07 \u00a7\u00a71 and 3 carry revision banners pointing here'; \u00a71 has a banner, \u00a73 has a bullet-level WITHDRAWN note -- accurate enough in substance, inaccurate as written, and this repository's recurring defect class is a comment asserting something the tree does not have."
+    },
+    {
+      "id": "F5",
+      "severity": "minor",
+      "file": "binstore-backends/src/main/java/binjava/binstore/backend/MemoryBinStore.java:91",
+      "title": "The key-limit error reports a char count while the limit it names is in bytes",
+      "failure_scenario": "The guard measures key.getBytes(UTF_8).length but the message prints key.length(). For a key with multi-byte characters -- which doc 07 \u00a73's 'every character our key generator can emit' case will exercise -- the operator reads 'key longer than 1024 bytes: 700' and concludes the guard is broken rather than that the key is 1400 bytes. Print the measured byte count."
+    }
+  ],
+  "task": "M1.1",
+  "role": "reviewer"
+}

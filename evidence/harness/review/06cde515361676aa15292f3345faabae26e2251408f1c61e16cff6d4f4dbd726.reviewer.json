@@ -1,0 +1,38 @@
+{
+  "diff_sha256": "06cde515361676aa15292f3345faabae26e2251408f1c61e16cff6d4f4dbd726",
+  "verdict": "pass",
+  "summary": "Round 2 verify. F1, F2 and F3 are genuinely fixed and I re-measured each rather than taking the claim: the M4.10a row is out of backlog.md (it is absent from HEAD, the index and the worktree) and appended to the ## M4 table of backlog-done.md with 4 columns and state 'done'; check-commit-msg.sh accepts an 'M4.10a ...' subject (it extracts M4.10 and matches). The density test kills a shared fleet-wide per-attempt counter (measured: uniqueness stays green, everyPodIssuesADenseSequence... fails at line 112) and kills a podId/segmentKey swap inside record() and a dropped issued.add for the zombie path. Both quoted numbers are true as staged, measured over seeds 0..29 at ROUGH: dense 30/30, two pods sharing a value 19/30. The new class javadoc's Faults.none() claim is also true: with the allocator reverted, uniqueness fails with no faults injected. Full :sequencer:check passes; both new tests run in 0.85s and 0.32s so the duplicated 30-seed sweep costs nothing worth noting. Nothing in the diff touches an object-store request path -- it is test-scope and docs only, adds no get/put/list/stat, and the per-attempt record is an in-memory list bounded by rounds. I agree with deferring F4: issued() is a pure function of the RNG stream that commits(), faults() and violations() already pin, and an honest red for the added line needs injected nondeterminism -- a bigger change than the line buys. Four minors below; none blocks.",
+  "findings": [
+    {
+      "id": "F5",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSimulationFlushSeqTest.java:55",
+      "title": "The round-2 javadoc correction was applied to the class comment and not to the method comment four lines below, which still carries the sentence it refutes",
+      "failure_scenario": "The class javadoc added this round says 'THE FAULTED PROFILE IS NOT WHAT REACHES THE DEFECT, though an earlier javadoc said so ... with the allocator reverted it fails under Faults.none() too'. The method javadoc on noPodIdAndFlushSeqPairIsEverIssuedForTwoDifferentSegments still says 'The defect needs a FAILED commit, so the faulted profile is what reaches it.' I measured the class javadoc's version and it is the true one: with flushSeq reverted to commits/zombieWrites, a 30-seed sweep at Faults.none() reissues a pair for two segments and the uniqueness assertion fails. So the surviving sentence is false, and a reader who wants to know whether ROUGH is load-bearing gets both answers from the same file. The next person to weaken this test's profile will cite the wrong one of the two."
+    },
+    {
+      "id": "F6",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:177",
+      "title": "F1's fix moves the row to the archive but the commit adds a notes entry written in the pre-fix present tense, and nothing links to it",
+      "failure_scenario": "The added '### M4.10a' section reads '`CommitProtocolSimulation` issues `flushSeq` from two fleet-global counters: `commits` for the leader (line ~199) and `zombieWrites` for zombies (~188)' and 'The fix is a per-pod allocator taken BEFORE the attempt' -- present and future tense describing state this same commit removes, with line numbers that no longer resolve. It sits immediately above '### M4.10', the very next task, whose notes a session is instructed to open. That session reads the adjacent entry and plans work that is already done, or re-diagnoses a defect that no longer exists -- the same failure F1 named, relocated from backlog.md to backlog-notes.md. It is also unreachable: backlog.md no longer carries the row and the backlog-done.md row has no [notes] link, so the only way to it is a grep that lands on it by accident. Two smaller notes: every other task section in this file quotes the verbatim table row, and this one is free prose; and the archive row and the notes entry now disagree in tense about the same landed change."
+    },
+    {
+      "id": "F7",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSimulation.java:235",
+      "title": "Surviving mutation: what is recorded still agrees with what is sent only by the adjacency of two statements",
+      "failure_scenario": "record(CommitRequest) closes the mutation its own javadoc names -- reverting the request's flushSeq argument now changes the recording too, and density catches it, which I verified. It does not close the next one out. Measured on the staged bytes: leave the correct leaderReq built and recorded, and change the following line to `leader.commit(new CommitRequest(leaderPod, commits, leaderReq.segmentKey(), leaderReq.recordCounts()))`. The whole :sequencer suite stays green while the driver sends a reissued (podId, flushSeq) for two different segments -- exactly the condition this task exists to remove, and exactly what M4.10's dedup would then be tested against. The residual gap is that issued() is a parallel record kept beside the seam rather than at it; a forwarding Sequencer wrapping each LocalSequencer at tryStart, recording inside commit(CommitRequest), would make divergence unconstructible. Low plausibility as an accident, since the two statements are adjacent and new Issued(...) appears exactly once, which is why this is minor and not a blocker -- but the round-1 finding about reading a parallel record is narrowed rather than answered, and it is worth a backlog row rather than a third round."
+    },
+    {
+      "id": "F8",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSimulationFlushSeqTest.java:124",
+      "title": "The OVERLAP half of the new test is fully implied by the DENSITY half, and the density assertion is keyed on pod NAME, which M4.10's own noted semantics will contradict",
+      "failure_scenario": "Density forces every pod's sequence to start at 0, so any seed in which two distinct pod names issue anything necessarily has two pods sharing the value 0. Measured over seeds 0..29: seeds with a shared value = 19, seeds with more than one pod issuing = 19, identical by construction. The assertion therefore discriminates nothing beyond 'some seed had two pods issue at all' -- useful as an anti-vacuity guard for this test, which is real value, but the javadoc's 'What separates the two is DENSITY and OVERLAP' credits it with discrimination it cannot have, and someone tightening this later will believe there are two independent properties here. Separately, density is asserted per pod NAME over the whole run, so it bakes in the assumption that a pod name maps to one process for the life of the run. M4.10's notes record the opposite as its own deliverable -- flushSeq restarts at 0 on every process start while podShortId is stable -- so the moment the harness models a restart this assertion must be relaxed, and non-negotiable 2 makes relaxing an assertion an awkward conversation with no note in the tree saying it was foreseen."
+    }
+  ],
+  "task": "M4.10a",
+  "role": "reviewer",
+  "staged_tree": "e63855ef69c4fabbf08b1a7df7df9bcba417b506"
+}

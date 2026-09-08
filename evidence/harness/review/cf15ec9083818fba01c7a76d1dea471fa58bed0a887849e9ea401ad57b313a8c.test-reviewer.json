@@ -1,0 +1,50 @@
+{
+  "diff_sha256": "cf15ec9083818fba01c7a76d1dea471fa58bed0a887849e9ea401ad57b313a8c",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "severity": "major",
+      "file": "sequencer/src/main/java/binjava/sequencer/ChainReplay.java:131",
+      "summary": "The upTo bound -- the row's headline I3 claim, 'the crossing STOPS at the named slot, not at the predecessor's end' -- is unconstrained. Deleting the whole 'if (entry.sequence() > upTo) return;' block leaves :sequencer:test green (verified rc=0). Also surviving: '>' -> '>=', and 'opening.prevSeq() + 1'. CommitLogCrossEpochTest:82 passes under all three because its zombie delta at slot 3 is already unreachable behind M4.6a's SEAL barrier at slot 2, which CommitLogSealTest.recoveryDoesNotApplyTheDiscardedSuffixAfterASeal already pins. The test's name claims a property the seal does all the work for. Discriminating fixture: a predecessor with NO seal past the named slot -- epoch1 CONTINUE@0, delta@1(6), delta@2(99 at offset 6); epoch2 CONTINUE naming (1,1). Correct 6, mutant 105.",
+      "failure_scenario": "A future change makes a CONTINUE name a slot that is NOT the predecessor's seal (M4.8 checkpoints, or a predecessor whose seal is missing because the sealing leader died between chainEnd and the seal PUT). The crossing then replays the predecessor to its END, pulling a fenced leader's discarded suffix into the successor's offset history -- I3 -- and the whole suite stays green, because the only test named for this boundary is satisfied by the seal barrier instead."
+    },
+    {
+      "severity": "major",
+      "file": "sequencer/src/main/java/binjava/sequencer/ChainReplay.java:154",
+      "summary": "Mutation 'seal = found;' (drop the chainEpoch == ownEpoch guard) survives the whole suite. Measured consequence on the shape no test builds -- a leader recovering a chain that already holds its CONTINUE: recover() crosses into the sealed predecessor, adopts ITS seal as sealedAt, and every commit() then throws 'chain sealed at seq 2 ... this writer is fenced and must stop'. Permanent refusal to sequence on a chain the node legitimately owns. The javadoc claims the mechanism verbatim ('ONLY THIS CHAIN'S SEAL BINDS THE WRITER') and nothing pins it.",
+      "failure_scenario": "A leader restarts and re-wins the same term, or any consumer calls CommitLog.recover() on a chain that already holds its CONTINUE (the crossing reader this task exists to build). It adopts the PREDECESSOR's seal, and every commit() from then on throws 'this writer is fenced and must stop'. The cluster has a leader holding a valid lease that can never sequence anything, and no test in the suite goes red."
+    },
+    {
+      "severity": "major",
+      "file": "sequencer/src/main/java/binjava/sequencer/CommitLog.java:208",
+      "summary": "Mutation nextOffsets.merge(key, next, Math::max) -> nextOffsets.put(key, next) survives the whole suite. Measured on the same missing shape: a restart at an already-opened chain rewinds offsets from 10 to 6 and the next commit reassigns 6..9 -- I2 and acceptance criterion 4, the exact defect this task exists to close. open()'s own javadoc documents the re-run-after-partial-start path as legitimate, so it is contract-reachable. One fixture (recover() AND open() on a chain that already holds its CONTINUE) kills this and the seal finding above.",
+      "failure_scenario": "A leader re-runs open() after a partial start -- the idempotence open()'s javadoc advertises -- with recover() having already loaded its own chain's offsets. The inherited map overwrites them with the predecessor's lower values, nextOffset drops from 10 to 6, and the next commit hands out offsets 6..9 a second time. Offsets are reassigned across a failover, which is I2 and acceptance criterion 4, and the suite is green."
+    },
+    {
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/LocalSequencerFailoverTest.java:128",
+      "summary": "The cost test reads only counts().gets(). Adding 'if (chainEpoch != ownEpoch) store.list(logPrefix, null, 1000);' inside ChainReplay.walk's entry loop -- one LIST per predecessor entry, a request rate scaling with records, non-negotiable 6's single named prohibition -- survives the entire suite including this test. The two-point GET slope (12->16, 40->44) IS strong against super-linear GET regressions; the gap is the uncounted request class. Asserting counts().lists() at both sizes closes it.",
+      "failure_scenario": "Someone bounds recovery in M4.9, or reworks the crossing, and introduces a LIST per predecessor entry instead of per page. Object-store request rate now scales with records -- the one thing non-negotiable 6 forbids and the reason this project exists -- and aTakeoverCostsONEGETPerPredecessorEntryAndTHATISAREGRESSION, the test whose entire subject is what a takeover costs, stays green because it never looks at lists()."
+    },
+    {
+      "severity": "major",
+      "file": "sequencer/src/main/java/binjava/sequencer/ChainReplay.java:119",
+      "summary": "MAX_CHAIN_DEPTH is unconstrained: deleting the whole guard leaves the suite green (verified rc=0), as does 'depth > MAX_CHAIN_DEPTH * 1000' and starting inherited()'s counter at 0. Not theoretical and not expensive -- nothing validates that a CONTINUE names a LOWER epoch, so a two-object cycle (epoch1 CONTINUE naming (2,9); epoch2 naming (1,9)) recurses. Measured with the guard: clean IOException 'CONTINUE chain deeper than 1000'. Without it: java.lang.StackOverflowError escaping a public API.",
+      "failure_scenario": "Corrupt or hand-written control bytes produce a CONTINUE naming a higher epoch whose own CONTINUE names back. Someone later 'simplifies' the depth guard away, or raises the constant, and recovery dies with StackOverflowError instead of a diagnosable IOException. An Error unwinds through a public API on the startup path, the pod crash-loops with no actionable message, and nothing in the suite noticed the guard leaving."
+    },
+    {
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/LocalSequencerTest.java:8",
+      "summary": "Split leftovers: 'import binjava.binstore.CountingBinStore;' is now unused (sole remaining occurrence is the import), and five consecutive blank lines sit at line 379 where the two tests were removed.",
+      "failure_scenario": "The unused import and the blank-line run are harmless today; they read as though CountingBinStore is still exercised in LocalSequencerTest, so the next reader looking for the takeover cost assertion searches the wrong file."
+    },
+    {
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitLogCrossEpochTest.java:35",
+      "summary": "Shapes the brief listed and that probing confirms behave correctly but have no test: a predecessor sealed at slot 0 crossed into (yields 5, correct) and a CONTINUE naming a slot past the predecessor's end (yields 6, correct, no exception). Both are four-object fixtures. No defect found in either -- recorded so they are not re-derived.",
+      "failure_scenario": "A seal at slot 0 or a CONTINUE naming a slot past the predecessor's end reaches the crossing in production and someone changes the code that handles them. Both behave correctly today and neither has a test, so the regression lands silently."
+    }
+  ],
+  "task": "M4.6e",
+  "role": "test-reviewer"
+}

@@ -1,0 +1,32 @@
+{
+  "diff_sha256": "389ab6350283958f4b563b1344a2d42a8b84476404a9475addb5fe580cde26e7",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "severity": "major",
+      "file": "sequencer/src/main/java/binjava/sequencer/ChainReplay.java:157",
+      "summary": "Mutation 'opening.prevEpoch() >= chainEpoch' -> '> chainEpoch' survives the whole suite. This is the ONLY termination argument the walk has, and the new test builds a 1<->2 cycle that exercises only the strictly-greater half; the equality half -- a CONTINUE naming its OWN epoch -- is untested. Measured: baseline gives the clean IOException 'chain at epoch 2 continues from epoch 2, which is not LOWER'; the mutant gives 'java.lang.OutOfMemoryError: Java heap space' from the unbounded hops ArrayList. Strictly worse than the StackOverflowError the round-1 fix removed. One extra object -- Continue(0, 2, 9) at epoch 2 -- closes it.",
+      "failure_scenario": "Corrupt or hand-written control bytes give a chain a CONTINUE naming its own epoch. Someone later relaxes the comparison to '>' -- it reads as 'must be strictly lower', which is the same words the message uses -- and recovery no longer throws; it allocates hops forever and dies with OutOfMemoryError on the startup path. Every node that tries to lead heap-exhausts in turn, the whole suite stays green, and the failure carries no message an operator can act on."
+    },
+    {
+      "severity": "major",
+      "file": "sequencer/src/main/java/binjava/sequencer/ChainReplay.java:76",
+      "summary": "Deleting 'if (prevEpoch >= 1)' from inherited() survives the whole suite. Measured with a probe on the fixture theFirstLeaderDoesNotTouchTheReservedUnleasedChain already builds: a first leader's commit goes from firstOffset=0 to firstOffset=3, inheriting the RESERVED unleased chain's offsets into a leased chain -- the M4.6d fork, arriving through open(). Round 1's two-crossings shape recurring: there are TWO epoch-0 guards, one per crossing, and only the recover-path one (chainEpoch >= 1 in the CONTINUE branch) is pinned -- verified, dropping it kills aFirstChainNamingNoPredecessorCrossesNothing. The existing control asserts only the WRITE side ('no seal, no slot consumed'); one nextOffset/firstOffset assertion on its existing 3-record delta closes it.",
+      "failure_scenario": "Until M4.6d lands, epoch 0 is a live chain that every unleased CommitLog writes to. A refactor of inherited() drops or inverts the guard and the first leader of a cluster silently adopts the unleased chain's offsets as its own history -- records committed on the fork become part of a leased stream, and the leader hands out offsets a chain no reader lists has already assigned. That is I2, and the only test standing near it passes because it checks that nothing was WRITTEN to epoch 0, never that nothing was READ from it."
+    },
+    {
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitLogCrossEpochTest.java:206",
+      "summary": "theCrossingIsTRANSITIVEAcrossSeveralTerms does not test transitivity. Verified surgically: with the ancestry loop capped at ONE hop, running that test alone is BUILD SUCCESSFUL. Its epoch-2 delta is written at firstOffset=6, so the immediate predecessor's bytes already carry epoch 1's contribution and skipping epoch 1 changes the answer not at all -- the fixture's own comment claims a two-term fixture cannot discriminate, and this three-term one cannot either. Least consequential of the four majors because the property IS pinned elsewhere (the one-hop mutation is killed by aCONTINUENaming..., aChainSEALED... and the cost test), but all three are incidental to transitivity. Fix: give epoch 1 a second RunKey that epoch 2 never touches and assert that stream too.",
+      "failure_scenario": "The three tests that incidentally kill the one-hop mutation are each about something else -- a corrupt link, a never-opened chain, request counts. Any of them gets rewritten for its own reasons, transitivity quietly goes unpinned, and the test named for it stays green. A crossing that follows only the immediate CONTINUE then loses every stream an ancestor wrote and a descendant did not touch, restarting those streams at 0. This is the exact defect round 1 found one test over, and the M4.6a row's own warning: a test that constrains nothing reads as coverage, so the next person deletes the wrong one."
+    },
+    {
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/LocalSequencerFailoverTest.java:151",
+      "summary": "The cost test now counts gets() and lists() but not stats() -- and this round's new firstEntry() is precisely what introduces stat to the recovery path. Mutation adding 'store.stat(stat.key());' per entry inside applyChain -- one STAT per entry, a request rate scaling with records -- survives the whole suite. Same finding as round-1 MAJOR 4, one request class over. StoreCounts exposes total(); asserting that closes the class permanently instead of enumerating kinds one regression at a time.",
+      "failure_scenario": "M4.9's bounded recovery, or any rework of firstEntry, introduces a per-entry stat -- the cheapest request to reach for and the easiest to not notice, since firstEntry already stats. Object-store request rate now scales with records, the one thing non-negotiable 6 forbids outright, and the test whose entire subject is what a takeover costs stays green because stats are not among the two kinds it enumerates."
+    }
+  ],
+  "task": "M4.6e",
+  "role": "test-reviewer"
+}

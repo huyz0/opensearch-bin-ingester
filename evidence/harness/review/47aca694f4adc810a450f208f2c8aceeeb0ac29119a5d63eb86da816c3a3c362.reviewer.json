@@ -1,0 +1,38 @@
+{
+  "diff_sha256": "47aca694f4adc810a450f208f2c8aceeeb0ac29119a5d63eb86da816c3a3c362",
+  "verdict": "pass",
+  "summary": "Round 2, verify. F1-F6 all land and every load-bearing claim added this round checks out against the tree: applyChain does return at hop.upTo and at the first Seal (ChainReplay.java:319, :339); the prescribed neverOpened shape does reach applyChain unbounded (Seal at slot 0 -> limit = Long.MAX_VALUE, ChainReplay.java:186, over an unsealed ancestor); a takeover's seal key sorts before ckpt/ so the plain shape returns at the seal; ChainEntry.decode throws IOException on bad magic (ChainEntry.java:100) so LocalSequencer.start really does release the lease; CommitDelta carries only (sequence, segments) so the first post-takeover checkpoint really does carry pods = {} and Checkpoint permits an empty map; Invariants.readChain and CommitProtocolSimulation.hasChain are as described; the corrected 1/d arithmetic is right and AC5 says what the row says it says. Four minors, none blocking.",
+  "findings": [
+    {
+      "id": "F7",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:321",
+      "title": "One copy of the M4.8a row was repointed at M4.8b2 and its duplicate was not",
+      "failure_scenario": "F5 repointed the LANDED M4.8a row (backlog-done.md:106) from M4.8b to M4.8b2, and the ADR and Checkpoint.java with it. The M4.8a row in backlog-notes.md:321 still says 'the record is a value type plus its codec, and M4.8b is what decides when one gets written'. A session that opens M4.8a's notes -- the file AGENTS.md sends it to for the reasoning behind a row -- is sent to M4.8b, which after this commit decides nothing and is a banner. The hop resolves, so nothing is built wrong; what it costs is the extra hop and, next time this fact is corrected, a third copy nobody greps. This is the one-copy-fixed failure the M4.8 banner two hundred lines above (backlog-notes.md:169) names in its own words, arriving inside the commit that was fixing three instances of it."
+    },
+    {
+      "id": "F8",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:329",
+      "title": "'this growth is bounded by the time to M4.9' bounds the LIST exposure, not the growth; the source text it replaced said M7",
+      "failure_scenario": "The key count under logPrefix() grows with checkpoints and nothing deletes them until M7 -- the M4 SPEC's own non-goals say so, and the M4.8b source text this split replaced said it in as many words ('nothing deletes them before M7', naming cost.md R15's ~1 LIST/s ceiling at M5's 300-node fan-out as the consequence). What M4.9 retires is recovery's LIST of that prefix, not the growth. The sentence as written says the growth itself ends at M4.9. Scenario: M4.9 lands and someone asks whether the accepted cost is now paid off; the row says yes, so nobody checks that ChainReplay.chainEnd (the other of the two listing sites this row is about) still pages the prefix on the takeover path. It is defensible only because M4.9's own notes row promises to bound the crossing's LISTs too -- a promise that lives in M4.9 and not in AC5, whose word is 'recovery'. One clause -- 'the LIST cost of that growth is bounded by the time to M4.9; the key count itself by M7' -- would say what is true, and would keep the R15/M5 consequence the source text named."
+    },
+    {
+      "id": "F9",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:329",
+      "title": "'THE SHAPE THAT REACHES applyChain is ...' claims exclusivity the tree contradicts, and prescribes the more fragile of the two",
+      "failure_scenario": "The prescribed shape is correct and I verified it reaches the site. It is not the only one, and it is not the cheapest. replayAncestry(epoch, Long.MAX_VALUE) adds hops[0] = (epoch, MAX_VALUE) before any ancestry question (ChainReplay.java:144), so CommitLog.recover() over an UNSEALED chain whose slot 0 is a delta breaks out of the walk immediately and applyChain runs unbounded over that one chain -- no burned epoch, no Seal at slot 0, no grandparent. CommitLogTest:407 (recoveryStopsOnAnEntryItCannotUnderstandRatherThanSkippingIt) is already exactly that fixture, seeding an undecodable key into a committed chain and asserting recover() throws. Scenario: an implementer obeys 'The test must build that, not a plain takeover' and constructs the three-epoch fixture. Getting epoch 4 sealed at slot 0 requires driving LocalSequencer.start for epoch 5 while epoch 4 was never opened; a fixture that instead starts epoch 4 successfully seals epoch 3, applyChain's hop becomes (3, seal.sequence()), it returns at the Seal, and the test is green against a chainEnd-only fix -- the precise trap this clause exists to defuse, re-armed by the elaborate fixture it prescribes. The row should name the simple shape as sufficient for the filter and keep the takeover one for production-reachability if it wants both."
+    },
+    {
+      "id": "F10",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-notes.md:333",
+      "title": "The oldestRetainedOffset criterion inverts the ADR's polarity: 0 is the CORRECT production value, not the careless one",
+      "failure_scenario": "ADR-0033's 'the field a careless fixture leaves at 0' is about the GOLDEN FIXTURE, which needs two distinct non-default values or the consistent field swap round-trips green. For the WRITER the polarity is the other way: nothing deletes before M7, CommitLog tracks only next offsets and ChainReplay.fold computes only nextOffset, so the only truthful value the writer can emit today is 0. M4.8b2 imports the ADR's phrase into a writer criterion -- 'assert per-stream and per-pod values against a workload where they differ -- including oldestRetainedOffset, which ADR-0033 records as exactly the field a careless fixture leaves at 0' -- and then names only the value that must NOT survive, never the one that must. Scenario: an implementer reads 0 as the careless answer, and since StreamOffsets(next, next) is explicitly forbidden, sources a third value (the stream's first observed offset, or next minus the window) from nothing -- a wire-visible claim that records were dropped when none were, in a field M7's GC and M4.10 will later trust. Say the value: 0 until retention exists, asserted non-equal to a non-zero nextOffset, which kills (next, next) without inventing a number."
+    }
+  ],
+  "task": "M4.8b",
+  "role": "reviewer",
+  "staged_tree": "a3f60b66f77a261230750a57738465a1990ba0c5"
+}

@@ -1,0 +1,20 @@
+{
+  "diff_sha256": "bac705313bb6fa36455f10386a774becf8a3c4a074febca9b4b18e43f50f3683",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "M9",
+      "severity": "minor",
+      "file": "scripts/check-module.sh:103",
+      "summary": "Two of the entries added to HTTP_GROUPS this round -- `org\\.springframework\\.web` and `com\\.sun\\.net\\.httpserver` -- are not Maven groups and can never match a dependency report line. Spring's group is `org.springframework` (artifact `spring-web`/`spring-webmvc`) or `org.springframework.boot`; `com.sun.net.httpserver` is a JDK package with no coordinate at all. They are inert entries that read as coverage.",
+      "failure_scenario": "Ran the script's own grep over a synthetic report containing `org.springframework:spring-web:6.1.14`, `org.springframework:spring-webmvc:6.1.14` and `org.springframework.boot:spring-boot-starter-web:3.3.4`: zero matches. `io.undertow:undertow-core`, `org.apache.tomcat.embed:tomcat-embed-core`, `io.grpc:grpc-netty-shaded` and `io.helidon.webserver` all matched, so the seven frameworks from M7 are genuinely covered -- only these two extras are dead. Concretely: `ingest/build.gradle.kts` adding `implementation(\"org.springframework:spring-webmvc:6.1.14\")` resolves clean and prints `ok 1 module(s) checked`. Fix is one character each: `org\\.springframework` (the `.boot`/`:spring-web` suffixes are then caught by the following `[.:]`), and drop `com.sun.net.httpserver`, which belongs in the java.net.http prose note directly above rather than in a coordinate denylist that cannot see it."
+    },
+    {
+      "id": "M10",
+      "severity": "minor",
+      "file": "scripts/check-module.sh:139",
+      "summary": "The comment justifying the compileClasspath pass says \"Rule 4 (nothing depends on `http`) is also a compile-time fact\", but no check for rule 4 exists anywhere in the script. The comment implies an assertion the gate does not make. Raised late -- it predates this round and I missed it in rounds one and two.",
+      "failure_scenario": "`plugin/build.gradle.kts` changes `api(project(\":client\"))` to `api(project(\":http\"))`. `plugin` is not in NO_HTTP (deliberately -- the consumer needs an HTTP client), so HTTP_GROUPS is never applied to it; NO_CLOUD only greps cloud SDKs; the binstore-backends grep is hardcoded to that one project name. The gate prints ok while Helidon webserver has been pulled transitively into the OpenSearch JVM -- the exact outcome ADR-0019 and rule 2 exist to prevent. The plugin/binstore-backends check added this round is the template: `printf '%s\\n' \"$deps\" | grep -qE \"project '?:http'?\"` for every module except `http` itself. Either add it or delete the rule-4 clause from the comment; a gate that names a rule it does not check is how the next reader concludes it is covered."
+    }
+  ]
+}

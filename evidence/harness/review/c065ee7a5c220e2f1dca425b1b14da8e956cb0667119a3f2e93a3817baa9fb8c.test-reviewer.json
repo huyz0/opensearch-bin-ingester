@@ -1,0 +1,22 @@
+{
+  "diff_sha256": "c065ee7a5c220e2f1dca425b1b14da8e956cb0667119a3f2e93a3817baa9fb8c",
+  "verdict": "pass",
+  "findings": [
+    {
+      "file": "scripts/test_integrity.py",
+      "line": 90,
+      "severity": "minor",
+      "what": "The TEST_PATH guards on `sources` are now an EQUIVALENT mutant, and the earlier-round major that asked for a test on them should be closed rather than chased. Replacing the comprehension with `sources = set(renamed.values())` survives the whole suite -- but I could not construct any input where it changes behaviour, because the two lines added since (`departed` re-appends every TEST_PATH source whose destination left the tier, and `touched` re-adds every MAIN_PATH source for the short-circuit) already cover both cases the guards exist for. Measured across four fixtures (diff.renames true/false x main->main rename / testFixtures->test rename, each with a gutted BarTest): identical output and exit 1 in all eight runs. `rekey`'s `ident.startswith(from_pkg + '.')` guard (java_tests.py:746) and its `from_pkg == to_pkg` early return are equivalent for the same reason -- since `package_of` now normalises, `from_pkg` is by construction the package the ids were built from, so the prefix always matches. The code already says the startswith guard is unfalsifiable; the accurate statement is stronger, that it cannot differ.",
+      "failure_scenario": "No behavioural failure. The risk is process: three rounds have now spent effort on a mutation that no test can kill because no input distinguishes it. Left unrecorded, round 5 finds it again."
+    },
+    {
+      "file": "buildSrc/src/test/java/binjava/RenameBlindnessTest.java",
+      "line": 225,
+      "severity": "minor",
+      "what": "In `aTestThatLEFTTheTestTierIsARemovalNotAnAbsence` the GUTTING is decorative and unconstrained: `write(dir, FIXTURES, GUTTED_TEST)` can be replaced with `write(dir, FIXTURES, STRONG_TEST)` and the test still passes, because `departed` takes the SOURCE back and `after` is absent, so every method reads as removed regardless of what the destination now contains. The assertion description says 'a test gutted on its way out of the tier must be refused', which claims more than the test checks -- what it actually pins is 'a test file that leaves the tier is reported as a removal'. That is the right behaviour and the test does kill the mutation (deleting the `departed` block turns it green->red, measured), so this is naming, not falsifiability.",
+      "failure_scenario": "A reader concludes that gutting-on-departure is distinguished from a pure departure and relies on the gate to tell them apart. It does not: both produce the same 'removed alongside' line, and a `Test-removed:` trailer added for the legitimate departure silences the gutting in the same commit."
+    }
+  ],
+  "task": "M0.53",
+  "role": "test-reviewer"
+}

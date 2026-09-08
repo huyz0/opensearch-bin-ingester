@@ -1,0 +1,27 @@
+{
+  "diff_sha256": "57ddc63d8d2cb3f8cb77b5ca945f8ce4565e0ecf026b3dcb01f3e8211c8d6eba",
+  "verdict": "pass",
+  "summary": "Round 3, confirming. The silent-green hole round 2 found is closed, and I verified it by running rather than by reading: with a sampler that stops at sample 11 of ~190 without recording anything (the pre-hardening behaviour), the test now FAILS at line 327 with the self-describing message 'the last sample lands at the END of the load' and a 178,884 ms gap, in a real JUnit <failure> element. samplerFailures stayed empty in that run and hasSizeGreaterThan(10) passed on 11 samples, so the timestamp assertion is the one carrying the load, exactly as claimed. The retry loop is correct on every point asked. Cadence, its 2.0 threshold, the warm-up probe and both memory bounds are unchanged in substance and independently check out arithmetically; none was weakened relative to M1.18. Three minors, none blocking, none to be fixed in this round.",
+  "findings": [
+    {
+      "severity": "minor",
+      "location": "http/src/test/java/binjava/http/MemoryFlatAtIntervalCeilingTest.java:349",
+      "title": "This round corrected one copy of the ~152 files figure and left the other; measured, the truth is 166",
+      "failure_scenario": "The delta corrected the backlog row to '~166 files are written either way' but the identical sentence in the test comment still reads '~152 files'. They are the same quantity in the same commit and now disagree. I measured it directly: every clean run's store root under http/build/tmp holds exactly 166 regular files (four clean runs, all 166), so the backlog is right and the comment is stale. No assertion depends on the number, but it is the number a future author uses to size the 2.0 files/s threshold: reading 152 understates the per-window file count by 9% and the margin with it, and a reader who notices the contradiction cannot tell which document was measured. This is rule 11's predicted mechanism in action -- the fix's own prose became the next round's surface -- and it lands as a minor rather than being fixed here."
+    },
+    {
+      "severity": "minor",
+      "location": "http/src/test/java/binjava/http/MemoryFlatAtIntervalCeilingTest.java:266",
+      "title": "The cadence metric is calibrated on a files-per-flush invariant that nothing asserts",
+      "failure_scenario": "countFiles counts every regular file in the store root, and the 2.0 files/s threshold is derived from the comment's '2 files per object, 2 objects per flush' = 4 files per flush. Nothing in this test constrains that ratio. Surviving mutation: make LocalFsBinStore.put stop writing the .v sidecar, or make the publisher write the delta object but not the segment -- files per flush halves, every window's measured files/s halves, and every assertion here still passes, now with double the apparent margin while measuring half of what it believes. The test would go green on a store that had silently stopped writing half its objects. Two mitigations make this non-blocking: durability is M1/M2's criterion rather than this one, and because Ingest.append blocks until durable, the 'written >= TARGET_BYTES' assertion already forbids the degenerate 'flusher stopped entirely' case that a missing lower bound would otherwise admit. Record it; do not add an assertion in this round."
+    },
+    {
+      "severity": "minor",
+      "location": "http/src/test/java/binjava/http/MemoryFlatAtIntervalCeilingTest.java:281",
+      "title": "175 MB of scratch per run is created and never deleted",
+      "failure_scenario": "Files.createTempDirectory(\"binstore-memflat-ceiling\") is never removed -- @AfterEach only stops the WebServer -- so each invocation leaves the full 200 MB body on disk. Measured on this machine right now: 1.3 GB across eight run directories under http/build/tmp, each 175 MB. testing.md rule 17 is satisfied (the new Gradle task redirects java.io.tmpdir, which was round 1's fix), so this is unbounded growth in the right place rather than the wrong one: a CI runner or a developer iterating on this test accumulates 175 MB per run until an unrelated task fails with ENOSPC, and nothing in the test or the task deletes it. Pre-existing since round 1 and identical in shape to M1.18 -- which is in fact worse and outside this diff, since memoryBoundTest still sets no java.io.tmpdir and so leaks to the system temp directory, a live rule-17 violation in the tree. Harvest at the milestone boundary per rule 13; do not fix here."
+    }
+  ],
+  "task": "M3.5",
+  "role": "test-reviewer"
+}

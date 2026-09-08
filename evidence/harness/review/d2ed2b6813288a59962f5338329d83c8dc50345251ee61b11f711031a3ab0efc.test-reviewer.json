@@ -1,0 +1,16 @@
+{
+  "diff_sha256": "d2ed2b6813288a59962f5338329d83c8dc50345251ee61b11f711031a3ab0efc",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "M4.21-tr-1",
+      "severity": "major",
+      "location": "buildSrc/src/test/java/binjava/ReviewRoundCapTest.java (whole file) / scripts/check-reviewed.sh:160",
+      "title": "The key match's line-anchoring is unconstrained: 'f[1] == k' can be weakened to a substring test with all 15 tests staying green.",
+      "failure_scenario": "VERIFIED BY EXECUTION in an isolated git worktree carrying the exact staged bytes (diff_sha256 above), via `./gradlew :buildSrc:test --tests binjava.ReviewRoundCapTest`. check-reviewed.sh:160 requires the rounds:<task> key to be the FIRST whitespace-delimited field of an added baselines/review.txt line ('split(line, f, /[[:space:]]+/); ... if (f[1] == k && rest ~ /[^[:space:]]/) found = 1'). Replacing that condition with a plain substring test -- 'if (index(line, k) > 0 && rest ~ /[^[:space:]]/) found = 1' -- leaves all 15 ReviewRoundCapTest cases green (confirmed via the JUnit XML report: tests=15 failures=0). No fixture stages an added line where 'rounds:<task>' appears anywhere other than as the line's own leading field, so the anchoring property that stops the key from being read out of unrelated prose is untested. Concretely, under the substring-match mutant, a wholly ordinary and legitimate finding-argument line such as 'reviewer:R7  already fixed elsewhere, see rounds:M9.1 in the parent commit' would silently ALSO argue the round-cap escape for task M9.1, even though its actual key is reviewer:R7 and 'rounds:M9.1' is incidental prose in the reason text -- a real bypass of the exact mechanism this suite exists to pin (the sibling tests aTASKNameIsMatchedEXACTLYAndNotAsAPattern and aFILENAMEThatMerelyMATCHESTheGuardAsAPattern cover the adjacent 'matched as a pattern, not exactly' defect class on the task-id and the filename axes respectively, but not on the line-position axis). This is distinct from, and not covered by, the already-recorded gaps M4.26 (worktree read on the older argue-key), M4.29 (--task validation), M4.30 (packet round display) or M4.31 (added-vs-committed/context rendering primitive) -- none of those concern whether the key must anchor the line rather than merely appear in it. Recommend a fixture: stage an added baselines/review.txt line whose FIRST field is a different key (e.g. 'reviewer:R7') and whose free-text reason contains the literal substring 'rounds:<task>' for the task under test, and assert the gate still refuses.",
+      "surviving_mutation": "check-reviewed.sh: change `if (f[1] == k && rest ~ /[^[:space:]]/) found = 1` to `if (index(line, k) > 0 && rest ~ /[^[:space:]]/) found = 1`"
+    }
+  ],
+  "task": "M4.21",
+  "role": "test-reviewer"
+}

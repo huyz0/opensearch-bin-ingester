@@ -1,0 +1,39 @@
+{
+  "diff_sha256": "f5f7082044f4bf20527c5a05c7c2b8f2cd0c24f7aefa7c3d6ab235bb42c24a6b",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "attribution-claimed-unread-while-dedup-reads-it",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/Sequencer.java:92",
+      "summary": "The sentence added this round -- 'NOTHING READS IT BACK IN THIS BUILD' about SegmentCommit.Attribution -- is false. IdempotencyWindow.answer GETs the pointed delta through DeltaReader.at, decodes it, and IdempotencyWindow.answers matches on segment.attribution(); that IS reading the durable attribution back, and it is the whole replay-answer path.",
+      "failure_scenario": "MEASURED. I replaced DeltaReader.at's return with a CommitDelta rebuilt from the decoded segments MINUS their attribution -- i.e. the store-decoded attribution is not read -- and 8 :sequencer tests failed (aReplayedTripleReturnsTheORIGINALOffsetsAndAppendsNoSecondDelta, aReplayIsAnsweredWithITSOwnSegmentOutOfABatchedDelta, aBatchMixingAReplayWithAFreshFlushCommitsTheFreshOneAndAnswersTheReplay, anAllReplayBatchReportsTheHIGHESTSequenceInvolved, aBatchAPPLYINGTwoFlushesOutOfOrderKeepsTheHIGHESTWatermark, aBatchOfReplaysPointingAtONEDeltaReadsItONCE, pastTheBoundTheOLDESTIncarnationIsEVICTEDAndCommitsAgain, aFlushSubmittingTWOSegmentsUnderONETripleIsAnsweredPerSEGMENT). The harm if believed: non-negotiable 8 makes 'every reader' the unit of a format change, and a maintainer enumerating readers of Attribution from this contract concludes there are none -- so a change to the attribution layout ships without touching the dedup reader. It stays MINOR rather than MAJOR because the 8 tests above fail loudly, so it costs wasted work rather than a shipped defect; the sibling sentence in the same paragraph that misleads a CALLER (round 3's major) is fixed and correct.",
+      "recommendation": "Delete the clause or narrow it to 'nothing REBUILDS A WINDOW from it in this build'. Not worth a fifth round on its own -- record it in the commit body."
+    },
+    {
+      "id": "split-answered-is-always-empty",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/IdempotencyWindow.java:99",
+      "summary": "Split's third component is dead in this build: split() allocates `answered` and never adds to it, so LocalSequencer:380 copies an always-empty list and the `&& answered.isEmpty()` conjunct at :381 is always true. The javadoc on split() still says it divides requests into 'fresh work, replays, and triples an AMBIGUOUS commit turns out to have landed' -- the ambiguous arm is M4.10e and is not in this build. Predates this round's delta (the file carries a round-3 verdict); raised as a minor for the milestone harvest.",
+      "failure_scenario": "A reader of split()'s javadoc, or of LocalSequencer's `replays.isEmpty() && answered.isEmpty()` guard, concludes the ambiguous-landed reconciliation exists here and writes M4.10e against a classification that is never populated -- the same 'the contract promises what was split out' shape that cost this task a round. Mechanically: deleting the component and the conjunct leaves behaviour identical, since no producer of a non-empty `answered` exists.",
+      "recommendation": "Fold into M4.10e, which is where the third arm gets a producer."
+    },
+    {
+      "id": "unused-checkpoint-import",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/IdempotencyWindow.java:5",
+      "summary": "`import binjava.format.Checkpoint;` is unused -- a leftover of the checkpoint fold that moved to M4.10f.",
+      "failure_scenario": "MEASURED: removing the line leaves :sequencer:compileJava BUILD SUCCESSFUL. The cost is a false dependency signal -- Checkpoint appears in this class's import list, so a grep for who consumes the checkpoint format names a class that does not, which is exactly the enumeration non-negotiable 8 asks for on a format change."
+    },
+    {
+      "id": "m410-parent-row-still-claims-the-anchor",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:122",
+      "summary": "The M4.10 parent row (edited region of this commit's file) still reads 'd is the dedup and owns the end-to-end anchor', while the M4.10d done row and the M4.10f row both say the anchor moved to M4.10f.",
+      "failure_scenario": "A session routed to M4.10 (status split) to find where the end-to-end anchor lives is sent to M4.10d, finds it done, and either re-opens it or concludes the anchor landed -- CheckpointWriterContentTest's doesNotContainKey tripwire is still standing, so 'landed' is wrong."
+    }
+  ],
+  "task": "M4.10d",
+  "role": "reviewer",
+  "staged_tree": "6921e1bb6f3595865f1f606e4a16bf67ccf5b2bc"
+}

@@ -1,0 +1,27 @@
+{
+  "diff_sha256": "bd6e47374c76eefb06e96aebc730c56bf6e110a54b8fcbca197a11aa9aa3e7a3",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "M4.7-R8a",
+      "file": "sequencer/src/test/java/binjava/sequencer/BatchingSequencerTerminationTest.java:368",
+      "severity": "minor",
+      "title": "THE QUEUED CALLER'S FAILURE IS PINNED AS A TYPE AND NEVER AS A MESSAGE, so `terminalFailure()` can tell a caller queued behind a DEAD committer that somebody closed the sequencer -- the exact defect round 6 called a major on the sibling path -- with the whole tree green.",
+      "surviving_mutation": "Replace the whole body of BatchingSequencer.terminalFailure() (BatchingSequencer.java:272-278) with `return new IOException(\"this sequencer is closed\");`, dropping both the abnormal-death wording and the `why` cause chain.",
+      "failure_scenario": "MEASURED SURVIVING MUTATION in a copy of the staged tree: `./gradlew test` BUILD SUCCESSFUL, whole tree, with terminalFailure() reduced to a constant close message. Two tests reach that method and neither constrains it: `aQUEUEDCallerIsFailedWithoutWaitingForTheLeaseReleaseToFinish` asserts only `isInstanceOf(IOException.class)`, and `BatchingSequencerLifecycleTest.aCallerQUEUEDBehindADyingCommitterIsFailedEvenWithNoCloseAtAll` (line 207) asserts only `outcomes.hasSize(2)`. The ARRIVING-caller path is pinned by aCommitterThatDIEDDoesNotTELLTheNextCallerItWasCLOSED, but submit() builds its message inline (BatchingSequencer.java:176-181) and never calls terminalFailure(), so that test does not cover it. In production a pod whose committer died with an OutOfMemoryError tells every caller that was QUEUED behind it 'this sequencer is closed', with no cause attached -- an operator debugging a total stall is pointed at a shutdown that never happened, which is verbatim the harm the `terminated` field's own javadoc (BatchingSequencer.java:70-75) claims to prevent. Remedy is one line in either test: `.hasMessageContaining(\"terminated\")` plus a root-cause assertion.",
+      "remedy": "Add a message/cause assertion to the queued-caller failure in either test; the production code is correct today, only unconstrained."
+    },
+    {
+      "id": "M4.7-R8b",
+      "file": "sequencer/src/main/java/binjava/sequencer/BatchingSequencer.java:303",
+      "severity": "minor",
+      "title": "THE `catch (Exception)` -> `catch (Throwable)` WIDENING MADE THIS ROUND IS UNCONSTRAINED: no fixture has a delegate `close()` that throws an Error, so the widening can be reverted with the whole tree green.",
+      "surviving_mutation": "BatchingSequencer.closeDelegateQuietly: `} catch (Throwable releaseFailed) {` -> `} catch (Exception releaseFailed) {`.",
+      "failure_scenario": "MEASURED SURVIVING MUTATION in a copy of the staged tree: `./gradlew test` BUILD SUCCESSFUL across every module with the catch narrowed back. Every delegate close in the suite either does nothing, sets a flag, or throws IOException; none throws an Error. In production a store SDK raising a LinkageError or an OutOfMemoryError from `leases.release()` would then escape drainForever's `finally`, so the actionable ERROR log ('releasing the lease after the commit batcher terminated failed; it will now survive to its TTL') never fires and the operator gets an uncaught-exception stack trace from a virtual thread instead. Bounded harm -- the reordering this round means the queue is already failed by then -- which is why this is minor rather than major. A one-line fixture (a delegate whose close throws `new OutOfMemoryError(\"release\")`, asserting the committer's exit still completes) would pin it.",
+      "remedy": "Either add that fixture or record the widening as untested in the commit body."
+    }
+  ],
+  "task": "M4.7",
+  "role": "test-reviewer",
+  "staged_tree": "e494a59b4a292a602b94bf1ea000329f5055e950"
+}

@@ -1,0 +1,31 @@
+{
+  "diff_sha256": "7cadde4311554511eb898e9b58c5e16654f73bfabd54740c1c9c31ee32580a56",
+  "verdict": "pass",
+  "summary": "No test files in the staged set; the eight staged paths are the brevity skill, its adapter, the two agent briefs, the two generated indexes and the M0.79 backlog row. Verified against the index rather than the worktree: ADR-0036 is absent from it (git ls-files --cached under docs/internal/product/decisions/ returns 35 files, none matching 0036, while the file remains on disk unstaged), so blocking findings F5 and M0.79-T5 are resolved. F1 (major) is resolved: brevity/SKILL.md:35-38 now qualifies the out-of-scope bullet as 'reports written for a PERSON' and carves review findings explicitly back in. My four round-1 minors: T1 and T4 resolved by brevity/SKILL.md:43-45 and review/SKILL.md:130-135; T2 resolved by the same carve-out; T3 partially resolved by the provenance paragraph (minor TR1 below). The mirror fix is correct and is the right shape: review/SKILL.md:130-135 sits inside the shared '## Output' section, after both the production-reviewer (line 63) and test-reviewer (line 99) sections, and names five protected items for BOTH roles. My own brief keeps the mutation requirement and now cites review.sh's failure_scenario refusal (test-reviewer.md:52-67). Confirmed: this governs my output without weakening it, and I am content for it to. Landable.",
+  "findings": [
+    {
+      "id": "M0.79-T7",
+      "severity": "minor",
+      "location": ".agents/skills/brevity/SKILL.md:52",
+      "summary": "The provenance paragraph corrects the abbreviation claim 30 lines below it, under an unrelated heading, leaving the false sentence in place at the point of use.",
+      "failure_scenario": "Line 52 reads 'No invented abbreviations (cfg, impl, req, res, fn, auth). The tokenizer splits them the same as the full word: zero tokens saved'. Lines 81-85 say the opposite about the same example: '\"auth\" is one token where \"authentication\" is several, so that abbreviation does save tokens'. The correction sits under '## Write at full length when', two headings past '## Never fake-compress', so an agent that reads the Never-fake-compress section and applies it never reaches the contradiction. The file is loaded for output style, not read end to end. Answering the question put to me directly: this is better than deletion in that it keeps the readability ground the rules actually stand on, and worse than deletion in that a reader at line 52 still gets a sentence the same file later calls false -- the strictly better third option was to delete the tokenizer justification from line 52 and keep the readability clause that follows it ('the reader still decodes; the full word is cheaper and clearer'), which loses nothing the provenance paragraph says is load-bearing. No gate covers a document contradicting itself. Minor because it is in the fake-compress list, not the Never-cut list: no evidence in a finding is at risk, so it does not touch review quality, which is my lane. Fixing it costs another round and the packet says that is usually wrong."
+    },
+    {
+      "id": "M0.79-T8",
+      "severity": "minor",
+      "location": ".agents/skills/brevity/SKILL.md:82",
+      "summary": "A line-number self-citation in a mutable file; the repository's own gate table records that a number goes stale silently.",
+      "failure_scenario": "Line 82 reads 'here because line 43 of this file demands exactly that'. Line 43 today is 'Whether a result was MEASURED or inferred', so it resolves as staged -- I checked. Insert one bullet anywhere above it, which the Never-cut list is exactly the kind of list that grows, and the citation silently repoints at line 43's new occupant ('Negations: not, never, no...'), making the provenance paragraph cite a rule that does not demand what it claims. Nothing catches it: check-links.sh resolves markdown links, not line numbers, and check-rule-citations.sh is scoped to review.md's rule NAMES -- its own entry in the AGENTS.md gate table exists because 'a number goes stale silently'. AGENTS.md's Never list states the same rule for task IDs. Fix is to cite the rule by its text ('the Never-cut rule on MEASURED versus inferred') rather than by ordinal. Minor: a stale pointer degrades the explanation, not the finding format."
+    },
+    {
+      "id": "M0.79-T9",
+      "severity": "minor",
+      "location": ".claude/agents/reviewer.md:34",
+      "summary": "The briefs' protected-set enumerations read as exhaustive and are subsets of the mirror's five; a closed grammar around a shorter list is the mechanism that drops an item.",
+      "failure_scenario": "Answering the question put to me: do NOT align the briefs to the mirror's five. Three verbatim copies of one list is the fork skills/README.md rule 5 forbids, and the three lists disagreeing is what produced round 2's mirror finding in the first place; review/SKILL.md:130-135 is now the single authority and brevity/SKILL.md:40-46 independently protects negations, measured-versus-inferred and decision-changing caveats for any consumer, so the omission is not a hole. What IS a defect is the grammar, not the length: reviewer.md:36-38 says 'It never overrides the finding format -- file:line, a severity, and the concrete failure scenario stay, in full', which reads closed. The concrete failure: a production reviewer under brevity pressure reads that enumeration, does not find 'whether a result was measured or inferred' in it, treats the omission as permission, and writes 'the mutation survives' where it meant 'by inspection, the mutation survives' -- the exact F2 failure that brevity/SKILL.md:43-45 was added to close, now reachable through the brief rather than through the skill. test-reviewer.md:62-64 has the same closed grammar over four items. The fix is one word ('at least these stay'), or a pointer to the mirror instead of a restatement -- not a third copy of the list. Minor: both briefs already link the skill, so the protection is reachable; and the packet is explicit that fixing a minor is usually wrong because the next round's surface is the prose the fix adds."
+    }
+  ],
+  "task": "M0.79",
+  "role": "test-reviewer",
+  "staged_tree": "b18857410502088bf577a2e3b6f6988ce5b1cdb3"
+}

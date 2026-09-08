@@ -1,0 +1,14 @@
+{
+  "diff_sha256": "e46903273cdc7355f128fee5b2e855917fb8f75baecbc97f71ebd2ba314b8e42",
+  "verdict": "pass",
+  "findings": [
+    {
+      "file": "docs/internal/product/milestones/M1/SPEC.md",
+      "line": 99,
+      "severity": "minor",
+      "failure_scenario": "SPEC text (mirrored in the M1.21 backlog row and the test file's own comment) cites ADR-0014 for 'the wire format's u8 lane field', but ADR-0014 itself specifies a signed i8 lane (range -2..+2, which u8 cannot represent). Pre-existing elsewhere (roadmap.md, ADR-0015), propagated rather than introduced here, but newly cited against the one document that contradicts it -- a reader tracing the citation finds ADR-0014 disagrees."
+    }
+  ],
+  "task": "M1.21",
+  "role": "reviewer"
+}

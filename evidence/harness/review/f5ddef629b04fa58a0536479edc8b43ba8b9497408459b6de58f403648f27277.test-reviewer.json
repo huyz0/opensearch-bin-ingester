@@ -1,0 +1,22 @@
+{
+  "diff_sha256": "f5ddef629b04fa58a0536479edc8b43ba8b9497408459b6de58f403648f27277",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "file": "format/src/test/java/binjava/format/BatchedCommitDeltaTest.java",
+      "line": 245,
+      "severity": "major",
+      "what": "aRUNCountLargerThanTheObjectIsRefusedToo is the round-2 segment-count defect, un-fixed one field over. It has the huge-overclaim fixture (0x7FFFFFFF) but no MODEST-overclaim companion, so it constrains 'an absurd count is refused' and not 'a count exceeding the bytes left is refused' -- exactly the distinction aSegmentCountOnlyMODESTLYTooLargeIsAlsoRefused was added to buy for the other repeat count. MEASURED SURVIVING MUTATION: in CommitDelta.readSegment, `runCount > c.remaining()` -> `runCount > Integer.MAX_VALUE / 2` (a fixed sanity cap -- the exact wrong refactor the remaining()-derived bound is chosen over). `./gradlew :format:test :ingest:test :sequencer:test` = BUILD SUCCESSFUL. The identical mutation on the segment count (`count > c.remaining()` -> `count > Integer.MAX_VALUE / 2`) IS killed, by aSegmentCountOnlyMODESTLYTooLargeIsAlsoRefused. The asymmetry is the finding: the same one-fixture fix works here (a v0 delta whose run count is, say, 9 with 8 trailing bytes, asserting on the '9 runs' message rather than merely 'runs').",
+      "failure_scenario": "A later refactor replaces the remaining()-derived run bound with a constant cap -- the natural thing to write when someone asks 'how many runs is too many?'. Every test stays green. A truncated PUT or a foreign writer then leaves a v0 delta -- the shape every bucket already holds, reachable from CommitLog.recover on the ordinary recovery path -- whose run count is 200,000,000. PROBED under the mutant on a 20-byte object: `java.lang.OutOfMemoryError: Java heap space` out of ChainEntry.decode, past recover's own `throws IOException` and every caller catching it. That is the precise defect this commit widened scope to close, and the test the author added for it does not hold it closed."
+    },
+    {
+      "file": "format/src/main/java/binjava/format/CommitDelta.java",
+      "line": 202,
+      "severity": "minor",
+      "what": "Neither repeat-count guard is constrained in its NEGATIVE half, on either count. Cursor.uvarint permits shift up to 63, so a crafted 10-byte varint yields a negative long. MEASURED SURVIVING MUTATIONS, both BUILD SUCCESSFUL across format+ingest+sequencer: (a) readSegment `runCount < 0 || runCount > c.remaining()` -> `runCount > c.remaining()`; (b) decodeBatchedBody `count <= 0` -> `count == 0` (the '0 segments' test uses only the literal zero). Production is correct in both places; nothing pins it.",
+      "failure_scenario": "A corrupt or hostile chain object encodes its run count as the 10-byte varint 0xFFFFFFFF80000000. PROBED under mutation (a): `java.lang.IllegalArgumentException: Illegal Capacity: -2147483648` escapes ChainEntry.decode as an UNCHECKED exception, past recover's `throws IOException` -- the same contract escape the guards' own comments name as their reason for existing, differing from the OOM only in which unchecked type gets out. A caller that catches IOException to skip a torn entry instead dies."
+    }
+  ],
+  "task": "M4.7a",
+  "role": "test-reviewer"
+}

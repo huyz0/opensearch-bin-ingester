@@ -1,0 +1,34 @@
+{
+  "diff_sha256": "af8b9b999732a464ed2bf988a1036b903a1686fe2a28dbe0bd258284c24079a8",
+  "verdict": "changes-requested",
+  "summary": "Verified by mutation in an issued copy of the staged bytes (10 mutations, :sequencer suite each time; grep confirms FaultInjectingStore has no user outside sequencer/src, so :sequencer is the full blast radius). The core semantics of the new class are well pinned: the withheld arm delegating (aliasing it onto ambiguousPut) is killed on BOTH verbs; aliasing stream 4 onto stream 2 is killed by eachClassIsWIREDToItsOWNStream; a consecutive-seed phase lock (scramble(seed,4) = scramble(seed,2)+1) is killed by the new {1,4}/{2,4}/{3,4} pairs; a conditional withheld draw is killed by drawCounts. One documented behaviour is unpinned on the verb the row exists for: the LANDED-wins precedence is asserted for putIfAbsent only, and flipping it in putIfMatch leaves the whole suite green. The duplicatePut exclusion in the alignment test is SOUND -- measured: the realignment defect it would otherwise catch on that stream (conditional sub-draw off duplicateDraws) is killed by everyClassDrawsOnEVERYFaultingCall instead. No existing assertion was weakened: both drawCounts maps use containsExactlyInAnyOrderEntriesOf and each gained a fourth entry.",
+  "findings": [
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/FaultInjectingStoreWithheldTest.java:92",
+      "severity": "major",
+      "title": "The LANDED-wins precedence is pinned for putIfAbsent only; flipping it in putIfMatch -- the verb the row exists for -- leaves the entire suite green",
+      "surviving_mutation": "In FaultInjectingStore.putIfMatch, move the `if (withheld) { injected.add(...); throw ... }` block ABOVE the `if (ambiguous) { ... delegate.putIfMatch(...); throw ... }` block. Nothing else changed. MEASURED: `./gradlew :sequencer:test --tests 'binjava.sequencer.*'` -> BUILD SUCCESSFUL. The identical flip in putIfAbsent IS killed (whenBOTHFireTheLANDEDArmWinsAndTheWriteIsThere and enablingWITHHELDDoesNotMoveTheOtherClassesFaults both FAILED), which is what makes the asymmetry a gap rather than a limit.",
+      "failure_scenario": "whenBOTHFireTheLANDEDArmWinsAndTheWriteIsThere drives putIfAbsent only, and no test anywhere enables ambiguousPut and withheldPut together on putIfMatch -- FaultInjectingStoreTest's putIfMatch cases all pass withheldPut=0. So with both classes on at any rate, a co-firing lease-renew CAS can silently resolve as NOTHING-LANDED: the store keeps the OLD version, and the same-version retry SUCCEEDS where the LANDED arm requires it to lose. That is precisely the discrimination this row exists to create -- 'the renew threw, nothing landed, and the retry with the same version must succeed' -- inverted, on the one verb the row is about, and it would flip an M4.10e/M4.3h lease verdict from fenced to not-fenced without any test noticing. backlog-notes.md#m413c claims the precedence is 'documented rather than left to branch order'; on putIfMatch it IS left to branch order. Remedy: one test with new Faults(0, 1.0, 0, 1.0) on putIfMatch asserting injected() containsExactly(\"ambiguousPut\") and that the backing store's version MOVED.",
+      "acceptance_criterion": "withheldPut '... losing to the LANDED arm when both fire' (backlog row M4.13c) -- untested on putIfMatch"
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/FaultInjectingStoreStreamsTest.java:259",
+      "severity": "minor",
+      "title": "The new withheldPut:4 entry re-creates the count tie that everyClassDrawsOnEVERYFaultingCall's own comment says the asymmetric mix removed",
+      "surviving_mutation": "In FaultInjectingStore.countDraw, swap the last two labels: `: which == duplicateDraws ? \"withheldPut\" : \"duplicatePut\";`. MEASURED: `./gradlew :sequencer:test --tests 'binjava.sequencer.*'` -> BUILD SUCCESSFUL. Both drawCounts maps are symmetric across that pair (4 and 4 in the quiet run, 1 and 1 in the firing run), so the swap is invisible.",
+      "failure_scenario": "drawCounts() would attribute duplicateDraws' consumption to withheldPut and vice versa, so the accessor the whole 'no class can be skipped silently' argument rests on would name the wrong stream while staying green. The comment at line 237 states this exact mutation class was closed by round 6's asymmetric mix ('swapping two labels in countDraw ... passed. Different totals per class make the map name WHICH stream each verb consumed'), and that sentence is now false for the duplicatePut/withheldPut pair. NOT INTRODUCED HERE and hence minor: MEASURED that the ambiguousPut<->duplicatePut label swap already survives the pre-change tie at 4/4 too (BUILD SUCCESSFUL). Impact is bounded to test-visible diagnostics -- nothing outside these tests reads drawCounts(). A cheap close is one extra bare putIfAbsent on `quiet`... no: that moves all four equally; it needs a verb that draws withheldPut without drawing duplicatePut, which does not exist. Deleting or qualifying the now-false sentence is the honest alternative.",
+      "acceptance_criterion": null
+    },
+    {
+      "file": "sequencer/src/test/java/binjava/sequencer/FaultInjectingStoreWithheldTest.java:113",
+      "severity": "minor",
+      "title": "enablingWITHHELDDoesNotMoveTheOtherClassesFaults is non-vacuous but subsumed: the flagship aliasing mutation passes it and is caught only by drawCounts",
+      "surviving_mutation": "Replace `boolean withheld = fires(withheldDraws, faults.withheldPut());` with `boolean withheld = fires(ambiguousDraws, faults.withheldPut());` in BOTH verbs -- the sub-draw-off-ambiguousDraws shape backlog-notes.md#m413c says the class was designed away from. MEASURED: enablingWITHHELDDoesNotMoveTheOtherClassesFaults PASSES; only everyClassDrawsOnEVERYFaultingCallSoNoClassCanBeSKIPPEDSilently FAILS.",
+      "failure_scenario": "Because `fires` draws even at p==0, an UNCONDITIONAL sub-draw off another class's Random consumes the same number of draws in both arms of the toggle comparison, so the without/with lists stay identical and the test cannot see it. It only bites when the sub-draw is also gated on p>0 (MEASURED: `faults.withheldPut() > 0 && fires(ambiguousDraws, ...)` -> this test FAILS, so it is not vacuous). Consequence if drawCounts is ever relaxed or its per-class totals go symmetric: the aliasing this file exists to prevent returns undetected, with the test whose name claims to own the property still green. Recorded so the coverage is attributed to the test that actually carries it. The duplicatePut EXCLUSION is separately sound -- MEASURED: `faults.withheldPut() > 0 && fires(duplicateDraws, ...)` is killed by everyClassDrawsOnEVERYFaultingCall.",
+      "acceptance_criterion": null
+    }
+  ],
+  "task": "M4.13c",
+  "role": "test-reviewer",
+  "staged_tree": "971d1d6eaaad711a83916e2143d4d5b7630582d3"
+}

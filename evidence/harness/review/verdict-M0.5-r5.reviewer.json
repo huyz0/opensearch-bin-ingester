@@ -1,0 +1,10 @@
+{"diff_sha256": "97b52c9b81f3558e4d6d384e5a00c3b3a229d8164902762550df45e5eedac518",
+ "verdict": "changes-requested",
+ "findings": [
+   {"id":"M12","severity":"major","file":"AGENTS.md:200",
+    "summary":"The generated region now lists check-module.sh as present in scripts/, but the hand-maintained paragraph four lines below still lists it under \"Not yet existing, and named by skills and standards that say so\". AGENTS.md contradicts itself within one screen, and the false half is the half agents are told to obey.",
+    "failure_scenario":"AGENTS.md is layer 0, loaded into every session by every agent. The stale paragraph ends \"When a skill tells you to run one of these and it is absent, say the gate did not run. Do not proceed as though it passed.\" An agent reaching M1 T6c -- which the M1 SPEC assigns to check-module.sh, not to a test -- reads line 200, concludes the gate does not exist, and reports that the module dependency surface was not checked. The gate added by this very commit is disabled by instruction. build-index.sh --check cannot catch this: it validates only the bytes between the index:gates markers, and line 200 sits outside them, which is exactly why the generated half was updated and the prose half was not. Fix is deleting `check-module.sh` from line 201's list."},
+   {"id":"M11","severity":"minor","file":"scripts/check-module.sh:31",
+    "summary":"Carried forward unchanged from the pass at 81996e91. The script is byte-identical (diff hash 81996e91c3b684dc66b2dc3863d6473aefaa1d16640ad37a14252fa62bbed6af, matching the r4 packet exactly), so the finding and its severity carry forward with it.",
+    "failure_scenario":"As recorded at 81996e91. Not re-audited this round per the packet's instruction."}
+ ]}

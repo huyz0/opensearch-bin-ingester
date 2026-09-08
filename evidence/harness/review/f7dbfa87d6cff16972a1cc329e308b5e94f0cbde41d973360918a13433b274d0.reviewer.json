@@ -1,0 +1,38 @@
+{
+  "diff_sha256": "f7dbfa87d6cff16972a1cc329e308b5e94f0cbde41d973360918a13433b274d0",
+  "verdict": "pass",
+  "summary": "Verify round. Z1 and Z2 both MEASURED DEAD against the new test, and the new test's third assertion is MEASURED as the only thing standing between the stale-version assertion and vacuity. Z3's rename still kills its mutant; Z5's rung-2 correction matches gate-design's ladder; Z6's coverage enumeration and its NOT-covered list check out against the code, with one residual over-claim. Z7 is only half done: the duplicated clauses it named are still in the M4.19 and M4.20 rows verbatim. No production code changed and no object-store request rate is affected -- this is a test-scope decorator whose extra requests (one retry per duplicatePut, one landing write per ambiguousPut) are per simulated call and never on a production path.",
+  "measurements": [
+    "baseline: ./gradlew :sequencer:test --tests 'binjava.sequencer.FaultInjectingStore*' -> 20 tests, 0 failures (15 + 5). Full :sequencer:test green.",
+    "Z1 mutant (FaultInjectingStore.java:217 clean putIfAbsent writes `new byte[read(body).length]`): DIES -- theCLEANPathWritesTheCALLERSExactBytesAndHONOURSTheVersion, and only that test.",
+    "Z2 mutant (FaultInjectingStore.java:280 `return Optional.of(delegate.put(k, b))`): DIES -- same test, only that test.",
+    "non-vacuity of Z2's fix (FaultInjectingStore.java:280 `return Optional.empty()`, i.e. a clean putIfMatch that NEVER writes): DIES on the third assertion specifically -- failure message is `[a matching version still writes] Expecting Optional to contain a value but it was empty`. Without that assertion the stale-version arm plus `and nothing changed` would both hold, so the third assertion is load-bearing exactly as its comment claims.",
+    "Z3's renamed test: ambiguous putIfAbsent landing write degraded to `delegate.put` -> DIES on anAmbiguousPutIfAbsentSTILLLOSESToAnOccupiedSlot, only that test.",
+    "row claim `both range ends`: guard mutated to `p > 0.0 && p <= 1.0` -> 5+ tests fail; to `p >= 0.0 && p < 1.0` -> 5+ tests fail. Both ends genuinely pinned.",
+    "row claim `NOT covered: close, multipart and capabilities`: grep confirms no test calls store.close(), store.multipart() or store.capabilities() (FaultInjectingStoreStreamsTest.java:235 closes the InputStream from get, not the store). True.",
+    "row claim on which class reaches which verb: unreachable acts at FaultInjectingStore.java:199 (putIfAbsent), 238 (stat), 246 (get), 289 (list); ambiguousPut at 203 and 273 (both conditional writes); duplicatePut at 220 (putIfAbsent only), drawn-and-discarded at 272. Matches the row.",
+    "Z5: gate-design SKILL.md ladder rung 2 is `Derive from a source of truth`, which is what the corrected countDraw javadoc now names. Accurate.",
+    "review.md rule 12 exists and says what the M4.12 row cites it for.",
+    "tree left exactly as found: `git diff --stat` empty against the index, all five untracked M4.19/M4.20 files still present, no probe file left behind."
+  ],
+  "findings": [
+    {
+      "id": "Y1",
+      "severity": "minor",
+      "location": "sequencer/src/test/java/binjava/sequencer/FaultInjectingStore.java:124-126, sequencer/src/test/java/binjava/sequencer/FaultInjectingStoreTest.java:268-280, docs/internal/product/backlog.md:265",
+      "finding": "SURVIVING MUTATION, MEASURED: replacing `return List.copyOf(injected);` with `return java.util.Collections.unmodifiableList(injected);` leaves all 20 tests green. The test is named theInjectedRecordIsASNAPSHOTACallerCannotMutate and pins only the second half of its own name -- `add` throws either way -- while the SNAPSHOT half (a returned list that does not grow under its holder) is unconstrained. The M4.12 row's covered-list says `the immutability of the record`, which reads as covering both.",
+      "failure_scenario": "injected() is, by the class javadoc's own words, 'the only defence' against a silent simulator, and criterion 1's per-class attribution is read off it. The natural way to attribute a fault to a phase is capture-and-diff -- which is exactly how this diff's own helpers are written (FaultInjectingStoreStreamsTest.java:144-150 and :204-208 hold a `now` and index forward from `seen`). Under the live-view mutant those captures alias one growing ArrayList, so a sweep in M4.13 that snapshots `injected()` at the start of a phase and compares it against the end sees two views of the same object: `isNotEqualTo`/`isEqualTo` between them becomes trivially true and the anti-vacuity assertion it was written to be reports success having compared nothing. That is the failure mode this whole file exists to prevent, arriving through the accessor rather than through a fault class. Fix is one assertion in the existing test: hold `seen`, drive a second fault, assert `seen` did not grow.",
+      "fix_hint": "In theInjectedRecordIsASNAPSHOTACallerCannotMutate, after capturing `seen`, drive a second faulting call and assert `seen` still has size 1 -- then either the row's `immutability of the record` is true as written, or narrow it to `the returned list is read-only`."
+    },
+    {
+      "id": "Y2",
+      "severity": "minor",
+      "location": "docs/internal/product/backlog.md:266 (M4.19), docs/internal/product/backlog.md:267 (M4.20)",
+      "finding": "The duplicated clauses reported last round are STILL PRESENT, verbatim, in both rows. M4.19 reads `Delivers I1-I5 as predicates over the raw objects, I1-I5 as predicates over the raw objects.` (measured: 2 occurrences of that clause in the file, both on line 266). M4.20 reads `... many logical pods, one seed, driven through the Sequencer seam, with failover BOTH ways -- a polite release and a TTL lapse -- and fenced leaders that do not know it yet -- many logical pods, one seed, through the Sequencer seam, with failover both ways (a polite release and a TTL lapse) and fenced leaders that do not know it yet`. The untracked-files half of last round's finding WAS fixed (both rows now carry the `NEITHER IS TRACKED YET` caveat); the duplication half was not, and the insertion of that caveat into M4.20 additionally leaves `Also withZone returns this, violating the Clock contract --` running straight into the next warning marker with no clause of its own.",
+      "failure_scenario": "backlog.md is the authoritative task list and is what `next-task` and `milestone-review` read. Whoever picks up M4.19 reads the acceptance sentence twice and has to decide whether the second copy is a second, subtly different deliverable -- the two M4.20 copies are NOT identical (one says `driven through the Sequencer seam`, the other `through the Sequencer seam`; one uses dashes, the other parentheses), so the reader cannot tell duplication from a deliberate restatement and must go looking for a distinction that does not exist. This is the same class of defect as the M4.12 row that 'described a commit other than itself': the authoritative document costs a reader time it should not.",
+      "fix_hint": "Delete the second copy of each clause. Both are within the rows this diff adds, so it is a two-line edit to lines 266 and 267."
+    }
+  ],
+  "task": "M4.12",
+  "role": "reviewer"
+}

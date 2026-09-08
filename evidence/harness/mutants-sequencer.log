@@ -1,0 +1,288 @@
+7:52:02 AM PIT >> INFO : Verbose logging is disabled. If you encounter a problem, please enable it before reporting an issue.
+7:52:02 AM PIT >> INFO : Created 2 mutation test units in pre scan
+7:52:02 AM PIT >> INFO : Sending 133 test classes to minion
+7:52:02 AM PIT >> INFO : Sent tests to minion
+/-\|/-\|/-\|/-\|/-7:52:03 AM PIT >> INFO : MINION : Sep 08, 2026 7:52:03 AM binjava.sequencer.BatchingSequencer drainForever
+7:52:03 AM PIT >> INFO : MINION : SEVERE: the commit batcher terminated abnormally; this sequencer can no longer commit, and its lease is being released so another node can take over
+7:52:03 AM PIT >> INFO : MINION : java.lang.OutOfMemoryError: delta encode
+7:52:03 AM PIT >> INFO : MINION : 	at binjava.sequencer.BatchingSequencerLifecycleTest$1.commitAll(BatchingSequencerLifecycleTest.java:226)
+7:52:03 AM PIT >> INFO : MINION : 	at binjava.sequencer.BatchingSequencer.commitBatch(BatchingSequencer.java:380)
+7:52:03 AM PIT >> INFO : MINION : 	at binjava.sequencer.BatchingSequencer.drainLoop(BatchingSequencer.java:322)
+7:52:03 AM PIT >> INFO : MINION : 	at binjava.sequencer.BatchingSequencer.drainForever(BatchingSequencer.java:220)
+7:52:03 AM PIT >> INFO : MINION : 	at java.base/java.lang.VirtualThread.run(VirtualThread.java:460)
+7:52:03 AM PIT >> INFO : MINION : 
+7:52:03 AM PIT >> INFO : MINION : Sep 08, 2026 7:52:03 AM binjava.sequencer.BatchingSequencer drainForever
+7:52:03 AM PIT >> INFO : MINION : SEVERE: the commit batcher terminated abnormally; this sequencer can no longer commit, and its lease is being released so another node can take over
+7:52:03 AM PIT >> INFO : MINION : java.lang.IllegalStateException: the timer is broken
+7:52:03 AM PIT >> INFO : MINION : 	at binjava.sequencer.BatchingSequencerLifecycleTest.lambda$aCallerQUEUEDBehindADyingCommitterIsFailedEvenWithNoCloseAtAll$0(BatchingSequencerLifecycleTest.java:183)
+7:52:03 AM PIT >> INFO : MINION : 	at binjava.sequencer.BatchingSequencer.drainLoop(BatchingSequencer.java:320)
+7:52:03 AM PIT >> INFO : MINION : 	at binjava.sequencer.BatchingSequencer.drainForever(BatchingSequencer.java:220)
+7:52:03 AM PIT >> INFO : MINION : 	at java.base/java.lang.VirtualThread.run(VirtualThread.java:460)
+7:52:03 AM PIT >> INFO : MINION : 
+7:52:03 AM PIT >> INFO : MINION : Sep 08, 2026 7:52:03 AM binjava.sequencer.BatchingSequencer drainForever
+7:52:03 AM PIT >> INFO : MINION : SEVERE: the commit batcher terminated abnormally; this sequencer can no longer commit, and its lease is being released so another node can take over
+7:52:03 AM PIT >> INFO : MINION : java.lang.IllegalStateException: the timer is broken
+7:52:03 AM PIT >> INFO : MINION : 	at binjava.sequencer.BatchingSequencerLifecycleTest.lambda$aCommitterKilledByItsTimerFAILSCallersRatherThanParkingThem$0(BatchingSequencerLifecycleTest.java:130)
+7:52:03 AM PIT >> INFO : MINION : 	at binjava.sequencer.BatchingSequencer.drainLoop(BatchingSequencer.java:320)
+7:52:03 AM PIT >> INFO : MINION : 	at binjava.sequencer.BatchingSequencer.drainForever(BatchingSequencer.java:220)
+7:52:03 AM PIT >> INFO : MINION : 	at java.base/java.lang.VirtualThread.run(VirtualThread.java:460)
+7:52:03 AM PIT >> INFO : MINION : 
+7:52:03 AM PIT >> INFO : MINION : Sep 08, 2026 7:52:03 AM binjava.sequencer.BatchingSequencer drainForever
+7:52:03 AM PIT >> INFO : MINION : SEVERE: the commit batcher terminated abnormally; this sequencer can no longer commit, and its lease is being released so another node can take over
+7:52:03 AM PIT >> INFO : MINION : java.lang.OutOfMemoryError: simulated: encoding a large batch
+7:52:03 AM PIT >> INFO : MINION : 	at binjava.sequencer.BatchingSequencerTerminationTest$4.commitAll(BatchingSequencerTerminationTest.java:319)
+7:52:03 AM PIT >> INFO : MINION : 	at binjava.sequencer.BatchingSequencer.commitBatch(BatchingSequencer.java:380)
+7:52:03 AM PIT >> INFO : MINION : 	at binjava.sequencer.BatchingSequencer.drainLoop(BatchingSequencer.java:322)
+7:52:03 AM PIT >> INFO : MINION : 	at binjava.sequencer.BatchingSequencer.drainForever(BatchingSequencer.java:220)
+7:52:03 AM PIT >> INFO : MINION : 	at java.base/java.lang.VirtualThread.run(VirtualThread.java:460)
+7:52:03 AM PIT >> INFO : MINION : 
+7:52:03 AM PIT >> INFO : MINION : Sep 08, 2026 7:52:03 AM binjava.sequencer.BatchingSequencer drainForever
+7:52:03 AM PIT >> INFO : MINION : SEVERE: the commit batcher terminated abnormally; this sequencer can no longer commit, and its lease is being released so another node can take over
+7:52:03 AM PIT >> INFO : MINION : java.lang.OutOfMemoryError: simulated: encoding a large batch
+7:52:03 AM PIT >> INFO : MINION : 	at binjava.sequencer.BatchingSequencerTerminationTest$DyingDelegate.commitAll(BatchingSequencerTerminationTest.java:76)
+7:52:03 AM PIT >> INFO : MINION : 	at binjava.sequencer.BatchingSequencer.commitBatch(BatchingSequencer.java:380)
+7:52:03 AM PIT >> INFO : MINION : 	at binjava.sequencer.BatchingSequencer.drainLoop(BatchingSequencer.java:322)
+7:52:03 AM PIT >> INFO : MINION : 	at binjava.sequencer.BatchingSequencer.drainForever(BatchingSequencer.java:220)
+7:52:03 AM PIT >> INFO : MINION : 	at java.base/java.lang.VirtualThread.run(VirtualThread.java:460)
+7:52:03 AM PIT >> INFO : MINION : 
+7:52:03 AM PIT >> INFO : MINION : Sep 08, 2026 7:52:03 AM binjava.sequencer.BatchingSequencer drainForever
+7:52:03 AM PIT >> INFO : MINION : SEVERE: the commit batcher terminated abnormally; this sequencer can no longer commit, and its lease is being released so another node can take over
+7:52:03 AM PIT >> INFO : MINION : java.lang.InterruptedException
+7:52:03 AM PIT >> INFO : MINION : 	at java.base/java.util.concurrent.locks.ReentrantLock$Sync.lockInterruptibly(ReentrantLock.java:160)
+7:52:03 AM PIT >> INFO : MINION : 	at java.base/java.util.concurrent.locks.ReentrantLock.lockInterruptibly(ReentrantLock.java:373)
+7:52:03 AM PIT >> INFO : MINION : 	at java.base/java.util.concurrent.LinkedBlockingQueue.take(LinkedBlockingQueue.java:432)
+7:52:03 AM PIT >> INFO : MINION : 	at binjava.sequencer.BatchingSequencer.drainLoop(BatchingSequencer.java:319)
+7:52:03 AM PIT >> INFO : MINION : 	at binjava.sequencer.BatchingSequencer.drainForever(BatchingSequencer.java:220)
+7:52:03 AM PIT >> INFO : MINION : 	at java.base/java.lang.VirtualThread.run(VirtualThread.java:460)
+7:52:03 AM PIT >> INFO : MINION : 
+7:52:03 AM PIT >> INFO : MINION : Sep 08, 2026 7:52:03 AM binjava.sequencer.BatchingSequencer drainForever
+7:52:03 AM PIT >> INFO : MINION : SEVERE: the commit batcher terminated abnormally; this sequencer can no longer commit, and its lease is being released so another node can take over
+7:52:03 AM PIT >> INFO : MINION : java.lang.OutOfMemoryError: simulated: encoding a large batch
+7:52:03 AM PIT >> INFO : MINION : 	at binjava.sequencer.BatchingSequencerTerminationTest$DyingDelegate.commitAll(BatchingSequencerTerminationTest.java:76)
+7:52:03 AM PIT >> INFO : MINION : 	at binjava.sequencer.BatchingSequencer.commitBatch(BatchingSequencer.java:380)
+7:52:03 AM PIT >> INFO : MINION : 	at binjava.sequencer.BatchingSequencer.drainLoop(BatchingSequencer.java:322)
+7:52:03 AM PIT >> INFO : MINION : 	at binjava.sequencer.BatchingSequencer.drainForever(BatchingSequencer.java:220)
+7:52:03 AM PIT >> INFO : MINION : 	at java.base/java.lang.VirtualThread.run(VirtualThread.java:460)
+7:52:03 AM PIT >> INFO : MINION : 
+7:52:03 AM PIT >> INFO : MINION : Sep 08, 2026 7:52:03 AM binjava.sequencer.BatchingSequencer drainForever
+7:52:03 AM PIT >> INFO : MINION : SEVERE: the commit batcher terminated abnormally; this sequencer can no longer commit, and its lease is being released so another node can take over
+7:52:03 AM PIT >> INFO : MINION : java.lang.OutOfMemoryError: simulated: encoding a large batch
+7:52:03 AM PIT >> INFO : MINION : 	at binjava.sequencer.BatchingSequencerTerminationTest$DyingDelegate.commitAll(BatchingSequencerTerminationTest.java:76)
+7:52:03 AM PIT >> INFO : MINION : 	at binjava.sequencer.BatchingSequencer.commitBatch(BatchingSequencer.java:380)
+7:52:03 AM PIT >> INFO : MINION : 	at binjava.sequencer.BatchingSequencer.drainLoop(BatchingSequencer.java:322)
+7:52:03 AM PIT >> INFO : MINION : 	at binjava.sequencer.BatchingSequencer.drainForever(BatchingSequencer.java:220)
+7:52:03 AM PIT >> INFO : MINION : 	at java.base/java.lang.VirtualThread.run(VirtualThread.java:460)
+7:52:03 AM PIT >> INFO : MINION : 
+7:52:03 AM PIT >> INFO : MINION : Sep 08, 2026 7:52:03 AM binjava.sequencer.BatchingSequencer drainForever
+7:52:03 AM PIT >> INFO : MINION : SEVERE: the commit batcher terminated abnormally; this sequencer can no longer commit, and its lease is being released so another node can take over
+7:52:03 AM PIT >> INFO : MINION : java.lang.InterruptedException
+7:52:03 AM PIT >> INFO : MINION : 	at java.base/java.util.concurrent.locks.ReentrantLock$Sync.lockInterruptibly(ReentrantLock.java:160)
+7:52:03 AM PIT >> INFO : MINION : 	at java.base/java.util.concurrent.locks.ReentrantLock.lockInterruptibly(ReentrantLock.java:373)
+7:52:03 AM PIT >> INFO : MINION : 	at java.base/java.util.concurrent.LinkedBlockingQueue.take(LinkedBlockingQueue.java:432)
+7:52:03 AM PIT >> INFO : MINION : 	at binjava.sequencer.BatchingSequencer.drainLoop(BatchingSequencer.java:319)
+7:52:03 AM PIT >> INFO : MINION : 	at binjava.sequencer.BatchingSequencer.drainForever(BatchingSequencer.java:220)
+7:52:03 AM PIT >> INFO : MINION : 	at java.base/java.lang.VirtualThread.run(VirtualThread.java:460)
+7:52:03 AM PIT >> INFO : MINION : 
+\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/7:52:04 AM PIT >> INFO : MINION : Sep 08, 2026 7:52:04 AM binjava.sequencer.CheckpointWriter writeIfDirty
+7:52:04 AM PIT >> INFO : MINION : WARNING: checkpoint at sequence 1 was not written; retrying at the next trigger
+7:52:04 AM PIT >> INFO : MINION : java.io.IOException: the store is unreachable
+7:52:04 AM PIT >> INFO : MINION : 	at binjava.sequencer.CheckpointDiscoveryTest.aFailedPOINTERWriteLeavesTheCheckpointUNWRITTENSoALaterTriggerRedoesBoth(CheckpointDiscoveryTest.java:272)
+7:52:04 AM PIT >> INFO : MINION : 	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:104)
+7:52:04 AM PIT >> INFO : MINION : 	at java.base/java.lang.reflect.Method.invoke(Method.java:565)
+7:52:04 AM PIT >> INFO : MINION : 	at org.junit.platform.commons.util.ReflectionUtils.invokeMethod(ReflectionUtils.java:786)
+7:52:04 AM PIT >> INFO : MINION : 	at org.junit.platform.commons.support.ReflectionSupport.invokeMethod(ReflectionSupport.java:514)
+7:52:04 AM PIT >> INFO : MINION : 	at org.junit.jupiter.engine.execution.MethodInvocation.proceed(MethodInvocation.java:60)
+7:52:04 AM PIT >> INFO : MINION : 	at org.junit.jupiter.engine.execution.InvocationInterceptorChain$ValidatingInvocation.proceed(InvocationInterceptorChain.java:131)
+7:52:04 AM PIT >> INFO : MINION : 	at org.junit.jupiter.api.AssertTimeoutPreemptively.lambda$submitTask$3(AssertTimeoutPreemptively.java:95)
+7:52:04 AM PIT >> INFO : MINION : 	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+7:52:04 AM PIT >> INFO : MINION : 	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+7:52:04 AM PIT >> INFO : MINION : 	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+7:52:04 AM PIT >> INFO : MINION : 	at java.base/java.lang.Thread.run(Thread.java:1474)
+7:52:04 AM PIT >> INFO : MINION : 
+-\|/-\|/-\|/-\|/-\7:52:04 AM PIT >> INFO : MINION : Sep 08, 2026 7:52:04 AM binjava.sequencer.CheckpointWriter observe
+7:52:04 AM PIT >> INFO : MINION : WARNING: checkpoint bookkeeping failed; the commit itself stands
+7:52:04 AM PIT >> INFO : MINION : java.lang.IllegalStateException: store is broken
+7:52:04 AM PIT >> INFO : MINION : 	at binjava.sequencer.CheckpointWriterTriggerTest.anUNCHECKEDFailureLeavesTheWriterDirtySoALaterTickStillWrites(CheckpointWriterTriggerTest.java:285)
+7:52:04 AM PIT >> INFO : MINION : 	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:104)
+7:52:04 AM PIT >> INFO : MINION : 	at java.base/java.lang.reflect.Method.invoke(Method.java:565)
+7:52:04 AM PIT >> INFO : MINION : 	at org.junit.platform.commons.util.ReflectionUtils.invokeMethod(ReflectionUtils.java:786)
+7:52:04 AM PIT >> INFO : MINION : 	at org.junit.platform.commons.support.ReflectionSupport.invokeMethod(ReflectionSupport.java:514)
+7:52:04 AM PIT >> INFO : MINION : 	at org.junit.jupiter.engine.execution.MethodInvocation.proceed(MethodInvocation.java:60)
+7:52:04 AM PIT >> INFO : MINION : 	at org.junit.jupiter.engine.execution.InvocationInterceptorChain$ValidatingInvocation.proceed(InvocationInterceptorChain.java:131)
+7:52:04 AM PIT >> INFO : MINION : 	at org.junit.jupiter.api.AssertTimeoutPreemptively.lambda$submitTask$3(AssertTimeoutPreemptively.java:95)
+7:52:04 AM PIT >> INFO : MINION : 	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+7:52:04 AM PIT >> INFO : MINION : 	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+7:52:04 AM PIT >> INFO : MINION : 	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+7:52:04 AM PIT >> INFO : MINION : 	at java.base/java.lang.Thread.run(Thread.java:1474)
+7:52:04 AM PIT >> INFO : MINION : 
+7:52:04 AM PIT >> INFO : MINION : Sep 08, 2026 7:52:04 AM binjava.sequencer.CheckpointWriter observe
+7:52:04 AM PIT >> INFO : MINION : WARNING: checkpoint bookkeeping failed; the commit itself stands
+7:52:04 AM PIT >> INFO : MINION : java.lang.IllegalStateException: store is broken
+7:52:04 AM PIT >> INFO : MINION : 	at binjava.sequencer.CheckpointWriterTriggerTest.anUNCHECKEDStoreFailureDoesNotTurnTheRateIntoOnePerDelta(CheckpointWriterTriggerTest.java:264)
+7:52:04 AM PIT >> INFO : MINION : 	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:104)
+7:52:04 AM PIT >> INFO : MINION : 	at java.base/java.lang.reflect.Method.invoke(Method.java:565)
+7:52:04 AM PIT >> INFO : MINION : 	at org.junit.platform.commons.util.ReflectionUtils.invokeMethod(ReflectionUtils.java:786)
+7:52:04 AM PIT >> INFO : MINION : 	at org.junit.platform.commons.support.ReflectionSupport.invokeMethod(ReflectionSupport.java:514)
+7:52:04 AM PIT >> INFO : MINION : 	at org.junit.jupiter.engine.execution.MethodInvocation.proceed(MethodInvocation.java:60)
+7:52:04 AM PIT >> INFO : MINION : 	at org.junit.jupiter.engine.execution.InvocationInterceptorChain$ValidatingInvocation.proceed(InvocationInterceptorChain.java:131)
+7:52:04 AM PIT >> INFO : MINION : 	at org.junit.jupiter.api.AssertTimeoutPreemptively.lambda$submitTask$3(AssertTimeoutPreemptively.java:95)
+7:52:04 AM PIT >> INFO : MINION : 	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+7:52:04 AM PIT >> INFO : MINION : 	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+7:52:04 AM PIT >> INFO : MINION : 	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+7:52:04 AM PIT >> INFO : MINION : 	at java.base/java.lang.Thread.run(Thread.java:1474)
+7:52:04 AM PIT >> INFO : MINION : 
+7:52:04 AM PIT >> INFO : MINION : Sep 08, 2026 7:52:04 AM binjava.sequencer.CheckpointWriter observe
+7:52:04 AM PIT >> INFO : MINION : WARNING: checkpoint bookkeeping failed; the commit itself stands
+7:52:04 AM PIT >> INFO : MINION : java.lang.IllegalStateException: store is broken
+7:52:04 AM PIT >> INFO : MINION : 	at binjava.sequencer.CheckpointWriterTriggerTest.anUNCHECKEDStoreFailureDoesNotTurnTheRateIntoOnePerDelta(CheckpointWriterTriggerTest.java:264)
+7:52:04 AM PIT >> INFO : MINION : 	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:104)
+7:52:04 AM PIT >> INFO : MINION : 	at java.base/java.lang.reflect.Method.invoke(Method.java:565)
+7:52:04 AM PIT >> INFO : MINION : 	at org.junit.platform.commons.util.ReflectionUtils.invokeMethod(ReflectionUtils.java:786)
+7:52:04 AM PIT >> INFO : MINION : 	at org.junit.platform.commons.support.ReflectionSupport.invokeMethod(ReflectionSupport.java:514)
+7:52:04 AM PIT >> INFO : MINION : 	at org.junit.jupiter.engine.execution.MethodInvocation.proceed(MethodInvocation.java:60)
+7:52:04 AM PIT >> INFO : MINION : 	at org.junit.jupiter.engine.execution.InvocationInterceptorChain$ValidatingInvocation.proceed(InvocationInterceptorChain.java:131)
+7:52:04 AM PIT >> INFO : MINION : 	at org.junit.jupiter.api.AssertTimeoutPreemptively.lambda$submitTask$3(AssertTimeoutPreemptively.java:95)
+7:52:04 AM PIT >> INFO : MINION : 	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+7:52:04 AM PIT >> INFO : MINION : 	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+7:52:04 AM PIT >> INFO : MINION : 	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+7:52:04 AM PIT >> INFO : MINION : 	at java.base/java.lang.Thread.run(Thread.java:1474)
+7:52:04 AM PIT >> INFO : MINION : 
+7:52:04 AM PIT >> INFO : MINION : Sep 08, 2026 7:52:04 AM binjava.sequencer.CheckpointWriter observe
+7:52:04 AM PIT >> INFO : MINION : WARNING: checkpoint bookkeeping failed; the commit itself stands
+7:52:04 AM PIT >> INFO : MINION : java.lang.IllegalStateException: store is broken
+7:52:04 AM PIT >> INFO : MINION : 	at binjava.sequencer.CheckpointWriterTriggerTest.anUNCHECKEDStoreFailureDoesNotTurnTheRateIntoOnePerDelta(CheckpointWriterTriggerTest.java:264)
+7:52:04 AM PIT >> INFO : MINION : 	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:104)
+7:52:04 AM PIT >> INFO : MINION : 	at java.base/java.lang.reflect.Method.invoke(Method.java:565)
+7:52:04 AM PIT >> INFO : MINION : 	at org.junit.platform.commons.util.ReflectionUtils.invokeMethod(ReflectionUtils.java:786)
+7:52:04 AM PIT >> INFO : MINION : 	at org.junit.platform.commons.support.ReflectionSupport.invokeMethod(ReflectionSupport.java:514)
+7:52:04 AM PIT >> INFO : MINION : 	at org.junit.jupiter.engine.execution.MethodInvocation.proceed(MethodInvocation.java:60)
+7:52:04 AM PIT >> INFO : MINION : 	at org.junit.jupiter.engine.execution.InvocationInterceptorChain$ValidatingInvocation.proceed(InvocationInterceptorChain.java:131)
+7:52:04 AM PIT >> INFO : MINION : 	at org.junit.jupiter.api.AssertTimeoutPreemptively.lambda$submitTask$3(AssertTimeoutPreemptively.java:95)
+7:52:04 AM PIT >> INFO : MINION : 	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+7:52:04 AM PIT >> INFO : MINION : 	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+7:52:04 AM PIT >> INFO : MINION : 	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+7:52:04 AM PIT >> INFO : MINION : 	at java.base/java.lang.Thread.run(Thread.java:1474)
+7:52:04 AM PIT >> INFO : MINION : 
+7:52:04 AM PIT >> INFO : MINION : Sep 08, 2026 7:52:04 AM binjava.sequencer.CheckpointWriter writeIfDirty
+7:52:04 AM PIT >> INFO : MINION : WARNING: checkpoint at sequence 1 was not written; retrying at the next trigger
+7:52:04 AM PIT >> INFO : MINION : java.io.IOException: the store is unreachable
+7:52:04 AM PIT >> INFO : MINION : 	at binjava.sequencer.CheckpointWriterTriggerTest.aFailedCheckpointPutDoesNotWedgeTheWriterForever(CheckpointWriterTriggerTest.java:360)
+7:52:04 AM PIT >> INFO : MINION : 	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:104)
+7:52:04 AM PIT >> INFO : MINION : 	at java.base/java.lang.reflect.Method.invoke(Method.java:565)
+7:52:04 AM PIT >> INFO : MINION : 	at org.junit.platform.commons.util.ReflectionUtils.invokeMethod(ReflectionUtils.java:786)
+7:52:04 AM PIT >> INFO : MINION : 	at org.junit.platform.commons.support.ReflectionSupport.invokeMethod(ReflectionSupport.java:514)
+7:52:04 AM PIT >> INFO : MINION : 	at org.junit.jupiter.engine.execution.MethodInvocation.proceed(MethodInvocation.java:60)
+7:52:04 AM PIT >> INFO : MINION : 	at org.junit.jupiter.engine.execution.InvocationInterceptorChain$ValidatingInvocation.proceed(InvocationInterceptorChain.java:131)
+7:52:04 AM PIT >> INFO : MINION : 	at org.junit.jupiter.api.AssertTimeoutPreemptively.lambda$submitTask$3(AssertTimeoutPreemptively.java:95)
+7:52:04 AM PIT >> INFO : MINION : 	at java.base/java.util.concurrent.FutureTask.run(FutureTask.java:328)
+7:52:04 AM PIT >> INFO : MINION : 	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+7:52:04 AM PIT >> INFO : MINION : 	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+7:52:04 AM PIT >> INFO : MINION : 	at java.base/java.lang.Thread.run(Thread.java:1474)
+7:52:04 AM PIT >> INFO : MINION : 
+|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-7:52:07 AM PIT >> INFO : MINION : Sep 08, 2026 7:52:07 AM binjava.sequencer.LocalSequencer renewForever
+7:52:07 AM PIT >> INFO : MINION : SEVERE: the lease renew at epoch 1 returned empty: either another node took the term or this one self-fenced after an ambiguous write (ADR-0027). This node will not sequence again and must be restarted to rejoin.
+\|/-\|7:52:07 AM PIT >> INFO : MINION : Sep 08, 2026 7:52:07 AM binjava.sequencer.LocalSequencer renewForever
+7:52:07 AM PIT >> INFO : MINION : WARNING: a lease renew failed; the term is untouched and the next tick retries
+7:52:07 AM PIT >> INFO : MINION : java.io.IOException: injected: the store refused putIfMatch for bins/cluster-a/ctl/lease/0.json
+7:52:07 AM PIT >> INFO : MINION : 	at binjava.sequencer.FailPutIfMatchStore.putIfMatch(FailPutIfMatchStore.java:48)
+7:52:07 AM PIT >> INFO : MINION : 	at binjava.sequencer.LeaseManager.renewLocked(LeaseManager.java:308)
+7:52:07 AM PIT >> INFO : MINION : 	at binjava.sequencer.LeaseManager.renew(LeaseManager.java:278)
+7:52:07 AM PIT >> INFO : MINION : 	at binjava.sequencer.LocalSequencer.renewForever(LocalSequencer.java:141)
+7:52:07 AM PIT >> INFO : MINION : 	at java.base/java.lang.VirtualThread.run(VirtualThread.java:460)
+7:52:07 AM PIT >> INFO : MINION : 
+/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\|/-\7:52:07 AM PIT >> INFO : Calculated coverage in 5 seconds.
+7:52:07 AM PIT >> INFO : 0 tests took longer than 2000 ms
+7:52:07 AM PIT >> INFO : Slowest test ([engine:junit-jupiter]/[class:binjava.sequencer.LocalSequencerRenewTest]/[method:thePUBLICStartWIRESTheConfiguredIntervalIntoTheTickerItInstalls()]) took 1155 ms
+7:52:07 AM PIT >> INFO : Largest test ([engine:junit-jupiter]/[class:binjava.sequencer.BoundedRecoveryCorrectnessTest]/[method:aCheckpointCoveringEntriesPASTTheBarrierIsNotUsed()]) covered 215 blocks
+7:52:07 AM PIT >> INFO : Created 2 mutation test units
+7:52:17 AM PIT >> WARNING : Minion exited abnormally due to TIMED_OUT
+7:52:25 AM PIT >> WARNING : Minion exited abnormally due to TIMED_OUT
+7:52:26 AM PIT >> WARNING : Minion exited abnormally due to TIMED_OUT
+7:52:34 AM PIT >> WARNING : Minion exited abnormally due to TIMED_OUT
+7:52:34 AM PIT >> WARNING : Minion exited abnormally due to TIMED_OUT
+7:52:43 AM PIT >> WARNING : Minion exited abnormally due to TIMED_OUT
+7:52:46 AM PIT >> WARNING : Minion exited abnormally due to TIMED_OUT
+/7:52:50 AM PIT >> WARNING : Minion exited abnormally due to TIMED_OUT
+7:52:58 AM PIT >> WARNING : Minion exited abnormally due to TIMED_OUT
+7:53:06 AM PIT >> WARNING : Minion exited abnormally due to TIMED_OUT
+-7:53:08 AM PIT >> INFO : Completed in 65 seconds
+================================================================================
+- Mutators
+================================================================================
+> org.pitest.mutationtest.engine.gregor.mutators.ConditionalsBoundaryMutator
+>> Generated 15 Killed 15 (100%)
+> KILLED 14 SURVIVED 0 TIMED_OUT 1 NON_VIABLE 0 
+> MEMORY_ERROR 0 NOT_STARTED 0 STARTED 0 RUN_ERROR 0 
+> NO_COVERAGE 0 
+--------------------------------------------------------------------------------
+> org.pitest.mutationtest.engine.gregor.mutators.returns.PrimitiveReturnsMutator
+>> Generated 2 Killed 1 (50%)
+> KILLED 1 SURVIVED 1 TIMED_OUT 0 NON_VIABLE 0 
+> MEMORY_ERROR 0 NOT_STARTED 0 STARTED 0 RUN_ERROR 0 
+> NO_COVERAGE 0 
+--------------------------------------------------------------------------------
+> org.pitest.mutationtest.engine.gregor.mutators.VoidMethodCallMutator
+>> Generated 25 Killed 18 (72%)
+> KILLED 17 SURVIVED 6 TIMED_OUT 1 NON_VIABLE 0 
+> MEMORY_ERROR 0 NOT_STARTED 0 STARTED 0 RUN_ERROR 0 
+> NO_COVERAGE 1 
+--------------------------------------------------------------------------------
+> org.pitest.mutationtest.engine.gregor.mutators.returns.BooleanTrueReturnValsMutator
+>> Generated 5 Killed 4 (80%)
+> KILLED 4 SURVIVED 1 TIMED_OUT 0 NON_VIABLE 0 
+> MEMORY_ERROR 0 NOT_STARTED 0 STARTED 0 RUN_ERROR 0 
+> NO_COVERAGE 0 
+--------------------------------------------------------------------------------
+> org.pitest.mutationtest.engine.gregor.mutators.returns.NullReturnValsMutator
+>> Generated 9 Killed 9 (100%)
+> KILLED 9 SURVIVED 0 TIMED_OUT 0 NON_VIABLE 0 
+> MEMORY_ERROR 0 NOT_STARTED 0 STARTED 0 RUN_ERROR 0 
+> NO_COVERAGE 0 
+--------------------------------------------------------------------------------
+> org.pitest.mutationtest.engine.gregor.mutators.MathMutator
+>> Generated 10 Killed 10 (100%)
+> KILLED 7 SURVIVED 0 TIMED_OUT 3 NON_VIABLE 0 
+> MEMORY_ERROR 0 NOT_STARTED 0 STARTED 0 RUN_ERROR 0 
+> NO_COVERAGE 0 
+--------------------------------------------------------------------------------
+> org.pitest.mutationtest.engine.gregor.mutators.returns.BooleanFalseReturnValsMutator
+>> Generated 1 Killed 1 (100%)
+> KILLED 1 SURVIVED 0 TIMED_OUT 0 NON_VIABLE 0 
+> MEMORY_ERROR 0 NOT_STARTED 0 STARTED 0 RUN_ERROR 0 
+> NO_COVERAGE 0 
+--------------------------------------------------------------------------------
+> org.pitest.mutationtest.engine.gregor.mutators.returns.EmptyObjectReturnValsMutator
+>> Generated 4 Killed 4 (100%)
+> KILLED 4 SURVIVED 0 TIMED_OUT 0 NON_VIABLE 0 
+> MEMORY_ERROR 0 NOT_STARTED 0 STARTED 0 RUN_ERROR 0 
+> NO_COVERAGE 0 
+--------------------------------------------------------------------------------
+> org.pitest.mutationtest.engine.gregor.mutators.NegateConditionalsMutator
+>> Generated 48 Killed 47 (98%)
+> KILLED 42 SURVIVED 1 TIMED_OUT 5 NON_VIABLE 0 
+> MEMORY_ERROR 0 NOT_STARTED 0 STARTED 0 RUN_ERROR 0 
+> NO_COVERAGE 0 
+--------------------------------------------------------------------------------
+================================================================================
+- Timings
+================================================================================
+> pre-scan for mutations : < 1 second
+> scan classpath : < 1 second
+> coverage and dependency analysis : 5 seconds
+> build mutation tests : < 1 second
+> run mutation analysis : 1 minutes and 0 seconds
+--------------------------------------------------------------------------------
+> Total  : 1 minutes and 5 seconds
+--------------------------------------------------------------------------------
+> 0 tests took longer than 2000 ms
+> Slowest test ([engine:junit-jupiter]/[class:binjava.sequencer.LocalSequencerRenewTest]/[method:thePUBLICStartWIRESTheConfiguredIntervalIntoTheTickerItInstalls()]) took 1155 ms
+> Largest test ([engine:junit-jupiter]/[class:binjava.sequencer.BoundedRecoveryCorrectnessTest]/[method:aCheckpointCoveringEntriesPASTTheBarrierIsNotUsed()]) covered 215 blocks
+================================================================================
+- Statistics
+================================================================================
+>> Line Coverage (for mutated classes only): 209/213 (98%)
+>> 133 tests examined
+>> Generated 119 mutations Killed 109 (92%)
+>> Mutations with no coverage 1. Test strength 92%
+>> Ran 794 tests (6.67 tests per mutation)
+Enhanced functionality available at https://www.arcmutate.com/

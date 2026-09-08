@@ -1,0 +1,34 @@
+{
+  "diff_sha256": "82008131575b14209bf261282ec0e15bfc484d3b3639dba48309780953b5007a",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "DT8",
+      "severity": "major",
+      "file": "docs/internal/product/milestones/M1/SPEC.md:99",
+      "summary": "DT1 not closed: criterion 3's anti-vacuity assertion has the wrong polarity. 'the fake transport must be asserted to have delivered nothing' is satisfied identically by a consumer that never started, so it cannot rule out the case its own rationale claims to rule out. The 3,000-poll-interval clause constrains the window length, not any observed consumer activity, so there is still no positive liveness signal anywhere in the criterion.",
+      "failure_scenario": "Mutation that survives: make the consumer's subscribe/start path a no-op (or have the plugin factory hand back a consumer whose poll loop is never scheduled). All 1,600 consumers do nothing; store.totalRequests() == 0; the fake transport delivered nothing; the test is green and NFR-2 is 'proved' by 1,600 dead objects. Close it with a positive assertion: the fake transport records 1,600 live subscriptions for the whole window, or after advancing the clock 3,000 intervals a single control push is delivered to all 1,600 (proving they were alive and blocked) and only then is totalRequests() asserted to be 0."
+    },
+    {
+      "id": "DT9",
+      "severity": "minor",
+      "file": "docs/internal/product/milestones/M1/SPEC.md:121",
+      "summary": "Tier-discipline count is stale after adding T5b2. The table now has seven rows tagged **T4** (T5b2, T5c, T5d, T11, T11c, T11b, T8b) but the prose says T4 'appears six times' and its enumeration omits T5b2.",
+      "failure_scenario": "The sentence exists so a reader can check that every T4 occurrence names why a fake cannot answer it; a count that does not match the table is exactly the audit that stops working. A future row added at T4 without justification would keep the count wrong and be invisible. Fix: 'appears seven times' and add T5b2 to the versioning/Lucene-state clause."
+    },
+    {
+      "id": "DT10",
+      "severity": "minor",
+      "file": "docs/internal/product/milestones/M1/SPEC.md:140",
+      "summary": "T5d now requires concurrency but not a controlled interleaving, so the race it depends on is left to the scheduler.",
+      "failure_scenario": "If the stale replay write happens to reach the index before the live write, a last-writer-wins bug (replay-time version stamped instead of the source's) produces the correct final document and the test passes — the same escape DT4 named, now intermittent rather than systematic. Require the replay's write to be observed to land after the live write (barrier or repeat the race N times), so the losing ordering is actually exercised."
+    },
+    {
+      "id": "DT11",
+      "severity": "minor",
+      "file": "docs/internal/standards/build.md:25",
+      "summary": "DT7's per-worker note is correct, but the restated total is arithmetically off: with the doubling the rows sum to 1024+1024+1024+256+1024+512+1024 = 5,888 MiB = 5.75 GiB, not 5.9 GiB (5.9 is the figure in GB, not GiB).",
+      "failure_scenario": "Errs conservatively (toward the 6 GiB ceiling) so it weakens nothing today, but a table whose stated total does not equal its own rows is the same class of defect DT7 raised, and the next person to add a row will reconcile against a number that was never right."
+    }
+  ]
+}

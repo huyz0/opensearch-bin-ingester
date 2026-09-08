@@ -1,0 +1,15 @@
+{
+  "diff_sha256": "28cb9bb5308bc890549b9a0acaafba76d5c2f617f544fccf287ed0fd4ea62410",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "DT12",
+      "severity": "minor",
+      "file": "docs/internal/product/milestones/M1/SPEC.md:95",
+      "summary": "DT8 is closed for the case it named, but the liveness signal proves the consumers were alive, not that they polled repeatedly. Registration plus one end-of-window delivery is satisfied by a consumer that blocked once for the whole window; the '3,000 poll intervals' clause is still asserted about injected clock time, never about observed poll behaviour.",
+      "failure_scenario": "Surviving mutation: wire the consumer's blocking read to ignore the injected Clock (or set pollTimeout to effectively infinite), so each of the 1,600 consumers enters readNext once, blocks until the control record arrives, and never times out. All 1,600 are registered, all 1,600 receive the control record, store.totalRequests() == 0, green. NFR-2 is then proved by consumers that never exercised the idle poll path at all. Cheap close: have the fake transport count poll calls (or timeouts) and require >= 3,000 across the window, alongside the zero."
+    }
+  ],
+  "task": "M-1.1",
+  "role": "test-reviewer"
+}

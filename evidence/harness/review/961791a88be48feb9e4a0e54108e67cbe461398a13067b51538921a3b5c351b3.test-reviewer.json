@@ -1,0 +1,25 @@
+{
+  "diff_sha256": "961791a88be48feb9e4a0e54108e67cbe461398a13067b51538921a3b5c351b3",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "TR-M4.43-1",
+      "severity": "major",
+      "file": "docs/internal/product/backlog-notes.md:309",
+      "title": "M4.41's remedy is labelled 'measured' but was projected, one of its two numbers is wrong, and the remedy AS SPECIFIED leaves the tree deterministically RED",
+      "summary": "The row says '\u26a0\ufe0f THE SPECIFIED REMEDY, measured by the round-4 test review: widen the window to 2000ms and raise the floor to 9 (honest ~13, 2x mutant ~6), which costs one extra second of wall clock and has margin on both sides.' Everything else in this row checks out against the round-4 test-review record (2 of 5 class-scoped kills; honest never below 6 across seven runs including load average 123; band roughly 0.75x-2.22x; slowRate 0 under the 2x mutant passing isLessThan(3L); the slowRate-lower-bound alternative leaving one unit of margin; LeaseConfig refusing only renewInterval >= ttl, so 9s/10s doubled to 18s is the defect reinstated -- LeaseConfig.java:63 with a comment naming 9s). The remedy does not. That review's own enumeration of runs is five class-scoped mutant runs, two full :sequencer:test runs and seven honest runs, ALL at the 1000ms window; no 2000ms run appears in it, and '~13' and '~6' are exactly 1000ms values doubled. I measured the 2000ms window in the reviewer tree, every run forced with --rerun-tasks and every count read from TEST-binjava.sequencer.LocalSequencerRenewTest.xml via a temporary println of fastRate/slowRate: honest = fastRate 13, slowRate 3 in 4 of 4 runs; mutant sleepFor(leases.renewInterval().multipliedBy(2)) at LocalSequencer.java:174 = fastRate 7, slowRate 1 in 3 of 3 runs. Two consequences. (1) The mutant figure is 7, not ~6 -- the floor of 9 still separates it, but the number in the row is not what the tree does. (2) The remedy as written is RED on the honest tree: 2000ms / a 600ms interval is 3.33, so the SECOND sequencer's existing bound at LocalSequencerRenewTest.java:427, isLessThan(3L), fails with 'Expecting actual: 3L to be less than: 3L' on every honest run. The row's 'costs one extra second of wall clock and has margin on both sides' does not mention that widening the window forces the slowRate bound to be re-scaled too -- and slowRate's bound is the very thing this row identifies as the second detector's only constraint. So a row whose subject is 'a number read from ONE run and reported as a measurement' attributes to a measurement a pair of numbers that were arithmetic, and one of them is wrong. Fix: say which runs were measured (the 1000ms ones) and, if the 2000ms figures are to stay, state them as measured now -- honest 13/3, mutant 7/1 -- and say that the slowRate bound moves with the window.",
+      "failure_scenario": "The session that picks up M4.41 applies the remedy verbatim -- window 2000ms, floor 9 -- and gets a red on the slowRate assertion the row never mentions, on the honest tree, deterministically. The cheapest way out of that red is to loosen isLessThan(3L) to isLessThan(4L) or delete it, which retires the only bound separating a constant-sleep mutant and leaves the fix weaker than what it replaced; the row's own alternative (bounding slowRate BELOW) is then unreachable because its measured honest value of 1 was taken at the 1000ms window and no longer holds. Second-order and worse: 'measured by the round-4 test review' becomes a committed claim of exactly the kind M4.41 exists to have corrected, so the next round of this loop starts from a false premise about which numbers were run."
+    },
+    {
+      "id": "TR-M4.43-2",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog-done.md:14",
+      "title": "The M4.43 done-row is filed in the M0 section, above M0.5, not in the M4 section with M4.17 and M4.38",
+      "summary": "backlog-done.md is sectioned: '## M0 -- harness' at :10, '## M4 -- sequencer and commit log' at :102. M4.17 is at :106 and M4.38 -- the precedent this row cites by name for taking its own ID -- at :107. The new M4.43 row is inserted at :14, i.e. as the first row of the M0 harness table. No claim in it is false and check-commit-msg.sh greps the whole file, so nothing breaks; the row is simply not where a reader of M4 will look, and it is the first thing a reader of M0 sees.",
+      "failure_scenario": "A session reviewing what M4 landed -- M4.15's milestone review is the concrete one, and it is the next open row in backlog.md -- reads the M4 section and does not see that M4.41 and M4.42 were filed, so it either re-files them under new IDs or judges M4.17's review findings unrecorded. The same reader scanning the M0 harness section finds a sequencer row heading a table about the harness."
+    }
+  ],
+  "task": "M4.43",
+  "role": "test-reviewer",
+  "staged_tree": "cf0e0a0ef8ffed21a69f5807e0357c3b4f466a84"
+}

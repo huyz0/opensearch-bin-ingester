@@ -1,0 +1,27 @@
+{"diff_sha256": "bac705313bb6fa36455f10386a774becf8a3c4a074febca9b4b18e43f50f3683",
+ "verdict": "changes-requested",
+ "findings": [
+  {"id":"MT10","severity":"major","file":"scripts/check-module.sh:86",
+   "summary":"The file claims rule 4 coverage it does not have. The comment justifying compileClasspath says \"Rule 4 (nothing depends on `http`) is also a compile-time fact\", but no check anywhere greps for project ':http'. Executed: added `api(project(\":http\"))` to client/build.gradle.kts and ran ./scripts/check-module.sh client -> `ok 1 module(s) checked`, exit 0.",
+   "failure_scenario":"This is the identical defect the author fixed at lines 121-129 for plugin->binstore-backends: `http` has zero external dependencies today, so a project dependency on it resolves to nothing the HTTP_GROUPS grep can see. client and plugin are not in NO_HTTP, so they will NEVER be caught even after Helidon lands in http. Surviving mutation: any module taking a dependency on project(':http'). Fix is either the three-line grep parallel to line 125, or deleting the rule 4 clause from the comment -- but the claim as staged is exactly non-negotiable 4."},
+
+  {"id":"MT11","severity":"major","file":"scripts/check-module.sh:50",
+   "summary":"Two HTTP_GROUPS entries can never match their own input. `org\\.springframework\\.web` does not match Spring's coordinates, which are `org.springframework:spring-web`, `spring-webmvc`, `spring-webflux` and `org.springframework.boot:spring-boot-starter-web` -- there is no group `org.springframework.web`. Executed: `implementation(\"org.springframework:spring-web:6.1.14\")` in ingest -> `ok 1 module(s) checked`, exit 0. `com.sun.net.httpserver` is a JDK package, not a Maven group, and cannot appear in any dependency report.",
+   "failure_scenario":"Both entries were added in the previous round to close holes and close nothing, while reading to an auditor as coverage. The regex is group-anchored `(group)[.:]`, so Spring needs artifact-level matching (e.g. `org\\.springframework[.:][a-z-]*spring-web`) -- the shape of the whole list cannot express it. The honesty note at 41-49 says the list is incomplete; it does not say entries in it are inert, and that is a different and worse claim."},
+
+  {"id":"MT12","severity":"major","file":"scripts/check-module.sh:24",
+   "summary":"ALL is a third hand-maintained copy of the module list (settings.gradle.kts and architecture.md are the other two) with nothing keeping them in sync, and the delta path drops an unknown module SILENTLY. Line 75 fails loudly for a module named on the command line that is not in ALL; lines 66-67 only `echo` names that ARE in ALL, so a changed directory that is a real Gradle module but absent from ALL vanishes with no signal.",
+   "failure_scenario":"A future `consumer` module (the glossary already names consumer as a library bundled into plugin) is added to settings.gradle.kts and not to ALL. settings.gradle.kts changing routes to the full eight, the success line prints `8 module(s) checked`, and the ninth module -- the one whose dependency surface has never been vetted -- is never resolved. Rule 5 is unenforced on the only module that could plausibly violate it, and the gate is green. Derive ALL from settings.gradle.kts, or fail when the two differ."},
+
+  {"id":"MT13","severity":"minor","file":"scripts/check-module.sh:47",
+   "summary":"The honesty note names the right class of limitation but not the one that is actually reachable here: a coordinate-less jar. `implementation(files(\"libs/helidon-webserver-4.1.0.jar\"))` in ingest -> `ok 1 module(s) checked`, exit 0 (executed). Gradle's `dependencies` report omits file-collection dependencies entirely, so this is a hole in the reporting MECHANISM, not in the completeness of the list, and the note as written does not cover it.",
+   "failure_scenario":"Helidon reaches ingest as a checked-in or flat-dir jar, compiles, and the gate reports ok. One sentence added to the note at 47-49 -- 'and a `files(...)` dependency carries no coordinate for the report to print' -- makes the note accurate."},
+
+  {"id":"MT14","severity":"minor","file":"scripts/check-module.sh:142",
+   "summary":"The success line contradicts itself when modules are named on the command line: WHY says 'named on the command line' and scope_note appends '(changed files only -- CI runs GATE_SCOPE=full)', which is false about what was just checked. Observed on every named-module run in this review.",
+   "failure_scenario":"lib.sh states the reason for scope_note is that 'a delta pass is a weaker statement than a full pass and must not read like one'. Here it makes a targeted pass read as a delta pass. Suppress the note, or print an explicit scope for the named case."},
+
+  {"id":"MT15","severity":"minor","file":"scripts/check-module.sh:32",
+   "summary":"architecture.md rule 1 ('`format` depends on nothing and is pure') has no assertion. Executed: `implementation(\"com.fasterxml.jackson.core:jackson-databind:2.18.2\")` in format -> ok, exit 0.",
+   "failure_scenario":"format acquires an external dependency and the module architecture.md designates as the pure T0 module stops being pure with no gate saying so. Unlike MT10 the file never claims rule 1, so this is a scope note rather than a false claim -- but 'assert the module's dependency surface' is the whole task, and rules 1, 3 and 4 of that surface are unasserted with nothing recording that they are deferred."}
+ ]}

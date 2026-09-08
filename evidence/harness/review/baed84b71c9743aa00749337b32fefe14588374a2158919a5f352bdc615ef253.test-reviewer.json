@@ -1,0 +1,62 @@
+{
+  "diff_sha256": "baed84b71c9743aa00749337b32fefe14588374a2158919a5f352bdc615ef253",
+  "verdict": "changes-requested",
+  "summary": "The four author-reported mutants are real and were reproduced independently; the three-way C/S/W fixture is genuinely discriminating (archive HEAD observed 'C', tar worktree observed 'W'). Two properties the script itself calls load-bearing are unconstrained by any of the four tests: honouring GIT_INDEX_FILE (the private-index composition this very packet depends on) and the role validation that guards `rm -rf \"$DEST\"`. Four further mutations survive as minors.",
+  "findings": [
+    {
+      "severity": "major",
+      "file": "buildSrc/src/test/java/binjava/ReviewTreeTest.java:172",
+      "title": "The GIT_INDEX_FILE-honouring property has zero coverage, and the fixture makes it unreachable",
+      "surviving_mutation": "Insert `unset GIT_INDEX_FILE` immediately before `git checkout-index -a --prefix=\"$DEST/\"` in scripts/review-tree.sh. All four tests stay green (verified by execution in an isolated tree).",
+      "failure_scenario": "review-tree.sh's own comment says it 'Honours GIT_INDEX_FILE, which is what makes this compose with a private index: a session reviewing its own staged bytes in a shared checkout gets ITS index materialised, not whatever another session left in .git/index.' That is exactly the workflow this packet issues (GIT_INDEX_FILE exported before every git command in a shared checkout). Demonstrated in a sandbox: repo whose .git/index stages 'OTHER-SESSION' and whose private index stages 'MINE'; the shipped script materialises 'MINE', the mutated script materialises 'OTHER-SESSION'. The reviewer would be handed another session's staged bytes, be unable to tell, and produce a verdict bound by hash to bytes it never saw -- the same defect class the test file's own javadoc names ('a tree WITHOUT the diff under review, which is worse than no isolation because it looks like a review and is not'), reached by a different route. The fixture cannot currently exercise it: hermetic() strips GIT_* from every child, so no test ever runs the script under a private index.",
+      "suggested_fix": "Extend scratch() to also stage a distinct value ('P') into a private index file, and add a test that runs review-tree.sh with GIT_INDEX_FILE pointed at it (set on the ProcessBuilder environment AFTER GitEnv.stripped, which a JVM is permitted to do) asserting the tree holds 'P' and not 'S'. Same tier, ~10 lines, and it doubles as the end-to-end pin discussed in finding 6."
+    },
+    {
+      "severity": "major",
+      "file": "scripts/review-tree.sh:30",
+      "title": "No failure-path test: the role validation guarding `rm -rf \"$DEST\"` is unconstrained",
+      "surviving_mutation": "Delete the whole `case \"$ROLE\" in reviewer|test-reviewer) ;; *) echo usage; exit 2 ;; esac` block. All four tests stay green (verified by execution). Weaker variants also survive: `exit 2` -> `exit 0`, or replacing the arm list with `*) ;;`.",
+      "failure_scenario": "ROLE is interpolated straight into DEST and DEST is passed to `rm -rf`. With the guard gone, `review-tree.sh '../../../victim'` deletes an arbitrary directory -- demonstrated in a sandbox, victim/data.txt was removed and the tree materialised over it. The realistic path is milder but still silent: a wrapper invoking `review-tree.sh \"$ROLE\"` with ROLE unset yields DEST=\".../$KEY/\", so both reviewers materialise into the same directory -- reinstating precisely the M4.3 evidence corruption this task exists to prevent, with nothing failing. testing.md rule 14 requires the failure path, and this packet's own lens says to construct the input the check must reject and confirm it rejects it. Nothing does.",
+      "suggested_fix": "One parameterised test over {\"\", \"reviewer/../..\", \"docs-reviewer\"} asserting exit status 2, a usage message on stderr, and that no directory was created."
+    },
+    {
+      "severity": "minor",
+      "file": "scripts/review-tree.sh:44",
+      "title": "`rm -rf \"$DEST\"` can be deleted with no test failing",
+      "surviving_mutation": "Delete the `rm -rf \"$DEST\"` line. All four tests stay green (verified by execution).",
+      "failure_scenario": "The line's comment states the property it buys: `checkout-index` overwrites but never removes, so a file deleted by this round's diff survives from the previous round and a reviewer tests against a file the commit does not have. Every test uses a fresh @TempDir, hence a fresh KEY and a virgin DEST, so no test ever materialises twice into one destination. A test would call tree() twice against the same repo with a file removed from the index between the calls and assert it is gone from the second tree."
+    },
+    {
+      "severity": "minor",
+      "file": "scripts/review-tree.sh:38",
+      "title": "The repository-path component of KEY can be dropped with no test failing",
+      "surviving_mutation": "`KEY=$(printf '%s' \"$ROOT\" | sha256sum | cut -c1-12)` -> `KEY=fixed`. All four tests stay green (verified by execution).",
+      "failure_scenario": "The comment says KEY exists so two sessions working two checkouts on one machine do not materialise into the same directory. Every test derives its repo from one @TempDir, so no test ever compares two roots. With the mutation, two checkouts reviewing different diffs share /tmp/binjava-review-trees/fixed/reviewer, the second `rm -rf` wipes the first mid-review, and the symptom is a mutation result that is simply wrong -- the M0.59 failure one level up. Two repos in one @TempDir, same role, asserting distinct paths, would close it."
+    },
+    {
+      "severity": "minor",
+      "file": "scripts/review.sh:35",
+      "title": "The wiring of review-tree.sh into the packet is untested; the script can become an orphan silently",
+      "surviving_mutation": "Delete the entire `=== YOUR OWN TREE TO MUTATE IN ===` echo block from review.sh, leaving zero occurrences of 'review-tree' in the file. All four tests stay green (verified by execution).",
+      "failure_scenario": "The task's point is that the tree is issued rather than improvised -- reviewers were already rsync'ing scratch copies differently each time, which is how M4.3's evidence was corrupted. If the section is later dropped or reworded past recognition, review-tree.sh becomes a script nothing tells anyone to run and the behaviour silently reverts, while every test stays green. Nothing in the suite asserts on `review.sh context` output at all. A single assertion that the context output mentions review-tree.sh would pin the wiring without pinning the prose."
+    },
+    {
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/ReviewTreeTest.java:223",
+      "title": "The test is named 'EveryInheritedGitVariable' but pins exactly three keys",
+      "surviving_mutation": "`removeIf(k -> k.startsWith(\"GIT_\"))` -> `removeIf(k -> k.equals(\"GIT_INDEX_FILE\") || k.equals(\"GIT_DIR\") || k.equals(\"GIT_WORK_TREE\"))`. All four tests stay green (verified by execution).",
+      "failure_scenario": "GIT_OBJECT_DIRECTORY, GIT_ALTERNATE_OBJECT_DIRECTORIES, GIT_COMMON_DIR, GIT_CEILING_DIRECTORIES and GIT_CONFIG_GLOBAL redirect a child's git the same way; a fixture inheriting GIT_OBJECT_DIRECTORY writes its blobs into the caller's odb, which is the same cross-contamination the class javadoc measured. Adding one non-listed GIT_* key to the assertion closes it. Separately: asserting on the ProcessBuilder environment map is NOT implementation-restated -- that map is the child's environment, so there is no gap between 'the map lacks the key' and 'the child does not see it' -- but the observable version is constructible (a JVM cannot set its own environment, yet it can set a child's), and finding 1's suggested test provides it for free."
+    }
+  ],
+  "verified_independently": [
+    "git checkout-index -> git archive HEAD | tar -x: kills theTreeHoldsTheSTAGEDBytes... (observed 'C') and eachRoleGetsItsOwnTree... CONFIRMED",
+    "git checkout-index -> tar -c --exclude=.git . | tar -x: kills the same two (observed 'W') CONFIRMED",
+    "DEST moved under $ROOT: kills theTreeLivesOUTSIDETheRepository... only CONFIRMED",
+    "GitEnv.stripped removeIf deleted: kills strippingRemovesEveryInheritedGitVariable only CONFIRMED",
+    "DEST drops $ROLE: kills eachRoleGetsItsOwnTree... only (additional, not reported by author)",
+    "Question 1: the C/S/W fixture is genuinely three-way discriminating -- the two wrong sources produce two distinct observed values, neither an absent-file error",
+    "Question 3: binding_key in tdd_scan.py is sha256(test declaration + NUL + the file's non-test remainder), so a helper in ReviewTreeTest.java would be inside the remainder and could not be mutated without staling the record. The separate-file reasoning is sound; no simpler recordable arrangement exists inside the test source set."
+  ],
+  "task": "M0.57",
+  "role": "test-reviewer"
+}

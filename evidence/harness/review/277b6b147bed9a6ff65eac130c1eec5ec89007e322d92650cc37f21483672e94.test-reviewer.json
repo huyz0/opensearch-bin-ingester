@@ -1,0 +1,87 @@
+{
+  "diff_sha256": "277b6b147bed9a6ff65eac130c1eec5ec89007e322d92650cc37f21483672e94",
+  "verdict": "changes-requested",
+  "summary": "The 11 conformance cases hold the memory backend well but under-constrain the SPI contract in seven places, each verified by a surviving mutation run against the staged bytes in a pristine index copy (control: putIfAbsent->put IS caught, so the harness is live). All seven are the shapes a filesystem backend naturally takes, so they land silently in M1.2.",
+  "findings": [
+    {
+      "file": "binstore-spi/src/testFixtures/java/binjava/binstore/BinStoreConformance.java",
+      "line": 66,
+      "severity": "major",
+      "title": "putIfAbsent atomicity is asserted in prose and tested single-threaded",
+      "mutation": "replace `objects.putIfAbsent(key, entry)` with `if (objects.get(key) != null) return empty; Thread.yield(); objects.put(key, entry); return of(v);`",
+      "failure_scenario": "VERIFIED SURVIVING (11 tests, 0 failures). The case writes to a free key then an occupied key sequentially, so a non-atomic get-then-put satisfies every assertion. M1.2's whole implementation technique is O_CREAT|O_EXCL versus Files.exists()-then-write, and only the second is caught by nothing here. testing.md rule 19 makes CAS semantics the conformance suite's primary job. Needs N threads on one key through a CyclicBarrier: exactly one Optional present, and the surviving body equal to that winner's."
+    },
+    {
+      "file": "binstore-spi/src/testFixtures/java/binjava/binstore/BinStoreConformance.java",
+      "line": 122,
+      "severity": "major",
+      "title": "list never distinguishes a byte prefix from a directory, nor ordering across nesting",
+      "mutation": "implement list as `filter(k -> parentPath(k).equals(trim(prefix,'/')))` over the whole map, i.e. a readdir of the prefix directory",
+      "failure_scenario": "VERIFIED SURVIVING (11 tests, 0 failures). Every key in both list cases sits exactly one level under a prefix that always ends in '/', and no key is a prefix of another. So a backend that resolves a prefix to a directory and lists its children passes, and a backend that orders by directory walk rather than by full key bytes passes too. Both are what Files.walk/File.list give you for free in M1.2. The suite needs `p/a`, `p/ab`, `p/a/x` present at once, `list(\"p/a\", null)` returning all three in byte order (`p/a` < `p/a/x` < `p/ab`, since '/' is 0x2F and 'b' is 0x62), and a prefix that does not end in a separator."
+    },
+    {
+      "file": "binstore-spi/src/testFixtures/java/binjava/binstore/BinStoreConformance.java",
+      "line": 144,
+      "severity": "major",
+      "title": "the prefix/startAfter asymmetry was fixed in one list case and left in the other",
+      "mutation": "`.takeWhile(e -> startAfter != null || e.getKey().startsWith(prefix))` -- drop the prefix bound only on the resume path",
+      "failure_scenario": "VERIFIED SURVIVING (11 tests, 0 failures). listReturnsOnlyThePrefixInLexicographicOrder was correctly hardened with `q/z`, but listResumesStrictlyAfterTheGivenKey has no foreign key at all -- only p/a, p/b, p/c -- so the resume branch's prefix bound is unconstrained, which is the same defect class that `other/z` originally hid. A backend that seeks to startAfter in the global key space and forgets the prefix returns q/z, and nothing notices. Add q/z (and other/z) to the resume case, and add the two resume edge cases: startAfter naming a key that no longer exists, and startAfter sorting before the prefix."
+    },
+    {
+      "file": "binstore-spi/src/testFixtures/java/binjava/binstore/BinStoreConformance.java",
+      "line": 92,
+      "severity": "major",
+      "title": "Version is never asserted to be either the object's version or a stable one",
+      "mutation": "(a) `put` returns `new Version(\"constant-lie\")` while storing the real one; (b) `stat` returns `nextVersion()` on every call",
+      "failure_scenario": "BOTH VERIFIED SURVIVING (11 tests, 0 failures each). No test anywhere reads the Version returned by put or putIfAbsent -- both return values are discarded or checked only for Optional presence -- so put's entire return value is unconstrained. And line 92 asserts only `version()).isNotNull()`, which Version's own compact constructor already guarantees, so it constrains nothing beyond VersionTest. aVersionChangesWhenTheObjectChanges asserts inequality only, which an unstable version satisfies trivially: a backend deriving a version from mtime and re-stat'ing gets a fresh token per call and passes. Assert put's returned Version equals stat's, and that two consecutive stats of an unchanged object return equal versions."
+    },
+    {
+      "file": "binstore-spi/src/testFixtures/java/binjava/binstore/BinStoreConformance.java",
+      "line": 164,
+      "severity": "major",
+      "title": "the absent key in the delete batch is last, so an abort-on-absent backend passes",
+      "mutation": "`for (String k : keys) { if (objects.remove(k) == null) { return; } }` -- silently abandon the rest of the batch at the first absent key",
+      "failure_scenario": "VERIFIED SURVIVING (11 tests, 0 failures). delete(List.of(\"p/a\", \"never-existed\")) has nothing after the absent key that must still be deleted, so aborting there is indistinguishable from completing. The natural filesystem shape is `try { for (k : keys) Files.delete(k); } catch (NoSuchFileException ignored) {}` -- catch around the loop rather than inside it -- and the comment's own scenario (GC re-running after a crash over a list that mixes already-deleted and still-present keys) is exactly what it fails on. Put the absent key first or in the middle: delete(List.of(\"gone\", \"p/a\", \"p/c\")) with p/b surviving."
+    },
+    {
+      "file": "binstore-spi/src/testFixtures/java/binjava/binstore/BinStoreConformance.java",
+      "line": 110,
+      "severity": "major",
+      "title": "getRange has no failure path -- absence and out-of-range are both untested",
+      "mutation": "treat an absent key as zero bytes and clamp endIncl to EOF instead of validating: `data = get(key)==null ? new byte[0] : ...; if (start >= data.length) return empty; endIncl = min(endIncl, data.length-1);`",
+      "failure_scenario": "VERIFIED SURVIVING (11 tests, 0 failures). readingAnAbsentKeyFailsRatherThanReturningEmptyBytes guards `get` and states exactly why empty bytes are dangerous, but getRange -- the method a segment directory actually calls -- has only the happy path, so the identical defect is unguarded there. RandomAccessFile.seek past EOF gives a short read rather than an exception, so M1.2 lands in this hole by default. testing.md rule 14. Needs: getRange on a missing key throws; endIncl >= length throws; start < 0 or endIncl < start throws."
+    },
+    {
+      "file": "binstore-spi/src/main/java/binjava/binstore/Body.java",
+      "line": 26,
+      "severity": "major",
+      "title": "Body is new production code with validation, a defensive copy and a re-open contract, and no test at all",
+      "mutation": "simultaneously: `ofBytes` returns `new Body(0L, ...)`; drop `bytes.clone()`; delete the `length < 0` check from the compact constructor",
+      "failure_scenario": "VERIFIED SURVIVING (spi 7 tests + backends 11 tests, 0 failures) with all three applied at once -- the class can be gutted and the tree stays green. Version and ObjectStat each got a unit test for exactly this validation; Body got none. `length` is the field the SPI javadoc says stores need up front for Content-Length, and nothing reads it, so a wrong length reaches the first real HTTP backend as a truncated or rejected PUT with no test having ever looked. The documented 'the supplier may be called more than once, because a retry has to re-read the body from the start' is also never exercised -- a Body whose open() works once would pass everything."
+    },
+    {
+      "file": "binstore-spi/src/testFixtures/java/binjava/binstore/BinStoreConformance.java",
+      "line": 184,
+      "severity": "major",
+      "title": "capabilities are asserted as advertised rather than probed",
+      "mutation": "leave capabilities() advertising maxKeyBytes = 1024 (as MemoryBinStore does) on a backend that refuses any key over 255 bytes; or advertise batchDelete = true on a backend that loops",
+      "failure_scenario": "SURVIVES BY INSPECTION: the longest key the suite ever writes is 7 bytes and no case writes a key at or beyond the advertised limit, so the advertised number is never compared to behaviour. testing.md rule 19 is explicit -- 'Establish Capabilities by writing and asserting rejection, never from a version string' -- and `assertThat(maxKeyBytes()).isPositive()` is the assume, not the probe. A filesystem backend hits a real 255-byte-per-component limit while advertising whatever constant it inherited. Write a key of exactly maxKeyBytes and require it to round-trip; write one longer and require rejection."
+    },
+    {
+      "file": "binstore-spi/src/test/java/binjava/binstore/VersionTest.java",
+      "line": 13,
+      "severity": "minor",
+      "title": "the reconstructed reds are honest as constraint evidence, but only for the first assertion of each case",
+      "mutation": "n/a -- this is a red-record observation, not a surviving mutation",
+      "failure_scenario": ".harness/tdd/red.log shows all seven record-test reds as AssertionFailedError at the intended assertion line (VersionTest.java:13 and :33, ObjectStatTest.java:16), not compile errors and not vacuous passes, so they are honest evidence that those assertions constrain the code -- a mutation-produced red is stronger than a class-does-not-exist red. Two caveats worth a line in the commit body: (1) the conformance reds are timestamped 00:32:33-00:32:45 and the record reds 00:33:37-00:34:25, so Version and ObjectStat existed before their unit tests -- the red is reconstructed, which is evidence of constraint but not of ordering, and check-tdd cannot tell the two apart; (2) a red at the first assertion of a multi-assertion case proves only that assertion, so carriesKeySizeAndVersion's size() and version() assertions and equalsByToken's isNotEqualTo were never observed failing."
+    }
+  ],
+  "not_findings": [
+    "list assertions use containsExactly (order AND exact membership) in both cases -- no count-where-membership-is-needed defect. The two assertions that are weaker than they look are version().isNotNull() and maxKeyBytes().isPositive(), covered above.",
+    "The nine mutations the author reports as caught were spot-checked: putIfAbsent->put was re-run as a live control and does fail (11 tests, 1 failure), confirming the harness executes rather than reporting UP-TO-DATE.",
+    "The q/z fix to listReturnsOnlyThePrefixInLexicographicOrder is genuine: with other/z sorting before p/ and q/z after, dropping the prefix check fails, and dropping the lower bound also fails.",
+    "No Thread.sleep, no fixed port, no system temp, no mock. Tier is correct: every case is T0/T1 against MemoryBinStore and the missing concurrency case stays T1 with a barrier, no clock or socket needed."
+  ],
+  "task": "M1.1",
+  "role": "test-reviewer"
+}

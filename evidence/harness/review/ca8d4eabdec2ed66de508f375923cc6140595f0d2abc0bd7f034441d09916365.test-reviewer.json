@@ -1,0 +1,87 @@
+{
+  "verdict": "changes-requested",
+  "summary": "Sixteen tests, and the ones that bite bite hard: 12 mutants measured dead, including both K boundaries, both dirty-flag halves (idle kills `dirty = true` initial, quiet kills the missing `dirty = false`), per-stream and per-pod PUT amplification, `put` for `Math::max`, constant body sequence, key/body off-by-one, oldestRetainedOffset = nextOffset, the missing `observe` call and observe-before-commit. Four named acceptance criteria have no test that fails when the code is wrong, each measured surviving the full suite in a private tree: (1) a writer whose stream/pod CONTENT freezes at the first checkpoint while the sequence advances -- the row's own 'a constant or STALE body' hazard -- passes everything, because no test ever decodes two checkpoints' content; (2) `seq = nextSequence() - 1`, one of the three wrong derivations the row names, passes because every sequence assertion is relative; (3) the writer's key epoch is a constant-1 survivor -- after a takeover every checkpoint would land under the SEALED ancestor's prefix and the epoch-2 fixture that would catch it already exists and asserts only pods; (4) deleting `deltasSinceCheckpoint = 0` makes K a one-shot threshold and every later commit write a checkpoint (1000x PUTs at the shipped default), because no K test commits past the first period. Plus two minors: the failure-path test proves a later COMMIT writes but not a later TICK (clearing `dirty` in the catch -- the line whose production comment says it is load-bearing -- survives), and `theShippedCheckpointPolicyIsUsable` kills nothing the suite does not already kill while passing against a policy that never checkpoints at all. No existing test file is touched, so nothing was weakened; tiers are right (MemoryBinStore + injected tickers, no sleep, no socket) and `tickAndAwait` is race-free -- `ticksProcessed` is incremented after the write and read through an AtomicLong.",
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "major",
+      "blocks": true,
+      "title": "A stale checkpoint body -- content frozen at the first write, sequence still advancing -- survives every content test",
+      "file": "sequencer/src/test/java/binjava/sequencer/CheckpointWriterContentTest.java:71",
+      "mutation": "In CheckpointWriter.writeIfDirty, cache the streams map and the pods copy on the first write and reuse them for every later checkpoint, leaving `sequence` correct: `if (frozenStreams == null) { frozenStreams = streams; frozenPods = podsNow; } new Checkpoint(sequence, frozenStreams, frozenPods)`. MEASURED: :sequencer:test BUILD SUCCESSFUL, whole suite green.",
+      "why": "Every content test observes at most ONE checkpoint: theCheckpointCarriesEachStreamsOwnNextOffsetAndEachPodsOwnFlushSeq uses K=3 with 3 commits, everyStreamsOldestRetainedOffsetIsZero uses K=1 with 1 commit, aPodsFlushSeqNeverGoesBACKWARDS uses K=2 with 2 commits, and LocalSequencerCheckpointTest uses K=2 with 2 commits. theBodysSequenceIsTheKeysSequence is the only test that writes twice and it asserts nothing but the sequence. The file's own javadoc names 'a constant or stale body' as the hazard it exists for, and the task row names it too; the constant-SEQUENCE form is dead, the stale-CONTENT form is alive.",
+      "failure_scenario": "A checkpoint whose key and body say sequence N but whose offsets are from an earlier commit. M4.9 replays deltas from N forward, so every offset advance between the frozen snapshot and N is lost -- a silent offset regression at recovery, invisible to every count, boundary and grammar assertion.",
+      "remedy": "In theBodysSequenceIsTheKeysSequenceAndBothAdvanceWithDeltas commit different counts per delta and assert the SECOND body's nextOffset (and pods) advanced, not only its sequence."
+    },
+    {
+      "id": "F2",
+      "severity": "major",
+      "blocks": true,
+      "title": "The seq derivation is decided in prose only: `nextSequence() - 1` survives the whole suite",
+      "file": "sequencer/src/test/java/binjava/sequencer/CheckpointWriterContentTest.java:161",
+      "mutation": "`long sequence = log.nextSequence() - 1;` in CheckpointWriter.writeIfDirty. MEASURED: :sequencer:test BUILD SUCCESSFUL.",
+      "why": "Key and body shift together, so theBodysSequenceIsTheKeysSequenceAndBothAdvanceWithDeltas (key == checkpointKeyFor(bodySeq), secondSeq > firstSeq) still passes, and no test asserts an ABSOLUTE sequence. theCheckpointKeyIsZeroPadded... exercises LogKeys directly with literals 9 and 16 and never goes through the writer. The row names this exact derivation -- 'an off-by-one against the last INCLUDED sequence' -- as one of three that must not survive, and demands the choice be 'made and stated'; it is stated in the javadoc and pinned by nothing.",
+      "failure_scenario": "M4.9 bounds replay from the key's seq. Off by one, it either re-applies a delta already folded into the checkpoint or skips one -- offsets duplicated or dropped, with the object count, the boundary tests and the key grammar all unchanged.",
+      "remedy": "One absolute assertion: after the commits, `assertThat(lastWritten(store).sequence()).isEqualTo(log.nextSequence())` (or against the count of deltas committed)."
+    },
+    {
+      "id": "F3",
+      "severity": "major",
+      "blocks": true,
+      "title": "The writer's key EPOCH is never observed at anything but 1; a constant survives, and the takeover fixture that would catch it already exists",
+      "file": "sequencer/src/test/java/binjava/sequencer/CheckpointWriterContentTest.java:133",
+      "mutation": "`this.keys = new LogKeys(prefix, 1);` in the CheckpointWriter constructor, dropping `log.epoch()`. MEASURED: :sequencer:test BUILD SUCCESSFUL.",
+      "why": "Every test that asserts a checkpoint KEY runs at epoch 1 (both LogKeys literals in the content test are `new LogKeys(\"bins\", 1)`), and the one test with a second epoch -- theFirstCheckpointAfterATakeoverCarriesNoPodsAtAll, which builds `new CommitLog(store, \"bins\", 2)` -- asserts only `pods()`, read through lastCheckpointBody() which does not care what key the bytes landed under.",
+      "failure_scenario": "After a takeover at epoch 2, every checkpoint is written under epoch 1's log prefix -- the SEALED ancestor chain. M4.9 lists under the current epoch and finds none, so recovery stays unbounded forever; nothing throws, because M4.8b1's isEntryKey filter makes the ancestor's readers skip the strays. Silent, permanent, and it only manifests after the first failover.",
+      "remedy": "In the takeover test, one line: assert the last checkpoint key equals `new LogKeys(\"bins\", 2).checkpointKeyFor(...)`, or at least starts with the epoch-2 log prefix."
+    },
+    {
+      "id": "F4",
+      "severity": "major",
+      "blocks": true,
+      "title": "The K PERIOD is pinned only for the first period: deleting the counter reset gives one checkpoint per DELTA and no test notices",
+      "file": "sequencer/src/test/java/binjava/sequencer/CheckpointWriterTriggerTest.java:106",
+      "mutation": "Delete `deltasSinceCheckpoint = 0;` from CheckpointWriter.writeIfDirty. MEASURED: :sequencer:test BUILD SUCCESSFUL.",
+      "why": "noCheckpointBeforeTheKthDeltaAndExactlyOneAtIt stops at exactly K commits (K=3, 3 commits), and every other K-driven test either uses K=1 (where the reset is a no-op) or stops at K (LocalSequencerCheckpointTest: K=2, 2 commits; aPodsFlushSeq...: K=2, 2 commits). theTickTriggerWritesOncePerPeriod... says 'no more and no fewer' but runs K=1_000_000, so it constrains the T trigger only. Nothing ever commits past the first checkpoint at a K above 1.",
+      "failure_scenario": "After the first checkpoint the counter never falls below K again, so EVERY subsequent commit writes a checkpoint: the PUT rate goes from deltas/K to one per delta -- 1000x at the shipped CHECKPOINT_EVERY_DELTAS -- while the row's 'PUTs scale with deltas/K' criterion, asserted by request count, stays green.",
+      "remedy": "Extend the boundary test past the first period: with K=3, commits 4 and 5 must still leave one checkpoint and the 6th must make it two."
+    },
+    {
+      "id": "F5",
+      "severity": "minor",
+      "blocks": false,
+      "title": "The failure-path test proves a later COMMIT writes, not a later TICK: clearing the dirty flag in the catch survives",
+      "file": "sequencer/src/test/java/binjava/sequencer/CheckpointWriterTriggerTest.java:251",
+      "mutation": "Add `dirty = false;` before the `return` in CheckpointWriter's `catch (IOException retryAtTheNextTrigger)`. MEASURED: :sequencer:test BUILD SUCCESSFUL. The harder form -- a `latched` flag that stops all further writes -- IS killed by this test, so the criterion 'a later trigger still writes' does have a test; this is the narrower sub-case.",
+      "why": "The test uses frozen() and two commits at K=1, and `observe` sets `dirty = true` unconditionally, so the second COMMIT re-arms the flag the mutation cleared. The tick path is never exercised after a failure -- which is exactly the case the production comment calls out ('clearing it there wedges the writer until the next commit and, on a quiet cluster, forever').",
+      "failure_scenario": "One transient store error during a checkpoint on a cluster that then goes quiet: the state is never checkpointed, and recovery for that chain stays unbounded until the next commit -- which on a quiet cluster never comes.",
+      "remedy": "Swap frozen() for the ManualTicker and assert that a TICK after the failed PUT writes (checkpointKeys grows without a second commit). Scoping failNextCheckpointPut to `.ckpt` is correct, and the recorded failed attempt is why the assertion reads >= 2 rather than == 2; that part is sound."
+    },
+    {
+      "id": "F6",
+      "severity": "minor",
+      "blocks": false,
+      "title": "theShippedCheckpointPolicyIsUsable passes against a policy that never checkpoints, and kills nothing the suite does not already kill",
+      "file": "sequencer/src/test/java/binjava/sequencer/LocalSequencerCheckpointTest.java:107",
+      "mutation": "`CHECKPOINT_EVERY_DELTAS = Long.MAX_VALUE` and `CHECKPOINT_INTERVAL = Duration.ofDays(1)`. MEASURED: :sequencer:test BUILD SUCCESSFUL -- which is precisely the `sleepFor(Duration.ofDays(1))` failure the file's own javadoc cites as its reason for existing. In the other direction, `CHECKPOINT_EVERY_DELTAS = 0` fails 33 tests across LocalSequencerTest, LocalSequencerRenewTest, CommitProtocolSimulationTest and others, so the >= 1 half is already dead surface.",
+      "why": "The bounds asserted (>= 1, > ZERO) are the writer's construction guards restated, not a policy.",
+      "failure_scenario": "A default quietly widened to a value that never fires in production, leaving M4.9 with no checkpoint to bound recovery from, with the whole suite green.",
+      "remedy": "Either bound the policy on the side that can actually go wrong (an upper bound derived from the recovery bound M4.9 needs), or drop the test as covered."
+    },
+    {
+      "id": "F7",
+      "severity": "minor",
+      "blocks": false,
+      "title": "The request-rate dimension test compares two fixtures, so a writer that writes nothing passes it",
+      "file": "sequencer/src/test/java/binjava/sequencer/CheckpointWriterTriggerTest.java:228",
+      "mutation": "Make writeIfDirty return immediately: both fixtures record 0 checkpoint PUTs and `isEqualTo` holds. (Killed elsewhere -- noCheckpointBeforeTheKthDeltaAndExactlyOneAtIt fails -- so this is a robustness nit, not a hole.)",
+      "why": "The assertion is relative rather than absolute. Both real dimension mutants were measured DEAD here: a PUT per stream (40 vs 1) and a PUT per pod (4 vs 1) each fail this test and only this test, so it does the job the row asked of it.",
+      "failure_scenario": "The test would go on passing if the writer stopped writing entirely, so it can only be read together with the boundary tests.",
+      "remedy": "`.isEqualTo(1)` on both sides instead of comparing them, or assert `few` is 1 first."
+    }
+  ],
+  "diff_sha256": "ca8d4eabdec2ed66de508f375923cc6140595f0d2abc0bd7f034441d09916365",
+  "task": "M4.8b2",
+  "role": "test-reviewer",
+  "staged_tree": "7998186dac8a65d92e8f46eada732424d17dbcd6"
+}

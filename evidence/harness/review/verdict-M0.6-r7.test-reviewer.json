@@ -1,0 +1,34 @@
+{
+  "diff_sha256": "fdddda0f1aa21e4d33d5be03e56aeb3fec430a837704cf2aeb05e8d64ad24f78",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "WT25",
+      "severity": "major",
+      "file": "buildSrc/src/test/java/binjava/ModuleGateTest.java:45",
+      "summary": "The javadoc claims this suite constrains SELECTION, but it enters only ONE of the gate's three selection modes (the delta path). GATE_SCOPE=full -- the mode the AGENTS.md row added by THIS commit says CI depends on -- and the named-module door documented in check-module.sh's header are entered by no test.",
+      "surviving_mutation": "scripts/check-module.sh:255 `elif [ \"$GATE_SCOPE\" = \"full\" ]; then` -> `elif false; then` AND :253 `if [ $# -gt 0 ]; then` -> `if false; then`. Measured: 55/55 tests green. In a scratch repo with nothing staged, `GATE_SCOPE=full ./scripts/check-module.sh` then prints `ok no module changed (full tree: 7 tracked/staged)`, exits 0, and makes zero gradlew invocations -- a green line naming the full tree while building none of it, which is exactly the vacuous CI green the new AGENTS.md row promises is prevented. `./scripts/check-module.sh alpha` likewise prints `ok no module changed`. Killed by two ModuleGateTest methods on the existing scratch harness: one setting GATE_SCOPE=full with nothing staged and asserting `2 module(s) checked`, one invoking the script with `alpha` and asserting `1 module(s) checked (named on the command line)`."
+    },
+    {
+      "id": "WT26",
+      "severity": "major",
+      "file": "buildSrc/src/test/java/binjava/RuleListTest.java:31",
+      "summary": "Answer to the question asked: the regex does NOT match silently (m.find() is asserted, and reformatting to single quotes fails the test loudly -- verified), and isSubsetOf is NOT vacuous on an emptied list (\"\".split(\"\\\\s+\") yields [\"\"], size 1, so NO_HTTP=\"\" dies -- verified). But the test has been relocated somewhere it can be bypassed: it reads the FIRST textual assignment in the source, not the value the gate uses at the point of use. It also constrains membership only, never contents, so the escape the script's own comment predicts -- deleting a module from the list -- is invisible.",
+      "surviving_mutation": "(a) Shadowing: insert `NO_HTTP=\"\"` and `NO_CLOUD=\"\"` immediately before `checked=0` at scripts/check-module.sh:274. Rules 2 and 5 become inert for every module; RuleListTest still reads the strong assignment at :221/:223 and 55/55 tests stay green. (b) Shrinking: `NO_HTTP=\"format binstore-spi sequencer\"` (drop `ingest`) or `NO_CLOUD=\"client\"` (drop `plugin`) -- still a subset, 55/55 green, gate enforces strictly less and still prints ok. Both measured. Fix: a `--rule-lists` door that echoes $NO_HTTP/$NO_CLOUD at the point of use (the same one-implementation argument the file makes for --list-modules at :24-26, which this test violates one level up by exercising the text instead of the value), plus containsExactlyInAnyOrder on the four/two names architecture.md rules 5 and 2 fix."
+    },
+    {
+      "id": "WT27",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/ModuleGateTest.java:28",
+      "summary": "The javadoc's honest gap list names three untested mutations (HTTP_GROUPS, compileClasspath, rule-4) and hands them to M0.23, but two more branches downstream of selection are equally untested and are NOT about rules 2/4/5 -- they are the 'reports success while checking nothing' class, and the stub gradlew already in this file makes them cheap to cover.",
+      "surviving_mutation": "scripts/check-module.sh:301 `[ -n \"$one\" ] || { bad_conf=\"$conf (empty report)\"; break; }` -> `true` survives 55/55; and :278 `if ! ./gradlew \":$m:build\" ...` -> `if ! true ./gradlew ...` survives 55/55. The file's own comment at :291-293 says the exit-status check exists because an empty dependency report once printed the success line over bytes never read. A second stub variant (exit 1, or empty output for `dependencies`) kills both. At minimum name them in the M0.23 backlog row so the gap list is complete."
+    },
+    {
+      "id": "WT28",
+      "severity": "minor",
+      "file": "buildSrc/build.gradle.kts:37",
+      "summary": "This one line is what makes all 55 tests actually rerun when a shell script changes; nothing guards its removal, and this is the SECOND occurrence of the class (the comment above it records the same fix for *.py). A test suite that does not run on the change it guards is the defect this commit's own comment names.",
+      "surviving_mutation": "Revert to `include(\"*.py\")`, run the suite once to warm the cache, then apply any killed mutation (e.g. NO_HTTP=\"\"). Measured: `Task :test UP-TO-DATE`, BUILD SUCCESSFUL, check-harness-tests.sh reports the cached 55 passing. Deterministic guard available (non-negotiable 9): have check-harness-tests.sh fail when the run reports `:test UP-TO-DATE` after a scripts/*.sh change, or assert the declared input patterns."
+    }
+  ]
+}

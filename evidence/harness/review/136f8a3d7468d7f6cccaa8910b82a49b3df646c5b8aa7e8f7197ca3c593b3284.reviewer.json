@@ -1,0 +1,43 @@
+{
+  "diff_sha256": "136f8a3d7468d7f6cccaa8910b82a49b3df646c5b8aa7e8f7197ca3c593b3284",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "file": "scripts/review-tree.sh",
+      "line": 75,
+      "severity": "major",
+      "what": "The containment guard resolves TMPDIR but not the shared parent the script then creates under it. TMPROOT is physical (line 62) and ROOT_P is physical (line 70), but BASE=\"$TMPROOT/binjava-review-trees\" appends one unresolved component, and mkdir -p/mktemp -d both follow a symlink there. The comment at line 80 deletes the second resolution on the ground that \"BASE is built from an already-physical TMPROOT\" -- true of TMPROOT, false of BASE, and it removed the only thing that could have caught this.",
+      "failure_scenario": "REPRODUCED. Scratch repo, TMPDIR outside it, and $TMPDIR/binjava-review-trees pre-existing as a symlink into the working tree: review-tree.sh reviewer exits 0, prints a path that looks external, and materialises the full tree plus a nested .git PHYSICALLY inside the repository -- the exact outcome the guard is argued at length to prevent, one component below where it looks. Two realistic inputs: (a) the script's own comment says the trees cost disk and invites a manual sweep, and the natural response to 470M of tmpfs (measured now: 204 directories) is to relocate the parent with a symlink; if that target is inside the repo the guard is silently void. (b) $TMPDIR/binjava-review-trees is a fixed, predictable name in a world-writable directory, so any other local process can choose where a reviewer's 571 files land. Consequence inside the repo is not cosmetic: tdd-red.sh:40 runs `find . -path '*/build/test-results/*' -name 'TEST-*.xml' -delete` from the root and would delete a live reviewer's test-results out of the materialised tree -- the M4.3 evidence corruption this row exists to prevent, re-created through the guard that is supposed to prevent it. Fix is to resolve DEST after mktemp, CHECK the resolution (the round-3 finding was that it was unchecked, not that it was useless), and re-apply the containment case."
+    },
+    {
+      "file": "scripts/review.sh",
+      "line": 64,
+      "severity": "major",
+      "what": "The packet block this diff adds tells every reviewer \"The tree IS a git repository -- it carries a single commit of the staged bytes\". After the round-3 fix that is false: the single commit is EMPTY (`git commit --allow-empty -m \"empty base, so HEAD resolves\"`, review-tree.sh:134) and the staged bytes exist only in the index. The prose describes the design that was just removed.",
+      "failure_scenario": "MEASURED in an issued tree (571 files). The reviewer workflow the script's own header states is \"apply a change to production code, run the suite, see which test fails, restore\", and the restore step is the one the prose gets wrong. A reviewer who believes the bytes are committed restores with `git reset --hard`: HEAD is the empty commit, so all 571 files are deleted and the tree is left containing only .git -- its evidence destroyed mid-review, silently, exit 0. `git checkout HEAD -- scripts/lib.sh` errors with \"pathspec did not match any file(s) known to git\", which at least fails loudly; `git stash` has the same shape as reset. Only `git checkout -- <file>` (from the index) works, and nothing tells the reviewer that. The packet should say the bytes are STAGED and that restore is `git checkout -- <path>`."
+    },
+    {
+      "file": "docs/internal/product/backlog.md",
+      "line": 35,
+      "severity": "major",
+      "what": "The M0.57 row states that trees \"are left for the platform's reaper, deliberately, because an age-based sweep would put the removal back to save disk\". The same commit removes exactly that claim from review-tree.sh, where the replacement comment says \"nothing here removes them, and no claim is made that the platform does. A draft of this comment said the temp reaper would take them, which round-3 review measured as false on the documented platform\". The commit therefore ships the retraction and the retracted claim side by side, with the false copy in the authoritative record.",
+      "failure_scenario": "RE-MEASURED now: /tmp is tmpfs (23G, 5.5G used) and /tmp/binjava-review-trees holds 470M across 204 directories, growing by ~9M per invocation before any build and ~14M after a buildSrc run. Nothing is reclaiming them. backlog.md is described in AGENTS.md as the authoritative task list, and M0.59/M0.61 explicitly say they belong with this row, so the next person here reads that reclamation is automatic, does not carry forward the manual `rm -rf \"${TMPDIR:-/tmp}/binjava-review-trees\"` line the script now documents, and the tmpfs keeps growing against a WSL2 memory budget that build.md already treats as the thing that kills sessions. A reader who notices both texts cannot tell which is current."
+    },
+    {
+      "file": "docs/internal/product/backlog.md",
+      "line": 35,
+      "severity": "minor",
+      "what": "The row and the `rounds:M0.57` entry (baselines/review.txt:12) both stop at round 2. Neither records round 3's finding, which is the strongest one this task produced: committing the materialised tree leaves index == HEAD, so `git diff --cached` is empty and every gate in its DEFAULT delta mode examines nothing and passes vacuously. What the row does say -- \"THE TREE IS A REAL GIT REPOSITORY, one commit, no history and no remote\" -- now describes an EMPTY commit, and attributes the non-vacuity to the commit when it is delivered by staging without committing.",
+      "failure_scenario": "The row is the durable record and the row is what a future editor of review-tree.sh reads. Following it literally -- \"a real git repository, one commit\" -- re-creates round 3's defect: `git add -A && git commit` gives a tree where check-file-size prints `ok 0 source file(s) within 500 lines` while holding an over-long file, and check-tdd/check-reviewed print `ok nothing staged`. The row records rounds 1 and 2's lessons at length precisely so that cannot happen; round 3's is the one omitted. Separately, the rounds entry's argument for exceeding the cap is weaker than the facts support: an enumeration that accounts for two of at least three completed rounds cannot show the later rounds earned their keep."
+    },
+    {
+      "file": "scripts/review-tree.sh",
+      "line": 107,
+      "severity": "minor",
+      "what": "Staging all 571 files makes every delta gate see the whole tree, which is the point -- but it also puts every test file in check-tdd's changed set, and check-tdd dies there. Inside a freshly issued tree, `./scripts/check-tdd.sh` exits 1 with a raw traceback: UnicodeEncodeError: 'utf-8' codec can't encode character '\\ud800' from tdd_scan.binding_key, triggered by the lone surrogate escape in format/src/test/java/binjava/format/LeaseTest.java. Pre-existing tdd_scan bug (M0.56), newly reachable in every review tree.",
+      "failure_scenario": "It is loud rather than a false green, so it does not block. But a reviewer verifying a check-tdd or tdd_scan change the way this row says reviewers verify -- mutate the input, run the gate in the issued tree -- has no clean baseline: the gate crashes before and after every mutation, so no mutation can be distinguished. The same crash fires in the real repository the moment anyone stages an edit to LeaseTest.java. Worth a backlog row against tdd_scan (encode with errors='surrogatepass' or hash bytes), not a fix here."
+    }
+  ],
+  "task": "M0.57",
+  "role": "reviewer"
+}

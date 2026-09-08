@@ -1,0 +1,15 @@
+{
+  "diff_sha256": "3951da7bc1a444af203f6a364ff06349028a222472da95f1d28c61ba1183e5da",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "M0.9-r2-1",
+      "severity": "major",
+      "file": "AGENTS.md",
+      "summary": "The new index-registration.md link description says 'what a producer declares per index', but the linked document says the message is 'Sent by the plugin on connect' and every field in it (numShards, routingNumShards, partitioningMode, replicationMode, quorum, lanes) is exactly what glossary.md says a producer 'knows nothing of' (partitions, shard counts or object storage). This is the same class of defect that triggered this re-bind -- a false claim about a linked document's contents, in the layer-0 index -- reintroduced by the very fix that removed the first one, and it is invisible to check-terminology.sh because 'producer' is itself a valid glossary term, just attributed to the wrong one of the six roles here.",
+      "failure_scenario": "A future agent reads AGENTS.md (loaded every session), takes 'what a producer declares' at face value, and designs or reviews producer-side code to accept/validate numShards, routingNumShards or partitioningMode -- work that belongs to the plugin per index-registration.md and per ADR-0015 ('no new endpoint, no new credential' on the producer side), and per the glossary's explicit statement that the producer 'knows nothing of partitions, shard counts or object storage.'"
+    }
+  ],
+  "task": "M0.9",
+  "role": "reviewer"
+}
