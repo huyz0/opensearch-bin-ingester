@@ -56,6 +56,44 @@ import java.util.Random;
 // added requests through a meter that cannot see them.
 public final class FaultInjectingStore implements BinStore {
 
+    /** The pod whose calls follow, until the next call to this method. */
+    void actingAs(String podId) {
+        this.actor = podId;
+    }
+
+    /** Cut {@code podId} off from the store until {@link #heal} is called. */
+    void partition(String podId) {
+        partitioned.add(podId);
+    }
+
+    /** Let {@code podId} reach the store again -- which is what makes a zombie. */
+    void heal(String podId) {
+        partitioned.remove(podId);
+    }
+
+    /** Whether the pod currently acting is cut off. */
+    private boolean isPartitioned() {
+        String who = actor;
+        return who != null && partitioned.contains(who);
+    }
+
+    /**
+     * Refuses the call if the acting pod is partitioned.
+     *
+     * <p>⚠️ EVERY VERB, not only the writes. A partition is a network fact: a
+     * pod that cannot PUT cannot GET, LIST or STAT either. Cutting only writes
+     * would let an isolated leader keep reading the chain and discover its own
+     * fencing -- the one thing a real partition guarantees it cannot do, and
+     * the thing that makes a zombie a zombie.
+     */
+    private void refuseIfPartitioned() throws IOException {
+        if (isPartitioned()) {
+            injected.add(new Injected("partition", "pod:" + actor));
+            throw new IOException("injected: partition -- pod " + actor
+                    + " cannot reach the store");
+        }
+    }
+
     /** What may go wrong, as probabilities in [0,1]. */
     public record Faults(double unreachable, double ambiguousPut, double duplicatePut,
             double withheldPut) {
@@ -91,6 +129,48 @@ public final class FaultInjectingStore implements BinStore {
     /** One injected fault, for asserting a run actually exercised something. */
     public record Injected(String kind, String key) {
     }
+
+    /**
+     * Who is calling, and who is cut off (M4.13e).
+     *
+     * <p>⚠️ THE STORE HAD NO NOTION OF WHICH POD WAS CALLING, and that is why
+     * "partitioned leaders" could not be an injectable fault. {@code
+     * unreachable} is a per-call coin flip applied to everybody equally, which
+     * models a flaky store; a partition keeps ONE pod down for a stretch while
+     * the others stay up, which is the shape a lease fight takes and the only
+     * shape that produces a zombie -- an isolated leader that cannot renew,
+     * does not know it has been fenced, and keeps acknowledging.
+     *
+     * <p>⚠️ A STATE, NOT A RATE. The other four classes are probabilities per
+     * call. A partition expressed that way would cut a pod off for one call and
+     * restore it for the next, which is the flaky store again under another
+     * name. It is set and cleared explicitly, and the driver decides when.
+     *
+     * <p>⚠️ THE ACTOR IS STICKY, NOT SCOPED, AND THAT IS A TRAP WORTH NAMING.
+     * It is a plain field on a SHARED store -- not thread-local, whatever a
+     * previous draft of this sentence said -- and it persists until the next
+     * call to {@link #actingAs}. So a caller that never sets one does NOT run
+     * un-partitioned: it inherits whoever acted last. Review measured exactly
+     * that -- after {@code actingAs("pod-a")} and a partition, an invariant
+     * checker calling {@code list} was refused with pod-a's partition.
+     *
+     * <p>⚠️ THE CONSEQUENCE, AND THE DISCIPLINE IT DEMANDS. A checker that can
+     * be cut off reports violations describing the HARNESS rather than the
+     * system, which is worse than no checker. Two things keep that from
+     * happening and both are needed: the checkers read the backing store
+     * BELOW this decorator, and the driver calls {@code actingAs(null)} before
+     * the judging phase. Passing null is how a caller says "I am not a pod",
+     * and it is the only thing that makes the fail-open below true.
+     *
+     * <p>⚠️ SINGLE-THREADED DRIVING IS REQUIRED, as it already is for the
+     * per-class draw streams. One shared actor field cannot describe two pods
+     * acting at once: pod-b's {@code actingAs} landing between pod-a's and
+     * pod-a's write would judge pod-a against pod-b's partition state, and no
+     * assertion here could see it.
+     */
+    private final java.util.Set<String> partitioned =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private volatile String actor;
 
     private final BinStore delegate;
     /**
@@ -238,6 +318,16 @@ public final class FaultInjectingStore implements BinStore {
         boolean ambiguous = fires(ambiguousDraws, faults.ambiguousPut());
         boolean duplicate = fires(duplicateDraws, faults.duplicatePut());
         boolean withheld = fires(withheldDraws, faults.withheldPut());
+        // ⚠️ AFTER THE DRAWS, NOT BEFORE, and review MEASURED why. A guard that
+        // returns before the four unconditional draws makes a partitioned call
+        // consume no stream, which re-aligns every other class's fault
+        // positions: at seed 7 a pod that was never partitioned had its own
+        // `unreachable` faults move from [3,9,18,19,21] to [3,10,13,14,23,24,26]
+        // -- one index in common out of seven. That is the same aliasing this
+        // file's round-3 note removed for the other classes, arriving through
+        // control flow instead of through a shared Random, and it makes
+        // criterion 1's per-class attribution unobtainable.
+        refuseIfPartitioned();
         if (unreachable) {
             injected.add(new Injected("unreachable", key));
             throw new IOException("injected: the store was unreachable");
@@ -289,6 +379,7 @@ public final class FaultInjectingStore implements BinStore {
     }
 
     @Override public Optional<binjava.binstore.ObjectStat> stat(String k) throws IOException {
+        refuseIfPartitioned();
         if (fires(unreachableDraws, faults.unreachable())) {
             injected.add(new Injected("unreachable", k));
             throw new IOException("injected: the store was unreachable");
@@ -297,6 +388,7 @@ public final class FaultInjectingStore implements BinStore {
     }
 
     @Override public java.io.InputStream get(String k) throws IOException {
+        refuseIfPartitioned();
         if (fires(unreachableDraws, faults.unreachable())) {
             injected.add(new Injected("unreachable", k));
             throw new IOException("injected: the store was unreachable");
@@ -305,10 +397,12 @@ public final class FaultInjectingStore implements BinStore {
     }
 
     @Override public java.io.InputStream getRange(String k, long a, long b) throws IOException {
+        refuseIfPartitioned();
         return delegate.getRange(k, a, b);
     }
 
     @Override public binjava.binstore.Version put(String k, Body b) throws IOException {
+        refuseIfPartitioned();
         return delegate.put(k, b);
     }
 
@@ -326,6 +420,11 @@ public final class FaultInjectingStore implements BinStore {
         boolean ambiguous = fires(ambiguousDraws, faults.ambiguousPut());
         fires(duplicateDraws, faults.duplicatePut());
         boolean withheld = fires(withheldDraws, faults.withheldPut());
+        // ⚠️ AFTER THE DRAWS, as on putIfAbsent -- and this is the verb that
+        // matters most. `putIfMatch` is the LEASE RENEW: with no guard here a
+        // partitioned leader keeps renewing, is never fenced, and never
+        // becomes the zombie this whole fault class exists to produce.
+        refuseIfPartitioned();
         if (ambiguous) {
             byte[] bytes = read(b);
             delegate.putIfMatch(k, new Body(bytes.length,
@@ -347,6 +446,7 @@ public final class FaultInjectingStore implements BinStore {
     }
 
     @Override public binjava.binstore.MultipartWriter multipart(String k) throws IOException {
+        refuseIfPartitioned();
         return delegate.multipart(k);
     }
 
@@ -356,10 +456,12 @@ public final class FaultInjectingStore implements BinStore {
             injected.add(new Injected("unreachable", p));
             throw new IOException("injected: the store was unreachable");
         }
+        refuseIfPartitioned();
         return delegate.list(p, a, m);
     }
 
     @Override public void delete(java.util.List<String> keys) throws IOException {
+        refuseIfPartitioned();
         delegate.delete(keys);
     }
 
