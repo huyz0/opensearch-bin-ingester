@@ -1,0 +1,23 @@
+{
+  "task": "M5.6b",
+  "role": "reviewer",
+  "diff_sha256": "a9471026132923bb7273586fb85521fde225c63daf18c015531691fbd9d760be",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "major",
+      "file": "docs/internal/product/backlog.md:43 (and ingest/src/test/java/binjava/ingest/ForwardingIngestTest.java:35-39)",
+      "summary": "The row is flipped to done with \"the correctness hole M4 left open closes here / proved end to end\", and its caveat names the missing production main() as the remaining gap -- but the forwarding hop itself has no production implementation: InProcessTransport (sequencer/src/testFixtures) is the ONLY SequencerTransport in the tree, so the caveat is honest as far as it goes and materially insufficient.",
+      "failure_scenario": "grep -rn SequencerTransport --include=*.java over the repo returns exactly one implementation, sequencer/src/testFixtures/java/binjava/sequencer/InProcessTransport.java, plus two anonymous classes inside RemoteSequencerTest. M5.3's backlog row scopes \"SequencerTransport seam and its fake\" -- the fake, explicitly -- and no backlog row anywhere owns a real one. So fleet() assembles the follower over a test fixture, and the javadoc's claim that this proves the LIBRARY assembled the way a service would assemble it is false in the one respect the task is about: a service cannot assemble it this way, because there is nothing to construct at that argument. Concretely, if M5.20's harvest or a later session acts on this row as written and supplies the missing main(), a follower pod in a real deployment still has no transport to forward over: new FleetSequencer(store, config, ???, election) cannot be written, and every append to a non-leaseholder pod fails -- the exact M4 hole the row declares closed. The project already treats this precise shape as a defect worth its own row: M1.11b records \"no production implementation exists ... two copies of the same production code living only in tests\". Compounding it, M5's SPEC states this behaviour's acceptance at criterion 1 as 3 pods asserted by CountingBinStore over the chain prefix, and lists its end-to-end row as T2 a non-leaseholder pod's write is searchable; this is 2 pods at T1 over MemoryBinStore with an aggregate puts() count and no read-back, which is a defensible amount to prove but not what \"proved end to end\" and a bolded \"closes here\" assert."
+    },
+    {
+      "id": "R2",
+      "severity": "minor",
+      "file": "ingest/src/test/java/binjava/ingest/ForwardingIngestTest.java:118-125",
+      "summary": "The comment claims to guard cost.md's rule that requests scale with segments, never with pods, but the assertion reads only counts().puts(), and forwarding's actual per-pod cost is on the GET/STAT counters the assertion cannot see.",
+      "failure_scenario": "A follower's commit issues, per commit: one stat and one get from Leadership.sequencer() -> tryLead() -> LeaseManager.acquireLocked() (which returns empty without a PUT when the lease is unexpired), plus one get from RemoteSequencer.currentLease(). None of the three is observable through counts().puts(). Named surviving mutation: add a second currentLease() call to RemoteSequencer.commitAll, doubling the forwarding path's GET rate per commit per non-leading pod -- store.counts().puts() - before is still 2 and the test stays green while asserting cost.md's rule. CountingBinStore.counts() already returns gets/stats, so pinning them costs one more assertion; alternatively narrow the comment to say it pins the WRITE half only and points at M5.6c for the read half."
+    }
+  ],
+  "via": "record"
+}

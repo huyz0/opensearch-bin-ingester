@@ -1,0 +1,16 @@
+{
+  "task": "M5.6b",
+  "role": "test-reviewer",
+  "diff_sha256": "d6d14ee14a2be7eadb3d554aed59a61b6b5e22fb065227874d46f8b82ed92947",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "minor",
+      "file": "ingest/src/test/java/binjava/ingest/ForwardingIngestTest.java:28-34 (and docs/internal/product/backlog.md:18)",
+      "summary": "The case-sensitive grep is correctly withdrawn and the paragraph now enumerates nothing itself, but the sentence that replaces it makes a fresh completeness claim -- the list lives on the M5.6e backlog row, which names each site and line -- and that row's enumeration is scoped to M5's SPEC and the roadmap, so it misses backlog.md:18, which states the milestone's correctness claim in different words and pins it to a task that has already been committed.",
+      "failure_scenario": "backlog.md:18, the current-milestone header and the first thing a session-opening reader sees, reads: It owns the commit forwarding M4 deferred, so a multi-pod deployment is incorrect until M5.4 lands. M5.4 has landed -- git log shows bb07f2a -- so by the tree's own history that sentence now asserts the proposition all four rounds have been retracting. It is not named on the M5.6e row, is not returned by any grep for correctness hole at any case, and is 28 lines above the row advertised as holding the list. Concretely: M5.20 opens the M5.6e row, corrects the four SPEC lines and the roadmap row, marks M5.4's row done (it still reads todo today, which is the only thing currently masking the header), and backlog.md:18 then tells every later session that multi-pod is correct while M5.6e sits todo owned by M8. Minor, not major: no Java or SPEC site now asserts the hole is shut in the affirmative, and the header line is pre-existing and untouched by this diff -- the defect is that the javadoc points at that row as THE list for a third time in the same shape. Verified separately: the rest of the replacement wording checks out, and theFollowerWritesItsOwnSEGMENTButNotTheCHAIN's lack of a leading() assertion should NOT be raised, because the both-pods-lead mutation it would survive alone is killed outright by aPodThatDoesNotHoldTheLeaseSTILL_INGESTS, so no mutation survives the pair."
+    }
+  ],
+  "via": "record"
+}

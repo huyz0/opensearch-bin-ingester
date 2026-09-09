@@ -1,0 +1,16 @@
+{
+  "task": "M5.6b",
+  "role": "test-reviewer",
+  "diff_sha256": "a61e98a054c1bf25f46c37d78167e7105fb65190446fef09369f6d6b81d5de58",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "major",
+      "file": "ingest/src/test/java/binjava/ingest/ForwardingIngestTest.java:28-30 (and sequencer/src/test/java/binjava/sequencer/FleetSequencerTest.java:28-32)",
+      "summary": "The retraction's own headline makes a checkable count -- four separate places in this tree have now claimed to -- and the count is wrong: a fifth site, FleetSequencerTest's class javadoc, still names M5.6b by ID as where M4's correctness hole closes, and this commit marks M5.6b done without touching it.",
+      "failure_scenario": "The four sites the sentence accounts for are this file's own former headline, RemoteSequencer.java:15-18 (corrected in this diff), backlog.md M5.6b (corrected in round two) and backlog.md M5.6 (corrected in this diff). FleetSequencerTest.java:28-32 reads IT DOES NOT YET CLOSE THE CORRECTNESS HOLE ... nothing in production constructs THIS either, so a real non-leaseholder pod still cannot commit. That is M5.6b. -- i.e. it asserts the proposition backlog.md:43, edited in this same diff, now denies. Concretely: an agent running next-task or milestone-review greps correctness hole, reads That is M5.6b, checks the backlog and finds M5.6b marked done in this very commit, concludes the hole is shut, and does not schedule M5.6e -- the row this commit created precisely so the gap stops being unowned -- while every append to a non-leaseholder pod still fails because new FleetSequencer(store, config, ???, election) has no transport to pass. This is round two's finding one file over. A related still-standing claim, M5/SPEC.md:377, is NOT covered by the M5.6e row's deferral, which names only the SPEC's opening sentence; flagged as context since it is a spec change under sdd.md. Separately verified and NOT raised: the two new tests' mutation coverage holds -- the PUT arm is falsifiable in both directions, the LIST arm kills round one's named mutation, the offset arm plus the leading() assertion jointly kill both-pods-lead and never-lead, and the renewer race is genuinely removed rather than made rarer."
+    }
+  ],
+  "via": "record"
+}

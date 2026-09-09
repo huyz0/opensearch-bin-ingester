@@ -1,0 +1,23 @@
+{
+  "task": "M5.6b",
+  "role": "test-reviewer",
+  "diff_sha256": "a9471026132923bb7273586fb85521fde225c63daf18c015531691fbd9d760be",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "minor",
+      "file": "ingest/src/test/java/binjava/ingest/ForwardingIngestTest.java:115-126",
+      "summary": "The cost arm meters PUTs only, so the rule its own comment states -- \"requests scale with segments, never with pods\" -- is not actually constrained for GET/LIST/STAT, and a per-forward LIST survives.",
+      "failure_scenario": "Mutate RemoteSequencer.currentLease() to discover the holder with store.list(...) over the lease prefix, or add a store.stat(leaseKey) before the GET. Every forwarded commit then issues an extra billed request that scales with forwarding pods and commits, which is exactly the shape the comment says shows up here. Both new tests stay green: store.counts().puts() - before is still 2. Nothing else in the suite closes it either -- RemoteSequencerTest.forwardingAddsNoOBJECTSTOREWriteOfItsOwn also counts only puts(), and grep shows no counts().lists() assertion anywhere on the forward or commit path. Asserting store.counts().lists() unchanged alongside the PUT delta would kill it."
+    },
+    {
+      "id": "R2",
+      "severity": "minor",
+      "file": "ingest/src/test/java/binjava/ingest/ForwardingIngestTest.java:44-48,115-125",
+      "summary": "The exact PUT-delta assertion races the leaseholder's wall-clock lease renewer, which issues a counted putIfMatch every 3 seconds into the same CountingBinStore.",
+      "failure_scenario": "config() sets renewInterval = Duration.ofSeconds(3) and fleet() drives LocalSequencer.start with the default ticker sleepFor(renewInterval), so poda's renewer thread calls LeaseManager.renew() -> store.putIfMatch(leaseKey, ...) on the wall clock; CountingBinStore.putIfMatch increments puts(). The window between before = store.counts().puts() and the assertion spans appendOnce(follower, ...), which includes CompletableFuture.supplyAsync on the common ForkJoinPool plus awaitPending's spin (bounded at 10 s). On a loaded CI host that window can exceed a renew tick; the delta then reads 3 and the test fails with expected 2 but was 3 while the production code is correct. Injecting a fixed/movable Clock into the LeaseManager, or a no-op RenewTicker, removes the race; the same exposure exists in FleetSequencerTest.aFollowerDoesNotWriteTheCHAINItself, so this is a repeated shape rather than a new one."
+    }
+  ],
+  "via": "record"
+}

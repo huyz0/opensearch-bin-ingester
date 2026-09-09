@@ -1,0 +1,30 @@
+{
+  "task": "M5.6b",
+  "role": "reviewer",
+  "diff_sha256": "6db15cd6da2e7feafd50832b6cc78964a49890a1ede924f3622f60d134bf9242",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:46 (and sequencer/src/main/java/binjava/sequencer/RemoteSequencer.java:19-20, ingest/src/test/java/binjava/ingest/ForwardingIngestTest.java:48-51)",
+      "summary": "The new rows and javadoc state that InProcessTransport is \"the ONLY implementation in the tree\" / \"the only SequencerTransport in the tree\", and a one-command check disproves the quantifier: RemoteSequencerTest defines two further implementations, so the claim only holds if it is read as \"the only one outside a test\", which is not what it says.",
+      "failure_scenario": "Someone taking M5.6e, or a reviewer checking the row that justifies it, runs `grep -rn SequencerTransport --include=*.java` and finds three implementations of the interface: sequencer/src/testFixtures/.../InProcessTransport.java:25, and `new SequencerTransport() { ... }` at sequencer/src/test/java/binjava/sequencer/RemoteSequencerTest.java:134 and :207. The row's stated premise is then false as written and the reader cannot tell whether it is stale (someone added a transport since) or merely imprecise (test doubles were meant to be excluded) -- the same class of checkable-and-wrong completeness claim this file has already been through in rounds 3, 4 and 5, and it is now also in production javadoc. The load-bearing claim -- no PRODUCTION implementation -- is true and would survive the wording \"the only implementation outside a test\"."
+    },
+    {
+      "id": "R2",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:46",
+      "summary": "The M5.6e row assigns the correction of five statements it declares false to M5.20, whose own row reads only \"M5's `VERIFIED.md` and the milestone review\" and mentions no spec or roadmap correction -- the same overstatement of ownership the same cell condemns four clauses later for M2.1.",
+      "failure_scenario": "M5.20 is executed as its row and the milestone-review skill read: git log plus SPEC.md are read, findings become rows for the NEXT milestone (\"not retrofitted into this one\"), and VERIFIED.md is written. scripts/check-milestone-verified.sh forces an evidence line per numbered criterion, so criterion 1 gets an honest OBSERVED-NOT -- but it parses only the `## Acceptance criteria` list, so SPEC.md:5 (\"THIS MILESTONE MAKES A MULTI-POD DEPLOYMENT CORRECT FOR THE FIRST TIME\"), SPEC.md:11, SPEC.md:377 (\"M5.6 | ... the correctness hole closes here\") and roadmap.md:14 (\"leaves a multi-pod deployment incorrect until this lands\") are untouched by any gate and survive M5 being marked complete. A reader planning M6 from the roadmap then reads a completed M5 whose row says multi-pod is now correct. sdd.md rule 8 says a wrong spec is amended, and this tree's own precedent for that is a row of its own -- M5.0 (\"the roadmap row corrected to name commit forwarding\") and M5.21 (\"Correct where three requirements live\") -- not a clause inside an unrelated row."
+    },
+    {
+      "id": "R3",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:46",
+      "summary": "M5.6e is recorded as \"todo, owned by M8\" and \"recorded here so it stops being unowned\", but roadmap.md's M8 row -- which is where this tree records every other reassignment into M8 -- says nothing about a production SequencerTransport or ADR-0012's RPC, so the only record of M8's ownership is a cell inside M5's table.",
+      "failure_scenario": "M8 is decomposed from roadmap.md:17, the document AGENTS.md describes as \"milestones in execution order, each with a completion condition\". That row enumerates the chaos matrix, the `EndpointSlice` watch/NFR-9 and the degraded `ctl/inbox/` path -- both reassignments having been written INTO the row by M5.21's mechanism -- and names no transport, so M8's SPEC is written without one and the production `SequencerTransport` is unowned again, which is precisely the outcome the row exists to prevent and the same shape as M1.11b, still `todo` from M1. ADR-0012 itself never names a milestone, so it cannot supply the ownership either."
+    }
+  ],
+  "via": "record"
+}

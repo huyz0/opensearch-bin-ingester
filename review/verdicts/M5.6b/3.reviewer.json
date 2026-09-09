@@ -1,0 +1,23 @@
+{
+  "task": "M5.6b",
+  "role": "reviewer",
+  "diff_sha256": "a61e98a054c1bf25f46c37d78167e7105fb65190446fef09369f6d6b81d5de58",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:46 (and ingest/src/test/java/binjava/ingest/ForwardingIngestTest.java:28-37)",
+      "summary": "The deferral of the SPEC correction is right, but its record enumerates only ONE of the SPEC's closure claims -- the opening sentence at line 5 -- while three further statements in the same spec and one in the roadmap are falsified by the same deferral and are named nowhere, and the new javadoc's count of four separate places undercounts by omitting exactly those.",
+      "failure_scenario": "grep -inE 'correctness hole|multi-pod|non-leaseholder' over docs/internal/product/ returns, besides SPEC.md:5 which M5.6e quotes: SPEC.md:11 (this one is a correctness hole, and it is task M5.6 for that reason), SPEC.md:377 in the task table (| M5.6 | Wire forwarding into DefaultIngest -- the correctness hole closes here |), SPEC.md:18 in the completion condition (and a non-leaseholder pod can commit), and roadmap.md:14 (which leaves a multi-pod deployment incorrect until this lands). SPEC.md:377 is the sharpest: it names M5.6 by ID and says the hole closes there, the direct negation of backlog.md:40 as edited by this very diff -- the tree still asserts both answers at once about the same task ID, the shape round two blocked on, surviving only because it is in a file this diff does not touch. Concretely: M5.20 reads the M5.6e note, amends the one sentence it quotes, leaves the task-table row and the completion condition standing, and then certifies criterion 'a non-leaseholder pod can commit' against a task table that says the hole closed at M5.6 -- while M5.6e sits at todo, owned by M8. The javadoc's 'four separate places' reinforces this: a reader counts four, finds the four this commit corrected, and concludes the sweep was complete when at least four more claims are live. Not major because the diff does not create the SPEC contradiction and backlog.md is the authoritative task list; the fix is to widen the M5.6e note to SPEC.md lines 5, 11, 18 and 377 plus roadmap.md's M5 row, and to make the javadoc count match a grep."
+    },
+    {
+      "id": "R2",
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/RemoteSequencer.java:20-22 (and docs/internal/product/backlog.md:40,43)",
+      "summary": "The second gap this commit names -- no production main() assembles any of it -- is cited to (M2.1), which is a DONE row about Capabilities.conditionalWrites that merely observes the absence in passing, so the citation presents as owned a gap that no backlog row owns, in production javadoc.",
+      "failure_scenario": "backlog.md:197 is the only M2.1 row and it is marked done. grep -n 'main()' over backlog.md returns exactly three hits -- M5.6, M5.6b and that done M2.1 row -- and no row anywhere in backlog.md or roadmap.md owns CREATING a production main(). So an agent running next-task or milestone-review, reading RemoteSequencer.java:21-22 and wanting to schedule the remaining half of multi-pod correctness, follows M2.1, finds a row marked done, and concludes the wiring is accounted for; the service entry point stays unowned indefinitely -- precisely the state M5.6e was added in this same diff to end for the transport. Round one's finding was that an unowned gap needs its own row rather than a mention; the same standard applied to the main() gap would mean either a row of its own or citing M2.1 as 'observed at M2.1, owned by nothing'. Minor because the substantive claim -- that no main() exists -- is true and verifiable, so no reader is told the hole is shut; only the ownership is overstated."
+    }
+  ],
+  "via": "record"
+}

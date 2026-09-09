@@ -1,0 +1,16 @@
+{
+  "task": "M5.6b",
+  "role": "test-reviewer",
+  "diff_sha256": "5d370cd331f22d19b4d8608e82156ed5e188035854d097e479e0cbc531d144b1",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "minor",
+      "file": "ingest/src/test/java/binjava/ingest/ForwardingIngestTest.java:28-32",
+      "summary": "Round three's wrong count is genuinely fixed, but the command that replaced it is offered as \"the list\" and is case-sensitive, so it returns none of the four Java source files that carry the phrase -- including line 28 of the file the sentence is written in, which the same sentence names as one of the places.",
+      "failure_scenario": "Running the named command verbatim -- grep -rn \"correctness hole\" . -- returns 15 lines, of which 10 are review/verdicts/*.json and review/overrides.md prose, and the only source hits are RemoteSequencer.java:24, ForwardingIngestTest.java:31 (the sentence quoting itself), backlog.md:40, SPEC.md:11 and SPEC.md:377. It returns ZERO of the four uppercase headline sites, because this repository writes these headlines in caps: ForwardingIngestTest.java:28, FleetSequencerTest.java:28, and RemoteSequencerTest.java:22, whose THIS IS THE CORRECTNESS HOLE M4 LEFT OPEN is now the tree's only uncaveated Java statement on the subject and is untouched by this commit. Adding -i returns all four. Concretely: M5.20, or any later sweep, reads this javadoc, treats the command as the enumeration mechanism it is advertised to be, corrects SPEC.md:11 and SPEC.md:377, and never sees RemoteSequencerTest.java:22 -- and roadmap.md's M5 row is missed as well, for wording rather than case. The defect is the same shape as the count it replaced (a checkable claim of completeness that is checkably incomplete) but strictly smaller in consequence: no site now asserts the hole is shut, backlog.md's M5.6, M5.6b and M5.6e rows all deny it, and the M5.6e row enumerates SPEC.md lines 5, 11, 18 and 377 plus roadmap.md's M5 row by hand. Round three's specific finding is verified closed: FleetSequencerTest no longer says That is M5.6b, and no count remains anywhere in the diff. Round three's mutation verification is re-checked as accurate -- noting that theFollowerWritesItsOwnSEGMENTButNotTheCHAIN asserts no leading() state of its own and would stay green under a both-pods-lead mutation, which the first test catches, so it is not raised separately."
+    }
+  ],
+  "via": "record"
+}

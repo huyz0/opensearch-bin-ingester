@@ -1,0 +1,16 @@
+{
+  "task": "M5.6b",
+  "role": "test-reviewer",
+  "diff_sha256": "6db15cd6da2e7feafd50832b6cc78964a49890a1ede924f3622f60d134bf9242",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "minor",
+      "file": "ingest/src/test/java/binjava/ingest/ForwardingIngestTest.java:177-213",
+      "summary": "The cost arm never constrains WHICH pod holds the term, so its two counts are symmetric under an inversion of the roles its own name asserts -- it would read the same 2 PUTs and 0 LISTs if the pod it calls the follower were the leaseholder and the pod it calls the leader were the one forwarding.",
+      "failure_scenario": "MUTATION, run against the staged tree: in LeaseManager.tryAcquire drop the negation, `if (!current.isExpiredAt(clock.millis()))` -> `if (current.isExpiredAt(clock.millis()))`, so an unexpired lease is taken over. `fleet(store, \"podb\", B, transport)` then wins the term at construction, `poda`'s LocalSequencer is fenced, and the pod the test calls the leader is the one forwarding. Both PUTs inside the measured window are still the follower's segment and one delta, and no LIST is issued, so `theFollowerWritesItsOwnSEGMENTButNotTheCHAIN` PASSES with the two roles exactly inverted -- MEASURED: the ingest suite under that mutation reports `theFollowerWritesItsOwnSEGMENTButNotTheCHAIN() passed`. It is killed only by the sibling test in the same class (`aPodThatDoesNotHoldTheLeaseSTILL_INGESTS() FAILED` on `assertThat(followerSeq.leading()).isFalse()`), so the SUITE is sound and nothing regresses; what is wrong is that this test is named for a role split it does not assert, and a reader trusting the name would believe the counts pin the leaseholder. One line before `putsBefore` -- `assertThat(followerSeq.leading()).isFalse()`, or an assertion that `transport.sentTo()` ends with `A` -- makes the name true. Recorded as minor: it does not weaken the change and does not block."
+    }
+  ],
+  "via": "record"
+}

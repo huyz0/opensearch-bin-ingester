@@ -12,10 +12,16 @@ import java.util.Objects;
 /**
  * Commits by forwarding to the pod the lease names (M5.4, M5.5, FR-11).
  *
- * <p>⚠️ THIS IS WHAT MAKES A MULTI-POD DEPLOYMENT CORRECT. M4 introduced a
- * lease so that exactly one sequencer writes the chain, and shipped only the
- * local implementation — so a pod that is not the leaseholder could not commit
- * at all. Everything else in M5 is the read path; this is a correctness hole.
+ * <p>⚠️ THIS IS THE HALF OF MULTI-POD CORRECTNESS THAT WAS MISSING, and an
+ * earlier draft of this sentence said it WAS multi-pod correctness. It is not,
+ * and the distinction cost a review round to notice: M4 introduced a lease so
+ * that exactly one sequencer writes the chain and shipped only the local
+ * implementation, so a pod that is not the leaseholder could not commit at all.
+ * This class removes that. But the only {@link SequencerTransport} in the tree
+ * is a test fixture (M5.6e) and no production {@code main()} assembles any of
+ * it — M2.1 merely OBSERVES that absence in a row marked done, and no row owns
+ * creating one — so a real follower pod still cannot forward. Everything else in M5
+ * is the read path; this one is a correctness hole, and it is not shut yet.
  *
  * <p>⚠️ IT HOLDS NO COORDINATION STATE, AND THAT IS THE DESIGN. It reads the
  * lease to learn where to send, sends, and on a refusal re-reads. ADR-0012:

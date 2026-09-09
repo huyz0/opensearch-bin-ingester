@@ -29,7 +29,9 @@ import org.junit.jupiter.api.Test;
  * this sentence claimed it did. {@code RemoteSequencer} made forwarding
  * possible and nothing chose to use it; this class chooses — but nothing in
  * production constructs THIS either, so a real non-leaseholder pod still cannot
- * commit. That is M5.6b.
+ * commit. M5.6b proves the commit path across two pods; SHUTTING the hole needs
+ * a production {@code SequencerTransport} (M5.6e) and a production {@code
+ * main()}, which no row owns.
  */
 class FleetSequencerTest {
 

@@ -1,0 +1,16 @@
+{
+  "task": "M5.6b",
+  "role": "test-reviewer",
+  "diff_sha256": "0454681ef077b503da6881a724c1fa6c7d45c72de0ff0053aa5b0b7380a10cb6",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "major",
+      "file": "ingest/src/test/java/binjava/ingest/ForwardingIngestTest.java:28-34",
+      "summary": "The class javadoc's headline claim -- THIS IS WHERE M4'S CORRECTNESS HOLE CLOSES -- is flatly contradicted by the backlog row this same commit rewrites, which now says the opposite; round one's correction was applied to one of the two places the claim appears and left standing in the other.",
+      "failure_scenario": "backlog.md:43 in this staged diff reads It does NOT close M4's hole ... the forwarding hop runs over InProcessTransport, a test fixture that is the only SequencerTransport in the tree (M5.6e), and there is no production main() to assemble any of it (M2.1), and the same commit adds M5.6e as a todo row. ForwardingIngestTest.java:28 asserts the retracted claim in bold caps as the file's headline, and even generalises it -- and every earlier task said so about itself and was wrong -- while being an instance of the same error (RemoteSequencer.java:15-18 makes the identical claim). Concretely: an agent running next-task or milestone-review greps for M4's correctness hole, opens the only test file that names it, reads line 28, and closes or deprioritises M5.6e -- the row this commit created precisely to stop that gap being unowned -- while a follower pod in any real deployment still has no SequencerTransport to construct. Round one's production reviewer scored this exact sentence major and named both locations; only the backlog half was fixed. Verified separately and NOT re-raised: round one's two test findings are genuinely closed. (1) The cost arm now asserts store.counts().lists() - listsBefore is zero, killing the named LIST mutation, and the comment scopes the claim to the write half and points the stat-and-two-gets read cost at M5.6c. (2) The renewer race is REMOVED rather than made rarer: LocalSequencer.start's 3-arg overload builds sleepFor(leases.renewInterval()), renewForever sleeps BEFORE its first renew, and config()'s 30-minute interval yields zero counted putIfMatch inside a window appendOnce bounds at ~20s; CheckpointWriter's 60s interval is bounded outside it by the same deadlines. Nothing depends on a short lease, and the 1-hour TTL strictly strengthens the follower's election returning empty without a PUT, which is what keeps the delta at exactly 2."
+    }
+  ],
+  "via": "record"
+}

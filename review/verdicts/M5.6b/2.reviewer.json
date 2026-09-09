@@ -1,0 +1,23 @@
+{
+  "task": "M5.6b",
+  "role": "reviewer",
+  "diff_sha256": "0454681ef077b503da6881a724c1fa6c7d45c72de0ff0053aa5b0b7380a10cb6",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "major",
+      "file": "ingest/src/test/java/binjava/ingest/ForwardingIngestTest.java:28-34 (and docs/internal/product/backlog.md:40)",
+      "summary": "Round one's major was that this commit asserts M4's correctness hole closes here when the forwarding hop has no production implementation; the M5.6b row was corrected to say it does NOT close, but the test's own headline still says in bold caps that it does, and the M5.6 row three lines above it still says the hole closes at M5.6b -- so the commit now ships three statements about its central claim, two of which are false and contradict the one that was fixed.",
+      "failure_scenario": "ForwardingIngestTest.java:28 reads THIS IS WHERE M4'S CORRECTNESS HOLE CLOSES, while backlog.md:43, edited in this same diff, reads It does NOT close M4's hole, and backlog.md:40 (M5.6, untouched) still reads the correctness hole does not close here -- it closes at M5.6b. The file's own next paragraph states there is no production SequencerTransport and no production main(), which makes line 28 false by the file's own evidence: new FleetSequencer(store, config, ???, election) cannot be written by a service, so every append to a non-leaseholder pod in a real deployment still fails. Concretely, M5.20's harvest or any later session reading either the test file or the M5.6 row concludes the hole is shut, does not schedule M5.6e, and the fleet ships with followers that cannot commit. The same pattern was already caught once as M5.6/3.reviewer R3 and again as M5.6b/1.reviewer R1; correcting one of the three sites and leaving the other two makes the tree assert both answers at once, which is worse than the uncorrected state because a reader cannot tell which statement the project believes."
+    },
+    {
+      "id": "R2",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:45",
+      "summary": "The M5.6c row's count is raised from seven to nine with no change to the enumeration it introduces, so the row promises nine items and names eight, and the added ones are identified nowhere.",
+      "failure_scenario": "The row reads The nine refusals and cost gaps ... : commit-after-close; ADR-0027's self-fence; leading() narrowed; tryLead() gated on an EXPIRED lease; close() not waiting for an in-flight election; sequencer() handing back an already-closed sequencer; and two pins the suite cannot yet drive -- six named items plus two pins is eight, and the semicolon list is byte-identical to the pre-change version that said seven. The escape hatch (detailed in review/verdicts/M5.6*/) does not resolve it either: those directories hold roughly fifteen open minor findings, so nine is not derivable from them. Whoever picks up M5.6c closes the six named refusals and the two pins, cannot locate a ninth, and either marks the row done having addressed eight of nine -- leaving one gap permanently unowned -- or carries two items this very diff already fixed."
+    }
+  ],
+  "via": "record"
+}
