@@ -78,11 +78,11 @@ public final class RemoteSequencer implements Sequencer {
             // same triple TO THAT INSTANCE gets the offsets that already apply
             // -- and not even the same pod's NEXT term qualifies, because the
             // mark that does it is a field on the instance. ⚠️ IT IS NOT ANSWERABLE
-            // ACROSS A TAKEOVER: the reconciliation seeds that pod's in-memory
-            // window and never its checkpoint, so a SUCCESSOR does not inherit
-            // the flush once a later checkpoint bounds past its delta, and the
-            // resend appends the same records again -- which is I2 and which is
-            // M5.25. And a takeover is exactly the case this arm is in.
+            // ACROSS A POD RESTART: the mark that answers it is one
+            // sequencer instance's field, and M5.25 carries the flush into the
+            // checkpoint for a pod's CURRENT incarnation only -- a checkpoint
+            // remembers one per pod. A resend from an incarnation since
+            // superseded still appends the records again, which is I2.
             // ⚠️ SO PROPAGATING IS STILL A CORRECTNESS BAR, not yet a policy
             // choice. It is also the conservative behaviour on its own terms:
             // nothing bounds how long the peer stays unreachable, and the

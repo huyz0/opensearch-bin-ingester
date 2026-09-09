@@ -34,8 +34,9 @@ import org.junit.jupiter.api.Test;
  * flushSeq) IS NOT YET SAFE" — quoted here as history, since M5.23 replaced
  * it: a retry to the SAME sequencer is now reconciled against the chain and
  * answered. What is still unsafe is a retry that crosses a TAKEOVER, because a
- * successor does not inherit an ambiguously-landed flush (M5.25) — and a retry
- * loop here cannot know which it is doing. A first draft of this commit added
+ * successor inherits an ambiguously-landed flush only for a pod's CURRENT
+ * incarnation (M5.25), and a restart mints a new one — and a retry loop here
+ * cannot know which it is doing. A first draft of this commit added
  * an automatic retry and would have duplicated records on every lost
  * response.
  *
@@ -127,8 +128,9 @@ class CommitRetryTripleTest {
         assertThat(sent.podId()).isEqualTo("pod1");
         assertThat(sent.flushSeq()).isZero();
         assertThat(flaky.seen()).as("one attempt -- no retry is added here, because a "
-                + "retry loop cannot tell a resend to the SAME sequencer, which M5.23 "
-                + "answers, from one that crosses a takeover, which M5.25 does not")
+                + "retry loop cannot tell a resend within a pod's CURRENT incarnation, "
+                + "which M5.23 and M5.25 answer, from one across a RESTART, which mints a "
+                + "new incarnation and duplicates")
                 .hasSize(1);
     }
 

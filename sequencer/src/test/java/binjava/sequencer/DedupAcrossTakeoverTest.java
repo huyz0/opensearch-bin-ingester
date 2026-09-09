@@ -9,7 +9,9 @@ import static binjava.sequencer.DedupFixtures.manager;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import binjava.binstore.BinStore;
 import binjava.binstore.backend.MemoryBinStore;
+import binjava.format.Checkpoint;
 import binjava.format.CommitDelta;
 import java.io.IOException;
 import java.util.List;
@@ -83,6 +85,125 @@ class DedupAcrossTakeoverTest {
         // twice -- which is exactly the defect, so it is asserted separately.
         assertThat(deltasCarrying(store, "seg/0"))
                 .as("and appends NOTHING -- one segment, one delta, across a takeover")
+                .isEqualTo(1);
+    }
+
+    /**
+     * An AMBIGUOUSLY-LANDED flush is inherited too (M5.25).
+     *
+     * <p>⚠️ THE HALF M5.23 LEFT OPEN, and it is invisible from either side.
+     * {@code CheckpointWriter} learns only from a commit that RETURNED, so an
+     * append whose response was lost reached it never — the flush was durable,
+     * answered by the running sequencer's own window, and absent from the map a
+     * SUCCESSOR treats as authoritative below the checkpoint bound.
+     *
+     * <p>⚠️ THE CHECKPOINT IS READ BACK, not inferred from the replay's answer.
+     * Review MEASURED why: every assertion about the answer to a replay of
+     * flushSeq 4 is satisfied by a watermark of FIVE just as well, so recording
+     * one flush too high survived — and its effect is the opposite defect, a
+     * genuinely new flush REFUSED after a takeover, which ADR-0036 calls the
+     * more damaging direction. The negative control below is that case.
+     *
+     * <p>⚠️ AND THE SETUP IS THE TEST. Review MEASURED three one-token edits
+     * that each make this pass against the defect: {@code K = 8} instead of 1
+     * (the delta stays in the uncheckpointed tail), dropping the {@code
+     * seg/after} commit (same), and {@code Mode.LOST} instead of {@code LANDED}
+     * (nothing was there to reconcile). The checkpoint assertion is what stops
+     * those being silent.
+     */
+    @Test
+    void anAMBIGUOUSLYLandedFlushIsInheritedAcrossATakeover() throws Exception {
+        MemoryBinStore backing = new MemoryBinStore();
+        CheckpointWriter.Ticker frozen = () -> new CountDownLatch(1).await();
+        java.util.concurrent.atomic.AtomicBoolean armed =
+                new java.util.concurrent.atomic.AtomicBoolean();
+        BinStore store = new AmbiguousPutStore(backing, AmbiguousPutStore.Mode.LANDED,
+                AmbiguousPutStore.Target.PUT_IF_ABSENT, false, key -> armed.get());
+        // ⚠️ TWO PODS IN ONE AMBIGUOUS BATCH, which is what a leaseholder
+        // folding a window of forwarded flushes produces -- and without two
+        // DIFFERENT pods, "records EVERY flush the landed delta carries" is
+        // unconstrained: review measured a `break` after the first attributed
+        // segment surviving, and two segments of the SAME pod under one
+        // flushSeq did not kill it either, because one entry covers both.
+        CommitRequest lostA = new CommitRequest("podb", "i1", 4, "seg/lost-a", counts(3));
+        CommitRequest lostB = new CommitRequest("podd", "i1", 9, "seg/lost-b", counts(2));
+
+        long assigned;
+        long ambiguousSequence;
+        LocalSequencer first = LocalSequencer.start(store, PREFIX, manager(store, "poda"), 8,
+                LocalSequencer.sleepFor(java.time.Duration.ofSeconds(3)), 1, frozen)
+                .orElseThrow();
+        try {
+            // ⚠️ AN EARLIER RETURNED COMMIT FROM THE SAME POD, so the map
+            // already holds an entry for it and the reconciled fact has to WIN
+            // a merge rather than fill a hole -- review measured `putIfAbsent`
+            // surviving without one. It also pushes the ambiguous delta's
+            // sequence past the epoch, so swapping the two arguments is visible.
+            first.commitAll(List.of(new CommitRequest("podb", "i1", 1, "seg/early", counts(1))));
+
+            armed.set(true);
+            assertThatThrownBy(() -> first.commitAll(List.of(lostA, lostB)))
+                    .as("the append landed and the response did not")
+                    .isInstanceOf(IOException.class);
+            CommitDelta answered = first.commitAll(List.of(lostA, lostB));
+            assigned = firstOffsetOf(answered, "seg/lost-a");
+            ambiguousSequence = answered.sequence();
+            // ⚠️ AND A LATER FLUSH, so a checkpoint is written whose sequence is
+            // PAST the ambiguous delta.
+            first.commitAll(List.of(
+                    new CommitRequest("poda", "i1", 0, "seg/after", counts(2))));
+        } finally {
+            first.close();
+        }
+
+        // ⚠️ WHAT WAS WRITTEN, not what a replay happens to answer.
+        Checkpoint checkpoint;
+        try (var in = backing.get(new LogKeys(PREFIX, 1L).latestCheckpointKey())) {
+            checkpoint = Checkpoint.decode(in.readAllBytes());
+        }
+        assertThat(checkpoint.sequence())
+                .as("the checkpoint bounds PAST the ambiguous delta, so a successor cannot "
+                        + "find it in the tail -- which is what makes this test about the "
+                        + "checkpoint at all")
+                .isGreaterThan(ambiguousSequence);
+        assertThat(checkpoint.pods().get("podb"))
+                .as("and it carries the flush whose commit never returned, at the delta that "
+                        + "holds it -- one too high would REFUSE this pod's next real flush")
+                .isEqualTo(new Checkpoint.PodState("i1", 4, 1L, ambiguousSequence));
+        assertThat(checkpoint.pods().get("podd"))
+                .as("and EVERY pod the landed batch carried, not just the first -- a "
+                        + "leaseholder folds many pods' flushes into one delta")
+                .isEqualTo(new Checkpoint.PodState("i1", 9, 1L, ambiguousSequence));
+
+        LocalSequencer successor = takeOver(backing, "podc");
+        try {
+            CommitDelta replay = successor.commitAll(List.of(lostA, lostB));
+            assertThat(firstOffsetOf(replay, "seg/lost-a"))
+                    .as("the successor answers with the offsets that already apply, for a "
+                            + "flush no commit ever RETURNED for")
+                    .isEqualTo(assigned);
+
+            // ⚠️ THE NEGATIVE CONTROL. A watermark one too high answers the
+            // replay above just as well, and REFUSES this -- a live pod's real
+            // flush rejected across a takeover, which ADR-0036 records as worse
+            // than the duplication the row exists to stop.
+            assertThat(successor.commitAll(List.of(
+                    new CommitRequest("podb", "i1", 5, "seg/next", counts(2)))).segments())
+                    .as("and a genuinely NEW flush from the same pod is still applied")
+                    .isNotEmpty();
+        } finally {
+            successor.close();
+        }
+
+        assertThat(deltasCarrying(backing, "seg/lost-a"))
+                .as("and appends NOTHING -- one delta, across a lost reply AND a takeover")
+                .isEqualTo(1);
+        // ⚠️ BOTH PODS OF THE BATCH. The I2 assertion is what actually shows
+        // nothing was committed twice, and covering only the first pod would
+        // leave the two-pod strengthening resting entirely on the white-box
+        // checkpoint read.
+        assertThat(deltasCarrying(backing, "seg/lost-b"))
+                .as("for the second pod of the same landed batch as well")
                 .isEqualTo(1);
     }
 

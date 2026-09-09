@@ -4,6 +4,7 @@ package binjava.sequencer;
 import binjava.binstore.BinStore;
 import binjava.binstore.Body;
 import binjava.format.Checkpoint;
+import binjava.format.SegmentCommit;
 import binjava.format.Checkpoint.StreamOffsets;
 import binjava.format.RunKey;
 import java.io.ByteArrayInputStream;
@@ -55,9 +56,10 @@ import java.util.concurrent.atomic.AtomicLong;
  * from {@link #observe}, which {@code LocalSequencer} calls AFTER a successful
  * {@code commitAll}. An AMBIGUOUS commit — the PUT landed, the response was
  * lost — applies without ever reaching it. M5.23 reconciles that case from the
- * chain into the WINDOW, so the running process answers the retry; ⚠️ it does
- * NOT reach this map, so a SUCCESSOR still does not inherit the fact once a
- * later checkpoint bounds past that delta. M5.25 owns that half.
+ * chain into the WINDOW, so the running process answers the retry, and M5.25
+ * hands it to this map as well through {@link #observeReconciled} — so a
+ * SUCCESSOR inherits it too, rather than only while that delta is still in the
+ * uncheckpointed tail.
  */
 final class CheckpointWriter implements AutoCloseable {
 
@@ -137,20 +139,8 @@ final class CheckpointWriter implements AutoCloseable {
         long pointerEpoch = log.epoch();
         long pointerSequence = appliedSequence;
         for (CommitRequest request : requests) {
-            // ⚠️ Math::max WITHIN AN INCARNATION, never across one. A retried or
-            // late flush arrives with a LOWER flushSeq than one already applied,
-            // and taking the last seen would walk the watermark backwards. But
-            // a RESTARTED pod reissues from 0 under a NEW incarnation, and
-            // maxing across that refuses its second commit for ever -- which is
-            // the suppression ADR-0036 exists to prevent, and a depth-one
-            // fixture passes it.
-            pods.merge(request.podId(),
-                    new Checkpoint.PodState(request.incarnationId(), request.flushSeq(),
-                            pointerEpoch, pointerSequence),
-                    (existing, incoming) -> existing.incarnationId() != null
-                            && existing.incarnationId().equals(incoming.incarnationId())
-                            && existing.lastAppliedFlushSeq() > incoming.lastAppliedFlushSeq()
-                            ? existing : incoming);
+            rememberPod(request.podId(), request.incarnationId(), request.flushSeq(),
+                    pointerEpoch, pointerSequence);
         }
         // ⚠️ ONE `commitAll` IS ONE DELTA, however many requests it batches --
         // M4.7's whole point -- so this counts deltas, which is what K means.
@@ -180,6 +170,77 @@ final class CheckpointWriter implements AutoCloseable {
         dirty = true;
         if (deltasSinceCheckpoint >= everyDeltas) {
             writeIfDirty();
+        }
+    }
+
+    /**
+     * Records one pod's flush as applied at {@code (epoch, sequence)}.
+     *
+     * <p>⚠️ Math::max WITHIN AN INCARNATION, never across one. A retried or late
+     * flush arrives with a LOWER flushSeq than one already applied, and taking
+     * the last seen would walk the watermark backwards. But a RESTARTED pod
+     * reissues from 0 under a NEW incarnation, and maxing across that refuses
+     * its second commit for ever — which is the suppression ADR-0036 exists to
+     * prevent, and a depth-one fixture passes it.
+     */
+    private void rememberPod(String podId, String incarnationId, long flushSeq,
+            long pointerEpoch, long pointerSequence) {
+        pods.merge(podId,
+                new Checkpoint.PodState(incarnationId, flushSeq, pointerEpoch, pointerSequence),
+                (existing, incoming) -> existing.incarnationId() != null
+                        && existing.incarnationId().equals(incoming.incarnationId())
+                        && existing.lastAppliedFlushSeq() > incoming.lastAppliedFlushSeq()
+                        ? existing : incoming);
+    }
+
+    /**
+     * Records flushes learned from the CHAIN rather than from a commit that
+     * returned (M5.25).
+     *
+     * <p>⚠️ THIS IS THE HALF M5.23 LEFT OPEN. An append whose response was lost
+     * has still landed, and {@link #observe} only ever runs after a commit
+     * RETURNS — so the flush was durable, answered by the running sequencer's
+     * in-memory window, and invisible here. A SUCCESSOR seeds from
+     * {@code Checkpoint.pods} plus the uncheckpointed tail, so it inherited the
+     * fact only while that delta was still in the tail; once a later checkpoint
+     * bounded past it, the retry was applied a second time (I2).
+     *
+     * <p>⚠️ IT RECORDS THE POD STATES AND NOTHING ELSE. {@link #capture} also
+     * snapshots the chain — offsets and next sequence — from the commit thread
+     * that just advanced them. Nothing advanced them here: the append that
+     * landed was never applied to this log, so `nextSequence` still points AT
+     * the delta rather than past it, and writing that pair would checkpoint a
+     * chain state one behind the pointer it carries. The next real commit
+     * captures both, and carries these pod states with it.
+     *
+     * <p>⚠️ Does NOT throw. See the class note on failed checkpoints.
+     */
+    synchronized void observeReconciled(List<SegmentCommit> landed, long epoch, long sequence) {
+        try {
+            for (SegmentCommit segment : landed) {
+                SegmentCommit.Attribution attribution = segment.attribution();
+                if (attribution != null) {
+                    rememberPod(attribution.podId(), attribution.incarnationId(),
+                            attribution.flushSeq(), epoch, sequence);
+                }
+            }
+            // ⚠️ NOT MARKED DIRTY, and an earlier draft was. The reason given
+            // -- so a tick writes these out if no commit follows -- does not
+            // hold: until a real commit runs, `pendingSequence` is at or before
+            // the ambiguous delta, so a successor finds that delta in the tail
+            // anyway and needs no checkpoint to inherit it. What the flag DID
+            // buy was a wasted write per reconcile and, more often, a
+            // checkpoint whose `PodState` points at an entry at or beyond its
+            // own `sequence`. ⚠️ NOT REMOVING THAT SHAPE, only its commonest
+            // cause: `writeIfDirty` leaves the flag SET when its PUT throws, so
+            // a tick between a reconcile and the next `capture` can still write
+            // one. The next real commit carries these states, and that is the
+            // checkpoint in which they mean anything.
+        } catch (Throwable neverFailAnAcknowledgedCommit) {
+            LOG.log(System.Logger.Level.WARNING,
+                    "checkpoint bookkeeping failed for a reconciled append; the records "
+                            + "themselves are durable either way",
+                    neverFailAnAcknowledgedCommit);
         }
     }
 

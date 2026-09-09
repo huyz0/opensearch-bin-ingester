@@ -63,15 +63,13 @@ import java.util.List;
  *
  * <p>⚠️ A SUCCESSOR INHERITS THE WINDOW FROM THE CHAIN (M5.1), rebuilt from the
  * replay that crosses from the predecessor, so a retry that crosses a takeover
- * is answered too — with two stated limits. A checkpoint remembers a pod's
- * LATEST incarnation only; and ⚠️ <b>AN AMBIGUOUSLY-LANDED FLUSH IS NOT IN THE
- * CHECKPOINT AT ALL</b>. {@code CheckpointWriter} learns only from a commit
- * that RETURNED, so the flush M5.23 reconciles is known to the running window
- * and to the chain, but not to the map a successor treats as authoritative
- * below the checkpoint bound. While that delta is still in the uncheckpointed
- * tail the successor's replay finds it; once a later checkpoint bounds past it,
- * a retry crossing the takeover is applied twice. Recorded as M5.25, and stated
- * here rather than left to be discovered.
+ * is answered too — including a flush whose own commit never returned, which
+ * M5.25 hands to the checkpoint as well as to the running window. ⚠️ ONE STATED
+ * LIMIT REMAINS: a checkpoint remembers a pod's LATEST incarnation only, so a
+ * replay from an incarnation since superseded is not answered and lands twice.
+ * That window needs a pod to restart between the original and its retry, and it
+ * is the direction that duplicates rather than suppresses, which ADR-0036
+ * records as the less damaging of the two.
  *
  * <p>⚠️ THE TRIPLE IS NOT THE WHOLE KEY OF AN ANSWER. A replay is DETECTED on
  * {@code (podId, incarnationId, flushSeq)}, but it is ANSWERED only by a
@@ -129,9 +127,9 @@ public interface Sequencer extends AutoCloseable {
      *     SEQUENCER (M5.23): the failure names the slot the append was
      *     attempted at, and the next commit reconciles it against the chain, so
      *     a retry of a commit that landed is answered with the offsets that
-     *     already apply and appends nothing. ⚠️ IT IS NOT YET SAFE ACROSS A
-     *     TAKEOVER -- a successor does not inherit an ambiguously-landed flush
-     *     once a checkpoint bounds past its delta (M5.25). ⚠️ And a DIFFERENT
+     *     already apply and appends nothing. ⚠️ AND ACROSS A TAKEOVER TOO
+     *     (M5.25): the reconciliation hands the flush to the checkpoint as well
+     *     as to the running window, so a successor inherits it. ⚠️ A DIFFERENT
      *     triple is a different commit and duplicates the records; see the
      *     failure-and-retry note
      * @throws FencedException the ONE exception to the paragraph above: this

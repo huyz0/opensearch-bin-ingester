@@ -486,12 +486,11 @@ public final class LocalSequencer implements Sequencer {
      * still unknown -- and a store that cannot answer this read is a store the
      * commit behind it could not have reached either.
      *
-     * <p>⚠️ THIS SEEDS THE WINDOW AND NOT THE CHECKPOINT, which is a gap rather
-     * than a boundary: {@code CheckpointWriter} learns only from a commit that
-     * RETURNED, so the reconciled flush is durable, answered here, and absent
-     * from what a SUCCESSOR inherits once a later checkpoint bounds past its
-     * delta. M5.25 owns closing it; said here because the fix is one file over
-     * and the omission is invisible from either side.
+     * <p>⚠️ IT SEEDS THE CHECKPOINT AS WELL AS THE WINDOW (M5.25), and seeding
+     * only the window was a gap invisible from either side: this pod answered
+     * the retry and the next pod did not, because {@code CheckpointWriter}
+     * learns only from a commit that RETURNED. Both are seeded from the same
+     * delta this reconciliation already read.
      */
     private void reconcileAmbiguousAppend() throws IOException {
         AmbiguousAppendException pending = ambiguousAppend;
@@ -509,6 +508,17 @@ public final class LocalSequencer implements Sequencer {
             if (attribution != null) {
                 window.applied(attribution, pending.epoch(), landed.get().sequence());
             }
+        }
+        // ⚠️ AND THE CHECKPOINT, WHICH IS WHAT A SUCCESSOR INHERITS (M5.25).
+        // Seeding only the in-memory window left this pod answering the retry
+        // and the next pod not: `CheckpointWriter` learns from commits that
+        // RETURNED, so an ambiguously-landed flush reached it never, and a
+        // successor inherited the fact only while that delta was still in the
+        // uncheckpointed tail.
+        CheckpointWriter writer = checkpoints;
+        if (writer != null) {
+            writer.observeReconciled(landed.get().segments(), pending.epoch(),
+                    landed.get().sequence());
         }
     }
 

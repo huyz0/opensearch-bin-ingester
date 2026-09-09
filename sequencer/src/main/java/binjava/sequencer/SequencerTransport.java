@@ -42,11 +42,12 @@ public interface SequencerTransport extends AutoCloseable {
      * own ambiguous append against the slot it named, so a resend to THE SAME
      * SEQUENCER is answered. ⚠️ THE SAME SEQUENCER, NOT THE SAME POD: the mark
      * that makes it answerable is one instance's field, so a pod that loses and
-     * re-acquires its lease is the same pod holding a fresh, empty one. Any
-     * other resend still duplicates -- the reconciliation seeds an in-memory
-     * window and never the checkpoint, so a successor does not inherit the
-     * flush once a later checkpoint bounds past its delta. That is M5.25, and
-     * following the lease is exactly the case a caller here is in.
+     * re-acquires its lease is the same pod holding a fresh, empty one.
+     * ⚠️ A RESEND TO A SUCCESSOR IS ANSWERED SINCE M5.25 -- the reconciliation
+     * writes the flush into the checkpoint too -- but only within a pod's
+     * CURRENT incarnation, because a checkpoint remembers one per pod. This
+     * transport cannot tell which case a resend is in, so it still does not
+     * resend one whose outcome it does not know.
      *
      * @throws NotTheLeaseholderException when the peer answers that it does not
      *     hold the lease. ⚠️ A REFUSAL, NOT A FAILURE: nothing was applied, so

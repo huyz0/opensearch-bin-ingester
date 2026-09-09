@@ -50,11 +50,10 @@ import java.util.Optional;
  * (M5.23), which is why {@link #applied} takes an attribution off a delta as
  * well as off a request.
  *
- * <p>⚠️ IT IS NOT CLOSED ACROSS A TAKEOVER. A successor seeds from
- * {@code Checkpoint.pods} plus the uncheckpointed tail, and
- * {@code CheckpointWriter} never saw the ambiguous flush -- so once a later
- * checkpoint bounds past that delta the fact is gone and the retry lands twice.
- * M5.25 owns it.
+ * <p>⚠️ AND IT IS CLOSED ACROSS A TAKEOVER TOO (M5.25). A successor seeds from
+ * {@code Checkpoint.pods} plus the uncheckpointed tail, and the reconciliation
+ * now writes the ambiguous flush into that map as well -- so the fact survives
+ * a later checkpoint bounding past its delta.
  */
 final class IdempotencyWindow {
 

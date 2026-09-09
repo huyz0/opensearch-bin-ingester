@@ -27,8 +27,10 @@ import java.util.Objects;
  * {@link FencedException} rather than by its message. A fenced commit appended
  * nothing, so re-sending it is not a duplicate; any other {@link IOException}
  * may have landed and lost its reply, and re-sending THAT ELSEWHERE commits
- * the same records twice — M5.23 answers such a resend only at the sequencer
- * instance that made the append, never after the lease moves (M5.25). So the pod keeps its
+ * the same records twice unless the new holder inherited it — M5.23 answers
+ * such a resend at the sequencer instance that made the append, and M5.25
+ * carries it into the checkpoint a successor reads, for a pod's CURRENT
+ * incarnation only. So the pod keeps its
  * term through an ambiguous failure: a transient 503 on a delta PUT is not a
  * takeover.
  *
@@ -140,9 +142,9 @@ public final class FleetSequencer implements Sequencer {
                 // append makes a resend safe to THAT SEQUENCER only -- the mark
                 // is one instance's field, so not even the same pod's next term
                 // holds it -- while a fence proves nothing was appended at all
-                // and so authorises a resend anywhere, including to a
-                // successor, which does not inherit an ambiguously-landed
-                // flush (M5.25).
+                // and so authorises a resend anywhere -- including to a
+                // successor, which inherits an ambiguously-landed flush since
+                // M5.25 but only for a pod's current incarnation.
                 forwardFailed.addSuppressed(fence);
             }
             throw forwardFailed;

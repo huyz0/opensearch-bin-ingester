@@ -41,9 +41,11 @@ import java.io.IOException;
  * a fresh, empty one.
  *
  * <p>⚠️ WHAT STAYS TRUE, and what this type is for, is that a resend ELSEWHERE
- * is safe only on one of those two refusals — a successor does not inherit an
- * ambiguously-landed flush once a checkpoint bounds past its delta (M5.25), so
- * a lost outcome resent to a new holder is a duplicate.
+ * is safe only on one of those two refusals. ⚠️ M5.25 carries an
+ * ambiguously-landed flush into the checkpoint, so a successor DOES inherit it
+ * — but for a pod's current incarnation only, and a caller here cannot tell
+ * which incarnation a resend belongs to, so a lost outcome resent to a new
+ * holder is still a duplicate waiting to happen.
  */
 public final class FencedException extends IOException {
 

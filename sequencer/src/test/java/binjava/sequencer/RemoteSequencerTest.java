@@ -300,9 +300,10 @@ class RemoteSequencerTest {
         // reply, and re-sending it to ANOTHER pod commits the same records
         // again. ⚠️ M5.23 NARROWS THAT AND DOES NOT LIFT IT: a sequencer now
         // answers a resend of its OWN lost-response append by reading the slot
-        // it named, but that window is the LEASEHOLDER's and a successor does
-        // not inherit it (M5.25) -- and a resend from here would be to whoever
-        // holds the lease NOW. So the failure propagates.
+        // it named, and M5.25 carries that into the checkpoint a successor
+        // reads -- but for a pod's CURRENT incarnation only, and a resend from
+        // here goes to whoever holds the lease NOW, which this class cannot
+        // tell apart from a resend across a restart. So the failure propagates.
         SequencerTransport flaky = new SequencerTransport() {
             @Override
             public CommitDelta send(String endpoint, CommitRequest request)
