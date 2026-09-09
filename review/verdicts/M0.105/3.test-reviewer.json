@@ -1,0 +1,8 @@
+{
+  "task": "M0.105",
+  "role": "test-reviewer",
+  "diff_sha256": "e813dcf8320e310e58e157985ce18d0f416e4482d9499a533b6c174c9a6a9e83",
+  "verdict": "pass",
+  "findings": [],
+  "via": "record"
+}

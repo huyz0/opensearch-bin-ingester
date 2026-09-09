@@ -1,0 +1,16 @@
+{
+  "task": "M0.105",
+  "role": "reviewer",
+  "diff_sha256": "e813dcf8320e310e58e157985ce18d0f416e4482d9499a533b6c174c9a6a9e83",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:61",
+      "summary": "The M0.105 row states that a gate for the State column is \"its own task, not a clause in this one\" and that \"NOTHING STOPS THE TENTH\", but no backlog row is created for that task, so the follow-up this change identifies is left unowned -- the same shape backlog.md itself records as a defect three times (M5.6e \"recorded here so it stops being unowned\", M5.23 \"it names M4.10e, which is a backlog row nowhere\", M5.1 \"M4.10f is a backlog row nowhere\").",
+      "failure_scenario": "After this commit, the nearest row is M0.20 (check-cross-refs.sh -- every M<n>/R<n> resolves, and no row under ## Completed contradicts its own State cell), whose predicate is cross-reference resolution, not State-versus-git-log; grepping backlog.md for any row owning a State-column gate returns nothing. A later session runs next-task, sees no such row, lands M5.6c or M5.7, and leaves that row reading todo -- the tenth stale row, arriving by exactly the mechanism the row it was recorded in predicts, with no task in the tree that would ever have prevented it. Every fact this row asserts about the mechanism was verified as true (check-commit-msg.sh only greps for the ID's presence and truncates letter suffixes, so nothing reads the State cell); the defect is only that the named remedy has no owner."
+    }
+  ],
+  "via": "record"
+}

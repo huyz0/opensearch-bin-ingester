@@ -1,0 +1,17 @@
+{
+  "task": "M0.105",
+  "role": "reviewer",
+  "diff_sha256": "8571f0e25881b3f6f1fc181a091eb625ecc583b41658892e997f8f6753733b5b",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:62",
+      "summary": "The new M0.106 row's refinement clause -- \"excluding the commit that introduced the row would catch the three harvest cases and still misjudge M0.104 and M1.16e\" -- is false against this tree: all six named commits are each the sole commit naming their ID AND the commit that introduced their row, so the exclusion catches all six, while the case it does misjudge (M5.24, and now M0.105 itself) is not named.",
+      "failure_scenario": "Measured on the tree at HEAD ec78a49: `git log --format=%s` contains exactly one subject starting with each of M0.104, M1.16e, M1.16b, M2.10, M1.24, M1.22 (2e4e9f1, 36500e9, 6cc11b0, 1fe5b5b, cbae7ea, a2025c4), and `git log -L '/^| <id> |/,+1:docs/internal/product/backlog.md'` shows each of those same commits introduced the row and no later commit ever touched that line. So the predicate \"an ID prefixes some commit subject other than the one that introduced the row => State is done\" returns false for all six, agreeing with all six `todo` cells -- zero false positives, not two. Conversely 8680490's subject is \"M5.24 ...\" and that same commit added the M5.24 row (`git show 8680490 -- docs/internal/product/backlog.md` adds the M5.23 and M5.24 rows) while also delivering tools/testresults.py, and this commit makes the identical shape for M0.105; under the exclusion those two done rows read as not-done, a false negative the row never mentions. An implementer picking up M0.106 and testing the exclusion against the two cases the row names will see both pass, get no signal from the row's actual counterexample, and -- taking the row's closing sentence \"if no predicate separates them, the answer is a different rung of gate-design\" at face value -- reach for rung 6/7 (an agent asked to remember) when rung 3 covers every measured case except the same-commit-creates-and-does one, which is precisely the escalation AGENTS.md non-negotiable 9 requires evidence for."
+    }
+  ],
+  "via": "record",
+  "recorded_late": "Written after the round rather than by `xreview.py record` at the time, which is a gap in the author's bookkeeping and not a property of the review. The reply below is the reviewer's verbatim JSON. The hash was recovered from the packet that round was reviewed against, whose `=== THE COMPLETE STAGED DIFF ===` section holds the diff verbatim; the same reconstruction applied to round 3's packet reproduces the hash `xreview.py record` computed from the index, which is what makes it checkable rather than asserted."
+}

@@ -1,0 +1,31 @@
+{
+  "task": "M0.105",
+  "role": "reviewer",
+  "diff_sha256": "e4532c6aead5293353fb5503b56db61344b21cbb38b35f91c30ddfbe5fdaf8c7",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "major",
+      "file": "docs/internal/product/backlog.md:62",
+      "summary": "The new M0.106 row specifies a gate whose invariant -- \"for every backlog row whose ID prefixes a commit subject in git log, the row's State must be done\" -- is already false in six places in this same file, and the row calls the join \"exact\" while naming only the false-NEGATIVE blind spot (work delivered inside another commit), never the false-POSITIVE half that would fail on correct rows.",
+      "failure_scenario": "Implement M0.106 exactly as written and run it on this tree: it flags six rows whose `todo` is correct, because their commit RECORDED the row rather than doing the work. Verified by joining `git log --format=%s` against the State column: M0.104 (commit 2e4e9f1, three rows above M0.106 in the same table, state deliberately '**todo, cause unknown; symptom contained**' -- the cause is unknown, so it cannot truthfully read done); M1.16b (commit 6cc11b0, row text reads '\u26a0\ufe0f **Withdrawn, not done.**'); M1.16e (commit 36500e9 shipped ADR-0023 only -- no such gate exists in scripts/, so the row's actual deliverable is absent); M2.10 (commit 1fe5b5b added rows and VERIFIED.md only; the putIfMatch fresh-Version regression test was never written); M1.22 (commit a2025c4 is a one-line backlog insert; the SPEC table sweep never happened); M1.24 (commit cbae7ea recorded the harvest; the hardening it names is unapplied). A seventh arrives the moment this commit lands: M0.105's own row is added here reading `todo` under a commit whose subject is 'M0.105: ...', which is this repository's standing convention (M0.103 at 08282a8 and M0.104 at 2e4e9f1 each added their own row as todo). So the gate as specified can only be made green by writing 'done' on rows whose work has not landed -- including one that says in its own text that it was withdrawn -- or by being SKIPped, which is precisely the outcome M0.102's row two screens above records as the reason an absolute threshold is worse than a movable one. The row must state the false-positive class (a row recorded BY a commit that did not do it) as a second thing the gate cannot see, or specify the discriminator, before an implementer builds it."
+    },
+    {
+      "id": "R2",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:34",
+      "summary": "M5.0's State cell attributes the whole row to `66f4020`, but that commit delivered only SPEC.md; the second of the row's three named deliverables -- \"the roadmap row corrected to name commit forwarding\" -- landed in `055d850`, the M5.21 commit, which is the same delivered-inside-another-task's-commit shape this diff annotates in full for M5.3 and M5.5.",
+      "failure_scenario": "M5.20 (M5's VERIFIED.md) reads the State column for evidence, sees `**done** (66f4020)` against a row promising a spec, a roadmap correction and two NFR reassignments, and runs `git show --stat 66f4020`: it returns one file, `docs/internal/product/milestones/M5/SPEC.md`, 404 insertions, and no roadmap.md. `git log -- docs/internal/product/roadmap.md` shows the M5 row was corrected to name commit forwarding by 055d850, one commit earlier and under a different task ID. The auditor either records the roadmap correction as unevidenced or reopens work that is already in the tree -- the exact failure this task exists to remove -- and the annotation vocabulary the same diff invents for M5.3/M5.5 ('inside `bb07f2a`, not its own commit') is not applied to the row that also needs it."
+    },
+    {
+      "id": "R3",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:31",
+      "summary": "M5.22's cell is flipped to a plain `**done** (053f8c3)` although `053f8c3` closed nothing -- it added 48 test lines that assert the defect is STILL PRESENT (`deltasCarrying == 2`) -- so the State column now says complete for a row whose own body says the defect is carried, not fixed.",
+      "failure_scenario": "The one decision this diff exists to enable is reading the State column instead of the row bodies. A session doing that after this lands sees M5.22 `done` and concludes the bare-v0-checkpoint takeover duplication is resolved; it is not -- `git show --stat 053f8c3` is a single test file, and the row body says closing it costs either M4's acceptance criterion 5 (`BoundedRecoveryCorrectnessTest`, MEASURED breaking) or a new unanswerable-watermark tier. The tree then asserts both answers at once, which is the defect ec78a49's own message spent four review rounds retracting. M0.104's cell three rows below shows the available vocabulary for exactly this state ('**todo, cause unknown; symptom contained**'); M5.22 needs the equivalent qualifier -- e.g. '**done** (`053f8c3`) -- pinned, NOT closed' -- rather than an unqualified done."
+    }
+  ],
+  "via": "record",
+  "recorded_late": "Written after the round rather than by `xreview.py record` at the time, which is a gap in the author's bookkeeping and not a property of the review. The reply below is the reviewer's verbatim JSON. The hash was recovered from the packet that round was reviewed against, whose `=== THE COMPLETE STAGED DIFF ===` section holds the diff verbatim; the same reconstruction applied to round 3's packet reproduces the hash `xreview.py record` computed from the index, which is what makes it checkable rather than asserted."
+}

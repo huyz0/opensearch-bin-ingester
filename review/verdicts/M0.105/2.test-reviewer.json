@@ -1,0 +1,17 @@
+{
+  "task": "M0.105",
+  "role": "test-reviewer",
+  "diff_sha256": "8571f0e25881b3f6f1fc181a091eb625ecc583b41658892e997f8f6753733b5b",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "major",
+      "file": "docs/internal/product/backlog.md:62",
+      "summary": "The M0.106 row's second measured claim is falsified by the same join that produced its first: it says excluding the row-introducing commit \"would catch the three harvest cases and still misjudge M0.104 and M1.16e\", but all SIX false positives -- including M0.104 and M1.16e -- are rows introduced by the very commit that names them, so the refined predicate misjudges none of them on the current corpus.",
+      "failure_scenario": "Measured over the staged backlog.md and all 85 commit subjects: the naive predicate \"ID prefixes a commit subject => State is done\" yields exactly six false positives (M0.104/2e4e9f1, M1.22/a2025c4, M1.16b/6cc11b0, M1.16e/36500e9, M1.24/cbae7ea, M2.10/1fe5b5b) -- the row's list is correct and complete, no more and no fewer. But for each of those six, `git show <commit>^:docs/internal/product/backlog.md | grep -cE '^\\| *<ID> *\\|'` returns 0 and the commit's own diff adds the row: 2e4e9f1 introduced the M0.104 row and 36500e9 introduced the M1.16e row, exactly as the three harvest commits did. Excluding the introducing commit therefore clears 6 of 6, not 3 of 6, and the residual set the row names is empty. Concrete harm: the row ends \"If no predicate separates them, the answer is a different rung of gate-design -- not an agent asked to remember\", so M0.106's implementer reads a measured-sounding statement that the cheap refinement still fails on two named rows, and either (a) implements it anyway and finds the two counterexamples do not exist, or (b) accepts the stated conclusion and escalates to a rung-6/7 agent check that AGENTS.md non-negotiable 9 forbids without a written argument that rungs 1-5 cannot carry it -- an argument this row's own evidence does not support. This is the identical defect class raised in round 1 (a checkable claim asserted as measured and falsified by re-running the join), reappearing one clause later in the sentence written to fix it, in the row whose own headline is \"THE FIRST DRAFT OF THIS ROW SHIPPED IT AS EXACT\". The fix is one clause, not a split: state that the exclusion clears all six on today's corpus and name the real residual risk (a second commit naming an already-existing still-open row, and the exclusion's own blind spot -- a row correctly done in the commit that introduced it, as M0.103 and M0.105 both are, is then never checked at all)."
+    }
+  ],
+  "via": "record",
+  "recorded_late": "Written after the round rather than by `xreview.py record` at the time, which is a gap in the author's bookkeeping and not a property of the review. The reply below is the reviewer's verbatim JSON. The hash was recovered from the packet that round was reviewed against, whose `=== THE COMPLETE STAGED DIFF ===` section holds the diff verbatim; the same reconstruction applied to round 3's packet reproduces the hash `xreview.py record` computed from the index, which is what makes it checkable rather than asserted."
+}

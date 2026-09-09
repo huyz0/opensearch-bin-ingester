@@ -1,0 +1,24 @@
+{
+  "task": "M0.105",
+  "role": "test-reviewer",
+  "diff_sha256": "e4532c6aead5293353fb5503b56db61344b21cbb38b35f91c30ddfbe5fdaf8c7",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "major",
+      "file": "docs/internal/product/backlog.md:62",
+      "summary": "M0.106 states its gate rule as an exact join -- \"for every backlog row whose ID prefixes a commit subject in git log, the row's State must be done\" -- but that predicate is false against the tree it would run over today, and the row's only stated limitation is the opposite direction, so it implies a clean bill in the direction where it actually has six false positives.",
+      "failure_scenario": "Implement the row literally and run it at HEAD on a clean checkout: joining the 81 task IDs that prefix a commit subject in `git log` against the ID column of the post-change backlog.md yields six rows whose State is not `done` -- M0.104 (2e4e9f1, State '**todo, cause unknown; symptom contained**', the commit contained the symptom and the cause is open), M1.16b (6cc11b0, row says '**Withdrawn, not done.**'), M1.16e (36500e9, the commit landed ADR-0023, the row's gate has not landed and says 'Until this lands the check is run by hand'), M1.22 (a2025c4, the commit RECORDED the drift as a follow-up sweep, the sweep is todo), M2.10 (1fe5b5b) and M1.24 (cbae7ea, milestone-review harvest commits that create rows named for their own ID covering still-open follow-ups). Five of the six are correct as written, so the gate as specified is red on a correct tree from the day it lands. Its two available outcomes are an exception list that must be edited every time a commit withdraws, defers or partially delivers a row -- or being SKIPped, which is the failure mode M0.102's own row argues against for thresholds. A predicate that cannot distinguish 'stale' from 'withdrawn / partially delivered / recorded-as-follow-up' is not the exact join the row claims 'needs no agent', and the \u26a0\ufe0f that discloses the M5.3/M5.5 blind spot reads as the full statement of what it cannot see."
+    },
+    {
+      "id": "R2",
+      "severity": "major",
+      "file": "docs/internal/product/backlog.md:61",
+      "summary": "The M0.105 row is added with State `todo` in the commit whose subject is `M0.105: ...`, so the commit that corrects nine stale rows creates the tenth -- an instance of the exact defect the row defines, produced by the fix itself.",
+      "failure_scenario": "After this commit lands, `git log` contains a subject starting `M0.105` while backlog.md line 61 reads `| - | todo |`. An agent then following AGENTS.md and the `next-task` skill -- 'take the top unblocked task' -- reads M0.105 as unblocked, unblocked-by-nothing work in the M0 block and re-does a State-column sweep that has already shipped; and the M0.106 gate the same diff proposes would fire on M0.105 as its first hit. This is the same mechanism the row itself documents: M5.24's commit 8680490 added its own row as `todo`, and M5.1's commit 5322388 added M5.22's row as `todo`, which is how the nine went stale. The convention that avoids it exists in the tree -- M0.103's own commit 08282a8 added its row as `| done |` -- so the fix is one cell, e.g. `**done** (this commit)`."
+    }
+  ],
+  "via": "record",
+  "recorded_late": "Written after the round rather than by `xreview.py record` at the time, which is a gap in the author's bookkeeping and not a property of the review. The reply below is the reviewer's verbatim JSON. The hash was recovered from the packet that round was reviewed against, whose `=== THE COMPLETE STAGED DIFF ===` section holds the diff verbatim; the same reconstruction applied to round 3's packet reproduces the hash `xreview.py record` computed from the index, which is what makes it checkable rather than asserted."
+}
