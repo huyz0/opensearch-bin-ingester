@@ -137,6 +137,18 @@ public final class FaultInjectingStore implements BinStore {
         this.actor = podId;
     }
 
+    /**
+     * Who is acting now, so a caller can restore it (M5.7).
+     *
+     * <p>⚠️ FOR A HOP, NOT FOR AN ASSERTION. A forwarded commit runs the lease
+     * read as the FORWARDER and the chain append as the LEASEHOLDER, so the
+     * driver's transport swaps the actor for the length of the send and puts
+     * back whatever was there -- and it cannot put back what it cannot read.
+     */
+    String actingPod() {
+        return actor;
+    }
+
     /** Cut {@code podId} off from the store until {@link #heal} is called. */
     void partition(String podId) {
         partitioned.add(podId);

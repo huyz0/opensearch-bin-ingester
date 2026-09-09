@@ -56,7 +56,24 @@ public final class CommitProtocolSimulation {
     private static final UUID STREAM = UUID.fromString("00000000-0000-0000-0000-0000000000aa");
     private static final Duration TTL = Duration.ofSeconds(10);
     private static final Duration RENEW = Duration.ofSeconds(3);
-    private static final String PREFIX = "bins/cluster-a";
+    static final String PREFIX = "bins/cluster-a";
+
+    /**
+     * How often a NON-leader pod commits by FORWARDING, in percent (M5.7).
+     *
+     * <p>⚠️ NOT 100. A fleet where every commit forwards never exercises the
+     * leaseholder's own path, and the deployment M5 makes correct has both:
+     * FR-12 mandates at least two ingester nodes per AZ, so the leaseholder is
+     * one pod among many and it writes its own flushes too.
+     *
+     * <p>⚠️ IT IS THE DRAW RATE, AND THREE OTHER NUMBERS FALL OUT OF IT.
+     * MEASURED at 1,000 seeds and 120 rounds: 32.95% of rounds become a forward
+     * ATTEMPT, 6.0% of draws are discarded because the pod drawn is the one
+     * leading, and only 4.02% of rounds are CONSUMED by a forward -- because
+     * 82.5% of attempts are issued while nobody leads, and those fall through
+     * to the election rather than spending the round.
+     */
+    private static final int FORWARD_RATE = 35;
 
     /**
      * One idempotency key as it was ISSUED, with the segment it named.
@@ -74,6 +91,7 @@ public final class CommitProtocolSimulation {
     /** What one seed produced, including what it is NOT evidence about. */
     public record Result(long seed, int commits, int takeovers, long highestEpoch,
             int zombieWrites, int zombieAttempts,
+            int forwardedCommits, int forwardAttempts, int forwardRefusals,
             List<FaultInjectingStore.Injected> faults,
             List<Issued> issued,
             List<Invariants.Violation> violations,
@@ -128,6 +146,21 @@ public final class CommitProtocolSimulation {
     public static Result run(long seed, int rounds, int pods,
             FaultInjectingStore.Faults faults) throws IOException {
         return run(seed, rounds, pods, faults, new MemoryBinStore());
+    }
+
+    /**
+     * The same, with pods that FORWARD rather than lead (M5.7).
+     *
+     * <p>⚠️ A PARAMETER RATHER THAN A REWRITE, because the SPEC says the
+     * simulation is EXTENDED and not replaced: every seed the four-argument
+     * overload has ever run stays bit-identical, so M4's evidence is not
+     * silently re-based by a change to the draw sequence. The sweep turns it
+     * on; the focused tests that measure the leaseholder's own path do not.
+     */
+    public static Result runForwarding(long seed, int rounds, int pods,
+            FaultInjectingStore.Faults faults) throws IOException {
+        return run(seed, rounds, pods, faults, new MemoryBinStore(),
+                ReaderInvariants.ReaderView::of, null, true);
     }
 
     /**
@@ -189,6 +222,14 @@ public final class CommitProtocolSimulation {
             java.util.function.Function<CommitLog, ReaderInvariants.ReaderView> viewFor,
             binjava.binstore.CountingBinStore meter)
             throws IOException {
+        return run(seed, rounds, pods, faults, backing, viewFor, meter, false);
+    }
+
+    static Result run(long seed, int rounds, int pods,
+            FaultInjectingStore.Faults faults, MemoryBinStore backing,
+            java.util.function.Function<CommitLog, ReaderInvariants.ReaderView> viewFor,
+            binjava.binstore.CountingBinStore meter, boolean forwarding)
+            throws IOException {
         Random random = new Random(seed);
         SimulatedClock clock = new SimulatedClock(1_000_000L);
         List<AckOrderInvariants.AckEvent> acks = new ArrayList<>();
@@ -242,6 +283,11 @@ public final class CommitProtocolSimulation {
         // what the assertion says.
         int zombieWrites = 0;
         int zombieAttempts = 0;
+        // ⚠️ THE FOLLOWER HALF OF THE FLEET, and a class of its own because
+        // this file crossed 700 lines -- code-structure rule 1, split rather
+        // than raise. The seam is real: leading is about the lease and the
+        // chain, forwarding is about reaching whoever holds them.
+        ForwardingPods followers = new ForwardingPods(store, faulty);
         // ⚠️ DERIVED, NOT DECLARED. Recorded at the point of issue, so a test
         // reads what the driver actually sent rather than a counter it set --
         // the shape M4.27 records as satisfiable by hard-coding.
@@ -313,6 +359,69 @@ public final class CommitProtocolSimulation {
                     }
                 }
             }
+            if (forwarding && random.nextInt(100) < FORWARD_RATE) {
+                // ⚠️ A POD THAT IS NOT THE LEASEHOLDER, chosen before anything
+                // else is drawn, so the draw sequence does not depend on which
+                // pod happens to lead this round.
+                String follower = "pod" + random.nextInt(pods);
+                // ⚠️ ANY POD THAT IS NOT LEADING RIGHT NOW, including when
+                // NOBODY is -- which is the only way a forward can straddle a
+                // leadership change. Review MEASURED the alternative: with this
+                // branch below the `leader == null` guard the lease and the
+                // routing table could never disagree at the moment a forward
+                // was issued, so `RemoteSequencer`'s whole refusal arm --
+                // M5.5's re-read-and-resend -- was dead in all 1,000 seeds, and
+                // replacing the transport's refusal with an AssertionError left
+                // the sweep green.
+                // ⚠️ ONE INCARNATION PER POD, sharing the `l:` key the leader
+                // path uses, because a pod that forwards and a pod that leads
+                // are the SAME process. Giving forwarding its own incarnation
+                // gave one pod two dense flushSeq counters, which the
+                // idempotency window then reads as two different pods --
+                // exactly the discrimination ADR-0036 exists to make, and a
+                // pod that both leads and forwards is the common case rather
+                // than the corner one.
+                if (!follower.equals(leaderPod)) {
+                    String followerInc = incarnations.computeIfAbsent("l:" + follower,
+                            k -> "inc-" + k + "-" + seed);
+                    CommitRequest forwarded = new CommitRequest(follower, followerInc,
+                            nextFlushSeq.merge(followerInc, 1L, Long::sum) - 1,
+                            "seg/fwd-" + round, counts(1 + random.nextInt(3)));
+                    issued.add(record(forwarded));
+                    Optional<CommitDelta> landed = followers.forward(forwarded);
+                    if (landed.isPresent()) {
+                        // ⚠️ ACKED UNDER THE EPOCH OF THE POD THAT WROTE IT,
+                        // because that is the chain the records landed in.
+                        // Attributing it to the follower would put an ack in a
+                        // chain the follower never wrote, and `checkAckOrder`
+                        // bases each chain on the lowest sequence its trace
+                        // shows.
+                        // ⚠️ READ FROM THE HOP, never from the driver's
+                        // `leader` field: this branch now runs when that field
+                        // may be null, and a forward can only have landed where
+                        // the transport actually routed it.
+                        acks.add(AckOrderInvariants.AckEvent.acked(
+                                followers.epochThatLanded(), landed.get().sequence()));
+                        commits++;
+                    }
+                    // ⚠️ A REFUSED OR LOST FORWARD IS NOT A FAILURE OF THE RUN,
+                    // and the leader is NOT stood down for it, unlike the
+                    // leader's own ambiguous failure below: nothing about a
+                    // follower's send tells us the leaseholder is unwell. A
+                    // follower that cannot reach it simply does not commit this
+                    // round -- the degraded behaviour M8's `ctl/inbox/` path
+                    // exists for.
+                    // ⚠️ THE ROUND IS SPENT ONLY IF SOMEBODY IS LEADING. With no
+                    // leader this falls through to the election below, because
+                    // a doomed forward must not cost the cluster the round it
+                    // would have used to elect -- measured, forwarding in
+                    // leaderless rounds and consuming them dropped takeovers
+                    // while inflating attempts sixfold.
+                    if (leader != null) {
+                        continue;
+                    }
+                }
+            }
             if (leader == null) {
                 String pod = "pod" + random.nextInt(pods);
                 faulty.actingAs(pod);
@@ -320,6 +429,14 @@ public final class CommitProtocolSimulation {
                 if (won.isPresent()) {
                     leader = won.get();
                     leaderPod = pod;
+                    // ⚠️ REGISTERED UNDER THE ENDPOINT THE LEASE NAMES, never
+                    // under "whichever sequencer we have". `InProcessTransport`
+                    // refuses an endpoint it does not know, so a forwarder that
+                    // stopped re-reading the lease reaches a pod that has gone
+                    // and is REFUSED -- which is the property being tested, and
+                    // which a transport routing to the only leader present
+                    // would answer for free.
+                    followers.leads(pod, leader);
                     takeovers++;
                     // ⚠️ THE SLOT-0 CONTINUE, EMITTED AS CONFIRMED, which M4.13's
                     // notes require and an earlier draft of this file CLAIMED to
@@ -370,12 +487,29 @@ public final class CommitProtocolSimulation {
             if (random.nextInt(100) < 20) {
                 // The leader goes away. Half the time politely.
                 if (random.nextBoolean()) {
+                    if (forwarding) {
+                        // ⚠️ INSIDE THE GUARD, and that placement is the whole
+                        // of review's P1/T1. `leader.close()` sets no actor, so
+                        // it is judged against whoever acted last -- and with
+                        // forwarding on that is a FOLLOWER, which made 21.5% of
+                        // graceful releases answer to another pod's partition
+                        // against 3.3% without. Naming the leader here fixes
+                        // that; naming it UNCONDITIONALLY also moved 4 of
+                        // M4's 1,000 leader-only seeds, which is re-basing the
+                        // evidence this file exists to preserve.
+                        // ⚠️ SO THE 3.3% IS STILL THERE on the leader-only path.
+                        // It is a pre-existing harness defect, it is NOT this
+                        // row's, and it is recorded as M5.26 rather than fixed
+                        // here where it would be invisible in the diff.
+                        faulty.actingAs(leaderPod);
+                    }
                     try {
                         leader.close();
                     } catch (IOException injected) {
                         // a fault during release leaves the lease to expire,
                         // which is exactly the ungraceful path
                     }
+                    followers.gone(leaderPod);
                 } else {
                     // ⚠️ It just STOPS ANSWERING -- and keeps its object, which
                     // is the point. A real fenced leader does not learn it is
@@ -383,6 +517,12 @@ public final class CommitProtocolSimulation {
                     // originating commits into a chain somebody else is sealing.
                     zombies.add(leader);
                     zombiePods.add(leaderPod);
+                    // ⚠️ THE ENDPOINT GOES EVEN THOUGH THE OBJECT STAYS. A
+                    // zombie is a pod that stopped ANSWERING, so a peer's send
+                    // to it must fail; keeping it routable would model a leader
+                    // that is unreachable to the store and reachable to its
+                    // peers, which is not the failure being injected.
+                    followers.gone(leaderPod);
                     clock.advance(TTL.plusSeconds(1));
                 }
                 leader = null;
@@ -466,72 +606,23 @@ public final class CommitProtocolSimulation {
             }
         }
 
-        List<Invariants.Violation> violations = new ArrayList<>();
-        long highest = 0;
-        int readersChecked = 0;
-        // ⚠️ ONE WALK PER EPOCH. The second `checkChain` this loop used to make
-        // was a provably DEAD disjunct -- every violation is raised inside the
-        // walk over entries, so a non-empty violation list already implies a
-        // non-empty chain -- and it cost a full second LIST plus one GET per
-        // entry in the phase M4.13's <60s budget lives in.
-        long scanTo = pods * (long) rounds;
-        // ⚠️ EVERYTHING HELD LANDS BEFORE ANYTHING IS JUDGED. A write still in
-        // the queue when the checkers run is a write that never landed, which
-        // is `withheldPut` -- a different class, already modelled. Draining
-        // here is what keeps `deferredPut` a DELAY.
-        faulty.drainPending();
-
-        // ⚠️ NOBODY IS ACTING WHILE THE CHECKERS RUN, and every partition is
-        // lifted first. The checkers read `backing` directly so they are
-        // already below the injector, but leaving an actor set would be a trap
-        // for the next person who points a checker at `store`: a checker that
-        // could be partitioned reports violations describing the harness.
-        for (String pod : partitionedPods) {
-            faulty.heal(pod);
-        }
-        partitionedPods.clear();
-        faulty.actingAs(null);
-
-        for (long epoch = 1; epoch <= scanTo; epoch++) {
-            violations.addAll(Invariants.checkChain(backing, PREFIX, epoch));
-            if (hasChain(backing, epoch)) {
-                highest = Math.max(highest, epoch);
-                // ⚠️ I3 AND I4's DROP CLAUSE, asked of PRODUCTION'S OWN READER
-                // at ITS OWN epoch (M4.13a). ⚠️ ONE CALL PER READER, NEVER SWEPT
-                // OVER A RANGE: `checkChain` is safe at every epoch in a range
-                // and this is not, which is why `ReaderView` carries the epoch.
-                CommitLog reader = new CommitLog(backing, PREFIX, epoch);
-                reader.recover();
-                violations.addAll(ReaderInvariants.checkReader(
-                        backing, PREFIX, viewFor.apply(reader)));
-                readersChecked++;
-            }
-        }
-        // ⚠️ AND I5's ACK-ORDERING CLAUSE, which no walk over the store can see.
-        // ⚠️ IT CANNOT FAIL, AND NOT BECAUSE `CommitLog` IS SERIAL -- an earlier
-        // draft of this comment said that and review refuted it. THIS DRIVER
-        // synthesises both events from one `commit()` return, adjacently, on one
-        // thread, so the order is the driver's construction and not the
-        // writer's. A pipelining writer would leave it green. The CONFIRMED
-        // event has to come from the store, which already sees every PUT, or
-        // from a production callback: M4.50 owns that, and until it lands this
-        // arm ASKS about I5's second clause without being able to answer.
-        violations.addAll(AckOrderInvariants.checkAckOrder(acks));
-        // ⚠️ THE SCAN BOUND IS ASSERTED, NOT ASSUMED. `highest` is computed by
-        // the loop above, so it can never report an epoch outside the range it
-        // scanned -- a run that burned more epochs than the bound would report
-        // CLEAN about chains nobody read, which is this file's own anti-vacuity
-        // risk arriving through the scan bound instead of through the faults.
-        if (hasChain(backing, scanTo + 1)) {
-            throw new IllegalStateException("the run reached epoch " + (scanTo + 1)
-                    + ", beyond the scanned bound " + scanTo
-                    + " -- chains past it were never checked");
-        }
+        // ⚠️ THE VERDICT IS A CLASS OF ITS OWN, split out when this file crossed
+        // 700 lines -- code-structure rule 1, split rather than raise, as
+        // `ForwardingPods` was. The seam is real: everything above DRIVES a
+        // fleet, everything in there JUDGES the bytes it left behind, and the
+        // judging reads the backing store directly rather than through the
+        // injector the driving goes through.
+        SimulationVerdict verdict =
+                SimulationVerdict.of(backing, faulty, partitionedPods, acks, pods, rounds, viewFor);
+        List<Invariants.Violation> violations = verdict.violations();
+        long highest = verdict.highestEpoch();
+        int readersChecked = verdict.readersChecked();
         return new Result(seed, commits, takeovers, highest, zombieWrites, zombieAttempts,
+                followers.commits(), followers.attempts(), followers.refusals(),
                 faulty.injected(), issued, violations, acks, readersChecked, midRunDrained);
     }
 
-    private static boolean hasChain(BinStore store, long epoch) throws IOException {
+    static boolean hasChain(BinStore store, long epoch) throws IOException {
         return !store.list(new CommitLog(store, PREFIX, epoch).logPrefix(), null, 1)
                 .objects().isEmpty();
     }
@@ -543,7 +634,7 @@ public final class CommitProtocolSimulation {
             SimulatedClock clock) {
         try {
             LeaseManager leases = new LeaseManager(store,
-                    new LeaseConfig(PREFIX, pod, "", TTL, RENEW), clock);
+                    new LeaseConfig(PREFIX, pod, ForwardingPods.endpointOf(pod), TTL, RENEW), clock);
             // ⚠️ A TICK THAT NEVER FIRES, because this harness's javadoc says
             // nothing here reads a wall clock or sleeps, and M4.17's production
             // ticker would have made both false: every retained zombie
