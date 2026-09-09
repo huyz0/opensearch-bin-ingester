@@ -41,19 +41,30 @@ import java.util.Objects;
  * commit PUT and the forwarding RPC, so one hung store call parks every caller
  * with no timeout (java-style.md rule 6).
  *
- * <p>⚠️ WHAT THIS CLASS DOES NOT YET REFUSE, stated here rather than
- * discovered: a commit after {@link #close}, and a commit by a pod the lease
- * still NAMES while its own sequencer is fenced — ADR-0027's self-fence, where
- * forwarding would address this pod's own endpoint. It also elects on every
- * commit while it does not lead, rather than only into an expired lease, which
- * costs a {@code stat} and a {@code get} the lease read has already answered.
- * Those are M5.6c; nothing in production constructs this class yet, so the gap
- * is a gap in the class rather than in a running pod.
+ * <p>⚠️ IT REFUSES A COMMIT AFTER {@link #close}, and it refuses to forward to
+ * ITSELF — the pod the lease still names while its own sequencer is fenced,
+ * which is ADR-0027's self-fence (M5.6c). Both used to fall through to
+ * forwarding, and the second of them routed the request straight back here.
+ *
+ * <p>⚠️ WHAT IT STILL DOES, stated here rather than discovered: it elects on
+ * every commit while it does not lead, rather than only into an EXPIRED lease,
+ * costing a {@code stat} and a {@code get} the lease read has already answered
+ * — measured at ~13% of the write-path bill. That is M5.6g. Nothing in
+ * production constructs this class yet (M5.6e), so the gap is a gap in the
+ * class rather than in a running pod.
  */
 public final class FleetSequencer implements Sequencer {
 
     private final Leadership leadership;
     private final RemoteSequencer remote;
+
+    /**
+     * ⚠️ VOLATILE, because {@link #close} and a commit reach it from different
+     * threads by construction: a SIGTERM handler closes while an in-flight
+     * flush is still inside {@code commitAll}. {@link Leadership} guards its own
+     * closed flag the same way and for the same reason.
+     */
+    private volatile boolean closed;
 
     public FleetSequencer(BinStore store, LeaseConfig config,
             SequencerTransport transport, Leadership.Election election) {
@@ -77,6 +88,20 @@ public final class FleetSequencer implements Sequencer {
 
     @Override
     public CommitDelta commitAll(List<CommitRequest> requests) throws IOException {
+        if (closed) {
+            // ⚠️ REFUSED HERE, BECAUSE THE FALLBACK WOULD SUCCEED. `Leadership`
+            // already refuses to ELECT after close, so `sequencer()` returns
+            // null -- and without this the commit fell straight through to
+            // forwarding, which reads the lease and sends. A pod that has
+            // released its lease and reported a clean shutdown then goes on
+            // committing through a peer for as long as anything holds a
+            // reference to it: an in-flight flush, a queued batch.
+            // ⚠️ NOT A `FencedException`. Nothing was appended, but this is a
+            // deliberate shutdown rather than a lost term, and a caller
+            // re-sending on the strength of a fence would be re-sending because
+            // THIS pod stopped -- which says nothing about who holds the lease.
+            throw new IOException("this pod's sequencer was closed and must not commit again");
+        }
         Sequencer mine = leadership.sequencer();
         FencedException fence = null;
         if (mine != null) {
@@ -89,6 +114,14 @@ public final class FleetSequencer implements Sequencer {
                 leadership.retire(mine, fenced);
                 fence = fenced;
             }
+        }
+        if (closed) {
+            // ⚠️ RE-CHECKED BEFORE FORWARDING, because the entry check alone
+            // leaves the exact caller the flag exists for: an in-flight flush
+            // that entered before `close` and reaches here after it. The window
+            // is the local commit above, which is a store round trip wide.
+            throw new IOException("this pod's sequencer was closed while this commit was in"
+                    + " flight, and must not forward it");
         }
         try {
             return remote.commitAll(requests);
@@ -123,10 +156,54 @@ public final class FleetSequencer implements Sequencer {
 
     @Override
     public void close() throws IOException {
+        // ⚠️ THE FLAG GOES UP FIRST, so a commit racing this shutdown is refused
+        // rather than forwarded, exactly as `Leadership.close` raises its own
+        // before taking the term away.
+        closed = true;
+        IOException failed = null;
         try {
-            leadership.close();
+            try {
+                leadership.close();
+            } catch (IOException releaseFailed) {
+                failed = releaseFailed;
+            }
         } finally {
+            // ⚠️ A `finally`, NOT A SECOND `catch`. An earlier draft caught only
+            // IOException, so an UNCHECKED throwable out of the lease release --
+            // `BatchingSequencer.close`'s join, a `BoundedLock` timeout, an SDK
+            // RuntimeException -- skipped this and leaked the transport. The
+            // original code got that right with `finally` and lost it while
+            // fixing the exception it swallowed; both properties are wanted.
+            closeTransport(failed);
+        }
+        if (failed != null) {
+            throw failed;
+        }
+    }
+
+    /**
+     * Closes the transport, attaching its failure to {@code failed} if there is
+     * one.
+     *
+     * @param failed the lease-release failure, or null
+     */
+    private void closeTransport(IOException failed) throws IOException {
+        try {
             remote.close();
+        } catch (IOException transportFailed) {
+            // ⚠️ ATTACHED, NEVER SUBSTITUTED, and a `finally` did substitute it.
+            // The lease release is the failure that matters to the fleet -- it
+            // says the lease was NOT handed back, so every other pod waits out
+            // the TTL instead of taking over in milliseconds (ADR-0007 puts
+            // that at ~10 s). Letting the transport's failure replace it threw
+            // away the one fact a successor's timing depends on.
+            if (failed == null) {
+                // ⚠️ THROWN FROM HERE when the release succeeded, because there
+                // is nothing to attach it to and losing it would report a clean
+                // shutdown over a transport still holding its peers.
+                throw transportFailed;
+            }
+            failed.addSuppressed(transportFailed);
         }
     }
 }

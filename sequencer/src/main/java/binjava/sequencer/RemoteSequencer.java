@@ -63,6 +63,7 @@ public final class RemoteSequencer implements Sequencer {
     @Override
     public CommitDelta commitAll(List<CommitRequest> requests) throws IOException {
         Lease lease = currentLease();
+        refuseSelfAddress(lease, null);
         try {
             return transport.send(lease.holderEndpoint(), requests.size() == 1
                     ? requests.get(0) : batched(requests));
@@ -97,9 +98,63 @@ public final class RemoteSequencer implements Sequencer {
                         + lease.holderEndpoint() + ", epoch " + lease.epoch()
                         + ") refused the commit and the lease has not moved", refused);
             }
+            refuseSelfAddress(moved, refused);
             return transport.send(moved.holderEndpoint(), requests.size() == 1
                     ? requests.get(0) : batched(requests));
         }
+    }
+
+    /**
+     * Refuses to address this pod's own endpoint (M5.6c, ADR-0027).
+     *
+     * <p>⚠️ REACHABLE THROUGH THE SELF-FENCE, which ADR-0027 accepts as a cost
+     * rather than a defect: an ambiguous renew makes a healthy leader treat
+     * itself as fenced and stand down for the remainder of the TTL, while the
+     * LEASE OBJECT goes on naming it for that whole remainder. A pod in that
+     * state falls back to forwarding, reads the lease, and finds itself.
+     *
+     * <p>⚠️ AND SENDING THERE IS NOT MERELY POINTLESS. The transport routes by
+     * endpoint, so the request arrives back at this pod — at the fenced
+     * sequencer that just refused it, or, where a pod publishes its
+     * {@link FleetSequencer} rather than its local one, at the very object that
+     * is forwarding. What a caller needs instead is the truth: no reachable
+     * sequencer right now, and the lease will not move until it expires.
+     *
+     * <p>⚠️ COMPARED ON {@code podId}, NEVER ON THE ENDPOINT, and an earlier
+     * draft got that wrong in a way that opened the hole it was closing.
+     * {@code holderEndpoint} is EMPTY for every pod configured without one —
+     * {@code Lease} says so in as many words, and most of this tree's fixtures
+     * still do it — so an endpoint comparison had to carve out the empty case,
+     * and the carve-out skipped exactly those pods. {@code podId} needs no
+     * carve-out: {@link LeaseConfig} and {@link Lease} both refuse it blank, so
+     * the comparison can never be vacuous. It is also the identity
+     * {@code LeaseManager.isOwnTerm} already uses.
+     *
+     * <p>⚠️ IT SAYS WHAT IS TRUE, NOT WHAT IS LIKELY. The self-fence is the
+     * case this exists for, but it is not the only way to arrive: during a
+     * PROMOTION a pod acquires the lease before it has finished sealing and
+     * recovering, so a concurrent commit on that same pod loses the election
+     * lock, forwards, and finds itself — with a perfectly healthy sequencer
+     * moments away. Refusing is right either way; asserting a fencing would be
+     * false at every failover.
+     */
+    private void refuseSelfAddress(Lease lease, IOException because) throws IOException {
+        if (!lease.holderPodId().equals(leaseConfig.podId())) {
+            return;
+        }
+        IOException refused = new IOException("the lease names this pod itself ("
+                + leaseConfig.podId() + " at " + lease.holderEndpoint() + ", epoch "
+                + lease.epoch() + ") while this pod is forwarding, so this commit has no"
+                + " reachable sequencer: either this pod's own term is fenced or closed and"
+                + " the lease cannot move until it expires, or it is mid-promotion and has"
+                + " not published its sequencer yet");
+        if (because != null) {
+            // ⚠️ CHAINED, like the sibling refusal two branches up: the peer's
+            // "not the leaseholder" is why we re-read at all, and dropping it
+            // leaves an operator with the conclusion and none of the evidence.
+            refused.initCause(because);
+        }
+        throw refused;
     }
 
     /**

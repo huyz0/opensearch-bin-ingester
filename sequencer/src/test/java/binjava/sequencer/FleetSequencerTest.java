@@ -91,6 +91,15 @@ class FleetSequencerTest {
         private final IOException failure;
         private final IOException closeFailure;
         private int commits;
+        /**
+         * ⚠️ HOOKS, so the two windows the `closed` flag exists for are
+         * drivable on ONE thread. Both are real interleavings -- a SIGTERM
+         * lands while a flush is inside {@code commitAll}, and a commit arrives
+         * while the lease is being handed back -- and a test that spawned
+         * threads for them would assert a schedule rather than a rule.
+         */
+        private Runnable duringCommit;
+        private Runnable duringClose;
 
         Refusing(IOException failure) {
             this(failure, null);
@@ -101,16 +110,285 @@ class FleetSequencerTest {
             this.closeFailure = closeFailure;
         }
 
+        Refusing duringCommit(Runnable action) {
+            this.duringCommit = action;
+            return this;
+        }
+
+        Refusing duringClose(Runnable action) {
+            this.duringClose = action;
+            return this;
+        }
+
         @Override public CommitDelta commitAll(List<CommitRequest> requests) throws IOException {
             commits++;
+            if (duringCommit != null) {
+                duringCommit.run();
+            }
             throw failure;
         }
 
         @Override public void close() throws IOException {
+            if (duringClose != null) {
+                duringClose.run();
+            }
             if (closeFailure != null) {
                 throw closeFailure;
             }
         }
+    }
+
+    /**
+     * ⚠️ A CLOSED POD MUST NOT COMMIT, and until now it did -- by FORWARDING.
+     * {@code Leadership.sequencer()} refuses to elect after close, so
+     * {@code leadership.sequencer()} returns null and the commit fell straight
+     * through to {@code remote.commitAll}, which reads the lease and sends. A
+     * pod that has released its lease and told its caller it is shutting down
+     * then goes on committing through a peer, for as long as anything holds a
+     * reference -- an in-flight flush, a queued batch.
+     */
+    @Test
+    void aCommitAfterCLOSEIsREFUSED_NotFORWARDED() throws Exception {
+        MemoryBinStore store = new MemoryBinStore();
+        InProcessTransport transport = new InProcessTransport();
+        LocalSequencer holder = LocalSequencer.start(
+                store, PREFIX, leases(store, "podc", C), 8).orElseThrow();
+        transport.at(C, holder);
+        try {
+            FleetSequencer mine = pod(store, "poda", A, transport);
+            mine.close();
+            // ⚠️ RE-REGISTERED AFTER THE CLOSE, and an earlier draft did not --
+            // its comment claimed a reachable holder made a forwarded commit
+            // SUCCEED, while `close` had already cleared the shared transport
+            // through `remote.close()`. Under the deleted-check mutation the
+            // commit then failed with "nowhere to send": the right verdict for
+            // the wrong reason, which is the shape this fixture exists to rule
+            // out.
+            transport.at(C, holder);
+
+            assertThatThrownBy(() -> mine.commit(flush("poda", 0, "seg/after-close")))
+                    .as("a released pod does not commit, through its own chain or anyone's")
+                    .isInstanceOf(IOException.class)
+                    // ⚠️ AND NOT A FENCING. `Sequencer`'s contract defines
+                    // `instanceof FencedException` as "safe to re-send
+                    // ELSEWHERE", and this refusal says nothing about who holds
+                    // the lease -- only that THIS pod stopped. Review MEASURED
+                    // the mutation: throwing a FencedException with the same
+                    // message left the whole suite green.
+                    .isNotInstanceOf(FencedException.class)
+                    // ⚠️ THE ENTRY GUARD'S OWN WORDS. Both refusals say
+                    // "closed", so a `hasMessageContaining("closed")` is
+                    // satisfied by the OTHER one -- review MEASURED that
+                    // deleting this guard left the suite green, because after
+                    // close the fall-through reaches the in-flight check and
+                    // says "closed" too. The suite then constrained their union
+                    // and neither individually.
+                    .hasMessageContaining("must not commit again");
+
+            assertThat(transport.sentTo())
+                    .as("and it did not reach the transport at all")
+                    .isEmpty();
+        } finally {
+            holder.close();
+        }
+    }
+
+    /**
+     * ⚠️ BOTH CLOSES RUN, AND NEITHER FAILURE IS ERASED. `close` put
+     * {@code remote.close()} in a `finally`, so when the lease release threw and
+     * the transport threw too, the transport's exception REPLACED the release's
+     * -- and the release is the one that says the lease was not handed back,
+     * which is the difference between a successor taking over in milliseconds
+     * and waiting out the TTL.
+     */
+    /**
+     * ⚠️ A CLOSE THAT FAILED IS STILL A CLOSE. A pod whose lease release threw
+     * does not go on committing through a peer — the one path where `close`
+     * does not return normally.
+     *
+     * <p>⚠️ IT PINS ONE MUTATION, NOT TWO, and an earlier version of this
+     * sentence claimed both. Latching {@code closed} only after the
+     * {@code throw} REDs this test; latching it after the two closes does not,
+     * because by then the close has returned. That second ordering is what
+     * {@code aCommitARRIVINGWhileTheLeaseIsBeingHandedBackIsREFUSED} exists for.
+     * A "MEASURED" line that does not reproduce is worse than none.
+     */
+    @Test
+    void aCloseThatFAILEDStillREFUSESLaterCommits() throws Exception {
+        MemoryBinStore store = new MemoryBinStore();
+        InProcessTransport transport = new InProcessTransport();
+        LocalSequencer holder = LocalSequencer.start(
+                store, PREFIX, leases(store, "podc", C), 8).orElseThrow();
+        transport.at(C, holder);
+        try {
+            IOException releaseFailed = new IOException("injected: the lease was not handed back");
+            Refusing held = new Refusing(new IOException("unused"), releaseFailed);
+            FleetSequencer mine = new FleetSequencer(store, config("poda", A),
+                    transport, () -> Optional.of(held));
+
+            assertThatThrownBy(mine::close).isSameAs(releaseFailed);
+            transport.at(C, holder);
+
+            assertThatThrownBy(() -> mine.commit(flush("poda", 0, "seg/after-failed-close")))
+                    .as("the pod is closed whether or not the goodbye landed")
+                    .isInstanceOf(IOException.class)
+                    .hasMessageContaining("closed");
+            assertThat(transport.sentTo())
+                    .as("and it forwarded nothing")
+                    .isEmpty();
+        } finally {
+            holder.close();
+        }
+    }
+
+    /**
+     * ⚠️ THE IN-FLIGHT FLUSH, which is the caller the entry guard cannot help.
+     * A commit enters, the local sequencer is fenced, and the pod is closed
+     * before the fallback forwards -- so the entry check passed and the send is
+     * still ahead. Review MEASURED the gap: deleting the pre-forward re-check
+     * left the whole build green, because no test closed a pod mid-commit.
+     *
+     * <p>⚠️ ONE THREAD, and deliberately. The close happens inside the local
+     * sequencer's own {@code commitAll}, which is a real interleaving -- a
+     * SIGTERM lands while a flush is in the store -- and asserting it without
+     * threads asserts the RULE rather than a schedule.
+     */
+    @Test
+    void aPodCLOSEDWhileACommitIsINFLIGHTDoesNotForwardIt() throws Exception {
+        MemoryBinStore store = new MemoryBinStore();
+        InProcessTransport transport = new InProcessTransport();
+        LocalSequencer holder = LocalSequencer.start(
+                store, PREFIX, leases(store, "podc", C), 8).orElseThrow();
+        transport.at(C, holder);
+        try {
+            java.util.concurrent.atomic.AtomicReference<FleetSequencer> self =
+                    new java.util.concurrent.atomic.AtomicReference<>();
+            Refusing fenced = new Refusing(new FencedException("injected: this term ended"));
+            FleetSequencer mine = new FleetSequencer(store, config("poda", A),
+                    transport, () -> Optional.of(fenced));
+            self.set(mine);
+            // ⚠️ THE CLOSE LANDS AFTER THE ENTRY CHECK AND BEFORE THE FORWARD.
+            fenced.duringCommit(() -> {
+                try {
+                    self.get().close();
+                } catch (IOException neverHappens) {
+                    throw new java.io.UncheckedIOException(neverHappens);
+                }
+            });
+            transport.at(C, holder);
+
+            assertThatThrownBy(() -> mine.commit(flush("poda", 0, "seg/in-flight")))
+                    .as("a fenced commit is normally forwarded -- but not by a pod that has "
+                            + "since been closed")
+                    .isInstanceOf(IOException.class)
+                    .hasMessageContaining("in flight");
+            assertThat(transport.sentTo())
+                    .as("so nothing reached a peer")
+                    .isEmpty();
+        } finally {
+            holder.close();
+        }
+    }
+
+    /**
+     * ⚠️ THE FLAG IS UP BEFORE EITHER HALF RUNS, which is what its comment
+     * claims and what nothing pinned: a commit arriving while the lease is
+     * still being handed back must already be refused. Review MEASURED the
+     * mutation -- moving {@code closed = true} below the two closes -- and it
+     * survived, because every other test closes and then commits.
+     */
+    @Test
+    void aCommitARRIVINGWhileTheLeaseIsBeingHandedBackIsREFUSED() throws Exception {
+        MemoryBinStore store = new MemoryBinStore();
+        InProcessTransport transport = new InProcessTransport();
+        LocalSequencer holder = LocalSequencer.start(
+                store, PREFIX, leases(store, "podc", C), 8).orElseThrow();
+        transport.at(C, holder);
+        try {
+            java.util.concurrent.atomic.AtomicReference<FleetSequencer> self =
+                    new java.util.concurrent.atomic.AtomicReference<>();
+            List<Throwable> refused = new java.util.ArrayList<>();
+            Refusing held = new Refusing(new IOException("unused"));
+            FleetSequencer mine = new FleetSequencer(store, config("poda", A),
+                    transport, () -> Optional.of(held));
+            self.set(mine);
+            held.duringClose(() -> {
+                try {
+                    self.get().commit(flush("poda", 0, "seg/mid-close"));
+                    refused.add(null);
+                } catch (Throwable why) {
+                    refused.add(why);
+                }
+            });
+
+            mine.close();
+
+            assertThat(refused).hasSize(1);
+            assertThat(refused.get(0))
+                    .as("the flag is raised before the lease goes back, not after")
+                    .isInstanceOf(IOException.class)
+                    .hasMessageContaining("closed");
+        } finally {
+            holder.close();
+        }
+    }
+
+    /**
+     * ⚠️ A TRANSPORT FAILURE IS NOT SWALLOWED when the release succeeded.
+     * Review MEASURED the gap: a close that lost the transport's failure and
+     * reported success stayed green, because the only test driving a transport
+     * failure also failed the release, which is the other branch.
+     */
+    @Test
+    void closeREPORTSATransportFailureWhenTheLeaseWentBackCleanly() throws Exception {
+        MemoryBinStore store = new MemoryBinStore();
+        IOException transportFailed = new IOException("injected: the transport did not close");
+        SequencerTransport transport = new SequencerTransport() {
+            @Override
+            public CommitDelta send(String endpoint, CommitRequest request) throws IOException {
+                throw new NotTheLeaseholderException("unused");
+            }
+
+            @Override
+            public void close() throws IOException {
+                throw transportFailed;
+            }
+        };
+        FleetSequencer mine = new FleetSequencer(store, config("poda", A),
+                transport, () -> Optional.of(new Refusing(new IOException("unused"))));
+
+        assertThatThrownBy(mine::close)
+                .as("a clean lease release does not hide a transport that would not close")
+                .isSameAs(transportFailed);
+    }
+
+    @Test
+    void closeRUNSBothHalvesAndREPORTSBothFailures() throws Exception {
+        MemoryBinStore store = new MemoryBinStore();
+        IOException releaseFailed = new IOException("injected: the lease was not handed back");
+        IOException transportFailed = new IOException("injected: the transport did not close");
+        Refusing held = new Refusing(new IOException("unused"), releaseFailed);
+        SequencerTransport transport = new SequencerTransport() {
+            @Override
+            public CommitDelta send(String endpoint, CommitRequest request) throws IOException {
+                throw new NotTheLeaseholderException("unused");
+            }
+
+            @Override
+            public void close() throws IOException {
+                throw transportFailed;
+            }
+        };
+        FleetSequencer mine = new FleetSequencer(store, config("poda", A),
+                transport, () -> Optional.of(held));
+
+        assertThatThrownBy(mine::close)
+                .as("the lease release is the failure a caller must see FIRST")
+                .isSameAs(releaseFailed);
+        assertThat(releaseFailed.getSuppressed())
+                .as("and the transport's failure is attached, never substituted -- deleting "
+                        + "`remote.close()` and swapping the two both fail here")
+                .containsExactly(transportFailed);
     }
 
     @Test

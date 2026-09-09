@@ -159,7 +159,7 @@ class ForwardingIngestTest {
             // acquires a cost that scales with objects rather than with
             // segments. ⚠️ THIS PINS THE WRITE HALF ONLY: a forwarded commit
             // also spends a stat and two gets on the lease key, which is the
-            // per-pod read cost M5.6c owns and MEASURES at ~13% of the
+            // per-pod read cost M5.6g owns and MEASURES at ~13% of the
             // write-path bill. Nothing here constrains that, and saying so is
             // the point -- an earlier draft of this comment claimed the whole
             // of cost.md's "segments, never pods" rule on a PUT count alone.

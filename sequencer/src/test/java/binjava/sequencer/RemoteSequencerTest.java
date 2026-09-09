@@ -169,6 +169,103 @@ class RemoteSequencerTest {
                 .isEqualTo(1);
     }
 
+    /**
+     * ⚠️ THE SECOND SELF-CHECK, on the RE-READ lease. A peer refuses, this pod
+     * re-reads to see where the term went — and it has come HERE, because this
+     * pod won the election in the same window. Following it would address our
+     * own endpoint, which is the send the first check exists to stop, arrived
+     * at one branch later. Review MEASURED the gap: deleting the second call
+     * left the whole build green.
+     */
+    @Test
+    void aLeaseThatMovesTOUSIsNotFollowedBackToOURSELVES() throws Exception {
+        MemoryBinStore store = new MemoryBinStore();
+        LocalSequencer first = LocalSequencer.start(
+                store, PREFIX, leaderAt(store, "poda", A), 8).orElseThrow();
+        InProcessTransport inner = new InProcessTransport().at(A, first);
+        // ⚠️ RECORDED AT THE OUTER TRANSPORT, because the inner one never sees
+        // the first send: this wrapper throws the refusal instead of delegating.
+        // Asserting on `inner.sentTo()` would have been asserting on an empty
+        // list for a reason that has nothing to do with the refusal under test.
+        List<String> attempted = new java.util.ArrayList<>();
+        SequencerTransport movesToUs = new SequencerTransport() {
+            private boolean moved;
+
+            @Override
+            public CommitDelta send(String endpoint, CommitRequest request) throws IOException {
+                attempted.add(endpoint);
+                if (!moved && A.equals(endpoint)) {
+                    moved = true;
+                    first.close();
+                    inner.gone(A);
+                    // ⚠️ THE TERM COMES TO `podb`, the very pod that is
+                    // forwarding, which is the state a promotion produces: the
+                    // lease is acquired before the sequencer is published, so a
+                    // concurrent commit on this pod is still forwarding.
+                    LocalSequencer ours = LocalSequencer.start(
+                            store, PREFIX, leaderAt(store, "podb", B), 8).orElseThrow();
+                    inner.at(B, ours);
+                    throw new NotTheLeaseholderException("fenced: the term moved");
+                }
+                return inner.send(endpoint, request);
+            }
+
+            @Override
+            public void close() throws IOException {
+                inner.close();
+            }
+        };
+
+        try (RemoteSequencer remote =
+                new RemoteSequencer(store, config("podb", B), movesToUs)) {
+            assertThatThrownBy(() -> remote.commit(flush(0, "seg/moved-to-us")))
+                    .as("the re-read found this pod, so there is nothing to follow")
+                    .isInstanceOf(IOException.class)
+                    .hasMessageContaining("names this pod itself")
+                    // ⚠️ AND THE REFUSAL THAT SENT US LOOKING IS ATTACHED. The
+                    // sibling branch chains it; dropping it here leaves an
+                    // operator the conclusion and none of the evidence.
+                    .hasCauseInstanceOf(SequencerTransport.NotTheLeaseholderException.class);
+        }
+        assertThat(attempted)
+                .as("one send, to the pod the FIRST read named -- never a second to ourselves")
+                .containsExactly(A);
+    }
+
+    /**
+     * ⚠️ THE KEY IS THE POD, NOT THE ENDPOINT, and nothing pinned which. Here
+     * the lease names THIS pod under a DIFFERENT endpoint — the shape a pod
+     * gets after its address changes across a restart, and the shape every
+     * fixture had before M5.7 gave pods endpoints at all, when the lease
+     * carried {@code ""} for everyone. An endpoint comparison finds no match
+     * and forwards; a podId comparison refuses. Review MEASURED the gap: both
+     * other self-address tests share the endpoint as well as the pod, so
+     * swapping the key left the suite green.
+     */
+    @Test
+    void aPodIsRecognisedByItsPODIdEvenWhenTheLeaseCarriesAnotherEndpoint() throws Exception {
+        MemoryBinStore store = new MemoryBinStore();
+        // ⚠️ THE LEASE SAYS `podb` LIVES AT `A`; this pod's own config says B.
+        LocalSequencer holder = LocalSequencer.start(
+                store, PREFIX, leaderAt(store, "podb", A), 8).orElseThrow();
+        InProcessTransport transport = new InProcessTransport().at(A, holder);
+        try (RemoteSequencer forwarding =
+                new RemoteSequencer(store, config("podb", B), transport)) {
+
+            assertThatThrownBy(() -> forwarding.commit(
+                    new CommitRequest("podb", "i1", 0, "seg/other-endpoint", counts(2))))
+                    .as("the pod is the same pod however the lease spells its address")
+                    .isInstanceOf(IOException.class)
+                    .hasMessageContaining("names this pod itself");
+
+            assertThat(transport.sentTo())
+                    .as("and no send was made to the address the lease carried")
+                    .isEmpty();
+        } finally {
+            holder.close();
+        }
+    }
+
     @Test
     void aRefusalWhenTheLeaseHasNOTMovedIsREPORTED_NotLoopedOn() throws Exception {
         MemoryBinStore store = new MemoryBinStore();
@@ -273,5 +370,52 @@ class RemoteSequencerTest {
             leader.close();
         }
         assertThat(deltasCarrying(store, "seg/0")).isZero();
+    }
+
+    /**
+     * A pod the lease NAMES does not forward to itself (M5.6c, ADR-0027).
+     *
+     * <p>⚠️ REACHABLE THROUGH THE SELF-FENCE, which is what ADR-0027 accepts as
+     * a cost: an ambiguous renew makes a healthy leader treat itself as fenced
+     * and stand down for the remainder of the TTL, while the LEASE OBJECT goes
+     * on naming it for that whole remainder. A pod in that state falls back to
+     * forwarding, reads the lease, and finds its own endpoint.
+     *
+     * <p>⚠️ AND SENDING THERE IS NOT MERELY POINTLESS. The transport routes by
+     * endpoint, so the request arrives back at this pod -- at the fenced
+     * sequencer that just refused it, or, when the pod registered its
+     * {@code FleetSequencer} rather than its local one, at the very object that
+     * is forwarding. What the caller needs is the truth: there is no reachable
+     * sequencer right now, and the lease will not move until it expires.
+     */
+    @Test
+    void aPodTheLeaseNAMESDoesNotForwardToITSELF() throws Exception {
+        MemoryBinStore store = new MemoryBinStore();
+        // ⚠️ THE LEASE NAMES `podb`'s OWN ENDPOINT, which is the state a
+        // self-fence leaves behind.
+        LocalSequencer holder = LocalSequencer.start(
+                store, PREFIX, leaderAt(store, "podb", B), 8).orElseThrow();
+        InProcessTransport transport = new InProcessTransport();
+        try (RemoteSequencer forwarding =
+                new RemoteSequencer(store, config("podb", B), transport)) {
+
+            assertThatThrownBy(() -> forwarding.commit(
+                    new CommitRequest("podb", "i1", 0, "seg/self", counts(2))))
+                    .as("a pod does not forward to itself")
+                    .isInstanceOf(IOException.class)
+                    // ⚠️ NOT THE ENDPOINT. Review MEASURED that: with the
+                    // refusal deleted, the fall-through message is "the pod the
+                    // lease names (pod-b:9000, epoch 1) refused the commit and
+                    // the lease has not moved", which interpolates the same
+                    // endpoint and satisfies a `hasMessageContaining(B)`. Only
+                    // a phrase the OLD path cannot produce constrains anything.
+                    .hasMessageContaining("names this pod itself");
+
+            assertThat(transport.sentTo())
+                    .as("and the send never happened, so nothing routed back to this pod")
+                    .isEmpty();
+        } finally {
+            holder.close();
+        }
     }
 }
