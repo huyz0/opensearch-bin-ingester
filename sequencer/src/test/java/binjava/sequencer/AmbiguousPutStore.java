@@ -12,6 +12,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Predicate;
 
 /**
  * Makes the FIRST conditional write of the chosen {@link Target} ambiguous —
@@ -57,6 +58,7 @@ public final class AmbiguousPutStore implements BinStore {
     private final Mode mode;
     private final Target target;
     private final boolean thenRefuseNextRead;
+    private final Predicate<String> onKey;
     private boolean fired;
     private boolean readRefused;
 
@@ -77,10 +79,24 @@ public final class AmbiguousPutStore implements BinStore {
      */
     public AmbiguousPutStore(BinStore delegate, Mode mode, Target target,
             boolean thenRefuseNextRead) {
+        this(delegate, mode, target, thenRefuseNextRead, key -> true);
+    }
+
+    /**
+     * @param onKey which keys are eligible, so a test can aim the ambiguity at
+     *     ONE write among several the same target makes. ⚠️ Needed because a
+     *     leader's cold start is itself a {@code putIfAbsent} -- the lease, then
+     *     the chain's CONTINUE -- so "the first conditional write" is not the
+     *     commit under test. A predicate the test can arm names the write it
+     *     means rather than counting the ones it does not.
+     */
+    public AmbiguousPutStore(BinStore delegate, Mode mode, Target target,
+            boolean thenRefuseNextRead, Predicate<String> onKey) {
         this.delegate = delegate;
         this.mode = mode;
         this.target = target;
         this.thenRefuseNextRead = thenRefuseNextRead;
+        this.onKey = onKey;
     }
 
     private void refuseReadIfDue() throws IOException {
@@ -92,8 +108,8 @@ public final class AmbiguousPutStore implements BinStore {
     }
 
     /** @return true if this call is the one made ambiguous, and marks it taken. */
-    private boolean claim(Target of) {
-        if (of != target || fired) {
+    private boolean claim(Target of, String key) {
+        if (of != target || fired || !onKey.test(key)) {
             return false;
         }
         fired = true;
@@ -107,7 +123,7 @@ public final class AmbiguousPutStore implements BinStore {
     @Override
     public Optional<Version> putIfMatch(String key, Body body, Version expected)
             throws IOException {
-        if (claim(Target.PUT_IF_MATCH)) {
+        if (claim(Target.PUT_IF_MATCH, key)) {
             if (mode == Mode.LANDED) {
                 // ⚠️ SELF-CHECKING. If the delegate's write lost, this fake
                 // would report LANDED while actually running the harmless
@@ -146,7 +162,7 @@ public final class AmbiguousPutStore implements BinStore {
 
     @Override
     public Optional<Version> putIfAbsent(String k, Body b) throws IOException {
-        if (claim(Target.PUT_IF_ABSENT)) {
+        if (claim(Target.PUT_IF_ABSENT, k)) {
             if (mode == Mode.LANDED) {
                 if (delegate.putIfAbsent(k, b).isEmpty()) {
                     throw new IllegalStateException(

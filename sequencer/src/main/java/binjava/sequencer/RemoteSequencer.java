@@ -70,10 +70,22 @@ public final class RemoteSequencer implements Sequencer {
             // ⚠️ FOLLOW THE LEASE, AND ONLY ON A REFUSAL (M5.5). A refusal says
             // plainly that nothing was applied, so resending the SAME request
             // to the new holder is safe. An IOException does not say that -- it
-            // may have landed and lost its reply -- and resending one
-            // "commits the same records again" per `Sequencer.commit`'s own
-            // contract. That is M5.23; until it lands, an ambiguous outcome
-            // propagates rather than being retried.
+            // may have landed and lost its reply.
+            // ⚠️ M5.23 MAKES THAT RESEND ANSWERABLE ONLY AT THE SEQUENCER
+            // INSTANCE THAT MADE THE APPEND. A leaseholder reconciles its own
+            // ambiguous append against the slot it named, so a resend of the
+            // same triple TO THAT INSTANCE gets the offsets that already apply
+            // -- and not even the same pod's NEXT term qualifies, because the
+            // mark that does it is a field on the instance. ⚠️ IT IS NOT ANSWERABLE
+            // ACROSS A TAKEOVER: the reconciliation seeds that pod's in-memory
+            // window and never its checkpoint, so a SUCCESSOR does not inherit
+            // the flush once a later checkpoint bounds past its delta, and the
+            // resend appends the same records again -- which is I2 and which is
+            // M5.25. And a takeover is exactly the case this arm is in.
+            // ⚠️ SO PROPAGATING IS STILL A CORRECTNESS BAR, not yet a policy
+            // choice. It is also the conservative behaviour on its own terms:
+            // nothing bounds how long the peer stays unreachable, and the
+            // caller is the one that must decide.
             Lease moved = currentLease();
             if (moved.epoch() == lease.epoch()
                     && moved.holderEndpoint().equals(lease.holderEndpoint())) {

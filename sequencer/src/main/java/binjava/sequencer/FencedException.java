@@ -21,12 +21,29 @@ import java.io.IOException;
  * {@code "fenced"} — a word no caller controls and any of the three could gain
  * with an edit to its wording.
  *
- * <p>⚠️ IT IS THE ONE FAILURE THAT IS SAFE TO RESEND, and that is the whole
- * reason it has a type. A fenced commit appended nothing — the conditional
- * write lost — so forwarding it to the new holder cannot duplicate anything.
- * Every other {@link IOException} from a commit is ambiguous: it may have landed
- * and lost its reply, and {@link Sequencer#commit} says resending one "commits
- * the same records again".
+ * <p>⚠️ IT PROVES AN APPEND DID NOT HAPPEN, which is what makes it safe to
+ * resend anywhere, and that is the whole reason it has a type. A fenced commit
+ * appended nothing — the conditional write lost — so forwarding it to the new
+ * holder cannot duplicate anything. Every other {@link IOException} from a
+ * commit is ambiguous: it may have landed and lost its reply. ⚠️ IT IS NOT THE
+ * ONLY SUCH PROOF, and an earlier wording of this sentence said it was: a peer
+ * declining because it does not hold the lease
+ * ({@code SequencerTransport.NotTheLeaseholderException}) says the same thing
+ * across a transport, and it is what M5.5's follow-the-lease resend runs on.
+ * What is true of both, and of nothing else, is that they are REFUSALS rather
+ * than lost outcomes.
+ *
+ * <p>⚠️ AND THAT DISTINCTION SURVIVES M5.23, which narrowed rather than removed
+ * it. {@link AmbiguousAppendException} lets a sequencer answer a resend of its
+ * OWN lost-response append, by reading the slot it named — so a resend to THAT
+ * SEQUENCER is now safe too. ⚠️ TO THAT SEQUENCER, NOT TO THAT POD: the mark
+ * is one instance's field, so a pod that loses and re-acquires its lease holds
+ * a fresh, empty one.
+ *
+ * <p>⚠️ WHAT STAYS TRUE, and what this type is for, is that a resend ELSEWHERE
+ * is safe only on one of those two refusals — a successor does not inherit an
+ * ambiguously-landed flush once a checkpoint bounds past its delta (M5.25), so
+ * a lost outcome resent to a new holder is a duplicate.
  */
 public final class FencedException extends IOException {
 

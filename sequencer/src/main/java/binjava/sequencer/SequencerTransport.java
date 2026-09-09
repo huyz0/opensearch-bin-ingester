@@ -32,11 +32,21 @@ public interface SequencerTransport extends AutoCloseable {
      * Sends {@code request} to the sequencer at {@code endpoint}.
      *
      * <p>⚠️ AN {@link IOException} HERE IS AMBIGUOUS and must be treated as
-     * such: the request may have been applied and only the reply lost. Until
-     * M5.23 reconciles an ambiguous commit from the chain, a caller may resend
-     * a request that was REFUSED, never one whose outcome it does not know —
-     * {@code Sequencer.commit}'s own contract says resending an unknown outcome
-     * "commits the same records again".
+     * such: the request may have been applied and only the reply lost. A caller
+     * may resend a request that was REFUSED, never one whose outcome it does
+     * not know — and every resend from here is to another pod, which is the
+     * case that stays unsafe.
+     *
+     * <p>⚠️ M5.23 DOES NOT LIFT THAT, and this sentence used to date the rule
+     * to M5.23's absence. What M5.23 gives is a leaseholder that reconciles its
+     * own ambiguous append against the slot it named, so a resend to THE SAME
+     * SEQUENCER is answered. ⚠️ THE SAME SEQUENCER, NOT THE SAME POD: the mark
+     * that makes it answerable is one instance's field, so a pod that loses and
+     * re-acquires its lease is the same pod holding a fresh, empty one. Any
+     * other resend still duplicates -- the reconciliation seeds an in-memory
+     * window and never the checkpoint, so a successor does not inherit the
+     * flush once a later checkpoint bounds past its delta. That is M5.25, and
+     * following the lease is exactly the case a caller here is in.
      *
      * @throws NotTheLeaseholderException when the peer answers that it does not
      *     hold the lease. ⚠️ A REFUSAL, NOT A FAILURE: nothing was applied, so
@@ -51,9 +61,13 @@ public interface SequencerTransport extends AutoCloseable {
      * The peer declined because it is not the leaseholder.
      *
      * <p>⚠️ A DISTINCT TYPE BECAUSE THE TWO OUTCOMES DIFFER IN WHAT A CALLER
-     * MAY DO. A plain {@link IOException} leaves the commit's fate unknown and
-     * must not be resent; this one says plainly that nothing was applied, which
-     * is the only case where following the lease to a new holder is safe.
+     * MAY DO. A plain {@link IOException} leaves the commit's fate unknown, so
+     * it must not be resent TO A DIFFERENT SEQUENCER; this one says plainly
+     * that nothing was applied, which is what makes following the lease to a
+     * new holder safe. ⚠️ A {@code FencedException} raised by a sequencer that
+     * writes the chain itself says the same thing; between them they are the
+     * only two failures that PROVE an append did not happen, and proving that
+     * is what authorises a resend elsewhere.
      */
     final class NotTheLeaseholderException extends IOException {
         private static final long serialVersionUID = 1L;

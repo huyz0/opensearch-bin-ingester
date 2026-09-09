@@ -200,10 +200,12 @@ class RemoteSequencerTest {
                 store, PREFIX, leaderAt(store, "poda", A), 8).orElseThrow();
         // ⚠️ THE DISTINCTION THAT KEEPS I2. A plain IOException does not say
         // whether the commit was applied -- it may have landed and lost its
-        // reply. `Sequencer.commit`'s contract says resending one "commits the
-        // same records again", because an ambiguous commit is never recorded as
-        // applied. Reconciling that from the chain is M5.23; until then the
-        // failure propagates.
+        // reply, and re-sending it to ANOTHER pod commits the same records
+        // again. ⚠️ M5.23 NARROWS THAT AND DOES NOT LIFT IT: a sequencer now
+        // answers a resend of its OWN lost-response append by reading the slot
+        // it named, but that window is the LEASEHOLDER's and a successor does
+        // not inherit it (M5.25) -- and a resend from here would be to whoever
+        // holds the lease NOW. So the failure propagates.
         SequencerTransport flaky = new SequencerTransport() {
             @Override
             public CommitDelta send(String endpoint, CommitRequest request)

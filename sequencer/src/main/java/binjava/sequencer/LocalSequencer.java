@@ -407,10 +407,14 @@ public final class LocalSequencer implements Sequencer {
             // trip, and only once the seal is visible. This node already KNOWS,
             // and spending a request to be told again is both slower and a
             // request that scales with a fenced pod's retry rate.
-            // ⚠️ A TYPE, NOT A MESSAGE. A caller re-sends on exactly this
-            // failure and on no other, because exactly this one appended
-            // nothing. Matching on the text does not work: the close refusal
-            // below names the lease too.
+            // ⚠️ A TYPE, NOT A MESSAGE. A caller re-sends TO ANOTHER POD on
+            // exactly this failure and on no other, because exactly this one
+            // proves nothing was appended. Matching on the text does not work:
+            // the close refusal below names the lease too.
+            // ⚠️ "TO ANOTHER POD" IS THE WHOLE QUALIFICATION, and it was added
+            // when M5.23 made a resend to THIS sequencer answerable: an
+            // ambiguous append is reconciled against the slot it named, but the
+            // mark that does it lives in this instance and dies with its term.
             throw new FencedException("this sequencer lost its lease at epoch " + log.epoch()
                     + " and has been fenced; it must not commit again");
         }
@@ -421,6 +425,11 @@ public final class LocalSequencer implements Sequencer {
             throw new IOException("this sequencer released its lease at epoch "
                     + log.epoch() + " and must not commit again");
         }
+        // ⚠️ BEFORE THE CLASSIFICATION, because it is what the classification
+        // is missing (M5.23). An append whose response was lost was never
+        // recorded as applied, so the window would call an already-committed
+        // flush fresh and commit it again.
+        reconcileAmbiguousAppend();
         // ⚠️ CLASSIFY FIRST, then commit the fresh submissions BEFORE anything
         // can refuse. `BatchingSequencer` fails a whole window together, so a
         // refusal raised first loses flushes that had nothing wrong with them
@@ -450,9 +459,72 @@ public final class LocalSequencer implements Sequencer {
         return new CommitDelta(delta.sequence(), merged);
     }
 
+    /**
+     * The append this instance made and never learned the outcome of (M5.23).
+     *
+     * <p>⚠️ CONFINED TO THE COMMIT PATH, like {@link #window} and for the same
+     * reason: it is written where an append is made and read where the next one
+     * is classified, both inside {@link #commitAll}.
+     */
+    private AmbiguousAppendException ambiguousAppend;
+
+    /**
+     * Seeds the window from the slot an ambiguous append named, so a retry of
+     * anything that batch carried is answered rather than committed again.
+     *
+     * <p>⚠️ EVERY ATTRIBUTION IN THE DELTA, not only the ones about to be
+     * resubmitted. The delta that landed carries the whole batch, and a caller
+     * regrouping its retries -- which {@code BatchingSequencer} does by
+     * construction -- may resubmit a subset, a superset, or both at once.
+     *
+     * <p>⚠️ AN EMPTY SLOT MEANS THE APPEND NEVER LANDED, and clearing the mark
+     * is what lets the retry commit it for the first time. Refusing instead
+     * would wedge this sequencer for the life of the process: the slot stays
+     * empty precisely because nothing may commit until it is read.
+     *
+     * <p>⚠️ A FAILED READ KEEPS THE MARK and propagates, because the outcome is
+     * still unknown -- and a store that cannot answer this read is a store the
+     * commit behind it could not have reached either.
+     *
+     * <p>⚠️ THIS SEEDS THE WINDOW AND NOT THE CHECKPOINT, which is a gap rather
+     * than a boundary: {@code CheckpointWriter} learns only from a commit that
+     * RETURNED, so the reconciled flush is durable, answered here, and absent
+     * from what a SUCCESSOR inherits once a later checkpoint bounds past its
+     * delta. M5.25 owns closing it; said here because the fix is one file over
+     * and the omission is invisible from either side.
+     */
+    private void reconcileAmbiguousAppend() throws IOException {
+        AmbiguousAppendException pending = ambiguousAppend;
+        if (pending == null) {
+            return;
+        }
+        Optional<CommitDelta> landed =
+                DeltaReader.ifWritten(store, prefix, pending.epoch(), pending.sequence());
+        ambiguousAppend = null;
+        if (landed.isEmpty()) {
+            return;
+        }
+        for (SegmentCommit segment : landed.get().segments()) {
+            SegmentCommit.Attribution attribution = segment.attribution();
+            if (attribution != null) {
+                window.applied(attribution, pending.epoch(), landed.get().sequence());
+            }
+        }
+    }
+
     /** Commits {@code requests} for real, and records what that applied. */
     private CommitDelta applyFresh(List<CommitRequest> requests) throws IOException {
-        CommitDelta delta = log.commitAll(requests);
+        CommitDelta delta;
+        try {
+            delta = log.commitAll(requests);
+        } catch (AmbiguousAppendException ambiguous) {
+            // ⚠️ REMEMBERED, THEN RETHROWN. The commit genuinely failed from
+            // this caller's point of view -- nothing here knows whether the
+            // records are durable, so acknowledging them would be a lie. What
+            // is kept is the slot, so the NEXT commit can find out.
+            ambiguousAppend = ambiguous;
+            throw ambiguous;
+        }
         for (CommitRequest request : requests) {
             window.applied(request, log.epoch(), delta.sequence());
         }

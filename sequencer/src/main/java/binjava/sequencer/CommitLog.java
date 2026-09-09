@@ -374,8 +374,24 @@ public final class CommitLog {
                         submission.attribution()));
             }
             CommitDelta delta = new CommitDelta(nextSequence, segments);
-            Optional<binjava.binstore.Version> written = store.putIfAbsent(keyFor(nextSequence),
-                    new Body(delta.encode().length, () -> new ByteArrayInputStream(delta.encode())));
+            Optional<binjava.binstore.Version> written;
+            try {
+                written = store.putIfAbsent(keyFor(nextSequence),
+                        new Body(delta.encode().length,
+                                () -> new ByteArrayInputStream(delta.encode())));
+            } catch (IOException lostResponse) {
+                // ⚠️ AMBIGUOUS, NOT FAILED (M5.23), and the SLOT is what makes
+                // that recoverable. A conditional PUT whose response was lost
+                // has still landed; one the store never saw has not; and
+                // nothing here can tell which. What this writer does know is
+                // the one object that either holds the append or does not, and
+                // throwing that away -- which a bare IOException did -- left a
+                // retry no way to ask the chain, so it committed the same
+                // records again. Reconciling needs the idempotency window,
+                // which belongs to the SEQUENCER, so this reports and does not
+                // decide.
+                throw new AmbiguousAppendException(epoch, nextSequence, lostResponse);
+            }
             if (written.isPresent()) {
                 apply(delta);
                 return delta;

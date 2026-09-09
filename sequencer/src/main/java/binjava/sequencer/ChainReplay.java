@@ -62,8 +62,10 @@ final class ChainReplay {
          * ⚠️ `pods` IS THE IDEMPOTENCY WINDOW, REBUILT FROM THE CHAIN (M5.1).
          * `IdempotencyWindow` is process-local, so a SUCCESSOR started with an
          * empty one and a replay crossing a takeover was applied twice --
-         * {@link Sequencer}'s javadoc says so and names the fix as M4.10f, which
-         * was in no build and no backlog row. Forwarding is what makes it
+         * {@link Sequencer}'s javadoc USED TO say so and named the fix as
+         * M4.10f, which was in no build and no backlog row. That sentence is
+         * gone because this is what removed it; the contract now describes the
+         * inheritance rather than its absence. Forwarding is what makes it
          * reachable: a forwarded commit whose reply is lost, retried after the
          * lease moves, arrives at a pod that never saw the original.
          *

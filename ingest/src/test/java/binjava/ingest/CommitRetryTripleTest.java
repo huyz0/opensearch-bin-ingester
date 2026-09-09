@@ -16,24 +16,28 @@ import org.junit.jupiter.api.Test;
  *
  * <p>⚠️ THE GUARANTEE STOPPED AT THE SEAM. {@code Sequencer}'s contract says a
  * resubmission of an already-applied {@code (podId, incarnationId, flushSeq)}
- * is answered rather than committed twice — and then adds that "a caller that
- * mints a fresh flushSeq for the retry is submitting a different commit, and
- * the same records are committed twice", closing with "THIS GUARANTEE STOPS AT
- * THIS SEAM and no production caller yet reaches it".
+ * is answered rather than committed twice, and that "a caller that mints a
+ * fresh flushSeq for the retry is submitting a different commit, and the same
+ * records are committed twice" — which it still says. ⚠️ IT USED TO CLOSE WITH
+ * "THIS GUARANTEE STOPS AT THIS SEAM and no production caller yet reaches it",
+ * and M5.23 replaced that clause; it is quoted here as the state this commit
+ * was written against, not as a sentence to go and find.
  *
  * <p>⚠️ M5 WILL MAKE ONE REACH IT — but not yet, and this commit deliberately
  * stops short. {@code DefaultIngest} wrote {@code flushSeq++} inside the
  * {@code CommitRequest} constructor call, so the request could not be resent at
  * all. It is now a named local, which is the whole change.
  *
- * <p>⚠️ NO RETRY IS ADDED HERE, AND ADDING ONE WOULD BE WRONG TODAY.
- * {@code Sequencer.commit} says so in its own {@code @throws}: "Retrying with
- * the same (podId, incarnationId, flushSeq) IS NOT YET SAFE: an ambiguous
- * commit is never recorded as applied, because the record happens after the
- * write RETURNS, so the retry commits the same records again." A first draft of
- * this commit added an automatic retry and would have duplicated records on
- * every lost response. Reconciling an ambiguous commit from the chain is
- * M5.23.
+ * <p>⚠️ NO RETRY IS ADDED HERE, AND ADDING ONE WOULD STILL BE WRONG TODAY --
+ * for a NARROWER reason than when this was written. {@code Sequencer.commit}'s
+ * {@code @throws} used to read "Retrying with the same (podId, incarnationId,
+ * flushSeq) IS NOT YET SAFE" — quoted here as history, since M5.23 replaced
+ * it: a retry to the SAME sequencer is now reconciled against the chain and
+ * answered. What is still unsafe is a retry that crosses a TAKEOVER, because a
+ * successor does not inherit an ambiguously-landed flush (M5.25) — and a retry
+ * loop here cannot know which it is doing. A first draft of this commit added
+ * an automatic retry and would have duplicated records on every lost
+ * response.
  *
  * <p>⚠️ AND {@code flushSeq} STILL ADVANCES UNCONDITIONALLY. The same draft
  * advanced it only on success, which wedges the pod: {@code flushLocked} has
@@ -122,8 +126,10 @@ class CommitRetryTripleTest {
         assertThat(sent.segmentKey()).as("carries the segment it published").isNotBlank();
         assertThat(sent.podId()).isEqualTo("pod1");
         assertThat(sent.flushSeq()).isZero();
-        assertThat(flaky.seen()).as("one attempt -- no retry is added here, because "
-                + "retrying an ambiguous commit is not yet safe").hasSize(1);
+        assertThat(flaky.seen()).as("one attempt -- no retry is added here, because a "
+                + "retry loop cannot tell a resend to the SAME sequencer, which M5.23 "
+                + "answers, from one that crosses a takeover, which M5.25 does not")
+                .hasSize(1);
     }
 
     @Test

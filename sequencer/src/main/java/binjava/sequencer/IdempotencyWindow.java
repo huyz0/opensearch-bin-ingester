@@ -38,10 +38,23 @@ import java.util.Optional;
  * window at the threshold, so it shipped weaker than no bound at all while
  * looking tested. M4.10g owns it, with the fixture properties review named.
  *
- * <p>⚠️ THIS IS PROCESS-LOCAL STATE. Nothing seeds it from the chain or from a
- * checkpoint, so a SUCCESSOR starts with an empty window and a replay that
- * crosses a takeover is NOT caught. That is the remaining half of M4.10d's row
- * and it is stated here rather than implied by silence.
+ * <p>⚠️ IT IS SEEDED FROM THE CHAIN (M5.1) -- see {@link #seed} -- so a
+ * SUCCESSOR does NOT start empty and a replay crossing a takeover is caught,
+ * with the one limit that a checkpoint remembers a pod's LATEST incarnation
+ * only.
+ *
+ * <p>⚠️ WHAT IT STILL CANNOT KNOW BY ITSELF is an append this instance made and
+ * never learned the outcome of: {@link LocalSequencer} records a commit as
+ * applied only after the write RETURNS. That gap is closed IN THIS PROCESS by
+ * reading the slot the append names and seeding this map from what is there
+ * (M5.23), which is why {@link #applied} takes an attribution off a delta as
+ * well as off a request.
+ *
+ * <p>⚠️ IT IS NOT CLOSED ACROSS A TAKEOVER. A successor seeds from
+ * {@code Checkpoint.pods} plus the uncheckpointed tail, and
+ * {@code CheckpointWriter} never saw the ambiguous flush -- so once a later
+ * checkpoint bounds past that delta the fact is gone and the retry lands twice.
+ * M5.25 owns it.
  */
 final class IdempotencyWindow {
 
@@ -154,12 +167,31 @@ final class IdempotencyWindow {
     /** Records that {@code request} is now durable at {@code (epoch, sequence)}. */
     void applied(CommitRequest request, long epoch, long sequence) {
         Objects.requireNonNull(request, "request");
-        byIncarnation.compute(key(request.podId(), request.incarnationId()), (ignored, prior) -> {
-            if (prior == null || request.flushSeq() > prior.lastAppliedFlushSeq()) {
-                return new Applied(request.flushSeq(), epoch, sequence);
-            }
-            return prior;
-        });
+        applied(new SegmentCommit.Attribution(
+                request.podId(), request.incarnationId(), request.flushSeq()), epoch, sequence);
+    }
+
+    /**
+     * Records that {@code attribution}'s flush is durable at
+     * {@code (epoch, sequence)}.
+     *
+     * <p>⚠️ TAKEN FROM A DELTA RATHER THAN FROM A REQUEST (M5.23). After an
+     * AMBIGUOUS append the two differ: the delta that landed carries every
+     * flush its batch held, while the retry that reconciles it may resubmit a
+     * subset, a superset, or a mix. Recording only what was resubmitted leaves
+     * the rest of that batch unrecorded, and each of THEM then commits a second
+     * time -- the duplicate this window exists to prevent, moved one flush
+     * sideways.
+     */
+    void applied(SegmentCommit.Attribution attribution, long epoch, long sequence) {
+        Objects.requireNonNull(attribution, "attribution");
+        byIncarnation.compute(key(attribution.podId(), attribution.incarnationId()),
+                (ignored, prior) -> {
+                    if (prior == null || attribution.flushSeq() > prior.lastAppliedFlushSeq()) {
+                        return new Applied(attribution.flushSeq(), epoch, sequence);
+                    }
+                    return prior;
+                });
     }
 
     /**

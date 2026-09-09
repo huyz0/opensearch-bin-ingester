@@ -158,7 +158,8 @@ public final class Leadership implements AutoCloseable {
      * the process on one transient store error: {@link LocalSequencer#close}
      * releases the lease, so its {@code putIfMatch} can throw — and that
      * IOException replaced the fence (making a commit that provably appended
-     * NOTHING look ambiguous, which the contract forbids re-sending) AND left
+     * NOTHING look ambiguous, and an ambiguous one may not be re-sent to
+     * ANOTHER pod — only a fence authorises that) AND left
      * the reference on a closed sequencer, whose later refusal is deliberately
      * not a {@link FencedException}. The fenced branch was then unreachable
      * forever after.

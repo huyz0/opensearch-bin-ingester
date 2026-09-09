@@ -20,10 +20,13 @@ import org.junit.jupiter.api.Test;
  * A replay that crosses a TAKEOVER is answered, not applied twice (M5.1).
  *
  * <p>⚠️ THIS IS THE HALF OF IDEMPOTENCY THAT DID NOT EXIST, and
- * {@link Sequencer}'s own javadoc says so: "A SUCCESSOR INHERITS NOTHING ... a
- * replay that crosses a takeover commits twice. Inheriting it is M4.10f."
- * M4.10f was in no build and was a backlog row nowhere, on this branch or on
- * the archive branch — an obligation named in a contract and owned by nobody.
+ * {@link Sequencer}'s own javadoc USED TO say so: "A SUCCESSOR INHERITS NOTHING
+ * ... a replay that crosses a takeover commits twice. Inheriting it is M4.10f."
+ * ⚠️ THAT SENTENCE IS NO LONGER IN THE TREE — M5.1 made it false and M5.23
+ * rewrote the paragraph — so it is quoted here as history, not as a citation to
+ * follow. M4.10f was in no build and was a backlog row nowhere, on this branch
+ * or on the archive branch: an obligation named in a contract and owned by
+ * nobody.
  *
  * <p>⚠️ FORWARDING IS WHAT MAKES IT REACHABLE, which is why M5 owns it. Today
  * every pod that commits IS the leaseholder, so the window answering a retry is

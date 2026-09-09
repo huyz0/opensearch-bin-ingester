@@ -48,14 +48,16 @@ import java.util.concurrent.atomic.AtomicLong;
  * <p>⚠️ EVERY {@code SegmentCommit} CARRIES AN OPTIONAL
  * {@code Attribution(podId, incarnationId, flushSeq)} (ADR-0036), and this
  * writer records a POINTER to the delta that last applied for each pod.
- * ⚠️ NOTHING IN {@code src/main} READS EITHER BACK YET — M4.10d is where a
- * successor folds the uncheckpointed tail into the window.
+ * ⚠️ M5.1 IS WHERE A SUCCESSOR READS THEM BACK, folding this checkpoint and the
+ * uncheckpointed tail after it into {@code IdempotencyWindow}.
  *
  * <p>⚠️ WHAT REMAINS PROCESS-LOCAL is the in-memory map below: it learns only
  * from {@link #observe}, which {@code LocalSequencer} calls AFTER a successful
  * {@code commitAll}. An AMBIGUOUS commit — the PUT landed, the response was
- * lost — applies without ever reaching it, which is why M4.10d must reconcile
- * that case from the chain rather than treating this map as authoritative.
+ * lost — applies without ever reaching it. M5.23 reconciles that case from the
+ * chain into the WINDOW, so the running process answers the retry; ⚠️ it does
+ * NOT reach this map, so a SUCCESSOR still does not inherit the fact once a
+ * later checkpoint bounds past that delta. M5.25 owns that half.
  */
 final class CheckpointWriter implements AutoCloseable {
 

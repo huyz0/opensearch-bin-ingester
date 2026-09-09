@@ -26,9 +26,11 @@ import java.util.Objects;
  * <p>⚠️ A FENCED LEADER FALLS BACK, IT DOES NOT FAIL — and it is told apart by
  * {@link FencedException} rather than by its message. A fenced commit appended
  * nothing, so re-sending it is not a duplicate; any other {@link IOException}
- * may have landed and lost its reply, and re-sending THAT commits the same
- * records twice. So the pod keeps its term through an ambiguous failure: a
- * transient 503 on a delta PUT is not a takeover.
+ * may have landed and lost its reply, and re-sending THAT ELSEWHERE commits
+ * the same records twice — M5.23 answers such a resend only at the sequencer
+ * instance that made the append, never after the lease moves (M5.25). So the pod keeps its
+ * term through an ambiguous failure: a transient 503 on a delta PUT is not a
+ * takeover.
  *
  * <p>⚠️ NOT SYNCHRONIZED, AND THE FIRST DRAFT WAS. A monitor held for the
  * length of a commit admits one caller at a time, so a leader wrapped in
@@ -98,9 +100,16 @@ public final class FleetSequencer implements Sequencer {
                 // have landed and lost its reply", which is the one thing that
                 // is FALSE about this failure: a fence proves nothing was
                 // appended and the forward never reached a peer. Dropping the
-                // fence destroys the evidence that would authorise the safe
-                // retry M5.23 is to make possible, and leaves an operator
-                // debugging a stalled producer with no sign a takeover happened.
+                // fence destroys the evidence that authorises a safe retry,
+                // and leaves an operator debugging a stalled producer with no
+                // sign a takeover happened. ⚠️ THE FENCE IS THE STRONGER
+                // EVIDENCE, and stays so after M5.23: reconciling an ambiguous
+                // append makes a resend safe to THAT SEQUENCER only -- the mark
+                // is one instance's field, so not even the same pod's next term
+                // holds it -- while a fence proves nothing was appended at all
+                // and so authorises a resend anywhere, including to a
+                // successor, which does not inherit an ambiguously-landed
+                // flush (M5.25).
                 forwardFailed.addSuppressed(fence);
             }
             throw forwardFailed;

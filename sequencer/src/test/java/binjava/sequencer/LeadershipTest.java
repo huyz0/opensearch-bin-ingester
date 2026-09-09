@@ -154,8 +154,9 @@ class LeadershipTest {
 
         // ⚠️ REPORTED, NEVER SUBSTITUTED. A close failure that REPLACED the
         // fence would turn a commit that provably appended nothing into an
-        // ambiguous one, which `Sequencer.commit` forbids re-sending -- so a
-        // producer's write is dropped on every takeover that meets a hiccup.
+        // ambiguous one -- and an ambiguous commit may not be re-sent to
+        // ANOTHER pod, which is where a fenced one goes. So a producer's write
+        // is dropped on every takeover that meets a hiccup.
         assertThat(fence.getSuppressed())
                 .as("the close failure is carried by the fence, not in place of it")
                 .hasSize(1);

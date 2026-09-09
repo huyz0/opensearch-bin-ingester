@@ -39,26 +39,48 @@ import java.util.List;
  * {@code (podId, incarnationId, flushSeq)}. An earlier draft of this very sentence promised it, four lines above
  * the paragraph retracting it.
  *
- * <p><b>Failure and retry — and what is NOT yet guaranteed.</b>
+ * <p><b>Failure and retry.</b>
  * {@link IOException} means the store was unreachable
  * ({@code BinStore}'s own contract distinguishes that from losing a CAS race,
  * which is an empty {@code Optional}). ⚠️ That is the AMBIGUOUS case, not a
  * clean failure: a conditional PUT whose response was lost has still landed.
  * <b>A resubmission of a triple this sequencer has already APPLIED is
  * answered</b> (M4.10d): it gets the offsets that already apply and appends
- * nothing. ⚠️ THAT IS NOT THE AMBIGUOUS CASE. A PUT whose response was lost is
- * never recorded as applied -- {@code commitAll} records only after the write
- * RETURNS -- so a retry after {@code IOException} still commits the same
- * records a second time. Reconciling that from the chain is M4.10e, and it is
- * NOT in this build. ⚠️ WHEN IT LANDS, THE RETRY MUST REUSE THE TRIPLE. A caller that mints a
+ * nothing. ⚠️ AND SINCE M5.23 THAT INCLUDES THE AMBIGUOUS CASE. A PUT whose
+ * response was lost is never recorded as applied -- {@code commitAll} records
+ * only after the write RETURNS -- so the failure names the SLOT it wrote to
+ * ({@link AmbiguousAppendException}), and the next commit reads that slot and
+ * learns from the chain what happened. A retry of anything the landed batch
+ * carried is then answered rather than appended.
+ * ⚠️ THE RETRY MUST REUSE THE TRIPLE. A caller that mints a
  * fresh {@code flushSeq} for the retry is submitting a different commit, and
- * the same records are committed twice — {@code DefaultIngest} increments
- * unconditionally today, so THIS GUARANTEE STOPS AT THIS SEAM and no
- * production caller yet reaches it.
+ * the same records are committed twice.
+ * ⚠️ AND NO PRODUCTION CALLER RESENDS ONE YET, which is stated rather than
+ * implied: {@code DefaultIngest} builds its request once (M5.2) but has no
+ * retry loop, and {@code RemoteSequencer} resends only a REFUSED forward, never
+ * an ambiguous one. What M5.23 changes is that such a resend is now SAFE, not
+ * that anything makes it.
  *
- * <p>⚠️ AND IT IS PROCESS-LOCAL. A SUCCESSOR INHERITS NOTHING: the window is
- * built per instance and no path seeds it from a predecessor, so every replay
- * that crosses a takeover commits twice. Inheriting it is M4.10f.
+ * <p>⚠️ A SUCCESSOR INHERITS THE WINDOW FROM THE CHAIN (M5.1), rebuilt from the
+ * replay that crosses from the predecessor, so a retry that crosses a takeover
+ * is answered too — with two stated limits. A checkpoint remembers a pod's
+ * LATEST incarnation only; and ⚠️ <b>AN AMBIGUOUSLY-LANDED FLUSH IS NOT IN THE
+ * CHECKPOINT AT ALL</b>. {@code CheckpointWriter} learns only from a commit
+ * that RETURNED, so the flush M5.23 reconciles is known to the running window
+ * and to the chain, but not to the map a successor treats as authoritative
+ * below the checkpoint bound. While that delta is still in the uncheckpointed
+ * tail the successor's replay finds it; once a later checkpoint bounds past it,
+ * a retry crossing the takeover is applied twice. Recorded as M5.25, and stated
+ * here rather than left to be discovered.
+ *
+ * <p>⚠️ THE TRIPLE IS NOT THE WHOLE KEY OF AN ANSWER. A replay is DETECTED on
+ * {@code (podId, incarnationId, flushSeq)}, but it is ANSWERED only by a
+ * segment carrying that triple AND the same {@code segmentKey} — one flush may
+ * submit several segments under one {@code flushSeq}, and the key alone would
+ * answer a different flush that reused it. So resending a triple with a
+ * DIFFERENT segment key is neither answered nor committed: it is refused, and
+ * that refusal is permanent for that {@code flushSeq}. Deliberate — answering
+ * with offsets that belong to other records is worse than failing.
  * ⚠️ AN EARLIER DRAFT SAID THE PAIR WAS CARRIED "so M4.10 can make the retry
  * safe WITHOUT CHANGING THE RECORD SHAPE". M4.10c changed it: ADR-0036 added
  * {@code incarnationId} to this record, because the pair could not discriminate
@@ -89,9 +111,9 @@ public interface Sequencer extends AutoCloseable {
      *     the same stream in one batch window. ⚠️ {@code RunCommit} still
      *     carries no pod attribution; since M4.10c {@code SegmentCommit} DOES,
      *     as an optional {@code Attribution}, which is what the replay-answer
-     *     path matches a retry against, and what M4.10f will rebuild a
-     *     successor's window FROM. It is not a selector for a caller's own
-     *     offsets.
+     *     path matches a retry against, what M5.1 rebuilds a successor's window
+     *     FROM, and what M5.23 seeds it from after an ambiguous append. It is
+     *     not a selector for a caller's own offsets.
      *     ⚠️ SETTLED BY M4.7b: <b>a caller finds its offsets by the SEGMENT KEY
      *     it submitted</b> — {@code delta.segments()}, matched on
      *     {@code request.segmentKey()}. That works because each request brings
@@ -103,10 +125,15 @@ public interface Sequencer extends AutoCloseable {
      *     {@code RunKey} — is the one the sentence above warns against
      * @throws IOException the store was unreachable — ⚠️ AMBIGUOUS, so the
      *     commit may or may not have landed. Retrying with the same
-     *     {@code (podId, incarnationId, flushSeq)} IS NOT YET SAFE: an
-     *     ambiguous commit is never recorded as applied, because the record
-     *     happens after the write RETURNS, so the retry commits the same
-     *     records again. M4.10e owns that; see the failure-and-retry note
+     *     {@code (podId, incarnationId, flushSeq)} IS SAFE AGAINST THE SAME
+     *     SEQUENCER (M5.23): the failure names the slot the append was
+     *     attempted at, and the next commit reconciles it against the chain, so
+     *     a retry of a commit that landed is answered with the offsets that
+     *     already apply and appends nothing. ⚠️ IT IS NOT YET SAFE ACROSS A
+     *     TAKEOVER -- a successor does not inherit an ambiguously-landed flush
+     *     once a checkpoint bounds past its delta (M5.25). ⚠️ And a DIFFERENT
+     *     triple is a different commit and duplicates the records; see the
+     *     failure-and-retry note
      * @throws FencedException the ONE exception to the paragraph above: this
      *     sequencer's term ended, the append was refused and NOTHING landed, so
      *     the same request may be re-sent to whoever holds the term now. ⚠️ THE
@@ -114,8 +141,10 @@ public interface Sequencer extends AutoCloseable {
      *     know that: a sequencer that writes the chain itself raises it, and one
      *     that FORWARDS to a peer does not — a peer's refusal reaches it as a
      *     transport-level failure it reports as a plain {@link IOException}.
-     *     So {@code instanceof FencedException} means "safe to re-send"; its
-     *     absence does not mean "unsafe from every implementation"
+     *     So {@code instanceof FencedException} means "safe to re-send
+     *     ELSEWHERE"; its absence does not mean "unsafe from every
+     *     implementation", nor — since M5.23 — "unsafe to re-send to THIS
+     *     sequencer"
      */
     default CommitDelta commit(CommitRequest request) throws IOException {
         return commitAll(List.of(request));
