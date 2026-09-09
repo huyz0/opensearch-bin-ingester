@@ -518,10 +518,14 @@ public final class CommitProtocolSimulation {
                     zombies.add(leader);
                     zombiePods.add(leaderPod);
                     // ⚠️ THE ENDPOINT GOES EVEN THOUGH THE OBJECT STAYS. A
-                    // zombie is a pod that stopped ANSWERING, so a peer's send
-                    // to it must fail; keeping it routable would model a leader
-                    // that is unreachable to the store and reachable to its
-                    // peers, which is not the failure being injected.
+                    // zombie must not go on serving peers; keeping it routable
+                    // would model a leader that is unreachable to the store and
+                    // reachable to its peers, which is not the failure being
+                    // injected.
+                    // ⚠️ IT MODELS A POD THAT REFUSES, NOT ONE THAT IS DEAD.
+                    // `InProcessTransport.gone` answers an unknown endpoint
+                    // with a refusal; a pod that answers NOTHING is
+                    // `unreachable`, and this sweep drives none -- M5.6j.
                     followers.gone(leaderPod);
                     clock.advance(TTL.plusSeconds(1));
                 }

@@ -128,10 +128,16 @@ final class ForwardingPods {
     /**
      * Stops {@code pod} answering.
      *
-     * <p>⚠️ CALLED EVEN WHEN THE SEQUENCER OBJECT SURVIVES. A zombie is a pod
-     * that stopped ANSWERING, so a peer's send to it must fail; keeping it
-     * routable would model a leader unreachable to the store and reachable to
-     * its peers, which is not a failure anything injects.
+     * <p>⚠️ CALLED EVEN WHEN THE SEQUENCER OBJECT SURVIVES. A zombie must not
+     * go on serving peers; keeping it routable would model a leader unreachable
+     * to the store and reachable to its peers, which is not a failure anything
+     * injects.
+     *
+     * <p>⚠️ IT MODELS A POD THAT REFUSES, NOT ONE THAT IS DEAD, and
+     * {@link InProcessTransport#gone} says so: an unknown endpoint is answered
+     * with a refusal. A pod that answers NOTHING is
+     * {@link InProcessTransport#unreachable}, and no path here uses it yet --
+     * M5.6j.
      */
     void gone(String pod) {
         peers.gone(endpointOf(pod));
