@@ -29,6 +29,12 @@ class LeadershipTest {
     private static final class Stub implements Sequencer {
         private final IOException closeFailure;
         private boolean closed;
+        /**
+         * ⚠️ A COUNT, NOT ONLY A FLAG. `retiringTWICERetiresONCE` states the
+         * consequence a boolean cannot see: a second lease release, after a
+         * successor took the term, writes an EXPIRED lease over a live one.
+         */
+        private int closeCount;
 
         Stub() {
             this(null);
@@ -44,6 +50,7 @@ class LeadershipTest {
 
         @Override public void close() throws IOException {
             closed = true;
+            closeCount++;
             if (closeFailure != null) {
                 throw closeFailure;
             }
@@ -216,6 +223,64 @@ class LeadershipTest {
         assertThat(none.sequencer()).as("a closed pod takes no term").isNull();
         assertThat(asked.get()).as("it did not even ask for one").isFalse();
         assertThat(none.isHeld()).isFalse();
+    }
+
+    /**
+     * ⚠️ THE LOSING ARM OF THE RECONCILING COMPARE-AND-SET (M5.6f, ADR-0038).
+     * When {@code close} takes the term BETWEEN the publish and the re-read,
+     * the CAS fails — and this method used to fall through to {@code return
+     * won}, handing a caller a sequencer {@code close} had already closed. The
+     * caller then commits through it, and {@code LocalSequencer} refuses with
+     * "this sequencer released its lease", on a pod that reports itself as
+     * leading.
+     *
+     * <p>⚠️ DRIVEN THROUGH A SEAM RATHER THAN A RACE. The window is between two
+     * adjacent statements, so two real threads would be asserting a schedule.
+     * {@code afterPublish} puts the close exactly where the interleaving would
+     * put it, on one thread, every run.
+     */
+    @Test
+    void aTermTAKENByCloseBetweenPublishAndRereadIsNotHandedBack() throws Exception {
+        AtomicBoolean bootAlreadyRan = new AtomicBoolean();
+        java.util.concurrent.atomic.AtomicReference<Leadership> self =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        Stub won = new Stub();
+        Leadership mine = new Leadership(() -> {
+            if (!bootAlreadyRan.getAndSet(true)) {
+                return Optional.empty();
+            }
+            return Optional.of(won);
+        });
+        self.set(mine);
+        // ⚠️ `close` TAKES THE TERM, so the compare-and-set that follows finds
+        // the reference already gone and LOSES.
+        mine.afterPublish = () -> {
+            // ⚠️ THE TERM IS PUBLISHED BY NOW, and asserting it here is what
+            // makes this the LOSING arm rather than the winning one. Review
+            // MEASURED the gap: moving `afterPublish.run()` above `held.set`
+            // left the test green while it silently became a copy of
+            // `aTermWonWHILEClosingIsGivenSTRAIGHTBack`, no longer touching the
+            // arm M5.6f fixed.
+            assertThat(self.get().isHeld())
+                    .as("the seam runs AFTER the publish, so close takes a term that is there")
+                    .isTrue();
+            try {
+                self.get().close();
+            } catch (IOException closeFailed) {
+                throw new java.io.UncheckedIOException(closeFailed);
+            }
+        };
+
+        assertThat(mine.sequencer())
+                .as("close already closed that sequencer -- handing it back hands back a "
+                        + "closed one")
+                .isNull();
+        assertThat(won.closeCount)
+                .as("closed ONCE, by close -- a plain set(null) here would give it back a "
+                        + "second time, and a second release writes an expired lease over a "
+                        + "live one")
+                .isEqualTo(1);
+        assertThat(mine.isHeld()).isFalse();
     }
 
     @Test

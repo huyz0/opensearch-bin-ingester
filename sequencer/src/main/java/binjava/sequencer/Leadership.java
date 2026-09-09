@@ -49,6 +49,25 @@ public final class Leadership implements AutoCloseable {
     private final BoundedLock electing = new BoundedLock();
     private volatile boolean closed;
 
+    /**
+     * Runs between publishing a won term and re-reading {@link #closed}.
+     *
+     * <p>⚠️ PACKAGE-PRIVATE FOR ONE TEST, and the reason is that the arm it
+     * exists to reach is otherwise reachable only through a thread
+     * interleaving. The compare-and-set below fails exactly when {@code close}
+     * lands in this window — between the publish and the re-read — and that
+     * losing arm is the one M5.6f fixed. A test that raced two real threads for
+     * it would assert a schedule; this asserts the rule.
+     *
+     * <p>⚠️ A NO-OP IN EVERY SHIPPING PATH, installed nowhere but a test, and
+     * the same licence {@code LocalSequencer.sleepFor} and
+     * {@code checkpointEveryDeltas} are given for the same measured reason: a
+     * seam nothing shipping installs is a seam no test exercises, and the
+     * alternative here is production logic with no test at all.
+     */
+    volatile Runnable afterPublish = () -> {
+    };
+
     public Leadership(Election election) {
         this.election = java.util.Objects.requireNonNull(election, "election");
         // ⚠️ ONE ATTEMPT AT BOOT, so a cold cluster elects a leader without
@@ -94,17 +113,26 @@ public final class Leadership implements AutoCloseable {
                 return null;
             }
             held.set(won);
+            afterPublish.run();
             // ⚠️ RE-READ AFTER PUBLISHING, and give the term straight back if
             // close happened while the election was inside the store. Winning
             // takes a `tryAcquire`, a seal and a `recover()` whose latency is
             // unbounded in chain length, so a SIGTERM lands in that window
-            // easily -- and `close` would have read a null reference, closed
-            // nothing, and reported a clean shutdown while this thread went on
-            // to install a leader with a live renewer that nobody will ever
-            // stop. The compare-and-set is what keeps that from double-closing
-            // a term `close` did manage to take.
-            if (closed && held.compareAndSet(won, null)) {
-                giveBack(won);
+            // easily -- and `close` would otherwise have read a null reference,
+            // closed nothing, and reported a clean shutdown while this thread
+            // went on to install a leader with a live renewer that nobody will
+            // ever stop.
+            if (closed) {
+                // ⚠️ NULL ON BOTH OUTCOMES OF THE COMPARE-AND-SET (M5.6f), and
+                // an earlier version returned `won` when it FAILED. The CAS
+                // fails exactly when `close` got there first -- so it has
+                // already closed that sequencer, and handing it to a caller
+                // hands back a closed one. Winning the CAS means close did not
+                // take it and this thread must give it back itself; losing
+                // means close is doing so. Neither is a term this caller holds.
+                if (held.compareAndSet(won, null)) {
+                    giveBack(won);
+                }
                 return null;
             }
             return won;
@@ -187,6 +215,25 @@ public final class Leadership implements AutoCloseable {
         }
     }
 
+    /**
+     * Gives the term back, WITHOUT waiting for an election already in the store.
+     *
+     * <p>⚠️ NOT WAITING IS A DECISION, NOT AN OVERSIGHT (ADR-0038). Taking the
+     * election lock here was written, measured and withdrawn: it made the
+     * hand-back deterministic and cost more than it bought. {@code takeOrFail}
+     * throws {@code InterruptedException} when the caller's interrupt flag is
+     * ALREADY set, and {@code DefaultIngest.close} arrives in exactly that
+     * state — so the wait turned a successful release into no release at all,
+     * on the one path it exists for. And the bound composes: this wait, then
+     * {@code BatchingSequencer}'s join, then {@code LeaseManager.release}'s own
+     * {@code takeOrFail(ttl)}, is ~30 s at ADR-0007's TTL against the 5 s
+     * {@code DefaultIngest} already cut a wait to because thirty "exceeded
+     * Kubernetes' default grace period".
+     *
+     * <p>⚠️ SO THE RACE IS RECONCILED RATHER THAN EXCLUDED, in
+     * {@link #sequencer()}, and the losing arm of that reconciliation returns
+     * null rather than a sequencer this method has already closed.
+     */
     @Override
     public void close() throws IOException {
         // ⚠️ THE FLAG GOES UP FIRST, so an election already inside the store
