@@ -96,7 +96,8 @@ public final class CommitProtocolSimulation {
             List<Issued> issued,
             List<Invariants.Violation> violations,
             List<AckOrderInvariants.AckEvent> acks,
-            int readersChecked, int midRunDrained) {
+            int readersChecked, int midRunDrained,
+            int gracefulReleases, int gracefulReleasesRefusedForAnotherPod) {
 
         /**
          * ⚠️ THE TRACE AND THE READER COUNT ARE PUBLISHED SO A TEST CAN SEE THEM
@@ -317,6 +318,7 @@ public final class CommitProtocolSimulation {
         // only thing separating a DELAYED write from one deferred to the end
         // of the run. The final drain lands everything either way.
         int midRunDrained = 0;
+        GracefulReleaseMeter releases = new GracefulReleaseMeter(faulty);
 
         for (int round = 0; round < rounds; round++) {
             // ⚠️ PARTITIONS ARE A STATE WITH A DURATION (M4.13e), so they are
@@ -487,28 +489,21 @@ public final class CommitProtocolSimulation {
             if (random.nextInt(100) < 20) {
                 // The leader goes away. Half the time politely.
                 if (random.nextBoolean()) {
-                    if (forwarding) {
-                        // ⚠️ INSIDE THE GUARD, and that placement is the whole
-                        // of review's P1/T1. `leader.close()` sets no actor, so
-                        // it is judged against whoever acted last -- and with
-                        // forwarding on that is a FOLLOWER, which made 21.5% of
-                        // graceful releases answer to another pod's partition
-                        // against 3.3% without. Naming the leader here fixes
-                        // that; naming it UNCONDITIONALLY also moved 4 of
-                        // M4's 1,000 leader-only seeds, which is re-basing the
-                        // evidence this file exists to preserve.
-                        // ⚠️ SO THE 3.3% IS STILL THERE on the leader-only path.
-                        // It is a pre-existing harness defect, it is NOT this
-                        // row's, and it is recorded as M5.26 rather than fixed
-                        // here where it would be invisible in the diff.
-                        faulty.actingAs(leaderPod);
-                    }
-                    try {
-                        leader.close();
-                    } catch (IOException injected) {
-                        // a fault during release leaves the lease to expire,
-                        // which is exactly the ungraceful path
-                    }
+                    // ⚠️ UNCONDITIONALLY (M5.26). A graceful release is the
+                    // LEADER's call, so the store must judge it against the
+                    // leader; naming no actor leaves `FaultInjectingStore`
+                    // judging it against whoever acted last, and a release is
+                    // then refused for a partition injected somewhere else.
+                    // ⚠️ THE ACTOR SAT INSIDE `if (forwarding)` UNTIL M5.26,
+                    // because M5.7 measured that hoisting it moves 4 of M4's
+                    // 1,000 leader-only seeds (323, 372, 495, 662) and would
+                    // have re-based, inside a task about forwarding, the
+                    // evidence this file exists to preserve. That
+                    // re-measurement is this row's whole cost and is recorded
+                    // in M4's VERIFIED.md rather than absorbed silently.
+                    // `GracefulReleaseMeter` sets it and reads back what the
+                    // store DID.
+                    releases.observe(leaderPod, leader::close);
                     followers.gone(leaderPod);
                 } else {
                     // ⚠️ It just STOPS ANSWERING -- and keeps its object, which
@@ -623,7 +618,8 @@ public final class CommitProtocolSimulation {
         int readersChecked = verdict.readersChecked();
         return new Result(seed, commits, takeovers, highest, zombieWrites, zombieAttempts,
                 followers.commits(), followers.attempts(), followers.refusals(),
-                faulty.injected(), issued, violations, acks, readersChecked, midRunDrained);
+                faulty.injected(), issued, violations, acks, readersChecked, midRunDrained,
+                releases.released(), releases.refusedForAnotherPod());
     }
 
     static boolean hasChain(BinStore store, long epoch) throws IOException {

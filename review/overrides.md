@@ -57,3 +57,52 @@ M5.6f - THREE ROUNDS, and round one KILLED THE DESIGN rather than finding a defe
 M5.6g - FIVE ROUNDS, and the code was REVERTED at round two rather than repaired. Round one found the implementation had an unbounded LIVENESS hole: promoting a follower on a peer's REFUSAL elects no successor when a leader is lost to node failure, because a dead pod raises no refusal -- and the whole suite was green anyway, because `InProcessTransport` answers an unknown endpoint with one, so every promotion test in the tree modelled a dead leader as a refusing one. Round two judged the revert honest and found the ADR that replaced it had the SAME blind spot for the absent-lease case, plus that the fixture fix was homed on M8 when rung 3 was available here. Round three then MEASURED, both roles independently, that the guard added in round three DID NOT GUARD: it asserted a follower does not promote on a dead peer, which is true under the rejected design too, so it was a test both worlds agree on. Round four writes the guard that does -- a dead leader AND a lapsed lease, verified RED by restoring the rejected design, and it fails on the COMMIT rather than an assertion, which is the outage itself -- removes a fixture method that had no caller and did not undo what it claimed, corrects two comments the new fixture javadoc contradicted, and fixes the ADR and the row that both asserted the false guard claim. ⚠️ ROUND FOUR THEN LEFT THE FALSE PROSE STRANDED RATHER THAN MOVING IT -- two stacked javadoc blocks, the dead one still saying THIS IS THE GUARD of the test that is not -- which is the third time in this milestone a correction has been applied to one of two places. Round five unstacks it, parks a renewer whose real 3 s sleep sat beside an 11 s injected clock jump, and constrains the fixture's flag-clearing that nothing checked; both reviewers had already returned `pass` on the substance. ⚠️ NO `src/main` FILE IS TOUCHED BY THIS TASK AT ALL, so the standing authority's third condition is vacuous here exactly as it was for M5.7; what is substituted is that every round found a REAL defect, three of them in my own claims rather than in the code, and that the round-four delta is a test, a test fixture, and prose. ⚠️ `scripts/check-reviewed.sh` has no override path, so this commit is made with SKIP=check-reviewed and says so. - approved-by: Huy Nguyen
 
 M5.25 - THREE ROUNDS, and rounds one and two each found REAL defects that were mine rather than the code's. The mechanism survived every probe in round one -- pod-states-without-the-chain-snapshot is consistent, the monitor is the right one, the merge rule still holds, the cost is neutral -- and what review found instead was that I had closed the gap in the code and retracted it in ZERO of the NINE places that state it, two of them inside the two files the diff edits. That is the failure mode `review/overrides.md` records M5.23 spending seven rounds on, running in the opposite direction. Round one also caught the row being flipped to `done` while DELETING the two open items it owned, neither of them staged nor owned elsewhere. Round two then found the sweep STILL incomplete -- three more sites, two again inside edited files -- because I greped for the CLAIM and not for the row id, when ADR-0039's own baseline entry says two searches together find more than either alone and I wrote that sentence. The test reviewer's round-one major was sharper than any of it: every assertion looked at the ANSWER to a replay, and a watermark one flush too high answers it just as well while REFUSING that pod's next real flush after a takeover -- the suppression direction ADR-0036 calls the more damaging. The test now reads the checkpoint back, asserts the exact `PodState` for both pods of the landed batch, and carries a genuinely-new-flush negative control; five named mutations were run and now die. Round three changes NO production logic: three comment retractions, one assertion, and prose. On the standing M5 authority. ⚠️ `scripts/check-reviewed.sh` has no override path, so this commit is made with SKIP=check-reviewed and says so. - approved-by: Huy Nguyen
+
+M5.26 - FIVE ROUNDS, signed under the standing M5 authority, whose three conditions ALL hold
+and are stated here rather than assumed. (1) EVERY PRIOR ROUND FOUND A REAL DEFECT: round one
+returned changes-requested from BOTH reviewers on the same blocking finding -- the counter
+compared `faulty.actingPod()` against the pod assigned one statement earlier in a
+single-threaded driver, a tautology, and the test reviewer proved it by reinstating the whole
+defect with the sweep green; round one also caught an actor-MISMATCH count published in M4's
+VERIFIED.md as a count of REFUSALS, which the fix then measured at 0.31% rather than the 3.3%
+the row was opened with, and an anti-vacuity floor that survived deleting `leader.close()`
+outright. (2) THE REMAINING FIX IS SMALL: round three corrects a duplicated comment paragraph
+the split left behind, a field declaration that landed between a javadoc and the method it
+documents, a denominator that paired the defect run's numerator with the fixed run's total,
+an overclaim that every verb passes through the new counter (two do not), and a re-basing
+that updated the reader count while leaving the epoch and ack halves of the same fingerprint
+stale. (3) THIS ROUND CHANGES NO PRODUCTION LOGIC: no `src/main` file is in the diff at all --
+the whole change is the simulation harness, and rounds three and four touch only comments, one
+field position, and three documents. ⚠️ `check-reviewed.sh` CAPS AT TWO ROUNDS AND HAS NO OVERRIDE
+PATH, so this commit is made with SKIP=check-reviewed; both reviewers ran all five rounds and both
+returned pass at rounds two, three and four. Findings NOT fixed are rows instead -- M5.28 (the refusal
+detector is constrained in one direction only), M5.29 (`calls()` cannot tell which store work a
+release did), M5.30 (two floors whose stated headroom is stale), M5.31 (the sweep never points at
+the wrongly-ALLOWED direction) -- M5.28 on the test reviewer's explicit advice that it does not
+warrant another round.
+
+⚠️ ROUND FOUR EXISTS BECAUSE ROUND THREE'S CORRECTIONS WERE THEMSELVES WRONG, which is review.md
+rule 11's warning landing on this task rather than a hypothetical: fixing a minor produced the next
+round's surface. Round three claimed to correct a denominator that paired the defect run's numerator
+(5 refusals) with the fixed run's total (1,608 releases) -- and corrected it in VERIFIED.md ONLY,
+leaving the backlog row saying 1,608, so this entry's own account of that correction was false when
+it was signed. It also introduced a fresh falsehood: a new comment asserting three verbs never reach
+the `calls` counter, when `list` reaches it on ~97% of calls. Round four corrects exactly the
+statements that are FALSE -- that denominator in its second home, the verb claim, an M5.29 figure
+that does not generalize, a "full fingerprint" that omits the per-seed hash, and a pointer implying
+two documents agree about a run time when they state different figures -- plus one javadoc that
+documented the semantics the fix REJECTED and so invited reinstating the hole. Nothing else in
+either reviewer's thirteen minors is touched, on rule 11.
+
+⚠️ ROUND FIVE IS REMOVALS AND SINGLE TOKENS, and it exists because round four ALSO corrected in
+one home and not the other: this entry went on saying the verb overclaim was corrected to "three
+do not" when the code and the row it points at had both been fixed to two. A signed override is
+the one artifact whose whole purpose is to be audited later, so a false factual parenthetical in
+it is not the same as a stale comment elsewhere -- the production reviewer said as much, naming it
+the single item worth touching. Round five corrects that, aligns this entry's conditions and round
+count with the round being signed, DELETES three positional pointers that resolved to nothing
+rather than repairing them, and states in M5.28 and M5.30 the units and seed-invariance caveats
+three separate findings asked for. It ADDS no claim that was not already measured. ⚠️ AND THE ROUND
+COUNT IS THE LESSON: five rounds on a change with no `src/main` file in it is review.md rule 12's
+M-1.1 pathology reproduced -- every round after the first found defects in the previous round's
+FIX, and all of them were in PROSE I wrote. The commit was not too big; the writing around it was.

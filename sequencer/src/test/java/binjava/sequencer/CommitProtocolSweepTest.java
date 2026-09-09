@@ -86,7 +86,7 @@ class CommitProtocolSweepTest {
      *   profile                              zero-commit  commits  readers  takeovers
      *   (0.05,0.05,0.1,0) -- three off               47     7.33    74.17     2.87
      *   (0.05,0.05,0.1,0.05,0.05,0.05)              137     4.22    47.34     2.61
-     *   (0.03,0.03,0.1,0.02,0.02,0.02) -- this       12    11.11    85.45     4.81
+     *   (0.03,0.03,0.1,0.02,0.02,0.02) -- this       12    11.11    85.46     4.81
      * </pre>
      *
      * <p>⚠️ THE BOUND IS ASSERTED, NOT TRUSTED. `zeroCommitSeeds` below fails
@@ -172,7 +172,7 @@ class CommitProtocolSweepTest {
         // asserting only its own file's constants can never be observed failing
         // without editing that file, so testing.md rule 2 cannot be satisfied
         // for it. Here it rides the sweep's own red.
-        // ⚠️ EVERY FLOOR BELOW IS `SEEDS * k`, so all six measure work PER SEED
+        // ⚠️ EVERY FLOOR BELOW IS `SEEDS * k`, so all seven measure work PER SEED
         // and are invariant under the seed count. Review MEASURED `SEEDS` 1000
         // to 10 together with `ROUNDS` 120 to 60 passing green at 1/200th of
         // the stated workload. Nothing else in the tree asserts the number M4's
@@ -206,6 +206,8 @@ class CommitProtocolSweepTest {
         boolean ackFloorAlwaysZero = true;
         long ackEvents = 0;
         int zeroCommitSeeds = 0;
+        long gracefulReleases = 0;
+        long gracefulReleasesRefused = 0;
         long start = System.nanoTime();
         for (long seed = 0; seed < SEEDS; seed++) {
             var run = CommitProtocolSimulation.run(seed, ROUNDS, PODS, faults);
@@ -217,6 +219,8 @@ class CommitProtocolSweepTest {
             epochsBurned += run.highestEpoch();
             faultsFired += run.faults().size();
             readersChecked += run.readersChecked();
+            gracefulReleases += run.gracefulReleases();
+            gracefulReleasesRefused += run.gracefulReleasesRefusedForAnotherPod();
             ackEvents += run.acks().size();
             for (long epoch = 1; epoch <= run.highestEpoch(); epoch++) {
                 long floor = run.lowestAckedSequenceIn(epoch);
@@ -239,6 +243,8 @@ class CommitProtocolSweepTest {
                                 : ""));
             }
         }
+        System.out.printf("sweep: graceful releases %d, refused for another pod %d, zero-commit seeds %d%n",
+                gracefulReleases, gracefulReleasesRefused, zeroCommitSeeds);
         long elapsed = (System.nanoTime() - start) / 1_000_000;
 
         // ⚠️ ANTI-VACUITY FIRST, and it comes before the invariant assertion on
@@ -262,7 +268,7 @@ class CommitProtocolSweepTest {
                         + "the separation, with ROUNDS=4 already clearing it")
                 .isGreaterThanOrEqualTo(SEEDS * 3L / 2);
         assertThat(epochsBurned)
-                .as("and the epoch depth near the re-measured 85.87 per seed, against 1.3 -- "
+                .as("and the epoch depth near the re-measured 85.88 per seed, against 1.3 -- "
                         + "the dimension a shorter run collapses first")
                 .isGreaterThan(SEEDS * 10L);
         // ⚠️ THE FAULT PROFILE IS A THRESHOLD TOO, and `isPositive()` did not
@@ -302,6 +308,35 @@ class CommitProtocolSweepTest {
                         + "event exists to guarantee -- it was documented in three places and "
                         + "emitted nowhere until review measured the floor sitting at 1")
                 .isTrue();
+
+        // ⚠️ A GRACEFUL RELEASE IS JUDGED AGAINST THE LEADER (M5.26). The
+        // simulation's `leader.close()` once named no acting pod, so
+        // `FaultInjectingStore` judged the release against WHOEVER ACTED LAST
+        // -- refusing it for a partition injected at a different pod and
+        // under-exercising the polite-failover path by that much.
+        // ⚠️ THE FLOOR COMES FIRST, and it is not decoration: the refusal
+        // count below is trivially 0 on a sweep where no leader ever closed
+        // politely, which is the vacuity every other floor in this method
+        // exists to refuse. ⚠️ AND IT COUNTS RELEASES THAT RETURNED, not
+        // branch entries: review MEASURED a first version at `SEEDS / 20` over
+        // attempts staying green at 1,713 with `leader.close()` DELETED
+        // outright, and green again with the polite path made 26x rarer.
+        // MEASURED 1,608 completed releases over 1,000 seeds -- 1.6 per seed
+        // -- so a floor of one per seed clears it by 1.6x, and the count is
+        // deterministic per seed rather than sampled. ⚠️ THE CLEARANCE IS A
+        // 1,000-SEED FIGURE: under `-Dsweep.seeds=1` the margin is exactly
+        // 1.0x, and the refusal signal below is 5 seeds in 1,000, so a
+        // shortened bisect run meets this floor while seeing nothing.
+        assertThat(gracefulReleases)
+                .as("the polite-failover path must COMPLETE before a claim about how it is "
+                        + "judged says anything -- a floor over attempts survives deleting "
+                        + "the release entirely")
+                .isGreaterThanOrEqualTo(SEEDS);
+        assertThat(gracefulReleasesRefused)
+                .as("a leader releasing its lease politely is judged against ITSELF, so no "
+                        + "release is refused blaming another pod -- MEASURED at 5 with the "
+                        + "defect reinstated at the store call, 0 without")
+                .isZero();
 
         // ⚠️ A SEED THAT COMMITS NOTHING HOLDS I1-I5 VACUOUSLY, and nothing was
         // counting them. Measured on this tree: 47 under the old profile, 137

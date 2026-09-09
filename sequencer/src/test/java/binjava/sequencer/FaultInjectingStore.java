@@ -132,6 +132,8 @@ public final class FaultInjectingStore implements BinStore {
         return i;
     }
 
+    private int calls;
+
     /** The pod whose calls follow, until the next call to this method. */
     void actingAs(String podId) {
         this.actor = podId;
@@ -147,6 +149,11 @@ public final class FaultInjectingStore implements BinStore {
      */
     String actingPod() {
         return actor;
+    }
+
+    /** Calls this store was asked to serve, refused ones included. */
+    int calls() {
+        return calls;
     }
 
     /** Cut {@code podId} off from the store until {@link #heal} is called. */
@@ -175,6 +182,20 @@ public final class FaultInjectingStore implements BinStore {
      * the thing that makes a zombie a zombie.
      */
     private void refuseIfPartitioned() throws IOException {
+        // ⚠️ COUNTED HERE BECAUSE THE VERBS THAT REACH THE STORE PASS
+        // THROUGH, which is the same reason the partition check lives here. A
+        // caller that needs to know whether the store did ANY work across a
+        // window -- M5.26's graceful release -- cannot ask the verbs one by
+        // one without going stale the next time one is added.
+        // ⚠️ TWO DO NOT REACH IT: `capabilities` and `close` never call this.
+        // `list` DOES, except on the ~3% of calls where its injected
+        // `unreachable` fires first -- an earlier version of this comment said
+        // list never reached it, which review measured as false. None is on a
+        // release path today: deleting `leases.release()` from
+        // `LocalSequencer.close` drives the floor to 0, MEASURED. So this
+        // counts a release now and needs revisiting if one ever comes to rest
+        // on `capabilities` or `close`.
+        calls++;
         if (isPartitioned()) {
             injected.add(new Injected("partition", "pod:" + actor));
             throw new IOException("injected: partition -- pod " + actor
