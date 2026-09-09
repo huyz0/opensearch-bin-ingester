@@ -75,6 +75,14 @@ repos:
         stages: [pre-commit]
         pass_filenames: false
         always_run: true
+      - id: check-adr-refs
+        name: "AGENTS.md: every ADR-<n> cited in the tree has a file behind it"
+        entry: scripts/check-adr-refs.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
+
       - id: check-links
         name: "every relative markdown link resolves"
         entry: scripts/check-links.sh

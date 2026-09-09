@@ -182,6 +182,7 @@ runs is exactly the list that goes stale:
 | `check-gate-scope.sh` | pre-commit | every gate judges this repository only, never .tmp/ or a sibling checkout |
 | `check-harness-tests.sh` | pre-commit | the harness's own tests run -- buildSrc tests are NOT run by ./gradlew build |
 | `check-module.sh` | pre-commit | architecture.md rules 2/4/5: each module stays inside its dependency surface |
+| `check-adr-refs.sh` | pre-commit | AGENTS.md: every ADR-<n> cited in the tree has a file behind it |
 | `check-links.sh` | pre-commit | every relative markdown link resolves |
 | `scripts/build-index.sh --check` | pre-commit | the generated index regions in AGENTS.md and skills/README.md are current |
 | `check-terminology.sh` | pre-commit | glossary.md: one name per concept -- producer/ingester/writer/reader/consumer/plugin |
