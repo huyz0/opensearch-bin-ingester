@@ -1,6 +1,6 @@
 # 0012. A peer mesh, but not gossip: deterministic ring over platform membership
 
-Status: accepted
+Status: accepted — ⚠️ **amended 2026-09-11 by M5.11** on one point of implementation only: the crossover consequence below says it "belongs in the `CostTable`", and half of it cannot. `CostTable` prices REQUESTS and carries no per-byte transfer price, so the GET half is read from it and the $/GB half is configuration. ⚠️ `CostTable` was deliberately NOT extended: it is a component of `Capabilities`, which is `wire-format-change` contract 5 read by every backend, and cross-AZ egress is a property of the DEPLOYMENT rather than of the store — extending it would make every backend declare a number it does not know. The DECISION here is untouched, and so is the requirement the consequence exists for: the crossover is DERIVED from the price table and moves with it, which `FetchPolicyConfig.derivedFrom` does and `FetchPolicyTest` pins in both of its inputs
 Date: 2026-08-30
 Requirements: FR-6, FR-12, NFR-4, NFR-5
 Research: docs/research/30-design-space/05-az-topology-and-data-flow.md §5b
@@ -172,6 +172,8 @@ sequence number rather than reading to check it is empty. See
 - **The ~19.5 KiB crossover becomes a named constant**, used by the peer-fetch
   path and by the inline-vs-coordinates decision in the subscription protocol.
   It is derived from two prices, so it moves with the price table — it belongs in
-  the `CostTable`, not hard-coded.
+  the `CostTable`, not hard-coded. ⚠️ **See the amendment on the `Status:` line**:
+  only ONE of the two prices is in `CostTable`, and the second is configuration.
+  "Not hard-coded" holds; "in the `CostTable`" holds by half.
 - Piggybacked digests are cheap enough to build now and are the migration path if
   pod counts ever reach the scale where real gossip would pay.
