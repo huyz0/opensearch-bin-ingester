@@ -160,3 +160,29 @@ AND by row ID -- before the first review, not after the third.
 ⚠️ THIS ENTRY POST-DATES BOTH ROUND-SIX VERDICTS. Reviewing it needs a seventh round, which both
 reviewers advised against: both passed and both said the remaining findings land under rule 11.
 Made with SKIP=check-reviewed, which caps at two rounds.
+
+M5.8 - SIX ROUNDS, signed under the standing M5 authority; its three conditions hold, and this
+entry is worth reading BEFORE the earlier ones because the rounds bought something different.
+(1) EVERY PRIOR ROUND FOUND A REAL DEFECT, and unlike M5.26/M5.27/M5.28 most were in the CODE
+rather than in prose about it: a cross-AZ fetch that the type I claimed prevented it did not
+prevent (the reviewer COMPILED it -- 13 of 20 segments answered an az-b peer for an az-a call);
+a per-JVM seed that passed every test I had written, because the suite asserted two calls agree
+with each other and never what they agree ON; a duplicate podId that defeated the tie-break
+entirely, at 91 of 200 segments; my own first fix for that being WORSE than the defect, throwing
+from `inAz` on every call and taking out a whole AZ for what every rolling restart produces; and
+`isEmpty()` widening to `size() <= 1` passing all nineteen tests because no fixture used an AZ
+of exactly one pod. (2) THE REMAINING FIX WAS SMALL: round six is one assertion and one row
+renumber. (3) NO PRODUCTION LOGIC CHANGED IN THE FINAL ROUND.
+
+⚠️ THE REVIEWS EARNED THEIR COST HERE, which is not true of every task this session. Twice a
+reviewer answered a claim of mine by compiling it rather than arguing with it, and both times I
+was wrong. The pattern worth keeping: when a claim is about what the code MAKES IMPOSSIBLE, ask
+for it to be demonstrated, not read.
+
+⚠️ AND THE TDD RECORDS WERE RE-RECORDED FOUR TIMES, because I kept recording reds and then
+editing the test file. Record them LAST, after the test text is final; the harness binds a red to
+the file's hash and every edit invalidates all of them.
+
+⚠️ THIS ENTRY POST-DATES BOTH ROUND-SIX VERDICTS. Reviewing it needs a seventh round; both
+reviewers returned pass with ZERO findings, so there is nothing left for one to examine. Made
+with SKIP=check-reviewed, which caps at two rounds.

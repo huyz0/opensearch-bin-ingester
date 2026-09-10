@@ -64,7 +64,8 @@ correctness.
 
 ## Seams (the only places I/O is allowed)
 
-`BinStore` · `Clock` · `Sequencer` · `SubscriptionTransport`.
+`BinStore` · `Clock` · `Sequencer` · `SubscriptionTransport` · `Membership`
+([ADR-0040](decisions/0040-membership-is-a-seam-whose-first-implementation-is-configuration.md)).
 A new seam is an ADR. Every seam has a fake, kept in step in the same commit.
 
 ## Dependency rules

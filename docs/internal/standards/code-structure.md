@@ -17,7 +17,7 @@
 3. **Business logic touches no socket, clock, or object store directly.** It
    takes a seam. If it needs I/O to test, it is in the wrong layer.
 4. **The seams are few and named**: `BinStore`, `Clock`, `Sequencer`,
-   `SubscriptionTransport`. A new seam is an ADR.
+   `SubscriptionTransport`, `Membership`. A new seam is an ADR.
 5. **Every seam has a fake** used by T0/T1 tests, kept in step with the real
    implementation in the same commit.
 6. **The ingester and the plugin share formats and the SPI, never runtime
