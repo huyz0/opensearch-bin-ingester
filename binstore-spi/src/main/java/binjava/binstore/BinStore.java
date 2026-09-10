@@ -152,10 +152,22 @@ public interface BinStore extends Closeable {
      * {@code presignedUrls=false} rather than signing remotely.
      *
      * <p>⚠️ THE TTL MUST BE POSITIVE, and a backend rejects one that is not.
-     * The upper bound is NOT set here: M5.13 wires it from configuration, and
-     * a ceiling belongs with the thing that reads the configuration. Stated
-     * because security.md rule 3 says short-lived, and "short" is otherwise
-     * asserted by nobody.
+     * The upper bound is NOT enforced here: {@code binjava.ingest.GrantIssuer}
+     * clamps to it, because a ceiling belongs with the thing that decides to
+     * hand a grant out rather than with the thing that signs. ⚠️ The bound
+     * itself is ADR-0010's, at ≤60 s -- an earlier note here said M5.13 would
+     * "wire it from configuration", which read as though the NUMBER were open.
+     * It is not; only shortening it is.
+     *
+     * <p>⚠️ AND A BACKEND'S OWN EXCEPTION MESSAGES ARE BOUND BY security.md
+     * RULE 4. If signing fails, whatever this method throws may be chained,
+     * printed and pasted into a ticket by a caller that cannot inspect it --
+     * so the message must carry NEITHER a signed URL NOR a credential. A
+     * signing failure is the likeliest place in the whole system for a
+     * credential to surface in text. ⚠️ NOTHING MECHANICALLY CHECKS THIS:
+     * {@code PresignConformance}'s capable half runs only against a stand-in
+     * (M5.37), so the check would be testing the fixture. M5.42 owns closing
+     * it when the first capable backend lands.
      *
      * <p>⚠️ THE DEFAULT REFUSES, so a backend that has not implemented this
      * cannot silently return something unusable. It is paired with
