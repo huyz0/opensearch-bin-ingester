@@ -135,3 +135,28 @@ reviewer answering the question directly: land it, not another round and not a
 `baselines/review.txt` entry, because rule 9's argued path is for a contested blocking finding
 and none of these is contested. Made with SKIP=check-reviewed: `check-reviewed.sh` caps at two
 rounds and has no override path.
+
+M5.28 - SIX ROUNDS, signed under the standing M5 authority; its three conditions hold. (1) EVERY
+PRIOR ROUND FOUND A REAL DEFECT, and most were mine rather than the code's: round one found the
+floor's clearance stated over the 1,000-seed TOTAL where its neighbours state cumulative
+prefixes (the true minimum is 1.0x at N=50, and the floor is vacuous below 50), and the
+governing comment still claiming all floors are `SEEDS * k`; round two found a MEASURED claim
+this same commit falsified -- "deleting `actingAs` leaves every case green" was measured against
+a three-case file and two cases were added beside it in the same round; rounds three and four
+found that claim wrong twice more, at "1 of 5" when it was 2 of 6, and found the retracted
+"holds by construction" surviving in the backlog copy after being withdrawn from the code copy.
+(2) THE REMAINING FIX IS SMALL: round six is five edits, all whitespace or single tokens.
+(3) NO PRODUCTION LOGIC: no `src/main` file is staged; the meter and the sweep are test sources.
+
+⚠️ THE COUNT WAS THE DEFECT AGAIN, exactly as in M5.27, and I did not carry the lesson across.
+The `actingAs` paragraph asserted a count, review falsified it, I corrected the count, review
+falsified it again, and only at round five did it stop asserting one and name the cases instead.
+⚠️ AND THE ONE-OF-TWO-HOMES FAILURE RECURRED FOUR TIMES in this task alone: a number disowned in
+one sentence while asserted four lines above it; a claim withdrawn from a comment and left in the
+backlog cell; a unit corrected in prose and left wrong in the accessor summary; a parenthetical
+falsified by the javadoc added in the same diff. The remedy that works is the sweep -- by phrase
+AND by row ID -- before the first review, not after the third.
+
+⚠️ THIS ENTRY POST-DATES BOTH ROUND-SIX VERDICTS. Reviewing it needs a seventh round, which both
+reviewers advised against: both passed and both said the remaining findings land under rule 11.
+Made with SKIP=check-reviewed, which caps at two rounds.

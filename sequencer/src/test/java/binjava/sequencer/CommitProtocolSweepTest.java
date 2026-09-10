@@ -172,8 +172,12 @@ class CommitProtocolSweepTest {
         // asserting only its own file's constants can never be observed failing
         // without editing that file, so testing.md rule 2 cannot be satisfied
         // for it. Here it rides the sweep's own red.
-        // ⚠️ EVERY FLOOR BELOW IS `SEEDS * k`, so all seven measure work PER SEED
-        // and are invariant under the seed count. Review MEASURED `SEEDS` 1000
+        // ⚠️ SEVEN OF THE EIGHT FLOORS BELOW ARE `SEEDS * k`, so they measure
+        // work PER SEED and are invariant under the seed count. ⚠️ THE EIGHTH
+        // IS NOT, and it is called out here rather than only where it sits:
+        // the refusals-seen floor is `SEEDS / 50`, which INTEGER-DIVIDES TO
+        // ZERO below 50 seeds and is vacuous there. It is scaled that way
+        // because its signal is ~0.04 per seed; see its own comment. Review MEASURED `SEEDS` 1000
         // to 10 together with `ROUNDS` 120 to 60 passing green at 1/200th of
         // the stated workload. Nothing else in the tree asserts the number M4's
         // completion condition names.
@@ -208,6 +212,7 @@ class CommitProtocolSweepTest {
         int zeroCommitSeeds = 0;
         long gracefulReleases = 0;
         long gracefulReleasesRefused = 0;
+        long gracefulReleaseRefusalsSeen = 0;
         long start = System.nanoTime();
         for (long seed = 0; seed < SEEDS; seed++) {
             var run = CommitProtocolSimulation.run(seed, ROUNDS, PODS, faults);
@@ -221,6 +226,7 @@ class CommitProtocolSweepTest {
             readersChecked += run.readersChecked();
             gracefulReleases += run.gracefulReleases();
             gracefulReleasesRefused += run.gracefulReleasesRefusedForAnotherPod();
+            gracefulReleaseRefusalsSeen += run.gracefulReleaseRefusalsSeen();
             ackEvents += run.acks().size();
             for (long epoch = 1; epoch <= run.highestEpoch(); epoch++) {
                 long floor = run.lowestAckedSequenceIn(epoch);
@@ -243,8 +249,8 @@ class CommitProtocolSweepTest {
                                 : ""));
             }
         }
-        System.out.printf("sweep: graceful releases %d, refused for another pod %d, zero-commit seeds %d%n",
-                gracefulReleases, gracefulReleasesRefused, zeroCommitSeeds);
+        System.out.printf("sweep: graceful releases %d, refused for another pod %d, refusals seen %d, zero-commit seeds %d%n",
+                gracefulReleases, gracefulReleasesRefused, gracefulReleaseRefusalsSeen, zeroCommitSeeds);
         long elapsed = (System.nanoTime() - start) / 1_000_000;
 
         // ⚠️ ANTI-VACUITY FIRST, and it comes before the invariant assertion on
@@ -337,6 +343,49 @@ class CommitProtocolSweepTest {
                         + "release is refused blaming another pod -- MEASURED at 5 with the "
                         + "defect reinstated at the store call, 0 without")
                 .isZero();
+        // ⚠️ AND THE DETECTOR MUST BE ABLE TO DETECT (M5.28). The assertion
+        // above is `isZero`, so it can only fail by OVER-counting: review
+        // MEASURED that misspelling `"partition"` in the meter's scan
+        // predicate leaves the sweep green, and an emptied window or a deleted
+        // increment are the same family -- 0 is the fixed tree's answer too.
+        // A floor on the refusals the meter SEES kills TWO of the three --
+        // MEASURED. Deleting `refusedForAnotherPod++` survives it, because on
+        // a correct tree that counter is legitimately 0; `GracefulReleaseMeterTest`
+        // is what catches that one, by building the situation.
+        // ⚠️ NOT `isPositive()`, and that is the difference from the floors
+        // around it: 38 refusals over 1,000 seeds is ~0.04 per seed, so a bare
+        // positive floor REDS at `-Dsweep.seeds=1` with no defect present.
+        // ⚠️ AND THE CLEARANCE IS STATED AT PREFIX SCOPE, because over the
+        // 1,000-seed TOTAL it reads 1.9x and that is the wrong number to
+        // reason with. MEASURED per cumulative prefix: 38 refusals fall on 37
+        // seeds, `cum(N) >= N/50` holds for every N in 1..1000 so no
+        // shortened run false-reds, but the slack is EXACTLY ZERO for N in
+        // [50,79] -- only seed 1 carries a refusal before seed 79 -- and for
+        // N < 50 the floor is 0 and this assertion is VACUOUS. A re-measured
+        // `partitionRate`, or losing that one early window, reds a 50-seed
+        // run with no defect present.
+        assertThat(gracefulReleaseRefusalsSeen)
+                .as("the meter must SEE refusals inside release windows, or asserting it "
+                        + "counts none of the wrong kind constrains nothing")
+                .isGreaterThanOrEqualTo(SEEDS / 50);
+        // ⚠️ AND IT MUST BE THE REFUSAL COUNTER, not whichever `int`
+        // sits beside it. Review MEASURED that swapping
+        // `releases.refusalsSeen()` for `releases.released()` at the
+        // `Result` construction leaves this floor AND the whole suite
+        // green: three adjacent `int` components from one object, no
+        // compile-time distinction, and ~1,608 clears a floor of 20
+        // easily. ⚠️ THE MARGIN IS MEASURED, NOT STRUCTURAL: 38
+        // against 1,608, 42x. A refusal aborting its release proves
+        // only that a refusing window is not CREDITED; it does not
+        // bound the refusal COUNT below the credit count, and
+        // `TWORefusalsInOneWindowAreCountedTWICE` is the standing
+        // proof -- one window adds 2 here and 0 there. Review measured
+        // zero windows doing both over 1,000 seeds, and this green at
+        // every prefix from N=1.
+        assertThat(gracefulReleaseRefusalsSeen)
+        .as("and it must be the REFUSAL counter, not whichever `int` sits beside it "
+                + "at the `Result` construction")
+        .isLessThan(gracefulReleases);
 
         // ⚠️ A SEED THAT COMMITS NOTHING HOLDS I1-I5 VACUOUSLY, and nothing was
         // counting them. Measured on this tree: 47 under the old profile, 137

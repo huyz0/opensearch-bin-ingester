@@ -32,6 +32,7 @@ final class GracefulReleaseMeter {
     private final FaultInjectingStore faulty;
     private int released;
     private int refusedForAnotherPod;
+    private int refusalsSeen;
 
     GracefulReleaseMeter(FaultInjectingStore faulty) {
         this.faulty = faulty;
@@ -73,7 +74,21 @@ final class GracefulReleaseMeter {
             // leader's OWN partition refusing its release is legitimate --
             // that is the ungraceful path. Being refused for somebody else's
             // is what naming no actor caused.
-            if ("partition".equals(one.kind()) && !("pod:" + leaderPod).equals(one.key())) {
+            if (!"partition".equals(one.kind())) {
+                continue;
+            }
+            // ⚠️ COUNTED BEFORE THE CARVE-OUT, so the floor over it measures
+            // what this loop can SEE rather than what it concludes. Counting
+            // after survives the sweep and is caught only by the T1 case --
+            // MEASURED, both ways.
+            // ⚠️ THIS COUNTS REFUSALS; `refusedForAnotherPod` breaks, so it
+            // counts WINDOWS. They coincide at 38 today only because
+            // `refuseIfPartitioned` throws and aborts the release, so no
+            // window carries two -- measured by forcing this loop to stop at
+            // the first, which also gives 38. A release path that swallowed
+            // the IOException and kept calling would separate them.
+            refusalsSeen++;
+            if (!("pod:" + leaderPod).equals(one.key())) {
                 refusedForAnotherPod++;
                 break;
             }
@@ -96,5 +111,30 @@ final class GracefulReleaseMeter {
     /** Releases the store refused while blaming a pod other than the leader. */
     int refusedForAnotherPod() {
         return refusedForAnotherPod;
+    }
+
+    /**
+     * Partition refusals the store raised inside a release window, whoever it
+     * blamed (M5.28).
+     *
+     * <p>⚠️ REFUSALS, NOT RELEASES, and the unit is load-bearing: {@link
+     * #refusedForAnotherPod} breaks and so counts WINDOWS, this one does not.
+     * Reading this as a release count is how a reader re-derives the retracted
+     * claim that the two are ordered by construction.
+     *
+     * <p>⚠️ THIS IS WHAT MAKES {@link #refusedForAnotherPod} FALSIFIABLE. That
+     * one is asserted to be ZERO, so it can only fail by OVER-counting: review
+     * MEASURED that misspelling {@code "partition"} in the scan predicate --
+     * or emptying the window, or deleting the increment -- leaves the sweep
+     * green, because 0 is also the fixed tree's answer. A floor on the
+     * refusals the meter can SEE kills TWO of those three -- MEASURED. It does
+     * NOT kill a deleted {@code refusedForAnotherPod++}, because on a correct
+     * tree that counter is legitimately 0 and the sweep's totals cannot tell
+     * blinded from correct. {@link GracefulReleaseMeterTest} is what catches
+     * that one, and deleting it restores the unconstrained state this counter
+     * was added to end.
+     */
+    int refusalsSeen() {
+        return refusalsSeen;
     }
 }
