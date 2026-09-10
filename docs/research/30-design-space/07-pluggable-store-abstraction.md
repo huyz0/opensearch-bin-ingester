@@ -19,6 +19,19 @@ the two things they did not need and we cannot live without: **conditional write
 > `ObjectStat` carries **no** `lastModifiedMillis`, because no decision here may
 > depend on a store's clock. When this section and the ADR disagree, the ADR wins.
 
+> ⚠️ **REVISED 2026-09-10 by M5.10 / [ADR-0041](../../internal/product/decisions/0041-a-signed-url-is-a-capability-and-a-type-not-a-string.md).**
+> **Both listings below are the shape BEFORE that change** and are kept for the reasoning
+> around them. As shipped, `BinStore` also has `presign(String key, Duration ttl)` returning a
+> `SignedUrl` and defaulting to refusal, and `Capabilities` carries `boolean presignedUrls` as
+> its THIRD component, with `requirePresignedUrls()` alongside `requireConditionalWrites()`.
+> ⚠️ **A backend implementing `presign` must sign with NO request PER SIGNATURE.** S3 signs
+> locally from static credentials; an Azure user-delegation SAS signs locally too, from a
+> delegation key fetched once and valid up to seven days — one request amortised over every
+> URL it signs, which is why the line is drawn per signature rather than at zero. A
+> signature needing a round trip per URL — GCS V4 from a keyless Workload Identity — doubles
+> the request count on the one path `direct` exists to make cheap, so such a backend
+> advertises `presignedUrls=false` instead.
+
 ```java
 public interface BinStore extends Closeable {
     // --- reads -------------------------------------------------------------
@@ -41,6 +54,7 @@ public interface BinStore extends Closeable {
 
 record ObjectStat(String key, long size, Version version, long lastModifiedMillis) {}
 record Version(String token) {}                 // ETag on S3/Azure, generation on GCS
+
 record Capabilities(boolean conditionalWrites, boolean batchDelete,
                     long maxKeyBytes, long minPartSize, CostTable costs) {}
 ```

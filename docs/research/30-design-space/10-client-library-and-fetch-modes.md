@@ -125,6 +125,15 @@ fan-out and its own load. The client *may* fall back (§7).
 undoing the packaging simplification proxying bought us
 ([plugin-packaging §2](../20-opensearch/03-plugin-packaging.md)).
 
+> ⚠️ **REVISED 2026-09-10 by M5.10 / [ADR-0041](../../internal/product/decisions/0041-a-signed-url-is-a-capability-and-a-type-not-a-string.md).**
+> **"Mints it locally… no API call" is not true of every store.** It holds for S3, and for an
+> Azure user-delegation SAS once its key is fetched (valid up to seven days, so amortised). It
+> does NOT hold for GCS V4 signing from a keyless Workload Identity, which needs an
+> `iam.serviceAccounts.signBlob` call PER URL — so such a backend advertises
+> `Capabilities.presignedUrls=false` rather than signing remotely, and `direct` is unavailable
+> on it. ⚠️ **And the Local FS row below is aspirational**: `LocalFsBinStore` ships with
+> `presignedUrls=false` and no HTTP surface, so there is no loopback URL today.
+
 **Use a presigned/signed URL instead.** The ingester mints it locally (HMAC, microseconds, no API
 call) and the client fetches with a plain `HttpClient`:
 

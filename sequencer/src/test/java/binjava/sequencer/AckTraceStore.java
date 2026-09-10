@@ -121,6 +121,11 @@ final class AckTraceStore implements BinStore {
         return delegate.capabilities();
     }
 
+    @Override public binjava.binstore.SignedUrl presign(String key, java.time.Duration ttl)
+            throws java.io.IOException {
+        return delegate.presign(key, ttl);
+    }
+
     @Override public void close() throws IOException {
         delegate.close();
     }

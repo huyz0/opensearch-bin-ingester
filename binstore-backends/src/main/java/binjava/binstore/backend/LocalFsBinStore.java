@@ -431,7 +431,7 @@ public final class LocalFsBinStore implements BinStore {
 
     @Override
     public Capabilities capabilities() {
-        return new Capabilities(true, false, MAX_KEY_BYTES, 5L * 1024 * 1024, CostTable.free());
+        return new Capabilities(true, false, false, MAX_KEY_BYTES, 5L * 1024 * 1024, CostTable.free());
     }
 
     @Override

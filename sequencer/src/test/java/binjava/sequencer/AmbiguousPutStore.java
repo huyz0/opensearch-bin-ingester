@@ -193,6 +193,15 @@ public final class AmbiguousPutStore implements BinStore {
     public Capabilities capabilities() {
         return delegate.capabilities();
     }
+    @Override
+    public binjava.binstore.SignedUrl presign(String key, java.time.Duration ttl)
+            throws java.io.IOException {
+        // ⚠️ FORWARDED because a `default` method on the SPI cannot force a
+        // decorator to do it, and review MEASURED that forgetting it makes a
+        // capable backend pass the startup check and throw at first fetch.
+        return delegate.presign(key, ttl);
+    }
+
 
     @Override
     public void close() throws IOException {

@@ -67,6 +67,15 @@ final class StoreFakes {
         @Override public void delete(List<String> k) throws IOException { delegate.delete(k); }
 
         @Override public Capabilities capabilities() { return delegate.capabilities(); }
+    @Override
+    public binjava.binstore.SignedUrl presign(String key, java.time.Duration ttl)
+            throws java.io.IOException {
+        // ⚠️ FORWARDED because a `default` method on the SPI cannot force a
+        // decorator to do it, and review MEASURED that forgetting it makes a
+        // capable backend pass the startup check and throw at first fetch.
+        return delegate.presign(key, ttl);
+    }
+
 
         @Override public Optional<ObjectStat> stat(String k) throws IOException {
             return delegate.stat(k);
@@ -102,6 +111,12 @@ final class StoreFakes {
         @Override
         public Capabilities capabilities() {
             return delegate.capabilities();
+        }
+
+        @Override
+        public binjava.binstore.SignedUrl presign(String key, java.time.Duration ttl)
+                throws java.io.IOException {
+            return delegate.presign(key, ttl);
         }
 
         @Override

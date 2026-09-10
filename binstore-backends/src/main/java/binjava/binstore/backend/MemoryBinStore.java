@@ -263,7 +263,7 @@ public final class MemoryBinStore implements BinStore {
 
     @Override
     public Capabilities capabilities() {
-        return new Capabilities(true, true, MAX_KEY_BYTES, 5L * 1024 * 1024, CostTable.free());
+        return new Capabilities(true, true, false, MAX_KEY_BYTES, 5L * 1024 * 1024, CostTable.free());
     }
 
     @Override

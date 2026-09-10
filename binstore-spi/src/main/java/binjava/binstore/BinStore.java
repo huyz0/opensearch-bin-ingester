@@ -105,4 +105,75 @@ public interface BinStore extends Closeable {
 
     /** What this backend can do; checked at startup, never per request. */
     Capabilities capabilities();
+
+    /**
+     * A short-lived URL reading ONE object without credentials (M5.10,
+     * ADR-0041).
+     *
+     * <p>⚠️ ONE KEY, AND A TTL THE CALLER CHOOSES, per security.md rule 3.
+     * There is deliberately no prefix or bucket form: a grant that covers more
+     * than the object being served is a wider grant than the fetch needs, and
+     * it ends up in the OpenSearch JVM -- as a String, since ADR-0023 keeps
+     * this module out of {@code client} and {@code plugin}, so
+     * {@link SignedUrl}'s redaction does not travel with it.
+     *
+     * <p>⚠️ SIGNING ISSUES NO REQUEST PER SIGNATURE -- to the object store or
+     * to anything else. The qualifier is load-bearing in both directions, and
+     * two earlier drafts each got one of them wrong: "no OBJECT-STORE request"
+     * is satisfied literally by a GCS backend calling
+     * {@code iam.serviceAccounts.signBlob}, since that RPC goes to
+     * {@code iamcredentials.googleapis.com} while still costing a round trip
+     * for every URL; and "no request of ANY kind" is violated literally by the
+     * Azure carve-out below, since {@code getUserDelegationKey} is a request.
+     * PER SIGNATURE is the line: a key fetched once and reused for days is
+     * amortised, a call per URL is not.
+     *
+     * <p>⚠️ AND THE URL NAMES THE KEY IT WAS ASKED FOR, which the conformance
+     * suite asserts and this contract must therefore state.
+     *
+     * <p>⚠️ THE OBJECTION IS NOT non-negotiable 6, and an earlier draft cited
+     * it wrongly: that rule names records, shards, partitions and indices,
+     * while cost.md's invariant PERMITS scaling with nodes and rule 10 says
+     * read cost does. A consumer is one per node, so per-consumer scaling is
+     * allowed. The real objection is simpler and worse: {@code direct} is
+     * chosen per fetch, so a signing round trip DOUBLES the request count on
+     * the one path {@code direct} exists to make cheap -- and it arrives under
+     * exactly the load that made the ingester choose it.
+     *
+     * <p>⚠️ WHICH BACKENDS THIS EXCLUDES, corrected: S3 signs locally from the
+     * credential. An AZURE user-delegation SAS ALSO signs locally -- a
+     * {@code getUserDelegationKey} call yields a key valid for up to seven
+     * days, held by the application, and the SAS itself is a local HMAC, so the
+     * cost amortises the way an STS refresh does on S3. An earlier draft listed
+     * Azure as unable, which would have had the first Azure backend disable
+     * {@code direct} for a reason that is not true. What is excluded is a
+     * signature needing a round trip PER URL -- GCS V4 from a keyless Workload
+     * Identity is the live example. ⚠️ SUCH A BACKEND ADVERTISES
+     * {@code presignedUrls=false} rather than signing remotely.
+     *
+     * <p>⚠️ THE TTL MUST BE POSITIVE, and a backend rejects one that is not.
+     * The upper bound is NOT set here: M5.13 wires it from configuration, and
+     * a ceiling belongs with the thing that reads the configuration. Stated
+     * because security.md rule 3 says short-lived, and "short" is otherwise
+     * asserted by nobody.
+     *
+     * <p>⚠️ THE DEFAULT REFUSES, so a backend that has not implemented this
+     * cannot silently return something unusable. It is paired with
+     * {@link Capabilities#presignedUrls()}: a deployment wanting {@code direct}
+     * calls {@link Capabilities#requirePresignedUrls()} at startup and never
+     * reaches this.
+     *
+     * @param key the single object the grant covers
+     * @param ttl how long the grant lives; must be positive
+     * @throws UnsupportedOperationException if this backend cannot presign,
+     *     which {@link Capabilities#presignedUrls()} reports in advance
+     * @throws IllegalArgumentException if {@code ttl} is zero or negative --
+     *     the conformance suite requires this, and an earlier draft of this
+     *     block documented only the line above
+     */
+    default SignedUrl presign(String key, java.time.Duration ttl) throws IOException {
+        throw new UnsupportedOperationException(
+                "this backend cannot presign (ADR-0041); Capabilities.presignedUrls() "
+                        + "reports that before startup");
+    }
 }

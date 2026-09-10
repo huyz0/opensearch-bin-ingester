@@ -26,7 +26,7 @@ import org.junit.jupiter.api.Test;
  * <p>⚠️ M1 runs the NON-CAS half. Lease, epoch and seal semantics arrive with
  * ADR-0002 in M4 and extend this class rather than replacing it.
  */
-public abstract class BinStoreConformance extends ConditionalWriteConformance {
+public abstract class BinStoreConformance extends PresignConformance {
 
     private static void put(BinStore s, String key, String body) throws Exception {
         s.put(key, Body.ofBytes(bytes(body)));

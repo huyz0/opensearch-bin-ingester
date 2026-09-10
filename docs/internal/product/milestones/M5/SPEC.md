@@ -142,11 +142,25 @@ which is the exact failure this paragraph exists to prevent.
 [`wire-format-change`](../../../../../.agents/skills/wire-format-change/SKILL.md)
 obligations in the commit that makes them: the `BinStore` SPI gaining `presign`
 (the skill's trigger names the store SPI) and the subscription protocol gaining
-session and epoch (it names the subscription protocol). Each needs its ADR, a
-version bump, golden files, every reader and writer and fake updated in one
-commit, and **the read side shipped first** — an old plugin receiving a new
-event shape stalls consumers cluster-wide, and nothing in a functional test
-would catch it.
+session and epoch (it names the subscription protocol). Each needs its ADR,
+every reader and writer and fake updated in one commit, and **the read side
+shipped first** — an old plugin receiving a new event shape stalls consumers
+cluster-wide, and nothing in a functional test would catch it.
+
+⚠️ **AMENDED 2026-09-10 BY M5.10** (sdd.md rule 8 — the spec is amended, not
+worked around). This paragraph and the M5.10 task row below said "a version
+bump, golden files". **Neither applies to the store-SPI half, and both apply to
+the subscription half.** The store SPI is a contract because the skill's table
+says so and its audience is every backend — but it is a Java interface with no
+serialized shape, so there is no version to bump, no old bytes to keep parsing,
+and no round-trip property to test. What DOES apply, and was done: an ADR
+(ADR-0041), every implementation that WRAPS another `BinStore` updated in the
+same commit — `CountingBinStore` in production, plus every fake and test store
+that holds a delegate, found by sweeping the tree for one rather than by
+waiting for review to name them one at a time, the conformance suite green on every backend, and
+the contract document `07-pluggable-store-abstraction.md` bannered. ⚠️ The
+subscription protocol keeps the full list, including the version bump and the
+golden files, because it really does put bytes on a wire.
 
 **Out, explicitly:**
 
@@ -411,7 +425,7 @@ worklist. Until then a reader of this file meets the false answer first.
 | M5.7 | Extend the commit-protocol simulation with pods that forward rather than lead |
 | M5.8 | The membership seam, static implementation, and the AZ-scoped ring |
 | M5.9 | Cross-AZ peer fetch not addressable by construction |
-| M5.10 | ADR + `BinStore.presign` and `Capabilities.presignedUrls`, both backends, conformance, golden files (wire-format-change) |
+| M5.10 | ADR + `BinStore.presign` and `Capabilities.presignedUrls`, both backends, conformance (wire-format-change; ⚠️ no version bump or golden files — an interface has no serialized shape, amended above) |
 | M5.11 | `FetchMode` and the ingester-side selection policy, threshold configurable |
 | M5.12 | `proxy`: stream through, memory flat in consumer count |
 | M5.13 | `direct`: the grant, refused at startup without the capability, never logged |

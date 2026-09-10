@@ -216,3 +216,55 @@ Both die now. ⚠️ A REVIEWER AGREEING WITH THE AUTHOR IS NOT EVIDENCE; the mu
 Made with SKIP=check-reviewed: `check-reviewed.sh` caps at two rounds and has no override path.
 Both reviewers returned pass at round five. ⚠️ THIS ENTRY POST-DATES THOSE VERDICTS and is not
 covered by them.
+
+M5.10 - FIVE ROUNDS, signed under the standing M5 authority; all three conditions hold and each
+is stated here. (1) EVERY PRIOR ROUND FOUND A REAL DEFECT: round one found that `CountingBinStore`
+did not forward `presign` at all, so a capable backend behind the meter passed the startup check
+and threw `UnsupportedOperationException` at the first `direct` fetch -- reproduced by hand before
+it was fixed; round two found the conformance suite's capable branch asserting `isNotBlank()` and
+`isNotNull()`, tautologies restating `SignedUrl`'s own constructor, so a `presign` ignoring its
+`key` or its `ttl` would have passed; round three found the backlog row saying "⚠️ ONLY THE
+GOLDEN-FILE ITEM IS N/A", which by its own word left the version bump applying in a row marked
+done, and found the test reviewer's mutation -- hardcode `presignedUrls = true` in the meter,
+forward everything else -- passing all 1,089 tests; round four found the M5.10 row itself carrying
+FIVE cells in a four-column table, so GFM dropped the cell holding `done` and the rendered State
+column showed the acceptance criteria instead. (2) THE REMAINING FIX WAS SMALL: round five is one
+`@param` line moved within a javadoc, one added test assertion, and four prose corrections.
+(3) NO PRODUCTION LOGIC: the only `src/main` file differing between the round-four and round-five
+diffs is `Capabilities.java`, and the difference is `@param presignedUrls` moving from fifth to
+third so the javadoc matches the record's component order. Verified by diffing the two staged
+patches per file, not asserted.
+
+⚠️ ROUND FOUR REINTRODUCED THE DEFECT THE PRECEDING COMMIT HAD JUST FINISHED REPAIRING. `e9e56aa`
+is "M0.105: correct the State column of every M5 row whose commit already landed"; one commit
+later I wrote a five-cell row in the same table. Two more instances already sit in the tree
+(`M5.34`, `M0.26`), both from a literal `|` inside a code span, which GFM splits on even in
+backticks. This is a predicate over files in the tree, so non-negotiable 9 forbids leaving it to
+an agent: M0.109 opens `check-backlog-table.sh`, and the two existing instances are deliberately
+NOT fixed here because they belong to other rows.
+
+⚠️ FOUR OF THE FIVE ROUNDS FOUND DEFECTS IN THE PREVIOUS ROUND'S PROSE FIX, not in the change.
+The production reviewer said so unprompted at round five and recommended landing on rule 11 rather
+than opening a sixth, on the ground that a round six would review the prose a round-five fix adds.
+That is the same runaway M5.26/M5.27/M5.28 showed, and the remedy is still the one my own notes
+prescribe and I still reached for late: sweep by phrase AND by row ID BEFORE the first review. It
+worked once here -- "no request of ANY kind" had been corrected in `BinStore`'s javadoc and left
+standing in the research-07 banner and a test comment, and a sweep caught both before round five
+rather than after it.
+
+⚠️ THE ROUND COUNTER READS 4 AND THE TRUE COUNT IS 5. Round four's verdicts never went through
+`scripts/review.sh record`, which binds a verdict to the CURRENT staged bytes; by the time both
+came back I had already applied the fixes and the hash had moved. `review_rounds.py` counts
+distinct reviewed hashes, so it cannot see that round. Recording it after the fact would mean
+writing files straight into `.harness/review/` behind the validator, which is precisely the
+self-service escape this file exists to replace, so it was not done.
+
+⚠️ AND `review/verdicts/M5.10/` DOES NOT EXIST, nor do M5.8's or M5.9's. The paragraph at the top
+of this file tells a reader the conditions are checkable against that directory; for the last
+three tasks they are not, and the copying is a manual step nothing enforces. M0.110 opens it.
+
+Six minor findings land under rule 11 and are recorded in the commit body.
+
+Made with SKIP=check-reviewed: `check-reviewed.sh` caps at two rounds and has no override path.
+Both reviewers returned pass at round five. ⚠️ THIS ENTRY POST-DATES THOSE VERDICTS and is not
+covered by them.

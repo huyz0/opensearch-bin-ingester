@@ -176,6 +176,25 @@ public final class CountingBinStore implements BinStore {
         delegate.delete(keys);
     }
 
+    /**
+     * ⚠️ FORWARDED, AND NOT COUNTED. Signing issues no object-store request
+     * (ADR-0041), so counting it would put a floor under every request-rate
+     * criterion that this class exists to measure.
+     *
+     * <p>⚠️ FORGETTING THIS ONE WAS A REAL DEFECT, not a hypothetical: review
+     * MEASURED a capable backend behind this meter passing
+     * {@code requirePresignedUrls()} at startup and then throwing
+     * {@code UnsupportedOperationException} at the first {@code direct} fetch,
+     * blaming a backend that could in fact sign. A {@code default} method on
+     * the SPI cannot force a decorator to forward it -- which is why
+     * {@code CountingBinStoreTest} now runs the whole conformance suite rather
+     * than relying on anyone remembering.
+     */
+    @Override
+    public SignedUrl presign(String key, java.time.Duration ttl) throws java.io.IOException {
+        return delegate.presign(key, ttl);
+    }
+
     @Override
     public Capabilities capabilities() {
         // ⚠️ NOT counted. Capabilities are read at startup from local state and
