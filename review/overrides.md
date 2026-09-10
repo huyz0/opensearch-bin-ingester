@@ -321,3 +321,64 @@ walk buys the next shape rather than the last one, and that the exhaustive answe
 Made with SKIP=check-reviewed: `check-reviewed.sh` caps at two rounds and has no override path.
 Both reviewers returned pass at round three. ⚠️ THIS ENTRY POST-DATES THOSE VERDICTS and is not
 covered by them.
+
+M5.12 - FOUR ROUNDS, signed under the standing M5 authority; all three conditions hold and each is
+stated here with its evidence. (1) EVERY PRIOR ROUND FOUND A REAL DEFECT, and rounds one and two
+each found a BLOCKING one, both of the same kind: THE TEST MEASURED THE WRONG QUANTITY. Round one
+found that hand-off SIZE does not bound the MATERIALISED array, so `readAllBytes()` followed by
+chunk-sized slices -- buffer-then-forward, service memory O(segment), the falsifier M5's SPEC names
+for this row by name -- passed every test I had written. Round two found the fixtures could not
+express failure at all: `write(buffer, 0, read)` weakened to `write(buffer, 0, buffer.length)`
+survived because 1 MiB is an exact multiple of 64 KiB AND `ByteArrayInputStream` always fills, so
+every read in every test was exactly `buffer.length` -- against a real HTTP stream that pads every
+consumer's tail with the previous chunk's leftovers and decodes as corruption. Round three found
+the store stream never failing MID-READ, where a proxy that caught the failure and broke returns
+`live.size()` and REPORTS N CONSUMERS SERVED WHILE ALL N HOLD A TRUNCATED PREFIX. Round four found
+that no test let EVERY consumer die, so an early `break` there converts a broken object into a
+clean return of zero. (2) THE REMAINING FIX WAS SMALL: round four is one test, three deletions of
+dead code, and two javadoc corrections. (3) NO PRODUCTION LOGIC IN THE FINAL ROUND, verified
+mechanically rather than asserted -- I diffed the round-three and round-four staged patches,
+filtered to `*/src/main`, stripped comment lines, and counted ZERO non-comment lines changed. The
+same check across round four to the committed bytes is also zero.
+
+⚠️ THE PRODUCTION MAJORS WERE ALL OVERCLAIMS, NOT BUGS, and that is its own lesson. The code did
+what the row asked; three separate paragraphs claimed it did more. It claimed cost.md R5 ("one
+fetch per object per NODE") for a class that caches nothing; it claimed "a slow or dead consumer
+must not stall" while handling only the dead half; and it justified one-read-per-fan-out as "the
+shape NFR-4 forbids". ⚠️ THAT LAST ONE IS THE INVERSION M5.10's REVIEW ALREADY CORRECTED IN
+`BinStore.presign`'s JAVADOC, written again from scratch here, in three fresh homes. NFR-4 forbids
+scaling with shards, partitions or indices; a consumer is one per NODE, which it allows -- and the
+disproof was in this very milestone's subject, since `direct` IS one GET per consumer and is a
+sanctioned mode. I swept every NFR-4 citation in the tree before fixing this time, which is what my
+own notes prescribe and what I keep reaching for one round too late.
+
+⚠️ THE FILE SPLIT WAS FORCED BY A GATE AND THE SEAM WAS ALREADY THERE. `check-file-size` refused
+`SegmentProxyTest` at 722 lines; code-structure.md rule 1 is split, never raise. What fell out was
+the division the review rounds had been pointing at all along: every defect rounds two through four
+found lived on the FAILURE side and was invisible because the happy-path fixtures could not express
+failure. So `SegmentProxyFailureTest` is not a size-driven cut but the file those four rounds were
+asking for, and `SegmentProxyFixtures.StubStore` -- short reads, zero reads, mid-read failure,
+observable close -- is the instrument `MemoryBinStore` could never be.
+
+⚠️ AND I FOUND TWO DEFECTS IN MY OWN MEASUREMENT METHOD, which matter more than any finding above
+because they affect what every other report in this session was worth. First, `echo BUILD=$?` after
+a pipe reports the exit status of `tail`, not of Gradle: every "BUILD=0" I printed could not have
+detected a failure. The builds were in fact green -- reconfirmed here with the exit code captured
+directly and a forced `--rerun-tasks` -- but the check as written proved nothing, and I quoted it as
+though it did. Second, without `--rerun-tasks` Gradle can serve a cached result from the previous
+mutation, so a live mutation can look like it SURVIVED. I caught one such false survival
+(`!= -1` -> `> 0`) only by re-checking it, and "survived" is the direction that misleads.
+
+⚠️ THE COMMITTED BYTES ARE NOT THE REVIEWED BYTES, and here is exactly how they differ. The
+production reviewer's pass is bound to `9b6ebb8f` (round three) and the test reviewer's to
+`117bb068` (round four). After those verdicts I applied only the round-four minors the test reviewer
+itself raised: one new test closing the every-consumer-died gap (with its mutation verified dead),
+the removal of a dead `lastKeyRequested` field, six unused imports the split left behind, and two
+javadoc sentences that overclaimed -- one saying this test pinned the DEFAULT chunk when review
+measured that it pins only the value it passes in. ⚠️ I did NOT re-bind either verdict to the new
+hash; rewriting `diff_sha256` would forge the one thing the binding exists to prove.
+
+Eight minor findings land under rule 11 and are recorded in the commit body.
+
+Made with SKIP=check-reviewed: `check-reviewed.sh` caps at two rounds and has no override path.
+⚠️ THIS ENTRY POST-DATES BOTH VERDICTS and is not covered by them.
