@@ -86,18 +86,22 @@ which is the exact failure this paragraph exists to prevent.
    `(podId, incarnationId, flushSeq, segmentKey, recordCounts)` — all values,
    meaningful when they arrive from another pod — and `Lease` already carries
    `holderEndpoint`. M4 built both for this.
-2. **The idempotency window must survive a takeover** — `IdempotencyWindow`
-   is process-local, and `Sequencer`'s own javadoc says so: "a replay that
-   crosses a takeover commits twice. Inheriting it is M4.10f." ⚠️ **M4.10f is
-   not in the build and is a backlog row nowhere**, on this branch or the
-   archive. Forwarding is exactly what makes that reachable — a forwarded
+2. **The idempotency window must survive a takeover** — at M5's start
+   `IdempotencyWindow` was process-local and `Sequencer`'s javadoc said so:
+   "a replay that crosses a takeover commits twice. Inheriting it is M4.10f."
+   ⚠️ **M4.10f was not in the build and was a backlog row nowhere**, on this
+   branch or the archive. ⚠️ **DONE at M5.1**; that javadoc sentence is gone. Forwarding is exactly what makes that reachable — a forwarded
    commit whose reply is lost, retried after the lease moves, lands twice — so
    M5 owns it and it lands BEFORE forwarding is wired.
-3. **A retry must reuse its triple.** `DefaultIngest.java:355` writes
-   `flushSeq++` at the commit call site, so a retry mints a DIFFERENT triple
-   and the leaseholder's dedup cannot match it. `Sequencer`'s contract states
-   the consequence and adds "THIS GUARANTEE STOPS AT THIS SEAM and no
-   production caller yet reaches it". M5.6 makes one reach it.
+3. **A retry must reuse its triple.** At M5's start `DefaultIngest` built its
+   `CommitRequest` inside the commit call, so no two attempts could share a
+   triple and the leaseholder's dedup could not match a retry. ⚠️ **DONE at
+   M5.2**, which hoists the request into a named local so it can be held and
+   resent; the `flushSeq++` itself still sits in that constructor call, and
+   moving it was never the point. ⚠️ **NOTHING PINS IT**: review MEASURED that
+   reverting M5.2 leaves the whole suite green, `CommitRetryTripleTest`
+   included. Recorded as M5.32. ⚠️ So this prerequisite is BUILT but not PROVEN,
+   and nothing downstream should read "M5.2 landed" as "the property holds".
 4. **A `SequencerTransport` seam** and its fake, because the remote
    implementation must be testable at T1 without a socket. ⚠️ **The lease is the
    truth about who holds it** (ADR-0012): a peer hint may accelerate, never
@@ -186,26 +190,41 @@ pod B (not leaseholder)                pod A (leaseholder)
 ```
 
 The forwarding pod holds **no** coordination state. It reads the lease to learn
-where to send, sends, and on refusal re-reads. If the lease has moved, the new
+where to send, sends, and on refusal re-reads. ⚠️ **AS LANDED THAT IS THREE
+STORE REQUESTS, NOT ONE**: `FleetSequencer` also attempts an election on every
+commit while it does not lead — a `stat` and a `get` — which the sketch above
+omits. **M5.33**. If the lease has moved, the new
 holder answers; if the request was already applied, M4.10's idempotency answers
 it with the offsets that already apply and appends nothing.
 
-⚠️ **Idempotency is what makes forwarding safe, and TWO OF ITS THREE PARTS ARE
-MISSING.** A forwarded commit whose *response* is lost is the ambiguous case:
-the pod does not know whether it was applied, so it retries. That retry is
-answered rather than duplicated only if all three hold:
+⚠️ **Idempotency is what makes forwarding safe, and ALL THREE OF ITS PARTS ARE
+NOW BUILT** — which is not the same as all three being PROVEN, and the
+difference is spelled out per part below. A forwarded commit whose *response* is lost is the ambiguous case: the
+pod does not know whether it was applied, so it retries. That retry is answered
+rather than duplicated only if all three hold:
 
-1. the key is `(podId, incarnationId, flushSeq)` — **true today** (ADR-0036);
-2. the retry reuses the same triple — **false today**: `DefaultIngest.java:355`
-   writes `flushSeq++` at the call site, and `Sequencer`'s contract says "THIS
-   GUARANTEE STOPS AT THIS SEAM and no production caller yet reaches it";
-3. the window survives a takeover — **false today**: `Sequencer.java:59-61`
-   says "A SUCCESSOR INHERITS NOTHING ... a replay that crosses a takeover
-   commits twice."
+1. the key is `(podId, incarnationId, flushSeq)` — **true** (ADR-0036);
+2. the retry reuses the same triple — **true since M5.2**, which builds the
+   `CommitRequest` once so a resend carries the triple the first attempt used.
+   ⚠️ No production caller resends an ambiguous commit yet: `DefaultIngest` has
+   no retry loop, and `RemoteSequencer` resends only a REFUSED forward. M5.23
+   made such a resend safe; it did not make one happen;
+3. the window survives a takeover — **true since M5.1**, which rebuilds it from
+   the replay crossing from the predecessor, with M5.25 adding the flush whose
+   own commit never returned. ⚠️ **LIMITS REMAIN AND ARE DELIBERATELY NOT
+   COUNTED HERE.** An earlier draft said one, its correction said two, and
+   review then found a third — a replay from below the pointer is REFUSED
+   rather than answered, which this paragraph's "answered rather than
+   duplicated" framing does not cover. **M5.34** enumerates them against the
+   code, in one place, rather than a count in this paragraph going stale a
+   fourth time.
 
-M5.1 and M5.2 supply (3) and (2), and they land **before** M5.6 wires
-forwarding. Wiring it first is duplicate records at committed offsets, which I2
-forbids and no existing test covers.
+M5.1 and M5.2 supplied (3) and (2), and both landed **before** M5.6. Doing it
+the other way round would have meant duplicate records at committed offsets,
+which I2 forbids. ⚠️ **M5.6 BUILDS `FleetSequencer`; it does not wire
+forwarding into production.** Nothing outside tests constructs one, so the
+multi-pod correctness hole does not close at M5 — M5.6e, a production
+`SequencerTransport`, is owned by M8.
 
 **Rejected:** having every pod write the chain directly and race on
 `putIfAbsent`, which is what the tree did before M4. It is safe for I1 —
@@ -258,7 +277,7 @@ namespace for what M5 touches would have found nothing.
 | **R15** *LIST ceiling ~1/s sustained* | Ladder tier 4 is a LIST and is gated behind an explicit recovery action, never a hot path | ⚠️ inherited from M4: 300 plugin nodes scanning breaches it **at fan-out** |
 | **R2** *never LIST on a hot path* | No new LIST on any path M5 adds | 0 |
 | **R18** *never relax a budget to make a check pass* | No budget moves here | — |
-| — | Commit forwarding adds **no object-store request at all**: it is a pod-to-pod RPC, and the leaseholder's commit is the same single PUT it already made | +0 |
+| — | Commit forwarding is a pod-to-pod RPC and the leaseholder's commit is the same single PUT it already made, but it is ⚠️ **NOT free as landed**: **three store requests per follower commit on the non-refusal path** -- `RemoteSequencer` reads the lease (one `get`), and `FleetSequencer` attempts an election (a `stat` and a `get`); it is FOUR when the lease has moved, because `commitAll`'s `NotTheLeaseholderException` arm re-reads it. An earlier draft scored it "+0" and its correction priced two of the three; the COUNT is verified, only the pricing was wrong, and **M5.33** owns that | **+3 per follower commit**, per-flush. ⚠️ Nothing PINS the per-flush shape: review MEASURED that scaling the lease read per `RunKey` -- per stream, the shape non-negotiable 6 forbids by name -- leaves 587 tests green. M5.33 |
 
 ⚠️ `direct` is the one mode adding a consumer-side GET, which is why the
 ingester chooses it and a consumer cannot demand it. ⚠️ **The fan-out threshold
@@ -277,12 +296,18 @@ here, not a constant. M4 applied the same discipline to the lease TTL.
 3. **And that still holds across a takeover.** The retry goes to a NEW
    leaseholder that never saw the original, and is still answered rather than
    appended — which is only true once the window is inherited. ⚠️ **This is the
-   criterion an earlier draft wrote as if already satisfiable.** It is not:
-   `IdempotencyWindow` is process-local today and `Sequencer`'s javadoc says a
-   replay crossing a takeover commits twice.
+   criterion an earlier draft wrote as if already satisfiable.** It was not at
+   M5's start, when `IdempotencyWindow` was process-local; M5.1 inherits it and
+   M5.25 adds the flush whose own commit never returned. ⚠️ **NOT MET
+   UNCONDITIONALLY, and the exceptions are exceptions to THIS criterion**: the
+   limits **M5.34** enumerates are all cases where a retry crossing a takeover
+   is appended or refused rather than answered. Do not mark this verified
+   without reading that row.
 4. **A retry reuses its triple end to end**: killing the reply on the
    *production* path — `DefaultIngest`, not a fake — and retrying produces one
-   delta, not two. Fails today, because `flushSeq++` sits at the call site.
+   delta, not two. ⚠️ **STILL UNMET, and not for the reason first written**:
+   M5.2 makes the request resendable, but no production caller resends an
+   ambiguous commit, so there is no end-to-end retry to observe. M5.32.
 5. **All three fetch modes deliver identical bytes** for the same segment, and
    the mode is chosen by the ingester — a consumer asking for `direct` at
    fan-out > 1 is served something else.
@@ -354,7 +379,7 @@ as invisible to the gate remain so until `check-mutants.sh` is wired.
 | Risk | What reveals it |
 |---|---|
 | Forwarding becomes a second coordination path | Criterion 1's assertion that only the leaseholder writes the chain |
-| Forwarding is wired before a retry is answerable | Criteria 3 and 4, which fail against today's tree by construction |
+| Forwarding is wired before a retry is answerable | Criteria 3 and 4. ⚠️ Criterion 3 holds in the general case since M5.1/M5.25 but NOT unconditionally -- **M5.34** enumerates the retries that are appended or refused instead, and M5.20 must not mark it verified without them. Criterion 4 is still unmet, but because nothing resends an ambiguous commit end to end (M5.32), not for the reason first written |
 | `proxy` buffers under load | Criterion 6's memory bound, at K=64 |
 | `direct` becomes the default by accident | Criterion 5: the ingester chooses, and a consumer cannot demand it |
 | The zero-idle criterion repeats M1's non-proof | Criterion 8 requires a **recorded red** against a serving path that fetches per empty poll, and requires the injected clock to be READ -- M1.16b was withdrawn for a clock that was not |
@@ -363,8 +388,16 @@ as invisible to the gate remain so until `check-mutants.sh` is wired.
 ## Tasks
 
 One commit each. ⚠️ **The first three are prerequisites, not the headline.**
-Forwarding cannot be wired safely until a retry is answerable, and today it is
-not — across a takeover or on the production path.
+Forwarding could not be built safely until a retry was answerable, which at
+M5's start it was not — across a takeover or on the production path. M5.1 and
+M5.2 landed first, in that order, before M5.6. ⚠️ **THIS FILE STILL ANSWERS THE
+OTHER WAY IN PLACES THIS SENTENCE DOES NOT LIST.** It said FOUR, then FIVE, and
+review found further sites each time — four rounds running, including the FR-11
+requirements row above, which is the one `VERIFIED.md` walks. So neither a
+count nor an inventory is asserted here: **`M5.6e`** records the sites KNOWN to
+be false, explicitly as a starting point rather than a complete list, and
+**M5.20** re-sweeps before correcting rather than working that list as a
+worklist. Until then a reader of this file meets the false answer first.
 
 | ID | Task |
 |---|---|
