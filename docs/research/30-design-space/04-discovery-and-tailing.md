@@ -191,6 +191,25 @@ This matters disproportionately at our scale: with ~9,990 trickle indices flushi
 few KB. Sending coordinates and then fetching them is two round trips for something that fits in the
 event.
 
+> ⚠️ **REVISED 2026-09-11 by M5.14 / [ADR-0042](../../internal/product/decisions/0042-the-subscription-event-carries-a-session-and-an-epoch.md).**
+> **The listing below is the shape BEFORE that record** and is kept for the reasoning around it.
+> As shipped, an event carries a **`session`**, a **`sequencerEpoch`** and a **`via`** naming which
+> of the three modes in *"Do the bytes cost a fetch?"* applies. ⚠️ **The epoch shipped is the
+> SEQUENCER's term, NOT §2d's session epoch.** §2d adopts AutoMQ's `SessionId` + `SessionEpoch`,
+> where the epoch is KIP-227's: it orders concurrent requests *within one session* and makes
+> retries idempotent. That is a different counter with a different lifetime, and M5's SPEC
+> criterion 12 calls conflating the two "the obvious defect" — a first draft of this banner did
+> conflate them. ⚠️ **And three fields are GONE**: `byteStart`, `byteLen` and `codec`. cost.md R7
+> puts the header length in the object key, so a reader does one speculative range read that gets
+> the preamble and the directory without GUESSING — which removes the guess, not the lookup, and
+> matters only on the `direct` path. `codec` went for a different reason: it is recorded per run in
+> the segment header (doc 01 §4), so an event carrying it would repeat what the bytes already say.
+> ⚠️ ADR-0042 records the consequence for security.md rule 3's "where possible one range". ⚠️ The event
+> is encoded **binary**, behind a magic-and-version header, rather than as the JSON drawn here;
+> §2a's `HTTP/2 + NDJSON` recommendation is about the CHANNEL and is **not** overturned — the
+> framing is still open, and ADR-0042 records that its fields carry over unchanged if the channel
+> lands as NDJSON.
+
 ```
 <- event: batch
    { "index":"…", "partition":3, "firstOffset":45, "recordCount":128,

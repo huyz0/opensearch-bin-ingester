@@ -439,3 +439,73 @@ uncalled seam in a row, made visible as a row).
 Made with SKIP=check-reviewed. ⚠️ NOT because the round cap was exceeded -- it was not -- but
 because `check-reviewed` binds to the staged bytes, and the three post-verdict edits above moved
 them. ⚠️ THIS ENTRY POST-DATES BOTH VERDICTS and is not covered by them.
+
+M5.14 - FOUR ROUNDS, and ⚠️ THE STANDING M5 AUTHORITY DID NOT REACH THIS ONE. Its third condition
+-- "this round changes NO production logic" -- is FALSE: round three changed four decode guards
+from one-sided to both-sided and corrected an off-by-one in the range guard. I stopped and asked
+rather than sign, and Huy EXTENDED the grant to cover M5.14 specifically, in the same form he used
+for M5.9. This line is signed on that extension, not on the original three conditions, and the
+extension does not carry to any other task. Conditions 1 and 2 do hold and are evidenced below.
+
+⚠️ WHY ROUND THREE HAD TO TOUCH PRODUCTION LOGIC, which is the whole reason this could not be
+signed under the standing terms. `Cursor.uvarint` returns a LONG, so a ten-byte varint with bit 63
+set returns a NEGATIVE one -- for which `> Integer.MAX_VALUE` is false -- and the narrowing cast
+then keeps the low 32 bits. Review MEASURED `0x8000000000000064` decoding with no error to a record
+count of 100, and `0x8000000000000003` to partition 3. That delivers one stream's records under
+another stream's partition and reports a clean stream. ⚠️ `Checkpoint` AND `MembershipFilter` IN
+THE SAME PACKAGE BOTH WRITE `< 0 ||` FOR EXACTLY THIS, and this class's javadoc named them as its
+precedent while checking only one side. All four narrowing sites are now guarded; the reviewer
+re-measured all six uvarint paths and confirmed no fifth site exists.
+
+(1) EVERY PRIOR ROUND FOUND A REAL DEFECT, and rounds one and two each found something no gate
+could see. Round one: the decoder accepted TRAILING BYTES while `ChainEntry`, `Checkpoint` and
+`SegmentReader` all refuse them and this class cited `ChainEntry` as its precedent; and I had
+CONFLATED TWO EPOCHS -- shipping the sequencer term while citing research doc 04 §2d, whose epoch
+is KIP-227's SESSION epoch (it orders concurrent requests within one session and makes retries
+idempotent), which is the conflation M5's SPEC criterion 12 calls "the obvious defect" and which
+M5.15 exists to prevent. Round one also found `lastOffset()` overflowing to -9223372036854775683,
+which my own extremes test had stepped around by using the single record count at that offset where
+the sum still fits. Round two found the bit-63 defect above, and found TWO OF MY OWN ROUND-ONE
+FIXES INCOMPLETE IN THE SAME WAY -- each passing for a reason other than the one it named.
+(2) THE REMAINING FIX WAS SMALL: after both round-three passes, seven minors, all test or prose.
+
+⚠️ THE RECURRING SHAPE ACROSS ALL FOUR ROUNDS IS A TEST THAT PASSES FOR THE WRONG REASON, and it
+cost two extra rounds. My `via` variant changed TWO components, because the pairing invariant
+forbids PROXY with bytes -- so `isNotEqualTo` was satisfied by the array comparison and the `via`
+check stayed unreachable. Both length tests used `0x7FFF_FFFF`, which IS `Integer.MAX_VALUE`, so
+`> Integer.MAX_VALUE` was false, `Cursor` threw first, and neither test asserted a message; review
+proved the vacuity by rewriting one fixture to a COMPLETELY VALID length and watching it stay
+green. And the root cause of the whole decode-side hole was structural: every input the decoder
+ever saw had been produced by our own encoder, so an unknown `via` name silently becoming INLINE,
+and all four bounds guards, were unreachable. `SubscriptionEventMalformedTest` writes bodies BY
+HAND for exactly that reason.
+
+⚠️ AND I SHIPPED A FALSE JUSTIFICATION FOR A GOLDEN FILE. ADR-0042 argued the second fixture was
+needed because "a codec writing the ordinal instead of the name would match the inline file
+whenever INLINE is ordinal 0". It would not -- `via` is a length-prefixed string, so the inline
+fixture alone already fails an ordinal codec. Round three caught it. A false justification is worse
+than none: someone trimming fixtures reasons from it and drops the file, after which nothing pins
+that `via` varies at all.
+
+⚠️ WIRE-FORMAT-CHANGE EXEMPTIONS ARE RECORDED, NOT SKIPPED. Nothing has ever serialized a
+subscription event, so "bytes already in the bucket", "ship the read side first in an earlier
+commit" and "golden files for the old AND new shape" have no subject. Both reviewers verified that
+independently. The version byte is still written and an unknown one still refuses, because the
+first real rollout needs the discriminator already there.
+
+⚠️ THE COMMITTED BYTES ARE NOT THE REVIEWED BYTES. Both round-three verdicts are bound to
+`a9c2b76f`. After them I applied the seven minors those same verdicts raised: three test additions
+(trailing bytes on an INLINE body, the range guard's reject edge, and `hashCode` agreeing with
+`equals` -- all three measured dead before and after), and four prose corrections in ADR-0042 and
+the doc-04 banner. ⚠️ I did NOT re-bind either verdict to the new hash.
+
+Seven minor findings land under rule 11; four are fixed above and three are recorded in the commit
+body. Opened for gaps deliberately left unclosed: M5.44 (the grant and the range coordinates, which
+ADR-0041 assigns to M5.14 by name and this row declined), M5.45 (four seams now exist with no
+production caller, so M5 criteria 5-8 are not demonstrable end to end) and M5.46 (a truncated
+subscription frame reports itself as a corrupt chain entry, because `Cursor`'s two messages both
+name the wrong format).
+
+Made with SKIP=check-reviewed: `check-reviewed.sh` caps at two rounds and has no override path.
+Both reviewers returned pass at round three. ⚠️ THIS ENTRY POST-DATES THOSE VERDICTS and is not
+covered by them.

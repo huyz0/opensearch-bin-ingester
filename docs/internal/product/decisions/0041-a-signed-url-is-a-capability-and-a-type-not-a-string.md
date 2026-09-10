@@ -1,6 +1,6 @@
 # 0041. A signed URL is a capability and a type, not a string
 
-Status: accepted
+Status: accepted — ⚠️ **amended 2026-09-11 by M5.14** on ownership only: the Consequences below assign the grant's delivery to the subscription protocol, and the range scoping to "M5.14's coordinates". M5.14 shipped the event SHAPE ([ADR-0042](0042-the-subscription-event-carries-a-session-and-an-epoch.md)) and deliberately carried NEITHER — `via=DIRECT` says the consumer fetches for itself, and no field yet holds the URL or a byte range. ⚠️ **M5.44 owns both**, and this note exists because the first draft of ADR-0042 deferred them to no row at all, which would have left this record pointing at a task that had already declined the work. The DECISIONS here are untouched.
 Date: 2026-09-10
 Requirements: FR-6, NFR-5
 Research: docs/research/30-design-space/10-client-library-and-fetch-modes.md §2 and §4
