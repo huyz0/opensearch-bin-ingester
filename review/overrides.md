@@ -186,3 +186,33 @@ the file's hash and every edit invalidates all of them.
 ⚠️ THIS ENTRY POST-DATES BOTH ROUND-SIX VERDICTS. Reviewing it needs a seventh round; both
 reviewers returned pass with ZERO findings, so there is nothing left for one to examine. Made
 with SKIP=check-reviewed, which caps at two rounds.
+
+M5.9 - FIVE ROUNDS, and ⚠️ THE STANDING M5 AUTHORITY DID NOT REACH THIS ONE. Condition 3 --
+"this round changes no production logic" -- FAILED: rounds 3, 4 and 5 all changed
+`StaticMembership`. The production reviewer raised that unprompted at round 3 and I agreed and
+stopped rather than sign. Huy was asked and EXTENDED the grant to cover M5.9 specifically, in
+the same message that decided the design question below. This line is signed on that extension,
+not on the original three conditions, and the extension does not carry to any other task.
+
+⚠️ AND ONE ROUND WAS A DESIGN DECISION, NOT A DEFECT. Rounds 3 and 4 overturned a rule I had
+implemented and documented. I had `StaticMembership` REFUSE construction when a pod's own AZ
+disagreed with the configured fleet, arguing that "both sources come from the platform, so a
+disagreement is a configuration fault". Review showed the premise inverted: membership here IS
+configuration -- ADR-0040's own title -- so the FLEET is the stale side, and refusing kills a
+correctly-running pod on its say-so. It also crash-looped a scale-up replica the list had not
+caught up with. Huy chose FLEET WINS, COMPARE BY podId. MEASURED after: two pods disagree on 0
+of 200 segments against 96 before, `localAz()` is 2 peers for a two-pod AZ against 3, and a
+restarted pod owns its 91-segment share by podId while owning nothing by record.
+
+⚠️ THE WORST FINDING WAS ONE ALL THREE OF US GOT WRONG. I deleted M5.8's
+`anAZSCOPEDViewHoldsONLYThatAZSPeers` and argued its coverage was fully replaced; the production
+reviewer checked the merits and agreed, the test reviewer called the replacement stronger. It
+carried `inAz("az-c").isEmpty()`, the only assertion in the tree that ever touched an EMPTY AZ
+view, and it went out with the query it used. Two wrong implementations then passed the whole
+suite: throwing on an empty local AZ (the crash-loop, in the configuration where it is likeliest
+-- the first pod of a new AZ) and adopting another zone's peers (ADR-0012's 419x, restored).
+Both die now. ⚠️ A REVIEWER AGREEING WITH THE AUTHOR IS NOT EVIDENCE; the mutation was.
+
+Made with SKIP=check-reviewed: `check-reviewed.sh` caps at two rounds and has no override path.
+Both reviewers returned pass at round five. ⚠️ THIS ENTRY POST-DATES THOSE VERDICTS and is not
+covered by them.

@@ -36,47 +36,47 @@ class PeerRingTest {
     private static final Peer B1 = new Peer("pod-b1", "10.0.2.1:9000", "az-b");
     private static final Peer B2 = new Peer("pod-b2", "10.0.2.2:9000", "az-b");
 
-    private static Membership all() {
-        return new StaticMembership(List.of(A1, A2, A3, B1, B2));
-    }
-
     private static AzPeers azA(Peer... peers) {
         return new AzPeers("az-a", List.of(peers));
-    }
-
-    /** An AZ-scoped view holds only that AZ's peers. */
-    @Test
-    void anAZSCOPEDViewHoldsONLYThatAZSPeers() {
-        Membership members = all();
-        assertThat(members.inAz("az-a").peers()).containsExactlyInAnyOrder(A1, A2, A3);
-        assertThat(members.inAz("az-b").peers()).containsExactlyInAnyOrder(B1, B2);
-        assertThat(members.inAz("az-c").isEmpty()).isTrue();
     }
 
     /**
      * Another AZ scaling does not move this AZ's owner.
      *
-     * <p>⚠️ IT GUARDS AGAINST AN IMPLEMENTATION THAT LOOKS OUTSIDE ITS
-     * ARGUMENT -- a static fleet, a cache keyed on the whole membership, a
-     * singleton. Review measured that such a version passes every other case
-     * in this file.
+     * <p>⚠️ THE LOOP BELOW NO LONGER GUARDS ANYTHING, and saying so is better
+     * than implying otherwise. Since M5.9 both views are the same VALUE --
+     * review MEASURED {@code before.localAz().equals(after.localAz())} -- so
+     * the 200 iterations are f(x) == f(x). The property moved to
+     * {@link AzPeers}'s constructor, which is the right layer: an
+     * implementation looking outside its argument now dies there rather than
+     * here. What still earns its place is the pair of readbacks at the end,
+     * which pin that the view filters by AZ at all.
      */
     @Test
     void anotherAZSCALINGDoesNotMoveThisAZSOwner() {
-        Membership before = new StaticMembership(List.of(A1, A2, A3, B1));
-        Membership after = new StaticMembership(List.of(A1, A2, A3, B1, B2));
+        // ⚠️ ONE PAIR OF FLEET LISTS, USED FOR BOTH HALVES. Review MEASURED
+        // that building the anti-vacuity readbacks from their own literals let
+        // `after`'s fleet lose B2 -- or az-b entirely -- with this method still
+        // green: the guard could no longer see the change it exists to prove.
+        List<Peer> smallFleet = List.of(A1, A2, A3, B1);
+        List<Peer> grownFleet = List.of(A1, A2, A3, B1, B2);
+        Membership before = new StaticMembership(A1, smallFleet);
+        Membership after = new StaticMembership(A1, grownFleet);
         for (int i = 0; i < 200; i++) {
             String segment = "seg/" + i;
-            assertThat(PeerRing.ownerOf(segment, after.inAz("az-a")))
+            assertThat(PeerRing.ownerOf(segment, after.localAz()))
                     .as("az-b gaining a pod must not move az-a's owner for %s", segment)
-                    .isEqualTo(PeerRing.ownerOf(segment, before.inAz("az-a")));
+                    .isEqualTo(PeerRing.ownerOf(segment, before.localAz()));
         }
         // ⚠️ AND THE TWO FLEETS MUST ACTUALLY DIFFER, or this compares a view
         // with itself. Review MEASURED that a STATIC fleet shared between
         // instances survives the loop above -- az-a filters identically out of
-        // either fleet -- and is killed only by reading az-b back.
-        assertThat(before.inAz("az-b").peers()).containsExactly(B1);
-        assertThat(after.inAz("az-b").peers()).containsExactlyInAnyOrder(B1, B2);
+        // either fleet. Since M5.9 removed the cross-AZ query, the difference
+        // is read from a pod that LIVES in az-b rather than by asking for it.
+        assertThat(new StaticMembership(B1, smallFleet).localAz().peers())
+                .containsExactly(B1);
+        assertThat(new StaticMembership(B1, grownFleet).localAz().peers())
+                .containsExactlyInAnyOrder(B1, B2);
     }
 
     /**
@@ -116,8 +116,8 @@ class PeerRingTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("needs an az");
         // ⚠️ NULL AS WELL AS BLANK -- the same asymmetry `PeerTest` closed for
-        // `Peer`, left open here one class over. `Membership.inAz`'s contract
-        // says a blank OR null az throws, and only this pins the null half.
+        // `Peer`, left open here one class over. (An earlier version of this
+        // comment cited `Membership.inAz`'s contract; M5.9 deleted that method.)
         assertThatThrownBy(() -> new AzPeers(null, List.of()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("needs an az");
@@ -154,9 +154,14 @@ class PeerRingTest {
                     .as("a duplicated podId must not make two pods disagree about %s", segment)
                     .isEqualTo(PeerRing.ownerOf(segment, oneOrder));
         }
-        assertThat(new StaticMembership(List.of(oldAddress, newAddress, other)).inAz("az-a").peers())
-                .as("and the AZ keeps working rather than throwing on every lookup")
-                .hasSize(3);
+        // ⚠️ CONTENTS, NOT SIZE. Review MEASURED that `hasSize(3)` stayed green
+        // while an interim version of `StaticMembership` put self into its own
+        // view twice and erased the other entry -- the count was still 3 and
+        // two pods disagreed on 96 of 200 segments.
+        assertThat(new StaticMembership(oldAddress, List.of(oldAddress, newAddress, other))
+                .localAz().peers())
+                .as("every pod in the AZ sees the same list, duplicates included")
+                .containsExactlyInAnyOrder(oldAddress, newAddress, other);
     }
 
     /** An AZ view cannot be widened after it is built. */

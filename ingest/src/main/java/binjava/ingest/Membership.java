@@ -10,11 +10,14 @@ package binjava.ingest;
  * {@link StaticMembership}. SPEC.md states that as a consequence rather than
  * hiding it.
  *
- * <p>⚠️ THE ONLY QUERY IS AZ-SCOPED, deliberately: a seam that handed back the
- * whole fleet would leave every caller free to mix AZs. ⚠️ THAT IS NOT YET
- * ADR-0012's "enforced in code, not just documented" -- this layer has no
- * notion of the LOCAL pod's AZ, so asking for another AZ is still possible.
- * M5.9 closes that at the fetch path.
+ * <p>⚠️ THERE IS NO QUERY TAKING AN AZ, which is ADR-0012's "enforced in code,
+ * not just documented" AT THIS SEAM -- narrowed rather than closed, since
+ * {@code PeerRing.ownerOf} is public and whoever holds the fleet list can still
+ * build an {@link AzPeers} by hand. M5.8 shipped an {@code inAz(String)} and review
+ * MEASURED an az-a caller naming az-b's peers 20 of 20 times: the type stopped
+ * a MIXED view and nothing stopped the WRONG one. M5.9 removed the query
+ * rather than discouraging it, because no pod needs another AZ's membership --
+ * the ring owner in each AZ is computed by pods in that AZ.
  */
 public interface Membership {
 
@@ -30,19 +33,43 @@ public interface Membership {
     // disagreement ADR-0012 says costs an extra GET into a hard failure.
     // See ADR-0040.
 
+    /** This pod. */
+    Peer self();
+
     /**
-     * The peers in {@code az}, empty if none.
+     * The peers of THIS pod's AZ, as the fleet lists them.
      *
-     * <p>⚠️ RETURNS {@link AzPeers}, NOT A BARE LIST, so what comes back cannot
-     * be widened into a cross-AZ fetch by a caller who forgets. An UNKNOWN az
-     * answers empty, which is normal rather than exceptional: ADR-0012's miss
-     * ladder says the response to no ring owner is to fetch from the object
-     * store -- correct, one extra GET.
+     * <p>⚠️ IT NEED NOT CONTAIN {@link #self}, AND A CALLER MUST NOT ASSUME IT
+     * DOES. After a restart the list still holds this pod's OLD address, and
+     * that entry is what every pod in the AZ sees -- including this one. So
+     * "do I own this segment" is {@code owner.podId().equals(self().podId())},
+     * never {@code owner.equals(self())}, which review MEASURED matching 0 of
+     * 200 segments for a restarted pod.
      *
-     * <p>⚠️ A BLANK OR NULL az THROWS, and that is a different case from an
-     * unknown one: it is a configuration error, not a miss, and degrading it to
-     * a GET would hide an unset AZ variable behind a permanent cost. Stated
-     * because the two look alike at the call site and only one is a ladder rung.
+     * <p>⚠️ AND THAT RULE IS UNCONDITIONAL WHILE A DUPLICATE podId IS NORMAL,
+     * so if both incarnations are briefly live BOTH answer yes and both
+     * prefetch. It is bounded by the overlap window and unlikely under an
+     * ordered StatefulSet restart -- but it is not a few segments:
+     * {@code PeerRing} MEASURED the stale entry winning a pod's WHOLE share.
+     * Which incarnation should stand down is undecided.
+     *
+     * <p>⚠️ THE FLEET WINS BECAUSE AGREEMENT IS THE POINT. Substituting self
+     * in would make this pod's view differ from its neighbours' -- MEASURED at
+     * 96 of 200 segments -- and two pods that disagree about the owner both
+     * fetch, which is the arithmetic the ring exists to protect.
+     *
+     * <p>⚠️ THERE IS NO WAY TO ASK FOR ANOTHER AZ, and that absence IS the
+     * enforcement ADR-0012 demands -- "the peer-fetch path takes an AZ-scoped
+     * member list, so a cross-AZ peer is not addressable by construction rather
+     * than by discipline". M5.8 shipped an {@code inAz(String)} and review
+     * MEASURED an az-a caller naming az-b's peers 20 of 20 times: the type
+     * stopped a MIXED view, nothing stopped the WRONG one.
+     *
+     * <p>⚠️ NO POD EVER NEEDS ANOTHER AZ'S MEMBERSHIP. SPEC.md's prefetch
+     * paragraph says the ring owner in EACH AZ fetches for that AZ, so the
+     * owner elsewhere is computed by pods elsewhere. The query was removed
+     * rather than discouraged because it had no legitimate caller to keep it
+     * for.
      */
-    AzPeers inAz(String az);
+    AzPeers localAz();
 }

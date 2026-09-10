@@ -1,6 +1,29 @@
 # 0040. Membership is a seam whose first implementation is configuration
 
-Status: accepted
+Status: accepted — ⚠️ **AMENDED 2026-09-10 BY M5.9**: the THIRD Consequence below says a cross-AZ
+  fetch is still addressable and that M5.9 owns closing it. M5.9 has landed and closed it AT THIS
+  SEAM, by deleting `inAz(String)` — the seam now offers `self()` and `localAz()` only, so there is
+  no argument with which to name another AZ. Read that Consequence as the state at the time of
+  writing, not as work still owed. The Decision's "its only query is AZ-scoped" now reads: its
+  queries are AZ-scoped and neither takes an AZ. ⚠️ WHAT IS STILL TRUE: anyone HOLDING a fleet list
+  can hand-build an `AzPeers` for any AZ; the seam no longer retains the fleet, so that is narrowed
+  rather than closed. ⚠️ THE DECISION'S THIRD BULLET IS AMENDED THE SAME WAY: "that is not yet
+  ADR-0012's 'enforced in code, not just documented' — see the first consequence" was true when
+  written and is now false, and its pointer named the wrong consequence even then.
+
+  ⚠️ **AND M5.9 DECIDES ONE RULE THIS RECORD DID NOT: THE FLEET WINS, AND NOTHING IS REFUSED.**
+  `localAz()` is exactly the configured peers of the pod's own AZ. `self` is NOT substituted in, so
+  after a restart the view holds the list's OLD entry for this pod — every pod in the AZ therefore
+  computes the identical view and the identical owner. **So "do I own this" is a podId comparison,
+  never a record comparison**: MEASURED, `owner.equals(self())` matches 0 of 200 segments for a
+  restarted pod, and substituting `self` in made two pods disagree on 96 of 200 where the right
+  answer is 0. ⚠️ **AND NOTHING IS REFUSED** — not a `self` the list has not caught up with (that
+  crash-loops a scale-up replica), and not an AZ disagreement. ⚠️ **AN EARLIER DRAFT OF THIS NOTE
+  SAID THE OPPOSITE**, that an AZ disagreement is REFUSED because "both sources come from the
+  platform". That premise is false for this class: membership here IS configuration — this record's
+  own title — so the fleet is the STALE side and refusing kills a correctly-running pod on its
+  say-so. Both refusals contradicted the fourth Consequence below and ADR-0012's rule that a
+  membership disagreement costs an extra GET, never correctness.
 Date: 2026-09-10
 Requirements: NFR-4, NFR-5
 Research: ADR-0012 decides the peer mesh itself — no gossip, membership from a

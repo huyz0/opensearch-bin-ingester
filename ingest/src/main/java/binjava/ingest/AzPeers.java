@@ -18,11 +18,13 @@ import java.util.List;
  * window. {@link PeerRing} settles it instead, with a total order on
  * {@code (podId, endpoint)}.
  *
- * <p>⚠️ IT DOES NOT MAKE A CROSS-AZ FETCH UNADDRESSABLE, and the difference
- * matters because ADR-0012 asks for the second. Nothing here knows the local
- * pod's AZ, so a caller in az-a can still ask for {@code inAz("az-b")} and get
- * a usable view -- review MEASURED 20 of 20. Closing that is M5.9's, at the
- * fetch path, and it needs a notion of "me" that this layer does not have.
+ * <p>⚠️ THIS TYPE ALONE DID NOT MAKE A CROSS-AZ FETCH UNADDRESSABLE. While
+ * {@code Membership} had an {@code inAz(String)}, a caller in az-a could ask
+ * for az-b and get a usable view -- review MEASURED 20 of 20. M5.9 closed that
+ * by removing the query, so the seam now yields only {@code localAz()}.
+ * ⚠️ WHAT REMAINS is that anyone HOLDING a fleet list can still build an
+ * {@code AzPeers} for any AZ by hand; the seam no longer retains the fleet, so
+ * that is narrowed rather than closed.
  */
 public record AzPeers(String az, List<Peer> peers) {
 
