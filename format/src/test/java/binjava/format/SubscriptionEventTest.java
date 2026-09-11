@@ -25,12 +25,12 @@ class SubscriptionEventTest {
     private static final RunKey KEY = new RunKey(INDEX, 7);
 
     private static SubscriptionEvent inlineEvent() {
-        return new SubscriptionEvent("sess-abc", 42L, KEY, "seg/2026/09/11/xyz",
+        return new SubscriptionEvent("sess-abc", 42L, 1L, KEY, "seg/2026/09/11/xyz",
                 1_000L, 128, FetchMode.INLINE, new byte[] {1, 2, 3, 4, 5});
     }
 
     private static SubscriptionEvent coordinatesEvent(FetchMode via) {
-        return new SubscriptionEvent("sess-abc", 42L, KEY, "seg/2026/09/11/xyz",
+        return new SubscriptionEvent("sess-abc", 42L, 1L, KEY, "seg/2026/09/11/xyz",
                 1_000L, 128, via, new byte[0]);
     }
 
@@ -62,22 +62,28 @@ class SubscriptionEventTest {
     void EVERYFieldSurvivesTheRoundTripIndividually() throws Exception {
         SubscriptionEvent base = inlineEvent();
         SubscriptionEvent[] variants = {
-            new SubscriptionEvent("other-session", base.sequencerEpoch(), base.key(), base.segmentKey(),
+            new SubscriptionEvent("other-session", base.sequencerEpoch(), 1L, base.key(), base.segmentKey(),
                     base.firstOffset(), base.recordCount(), base.via(), base.inline()),
-            new SubscriptionEvent(base.session(), 99L, base.key(), base.segmentKey(),
+            new SubscriptionEvent(base.session(), 99L, 1L, base.key(), base.segmentKey(),
                     base.firstOffset(), base.recordCount(), base.via(), base.inline()),
-            new SubscriptionEvent(base.session(), base.sequencerEpoch(),
-                    new RunKey(UUID.fromString("ffffffff-0000-4000-8000-000000000001"), 3),
+            new SubscriptionEvent(base.session(), base.sequencerEpoch(), 1L, new RunKey(UUID.fromString("ffffffff-0000-4000-8000-000000000001"), 3),
                     base.segmentKey(), base.firstOffset(), base.recordCount(), base.via(),
                     base.inline()),
-            new SubscriptionEvent(base.session(), base.sequencerEpoch(), base.key(), "seg/other",
+            new SubscriptionEvent(base.session(), base.sequencerEpoch(), 1L, base.key(), "seg/other",
                     base.firstOffset(), base.recordCount(), base.via(), base.inline()),
-            new SubscriptionEvent(base.session(), base.sequencerEpoch(), base.key(), base.segmentKey(),
+            new SubscriptionEvent(base.session(), base.sequencerEpoch(), 1L, base.key(), base.segmentKey(),
                     2_000L, base.recordCount(), base.via(), base.inline()),
-            new SubscriptionEvent(base.session(), base.sequencerEpoch(), base.key(), base.segmentKey(),
+            new SubscriptionEvent(base.session(), base.sequencerEpoch(), 1L, base.key(), base.segmentKey(),
                     base.firstOffset(), 256, base.via(), base.inline()),
-            new SubscriptionEvent(base.session(), base.sequencerEpoch(), base.key(), base.segmentKey(),
+            new SubscriptionEvent(base.session(), base.sequencerEpoch(), 1L, base.key(), base.segmentKey(),
                     base.firstOffset(), base.recordCount(), base.via(), new byte[] {9, 8, 7}),
+            // ⚠️ THE NINTH COMPONENT. Round-1 review of M5.15a found this set
+            // still varying eight while the record had grown to nine -- every
+            // variant carried the base's `sessionEpoch`, so the method name
+            // stopped being true the moment the field was added.
+            new SubscriptionEvent(base.session(), base.sequencerEpoch(), 99L, base.key(),
+                    base.segmentKey(), base.firstOffset(), base.recordCount(), base.via(),
+                    base.inline()),
         };
         for (SubscriptionEvent variant : variants) {
             assertThat(SubscriptionEvent.decode(variant.encode())).isEqualTo(variant);
@@ -119,6 +125,93 @@ class SubscriptionEventTest {
     }
 
     /**
+     * The two epochs move INDEPENDENTLY -- asserted both ways (criterion 12).
+     *
+     * <p>⚠️ CRITERION 12 SPELLS OUT BOTH DIRECTIONS and this test follows its
+     * wording: "a sequencer failover does not invalidate a session, and a
+     * session reset does not imply a failover -- asserted both ways". One
+     * direction is half the property, and it is the half that looks fine: a
+     * codec that wrote one field twice and never read the other would pass a
+     * test that only ever varied the first.
+     *
+     * <p>⚠️ THE FORMAT CAN ONLY CARRY THE DISTINCTION, not enforce the
+     * behaviour. That a failover genuinely leaves a session ALIVE is a property
+     * of the session registry, which does not exist yet -- M5.15b owns it, and
+     * M5.15c owns the reset half. What is provable here is that the two numbers
+     * are separate fields that survive independently, which is the thing a
+     * later conflation would have to defeat first.
+     */
+    @Test
+    void theTwoEpochsMoveINDEPENDENTLYInBothDirections() throws Exception {
+        SubscriptionEvent base = new SubscriptionEvent("sess-abc", 42L, 3L, KEY, "seg/k",
+                1_000L, 128, FetchMode.PROXY, new byte[0]);
+
+        // A SEQUENCER FAILOVER: the term advances, the session is untouched.
+        SubscriptionEvent afterFailover = new SubscriptionEvent("sess-abc", 43L, 3L, KEY, "seg/k",
+                1_000L, 128, FetchMode.PROXY, new byte[0]);
+        assertThat(SubscriptionEvent.decode(afterFailover.encode())).isEqualTo(afterFailover);
+        assertThat(afterFailover.sessionEpoch())
+                .as("a failover must not disturb the session's own counter")
+                .isEqualTo(base.sessionEpoch());
+        assertThat(afterFailover).isNotEqualTo(base);
+
+        // A SESSION RESET: the session's counter advances, the term is untouched.
+        SubscriptionEvent afterReset = new SubscriptionEvent("sess-abc", 42L, 4L, KEY, "seg/k",
+                1_000L, 128, FetchMode.PROXY, new byte[0]);
+        assertThat(SubscriptionEvent.decode(afterReset.encode())).isEqualTo(afterReset);
+        assertThat(afterReset.sequencerEpoch())
+                .as("and a reset must not read as a failover")
+                .isEqualTo(base.sequencerEpoch());
+        assertThat(afterReset).isNotEqualTo(base);
+
+        // ⚠️ AND THE TWO CHANGES ARE DISTINGUISHABLE AFTER A ROUND TRIP, which
+        // is what "different counters" means operationally: an observer holding
+        // both ENCODED events can say which happened. Round-1 review found this
+        // block asserting `43 != 42` and `3 != 4` through accessors on records
+        // built from those literals three lines above -- nothing decoded, so no
+        // mutation could red it.
+        SubscriptionEvent failoverBack = SubscriptionEvent.decode(afterFailover.encode());
+        SubscriptionEvent resetBack = SubscriptionEvent.decode(afterReset.encode());
+        assertThat(failoverBack.sequencerEpoch())
+                .as("the failover moved the term, on the wire")
+                .isEqualTo(43L);
+        assertThat(failoverBack.sessionEpoch()).isEqualTo(3L);
+        assertThat(resetBack.sequencerEpoch())
+                .as("and the reset did not, on the wire")
+                .isEqualTo(42L);
+        assertThat(resetBack.sessionEpoch()).isEqualTo(4L);
+    }
+
+    /**
+     * A session epoch survives the round trip on its own.
+     *
+     * <p>⚠️ ITS OWN BASE, for the reason round 2 of M5.14 taught: a variant that
+     * moves two components lets {@code isNotEqualTo} be satisfied by the other
+     * one, and the field under test never becomes load-bearing.
+     */
+    @Test
+    void theSessionEpochSurvivesTheRoundTripONITSOWN() throws Exception {
+        SubscriptionEvent one = new SubscriptionEvent("s", 1L, 7L, KEY, "k", 0L, 1,
+                FetchMode.PROXY, new byte[0]);
+        SubscriptionEvent two = new SubscriptionEvent("s", 1L, 8L, KEY, "k", 0L, 1,
+                FetchMode.PROXY, new byte[0]);
+
+        assertThat(one).isNotEqualTo(two);
+        assertThat(SubscriptionEvent.decode(one.encode())).isEqualTo(one);
+        assertThat(SubscriptionEvent.decode(two.encode())).isEqualTo(two);
+        assertThat(SubscriptionEvent.decode(two.encode())).isNotEqualTo(one);
+    }
+
+    /** A negative session epoch is not a request order. */
+    @Test
+    void aNEGATIVESessionEpochIsREFUSED() {
+        assertThatThrownBy(() -> new SubscriptionEvent("s", 1L, -1L, KEY, "k", 0L, 1,
+                        FetchMode.PROXY, new byte[0]))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("not a request order");
+    }
+
+    /**
      * The extremes round-trip: offset 0, and the largest range that fits.
      *
      * <p>⚠️ AN EARLIER VERSION OF THIS JAVADOC CLAIMED `Long.MAX_VALUE`
@@ -136,11 +229,11 @@ class SubscriptionEventTest {
      */
     @Test
     void theEXTREMEOffsetsRoundTrip() throws Exception {
-        SubscriptionEvent zero = new SubscriptionEvent("s", 0L, KEY, "k", 0L, 1,
+        SubscriptionEvent zero = new SubscriptionEvent("s", 0L, 1L, KEY, "k", 0L, 1,
                 FetchMode.PROXY, new byte[0]);
         assertThat(SubscriptionEvent.decode(zero.encode())).isEqualTo(zero);
 
-        SubscriptionEvent huge = new SubscriptionEvent("s", Long.MAX_VALUE, KEY, "k",
+        SubscriptionEvent huge = new SubscriptionEvent("s", Long.MAX_VALUE, 1L, KEY, "k",
                 Long.MAX_VALUE - 1, 1, FetchMode.PROXY, new byte[0]);
         assertThat(SubscriptionEvent.decode(huge.encode())).isEqualTo(huge);
     }
@@ -160,6 +253,26 @@ class SubscriptionEventTest {
         assertThatThrownBy(() -> SubscriptionEvent.decode(bytes))
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("unsupported subscription event version: 99");
+
+        // ⚠️ AND BELOW THE RANGE, not only above it. Round-4 review MEASURED
+        // `if (version > VERSION_2)` surviving all 260 tests: a body with the
+        // correct MAGIC and a version field of ZERO -- which a zeroed or
+        // partly-written header produces -- fell through and parsed as the v1
+        // shape, returning a well-formed event. The shipped guard is a correct
+        // exact-match test; what was missing is anything that would notice a
+        // later DOWNWARD widening.
+        // ⚠️ THIS IS THE THIRD TIME A ONE-SIDED BOUND HAS TURNED UP IN THIS
+        // CODEC: `recordCount` and `partition` were both measured accepting a
+        // bit-63 value at M5.14 because their guards checked only the upper
+        // end, and `Checkpoint`/`MembershipFilter` were the precedent then too.
+        for (int unknown : new int[] {0, -1, Integer.MIN_VALUE}) {
+            byte[] below = inlineEvent().encode();
+            ByteBuffer.wrap(below).order(ByteOrder.BIG_ENDIAN).putInt(4, unknown);
+            assertThatThrownBy(() -> SubscriptionEvent.decode(below))
+                    .as("version %d is not one this build writes", unknown)
+                    .isInstanceOf(IOException.class)
+                    .hasMessageContaining("unsupported subscription event version");
+        }
     }
 
     /** Foreign bytes are refused on the magic, before anything is parsed. */
@@ -212,12 +325,12 @@ class SubscriptionEventTest {
      */
     @Test
     void theVIAAndINLINEPairingIsEnforcedInBothDirections() {
-        assertThatThrownBy(() -> new SubscriptionEvent("s", 1L, KEY, "k", 0L, 1,
+        assertThatThrownBy(() -> new SubscriptionEvent("s", 1L, 1L, KEY, "k", 0L, 1,
                         FetchMode.INLINE, new byte[0]))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("via=INLINE carries the bytes");
 
-        assertThatThrownBy(() -> new SubscriptionEvent("s", 1L, KEY, "k", 0L, 1,
+        assertThatThrownBy(() -> new SubscriptionEvent("s", 1L, 1L, KEY, "k", 0L, 1,
                         FetchMode.PROXY, new byte[] {1}))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("does not carry bytes");
@@ -226,20 +339,20 @@ class SubscriptionEventTest {
     /** The constructor refuses what its messages say it refuses. */
     @Test
     void theConstructorREFUSESWhatItsMessagesSay() {
-        assertThatThrownBy(() -> new SubscriptionEvent("  ", 1L, KEY, "k", 0L, 1,
+        assertThatThrownBy(() -> new SubscriptionEvent("  ", 1L, 1L, KEY, "k", 0L, 1,
                         FetchMode.PROXY, new byte[0]))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("blank session");
-        assertThatThrownBy(() -> new SubscriptionEvent("s", -1L, KEY, "k", 0L, 1,
+        assertThatThrownBy(() -> new SubscriptionEvent("s", -1L, 1L, KEY, "k", 0L, 1,
                         FetchMode.PROXY, new byte[0]))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("not a term");
-        assertThatThrownBy(() -> new SubscriptionEvent("s", 1L, KEY, "k", -1L, 1,
+        assertThatThrownBy(() -> new SubscriptionEvent("s", 1L, 1L, KEY, "k", -1L, 1,
                         FetchMode.PROXY, new byte[0]))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("never negative");
-        assertThatThrownBy(() -> new SubscriptionEvent("s", 1L, KEY, "k", 0L, 0,
+        assertThatThrownBy(() -> new SubscriptionEvent("s", 1L, 1L, KEY, "k", 0L, 0,
                         FetchMode.PROXY, new byte[0]))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("a push of nothing");
-        assertThatThrownBy(() -> new SubscriptionEvent(null, 1L, KEY, "k", 0L, 1,
+        assertThatThrownBy(() -> new SubscriptionEvent(null, 1L, 1L, KEY, "k", 0L, 1,
                         FetchMode.PROXY, new byte[0]))
                 .isInstanceOf(NullPointerException.class).hasMessage("session");
     }
@@ -285,7 +398,7 @@ class SubscriptionEventTest {
     @Test
     void theInlineBytesAreCOPIEDInAndOut() {
         byte[] mine = {1, 2, 3};
-        SubscriptionEvent event = new SubscriptionEvent("s", 1L, KEY, "k", 0L, 1,
+        SubscriptionEvent event = new SubscriptionEvent("s", 1L, 1L, KEY, "k", 0L, 1,
                 FetchMode.INLINE, mine);
         mine[0] = 99;
         assertThat(event.inline()).as("the constructor copied").containsExactly(1, 2, 3);
@@ -304,7 +417,15 @@ class SubscriptionEventTest {
     @Test
     void toStringCarriesNODocumentPayload() {
         byte[] secret = "TOPSECRETDOCUMENTBODY".getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        SubscriptionEvent event = new SubscriptionEvent("s", 1L, KEY, "k", 0L, 1,
+        // ⚠️ DISTINCT VALUES FOR THE TWO EPOCHS. Round-3 review MEASURED that
+        // with both at 1, swapping the two LABELS in `toString` survived --
+        // `sequencerEpoch=1` and `sessionEpoch=1` are both present whichever
+        // value sits under whichever name. This is the only test in the tree
+        // asserting `toString`, so nothing else could catch it, and the line it
+        // pins is the one this row's own comment calls "the line that has to
+        // answer 'was that a failover or a reset?'". Answering it BACKWARDS is
+        // worse than not answering it at all.
+        SubscriptionEvent event = new SubscriptionEvent("s", 1L, 2L, KEY, "k", 0L, 1,
                 FetchMode.INLINE, secret);
         assertThat(event.toString())
                 .as("the payload is the thing rule 4 forbids")
@@ -320,6 +441,13 @@ class SubscriptionEventTest {
                 .as("and everything a reader needs to identify the delivery is present")
                 .contains("session=s")
                 .contains("sequencerEpoch=1")
+                // ⚠️ AND THE SESSION EPOCH, which is the field that makes the
+                // printed line able to answer "failover or reset?" -- the
+                // question this row exists to make answerable. Round-1 review
+                // found `equals` and `hashCode` had gained it and `toString`
+                // had not; adding it to the class without adding it here would
+                // have left the omission free to come back.
+                .contains("sessionEpoch=2")
                 .contains(KEY.toString())
                 .contains("segmentKey=k")
                 .contains("firstOffset=0")
@@ -330,7 +458,7 @@ class SubscriptionEventTest {
     /** {@code lastOffset} is inclusive, matching {@code SubscriptionHub.Push}. */
     @Test
     void lastOffsetIsINCLUSIVE() {
-        assertThat(new SubscriptionEvent("s", 1L, KEY, "k", 1_000L, 128,
+        assertThat(new SubscriptionEvent("s", 1L, 1L, KEY, "k", 1_000L, 128,
                 FetchMode.PROXY, new byte[0]).lastOffset()).isEqualTo(1_127L);
     }
 }

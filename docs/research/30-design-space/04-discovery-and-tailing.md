@@ -199,7 +199,8 @@ event.
 > where the epoch is KIP-227's: it orders concurrent requests *within one session* and makes
 > retries idempotent. That is a different counter with a different lifetime, and M5's SPEC
 > criterion 12 calls conflating the two "the obvious defect" — a first draft of this banner did
-> conflate them. ⚠️ **And three fields are GONE**: `byteStart`, `byteLen` and `codec`. cost.md R7
+> conflate them. ⚠️ **Since M5.15a the event carries BOTH**: `sequencerEpoch` and `sessionEpoch`,
+> at version 2, with §2d's counter finally present under its own name. ⚠️ **And three fields are GONE**: `byteStart`, `byteLen` and `codec`. cost.md R7
 > puts the header length in the object key, so a reader does one speculative range read that gets
 > the preamble and the directory without GUESSING — which removes the guess, not the lookup, and
 > matters only on the `direct` path. `codec` went for a different reason: it is recorded per run in

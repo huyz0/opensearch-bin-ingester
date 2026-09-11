@@ -18,24 +18,41 @@ import java.util.Objects;
  * which is a different fact from "you missed something" and must not be
  * inferred from an offset gap.
  *
- * <p>⚠️ THERE ARE TWO EPOCHS AND THIS IS THE SEQUENCER'S. M5's SPEC criterion
- * 12 names conflating them as "the obvious defect", and round-1 review caught
- * this record doing exactly that -- shipping the sequencer term while citing
- * research doc 04 §2d, which describes KIP-227's SESSION epoch: a counter that
- * orders concurrent requests within one session and makes retries idempotent.
- * The field is named for which one it is so the second cannot be added by
- * accident on top of it. M5.15 owns resume and keeping them distinct.
+ * <p>⚠️ BOTH EPOCHS ARE HERE NOW, AND THEY ARE DIFFERENT COUNTERS.
+ * {@code sequencerEpoch} is the chain key's TERM; {@code sessionEpoch} is
+ * KIP-227's, ordering concurrent requests within one session. SPEC criterion 12
+ * requires the distinction ASSERTED BOTH WAYS: a sequencer failover does not
+ * invalidate a session, and a session reset does not imply a failover.
  *
- * <p>⚠️ THERE IS NO OLD SHAPE, AND SAYING SO IS PART OF THE OBLIGATION.
- * {@code wire-format-change}'s checklist asks what happens to bytes already in
- * the bucket and requires the read side to ship first, in an earlier commit.
- * Both assume a deployed writer. Nothing has ever serialized a subscription
- * event: {@code SubscriptionTransport} is an in-process seam,
- * {@code ConsumerClient} decodes SEGMENT bytes rather than events, and the
- * production transport (M1.11b) is still unbuilt. So this format has no bytes
- * in any bucket -- the protocol is not persisted at all -- and no old peer
- * speaks it. The exemption is recorded rather than the item skipped, the way
- * M5.10 recorded that a Java interface has no serialized form.
+ * <p>⚠️ M5.14 SHIPPED ONLY THE FIRST AND MIS-CITED IT as research doc 04 §2d's
+ * -- which is the session epoch -- and round-1 review caught it. Naming the
+ * field for which epoch it was is what made adding the second an addition
+ * rather than a reinterpretation. ⚠️ THE FORMAT CAN ONLY CARRY THE
+ * DISTINCTION; whether a failover actually leaves a session alive is
+ * behavioural and needs the session registry, which is M5.15b's.
+ *
+ * <p>⚠️ THERE IS AN OLD SHAPE NOW, AND THERE DID NOT USED TO BE. M5.14 shipped
+ * v1 and recorded honestly that "bytes already in the bucket", "ship the read
+ * side first" and "golden files for the old AND new shape" had NO SUBJECT --
+ * nothing had ever serialized a subscription event. M5.15a added
+ * {@link #sessionEpoch}, so v1 is a real previous shape with real stored bytes
+ * ({@code subscription-event-*-v1.bin}) and this decoder reads both.
+ *
+ * <p>⚠️ THIS PARAGRAPH SURVIVED THREE ROUNDS OF REVIEW SAYING THE OPPOSITE, and
+ * how is worth recording. Round one found it; my fix was a SILENT NO-OP,
+ * because I searched for "rather than the event" where the file said "rather
+ * than events" and {@code String.replace} returns the string unchanged. Round
+ * two found it again; that fix applied and was then REVERTED by a
+ * mutation-testing restore from a snapshot taken before it. Round three found
+ * it a third time. What a reader does with the stale version is concrete: told
+ * no bytes in this shape exist, they delete the
+ * {@code version == VERSION_2 ? c.uvarint() : SESSION_EPOCH_ABSENT} branch or
+ * regenerate the v1 fixtures, and every v1 event becomes unreadable.
+ *
+ * <p>⚠️ "SHIP THE READ SIDE FIRST, IN AN EARLIER COMMIT" IS STILL EXEMPT, and
+ * that half has not changed: the reader that understands both shapes and the
+ * writer that emits v2 land together, and no peer has ever spoken either shape
+ * across a process, so there is nobody to lag behind.
  *
  * <p>⚠️ THE VERSION IS STILL WRITTEN AND AN UNKNOWN ONE STILL REFUSES, because
  * the first real rollout needs the discriminator to already be there. Adding it
@@ -51,6 +68,17 @@ import java.util.Objects;
  *
  * @param session identifies this subscription across reconnects. ⚠️ Opaque to
  *     the consumer: it is the ingester's to mint and the consumer's to echo
+ * @param sessionEpoch KIP-227's counter: it orders concurrent requests WITHIN
+ *     one session and makes a retry idempotent. ⚠️ NOT THE SEQUENCER'S TERM,
+ *     and SPEC criterion 12 calls conflating the two "the obvious defect" --
+ *     a sequencer failover must not invalidate a session, and a session reset
+ *     must not imply a failover. They move independently and neither can be
+ *     derived from the other. ⚠️ Numbered from 1 by whatever mints them, which
+ *     is M5.15b's. {@link #SESSION_EPOCH_ABSENT} means the event carries no
+ *     session epoch -- USUALLY a v1 writer that had no such field, and possibly
+ *     a current writer that failed to set one, because {@code encode} emits v1
+ *     for an absent epoch. ⚠️ DO NOT READ IT AS "old peer": see
+ *     {@link #encode()} for why the two are indistinguishable on the wire
  * @param sequencerEpoch the sequencer TERM this event was produced under.
  *     ⚠️ A CHANGE means the sequencer moved, not that records were lost.
  *     ⚠️ NAMED FOR WHICH EPOCH IT IS, because there are two and M5's SPEC
@@ -59,8 +87,10 @@ import java.util.Objects;
  *     different counter -- KIP-227's SESSION epoch, which orders concurrent
  *     requests within one session and makes retries idempotent -- and an
  *     earlier draft of this record shipped the sequencer term while citing
- *     that section for it. When the session epoch arrives it is a second
- *     field, not this one
+ *     that section for it. ⚠️ It ARRIVED in M5.15a as a SECOND field --
+ *     {@code sessionEpoch}, documented above -- rather than as a
+ *     reinterpretation of this one, which is what naming this field for its own
+ *     epoch bought
  * @param key which stream advanced
  * @param segmentKey the object the records live in
  * @param firstOffset the offset of the first record in this push
@@ -71,14 +101,50 @@ import java.util.Objects;
  *     ⚠️ EMPTY RATHER THAN NULL, so a decoder never has to distinguish
  *     "absent" from "zero-length" -- the case a nullable field gets wrong
  */
-public record SubscriptionEvent(String session, long sequencerEpoch, RunKey key, String segmentKey,
-        long firstOffset, int recordCount, FetchMode via, byte[] inline) {
+public record SubscriptionEvent(String session, long sequencerEpoch, long sessionEpoch,
+        RunKey key, String segmentKey, long firstOffset, int recordCount, FetchMode via,
+        byte[] inline) {
 
     /** ⚠️ Distinct from {@code ChainEntry}'s: a different protocol, a different namespace. */
     public static final int MAGIC = 0x42535542;
 
-    /** The only version that has ever existed. */
+    /**
+     * The first shape: no session epoch.
+     *
+     * <p>⚠️ STILL DECODABLE, and that is the point of having written a version
+     * byte before there was anything to discriminate. M5.14 recorded "golden
+     * files for the old AND new shape" as having no subject because nothing had
+     * ever been serialized; two v1 golden files are now in the tree, so the
+     * item has one and is met rather than waived.
+     */
     public static final int VERSION_1 = 1;
+
+    /** Adds {@link #sessionEpoch}. Written by {@link #encode}. */
+    public static final int VERSION_2 = 2;
+
+    /**
+     * What a v1 event's session epoch reads as: there was no such field.
+     *
+    ABSENT IS NOT ZERO-THE-NUMBER. Collapsing the two would
+     * make a v1 event indistinguishable from a session at its very first
+     * request, and a consumer resuming on it would claim a position it was
+     * never given.
+     *
+     * <p>⚠️ "A LIVE SESSION NEVER USES THIS VALUE" IS AN INVARIANT THIS CLASS
+     * DOES NOT PROVIDE, and an earlier version of this paragraph stated it
+     * flatly -- the THIRD home of a claim round 3 removed from two others. What
+     * the format guarantees is narrower: no v2 body may carry the sentinel. A
+     * WRITER holding zero is not stopped here, because the compact constructor
+     * refuses only a negative epoch and {@code encode} turns zero into a
+     * well-formed v1 body. **M5.15b owns "a live writer never emits ABSENT"**,
+     * and reading this as a guarantee already in place is exactly how a
+     * registry defaulting a {@code long} to zero ships.
+     *
+     * <p>⚠️ A CONSUMER SEEING THIS CANNOT RESUME on that event and falls back
+     * to the commit log, which is what the log is for -- the same answer this
+     * decoder gives for an unknown version.
+     */
+    public static final long SESSION_EPOCH_ABSENT = 0L;
 
     public SubscriptionEvent {
         Objects.requireNonNull(session, "session");
@@ -91,6 +157,10 @@ public record SubscriptionEvent(String session, long sequencerEpoch, RunKey key,
         }
         if (sequencerEpoch < 0) {
             throw new IllegalArgumentException("an epoch of " + sequencerEpoch + " is not a term");
+        }
+        if (sessionEpoch < 0) {
+            throw new IllegalArgumentException(
+                    "a session epoch of " + sessionEpoch + " is not a request order");
         }
         if (firstOffset < 0) {
             throw new IllegalArgumentException("offsets are never negative");
@@ -162,7 +232,8 @@ public record SubscriptionEvent(String session, long sequencerEpoch, RunKey key,
         if (!(other instanceof SubscriptionEvent that)) {
             return false;
         }
-        return sequencerEpoch == that.sequencerEpoch && firstOffset == that.firstOffset
+        return sequencerEpoch == that.sequencerEpoch && sessionEpoch == that.sessionEpoch
+                && firstOffset == that.firstOffset
                 && recordCount == that.recordCount
                 && session.equals(that.session) && key.equals(that.key)
                 && segmentKey.equals(that.segmentKey) && via == that.via
@@ -171,7 +242,7 @@ public record SubscriptionEvent(String session, long sequencerEpoch, RunKey key,
 
     @Override
     public int hashCode() {
-        return Objects.hash(session, sequencerEpoch, key, segmentKey, firstOffset, recordCount, via)
+        return Objects.hash(session, sequencerEpoch, sessionEpoch, key, segmentKey, firstOffset, recordCount, via)
                 * 31 + java.util.Arrays.hashCode(inline);
     }
 
@@ -183,7 +254,16 @@ public record SubscriptionEvent(String session, long sequencerEpoch, RunKey key,
      */
     @Override
     public String toString() {
-        return "SubscriptionEvent[session=" + session + ", sequencerEpoch=" + sequencerEpoch + ", key=" + key
+        return "SubscriptionEvent[session=" + session
+                + ", sequencerEpoch=" + sequencerEpoch
+                // ⚠️ BOTH EPOCHS, because this is the printed line that has to
+                // answer "was that a failover or a reset?" -- the question this
+                // whole row exists to make answerable. Round-1 review found
+                // `equals` and `hashCode` had gained the field and `toString`
+                // had not, so the object could distinguish the two cases while
+                // nothing a human reads could.
+                + ", sessionEpoch=" + sessionEpoch
+                + ", key=" + key
                 + ", segmentKey=" + segmentKey + ", firstOffset=" + firstOffset
                 + ", recordCount=" + recordCount + ", via=" + via
                 + ", inline=" + inline.length + " bytes]";
@@ -197,10 +277,41 @@ public record SubscriptionEvent(String session, long sequencerEpoch, RunKey key,
         return head.array();
     }
 
-    /** This event's bytes, at {@link #VERSION_1}. */
+    /**
+     * This event's bytes: {@link #VERSION_2} when it carries a session epoch,
+     * {@link #VERSION_1} when it does not.
+     *
+     * <p>⚠️ THE VERSION FOLLOWS THE FIELD, which is what makes
+     * {@link #SESSION_EPOCH_ABSENT} out-of-band rather than a magic number
+     * inside the v2 range. An event with no session epoch IS a v1 event, so
+     * there is no v2 body that can carry the sentinel and no way for a live
+     * epoch to be mistaken for its absence.
+     *
+     * <p>⚠️ ROUND-1 REVIEW MEASURED THE COLLISION: a v2 event built with epoch 0
+     * encoded, decoded and read back as ABSENT, while the record javadoc, the
+     * ADR and a test all claimed "session epochs number from 1" and nothing
+     * enforced it. This rule removes the CONTRADICTION -- no v2 body can say
+     * both things at once.
+     *
+     * <p>⚠️ IT DOES NOT STOP A WRITER FROM HOLDING ZERO, and round-2 review was
+     * right to say so. A registry that leaves a {@code long} at Java's default
+     * still produces events; they are now stamped {@code VERSION_1},
+     * indistinguishable from a legitimately old writer, where before they were
+     * a self-contradictory v2 body a peer could refuse. ⚠️ THAT IS A REAL COST
+     * OF THIS RULE: the version byte describes the PAYLOAD, not the writer.
+     * ⚠️ And once M5.15b mints from 1, nothing legitimate emits v1 -- so a v1
+     * event on the wire is a bug this format cannot report. **M5.15b owns "a
+     * live writer never emits ABSENT"**; it is a minting invariant, not a codec
+     * one.
+     *
+     * <p>⚠️ SO A v1 EVENT ROUND-TRIPS TO v1 BYTES, which is stronger than the
+     * decode-only compatibility this started with: bytes read from an old
+     * writer and written back are byte-identical.
+     */
     public byte[] encode() {
+        boolean carriesSessionEpoch = sessionEpoch != SESSION_EPOCH_ABSENT;
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        out.writeBytes(header(VERSION_1));
+        out.writeBytes(header(carriesSessionEpoch ? VERSION_2 : VERSION_1));
         putString(out, session);
         SegmentWriter.putUvarint(out, sequencerEpoch);
         // ⚠️ THE UUID AS ITS TWO LONGS, not as text. A `UUID.toString` costs 36
@@ -218,6 +329,13 @@ public record SubscriptionEvent(String session, long sequencerEpoch, RunKey key,
         putString(out, via.name());
         SegmentWriter.putUvarint(out, inline.length);
         out.writeBytes(inline);
+        // ⚠️ APPENDED, not inserted beside `sequencerEpoch` where it reads
+        // better. A v2 body is then a v1 body plus one field, which keeps
+        // `decode` linear and makes the relationship between the two golden
+        // files legible to anyone diffing them.
+        if (carriesSessionEpoch) {
+            SegmentWriter.putUvarint(out, sessionEpoch);
+        }
         return out.toByteArray();
     }
 
@@ -248,7 +366,7 @@ public record SubscriptionEvent(String session, long sequencerEpoch, RunKey key,
             throw new IOException("not a subscription event: magic " + Integer.toHexString(magic));
         }
         int version = b.getInt(4);
-        if (version != VERSION_1) {
+        if (version != VERSION_1 && version != VERSION_2) {
             // ⚠️ REFUSED, NOT SKIPPED -- see the class javadoc. A consumer that
             // ignored an event it could not read would report a clean stream
             // while losing records.
@@ -274,6 +392,28 @@ public record SubscriptionEvent(String session, long sequencerEpoch, RunKey key,
             throw new IOException("inline length " + inlineLength + " does not fit an array");
         }
         byte[] inline = c.bytes((int) inlineLength);
+        // ⚠️ THE READ SIDE UNDERSTANDS BOTH SHAPES, which is the half of
+        // `wire-format-change`'s "ship the read side first" that is reachable
+        // in one commit: a reader built today parses what a v1 writer produced,
+        // and a v1 event's session epoch reads as ABSENT rather than as zero.
+        long sessionEpoch = version == VERSION_2 ? c.uvarint() : SESSION_EPOCH_ABSENT;
+        if (sessionEpoch < 0) {
+            throw new IOException("session epoch " + sessionEpoch + " is not a request order");
+        }
+        // ⚠️ A v2 BODY MAY NOT CARRY THE SENTINEL, so the value is out of band
+        // for v2: no sender can emit 0 at v2 and leave a reader unable to tell
+        // "this session is at request zero" from "this writer had no such
+        // field".
+        // ⚠️ WHAT THIS DOES NOT MAKE TRUE is "session epochs number from 1" --
+        // an earlier version of this comment claimed it did. The compact
+        // constructor refuses only a NEGATIVE epoch, and `encode` turns 0 into
+        // a well-formed v1 body, so a writer holding zero is not stopped here
+        // or anywhere in this class. That is a MINTING invariant and M5.15b
+        // owns it.
+        if (version == VERSION_2 && sessionEpoch == SESSION_EPOCH_ABSENT) {
+            throw new IOException("a version 2 event may not carry an absent session epoch; "
+                    + "an event without one is version 1");
+        }
         // ⚠️ TRAILING BYTES ARE A REFUSAL, matching every other decoder here:
         // `ChainEntry`, `Checkpoint` and `SegmentReader` all end with this
         // check. Bytes after a complete event mean the sender and this reader
@@ -309,7 +449,7 @@ public record SubscriptionEvent(String session, long sequencerEpoch, RunKey key,
             throw new IOException("partition " + partition + " does not fit a RunKey");
         }
         try {
-            return new SubscriptionEvent(session, sequencerEpoch,
+            return new SubscriptionEvent(session, sequencerEpoch, sessionEpoch,
                     new RunKey(new java.util.UUID(indexHi, indexLo), (int) partition), segmentKey,
                     firstOffset, (int) recordCount, mode, inline);
         } catch (IllegalArgumentException malformed) {

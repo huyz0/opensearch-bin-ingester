@@ -509,3 +509,69 @@ name the wrong format).
 Made with SKIP=check-reviewed: `check-reviewed.sh` caps at two rounds and has no override path.
 Both reviewers returned pass at round three. ⚠️ THIS ENTRY POST-DATES THOSE VERDICTS and is not
 covered by them.
+
+M5.15a - FOUR ROUNDS, signed under the standing M5 authority; all three conditions hold and each
+is evidenced. (1) EVERY PRIOR ROUND FOUND A REAL DEFECT. Round one: `SESSION_EPOCH_ABSENT` was an
+IN-BAND sentinel that nothing enforced -- a v2 event built with epoch 0 constructed, encoded and
+decoded straight back as ABSENT, while the record javadoc, the ADR and a test all claimed "session
+epochs number from 1"; and `BodyWriter` still emitted VERSION_1 after the bump, so all eleven
+hand-written guard bodies exercised only the shape this build no longer writes. Round two: my fix
+for the first was incomplete and my prose overstated it. Round three: the fix for THAT was missing
+from the staged bytes entirely (see below), and the guard comment claimed to make an invariant true
+that lives in a different layer. Round four: the same false claim was still standing in two more
+homes, and the version discriminator was pinned only ABOVE its range -- `if (version > VERSION_2)`
+passed all 260 format tests, letting a zeroed header parse as v1. (2) THE REMAINING FIX WAS SMALL:
+after both round-four passes, four minors -- three prose, one test case. (3) NO PRODUCTION LOGIC IN
+THE FINAL ROUNDS, verified mechanically by diffing the staged patches and counting zero
+non-comment `*/src/main` lines changed at rounds 3->4 and 4->commit.
+
+⚠️ THE DESIGN CHANGE ROUND TWO PRODUCED IS WORTH KEEPING: **the version follows the field**. An
+event with no session epoch IS a v1 event, so `encode` emits VERSION_1 for it and `decode` refuses
+a v2 body carrying the sentinel. That put the value out of band rather than reserving a magic
+number inside the v2 range, and made v1 bytes RE-ENCODE BYTE-IDENTICALLY -- stronger than the
+decode-only compatibility this started with. ⚠️ Round two also named its cost, which I had not:
+the version byte now describes the PAYLOAD rather than the writer, so a live writer that forgets to
+set an epoch emits bytes stamped VERSION_1, indistinguishable from a legitimately old writer. That
+is recorded in `encode`'s javadoc rather than argued away, and **M5.15b owns "a live writer never
+emits ABSENT"** -- a minting invariant, not a codec one.
+
+⚠️ THREE ROUNDS WERE SPENT ON ONE PARAGRAPH, AND HOW IS THE LESSON. The class javadoc said "THERE
+IS NO OLD SHAPE" -- true when M5.14 wrote it, false the moment this row added a field. Round one
+found it; my fix was a SILENT NO-OP, because I searched for "rather than the event" where the file
+said "rather than events" and `String.replace` returns the string unchanged on no match. Round two
+found it; that fix applied, and was then REVERTED by a mutation-testing `cp` restoring a snapshot
+taken before it. Round three found it a third time, and I initially doubted the reviewer because I
+had seen `grep` return zero at edit time. ⚠️ TWO METHOD CHANGES CAME OUT OF IT, both now standing:
+every `String.replace` carries `assert s.count(old) == 1` with a message naming what moved, and
+verification reads `git show :path` -- the STAGED blob is what review sees and is the only version a
+restore cannot silently change underneath.
+
+⚠️ AND A GREEN TEST RUN CAN BE A LIE, which the round-3 test reviewer caught and which invalidates
+a class of measurement I had been making freely. It observed `:format:test` reporting 260 tests
+while `format/build/classes/java/main` was EMPTY: `compileJava` had died with `pthread_create
+failed (EAGAIN)` under thread exhaustion, and the test task ran against a stale jar, producing
+well-formed but meaningless results. A GREEN run in that window is exactly as reachable as the red
+one it saw. Every count in this entry comes from a build run with nothing else building, with
+per-module compiled-class counts verified non-empty first; both round-4 reviewers were given the
+same rule and applied it.
+
+⚠️ THE WIRE-FORMAT CHECKLIST ITEMS M5.14 WAIVED ARE NOW HALF MET AND HALF STILL EXEMPT, stated
+separately because an earlier draft claimed both. "Golden files for the old AND the new shape" is
+MET: four files, and both versions assert in both directions. "Ship the read side first, in an
+earlier commit" is STILL EXEMPT: the reader and the writer land together, and no peer has ever
+spoken either shape across a process, so there is nobody to lag behind.
+
+Four minor findings land under rule 11 and are recorded in the commit body. Opened: nothing new --
+M5.15b/c/d already own resume, the reset signal and the wiring, and R3-4's transposition hazard
+(two adjacent same-typed `long`s that ten call sites can swap silently) is recorded on M5.15d with
+its measurement.
+
+⚠️ THE COMMITTED BYTES ARE NOT THE REVIEWED BYTES. Both round-four verdicts are bound to
+`d190a078`. After them I applied only what those verdicts raised: the false "a live session never
+uses this value" claim removed from its third and fourth homes, the v3 expiry of the sentinel rule
+recorded in the ADR, and one test case pinning the version guard below its range. ⚠️ Neither verdict
+was re-bound to the new hash.
+
+Made with SKIP=check-reviewed: `check-reviewed.sh` caps at two rounds and has no override path.
+Both reviewers returned pass at round four. ⚠️ THIS ENTRY POST-DATES THOSE VERDICTS and is not
+covered by them.

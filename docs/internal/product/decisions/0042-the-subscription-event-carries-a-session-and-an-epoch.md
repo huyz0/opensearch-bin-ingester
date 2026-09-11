@@ -1,13 +1,14 @@
 # 0042. The subscription event carries a session and an epoch
 
-Status: accepted
+Status: accepted — ⚠️ **amended 2026-09-11 by M5.15a**, which adds the SECOND epoch this record named as a future field. `sessionEpoch` (KIP-227's, ordering requests within one session) joins `sequencerEpoch` (the chain key's term) at **VERSION_2**. ⚠️ The Consequences below say "there is no old shape" and that the checklist items assuming one had no subject — **that was true when written and is no longer**: two v1 golden files are in the tree, v1 stays decodable, and both shapes now have golden files. The version byte written against exactly this day is what made it possible. See *Amendment: the second epoch* at the end.
 Date: 2026-09-11
 Requirements: FR-6, NFR-9
 Research: docs/research/30-design-space/04-discovery-and-tailing.md §2c (the event
   shape); §"Do the bytes cost a fetch?" defines the three `via` modes this event
   carries. ⚠️ §2d describes a session-based incremental subscription adopted from
-  AutoMQ's `SessionId` + `SessionEpoch` — that SESSION epoch is **not** the field
-  shipped here, see the Decision.
+  AutoMQ's `SessionId` + `SessionEpoch`. Its SESSION epoch was **not** shipped by
+  M5.14 — which cited it for the sequencer's term, the defect round-1 review
+  caught — and **is** shipped by M5.15a as `sessionEpoch`, alongside it.
   docs/research/30-design-space/10-client-library-and-fetch-modes.md §5 gives the
   same three modes from the client's side.
 
@@ -35,8 +36,13 @@ reasoning that made M5.10's Java-interface change contract 5.
 ## Decision
 
 **A subscription event is a versioned record carrying `(session, sequencerEpoch,
-key, segmentKey, firstOffset, recordCount, via, inline)`, encoded big-endian
-behind an 8-byte magic-and-version header.**
+sessionEpoch, key, segmentKey, firstOffset, recordCount, via, inline)`, encoded
+big-endian behind an 8-byte magic-and-version header.**
+
+⚠️ **`sessionEpoch` was added by M5.15a at `VERSION_2`** — the tuple above said
+eight fields for a nine-field record until round-2 review pointed out that the
+Status banner superseded only the Consequences, leaving the normative sentence
+stale.
 
 - **`session` is opaque to the consumer** — the ingester mints it, the consumer
   echoes it. Nothing in the format constrains its shape, so a later scheme
@@ -61,7 +67,10 @@ behind an 8-byte magic-and-version header.**
   term under its citation is exactly the conflation the SPEC warns about.
   Round-1 review caught it. When the session epoch arrives it is a **second
   field**, not a reinterpretation of this one, and M5.15 owns keeping them
-  apart.
+  apart. ⚠️ It arrived in M5.15a; this bullet's earlier "when the session epoch
+  arrives it is a second field" is now history rather than a plan, and M5.15
+  is a split pointer — **M5.15b** owns resume and the minting invariant that a
+  live writer never emits `SESSION_EPOCH_ABSENT`.
 - **`via` is written by NAME, not by ordinal.** Reordering the enum would
   silently change every encoded event; a name survives a reorder and fails
   loudly on a rename, which is the direction that can be fixed.
@@ -188,3 +197,55 @@ owns resume, the reset signal and keeping the two epochs distinct — it needs
 this shape to exist first. The transport that puts these bytes on a socket is
 M1.11b's. Nothing here changes any persisted format: the commit log, the
 checkpoint and the segment layout are untouched.
+
+## Amendment: the second epoch (M5.15a, 2026-09-11)
+
+**`sessionEpoch` is added at `VERSION_2`, appended after `inline`.** Appending
+rather than inserting it beside `sequencerEpoch` — where it reads better — is
+deliberate: a v2 body is then a v1 body plus one field, which keeps `decode`
+linear and makes the relationship between the two golden files legible to anyone
+diffing them. `GoldenSubscriptionEventTest` asserts that prefix relationship
+directly, so an edit that inserts the field mid-body fails even though both
+files would still round-trip against their own version.
+
+⚠️ **THE SENTINEL RULE IS SCOPED TO v2 AND EXPIRES AT v3**, which round-4
+review pointed out this amendment recorded only as a strengthening. The guard is
+`version == VERSION_2 && sessionEpoch == SESSION_EPOCH_ABSENT`, so "no body may
+carry the sentinel" holds for v2 and says nothing about v3. Whoever appends the
+next optional field inherits the choice: an event carrying that field but no
+session epoch must be v3, so its session-epoch slot holds 0 — either a v3 body
+carries the sentinel, re-opening the in-band collision round 1 blocked on, or
+the slot is special-cased and the linear "v(n) is v(n-1) plus one field" layout
+this record chose is lost. **Deciding that is part of adding the field, not
+after it.**
+
+⚠️ **A v1 EVENT'S MISSING FIELD READS AS `SESSION_EPOCH_ABSENT` (0), AND SESSION
+EPOCHS NUMBER FROM 1 — where "number from 1" is M5.15b's invariant, not this
+format's.** Absent is not zero-the-number, and the separation is
+load-bearing: if a live session could hold epoch 0, a v1 event would be
+indistinguishable from a session at its very first request, and a consumer
+resuming on it would claim a position it was never given. A consumer seeing
+`ABSENT` cannot resume on that event and falls back to the commit log — the same
+answer this decoder gives for an unknown version.
+
+⚠️ **THE OLD SHAPE IS NOW REAL, so ONE of the two checklist items this record
+waived is met — and the other is still exempt.** Round-1 review trimmed an
+earlier draft that claimed both.
+
+- **"Golden files for the old AND the new shape" — MET.** Four files. Both
+  versions are asserted in both directions, because the version follows the
+  field: an event with no session epoch IS a v1 event, so v1 bytes re-encode
+  byte-identically rather than being decode-only.
+- **"Ship the read side first, in an earlier commit" — STILL EXEMPT.** The
+  reader that understands both shapes and the writer that emits v2 land
+  together, which is not what the item asks for. The honest reason it does not
+  matter is unchanged from M5.14: no peer has ever spoken either shape across a
+  process, so there is nobody to lag behind.
+
+⚠️ **WHAT THE FORMAT CANNOT DO** is enforce SPEC criterion 12's behaviour — "a
+sequencer failover does not invalidate a session, and a session reset does not
+imply a failover". Two separate fields that survive independently is the
+*precondition* for that property, and is what a later conflation would have to
+defeat first; the property itself needs the session registry. **M5.15b** owns
+resume, **M5.15c** the reset signal, and **M5.15d** wiring a real sequencer
+epoch to the push site.

@@ -8,26 +8,30 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 /**
- * The subscription event's bytes, pinned (M5.14).
+ * The subscription event's bytes, pinned at BOTH shapes (M5.14, M5.15a).
  *
  * <p>⚠️ WHAT A GOLDEN FILE BUYS THAT A ROUND TRIP DOES NOT: a round trip passes
  * for any self-consistent codec, so renaming a field, reordering two, widening
  * a varint or switching endianness all survive it. Every one of those changes
  * the bytes, and every one silently breaks a peer that is not recompiled with
- * you. These two files are the only thing in the tree that would notice.
+ * you. These four files are the only thing in the tree that would notice.
  *
- * <p>⚠️ THERE IS NO OLD-SHAPE FILE BESIDE THESE, and that is deliberate rather
- * than an omission. {@code wire-format-change}'s checklist asks for golden files
- * for "the old and the new shape"; the subscription protocol has never been
- * serialized -- {@code SubscriptionTransport} is an in-process seam and the
- * production transport is still unbuilt -- so no bytes in this shape exist
- * anywhere outside this repository, and a v0 file would be a fixture invented to
- * satisfy a checklist. The version byte IS written, so the first real rollout
- * has its discriminator; when a v2 arrives, the file beside this one is what
- * makes the compatibility claim checkable, exactly as
- * {@code chain-delta-v0.bin} does for {@code chain-delta-v1.bin}.
+ * <p>⚠️ THE OLD-SHAPE FILES NOW HAVE A SUBJECT, and M5.14's javadoc said they
+ * did not. That was true then: nothing had ever been serialized, so
+ * {@code wire-format-change}'s "golden files for the old AND the new shape" and
+ * "ship the read side first" had nothing to be about, and the exemption was
+ * recorded rather than the item skipped. M5.15a added a field, so v1 is now a
+ * real old shape with real stored bytes -- and the version byte M5.14 wrote
+ * against exactly this day is what makes reading them possible.
  *
- * <p>⚠️ IF THIS TEST FAILS, THE FORMAT MOVED. That is not a reason to
+ * <p>⚠️ BOTH VERSIONS ARE NOW ASSERTED IN BOTH DIRECTIONS, and an earlier
+ * draft of this paragraph said v1 was decode-only because "nothing encodes v1
+ * any more". That stopped being true when round-1 review made the ABSENT
+ * sentinel out-of-band: the version follows the FIELD, so an event with no
+ * session epoch IS a v1 event and re-encodes to v1 bytes. The compatibility
+ * claim got stronger as a side effect of closing a different defect.
+ *
+ * <p>⚠️ IF ONE OF THESE FAILS, THE FORMAT MOVED. That is not a reason to
  * regenerate the file: it is the question of whether every reader and writer
  * moved with it, in this commit, which is the rule the skill exists to enforce.
  */
@@ -43,65 +47,135 @@ class GoldenSubscriptionEventTest {
         }
     }
 
+    private static SubscriptionEvent v2Inline() {
+        return new SubscriptionEvent("sess-abc", 42L, 3L, KEY, "seg/2026/09/11/xyz",
+                1_000L, 128, FetchMode.INLINE, new byte[] {1, 2, 3, 4, 5});
+    }
+
+    private static SubscriptionEvent v2Direct() {
+        return new SubscriptionEvent("sess-abc", 42L, 3L, KEY, "seg/2026/09/11/xyz",
+                1_000L, 128, FetchMode.DIRECT, new byte[0]);
+    }
+
     /**
-     * An {@code inline} event encodes to exactly the bytes on disk.
+     * A v2 {@code inline} event encodes to exactly the bytes on disk.
      *
      * <p>⚠️ BOTH DIRECTIONS, because they fail differently. Encoding proves the
      * WRITER has not drifted; decoding the stored bytes proves a READER built
-     * today still understands what a writer produced before. A codec that
-     * changed both consistently passes only the first.
+     * today still understands what a writer produced before.
      */
     @Test
-    void anINLINEEventMatchesItsGoldenBytes() throws Exception {
-        SubscriptionEvent event = new SubscriptionEvent("sess-abc", 42L, KEY,
-                "seg/2026/09/11/xyz", 1_000L, 128, FetchMode.INLINE,
-                new byte[] {1, 2, 3, 4, 5});
-        byte[] stored = golden("subscription-event-inline-v1.bin");
-
-        assertThat(event.encode()).as("the WRITER has not drifted").isEqualTo(stored);
+    void aV2INLINEEventMatchesItsGoldenBytes() throws Exception {
+        byte[] stored = golden("subscription-event-inline-v2.bin");
+        assertThat(v2Inline().encode()).as("the WRITER has not drifted").isEqualTo(stored);
         assertThat(SubscriptionEvent.decode(stored))
                 .as("and a READER built today still parses what was written before")
-                .isEqualTo(event);
+                .isEqualTo(v2Inline());
     }
 
     /**
-     * A {@code direct} event -- no inline bytes -- encodes to exactly its
-     * stored bytes.
+     * A v2 {@code direct} event -- no inline bytes -- matches its stored bytes.
      *
-     * <p>⚠️ THE SECOND FILE IS NOT REDUNDANT. The empty-payload case is where a
-     * length prefix and its absence are easiest to confuse, and it is the only
-     * fixture that pins the {@code via} field to something other than
-     * {@code INLINE} -- a codec writing the enum ORDINAL rather than its name
-     * matches the inline file if {@code INLINE} happens to be ordinal 0.
+     * <p>⚠️ THE SECOND FILE PER VERSION IS NOT REDUNDANT: the empty-payload case
+     * is where a length prefix and its absence are easiest to confuse, and it is
+     * the only fixture pinning {@code via} to something other than
+     * {@code INLINE}.
      */
     @Test
-    void aDIRECTEventMatchesItsGoldenBytes() throws Exception {
-        SubscriptionEvent event = new SubscriptionEvent("sess-abc", 42L, KEY,
-                "seg/2026/09/11/xyz", 1_000L, 128, FetchMode.DIRECT, new byte[0]);
-        byte[] stored = golden("subscription-event-direct-v1.bin");
-
-        assertThat(event.encode()).isEqualTo(stored);
-        assertThat(SubscriptionEvent.decode(stored)).isEqualTo(event);
+    void aV2DIRECTEventMatchesItsGoldenBytes() throws Exception {
+        byte[] stored = golden("subscription-event-direct-v2.bin");
+        assertThat(v2Direct().encode()).isEqualTo(stored);
+        assertThat(SubscriptionEvent.decode(stored)).isEqualTo(v2Direct());
     }
 
     /**
-     * The stored bytes carry the magic and version the class documents.
+     * A v1 event written before {@code sessionEpoch} existed still decodes, and
+     * its missing field reads as ABSENT rather than as zero-the-number.
      *
-     * <p>⚠️ READ FROM THE FILE, not from the constants, so this fails if the
+     * <p>⚠️ THIS IS THE COMPATIBILITY CLAIM, and it is the only test in the tree
+     * that makes it. Everything else about v1 could be deleted and the suite
+     * would stay green while a v1 peer's events became unreadable.
+     *
+     * <p>⚠️ ABSENT IS NOT ZERO. Session epochs number from 1, so
+     * {@code SESSION_EPOCH_ABSENT} cannot collide with a live one -- if it
+     * could, a v1 event would be indistinguishable from a session at its very
+     * first request, and a consumer resuming on it would claim a position it
+     * was never given.
+     */
+    @Test
+    void aV1EventStillDECODESAndItsSessionEpochIsABSENT() throws Exception {
+        // ⚠️ THE WHOLE RECORD, not a handful of components. Round-1 review
+        // measured five of eight asserted, so `via`, `inline` and `segmentKey`
+        // were unchecked -- which left the `direct` fixture in the loop only
+        // for the fields it shares with the `inline` one, i.e. contributing
+        // nothing. An `isEqualTo` against a constructed expectation is both
+        // stronger and shorter.
+        assertThat(SubscriptionEvent.decode(golden("subscription-event-inline-v1.bin")))
+                .as("a v1 inline event, whole")
+                .isEqualTo(new SubscriptionEvent("sess-abc", 42L,
+                        SubscriptionEvent.SESSION_EPOCH_ABSENT, KEY, "seg/2026/09/11/xyz",
+                        1_000L, 128, FetchMode.INLINE, new byte[] {1, 2, 3, 4, 5}));
+        assertThat(SubscriptionEvent.decode(golden("subscription-event-direct-v1.bin")))
+                .as("and a v1 direct event, whole")
+                .isEqualTo(new SubscriptionEvent("sess-abc", 42L,
+                        SubscriptionEvent.SESSION_EPOCH_ABSENT, KEY, "seg/2026/09/11/xyz",
+                        1_000L, 128, FetchMode.DIRECT, new byte[0]));
+
+        // ⚠️ AND THEY RE-ENCODE TO THEIR OWN BYTES. The version now follows the
+        // FIELD, so an absent session epoch means a v1 body -- which turns
+        // decode-only compatibility into a genuine round trip for stored bytes.
+        for (String name : new String[] {"subscription-event-inline-v1.bin",
+                                         "subscription-event-direct-v1.bin"}) {
+            assertThat(SubscriptionEvent.decode(golden(name)).encode())
+                    .as("%s re-encodes byte-identically", name)
+                    .isEqualTo(golden(name));
+        }
+    }
+
+    /**
+     * The two versions differ by exactly the appended field.
+     *
+     * <p>⚠️ A PREFIX COMPARISON, which is what makes "v2 is v1 plus one field"
+     * checkable rather than a sentence in an ADR. If a later edit inserts the
+     * session epoch mid-body instead, or reorders anything, this fails even
+     * though both files would still round-trip against their own version.
+     */
+    @Test
+    void aV2BodyIsAV1BodyPlusTheAppendedFIELD() throws Exception {
+        byte[] v1 = golden("subscription-event-inline-v1.bin");
+        byte[] v2 = golden("subscription-event-inline-v2.bin");
+
+        assertThat(v2.length).as("one uvarint longer").isEqualTo(v1.length + 1);
+        // ⚠️ FROM BYTE 8, skipping the header, because the VERSION differs by
+        // design -- that is the discriminator doing its job, not drift.
+        assertThat(java.util.Arrays.copyOfRange(v2, 8, v1.length))
+                .as("every v1 field, in the same order, at the same offset")
+                .isEqualTo(java.util.Arrays.copyOfRange(v1, 8, v1.length));
+    }
+
+    /**
+     * The stored bytes carry the magic and versions the class documents.
+     *
+     * <p>⚠️ READ FROM THE FILES, not from the constants, so this fails if the
      * constants move away from what is already on disk rather than agreeing
      * with themselves.
      */
     @Test
-    void theStoredBytesCarryTheDOCUMENTEDMagicAndVersion() throws Exception {
-        byte[] stored = golden("subscription-event-inline-v1.bin");
-        var b = java.nio.ByteBuffer.wrap(stored).order(java.nio.ByteOrder.BIG_ENDIAN);
-        assertThat(b.getInt(0)).isEqualTo(SubscriptionEvent.MAGIC);
-        assertThat(b.getInt(4)).isEqualTo(SubscriptionEvent.VERSION_1);
+    void theStoredBytesCarryTheDOCUMENTEDMagicAndVersions() throws Exception {
+        var v1 = java.nio.ByteBuffer.wrap(golden("subscription-event-inline-v1.bin"))
+                .order(java.nio.ByteOrder.BIG_ENDIAN);
+        var v2 = java.nio.ByteBuffer.wrap(golden("subscription-event-inline-v2.bin"))
+                .order(java.nio.ByteOrder.BIG_ENDIAN);
+
+        assertThat(v1.getInt(0)).isEqualTo(SubscriptionEvent.MAGIC);
+        assertThat(v2.getInt(0)).as("the magic does not move between versions")
+                .isEqualTo(SubscriptionEvent.MAGIC);
+        assertThat(v1.getInt(4)).isEqualTo(SubscriptionEvent.VERSION_1);
+        assertThat(v2.getInt(4)).isEqualTo(SubscriptionEvent.VERSION_2);
         // ⚠️ THE CONSTANT, NOT A LITERAL. A first draft of this line asserted
         // against 0x424A4348, a number I invented -- ChainEntry.MAGIC is
         // 0x42444C54, so the assertion passed without comparing the two things
-        // it named. Referencing the constant is what makes a future collision
-        // fail here.
+        // it named.
         assertThat(SubscriptionEvent.MAGIC)
                 .as("and it is NOT ChainEntry's -- a different protocol, a different namespace")
                 .isNotEqualTo(ChainEntry.MAGIC);

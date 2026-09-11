@@ -47,9 +47,22 @@ class SubscriptionEventMalformedTest {
     private static final class BodyWriter {
         private final ByteArrayOutputStream out = new ByteArrayOutputStream();
 
+        /**
+         * ⚠️ DEFAULTS TO THE VERSION THIS BUILD WRITES. Round-1 review of
+         * M5.15a found every hand-written body here still emitting
+         * {@code VERSION_1} after the version bump -- so all eleven guard tests
+         * exercised only the shape the encoder no longer produces, and three
+         * mutations guarded by {@code version == VERSION_1 &&} passed. That is
+         * verbatim the structural failure this file's own javadoc records
+         * review measuring at M5.14, reintroduced by the bump.
+         */
         BodyWriter() {
+            this(SubscriptionEvent.VERSION_2);
+        }
+
+        BodyWriter(int version) {
             out.writeBytes(ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN)
-                    .putInt(SubscriptionEvent.MAGIC).putInt(SubscriptionEvent.VERSION_1).array());
+                    .putInt(SubscriptionEvent.MAGIC).putInt(version).array());
         }
 
         BodyWriter str(String v) {
@@ -88,10 +101,20 @@ class SubscriptionEventMalformedTest {
         }
     }
 
-    /** A body that is valid in every field, so each test alters exactly one. */
+    /**
+     * A v2 body that is valid in every field, so each test alters exactly one.
+     *
+     * <p>⚠️ IT ENDS WITH THE SESSION EPOCH, because a v2 body carries one --
+     * and a v2 body carrying {@code SESSION_EPOCH_ABSENT} is refused, so 3 here
+     * is a live value rather than a filler.
+     */
     private static BodyWriter valid() {
-        return new BodyWriter()
-                .str("sess-abc")
+        return v1Fields(new BodyWriter()).uvarint(3L);
+    }
+
+    /** The fields both versions share, in order. */
+    private static BodyWriter v1Fields(BodyWriter w) {
+        return w.str("sess-abc")
                 .uvarint(42L)
                 .uuid(INDEX)
                 .uvarint(7L)
@@ -100,6 +123,11 @@ class SubscriptionEventMalformedTest {
                 .uvarint(128L)
                 .str("PROXY")
                 .uvarint(0L);
+    }
+
+    /** The same body at VERSION_1: no session epoch at all. */
+    private static BodyWriter validV1() {
+        return v1Fields(new BodyWriter(SubscriptionEvent.VERSION_1));
     }
 
     @Test
@@ -122,6 +150,7 @@ class SubscriptionEventMalformedTest {
         assertThat(decoded.recordCount()).isEqualTo(128);
         assertThat(decoded.via()).isEqualTo(FetchMode.PROXY);
         assertThat(decoded.inline()).isEmpty();
+        assertThat(decoded.sessionEpoch()).isEqualTo(3L);
     }
 
     /**
@@ -139,7 +168,7 @@ class SubscriptionEventMalformedTest {
                 .str("sess-abc").uvarint(42L).uuid(INDEX).uvarint(7L)
                 .str("seg/key").uvarint(1_000L).uvarint(128L)
                 .str("HYBRID")
-                .uvarint(0L).bytes();
+                .uvarint(0L).uvarint(3L).bytes();
         assertThatThrownBy(() -> SubscriptionEvent.decode(body))
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("unknown fetch mode")
@@ -162,7 +191,7 @@ class SubscriptionEventMalformedTest {
                 .str("sess-abc").uvarint(42L).uuid(INDEX).uvarint(7L)
                 .str("seg/key").uvarint(1_000L)
                 .uvarint(0x1_0000_0001L)
-                .str("PROXY").uvarint(0L).bytes();
+                .str("PROXY").uvarint(0L).uvarint(3L).bytes();
         assertThatThrownBy(() -> SubscriptionEvent.decode(body))
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("record count")
@@ -176,7 +205,7 @@ class SubscriptionEventMalformedTest {
                 .str("sess-abc").uvarint(42L).uuid(INDEX)
                 .uvarint(0x1_0000_0005L)
                 .str("seg/key").uvarint(1_000L).uvarint(128L)
-                .str("PROXY").uvarint(0L).bytes();
+                .str("PROXY").uvarint(0L).uvarint(3L).bytes();
         assertThatThrownBy(() -> SubscriptionEvent.decode(body))
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("partition");
@@ -202,7 +231,7 @@ class SubscriptionEventMalformedTest {
                 // without ever reaching the guard it names. This value narrows
                 // to a small positive int, so without the guard it would PARSE.
                 .uvarint(0x1_0000_0005L)
-                .raw((byte) 1, (byte) 2, (byte) 3, (byte) 4, (byte) 5).bytes();
+                .raw((byte) 1, (byte) 2, (byte) 3, (byte) 4, (byte) 5).uvarint(3L).bytes();
         assertThatThrownBy(() -> SubscriptionEvent.decode(body))
                 .isInstanceOf(IOException.class)
                 // ⚠️ ON THE MESSAGE, because that is what distinguishes THIS
@@ -246,7 +275,7 @@ class SubscriptionEventMalformedTest {
                 .str("sess-abc").uvarint(42L).uuid(INDEX).uvarint(7L)
                 .str("seg/key").uvarint(1_000L)
                 .uvarint(0x8000_0000_0000_0064L)
-                .str("PROXY").uvarint(0L).bytes();
+                .str("PROXY").uvarint(0L).uvarint(3L).bytes();
         assertThatThrownBy(() -> SubscriptionEvent.decode(count))
                 .as("it would otherwise narrow to a plausible 100")
                 .isInstanceOf(IOException.class)
@@ -256,7 +285,7 @@ class SubscriptionEventMalformedTest {
                 .str("sess-abc").uvarint(42L).uuid(INDEX)
                 .uvarint(0x8000_0000_0000_0003L)
                 .str("seg/key").uvarint(1_000L).uvarint(128L)
-                .str("PROXY").uvarint(0L).bytes();
+                .str("PROXY").uvarint(0L).uvarint(3L).bytes();
         assertThatThrownBy(() -> SubscriptionEvent.decode(partition))
                 .as("it would otherwise narrow to a plausible partition 3")
                 .isInstanceOf(IOException.class)
@@ -279,11 +308,34 @@ class SubscriptionEventMalformedTest {
                 .str("seg/key").uvarint(1_000L).uvarint(128L)
                 .str("INLINE")
                 .uvarint(0x8000_0000_0000_0005L)
-                .raw((byte) 1, (byte) 2, (byte) 3, (byte) 4, (byte) 5).bytes();
+                .raw((byte) 1, (byte) 2, (byte) 3, (byte) 4, (byte) 5).uvarint(3L).bytes();
         assertThatThrownBy(() -> SubscriptionEvent.decode(inlineLength))
                 .as("and a negative inline length narrows to exactly the bytes that follow")
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("inline length");
+
+        // ⚠️ THE FIFTH VARINT FIELD, added to the wire by M5.15a and not to
+        // this enumeration. Round-2 review measured the decode-side guard
+        // deletable -- behaviour-preserving, because the value then reaches the
+        // compact constructor which refuses it too, so only the MESSAGE
+        // changes. Pinned anyway: a caller decoding untrusted bytes should be
+        // told which field was wrong, and a guard nothing exercises is a guard
+        // nothing keeps.
+        byte[] negativeSessionEpoch = v1Fields(new BodyWriter(SubscriptionEvent.VERSION_2))
+                .uvarint(0x8000_0000_0000_0007L).bytes();
+        assertThatThrownBy(() -> SubscriptionEvent.decode(negativeSessionEpoch))
+                .as("a bit-63 session epoch is not a request order")
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("session epoch")
+                // ⚠️ AND THE DECODER REPORTS IT, not the constructor. My first
+                // attempt asserted only "session epoch" and the mutation
+                // SURVIVED: with the decode guard deleted the value reaches the
+                // compact constructor, which refuses it too and whose message
+                // also contains that phrase, so the bytes are rejected either
+                // way and nothing distinguished the two paths. The wrapped form
+                // is prefixed "malformed subscription event"; its absence is
+                // what says the field was validated where it was read.
+                .hasMessageNotContaining("malformed");
     }
 
     /**
@@ -302,7 +354,7 @@ class SubscriptionEventMalformedTest {
         byte[] inlineWithNoBytes = new BodyWriter()
                 .str("sess-abc").uvarint(42L).uuid(INDEX).uvarint(7L)
                 .str("seg/key").uvarint(1_000L).uvarint(128L)
-                .str("INLINE").uvarint(0L).bytes();
+                .str("INLINE").uvarint(0L).uvarint(3L).bytes();
         assertThatThrownBy(() -> SubscriptionEvent.decode(inlineWithNoBytes))
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("malformed subscription event")
@@ -311,7 +363,7 @@ class SubscriptionEventMalformedTest {
         byte[] proxyWithBytes = new BodyWriter()
                 .str("sess-abc").uvarint(42L).uuid(INDEX).uvarint(7L)
                 .str("seg/key").uvarint(1_000L).uvarint(128L)
-                .str("PROXY").uvarint(2L).raw((byte) 1, (byte) 2).bytes();
+                .str("PROXY").uvarint(2L).raw((byte) 1, (byte) 2).uvarint(3L).bytes();
         assertThatThrownBy(() -> SubscriptionEvent.decode(proxyWithBytes))
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("does not carry bytes");
@@ -323,7 +375,7 @@ class SubscriptionEventMalformedTest {
         byte[] body = new BodyWriter()
                 .str("").uvarint(42L).uuid(INDEX).uvarint(7L)
                 .str("seg/key").uvarint(1_000L).uvarint(128L)
-                .str("PROXY").uvarint(0L).bytes();
+                .str("PROXY").uvarint(0L).uvarint(3L).bytes();
         assertThatThrownBy(() -> SubscriptionEvent.decode(body))
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("blank session");
@@ -355,10 +407,24 @@ class SubscriptionEventMalformedTest {
         byte[] withPayload = new BodyWriter()
                 .str("sess-abc").uvarint(42L).uuid(INDEX).uvarint(7L)
                 .str("seg/key").uvarint(1_000L).uvarint(128L)
-                .str("INLINE").uvarint(3L).raw((byte) 1, (byte) 2, (byte) 3)
+                .str("INLINE").uvarint(3L).raw((byte) 1, (byte) 2, (byte) 3).uvarint(3L)
                 .raw((byte) 0xFF, (byte) 0xFE).bytes();
         assertThatThrownBy(() -> SubscriptionEvent.decode(withPayload))
                 .as("a v2 field appended to an inline push must not be read as a complete event")
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("trailing bytes");
+
+        // ⚠️ AND ON A v1 BODY, because the guard became version-sensitive the
+        // moment `BodyWriter` started defaulting to v2. Round-2 review measured
+        // `version == VERSION_2 && !c.atEnd()` surviving all 260 format tests:
+        // a body labelled VERSION_1 with bytes past the v1 shape -- a writer
+        // that appended the epoch without bumping the version, a future v3
+        // field, or two v1 events run together by a framing bug -- decoded as a
+        // complete v1 event with ABSENT, dropping the extra and reporting a
+        // clean stream. Verbatim what the guard's own comment forbids.
+        byte[] v1WithTrailing = validV1().raw((byte) 0xFF, (byte) 0xFE).bytes();
+        assertThatThrownBy(() -> SubscriptionEvent.decode(v1WithTrailing))
+                .as("the refusal is not a property of the newer version")
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("trailing bytes");
     }
@@ -384,8 +450,7 @@ class SubscriptionEventMalformedTest {
     void theVarintWIDTHTransitionsRoundTrip() throws Exception {
         long[] boundaries = {126L, 127L, 128L, 129L, 16_382L, 16_383L, 16_384L, 16_385L};
         for (long boundary : boundaries) {
-            SubscriptionEvent event = new SubscriptionEvent("s", boundary,
-                    new RunKey(INDEX, 1), "k", boundary, 1, FetchMode.PROXY, new byte[0]);
+            SubscriptionEvent event = new SubscriptionEvent("s", boundary, 1L, new RunKey(INDEX, 1), "k", boundary, 1, FetchMode.PROXY, new byte[0]);
             assertThat(SubscriptionEvent.decode(event.encode()))
                     .as("uvarint boundary %d", boundary)
                     .isEqualTo(event);
@@ -404,7 +469,7 @@ class SubscriptionEventMalformedTest {
      */
     @Test
     void aRangePastTheLastAddressableOffsetIsREFUSED() {
-        assertThatThrownBy(() -> new SubscriptionEvent("s", 1L, new RunKey(INDEX, 1), "k",
+        assertThatThrownBy(() -> new SubscriptionEvent("s", 1L, 1L, new RunKey(INDEX, 1), "k",
                         Long.MAX_VALUE - 1, 128, FetchMode.PROXY, new byte[0]))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("last addressable offset");
@@ -413,7 +478,7 @@ class SubscriptionEventMalformedTest {
         // Long.MAX_VALUE fits exactly. Round-2 review measured the first guard
         // rejecting it -- an off-by-one that this assertion, written as
         // `MAX_VALUE - 1`, would have frozen into the tree as correct.
-        SubscriptionEvent exact = new SubscriptionEvent("s", 1L, new RunKey(INDEX, 1), "k",
+        SubscriptionEvent exact = new SubscriptionEvent("s", 1L, 1L, new RunKey(INDEX, 1), "k",
                 Long.MAX_VALUE, 1, FetchMode.PROXY, new byte[0]);
         assertThat(exact.lastOffset())
                 .as("the largest range that DOES fit is still allowed")
@@ -424,11 +489,93 @@ class SubscriptionEventMalformedTest {
         // so a compound weakening -- `recordCount > 2 &&` bolted onto the
         // guard -- admitted a two-record push at the top of the offset space
         // with `lastOffset()` returning Long.MIN_VALUE.
-        assertThatThrownBy(() -> new SubscriptionEvent("s", 1L, new RunKey(INDEX, 1), "k",
+        assertThatThrownBy(() -> new SubscriptionEvent("s", 1L, 1L, new RunKey(INDEX, 1), "k",
                         Long.MAX_VALUE, 2, FetchMode.PROXY, new byte[0]))
                 .as("two records from the last addressable offset is one too many")
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("last addressable offset");
     }
 
+
+    /**
+     * A v2 body carrying the ABSENT sentinel is REFUSED, and the sentinel's
+     * VALUE is asserted literally.
+     *
+     * <p>⚠️ ROUND-1 REVIEW MEASURED BOTH HALVES BROKEN. `SESSION_EPOCH_ABSENT`
+     * was pinned only by a comparison with itself, so moving it to 5 passed the
+     * whole suite; and the collision it was supposed to prevent already
+     * existed -- a v2 event built with epoch 0 encoded, decoded, and read back
+     * as ABSENT while three separate javadocs claimed "session epochs number
+     * from 1".
+     *
+     * <p>⚠️ THE FIX MADE THE SENTINEL OUT-OF-BAND: an event with no session
+     * epoch IS a v1 event, so no v2 body can carry the value. This asserts the
+     * refusal a hand-written body is the only way to reach.
+     *
+     * <p>⚠️ WHY IT MATTERS BEYOND TIDINESS: M5.15b's registry leaving a
+     * {@code long} at Java's default 0 would make every event read as ABSENT
+     * and every resume degrade to a commit-log refetch -- forever, with a green
+     * suite.
+     */
+    @Test
+    void aV2BodyCarryingTheABSENTSentinelIsREFUSED() {
+        assertThat(SubscriptionEvent.SESSION_EPOCH_ABSENT)
+                .as("the sentinel's value is 0 and live epochs number from 1")
+                .isZero();
+
+        byte[] body = v1Fields(new BodyWriter(SubscriptionEvent.VERSION_2))
+                .uvarint(SubscriptionEvent.SESSION_EPOCH_ABSENT).bytes();
+        assertThatThrownBy(() -> SubscriptionEvent.decode(body))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("may not carry an absent session epoch");
+    }
+
+    /**
+     * A v1 body decodes through the hand-written path too, and reads as ABSENT.
+     *
+     * <p>⚠️ THE GOLDEN FILES COVER THE STORED v1 BYTES; this covers the SHAPE,
+     * so a v1 body that never existed as a fixture is still parsed. Together
+     * they are the compatibility claim: one pins the bytes we shipped, the
+     * other pins that the reader handles the shape at all.
+     */
+    @Test
+    void aV1BodyDecodesAndReadsAsABSENT() throws Exception {
+        SubscriptionEvent decoded = SubscriptionEvent.decode(validV1().bytes());
+        assertThat(decoded.sessionEpoch()).isEqualTo(SubscriptionEvent.SESSION_EPOCH_ABSENT);
+        assertThat(decoded.sequencerEpoch()).isEqualTo(42L);
+        assertThat(decoded.via()).isEqualTo(FetchMode.PROXY);
+
+        // ⚠️ AND IT RE-ENCODES TO v1 BYTES, byte-identically. That is stronger
+        // than decode-only compatibility: an event read from an old writer and
+        // written back is unchanged, which is only true because the VERSION now
+        // follows the FIELD rather than being a constant.
+        assertThat(decoded.encode()).isEqualTo(validV1().bytes());
+    }
+
+    /**
+     * The SESSION epoch's varint width transitions round-trip.
+     *
+     * <p>⚠️ ROUND-1 REVIEW MEASURED `putUvarint(out, sessionEpoch & 0x7F)`
+     * SURVIVING: every session epoch in the tree was 0, 1, 3, 4, 7 or 8, all
+     * inside one varint byte. The sibling test varies the SEQUENCER epoch
+     * across these same boundaries for exactly this reason, and the new field
+     * was spliced into it as a fixed literal.
+     *
+     * <p>⚠️ AND THE MUTATION IS FINDING 1 BY A SECOND ROUTE: under it a session
+     * at request 128 encodes as 0, which is the ABSENT sentinel -- a live epoch
+     * silently becoming its own absence.
+     */
+    @Test
+    void theSESSIONEpochVarintWidthTransitionsRoundTrip() throws Exception {
+        long[] boundaries = {1L, 126L, 127L, 128L, 129L, 16_382L, 16_383L, 16_384L, 16_385L};
+        for (long boundary : boundaries) {
+            SubscriptionEvent event = new SubscriptionEvent("s", 42L, boundary,
+                    new RunKey(INDEX, 1), "k", 0L, 1, FetchMode.PROXY, new byte[0]);
+            SubscriptionEvent back = SubscriptionEvent.decode(event.encode());
+            assertThat(back).as("session epoch %d", boundary).isEqualTo(event);
+            assertThat(back.sessionEpoch())
+                    .as("and it must not collapse to the ABSENT sentinel")
+                    .isEqualTo(boundary);
+        }
+    }
 }
