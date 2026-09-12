@@ -1,0 +1,29 @@
+{
+  "task": "M5.34",
+  "role": "reviewer",
+  "diff_sha256": "d2436c8b0748d9d59c194f9152db41ad06fd5bdf36de26939cb0e632d19fe2d8",
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/Sequencer.java:88",
+      "summary": "One present-tense count of the enumeration survives -- 'These are the two branches of answer' (also at :73, 'the two refusal branches of IdempotencyWindow.answer') -- and it falsifies the backlog cell's absolute claim that NO COUNT APPEARS ANYWHERE IN THIS ROW OR IN src/main.",
+      "detail": "Verified accurate today: IdempotencyWindow.answer has exactly two refusal sites, the orElseThrow at :280 ('holds no delta') and the match == null throw at :283-288, one per REFUSED bullet. So this is a drift risk, not a wrong number -- which is why it is minor and not a repeat of rounds 1-3. But it is the one number left describing the enumeration, it sits as the lead-in to a two-item <ul> under the REFUSED heading, and it is exactly the shape IdempotencyWindow.java:43-47 bans in the same commit ('a count here would be a count of a list living in another file') -- Sequencer.java counting branches that live in IdempotencyWindow.java. The same phrase is also in docs/internal/product/backlog.md:43 ('the two refusal branches of IdempotencyWindow.answer'), three sentences before that cell writes 'AND NO COUNT APPEARS ANYWHERE IN THIS ROW OR IN src/main'.",
+      "failure_scenario": "FAILURE SCENARIO: M5.52 or M5.55's author reads the cell's rule, greps src/main to confirm it, finds 'the two branches', and concludes either that the cell is already stale (so the naming rule was not actually applied) or that counting branches is permitted -- and restores 'the three duplicating cases' beside the DUPLICATED heading. Second path: someone adds a third refusal to answer, updates the bullets, and leaves the lead-in at 'two' -- the fifth recurrence, at the one site the headings were supposed to make impossible. Under review.md rule 11 this is recorded, not fixed."
+    },
+    {
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:71",
+      "summary": "M5.56's 'TWO LIVE INSTANCES' is stale on arrival: this commit fixes one of the two, leaving exactly one live instance in the tree.",
+      "detail": "The row's own preceding sentences put M5.34's three split citations in the past ('until review caught them', 'on the split version'), and this diff does unsplit all four -- verified, each of DedupAcrossTakeoverTest.aReplayFromBELOWThePointerIsREFUSED_NotAppliedTwice, SequencerDedupTest.aReplayThePointedDeltaDoesNotCarryIsREFUSED, SequencerDedupTest.aSegmentMatchingOnlyPARTOfTheTripleAnswersNOTHING and DedupAcrossTakeoverTest.aBAREV0CheckpointSlotLeavesItsPodUNPROTECTED_AndThatIsRecorded greps to exactly one src/main line and one directly @Test-annotated method. I scanned every unclosed {@code span in */src/main: the only remaining Class.method split matching M5.56's stated *Test/*IT scope is SubscriptionHub.java:480-481. So the live count is ONE.",
+      "failure_scenario": "FAILURE SCENARIO: the M5.56 implementer writes check-javadoc-cites.sh, runs it at GATE_SCOPE=full, gets one hit against a row that promises two, and either loses a round hunting the phantom or -- worse -- widens the class pattern past *Test/*IT to make the count come out, which is the false-positive surface the same row's design note warns against. Note the author applied the correct discipline elsewhere in this very commit (M5.32's cell: '495 when that revert was measured ... and is 496 now. Stated rather than carried forward'); the same qualification is missing here."
+    },
+    {
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/Sequencer.java:64-67",
+      "summary": "The summary sentence lost its in-place qualifier and now asserts unqualified 'a retry that crosses a takeover is answered too', which :147-149 explicitly denies.",
+      "detail": "The diff removed '\u26a0\ufe0f ONE STATED LIMIT REMAINS: ...' from the end of that paragraph and put nothing in its place, so the paragraph that a caller skimming the interface javadoc reads first now states the property with no caveat at all, while the closing paragraph says 'SO THE PROPERTY IS NOT \"A RETRY CROSSING A TAKEOVER IS ANSWERED\", and it is not \"answered or refused\" either'. IdempotencyWindow.java:41-43 got the treatment this paragraph did not -- 'a replay crossing a takeover is caught, WITH THE LIMITS {@link Sequencer} ENUMERATES'.",
+      "failure_scenario": "FAILURE SCENARIO: a caller reading Sequencer's contract stops at the M5.1/M5.25 paragraph -- it reads as the settled statement of the property, and the paragraph after it opens on meta-commentary about counting rather than on a limit -- and builds an at-most-once assumption on it; the bare v0 slot and the intermediate-checkpoint case then duplicate records at two offsets, which I2 forbids. Four words ('with the limits below') would close it, but under rule 11 the fix is the next round's surface, so this is recorded rather than requested."
+    }
+  ]
+}

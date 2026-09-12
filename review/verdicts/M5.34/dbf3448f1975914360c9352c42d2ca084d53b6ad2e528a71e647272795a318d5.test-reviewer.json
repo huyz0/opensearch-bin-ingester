@@ -1,0 +1,22 @@
+{
+  "task": "M5.34",
+  "role": "test-reviewer",
+  "diff_sha256": "dbf3448f1975914360c9352c42d2ca084d53b6ad2e528a71e647272795a318d5",
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/Sequencer.java:86-88,109-110",
+      "summary": "all three cited test names are SPLIT across two {@code} spans, so none of them greps -- the checkability the enumeration rests on",
+      "detail": "`{@code ...aReplayFromBELOWThePointerIsREFUSED_NotApplied}` + `{@code Twice}` (:86-87), `{@code ...aReplayThePointedDeltaDoesNotCarry}` + `{@code IsREFUSED}` (:87-88), and `{@code DedupAcrossTakeoverTest.aBAREV0Checkpoint}` + `{@code SlotLeavesItsPodUNPROTECTED_AndThatIsRecorded}` (:109-110). Each renders with a space in the middle of an identifier, and `grep -rn aReplayFromBELOWThePointerIsREFUSED_NotAppliedTwice sequencer/src/main` returns nothing today (measured). The commit's whole argument for naming rather than counting is that a name can be checked; a name split by the 100-column wrap cannot be checked by grep or by a future rung-3 gate of the obvious shape ('every Class.method cited in src/main javadoc resolves to a @Test method'), which is what non-negotiable 9 would ask for here.",
+      "failure_scenario": "M5.52 writes the incarnation pin and renames or moves `aReplayFromBELOWThePointerIsREFUSED_NotAppliedTwice` while reorganising `DedupAcrossTakeoverTest`. A grep for the old name across the tree finds no citation, so this enumeration keeps naming a test that no longer exists -- the same silent staleness as the wrong counts this row exists to retire, one level down."
+    },
+    {
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/IdempotencyWindow.java:105-111",
+      "summary": "the class javadoc now defers to Sequencer's list, but `seed`'s own javadoc in the same file still restates the superseded-incarnation limit in full",
+      "detail": "The staged change rewrites the class javadoc to 'STATED BY REFERENCE AND NOT RESTATED HERE ... two `src/main` statements of the same property disagreeing is what M5.34 exists to end'. Twelve lines further down, `seed`'s javadoc still says in full: 'Checkpoint.pods is keyed by podId, so it remembers a pod's LATEST incarnation only. A replay from an incarnation that has since been superseded is therefore not answered, and lands twice ... the direction that duplicates'. It is ACCURATE today, so this is not a correctness finding and not blocking -- but it is a second src/main statement of an enumerated limit, which is the condition the sentence twelve lines above declares ended. (`ChainReplay.java:322-344` holds a third, for the bare v0 slot; that one reads as local mechanism at the skip itself and is harder to argue away.)",
+      "failure_scenario": "M5.52 closes or narrows the superseded-incarnation limit, updates `Sequencer`'s list because that is the file M5.34 named as the single enumeration, and leaves `IdempotencyWindow.seed` asserting 'lands twice' about behaviour that no longer does. A caller reading the seam it actually calls gets the retired sentence."
+    }
+  ]
+}

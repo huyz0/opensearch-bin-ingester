@@ -1,0 +1,22 @@
+{
+  "task": "M5.34",
+  "role": "test-reviewer",
+  "diff_sha256": "3d8d5bb485b60cb6e06c49b28c6d98b873cb36fba64043a09b66ee4e91aa51fa",
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/Sequencer.java:177-180",
+      "summary": "the recorded reason states as fact that a rung-3 citation gate 'would have been defeated by every one of them' -- MEASURED FALSE: a gate of exactly the named shape flags all three split citations",
+      "detail": "The new paragraph says: 'A rung-3 gate of the obvious shape -- every {@code Class.method} cited in {@code src/main} javadoc resolves to a {@code @Test} -- would have been defeated by every one of them.' I implemented that shape (extract every `[A-Z]\\w*(Test|IT)\\.[a-z]\\w*` token from src/main comment lines; require a matching @Test-annotated method in a test source) and ran it against a reconstruction of the round-1 split. It reports all three: `DedupAcrossTakeoverTest.aReplayFromBELOWThePointerIsREFUSED_NotApplied`, `SequencerDedupTest.aReplayThePointedDeltaDoesNotCarry` and `DedupAcrossTakeoverTest.aBAREV0Checkpoint` -- because a split leaves the FIRST half still parseable as `Class.method` and dangling, which is precisely what the gate resolves. It is defeated only by a gate that greps the whole citation string, which is not the shape the sentence names. Supporting measurement: the four cited-name lines are 87, 77, 80 and 97 columns (Sequencer.java:94, :95, :96, :117), so none of them is past 100 and there was never a column-budget conflict to trade against -- the premise 'broken across two {@code} spans to fit the column budget' does not hold for these four names either. Round 2, so per review.md rule 11 this belongs in the commit body or a backlog row, not a round 3.",
+      "failure_scenario": "The gate row is not opened, or is opened and argued down, on the strength of a sentence in src/main that says the obvious implementation does not work. Meanwhile the same defect is ALREADY STANDING elsewhere in the tree and outside this diff: ingest/src/main/java/binjava/ingest/SubscriptionHub.java:480-481 splits `AssembledServingPathFailureTest.everySinkGetsTheFIRSTChunkBeforeAnyGetsTheSECOND` across a line break inside ONE {@code} span, so the full name greps nowhere from src/main -- and the candidate gate finds it in the same run."
+    },
+    {
+      "severity": "minor",
+      "file": "sequencer/src/main/java/binjava/sequencer/IdempotencyWindow.java:44",
+      "summary": "carried from round 1: naming the `seed` exception is defensible, but the warning is placed where the reader who hits the duplicate will not see it",
+      "detail": "Naming rather than deleting is the right call on one axis -- `seed`'s restatement carries the MECHANISM (`Checkpoint.pods` is keyed by `podId`) at the method that implements it, which Sequencer's list does not, so deleting it would move mechanism away from the code. But naming does not PREVENT the drift, it only makes it attributable afterwards, and the note is in the CLASS javadoc (:44) while the full restatement is at `seed` (:100-111), sixty lines below. A reader arriving at `seed` directly -- an IDE jump to the method, or following this sentence's own {@link #seed} -- reads the retired sentence and never sees the warning about it. The hand-off points the wrong way: the one line belongs AT `seed`, saying the enumeration lives in {@link Sequencer} and this paragraph restates it.",
+      "failure_scenario": "M5.52 closes or narrows the superseded-incarnation limit, updates Sequencer's list because that is the file M5.34 named as the single enumeration, and leaves IdempotencyWindow.seed asserting 'lands twice' about behaviour that no longer does -- exactly the drift the class javadoc says to watch, undetected because the watcher is not where the drift is."
+    }
+  ]
+}

@@ -40,8 +40,19 @@ import java.util.Optional;
  *
  * <p>⚠️ IT IS SEEDED FROM THE CHAIN (M5.1) -- see {@link #seed} -- so a
  * SUCCESSOR does NOT start empty and a replay crossing a takeover is caught,
- * with the one limit that a checkpoint remembers a pod's LATEST incarnation
- * only.
+ * WITH THE LIMITS {@link Sequencer} ENUMERATES -- SOME of which DUPLICATE
+ * rather than refuse. ⚠️ "SOME", NOT A NUMBER: a count here would be a
+ * count of a list living in another file, which is the drift this commit
+ * argues against by name. An earlier draft wrote THREE and disagreed with
+ * {@link Sequencer} in the same commit.
+ *
+ * <p>⚠️ STATED BY REFERENCE AND NOT RESTATED HERE. This sentence carried
+ * M5.25's "one limit" long after the count was known to be wrong, and two
+ * {@code src/main} statements of the same property disagreeing is what M5.34
+ * exists to end. ⚠️ {@link #seed}'s javadoc is the ONE restatement left
+ * standing, and the warning about it is repeated THERE rather than only here,
+ * because a reader who jumps straight to {@code seed} never reads this
+ * paragraph.
  *
  * <p>⚠️ WHAT IT STILL CANNOT KNOW BY ITSELF is an append this instance made and
  * never learned the outcome of: {@link LocalSequencer} records a commit as
@@ -106,6 +117,14 @@ final class IdempotencyWindow {
      * twice. That window is narrow -- it needs a pod to restart between the
      * original and its retry -- and it is the direction that duplicates rather
      * than suppresses, which ADR-0036 records as the less damaging of the two.
+     *
+     * <p>⚠️ THIS RESTATES A LIMIT {@link Sequencer} OWNS, and is the one
+     * restatement M5.34 left standing: the mechanism ({@code Checkpoint.pods}
+     * is keyed by {@code podId}) belongs beside the code that implements it.
+     * ⚠️ SO IT CAN DRIFT, and the drift to watch is M5.52 updating
+     * {@link Sequencer}'s list alone. The warning is here rather than only in
+     * the class javadoc because a reader who jumps straight to this method
+     * never reads that one.
      */
     void seed(Map<String, binjava.format.Checkpoint.PodState> fromChain) {
         // ⚠️ THE KEYS ARRIVE ALREADY SLOTTED, `podId\0incarnationId`, which is

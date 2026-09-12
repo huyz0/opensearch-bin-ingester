@@ -381,9 +381,12 @@ public final class DefaultIngest implements Ingest {
                             "the accumulator produced no segment for a non-empty batch"));
             // ⚠️ BUILT ONCE, SO A RETRY COULD CARRY THE SAME TRIPLE -- which is
             // the only thing that lets the sequencer answer one instead of
-            // committing it twice. `flushSeq++` used to sit inside this
-            // constructor call, so the number moved before the outcome was
-            // known and no two attempts could ever share a triple. Forwarding
+            // committing it twice. The REQUEST used to be built inside the
+            // `sequencer.commit(...)` call, so no two attempts could ever share
+            // a triple. ⚠️ THE `flushSeq++` DID NOT MOVE and should not: it is
+            // still inside this constructor call, five lines down. M5.2 hoisted
+            // the REQUEST, and M5.32 found five sites saying otherwise -- this
+            // was the last of them, and the only one in `src/main`. Forwarding
             // will retry when the lease moves under a forwarding pod, and the
             // request it resends has to be this one.
             CommitRequest request = new CommitRequest(podShortId, incarnationId, flushSeq++,

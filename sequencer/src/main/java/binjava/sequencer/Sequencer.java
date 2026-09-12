@@ -64,12 +64,94 @@ import java.util.List;
  * <p>⚠️ A SUCCESSOR INHERITS THE WINDOW FROM THE CHAIN (M5.1), rebuilt from the
  * replay that crosses from the predecessor, so a retry that crosses a takeover
  * is answered too — including a flush whose own commit never returned, which
- * M5.25 hands to the checkpoint as well as to the running window. ⚠️ ONE STATED
- * LIMIT REMAINS: a checkpoint remembers a pod's LATEST incarnation only, so a
- * replay from an incarnation since superseded is not answered and lands twice.
- * That window needs a pod to restart between the original and its retry, and it
- * is the direction that duplicates rather than suppresses, which ADR-0036
- * records as the less damaging of the two.
+ * M5.25 hands to the checkpoint as well as to the running window.
+ *
+ * <p>⚠️ THE LIMITS ARE NAMED, NOT COUNTED, AND DERIVED FROM THE CODE.
+ * Counting failed three times -- "one limit remains" (M5.25), "two" (M5.27),
+ * then review found a third. Naming them was not enough either: the first
+ * attempt took its names from two TEST names and missed a case that
+ * DUPLICATES. So this list is derived from the two refusal branches of
+ * {@code IdempotencyWindow.answer} and from what a checkpoint cannot seed,
+ * which is where the behaviour actually lives.
+ *
+ * <p>⚠️ EACH CITED TEST NAME IS ON ONE LINE, UNSPLIT. The argument for
+ * naming over counting is that a name is CHECKABLE, and an identifier broken
+ * across two {@code} spans is not: review MEASURED that {@code grep} for all
+ * three found nothing. ⚠️ AND A GATE WOULD HAVE CAUGHT THE SPLITS, which an
+ * earlier draft of this paragraph denied -- review BUILT the rung-3 shape
+ * (every {@code Class.method} cited in {@code src/main} javadoc resolves to a
+ * {@code @Test}) and ran it on the split version: it reported all three, because
+ * a split leaves the first half still parseable and dangling. M5.56 owns
+ * writing it. ⚠️ The same draft said these lines run past 100 columns; they
+ * are 87, 77, 80 and 97.
+ *
+ * <p><b>REFUSED — detected, and never applied twice.</b> These are the two
+ * branches of {@code answer}:
+ * <ul>
+ * <li><b>The pointed delta does not carry the triple.</b> Reached two ways: the
+ * pod's single pointer has moved PAST the replay (an older retry — answering
+ * it would mean the unbounded walk the pointer exists to avoid), or the triple
+ * is resent under a DIFFERENT {@code segmentKey}. Both are permanent for that
+ * {@code flushSeq}, because answering with offsets belonging to other records
+ * is worse than failing. Pinned by
+ * {@code DedupAcrossTakeoverTest.aReplayFromBELOWThePointerIsREFUSED_NotAppliedTwice},
+ * {@code SequencerDedupTest.aReplayThePointedDeltaDoesNotCarryIsREFUSED} and
+ * {@code SequencerDedupTest.aSegmentMatchingOnlyPARTOfTheTripleAnswersNOTHING}.
+ * </li>
+ * <li><b>The pointer names a delta that is gone.</b> Only reachable once a
+ * pointer is INHERITED from a predecessor's checkpoint and can outlive the
+ * delta it names — every pointer this build writes is written beside its own
+ * delta. ⚠️ UNPINNED: that branch's own comment says this "is where its
+ * test lives", and no test lives there.</li>
+ * </ul>
+ *
+ * <p><b>DUPLICATED — not detected at all, and applied twice.</b> These are
+ * what a checkpoint cannot seed OR DID NOT RECORD — and the second half of
+ * that rule was missing until review found the third bullet below, which a
+ * checkpoint COULD have seeded and simply never recorded. An incomplete
+ * generative rule is how the next one gets missed:
+ * <ul>
+ * <li><b>A superseded incarnation.</b> A checkpoint remembers a pod's LATEST
+ * incarnation only, so a replay from one since superseded is treated as fresh.
+ * It needs a pod to restart between the original and its retry. ⚠️ UNPINNED
+ * in either direction — M5.52 owns writing it.</li>
+ * <li><b>A bare v0 slot.</b> {@code ChainReplay} skips a slot with no pointer,
+ * because seeding it would evict a real pointered slot and admit the literal
+ * key {@code pod\0null} that nothing matches — so for a pod whose only record
+ * is a bare slot, a replay crossing a takeover is applied twice. Pinned, and
+ * harder than the limit above:
+ * {@code DedupAcrossTakeoverTest.aBAREV0CheckpointSlotLeavesItsPodUNPROTECTED_AndThatIsRecorded}
+ * drives a real takeover
+ * and asserts TWO deltas carry the segment. M5.22 landed with the gap open;
+ * closing it means giving up bounded recovery for that chain, or an
+ * unanswerable-watermark tier.</li>
+ * <li><b>A pod absent from an intermediate checkpoint's pods map.</b> A
+ * successor's {@code CheckpointWriter} starts EMPTY and is never handed what
+ * the chain gave it: {@code LocalSequencer} seeds the in-memory window from
+ * {@code log.recoveredPods()} and constructs the writer with nothing. So a
+ * checkpoint written by a middle leader carries cumulative OFFSETS but a
+ * TRUNCATED pods map, and {@code ChainReplay} stops the next successor's walk
+ * at it — the epoch before is never read. ⚠️ THIS NEEDS NO RESTART, NO v0
+ * OBJECT AND NO LEGACY BUILD: two takeovers, which is any rolling deploy.
+ * MEASURED by review: leader 1 commits {@code podb/i1} flushSeq 0; leader 2 —
+ * a DIFFERENT pod, at {@code K=1} so a checkpoint is written — commits twice;
+ * leader 3 takes the retry, and TWO deltas carry the segment. Both details are
+ * load-bearing: at {@code K=1000} no checkpoint is written and the answer is
+ * one, and if leader 2's commits were {@code podb}'s own then {@code podb} is
+ * in that checkpoint with a higher watermark and the retry is refused by the
+ * pointer branch instead. M5.55 carries the full configuration.
+ * ⚠️ UNPINNED, and M5.55 owns it.</li>
+ * </ul>
+ *
+ * <p>⚠️ SO THE PROPERTY IS NOT "A RETRY CROSSING A TAKEOVER IS ANSWERED",
+ * and it is not "answered or refused" either: the DUPLICATED family above is
+ * the direction I2 forbids, which ADR-0036 calls the less damaging of the two
+ * failures rather than a safe one. ⚠️ NO COUNT APPEARS IN THIS PARAGRAPH,
+ * and that is deliberate: the two headings carry the split and cannot drift,
+ * while this sentence said "TWO" over a list of three until review caught it --
+ * the FOURTH wrong number in this enumeration's history, written inside the
+ * commit that retires counting. A refused retry costs the caller an error;
+ * a duplicated one costs two copies of the same records at two offsets.
  *
  * <p>⚠️ THE TRIPLE IS NOT THE WHOLE KEY OF AN ANSWER. A replay is DETECTED on
  * {@code (podId, incarnationId, flushSeq)}, but it is ANSWERED only by a
