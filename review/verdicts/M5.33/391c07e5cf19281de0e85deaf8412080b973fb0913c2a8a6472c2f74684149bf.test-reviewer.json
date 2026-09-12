@@ -1,0 +1,15 @@
+{
+  "task": "M5.33",
+  "role": "test-reviewer",
+  "diff_sha256": "391c07e5cf19281de0e85deaf8412080b973fb0913c2a8a6472c2f74684149bf",
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/FleetSequencerCostTest.java:151",
+      "summary": "The measured window has a live lease renewer running against the SAME counter on a real clock, so the exact counts are time-dependent. MEASURED: a 4 s stall between `before` and `after` makes atOne.writes() 2, not 1.",
+      "detail": "MEASURED, out of tree. `pod()` builds each FleetSequencer through `LocalSequencer.start(store, PREFIX, manager, 8)`, whose 4-arg form installs `sleepFor(leases.renewInterval())` -- a real `Thread.sleep(3 s)` on a virtual thread -- and `config(...)` sets renewInterval to `Duration.ofSeconds(3)` with `Clock.systemUTC()`. That renewer issues `leases.renew()` (a `putIfMatch`, counted as a PUT by `CountingBinStore`) against the very `CountingBinStore` instance the window brackets. Inserting `Thread.sleep(4000)` between `var before = store.counts()` (:151) and `follower.commit(...)` (:152) reds the test with `[one delta PUT, made by the leaseholder] expected: 1L but was: 2L`. So the four `isEqualTo` pins are exact counts asserted across a window a background thread can write into. NOT INTRODUCED HERE AND NOT NEW: `FleetSequencerTest.aFollowerDoesNotWriteTheCHAINItself` uses a byte-identical fixture (same 10 s/3 s LeaseConfig, same `Clock.systemUTC()`, same absolute PUT delta) and predates this commit, so this is the established house pattern rather than something this test invented -- which is why it is minor and not major. But this test is strictly MORE exposed than its neighbour: it runs the fixture TWICE per execution (two independent 3 s races) and pins reads as well as writes, so it has four exact assertions where the neighbour has one. testing.md rule 1 is the applicable rule (a test that needs a clock is a signal), and the seam to remove the dependency already exists and is package-private to this package for exactly this purpose: `LocalSequencer.sleepFor`'s own javadoc says it is installed nowhere but a test and cites `sleepFor(Duration.ofDays(1))` leaving the build green. `() -> LocalSequencer.start(store, PREFIX, manager, 8, LocalSequencer.sleepFor(Duration.ofDays(1)))` removes the race outright. Recording rather than blocking, on review.md rule 11: the realistic window is ~1 ms against a 3 s deadline.",
+      "failure_scenario": "A loaded CI runner or a >3 s GC pause between the leader pod's construction and the `after` snapshot lets the lease renewer's `putIfMatch` land inside the counted range. `aForwardedCommitCostsTHREEReadsAndONEWriteAtANYNumberOfStreams` then reds with `expected: 1L but was: 2L` on a tree where nothing is wrong -- MEASURED exactly that message by inserting a 4 s sleep at :151. The engineer who sees it is looking at the one assertion in the tree that enforces non-negotiable 6 on the commit path, reding for a reason that has nothing to do with request shape, and the cheapest way to make a flaky cost pin quiet is to loosen it."
+    }
+  ]
+}

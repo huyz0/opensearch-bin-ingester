@@ -1,0 +1,29 @@
+{
+  "task": "M5.33",
+  "role": "reviewer",
+  "diff_sha256": "8e96eb8f92b2fc332b90e8153df53d6350cd153aa0048d896180c753a3a11d8a",
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/FleetSequencerCostTest.java:31",
+      "summary": "The retraction of the DeadPeerTest contrast states 57baf46 as \"one file and 185 insertions\"; that commit is seven files and 381 insertions.",
+      "detail": "`git show 57baf46 --numstat` gives backlog.md 2/1, decisions/0039-*.md 129/0, review/overrides.md 2/0, CommitProtocolSimulation.java 8/4, DeadPeerTest.java 185/0, ForwardingPods.java 10/4, InProcessTransport.java 45/1 -- seven files, 381 insertions. Only the DeadPeerTest.java ROW is one file at 185/0. The load-bearing half of the sentence is verified and correct: DeadPeerTest.java is 185 insertions and 0 deletions, FleetSequencerTest.java does not appear in that commit at all, and it is exactly 657 lines at 11fe5d8, at 57baf46 and at HEAD (377 at ebb61f3, 379 at ec78a49) -- it never crossed 700. Accurate phrasing would be \"one file ADDED, 185 insertions, 0 deletions, FleetSequencerTest untouched in that commit\".",
+      "failure_scenario": "A later reader does what this round was asked to do -- check the correction before reusing it -- runs `git show 57baf46 --stat`, sees seven files including an ADR, and concludes the correction is as loose as the claim it replaced. The DeadPeerTest precedent then survives another round, which is the exact loop this paragraph exists to end, in a task whose subject is that a number be measured rather than asserted."
+    },
+    {
+      "severity": "minor",
+      "file": "ingest/src/test/java/binjava/ingest/SegmentProxyFixtures.java:19",
+      "summary": "DeadPeerTest is still cited as a precedent for a split in a second file, which this commit does not reach.",
+      "detail": "SegmentProxyFixtures.java:17-20 reads \"SPLIT OUT WHEN SegmentProxyTest CROSSED 700 LINES -- code-structure.md rule 1, split rather than raise, the same way {@code DeadPeerTest} was split from {@code FleetSequencerTest}.\" DeadPeerTest was not split from FleetSequencerTest (see the previous finding's numstat), so the falsehood the new javadoc retracts still stands here and in DeadPeerTest.java:20 itself. PRE-EXISTING and out of this commit's scope: the file is in another module, is unstaged, and touching it would widen a documentation commit. Answering the round-4 question literally: no, not nothing still cites it. Suggested disposition is a backlog row correcting both remaining sites in one sweep, not an edit here.",
+      "failure_scenario": "The next author whose test file nears 700 lines greps for the precedent, lands on SegmentProxyFixtures rather than on FleetSequencerCostTest, and repeats \"the same way DeadPeerTest was split\" a fourth time -- the retraction only covers the site a reader of the COST test sees."
+    },
+    {
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/FleetSequencerCostTest.java:123",
+      "summary": "Two incomplete-edit artifacts in the new javadoc: a duplicated clause, and a paragraph that still describes the deleted accessors in the present tense.",
+      "detail": "(1) :122-124 reads \"**M5.6g** takes it from three to one by reusing the lease the forwarder already read; when that lands When it lands, the two expected {@code StoreCounts} are the ONLY self-enforcing sites\" -- \"when that lands When it lands\" is one clause left behind by another. (2) :150-160, the Cost record's javadoc, still opens \"THE ASSERTION IS ON THE WHOLE RECORD, NOT ON THESE ... these accessors exist only to make the failure message readable\" in the present tense, and only the NEXT paragraph (:162) says they are gone; `Cost` now has one component, `delta()`, so \"THESE\" has no antecedent. Both are prose only -- nothing here changes what the test constrains. Related and not worth its own finding: with the accessors gone, `private record Cost(StoreCounts delta)` is a one-component wrapper that `forwardedCommitCost` could drop in favour of returning `StoreCounts` directly.",
+      "failure_scenario": "The M5.6g author, who is the addressee of the sentence at :122, reads a broken clause and a paragraph promising accessors the record does not have, and either re-adds reads()/puts() -- restoring the dead-by-construction assertions this round deleted -- or skims past the hand-off rule that is the point of the paragraph."
+    }
+  ]
+}

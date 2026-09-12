@@ -1,0 +1,15 @@
+{
+  "task": "M5.33",
+  "role": "reviewer",
+  "diff_sha256": "4029d3a20efd683245d9b792554f462c4a4c850ae037365900a04019b96b49d4",
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/FleetSequencerCostTest.java:171",
+      "summary": "The Cost javadoc says \"these accessors exist only to make the failure message readable\" two lines before saying the accessors are gone; the record has only delta().",
+      "detail": "Lines 171-172 end the first paragraph with \"the test compares the entire delta and these accessors exist only to make the failure message readable\", and lines 174-180 then say \"AND THE ACCESSORS ARE GONE\" and record that reads()/puts() were measured dead by construction. The record at line 182 is `private record Cost(StoreCounts delta)` -- there are no accessors beyond the single component, so the first sentence is false as it stands and the two paragraphs contradict each other. Failure scenario: whoever extends this pin for a new request kind (M5.6g's sweep is explicitly handed off in this same file) reads the first paragraph, goes looking for the reads()/puts() helpers it says exist, and either re-adds them -- restoring exactly the four dead-by-construction assertions round 4 measured and removed -- or concludes the javadoc describes a different file and stops trusting it. Related and in the same place: with the accessors gone, Cost is a single-component wrapper over StoreCounts that forwardedCommitCost could return directly. Per review.md rule 11 this belongs in the commit body, not in a sixth round -- the surface a fix would add is more of the prose that is already the defect.",
+      "failure_scenario": "Whoever extends this pin for a new request kind -- M5.6g's sweep is handed off in this very file -- reads line 171's \"these accessors exist only to make the failure message readable\", goes looking for reads()/puts(), and either re-adds them, restoring exactly the four dead-by-construction assertions round 4 measured and removed, or concludes the javadoc describes a different file and stops trusting the rest of it."
+    }
+  ]
+}

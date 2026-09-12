@@ -1,0 +1,22 @@
+{
+  "task": "M5.33",
+  "role": "reviewer",
+  "diff_sha256": "bd1dcbb58902d56d605e7a88107ea72b6172af3b71ed069e53ae7aa655430238",
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/FleetSequencerCostTest.java:29",
+      "summary": "The DeadPeerTest contrast is false: that split moved no content either, and FleetSequencerTest never crossed 700 lines",
+      "detail": "The javadoc says NOTHING WAS MOVED OUT ... DeadPeerTest uses the same \"split from\" formula for a split that genuinely did move content, and the two should not read as the same event. MEASURED: `git show --stat 57baf46` (M5.6g: record why the cheap fix for the per-commit election is wrong, and guard it) is `1 file changed, 185 insertions(+)` -- DeadPeerTest was written new and no other file was touched. FleetSequencerTest has been exactly 657 lines since 11fe5d8 (M5.6c) and its only three commits took it 377 -> 379 -> 657, so it never crossed 700 and nothing was ever moved out of it. The two ARE the same event: new content placed in a new file to stay under the limit. The claim being cited as the contrast is DeadPeerTest's own javadoc line 20 (SPLIT OUT OF FleetSequencerTest when it crossed 700 lines), which is itself false and pre-existing -- not this diff's to fix, but this diff repeats it as established fact.",
+      "failure_scenario": "A reader deciding how to apply code-structure.md rule 1 opens the cited precedent to see what a real split looks like, greps FleetSequencerTest for the tests DeadPeerTest supposedly took out of it, finds none, and cannot tell whether the git history or the comment is wrong -- in the one file in the tree whose subject is that a stated number be measured rather than assumed."
+    },
+    {
+      "severity": "minor",
+      "file": "docs/internal/product/milestones/M5/SPEC.md:305",
+      "summary": "The M5.6g hand-off is enumerated three times with three different lists, none complete, and the backlog cell still says two sites",
+      "detail": "SPEC.md:305 says `when it lands FOUR sites change, not two: this cell, BOTH isEqualTo(3L) values, the test's own name, and the GET/STAT/GET breakdown in its javadoc`. FleetSequencerCostTest.java:113 says `FOUR sites change, not two: this method's name, both expected StoreCounts, the SPEC's cost row, and the GET/STAT/GET breakdown above`. Each list omits exactly what the other names -- the SPEC omits both `new StoreCounts(1, 2, 0, 1, 0)` literals (:130, :134), the javadoc omits both `isEqualTo(3L)` (:136, :141). And backlog.md:42 still carries the round-2 two-site framing verbatim: `M5.6g takes it to 1; both the cell and the assertion change when it lands` -- which the SPEC line in the same commit contradicts with `not two`. NEITHER four-list names the three sites that do NOT red: the `as()` text at :127 (`the lease GET, the election's STAT and GET`), the `as()` text at :135 (`the lease read, plus the election's stat and get`), and the javadoc headline at :77 (`A forwarded commit costs THREE reads`). CONTRIBUTING CAUSE, worth naming because it is why the two lists disagree: the last four assertions (:135-:146) cannot fail. atOne.reads(), atFour.reads(), atOne.delta().puts() and atFour.delta().puts() are all implied by the two whole-record equalities at :130 and :134, and AssertJ stops at the first failure, so no mutation can red them without first reding the record comparison. They carry no falsifying power and four of the M5.6g update sites the enumerations are arguing about.",
+      "failure_scenario": "M5.6g lands; the engineer works the SPEC's list of four, updates the cell, both isEqualTo(3L) values, the method name and the javadoc breakdown; the two whole-record assertions red and get fixed; the suite goes green -- and the file is left describing an election the follower no longer performs, at :77, :127 and :135, on a commit path whose whole point is that the election is gone. Nothing reds on those three, because neither four-list names them. That is the stale-prose class M5.27/M5.32/M5.34 exist to clean up, seeded by this commit."
+    }
+  ]
+}
