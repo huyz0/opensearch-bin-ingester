@@ -1,0 +1,15 @@
+{
+  "task": "M5.30",
+  "role": "test-reviewer",
+  "diff_sha256": "085ad8f088de6a3433dc5e34b248377cf7a5ddc6bb55bb21486e19eb527c314d",
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:107",
+      "summary": "M5.50's sizing enumeration names SEEDS*8 as the first multiplier that false-reds; MEASURED, the first is SEEDS*6. At the tightest prefix (N=8) the ACK half is 47 events, so SEEDS*6=48 and SEEDS*7=56 both red with no defect present. Every figure the row states is exact; the gap is that 6 and 7 are unlisted between a multiplier said to hold and one said to fail.",
+      "detail": "Re-verified from the per-seed ACK-kind series measured in round 2 (no file in the repository touched this round; figures recomputed from the round-2 out-of-tree run's CSVs). Cumulative ACK-kind counts give a prefix-minimum ratio at N=8 with 47 events for every multiplier, so: SEEDS*1 -> 5.875x, SEEDS*3 -> 1.9583x, SEEDS*5 -> 1.175x (47 against 40, seven events of slack), SEEDS*6 -> 0.9792x RED, SEEDS*7 -> 0.8393x RED, SEEDS*8 -> 0.734x RED. The row's three stated holding values and its stated 0.734x at SEEDS*8 are all exactly right; what it does not say is that the boundary sits between 5 and 6, and the phrase 'SEEDS * 8 or above FALSE-REDS' reads as though 6 and 7 were surveyed and safe. A careful reader can derive the true boundary from the row's own 1.175x (5 x 1.175 = 5.875 is the largest viable multiplier), which is why this is minor and not major. It is a todo row, nothing is asserted, and no assertion in the tree depends on it. Recorded rather than fixed, per review.md rule 11 -- this must not buy a round four.",
+      "failure_scenario": "M5.50's implementer wants more headroom than 1.175x gives, reads the row as bounding the safe range at 'below 8', ships `assertThat(ackOnlyEvents).isGreaterThanOrEqualTo(SEEDS * 6L)`, and the sweep false-reds with no defect present on the first `-Dsweep.seeds=8` bisecting run: MEASURED 47 ACK-kind events over seeds 0-7 against a floor of 48."
+    }
+  ]
+}

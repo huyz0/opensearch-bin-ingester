@@ -1,0 +1,22 @@
+{
+  "task": "M5.30",
+  "role": "reviewer",
+  "diff_sha256": "4731a27a73869863ee1c2a7f74b4cc0bf9a95eece598dd69c1143c2e1c2b2796",
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSweepTest.java:342",
+      "summary": "The two figures imported from the strip demonstration -- 2,295 violations and 29.83x -- are 200-SEED figures carried into text whose every other number is stated at 1,000 seeds, with no seed count given. At 1,000 seeds they are ~11.5k and 29.87x.",
+      "detail": "RE-MEASURED on this tree, 1,000 seeds, ROUNDS=120, PODS=3, out of tree against the sequencer test classpath: ackEvents 160,478 (160.478/seed), of which 11,110 are ACK (11.110/seed) and 149,368 are CONFIRMED (149.368/seed, 93.08%). Every figure this diff states reproduces EXACTLY -- readers 85,458 / 85.458 per seed / mean 8.5458x / prefix minimum 8.2000x at N=1; acks mean 32.0956x / prefix minimum 30.6000x at N=1; the ACK half mean 2.2220x and prefix minimum 1.1750x at N=8; 12 seeds with zero ACK events -- with ONE class of exception. Stripping the ACK half leaves 149,368 against a floor of SEEDS*5 = 5,000, which is 29.8736x, not the 29.83x stated at line 343 and repeated at backlog.md:37 and backlog.md:65. 29.83x is 29,829/1,000, the figure from the 200-seed run the demonstration was actually done on, and 2,295 violations is from that same 200-seed run (at 1,000 seeds the ack+1 defect scales to roughly 11,500, since violations track the 11.11 ACK events per seed). Neither site says 200. The comment at line 331 and the M5.50 row both open by framing the measurement at 1,000 seeds, so the reader carries that frame into the demonstration sentence. This is the defect class M5.30 exists to remove -- a number in a comment whose basis a later reader cannot reconstruct -- at one tenth the magnitude of the one it is removing, which is why it is minor rather than major. Fix is two words: say `over 200 seeds` where the 2,295 appears.",
+      "failure_scenario": "Whoever takes M5.50 re-runs the strip demonstration at the 1,000 seeds every neighbouring figure uses, measures ~11,500 violations instead of 2,295 and 29.87x instead of 29.83x, cannot reconcile either number with the row that sent them there, and either re-derives the whole demonstration or concludes the simulation moved under them and opens a hunt for a regression that is not there."
+    },
+    {
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:39",
+      "summary": "The corrected done cell attributes the units error to \"THE FIRST DRAFT OF THIS CELL\", but the claim that actually stands in the committed tree is M5.30's own TASK cell, left of it and untouched, which still asserts the floors' clearances were \"MEAN-based\". The row does not say it is left saying so.",
+      "detail": "The task cell (same line, left column, unchanged by this diff) reads: \"both stated clearances are MEAN-based where the sentences they replace speak of cumulative PREFIXES, which is the same units error one level up\". That sentence is measurably false -- the superseded profile gives 74.172 readers/seed, mean 7.417x, prefix minimum 7.322x at N=94, so the old 7.3x was the prefix minimum; and 17.53/5 = 3.506x rules out 3.09x having been a mean. The done cell corrects the substance clearly (\"The units were right in both\"), but attributes the error to a draft of the DONE cell, a document no reader of the committed tree ever sees, rather than to the task cell where the false sentence remains. This file's own convention does it the other way: M5.26 says \"THE 3.3% IN THIS ROW WAS WRONG and the row is left saying so\", and M5.29 says \"THREE VERBS SKIPPED THE COUNTER, NOT TWO\", each naming its own left cell. Fix is one clause -- \"and the task cell left of this one is left saying so\".",
+      "failure_scenario": "A reader scanning backlog.md for the state of the sweep's floors reads the task cell as the row's standing statement of the defect, takes \"both stated clearances are MEAN-based ... the same units error one level up\" as established, and either distrusts every prefix-derived figure in CommitProtocolSweepTest as a class or repeats the false units diagnosis in the next row that cites this one -- the correction that would stop them is 300 words to the right and is framed as being about a draft they have never seen."
+    }
+  ]
+}

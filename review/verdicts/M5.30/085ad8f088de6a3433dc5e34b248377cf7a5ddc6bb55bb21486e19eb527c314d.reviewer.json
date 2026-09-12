@@ -1,0 +1,22 @@
+{
+  "task": "M5.30",
+  "role": "reviewer",
+  "diff_sha256": "085ad8f088de6a3433dc5e34b248377cf7a5ddc6bb55bb21486e19eb527c314d",
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSweepTest.java:346",
+      "summary": "\"The 29.83x is a RATIO and holds at both\" -- measured 29.829x at 200 seeds but 29.874x at 1,000, so 29.83x is still a 200-seed figure",
+      "detail": "Re-measured on this tree (1,000 seeds, SWEEP_FAULTS, ROUNDS=120, PODS=3), counting AckEvent.isAck() against the whole trace: total 160,478 events, ACK-kind 11,110, CONFIRMED 149,368. Stripping the ACK half leaves 149,368/5,000 = 29.8736x at N=1,000 and 29,829/1,000 = 29.8290x at N=200. The sentence was added this round to remove exactly this ambiguity for 2,295/11,110 -- both of which verified exactly (2,295 violations = 2,295 acks at N=200; 11,110 = 11,110 at N=1,000, one per ack, and 0 with the ACK half stripped) -- but the ratio beside them is then asserted to be N-invariant when it is not. Failure scenario: the next engineer re-derives the stripped clearance from the 1,000-seed figures stated twelve lines above, gets 29.87x, and cannot tell whether the comment or their arithmetic is wrong -- the same doubt about a stated headroom that M5.30 exists to remove. Same figure, same wording, in the M5.28 and M5.50 backlog cells (docs/internal/product/backlog.md:37 and :65). Rounding-level, hence minor.",
+      "failure_scenario": "the next engineer re-derives the stripped clearance from the 1,000-seed figures stated twelve lines above, gets 29.87x, and cannot tell whether the comment or their arithmetic is wrong -- the same doubt about a stated headroom that M5.30 exists to remove. Same figure, same wording, in the M5.28 and M5.50 backlog cells (docs/internal/product/backlog.md:37 and :65). Rounding-level, hence minor."
+    },
+    {
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:65",
+      "summary": "M5.50's sizing table puts the false-red boundary at SEEDS * 8; measured, SEEDS * 6 already false-reds (47 acks against 48 at N=8)",
+      "detail": "Verified every quoted figure for the ACK-kind half: SEEDS*5 holds at every cumulative prefix with a minimum of 1.1750x at N=8 (47 against 40, seven events of slack); SEEDS*3 gives 1.9583x; SEEDS*1 gives 5.8750x -- all three exact. But the per-seed prefix minimum is cum(8)/8 = 5.875, so the first multiplier that false-reds is 6, not 8: SEEDS*6 reds first at N=8 (47 against 48, 0.9792x) and SEEDS*7 reds first at N=3 (18 against 21, 0.8571x). SEEDS*8 does red, though first at N=2 (15 against 16, 0.9375x) rather than at the quoted 0.734x, which is its N=8 ratio. Failure scenario: M5.50's implementer wants more than 1.175x of slack, reads \"SEEDS * 8 or above FALSE-REDS\" as the boundary, and sizes the new floor at SEEDS*6; `-Dsweep.seeds=8` -- the bisect mode the file documents -- then reds with no defect present, breaking the seed-invariance M5.28's row says every floor there has and re-creating the vacuity/false-red trap this row is written to avoid. Minor rather than major because the row's recommended value (SEEDS*5) is correct, and 47-at-N=8 is stated, so the true boundary is derivable from the numbers given.",
+      "failure_scenario": "M5.50's implementer wants more than 1.175x of slack, reads \"SEEDS * 8 or above FALSE-REDS\" as the boundary, and sizes the new floor at SEEDS*6; `-Dsweep.seeds=8` -- the bisect mode the file documents -- then reds with no defect present, breaking the seed-invariance M5.28's row says every floor there has and re-creating the vacuity/false-red trap this row is written to avoid. Minor rather than major because the row's recommended value (SEEDS*5) is correct, and 47-at-N=8 is stated, so the true boundary is derivable from the numbers given."
+    }
+  ]
+}

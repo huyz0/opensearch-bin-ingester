@@ -294,17 +294,58 @@ class CommitProtocolSweepTest {
         // LIVE one -- it carries I3 and I4's drop clause, half of what M4's
         // completion condition claims -- and it is the O(E-squared) loop anyone
         // optimising against the budget deletes first.
+        // ⚠️ THE STATED FIGURE WAS STALE (M5.30), and a floor whose headroom
+        // is wrong cannot be reasoned about the next time it needs tightening
+        // -- which is the only reason these comments carry numbers at all. The
+        // old "74.17 per seed" was the SUPERSEDED profile's row from the table
+        // at the top of this file, not this profile's.
+        // ⚠️ ITS UNITS WERE RIGHT, AND M5.30's FIRST DRAFT SAID OTHERWISE.
+        // That draft called "7.3x" a mean quoted where the sentence speaks of
+        // cumulative prefixes; review re-ran the superseded profile and
+        // measured 74.172 readers per seed, a MEAN clearance of 7.417x and a
+        // cumulative-prefix MINIMUM of 7.322x at N=94. 7.3x is the prefix
+        // minimum. The old comment's sentence and its number agreed; only the
+        // profile had moved.
+        // ⚠️ RE-MEASURED on this tree over 1,000 seeds: 85,458 readers, 85.46
+        // per seed, mean clearance 8.55x. The number that matters for a
+        // SHORTENED run is the cumulative-prefix MINIMUM, which is 8.20x, and
+        // it falls at N=1 -- so `-Dsweep.seeds=1` is the TIGHTEST run for this
+        // floor rather than a vacuous one, and no interior prefix dips below
+        // it.
         assertThat(readersChecked)
-                .as("one reader judged per epoch that has a chain -- measured 74.17 per "
-                        + "seed, so a floor of 10 clears every cumulative prefix by 7.3x")
+                .as("one reader judged per epoch that has a chain -- measured 85.46 per "
+                        + "seed, and the TIGHTEST cumulative prefix clears the floor of 10 "
+                        + "by 8.2x")
                 .isGreaterThanOrEqualTo(SEEDS * 10L);
         // ⚠️ THE TRACE MUST EXIST BEFORE ITS FLOOR MEANS ANYTHING. The floor
         // assertion below is RELATIVE -- "no chain's floor is above 0" -- so an
         // EMPTY trace satisfies it, and review MEASURED exactly that: with every
         // `acks.add` neutralised the whole suite stayed green while this test
         // reported success. That is the slot-0 CONTINUE defect reintroduced one
-        // level up, on the trace rather than on its floor. Measured 17.53 events
-        // per seed, so a floor of 5 clears every cumulative prefix by 3.09x.
+        // level up, on the trace rather than on its floor.
+        // ⚠️ RE-MEASURED (M5.30): 160,478 ack events over 1,000 seeds --
+        // 160.48 per seed, not the 17.53 this comment used to claim, so the
+        // floor of 5 clears by 32.10x on the mean and by 30.60x on the
+        // TIGHTEST cumulative prefix, against a stated 3.09x. Same single
+        // error as the readers floor above: a stale figure. 3.09x was already
+        // a prefix minimum -- 17.53/5 is 3.506x, so it cannot have been a mean.
+        // The prefix minimum is again at N=1.
+        //
+        // ⚠️ AND 30.60x IS HEADROOM OVER THE WRONG POPULATION, which review
+        // MEASURED and M5.50 owns. This trace is 93% CONFIRMED events: 149.37
+        // per seed against 11.11 ACK per seed. `checkAckOrder`'s only two
+        // `found.add` sites sit past an `if (!e.isAck()) continue;`, so it is
+        // the ACK HALF that this floor exists to guarantee is non-empty -- and
+        // that half clears by 2.22x on the mean, by **1.18x at N=8** on the
+        // tightest prefix, and 12 seeds emit ZERO ack events. Review
+        // demonstrated the gap: strip the three `acks.add(...acked(...))`
+        // calls and M4.50's ack+1 defect goes to 0 violations while this floor
+        // stays green at 29.83x. ⚠️ THE VIOLATION COUNT IS PER RUN LENGTH --
+        // 2,295 at 200 seeds, 11,110 at 1,000, one per ack -- so it is stated
+        // with its N here rather than left to be read against the 1,000-seed
+        // figures twelve lines up. The 29.83x is a RATIO and holds at both. A single floor over a 93/7 mixture
+        // cannot guard the minority half at any seed-invariant value; the
+        // answer is to split it, not to raise it.
         assertThat(ackEvents)
                 .as("the ack trace must be non-empty before its floor says anything -- "
                         + "`checkAckOrder` over an empty list reports nothing, forever")

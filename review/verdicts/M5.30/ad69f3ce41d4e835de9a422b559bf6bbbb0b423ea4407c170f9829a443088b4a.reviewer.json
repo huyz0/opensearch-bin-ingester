@@ -1,0 +1,29 @@
+{
+  "task": "M5.30",
+  "role": "reviewer",
+  "diff_sha256": "ad69f3ce41d4e835de9a422b559bf6bbbb0b423ea4407c170f9829a443088b4a",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSweepTest.java:300",
+      "summary": "The comment's own diagnosis is false: the old \"7.3x\" was NOT a mean, it was the correct cumulative-prefix minimum for the figure it cites. Re-measured on this tree.",
+      "detail": "The new comment states: 'The old \"74.17 per seed\" was the SUPERSEDED profile's row from the table at the top of this file, not this profile's; and \"7.3x\" was a MEAN where the sentence it sits in speaks of cumulative PREFIXES.' The first half is true (measured). The second half is measurably false. I re-ran the sweep loop over 1,000 seeds with the superseded profile `new FaultInjectingStore.Faults(0.05, 0.05, 0.1, 0)`, rounds 120, pods 3, on this tree: readers total 74,172 (74.172 per seed -- the 74.17 in the table, reproduced), mean clearance 74.172/10 = 7.4172x, and cumulative-prefix MINIMUM 7.3223x at N=94. The old comment said 7.3x. That is the prefix minimum, correctly computed and correctly described by the words 'clears every cumulative prefix by 7.3x'; the mean would have been written 7.4x. Arithmetic alone shows the same for acks: the old sentence cites 17.53 events per seed, whose mean clearance is 17.53/5 = 3.506x, yet it states 3.09x -- below the mean, i.e. again the shape of a prefix minimum, not a mean. So the old comments carried ONE error (a stale figure), not the two this change asserts, and the convention they used was the same one this change adopts. Failure scenario: the next person tightening either floor reads a committed, emphasised claim that the file's prior clearance numbers were mean-based and that 'cumulative prefix' in those sentences was a units error. They will either re-derive the convention from scratch or quote a mean believing that is what was always meant -- which is the exact defect (a floor whose stated headroom cannot be reasoned about) this task exists to remove, re-committed one level up. Same claim repeats at lines 323-325 ('Same two errors as the readers floor above: a stale figure, and a mean quoted where the sentence speaks of prefixes') and in the backlog cell at docs/internal/product/backlog.md:39 ('TWO ERRORS IN EACH COMMENT, NOT ONE ... AND a MEAN quoted where the sentence speaks of cumulative PREFIXES'), so the fix is three sites. Note the done-cell also asserts 'the row's own figures all checked out', and this is the row figure that does not.",
+      "failure_scenario": "A future engineer tightening `readersChecked >= SEEDS * 10L` (or the ack floor) reads the committed comment, believes the file's prior clearance figures were means and that 'every cumulative prefix' was a units error, and quotes a mean as the new headroom. A mean-based headroom does not bound a shortened `-Dsweep.seeds=N` run, so the next re-measure lands a floor that false-reds at some prefix with no defect present -- the same class of unusable-headroom defect this task was opened to remove."
+    },
+    {
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:39",
+      "summary": "\"seed 0 is the tightest case in the whole sweep\" is false as stated -- it is the tightest cumulative PREFIX, not the tightest seed (seed 822: 37 readers; seed 489: 45 acks).",
+      "detail": "Measured over 1,000 seeds: minimum per-seed readersChecked is 37 at seed 822 and minimum per-seed acks is 45 at seed 489, against seed 0's 82 and 153. What is true -- and what the surrounding sentence actually needs -- is that the cumulative-prefix minimum falls at N=1, so every prefix run cum(N)/(N*floor) clears by at least 8.20x/30.60x and `-Dsweep.seeds=N` can never false-red. The absolute phrasing survives in the permanent record; a later reader who adds a seed-offset or single-seed bisect option would infer that checking seed 0 is the hardest case, and it is not. The same sentence appears in the test comment at CommitProtocolSweepTest.java:307-308 ('seed 0 is the tightest case in the whole sweep'), though there the prefix frame is set in the preceding clause.",
+      "failure_scenario": "Someone later adds a single-seed or seed-offset bisect path and, trusting 'seed 0 is the tightest case in the whole sweep', runs seed 0 only as the hard case. Seed 0 yields 82 readers and 153 acks; seed 822 yields 37 readers and seed 489 yields 45 acks, so the genuinely tight seeds are never exercised and a regression that only shows up there is missed."
+    },
+    {
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:39",
+      "summary": "Locator off: the `gracefulReleaseRefusalsSeen` floor is four assertions below the ack floor, not two. The vacuity claim itself is correct.",
+      "detail": "From the ackEvents floor the order is ackFloorAlwaysZero, gracefulReleases, gracefulReleasesRefused, then gracefulReleaseRefusalsSeen -- four assertions down. The substance checks out: `isGreaterThanOrEqualTo(SEEDS / 50)` integer-divides to 0 for SEEDS < 50, so the assertion holds for any value and is vacuous there, which is the correct contrast against a prefix minimum at N=1. Only the pointer is wrong; a reader counting two assertions down lands on gracefulReleases, whose floor is `SEEDS` and is not vacuous at any N.",
+      "failure_scenario": "A reader following the cell's pointer counts two assertions below the ack floor, lands on `gracefulReleases >= SEEDS` (never vacuous), concludes the vacuous-below-50 warning applies to that floor, and either 'fixes' a floor that is fine or leaves the actually-vacuous `gracefulReleaseRefusalsSeen >= SEEDS / 50` unguarded when shortening a run below 50 seeds."
+    }
+  ]
+}
