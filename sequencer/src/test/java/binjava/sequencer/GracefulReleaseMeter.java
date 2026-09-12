@@ -33,6 +33,7 @@ final class GracefulReleaseMeter {
     private int released;
     private int refusedForAnotherPod;
     private int refusalsSeen;
+    private int releasedDespiteOwnPartition;
 
     GracefulReleaseMeter(FaultInjectingStore faulty) {
         this.faulty = faulty;
@@ -69,6 +70,14 @@ final class GracefulReleaseMeter {
             // replaced by an empty lambda; and counting ANY store call kept it
             // green at 1,626 with the release swapped for a `stat`.
             released++;
+            // ⚠️ ASKED OF THE LEADER, NOT OF THE ACTOR (M5.31). The actor is
+            // what the store judged; the leader is who the release was FOR, and
+            // the defect is exactly the two differing. A release that completed
+            // while the leader was cut off is one the leader's own partition
+            // should have refused.
+            if (faulty.isPartitioned(leaderPod)) {
+                releasedDespiteOwnPartition++;
+            }
         }
         List<FaultInjectingStore.Injected> during =
                 faulty.injected().subList(before, faulty.injected().size());
@@ -156,5 +165,44 @@ final class GracefulReleaseMeter {
      */
     int refusalsSeen() {
         return refusalsSeen;
+    }
+
+    /**
+     * Releases that completed while the LEADER's own partition should have
+     * refused them (M5.31).
+     *
+     * <p>⚠️ THE DIRECTION {@link #refusedForAnotherPod} CANNOT SEE. Both are
+     * M5.26's defect -- the store judging a release against whoever acted last
+     * -- but they fail opposite ways. A stale actor that is PARTITIONED refuses
+     * a release it should have allowed, which this meter has counted since
+     * M5.26. A stale actor that is NOT partitioned ALLOWS one it should have
+     * refused, and until this counter nothing in the tree looked for it: review
+     * MEASURED the two sets of seeds being different: seed 323 runs 3 releases and 9 commits on a CORRECT tree and 4 and 13 UNDER THE DEFECT, with zero wrongly-blamed refusals either way --
+     * the unseen direction showing up in the totals and in no assertion.
+     *
+     * <p>⚠️ AND IT IS THE WORSE DIRECTION. A wrongly refused release leaves
+     * the lease to expire, which is the ungraceful path the cluster already
+     * tolerates. A wrongly allowed one hands the lease back for a leader that
+     * is cut off and cannot know -- and {@link #released} credits it, so the
+     * sweep's graceful-release floor is partly met by releases that should
+     * never have completed.
+     *
+     * <p>⚠️ IT INHERITS {@link #released}'s {@code completed} SCOPE, and that
+     * is a stated limit rather than an oversight. A wrongly-allowed release
+     * whose write LANDED through the injector's {@code ambiguousPut} arm and
+     * then threw is invisible here -- the lease is written expired for a
+     * partitioned leader and nothing counts it. Dropping the conjunct is NOT
+     * the fix: M5.29 measured {@code record} running above
+     * {@code refuseIfPartitioned}, so all 38 legitimate refusals would become
+     * false positives on a correct tree.
+     *
+     * <p>⚠️ ZERO ON A CORRECT TREE BY CONSTRUCTION, which is why the T1 case
+     * builds the situation rather than waiting for it: {@code observe} sets the
+     * actor to the leader, so a partitioned leader's own release is refused and
+     * never completes. Same discipline as
+     * {@code aRefusalBLAMINGANOTHERPODIsCountedAndTheReleaseIsNotCredited}.
+     */
+    int releasedDespiteOwnPartition() {
+        return releasedDespiteOwnPartition;
     }
 }

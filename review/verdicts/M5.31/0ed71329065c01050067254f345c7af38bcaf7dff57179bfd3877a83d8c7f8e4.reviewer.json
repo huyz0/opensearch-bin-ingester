@@ -1,0 +1,15 @@
+{
+  "task": "M5.31",
+  "role": "reviewer",
+  "diff_sha256": "0ed71329065c01050067254f345c7af38bcaf7dff57179bfd3877a83d8c7f8e4",
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:66",
+      "summary": "M5.51 says THREE adjacent ints and 'three loose ints'; the Result record ends in SIX consecutive int components, four of them fed from the meter -- so the fix the row specifies does not close the swap the row itself cites as precedent",
+      "detail": "MEASURED by reading the record header at CommitProtocolSimulation.java:99-102: `int readersChecked, int midRunDrained, int gracefulReleases, int gracefulReleasesRefusedForAnotherPod, int gracefulReleaseRefusalsSeen, int gracefulReleasesDespiteOwnPartition` -- six consecutive ints, of which FOUR come from `releases` at the construction (line 624-625: released(), refusedForAnotherPod(), refusalsSeen(), releasedDespiteOwnPartition()). The row's headline and its remedy sentence both say three. The row is internally inconsistent about it: the precedent it cites -- M5.28 measuring `releases.refusalsSeen()` swapped for `releases.released()` -- is a transposition involving `released`, the fourth. Everything else in the row verified: I re-measured the transposition it records (`releases.refusedForAnotherPod()` written where `releases.releasedDespiteOwnPartition()` belongs) and the WHOLE `:sequencer:test` suite is green, 1,000-seed sweep included, so the measured claim and the rung-1 disposition are honest; only the count is wrong.",
+      "failure_scenario": "Whoever picks up M5.51 implements exactly what it specifies: the three counters it names (refusedForAnotherPod, refusalsSeen, releasedDespiteOwnPartition) become the meter's record, and `gracefulReleases` stays a loose adjacent int beside it -- as do `readersChecked` and `midRunDrained`. The row's own cited precedent, `refusalsSeen()` swapped for `released()`, is then still expressible at the boundary between the loose int and the record, so the row lands marked done while the swap it exists to make unrepresentable survives. The M5.28 guard (`refusalsSeen < gracefulReleases`) still covers that one pair, but the row will have recorded rung 1 as reached when it was not."
+    }
+  ]
+}

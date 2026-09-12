@@ -1,0 +1,29 @@
+{
+  "task": "M5.31",
+  "role": "test-reviewer",
+  "diff_sha256": "f5c1dfe4b3a13bdf1d18f175340e0ec131eb6d610aa09af17a21828eae456d36",
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSimulation.java:625",
+      "summary": "the new Result component's WIRE is unpinned -- swapping releasedDespiteOwnPartition() for refusedForAnotherPod() leaves the whole suite green",
+      "detail": "MEASURED in a throwaway worktree of the staged tree: replacing `releases.releasedDespiteOwnPartition()` with `releases.refusedForAnotherPod()` at the Result construction gives CommitProtocolSweepTest 2/2 green (1,608 releases, 0 refused, 38 refusals seen) and GracefulReleaseMeterTest 11/11 green. Both are legitimately 0 on a correct tree, so no value assertion can separate them. The consequence is not cosmetic: I MEASURED that with M5.26's defect reinstated AND `refusedForAnotherPod++` deleted, the new isZero at CommitProtocolSweepTest.java:420 is the ONLY assertion that reds (1 vs 0, seed 323) -- so under this mis-wire the sweep's coverage of the allowed direction is gone while every line still executes. Same family as the swap M5.28's State cell records and closed with `isLessThan(gracefulReleases)`; that fix does not transfer to a counter asserted isZero, and the T1 case does pin the meter itself, so this is a future-edit exposure rather than a hole in today's coverage -- which is exactly the reasoning M5.28 used to defer it. Backlog row rather than a fix in this round.",
+      "failure_scenario": "MUTATION THAT SURVIVES, measured green on the full sequencer suite: at CommitProtocolSimulation.java:625 write `releases.refusedForAnotherPod()` in place of `releases.releasedDespiteOwnPartition()`. CommitProtocolSweepTest 2/2 pass, GracefulReleaseMeterTest 11/11 pass. The sweep then asserts the SAME counter twice and the M5.31 direction is unmonitored at 1,000 seeds -- measured to matter, because with `actingAs` deleted and `refusedForAnotherPod++` deleted the new isZero is the only assertion that reds (1 vs 0 on seed 323)."
+    },
+    {
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/GracefulReleaseMeter.java:145",
+      "summary": "the new javadoc is inserted between refusalsSeen()'s javadoc and its declaration, orphaning M5.28's documentation and introducing a javac warning",
+      "detail": "The new `releasedDespiteOwnPartition()` javadoc (lines 166-192) is placed AFTER the existing block comment that documents `refusalsSeen()` (lines 145-165) and before the new declaration, so two javadoc comments stack on one method and the M5.28 block -- the one that explains why refusedForAnotherPod is falsifiable at all -- attaches to nothing. javac says so on the staged tree: `GracefulReleaseMeter.java:145: warning: [dangling-doc-comments] documentation comment is not attached to any declaration`, emitted on every :sequencer:compileTestJava run I made. `refusalsSeen()` at line 197 is now undocumented. Moving the new javadoc below `refusalsSeen()` (or the new method above the orphaned block) costs one edit and removes a warning this commit introduced.",
+      "failure_scenario": "Not a surviving mutation -- a documentation defect with a compiler-visible symptom: `./gradlew :sequencer:test` on the staged tree prints `GracefulReleaseMeter.java:145: warning: [dangling-doc-comments] documentation comment is not attached to any declaration`. The failure scenario is a reader (or the next editor of refusalsSeen()) losing M5.28's stated reason for that counter, which is the argument that keeps the refusedForAnotherPod isZero falsifiable."
+    },
+    {
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSweepTest.java:406",
+      "summary": "the seed-323 measurement reads backwards: the CLEAN tree is 3 releases / 9 commits and the DEFECT is 4 / 13",
+      "detail": "MEASURED per-seed at 1,000 seeds, both trees: unmutated, seed 323 gives 3 graceful releases, 9 commits, refusedForAnotherPod=0, releasedDespiteOwnPartition=0; with `observe`'s `faulty.actingAs(leaderPod)` deleted it gives 4 releases, 13 commits, refusedForAnotherPod=0, releasedDespiteOwnPartition=1. The prose in four places -- this comment, GracefulReleaseMeter.java:177, GracefulReleaseMeterTest.java:38 and the backlog State cell -- says seed 323 'goes from 4 releases and 13 commits to 3 and 9'. Read as baseline->defect (the natural reading of 'the defect makes it move'), that is the sign INVERTED: it says the wrongly-ALLOWED direction removes a release, which is what the refusal direction does, and is the opposite of the property this counter exists to detect. It is resolvable by a careful reader from the counter's own javadoc ('a stale actor that is NOT partitioned ALLOWS one it should have refused'), and the phrasing is inherited verbatim from the pre-existing task cell, so minor rather than major -- but this file's own M5.30 exists because a measured figure in a floor comment could not be reasoned about later. Naming which state is which ('clean 3/9, defect 4/13') fixes it.",
+      "failure_scenario": "Not a surviving mutation -- a measured claim recorded with the wrong sign. Failure scenario: the next person tightening or re-measuring this assertion reads 'the defect takes seed 323 from 4 releases to 3' and concludes the wrongly-ALLOWED direction shows up as FEWER releases. Measured, per seed, at 1,000 seeds: clean 3 releases / 9 commits / despiteOwn 0; `actingAs` deleted 4 releases / 13 commits / despiteOwn 1."
+    }
+  ]
+}

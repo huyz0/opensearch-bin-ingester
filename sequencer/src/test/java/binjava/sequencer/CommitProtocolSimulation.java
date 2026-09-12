@@ -98,7 +98,8 @@ public final class CommitProtocolSimulation {
             List<AckOrderInvariants.AckEvent> acks,
             int readersChecked, int midRunDrained,
             int gracefulReleases, int gracefulReleasesRefusedForAnotherPod,
-            int gracefulReleaseRefusalsSeen) {
+            int gracefulReleaseRefusalsSeen,
+            int gracefulReleasesDespiteOwnPartition) {
 
         /**
          * ⚠️ THE TRACE AND THE READER COUNT ARE PUBLISHED SO A TEST CAN SEE THEM
@@ -620,7 +621,8 @@ public final class CommitProtocolSimulation {
         return new Result(seed, commits, takeovers, highest, zombieWrites, zombieAttempts,
                 followers.commits(), followers.attempts(), followers.refusals(),
                 faulty.injected(), issued, violations, acks, readersChecked, midRunDrained,
-                releases.released(), releases.refusedForAnotherPod(), releases.refusalsSeen());
+                releases.released(), releases.refusedForAnotherPod(), releases.refusalsSeen(),
+                releases.releasedDespiteOwnPartition());
     }
 
     static boolean hasChain(BinStore store, long epoch) throws IOException {

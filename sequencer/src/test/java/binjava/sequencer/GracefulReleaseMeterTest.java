@@ -27,6 +27,61 @@ import org.junit.jupiter.api.Test;
 class GracefulReleaseMeterTest {
 
     /**
+     * A release the leader's OWN partition should have refused, and did not.
+     *
+     * <p>⚠️ THE OTHER DIRECTION OF M5.26's DEFECT, and nothing counted it.
+     * A stale acting pod can make the store REFUSE a release it should have
+     * allowed -- that is {@code refusedForAnotherPod}, and the sweep asserts it
+     * is zero -- but it can equally make the store ALLOW one it should have
+     * refused, because the pod it judges is un-partitioned while the LEADER is
+     * cut off. The sweep sees that direction only in totals that move: review
+     * MEASURED seed 323 runs 3 releases and 9 commits on a CORRECT tree and 4 and 13 UNDER THE DEFECT, with zero wrongly-blamed refusals either way,
+     * so the outcomes moved and no assertion noticed.
+     *
+     * <p>⚠️ IT IS THE MORE DAMAGING DIRECTION. A wrongly REFUSED release
+     * leaves the lease to expire, which is merely the ungraceful path the
+     * cluster already tolerates. A wrongly ALLOWED one hands the lease back on
+     * behalf of a leader that is PARTITIONED and therefore cannot know it has
+     * been released -- and it is credited as a graceful release while doing so,
+     * so `gracefulReleases`'s own floor is met by releases that should not
+     * have happened.
+     *
+     * <p>⚠️ DISTINCT FROM M5.28, which is about the detector being
+     * blindable. This is a direction the detector was never pointed at.
+     */
+    @Test
+    void aReleaseTheLEADERSOwnPartitionShouldHaveREFUSEDIsCounted() throws Exception {
+        FaultInjectingStore faulty = new FaultInjectingStore(
+                new MemoryBinStore(), 1L, FaultInjectingStore.Faults.none());
+        binjava.binstore.Version held = faulty.put("ctl/lease", FaultFixtures.body("held"));
+        faulty.partition("poda");
+        GracefulReleaseMeter meter = new GracefulReleaseMeter(faulty);
+
+        meter.observe("poda", () -> {
+            // ⚠️ THE STALE ACTOR, which is M5.26's defect verbatim: the store
+            // judges the release against whoever acted last, and podb is not
+            // cut off, so the conditional write SUCCEEDS.
+            faulty.actingAs("podb");
+            faulty.putIfMatch("ctl/lease", FaultFixtures.body("expired"), held);
+        });
+
+        assertThat(meter.releasedDespiteOwnPartition())
+                .as("poda was cut off; its release must not have gone through")
+                .isEqualTo(1);
+        assertThat(meter.released())
+                .as("and the harm is that it was CREDITED -- the graceful-release floor is met "
+                        + "by a release that should have been refused")
+                .isEqualTo(1);
+        assertThat(meter.refusedForAnotherPod())
+                .as("the refusal direction saw nothing -- HELD BY CONSTRUCTION, not by the "
+                        + "meter's logic: `Faults.none()` with podb un-partitioned leaves the "
+                        + "injected window empty, so every mutant of the scan loop leaves this "
+                        + "green. It is here to show the two directions are DIFFERENT, not as "
+                        + "evidence that they are independent under mutation")
+                .isZero();
+    }
+
+    /**
      * A refusal blaming a pod OTHER than the releasing leader is counted.
      *
      * <p>⚠️ THE RELEASE ITSELF MOVES THE ACTOR, which is the one way to reach

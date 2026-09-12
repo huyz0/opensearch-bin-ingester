@@ -207,6 +207,20 @@ public final class FaultInjectingStore implements BinStore {
         partitioned.remove(podId);
     }
 
+    /**
+     * Whether {@code podId} is cut off, whoever is currently acting (M5.31).
+     *
+     * <p>⚠️ THE ACTOR IS THE WRONG QUESTION FOR THE METER, and that is the
+     * whole point of this accessor. {@link #isPartitioned()} below answers
+     * "should THIS call be refused", which is what the store needs. A meter
+     * checking whether a release should have been refused has to ask about the
+     * LEADER -- because the defect it looks for is precisely the store judging
+     * a release against somebody else.
+     */
+    boolean isPartitioned(String podId) {
+        return partitioned.contains(podId);
+    }
+
     /** Whether the pod currently acting is cut off. */
     private boolean isPartitioned() {
         String who = actor;

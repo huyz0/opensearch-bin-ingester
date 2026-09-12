@@ -213,6 +213,7 @@ class CommitProtocolSweepTest {
         long gracefulReleases = 0;
         long gracefulReleasesRefused = 0;
         long gracefulReleaseRefusalsSeen = 0;
+        long releasesDespiteOwnPartition = 0;
         long start = System.nanoTime();
         for (long seed = 0; seed < SEEDS; seed++) {
             var run = CommitProtocolSimulation.run(seed, ROUNDS, PODS, faults);
@@ -227,6 +228,7 @@ class CommitProtocolSweepTest {
             gracefulReleases += run.gracefulReleases();
             gracefulReleasesRefused += run.gracefulReleasesRefusedForAnotherPod();
             gracefulReleaseRefusalsSeen += run.gracefulReleaseRefusalsSeen();
+            releasesDespiteOwnPartition += run.gracefulReleasesDespiteOwnPartition();
             ackEvents += run.acks().size();
             for (long epoch = 1; epoch <= run.highestEpoch(); epoch++) {
                 long floor = run.lowestAckedSequenceIn(epoch);
@@ -249,8 +251,10 @@ class CommitProtocolSweepTest {
                                 : ""));
             }
         }
-        System.out.printf("sweep: graceful releases %d, refused for another pod %d, refusals seen %d, zero-commit seeds %d%n",
-                gracefulReleases, gracefulReleasesRefused, gracefulReleaseRefusalsSeen, zeroCommitSeeds);
+        System.out.printf("sweep: graceful releases %d, refused for another pod %d, refusals seen %d, "
+                        + "despite own partition %d, zero-commit seeds %d%n",
+                gracefulReleases, gracefulReleasesRefused, gracefulReleaseRefusalsSeen,
+                releasesDespiteOwnPartition, zeroCommitSeeds);
         long elapsed = (System.nanoTime() - start) / 1_000_000;
 
         // ⚠️ ANTI-VACUITY FIRST, and it comes before the invariant assertion on
@@ -394,6 +398,38 @@ class CommitProtocolSweepTest {
                         + "release is refused blaming another pod -- MEASURED at 5 with the "
                         + "defect reinstated at the store call, 0 without")
                 .isZero();
+        // ⚠️ AND THE OTHER DIRECTION (M5.31). The assertion above catches a
+        // release wrongly REFUSED because the store judged it against a
+        // partitioned stranger. The same stale actor wrongly ALLOWS one when
+        // the stranger is NOT partitioned and the leader is -- and until this
+        // line nothing looked for it. Review MEASURED the two sets of seeds
+        // being different: the 5 carrying a wrong refusal are 372, 495, 662,
+        // 887, 922, while the 4 whose outcomes MOVE are 323, 372, 495, 662 --
+        // seed 323 runs 3 releases and 9 commits on a CORRECT tree and 4 and 13 UNDER THE DEFECT, with zero wrongly-blamed refusals either way -- the
+        // unseen direction showing up in the totals and in no assertion.
+        // ⚠️ STATED AS TWO STATES RATHER THAN "from X to Y", because the row
+        // this task came from used that form and review read it backwards.
+        // ⚠️ AND THE DEFECT ALONE REDS ONLY THE ASSERTION ABOVE, because
+        // AssertJ stops at the first failure. The independent falsifying power
+        // of THIS line was measured by blinding the old detector too --
+        // `refusedForAnotherPod++` deleted AND `actingAs` deleted -- whereupon
+        // the sweep reds solely here, 1 against 0.
+        // ⚠️ IT IS THE MORE DAMAGING HALF: a wrongly refused release leaves the
+        // lease to expire, which is the ungraceful path the cluster already
+        // tolerates; a wrongly allowed one hands the lease back for a leader
+        // that is cut off and cannot know, AND is credited by
+        // `gracefulReleases`, so that floor is partly met by releases which
+        // should never have completed.
+        // ⚠️ THIS `isZero` IS NOT VACUOUS, and the reason is the floor below
+        // rather than anything here: `gracefulReleaseRefusalsSeen` proves
+        // release windows DO meet partitions -- 38 over 1,000 seeds. Without
+        // that floor, "no release completed despite its own partition" would
+        // also be satisfied by a sweep in which no release ever met one.
+        assertThat(releasesDespiteOwnPartition)
+                .as("a release that completed while the LEADER was cut off is one the "
+                        + "leader's own partition should have refused -- and it was credited "
+                        + "as graceful while doing so")
+                .isZero();
         // ⚠️ AND THE DETECTOR MUST BE ABLE TO DETECT (M5.28). The assertion
         // above is `isZero`, so it can only fail by OVER-counting: review
         // MEASURED that misspelling `"partition"` in the meter's scan
@@ -423,7 +459,7 @@ class CommitProtocolSweepTest {
         // sits beside it. Review MEASURED that swapping
         // `releases.refusalsSeen()` for `releases.released()` at the
         // `Result` construction leaves this floor AND the whole suite
-        // green: three adjacent `int` components from one object, no
+        // green: FOUR adjacent `int` components fed from one object, no
         // compile-time distinction, and ~1,608 clears a floor of 20
         // easily. ⚠️ THE MARGIN IS MEASURED, NOT STRUCTURAL: 38
         // against 1,608, 42x. A refusal aborting its release proves
