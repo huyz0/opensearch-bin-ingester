@@ -1,0 +1,14 @@
+{
+  "task": "M5.45a",
+  "role": "test-reviewer",
+  "diff_sha256": "e945786f650305af0bc9136c5ef196471c405654bfd6d8240562fa0d4c8d8087",
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "ingest/src/test/java/binjava/ingest/AssembledServingPathFailureTest.java:503",
+      "summary": "aSegmentWHOSEEverySubscriberFailsToOpenCostsZEROReads closes the throwing half of deliver's open() handling and leaves the null-RETURNING half open: deleting `if (sink == null) { continue; }` survives all three suites, and the state it guards buys exactly the GET this test exists to forbid.",
+      "failure_scenario": "MEASURED. SubscriptionHub.java:415-417 -- delete the three lines `if (sink == null) { continue; }` from deliver(): :ingest:test 205/205, :http:test 36/36, :plugin:test 34/34, zero failures and zero errors in every result XML. The surviving state is the null twin of the one the new test covers: every subscriber of a segment this pod does NOT hold returns null from open() instead of throwing. With the guard, `opened` is empty and the second early return fires -- zero reads, which is the property asserted at :523. Without it, three Tracking(null) wrappers go into `opened`, the guard at :427 does not fire, streamFromStore runs, and SegmentProxy.streamTo's own javadoc says an empty list still READS: one GET bought for zero consumers, the same cost shape the test's javadoc names. The NPE that follows is then swallowed by Tracking + writeHeldBytes/SegmentProxy, so the read is bought silently. MINOR rather than major on two counts: nothing in the tree returns null from Subscriber.open (checked -- no implementation in ingest, http, client or plugin does), and the Subscriber.open javadoc at SubscriptionHub.java:196-198 documents throwing as the way to refuse, so this is defensive code for a contract-violating return rather than a reachable production state. Closing it is one subscriber in the existing test returning null instead of throwing. The line is unchanged since round 1, so it is not a regression introduced this round."
+    }
+  ]
+}

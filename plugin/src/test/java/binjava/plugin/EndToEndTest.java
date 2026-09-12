@@ -66,9 +66,10 @@ class EndToEndTest {
     private record HubTransport(SubscriptionHub hub) implements SubscriptionTransport {
         @Override
         public AutoCloseable subscribe(RunKey key, Listener listener) {
-            return hub.subscribe(key, push -> listener.onDelivery(new Delivery(
-                    push.key(), push.segmentKey(), push.recordCount(), push.firstOffset(),
-                    push.segment())));
+            return hub.subscribe(key, SubscriptionHub.assembling(
+                    push -> listener.onDelivery(new Delivery(push.key(), push.segmentKey(),
+                            push.recordCount(), push.firstOffset(), push.via(),
+                            push.segment()))));
         }
     }
 

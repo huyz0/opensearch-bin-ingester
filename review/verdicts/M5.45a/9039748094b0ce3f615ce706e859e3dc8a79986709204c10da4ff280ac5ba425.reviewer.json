@@ -1,0 +1,32 @@
+{
+  "task": "M5.45a",
+  "role": "reviewer",
+  "diff_sha256": "9039748094b0ce3f615ce706e859e3dc8a79986709204c10da4ff280ac5ba425",
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "ingest/src/main/java/binjava/ingest/SubscriptionHub.java:313",
+      "summary": "The new comment replaces one false loudness claim with another: 'stopping loudly is the point' for the DIRECT arm's IllegalStateException is disproved by the very next paragraph of the same comment block.",
+      "failure_scenario": "Lines 309-316 say the DIRECT arm's IllegalStateException denying every later segment is deliberate because 'it is a programming error rather than a store outage, and stopping loudly is the point'. Lines 317-323, three lines below, state correctly that pushLoop's only handler is `catch (RuntimeException e) { continue; }` with no log, no metric and no droppedPushes increment. IllegalStateException IS a RuntimeException and takes exactly that path: publish's loop catches only UncheckedIOException (line 329), so the IllegalStateException leaves publish, reaches DefaultIngest.pushLoop:355, and is discarded in silence. Nothing about it is loud. Failure scenario: M5.45b makes DIRECT reachable, a deployment is misconfigured so FetchPolicy elects a mode this arm refuses, and the operator sees a window vanish with no log line at all -- while the comment that governed the decision told the M5.45b author the failure would announce itself. This is the same substance as round 2's DefaultIngest.java:356 minor ('exists to fail loudly'), answered for the UncheckedIOException half and restated for the IllegalStateException half. The honest wording is 'stopping rather than degrading to another mode', with the same M5.48 pointer the paragraph below carries."
+    },
+    {
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:63",
+      "summary": "The new M5.48 row cites NFR-12, which is 'Object key length <= 1024 bytes'; the row is about a missing log and metric and serves no requirement in requirements.md.",
+      "failure_scenario": "requirements.md:43 defines NFR-12 as 'Object key length | <= 1024 bytes for every input, including pathological'. M5.48 is about pushLoop dropping a push with no log, no metric and no counter -- observability, which has no NFR in requirements.md at all (the nearest thing is the observability.md standard, which the row already cites). sdd.md rule 2 says 'Every task cites a requirement ID... Work serving no FR/NFR is unjustified'; a row citing an unrelated-but-existing ID discharges that rule vacuously, and no gate catches it (check-adr-refs covers ADRs only, and any ID-resolution check would find NFR-12 present). Failure scenario: a milestone review or a coverage sweep traces NFR-12 and is handed a task about dropped pushes, while the reason M5.48 should be done -- an operator cannot distinguish a store outage from a quiet window -- is traced to nothing. Neighbouring rows with no requirement (M5.47, M5.26) use the em dash; that is the honest cell here, or a new NFR."
+    },
+    {
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:59",
+      "summary": "The new M5.45a done cell miscounts round 1 (four majors, not three) and presents the inline-branch failure gap as a round-2 discovery, hiding that a major was carried unfixed across two rounds.",
+      "failure_scenario": "The recorded verdicts for b11944dd62cd are three majors from `reviewer` plus one major from `test-reviewer` ('No failure-path test on the new serving path: every catch block, the Tracking/failed machinery and the null-proxy refusal...'), and two blocking. The cell says 'ROUND 1 FOUND THREE MAJORS AND TWO BLOCKING' and then 'ROUND 2 FOUND A MAJOR ON THE INLINE BRANCH ... the one with no failure test at all'. Round 2's own major is titled 'Round-1's failure-path finding is only HALF closed', and round 1 named the writeHeldBytes per-sink catch and the deliver() open() catch explicitly. Failure scenario: this cell is the durable record -- milestone-review reads commits and backlog cells together, and review.md rule 12 exists because a finding that survives a round means the commit was too big. As written, a reader counts one major per round and concludes each round found something new, when the same failure-path major went round 1 -> round 2 -> round 3. One sentence ('round 1's failure-path major was half-closed in round 2 and is closed here') restores it."
+    },
+    {
+      "severity": "minor",
+      "file": "ingest/src/main/java/binjava/ingest/SubscriptionHub.java:495",
+      "summary": "The round-2 major is closed on the INLINE branch but the identical hole on the held-PROXY branch is still open: no test anywhere throws from a sink while this pod holds the bytes, so writeHeldBytesChunked's per-sink catch has no input.",
+      "failure_scenario": "Surviving mutation, named: delete the try/catch at 493-497 in writeHeldBytesChunked and declare `throws IOException`. Every test stays green. The only throwing sinks in the tree are AssembledServingPathFailureTest:112 (FailingSink(1), published with heldBytes null -- the store-proxy loop) and :227 (FailingSink(0), 4096 bytes -- the inline branch); the new everySinkGetsTheFIRSTChunkBeforeAnyGetsTheSECOND at :318 is the only test reaching writeHeldBytesChunked and its three sinks never throw. grep confirms AssembledServingPathTest and AssembledServingPathFailureTest are the only files constructing a SegmentServing. Failure scenario: that is the branch DefaultIngest takes for every segment OVER the 256 KiB cap -- the normal case at 8 MiB segments. Without the catch, one consumer whose socket dies mid-segment turns into deliver()'s UncheckedIOException, nobody on the segment is completed, and publish rethrows into pushLoop's silent drop: every healthy subscriber of that segment loses the whole window. Round 2 named this region ('writeHeldBytesChunked's live.remove(i) has no input that reaches it either') and marked it Not measured; it is measured now. One FailingSink in the ordering test's fixture closes it."
+    }
+  ]
+}

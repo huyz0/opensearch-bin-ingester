@@ -1,0 +1,38 @@
+{
+  "task": "M5.45a",
+  "role": "reviewer",
+  "diff_sha256": "b8d36a67725bec847f5a4e4bde8edab49c7559b2eacc3838d303e4f422182e61",
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "ingest/src/main/java/binjava/ingest/DefaultIngest.java:356",
+      "summary": "The two new comments that justify throwing loudly are both defeated by the only production caller: pushLoop swallows the RuntimeException with no log, no metric and no droppedPushes increment.",
+      "failure_scenario": "SubscriptionHub.publish's new isolation comment (SubscriptionHub.java:305) ends 'AND IT IS STILL THROWN, because swallowing it would make a store outage indistinguishable from a quiet window', and the DIRECT arm (SubscriptionHub.java:365-369) says it 'exists to fail loudly'. The only caller of the four-argument publish is pushLoop, whose catch(RuntimeException e) does a bare `continue`: no logger, no counter (droppedPushes is incremented only by the queue-overflow path in flushLocked), no rethrow. Failure scenario: the store 500s on peer segments for ten minutes. Every batched delta now correctly publishes this pod's own held segment and correctly rethrows the UncheckedIOException for the peer ones -- and the operator sees exactly nothing, which is the state the comment says the rethrow prevents. The behaviour is an improvement on round 1 (the held segment is no longer denied); what is not true is the observability the comment claims for it. Either make the swallow observable at the call site or state in the comment that the rethrow is currently caught and discarded."
+    },
+    {
+      "severity": "minor",
+      "file": "ingest/src/main/java/binjava/ingest/SubscriptionHub.java:299",
+      "summary": "'EVERY SEGMENT IS ATTEMPTED' is true only of UncheckedIOException; any other RuntimeException out of publishSegment still denies every later segment, which is the round-1 defect for a different exception type.",
+      "failure_scenario": "The loop at 308-319 catches UncheckedIOException only. publishSegment can leave by another route -- the DIRECT arm at 370 throws IllegalStateException, and a RuntimeException escaping SegmentProxy.streamTo or FetchPolicy.modeFor is not caught either. Today DIRECT is genuinely unreachable from this call site (bytesInServingAz is hard-coded true for held bytes and servingPodUnderPressure is hard-coded false, so FetchPolicy.wantsDirect cannot fire), so this is not a live bug. But the comment states the isolation as unconditional, and the moment M5.45b makes DIRECT reachable, one segment electing it drops publication of every segment after it in the same delta -- byte-for-byte the failure aSTOREFailureOnOneSegmentDoesNotDenyTheSegmentThisPodHOLDS was written to prevent. Narrow the comment to the exception it actually isolates, or widen the catch."
+    },
+    {
+      "severity": "minor",
+      "file": "ingest/src/main/java/binjava/ingest/SubscriptionHub.java:55",
+      "summary": "'assembling ... fills segment() in the push it hands to complete' is false of the push that Subscriber.complete actually receives, in the very paragraph that fixes the round-1 empty-segment trap.",
+      "failure_scenario": "deliver() passes pushes.get(i) -- built at 396-397 with the EMPTY constant -- to subscriber.complete(). assembling builds a filled Push inside its complete() and hands it to the onSegment consumer, not to complete(). As written the sentence reads as 'the push handed to complete has segment() filled', which is exactly the assumption the paragraph above it warns loses a window: someone implementing Subscriber.complete directly (not via assembling) and reading push.segment() there gets zero bytes. Say 'it hands a filled push to its onSegment callback from inside complete'."
+    },
+    {
+      "severity": "minor",
+      "file": "ingest/src/main/java/binjava/ingest/SubscriptionHub.java:462",
+      "summary": "'nothing below T4 can observe the interleaving between two sinks that both receive everything' is false, and it is the sentence that excuses leaving chunk-outer unasserted.",
+      "failure_scenario": "The rewritten writeHeldBytesChunked javadoc correctly demotes the round-1 memory claim to an interleaving claim, then adds that the interleaving is unobservable below T4. A T0 unit test observes it directly: give each of two subscribers a SegmentSink that appends its own index to one shared List on every write, publish a segment of three chunks with heldBytes set, and assert the list is [0,1,0,1,0,1] rather than [0,0,0,1,1,1]. Consumer-outer fails that immediately. The claim converts a missing assertion into a stated impossibility, which is the shape that stops the next reader from writing the test."
+    },
+    {
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:0",
+      "summary": "The M5.45a row's State cell still reads `todo` while the same diff flips M5.12 to done and opens M0.111 to gate exactly this drift.",
+      "failure_scenario": "The staged backlog adds M0.111 (`check-backlog-state.sh` -- every backlog ID prefixing a commit subject has a State cell saying done) and corrects M5.12 from todo to done because f145c51 landed it and the cell was never updated. The M5.45a row this commit implements ends `| FR-6 | todo |`. Recent commits set the cell in the same commit (00f8c3a and dc74999 each add a `**done**` cell; f145c51 is the omission M0.111 exists for). Failure scenario: the next session runs next-task, reads M5.45a as todo and re-opens work that has landed -- and when M0.111's gate is written it will fail on this very commit, whose subject is `M5.45a:`."
+    }
+  ]
+}

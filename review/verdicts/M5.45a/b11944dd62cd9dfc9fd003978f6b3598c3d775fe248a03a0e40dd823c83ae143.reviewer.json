@@ -1,0 +1,56 @@
+{
+  "task": "M5.45a",
+  "role": "reviewer",
+  "diff_sha256": "b11944dd62cd9dfc9fd003978f6b3598c3d775fe248a03a0e40dd823c83ae143",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "severity": "major",
+      "file": "ingest/src/main/java/binjava/ingest/SubscriptionHub.java:46",
+      "summary": "Push.segment() is always EMPTY on the new serving path while the javadoc directly above the record still says the bytes travel with the push.",
+      "failure_scenario": "deliver() builds every Push with the EMPTY constant (line 353-354) for BOTH modes, and the bytes reach the subscriber only through SegmentSink. The javadoc on the Push record (lines 44-50), whose declaration this diff changes to add `via`, still reads 'INLINE: the segment bytes travel WITH the push (ADR-0004 -- M1 ships `inline` only) ... `proxy` and `direct` are M5'. Delivery.java's equivalent paragraph WAS rewritten; this one was not. Failure scenario: M1.11b's real transport (or a seventh HubTransport bridge, written from the shape the six existing ones had before this commit) implements Subscriber.open and does `new Delivery(..., push.segment())`. It compiles, the non-null check passes, and every consumer receives a zero-byte segment -- ConsumerClient.decodeInto opens delivery.segment() with no fallback, the throw happens inside the sink, and deliver() swallows it as a slow-or-dead subscriber. Silent, total record loss for that stream, which is the exact failure the task text says this ordering exists to prevent. Either state in the javadoc that `segment` is empty on this path (and that it survives only for the two overloads M5.47 removes), or stop carrying it."
+    },
+    {
+      "severity": "major",
+      "file": "ingest/src/main/java/binjava/ingest/SubscriptionHub.java:378",
+      "summary": "A store failure on one segment of a batched delta aborts publication of every later segment in the same delta, including the one whose bytes are already in hand.",
+      "failure_scenario": "publish() loops delta.segments() (line 276) with no per-segment isolation; deliver() converts a store IOException into UncheckedIOException, which propagates out of publishSegment, out of the loop, and is swallowed by DefaultIngest.pushLoop's catch(RuntimeException). Scenario: a batched delta arrives as [seg-theirs, seg-mine] (order comes from CommitLog.commitAll, not from this pod). The GET for seg-theirs fails with a transient 500. seg-mine is never published although its bytes are in the PendingPush array, and its subscribers -- which have nothing to do with the failing object -- lose the whole window silently. That is the same class of silent loss aBATCHEDDeltaDeliversEverySegmentFromWhereItsBytesARE was written to fix, reachable through the ordinary retryable store error. The comment at line 376-377 ('DefaultIngest.pushLoop catches this and drops the push') also understates the blast radius: what is dropped is the whole delta, not the segment that failed. Catch per segment and continue, or state the blast radius and open a row."
+    },
+    {
+      "severity": "major",
+      "file": "ingest/src/test/java/binjava/ingest/AssembledServingPathTest.java:1031",
+      "summary": "Acceptance criterion 3 demands an INTERLEAVING assertion on the assembled path and theServingPathHandsOffNoMoreThanACHUNKAtAnyK asserts only a hand-off-size bound -- the falsifier it names survives.",
+      "failure_scenario": "The task says the bound 'must be asserted as an INTERLEAVING (how much has been READ when the first byte is DELIVERED), because M5.12 measured that a hand-off-size bound passes against readAllBytes() plus chunk-sized slices'. The test asserts only largestHandOff <= 7000 at K=1 and K=64, which is precisely that insufficient shape; SegmentProxyTest.theFIRSTHandOffHappensBeforeTheStreamIsDRAINED has the interleaving assertion but at K=1 and against SegmentProxy in isolation, which the criterion excludes by name. Surviving mutation: replace streamFromStore's delegation with `byte[] all = store.get(key).readAllBytes();` followed by the same chunked write loop. Bytes still identical, gets() still 1, largestHandOff still <= 7000 at both K -- so ADR-0004's buffer-then-forward, the falsifier M5's SPEC names for criterion 6, passes the whole file. The test's own javadoc claims 'SPEC criterion 6 on the ASSEMBLED path'; as written it constrains the hand-off size only. Additionally M5.12's criterion 3 form ('an EQUALITY between K=1 and K=64 rather than a bound each satisfies separately') is not used: both K values are checked against the same constant."
+    },
+    {
+      "severity": "minor",
+      "file": "ingest/src/main/java/binjava/ingest/SubscriptionHub.java:308",
+      "summary": "The only production caller passes values the SegmentDelivery @param docs forbid, and those docs are not updated in this commit.",
+      "failure_scenario": "batchBytes is given heldBytes.length while SegmentDelivery documents it as 'this stream's share of the commit, NOT the whole segment' and carries a whole paragraph saying that the segment value is the defect M5.11 round-1 review caught. segmentFanOut is given targets.size(), which is the flattened (subscription x run) count, while SegmentDelivery documents it as 'how many consumers in the serving pod's AZ want THIS SEGMENT' and says in as many words 'THE SUBSCRIBER LIST IS NOT IT'. Neither is a behaviour defect today -- the whole segment really is what travels inline, and an inflated fan-out only suppresses DIRECT, which is unreachable -- but the M5.45a row settles the semantics and the javadoc still says the opposite. Failure scenario: whoever takes M5.43/M5.45b reads the @param, concludes the call site is the defect the paragraph describes, and 'restores' a per-run byte count, flipping every 8 MiB flush back to INLINE and attaching the whole array to every subscriber. Amend the @param text in the same commit that establishes the call site."
+    },
+    {
+      "severity": "minor",
+      "file": "ingest/src/main/java/binjava/ingest/SegmentServing.java:327",
+      "summary": "The nullable proxy component has no constructor anywhere, and the refusal it documents is swallowed as silently as the degradation it rejects.",
+      "failure_scenario": "SegmentServing.proxy is documented as 'may be null, which means this deployment cannot serve proxy at all and a push that needs it REFUSES rather than degrading to inline ... and would do it silently'. DefaultIngest always passes new SegmentProxy(store) and every test helper passes one, so no caller can produce the null and neither streamFromStore's IllegalStateException nor chunkBytes()'s DEFAULT_CHUNK_BYTES fallback is reachable or tested. Worse, the refusal it argues for is itself silent: the IllegalStateException is a RuntimeException, so it escapes deliver()'s IOException-only catch, aborts the rest of the delta (see the finding on line 378) and is swallowed by pushLoop with no log, metric or droppedPushes increment. The stated advantage over silent degradation does not exist. Either drop the nullable component until M5.43 gives it a setting, or make the refusal observable."
+    },
+    {
+      "severity": "minor",
+      "file": "ingest/src/main/java/binjava/ingest/SubscriptionHub.java:406",
+      "summary": "writeHeldBytesChunked's javadoc claims the loop order is the memory bound; for bytes already in hand it is not.",
+      "failure_scenario": "The paragraph says 'THE LOOP ORDER IS THE MEMORY BOUND, exactly as in SegmentProxy: consumer-outer would ... make the largest live hand-off the whole segment for the first consumer before the second sees a byte.' In SegmentProxy the outer loop is the READ, which is what keeps the materialised array at chunkBytes. Here the whole array is already materialised (that is the precondition for taking this branch), and consumer-outer would hand over slices of exactly the same `length` -- the largest hand-off stays one chunk and no additional allocation happens either way. What consumer-outer would actually change is delivery interleaving and the tail latency of the last subscriber, not memory. As written the comment claims a property the code cannot have, which is the kind of claim that makes a later reader think the ordering is already pinned by a test when nothing asserts it (swapping these two loops survives every assertion in AssembledServingPathTest)."
+    },
+    {
+      "severity": "minor",
+      "file": "ingest/src/main/java/binjava/ingest/SubscriptionHub.java:305",
+      "summary": "The publish javadoc says the mode is computed from the segment, the fan-out and the capabilities; for a segment this pod does not hold the policy is never consulted.",
+      "failure_scenario": "When heldBytes == null the mode is hard-set to FetchMode.PROXY and FetchPolicy.modeFor is not called at all, so neither the size bounds, the cross-AZ crossover nor presignedUrls participates. That is a defensible choice for M5.45a (inlining bytes we do not hold means buffering them, and DIRECT is M5.45b), and the @param heldBytes note explains half of it -- but the method-level paragraph 'The mode is computed here from the segment, the fan-out and the backend's capabilities' is true only of the held branch. A reader measuring 'is FetchPolicy wired?' from this paragraph will overcount its reach: today it decides for exactly one of the two branches."
+    },
+    {
+      "severity": "minor",
+      "file": "ingest/src/main/java/binjava/ingest/SubscriptionHub.java:451",
+      "summary": "assembling() turns the inline path from one shared array into one full copy per subscriber, and it is the only bridge in the tree.",
+      "failure_scenario": "Before this commit publishRun handed every subscriber the SAME byte[] reference, so inline delivery was O(segment) regardless of K. Every bridge now goes through assembling(), whose AssemblingSink accumulates into a ByteArrayOutputStream and then calls toByteArray() -- so each subscriber holds a full copy plus, transiently, the BAOS's own doubling buffer. At the 8 MiB default segment and K=64 that is ~1 GiB where the old path spent 8 MiB. The javadoc says the cost 'belongs to the subscriber rather than to the serving path' and that in production this side is a socket, which is fair -- but M1.11b has not landed, so today every caller of this hub is in the same JVM and the assembled path's memory is not flat in K for any subscriber the tree actually has. Worth naming in the commit body so M5.20's criterion 6 evidence line is not read as covering the bridge."
+    }
+  ]
+}

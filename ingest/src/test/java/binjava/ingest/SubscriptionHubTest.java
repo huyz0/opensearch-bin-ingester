@@ -44,8 +44,8 @@ class SubscriptionHubTest {
                 new binjava.format.SegmentCommit("seg-from-pod-b",
                         List.of(new RunCommit(new RunKey(B, 0), 5, 20)))));
 
-        try (var ignoredA = hub.subscribe(new RunKey(A, 0), forA::add);
-                var ignoredB = hub.subscribe(new RunKey(B, 0), forB::add)) {
+        try (var ignoredA = hub.subscribe(new RunKey(A, 0), SubscriptionHub.assembling(forA::add));
+                var ignoredB = hub.subscribe(new RunKey(B, 0), SubscriptionHub.assembling(forB::add))) {
             hub.publish(batched);
         }
 
@@ -95,7 +95,7 @@ class SubscriptionHubTest {
     void aSubscriberIsPushedItsOwnStreamsCommits() {
         SubscriptionHub hub = new SubscriptionHub();
         var received = new CopyOnWriteArrayList<SubscriptionHub.Push>();
-        try (var ignored = hub.subscribe(new RunKey(A, 0), received::add)) {
+        try (var ignored = hub.subscribe(new RunKey(A, 0), SubscriptionHub.assembling(received::add))) {
             hub.publish(delta(0, new RunKey(A, 0), 3, 10));
             assertThat(received).singleElement().satisfies(p -> {
                 assertThat(p.segmentKey()).isEqualTo("seg-0");
@@ -110,7 +110,7 @@ class SubscriptionHubTest {
     void aSubscriberIsNotWokenByOtherStreams() {
         SubscriptionHub hub = new SubscriptionHub();
         AtomicInteger woken = new AtomicInteger();
-        try (var ignored = hub.subscribe(new RunKey(A, 0), p -> woken.incrementAndGet())) {
+        try (var ignored = hub.subscribe(new RunKey(A, 0), SubscriptionHub.assembling(p -> woken.incrementAndGet()))) {
             hub.publish(delta(0, new RunKey(B, 0), 1, 0));
             hub.publish(delta(1, new RunKey(A, 7), 1, 0));
             // ⚠️ Fanning every delta to every subscriber makes wakeups scale
@@ -127,8 +127,8 @@ class SubscriptionHubTest {
         SubscriptionHub hub = new SubscriptionHub();
         AtomicInteger one = new AtomicInteger();
         AtomicInteger two = new AtomicInteger();
-        try (var ignoredA = hub.subscribe(new RunKey(A, 0), p -> one.incrementAndGet());
-                var ignoredB = hub.subscribe(new RunKey(A, 0), p -> two.incrementAndGet())) {
+        try (var ignoredA = hub.subscribe(new RunKey(A, 0), SubscriptionHub.assembling(p -> one.incrementAndGet()));
+                var ignoredB = hub.subscribe(new RunKey(A, 0), SubscriptionHub.assembling(p -> two.incrementAndGet()))) {
             hub.publish(delta(0, new RunKey(A, 0), 1, 0));
             assertThat(one.get()).isEqualTo(1);
             assertThat(two.get()).isEqualTo(1);
@@ -139,7 +139,7 @@ class SubscriptionHubTest {
     void closingASubscriptionStopsDeliveryAndReleasesTheStream() {
         SubscriptionHub hub = new SubscriptionHub();
         AtomicInteger woken = new AtomicInteger();
-        var sub = hub.subscribe(new RunKey(A, 0), p -> woken.incrementAndGet());
+        var sub = hub.subscribe(new RunKey(A, 0), SubscriptionHub.assembling(p -> woken.incrementAndGet()));
         hub.publish(delta(0, new RunKey(A, 0), 1, 0));
         sub.close();
         hub.publish(delta(1, new RunKey(A, 0), 1, 1));
@@ -158,7 +158,7 @@ class SubscriptionHubTest {
         AtomicInteger healthy = new AtomicInteger();
         try (var ignoredBad = hub.subscribe(new RunKey(A, 0), p -> {
             throw new IllegalStateException("consumer is wedged");
-        }); var ignoredGood = hub.subscribe(new RunKey(A, 0), p -> healthy.incrementAndGet())) {
+        }); var ignoredGood = hub.subscribe(new RunKey(A, 0), SubscriptionHub.assembling(p -> healthy.incrementAndGet()))) {
             // ⚠️ The commit is ALREADY DURABLE. A consumer that throws must not
             // roll back or stall a write that succeeded; it falls behind and
             // recovers from the log, which is what the log is for.
@@ -172,8 +172,8 @@ class SubscriptionHubTest {
         SubscriptionHub hub = new SubscriptionHub();
         AtomicInteger a = new AtomicInteger();
         AtomicInteger b = new AtomicInteger();
-        try (var ignored1 = hub.subscribe(new RunKey(A, 0), p -> a.incrementAndGet());
-                var ignored2 = hub.subscribe(new RunKey(B, 0), p -> b.incrementAndGet())) {
+        try (var ignored1 = hub.subscribe(new RunKey(A, 0), SubscriptionHub.assembling(p -> a.incrementAndGet()));
+                var ignored2 = hub.subscribe(new RunKey(B, 0), SubscriptionHub.assembling(p -> b.incrementAndGet()))) {
             hub.publish(new CommitDelta(0, "seg", List.of(
                     new RunCommit(new RunKey(A, 0), 2, 0),
                     new RunCommit(new RunKey(B, 0), 5, 0))));
@@ -204,7 +204,7 @@ class SubscriptionHubTest {
         for (int i = 0; i < 1600; i++) {
             AtomicInteger counter = new AtomicInteger();
             wokenPerStream.add(counter);
-            subs.add(hub.subscribe(new RunKey(A, i), p -> counter.incrementAndGet()));
+            subs.add(hub.subscribe(new RunKey(A, i), SubscriptionHub.assembling(p -> counter.incrementAndGet())));
         }
         // ⚠️ A POSITIVE liveness signal: all 1,600 are registered. "Nothing was
         // delivered" is also what 1,600 consumers that never started produce, so

@@ -68,9 +68,10 @@ public class ShardFanOutIT extends OpenSearchSingleNodeTestCase {
     private static final class HubTransport implements SubscriptionTransport {
         @Override
         public AutoCloseable subscribe(RunKey key, Listener listener) {
-            return HUB.subscribe(key, push -> listener.onDelivery(new Delivery(
-                    push.key(), push.segmentKey(), push.recordCount(),
-                    push.firstOffset(), push.segment())));
+            return HUB.subscribe(key, SubscriptionHub.assembling(
+                    push -> listener.onDelivery(new Delivery(push.key(), push.segmentKey(),
+                            push.recordCount(), push.firstOffset(), push.via(),
+                            push.segment()))));
         }
     }
 

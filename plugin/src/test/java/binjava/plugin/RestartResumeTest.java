@@ -7,6 +7,7 @@ import binjava.client.ConsumerClient;
 import binjava.client.Delivery;
 import binjava.client.SubscriptionTransport;
 import binjava.format.OpType;
+import binjava.format.FetchMode;
 import binjava.format.RunKey;
 import binjava.format.SegmentRecord;
 import binjava.format.SegmentWriter;
@@ -60,7 +61,8 @@ class RestartResumeTest {
             w.add(KEY, new SegmentRecord("doc-" + offset, OpType.INDEX, OptionalLong.of(1),
                     ("{\"n\":" + offset + "}").getBytes(StandardCharsets.UTF_8)), 1L);
         }
-        return new Delivery(KEY, "seg-" + firstOffset, count, firstOffset, w.toByteArray(1L));
+        return new Delivery(KEY, "seg-" + firstOffset, count, firstOffset, FetchMode.INLINE,
+                w.toByteArray(1L));
     }
 
     private static List<Long> offsets(List<ReadResult<BinStoreOffset, BinStoreMessage>> results) {

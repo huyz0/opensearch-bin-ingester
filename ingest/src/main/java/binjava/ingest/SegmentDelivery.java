@@ -32,7 +32,21 @@ package binjava.ingest;
  *     on the batch: doc 04 §2c's event carries {@code byteStart}/{@code
  *     byteLen} plus an optional inline payload and reasons about "a trickle
  *     index's 8 KiB batch", and {@code Delivery} is already documented as
- *     "one stream's share of a commit"
+ *     "one stream's share of a commit".
+ *     ⚠️ M5.45a THEN SETTLED WHAT THE SERVING PATH PASSES, AND IT IS THE
+ *     SEGMENT'S OWN LENGTH. The round-1 correction above is about the
+ *     CONTRACT -- this field is not DEFINED as the segment -- and it stands.
+ *     What changed is the caller: {@code SubscriptionHub.publishSegment}
+ *     decides PER SEGMENT rather than per run, because `proxy` streams a whole
+ *     segment and a hub choosing per run would issue one GET per run (~1,600
+ *     for one 8 MiB segment). One decision covering every run in a segment has
+ *     to be made on the segment's bytes, since those are the bytes that
+ *     travel. The consequence the round-1 note predicted is real and is the
+ *     intended behaviour there: an 8 MiB segment is past both inline bounds
+ *     and goes `proxy`, which is the point, because today every push otherwise
+ *     attaches the whole array to every subscriber. ⚠️ A caller that really is
+ *     deciding for ONE stream -- doc 04 §2c's per-batch event, when it exists
+ *     -- still passes that stream's share
  * @param bytesInServingAz whether the bytes are already in the serving pod's
  *     AZ -- its own buffer, or its AZ cache. ⚠️ Intra-AZ transfer is free and
  *     cross-AZ is not, which is the entire reason there are two inline
@@ -51,7 +65,20 @@ package binjava.ingest;
  *     flush. M5's SPEC rejects that in as many words -- "fetch-on-demand per
  *     consumer ... makes the read rate scale with consumers, which is exactly
  *     what NFR-4 forbids". ⚠️ ONE, not zero, is the interesting value:
- *     catch-up replay
+ *     catch-up replay.
+ *     ⚠️ WHAT M5.45a PASSES IS THE SUBSCRIPTIONS OF ONE SEGMENT, which is
+ *     the right granularity and a slight OVER-COUNT.
+ *     {@code SubscriptionHub.publishSegment} flattens the per-{@code RunKey}
+ *     lists of every run in the segment before choosing, so the number is
+ *     per-SEGMENT as this field requires -- the defect the paragraph above
+ *     describes is reaching for one run's list, and that is not what happens.
+ *     But a node subscribed to SEVERAL runs of the same segment appears once
+ *     per subscription rather than once, so the count runs high for a
+ *     multi-shard consumer. It biases toward `proxy` and `direct`, never
+ *     toward `inline`, and {@code SegmentProxy}'s javadoc names the same
+ *     duplication as bandwidth already spent. M5.40 owns collapsing a node's
+ *     subscriptions into one sink; until then this is an over-count, stated
+ *     rather than hidden
  * @param servingPodUnderPressure whether the pod is shedding load, which is
  *     the other condition research doc 04 gives for {@code DIRECT}
  */

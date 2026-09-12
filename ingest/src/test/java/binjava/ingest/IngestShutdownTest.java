@@ -49,7 +49,7 @@ class IngestShutdownTest {
         CountingBinStore store = new CountingBinStore(new MemoryBinStore());
         SubscriptionHub hub = new SubscriptionHub();
         List<SubscriptionHub.Push> seen = new CopyOnWriteArrayList<>();
-        var sub = hub.subscribe(new RunKey(IngestTestSupport.LOGS, 0), seen::add);
+        var sub = hub.subscribe(new RunKey(IngestTestSupport.LOGS, 0), SubscriptionHub.assembling(seen::add));
         DefaultIngest ingest = ingest(store, hub, IngestTestSupport.NEVER);
         long base = store.counts().total();
         CompletableFuture<AppendResult> inflight = appendAsync(ingest, "logs", 0, 7);

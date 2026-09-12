@@ -2,6 +2,7 @@
 package binjava.ingest;
 
 import binjava.binstore.BinStore;
+import binjava.binstore.Capabilities;
 import binjava.format.CommitDelta;
 import binjava.format.RunCommit;
 import binjava.format.RunKey;
@@ -52,6 +53,20 @@ public final class DefaultIngest implements Ingest {
     private final IngestConfig config;
     private final Accumulator accumulator;
     private final SegmentPublisher publisher;
+    /**
+     * ⚠️ THE INGESTER CHOOSES THE FETCH MODE, NOT THE CONSUMER (FR-6). It is
+     * built here, from the backend's own prices, because this is where the
+     * segment's size and the queue's memory budget are both in hand -- and
+     * because a consumer that could demand `direct` at fan-out 300 reproduces
+     * the $3,732/month design ADR-0004 rejected.
+     *
+     * <p>⚠️ DERIVED, NOT CONFIGURED, AND THAT IS A LIMIT WORTH NAMING: the
+     * `direct` fan-out threshold is configuration by M5.11's own acceptance
+     * criteria, and nothing here lets a deployment set it. It does not matter
+     * yet because `direct` is unreachable until M5.45b gives it a serving path
+     * and M5.43 gives it a setting; both rows own making the dial reachable.
+     */
+    private final SegmentServing serving;
     private final Sequencer sequencer;
     private final String podShortId;
     /**
@@ -123,12 +138,19 @@ public final class DefaultIngest implements Ingest {
     private volatile boolean closed;
     private long droppedPushes;
 
-    /** One queued delivery; the shutdown sentinel is the instance below. */
-    private record PendingPush(CommitDelta delta, byte[] segment, int bytes) {
+    /**
+     * One queued delivery; the shutdown sentinel is the instance below.
+     *
+     * <p>⚠️ THE SEGMENT IS ALWAYS ATTACHED, whatever mode it is served under.
+     * The mode governs how the bytes reach each SUBSCRIBER; this pod wrote
+     * them and holding one copy costs one copy, bounded by
+     * {@code maxQueuedPushBytes}.
+     */
+    private record PendingPush(CommitDelta delta, String segmentKey, byte[] segment, int bytes) {
     }
 
     /** Ends {@link #pushLoop} without interrupting a delivery in flight. */
-    private static final PendingPush POISON = new PendingPush(null, new byte[0], 0);
+    private static final PendingPush POISON = new PendingPush(null, null, new byte[0], 0);
 
     /** How many pushes were dropped because a subscriber could not keep up. */
     public long droppedPushes() {
@@ -148,6 +170,11 @@ public final class DefaultIngest implements Ingest {
         this.publisher = new SegmentPublisher(Objects.requireNonNull(store, "store"),
                 Objects.requireNonNull(prefix, "prefix"),
                 Objects.requireNonNull(podShortId, "podShortId"));
+        Capabilities storeCapabilities = store.capabilities();
+        this.serving = new SegmentServing(
+                new FetchPolicy(FetchPolicyConfig.defaultsFor(storeCapabilities.costs())),
+                storeCapabilities,
+                new SegmentProxy(store));
         this.sequencer = Objects.requireNonNull(sequencer, "sequencer");
         this.podShortId = podShortId;
         this.hub = Objects.requireNonNull(hub, "hub");
@@ -325,7 +352,7 @@ public final class DefaultIngest implements Ingest {
                 return;
             }
             try {
-                hub.publish(next.delta(), next.segment());
+                hub.publish(next.delta(), next.segmentKey(), next.segment(), serving);
             } catch (RuntimeException e) {
                 // ⚠️ A subscriber's failure is its own. SubscriptionHub already
                 // isolates a sink that throws; this is the backstop that keeps
@@ -385,6 +412,21 @@ public final class DefaultIngest implements Ingest {
             // ⚠️ Submitted only after BOTH objects are durable, and only after
             // the waiters are released: append promises DURABILITY, and a
             // consumer told about a segment it cannot GET would fail its read.
+            // ⚠️ THE ARRAY IS QUEUED WHATEVER MODE IS CHOSEN, and an earlier
+            // draft of this line dropped it for `proxy` on the theory that
+            // holding it was the memory cost the mode exists to avoid. That is
+            // WRONG IN BOTH DIRECTIONS. It buys nothing against SPEC criterion
+            // 6, whose bound is flat in the CONSUMER count K and not in the
+            // queue's depth -- one array serves every subscriber either way,
+            // and `maxQueuedPushBytes` already bounds the depth. And it costs a
+            // GET PER SEGMENT for bytes this pod wrote and still holds, which
+            // is a request bought for nothing.
+            //
+            // ⚠️ SO THE MODE IS ABOUT THE HAND-OFF, NOT ABOUT POSSESSION:
+            // `inline` gives each subscriber the whole segment at once,
+            // `proxy` gives it a chunk at a time. Reading the store is for
+            // bytes this pod does NOT hold -- another pod's segment, or a late
+            // subscriber after the array is gone, which is M5.16's prefetch.
             int bytes = published.segment().length;
             if (queuedPushBytes.get() + bytes > config.maxQueuedPushBytes()) {
                 // ⚠️ Dropped, not blocked: blocking here would put a slow
@@ -395,7 +437,7 @@ public final class DefaultIngest implements Ingest {
                 droppedPushes++;
             } else {
                 queuedPushBytes.addAndGet(bytes);
-                pushes.add(new PendingPush(delta, published.segment(), bytes));
+                pushes.add(new PendingPush(delta, published.key(), published.segment(), bytes));
             }
         } catch (IOException | RuntimeException e) {
             for (Pending p : batch) {

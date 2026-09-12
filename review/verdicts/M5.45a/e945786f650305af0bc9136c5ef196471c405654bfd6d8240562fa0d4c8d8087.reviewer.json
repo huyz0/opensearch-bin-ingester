@@ -1,0 +1,29 @@
+{
+  "task": "M5.45a",
+  "role": "reviewer",
+  "diff_sha256": "e945786f650305af0bc9136c5ef196471c405654bfd6d8240562fa0d4c8d8087",
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "ingest/src/test/java/binjava/ingest/AssembledServingPathFailureTest.java:424",
+      "summary": "The new test's javadoc says every other failing-sink test in the file publishes heldBytes == null; the INLINE failing-sink test publishes the bytes non-null, and the backlog done cell repeats the same false sentence.",
+      "failure_scenario": "Lines 423-425 explain why round 3's gap existed: 'every other failing-sink test in this file publishes heldBytes == null and never enters the method'. anINLINESinkThatTHROWSDoesNotDenyTheSubscribersAFTERIt at :248 calls hub.publish(oneRun(\"seg-inline\", ...), \"seg-inline\", segment, serving(store)) -- heldSegmentKey and heldBytes both NON-null -- and it is a failing-sink test (FailingSink(0) at :227). It misses writeHeldBytesChunked because its 4096-byte segment is UNDER the inline cap and publishSegment routes it to writeHeldBytes, not because the pod holds no bytes. The recorded round-3 verdict says so in its own words ('AssembledServingPathFailureTest:112 (FailingSink(1), published with heldBytes null -- the store-proxy loop) and :227 (FailingSink(0), 4096 bytes -- the inline branch)'), so the new sentence contradicts the verdict it is narrating. docs/internal/product/backlog.md:59 carries the same clause into the durable record ('which every failing-sink test until then missed by publishing `heldBytes == null`'). Concrete cost: the next author adding a failure test on the held path reads this and believes non-null heldBytes is sufficient to reach writeHeldBytesChunked; it is not -- the segment must also exceed the policy's inline cap, which is the one thing that has to be set up correctly for that test to constrain anything. This round was made by deletion and narrowing plus tests, and this is the one sentence it added that is not true.",
+      "detail": "Same text at docs/internal/product/backlog.md:59. The true reason is the inline cap, not the held-bytes nullness."
+    },
+    {
+      "severity": "minor",
+      "file": "ingest/src/main/java/binjava/ingest/SubscriptionHub.java:382",
+      "summary": "Round 3's 'stopping loudly' claim was deleted at line 313 but the identical claim survives at the DIRECT arm it described -- 'this arm exists to fail loudly'.",
+      "failure_scenario": "Round 3's reviewer minor was that 'stopping loudly is the point' is false because IllegalStateException is a RuntimeException and DefaultIngest.pushLoop's only handler is `catch (RuntimeException e) { continue; }` -- no log, no metric, no droppedPushes. The clause at :313 is gone this round and what replaces it is true. The DIRECT arm's own comment at :379-383, added by this same commit and unchanged since round 1, still says '...so this arm exists to fail loudly if that changes before the serving half does.' That is the same proposition at a different line: the throw at :384 escapes publish (the loop catches UncheckedIOException only, :326) and is discarded in silence one frame up. Failure scenario is round 3's, unchanged: M5.45b makes DIRECT reachable, a policy change elects it before the serving half exists, and the operator sees a window vanish with no log line, while the comment that governs the M5.45b author's decision told them the failure would announce itself. Honest wording is round 3's -- 'stopping rather than degrading to another mode' -- with the M5.48 pointer the paragraph above already carries. Recorded rather than fixed: it is not new text, it does not block, and rule 11 says the next round's surface is the prose the fix would add.",
+      "detail": "Pre-existing within this commit; round 3 flagged the proposition at :313 only."
+    },
+    {
+      "severity": "minor",
+      "file": "ingest/src/test/java/binjava/ingest/AssembledServingPathFailureTest.java:496",
+      "summary": "The new zero-read test's javadoc calls 'every open throws' the only state that reaches the opened.isEmpty() guard; a subscriber returning a null sink reaches it too.",
+      "failure_scenario": "Lines 496-500 say 'the subscribers EXIST and every {@code open} throws, which is the only state that reaches the second guard'. SubscriptionHub.deliver:411-413 has an explicit `if (sink == null) { continue; }` branch, so a set of subscribers that all RETURN NULL produces the same empty `opened` list and reaches the same guard -- round 3's own recorded scenario says 'every one of them throws from open() or returns null'. The consequence is small but real: the null-return branch is the one deliver handles silently with no Tracking entry, and a reader told it cannot reach the empty-opened state has no reason to test it, leaving the cheaper of the two routes to a GET-for-nobody unconstrained. 'the only state' should be 'subscribers exist and none of them yields a sink'.",
+      "detail": "Weakest of the three; documentation precision only."
+    }
+  ]
+}

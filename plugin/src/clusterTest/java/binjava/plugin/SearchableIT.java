@@ -73,11 +73,11 @@ public class SearchableIT extends OpenSearchSingleNodeTestCase {
     private static final class HubTransport implements SubscriptionTransport {
         @Override
         public AutoCloseable subscribe(RunKey key, Listener listener) {
-            return HUB.subscribe(key, push -> {
+            return HUB.subscribe(key, SubscriptionHub.assembling(push -> {
                 DELIVERED.addAndGet(push.recordCount());
                 listener.onDelivery(new Delivery(push.key(), push.segmentKey(),
-                        push.recordCount(), push.firstOffset(), push.segment()));
-            });
+                        push.recordCount(), push.firstOffset(), push.via(), push.segment()));
+            }));
         }
     }
 

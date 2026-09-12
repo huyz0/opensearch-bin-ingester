@@ -4,6 +4,7 @@ package binjava.client;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import binjava.format.OpType;
+import binjava.format.FetchMode;
 import binjava.format.RunKey;
 import binjava.format.SegmentRecord;
 import binjava.format.SegmentWriter;
@@ -54,7 +55,8 @@ class ConsumerClientTest {
     }
 
     private static Delivery delivery(long firstOffset, String... ids) throws Exception {
-        return new Delivery(KEY, "seg", ids.length, firstOffset, segmentOf(ids));
+        return new Delivery(KEY, "seg", ids.length, firstOffset, FetchMode.INLINE,
+                segmentOf(ids));
     }
 
     @Test

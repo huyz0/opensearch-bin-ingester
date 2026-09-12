@@ -66,7 +66,7 @@ class DefaultIngestTest {
         CountingBinStore store = new CountingBinStore(new MemoryBinStore());
         SubscriptionHub hub = new SubscriptionHub();
         List<SubscriptionHub.Push> seen = new CopyOnWriteArrayList<>();
-        try (var sub = hub.subscribe(new RunKey(IngestTestSupport.LOGS, 3), seen::add);
+        try (var sub = hub.subscribe(new RunKey(IngestTestSupport.LOGS, 3), SubscriptionHub.assembling(seen::add));
                 DefaultIngest ingest = ingest(store, hub, IngestTestSupport.NEVER)) {
             // ⚠️ Measured from AFTER construction: recover() spends one LIST at
             // startup, by design (R2 permits a LIST off the hot path). An
@@ -148,7 +148,7 @@ class DefaultIngestTest {
         SubscriptionHub sizerHub = new SubscriptionHub();
         List<SubscriptionHub.Push> measured = new CopyOnWriteArrayList<>();
         int segmentBytes;
-        try (var sub = sizerHub.subscribe(new RunKey(IngestTestSupport.LOGS, 0), measured::add);
+        try (var sub = sizerHub.subscribe(new RunKey(IngestTestSupport.LOGS, 0), SubscriptionHub.assembling(measured::add));
                 DefaultIngest probe = new DefaultIngest(
                         IngestTestSupport.pinnedIntervalConfig(IngestTestSupport.NEVER,
                                 8L << 20, Long.MAX_VALUE / 4),
@@ -167,7 +167,7 @@ class DefaultIngestTest {
         CountingBinStore store = new CountingBinStore(new MemoryBinStore());
         SubscriptionHub hub = new SubscriptionHub();
         BlockingSink sink = new BlockingSink();
-        try (var sub = hub.subscribe(new RunKey(IngestTestSupport.LOGS, 0), sink);
+        try (var sub = hub.subscribe(new RunKey(IngestTestSupport.LOGS, 0), SubscriptionHub.assembling(sink));
                 DefaultIngest ingest = new DefaultIngest(
                         IngestTestSupport.pinnedIntervalConfig(IngestTestSupport.NEVER, 8L << 20, budget),
                         store, IngestTestSupport.PREFIX, "pod1",
@@ -214,7 +214,7 @@ class DefaultIngestTest {
         CountingBinStore store = new CountingBinStore(new MemoryBinStore());
         SubscriptionHub hub = new SubscriptionHub();
         List<SubscriptionHub.Push> seen = new CopyOnWriteArrayList<>();
-        try (var sub = hub.subscribe(new RunKey(IngestTestSupport.LOGS, 0), seen::add);
+        try (var sub = hub.subscribe(new RunKey(IngestTestSupport.LOGS, 0), SubscriptionHub.assembling(seen::add));
                 DefaultIngest ingest = ingest(store, hub, IngestTestSupport.NEVER)) {
             appendOnce(ingest, "logs", 0, 6);
             awaitPush(seen);

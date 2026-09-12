@@ -1,0 +1,26 @@
+{
+  "task": "M5.45a",
+  "role": "test-reviewer",
+  "diff_sha256": "b8d36a67725bec847f5a4e4bde8edab49c7559b2eacc3838d303e4f422182e61",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "severity": "major",
+      "file": "ingest/src/test/java/binjava/ingest/AssembledServingPathFailureTest.java:128",
+      "summary": "Round-1's failure-path finding is only half closed: every failing sink in the new file is on the STORE-proxy loop, so subscriber isolation on the INLINE branch and in deliver()'s open() catch is still unconstrained.",
+      "failure_scenario": "MEASURED, three mutations, each with :ingest:test green at 198/198 (and the last also with :http:test and :plugin:test green). (a) SubscriptionHub.java:441 -- one token, `continue` -> `break` in writeHeldBytes: a sink that throws on the inline path then stops delivery to every LATER subscriber, and because those sinks never threw, Tracking.failed is false and deliver() COMPLETES them holding zero bytes. Through SubscriptionHub.assembling that is `new byte[0]` handed to the listener and ConsumerClient.decodeInto throwing inside complete(), swallowed at :431 -- silent, total loss of the window for every healthy consumer after the first bad one. That is the same 'worst outcome available' this file's first test exists to prevent, on the branch DefaultIngest takes for every segment under the 256 KiB default cap. (b) SubscriptionHub.java:436-444 -- delete the try/catch entirely (declare `throws IOException`): one inline sink's IOException becomes deliver()'s UncheckedIOException, nobody on the segment is completed, publish rethrows and pushLoop drops it. Green. (c) SubscriptionHub.java:398-411 -- remove the catch around `subscriber.open(push)` and rethrow: a subscriber that throws at open aborts the push for every other subscriber of the segment, violating the hub's headline invariant ('A SLOW OR DEAD SUBSCRIBER MUST NOT BLOCK A COMMIT', class javadoc lines 36-39). Green in all three suites. The only test that covers open()-throws, SubscriptionHubTest.aThrowingSubscriberDoesNotStopTheOthersOrTheCommit:157, runs publish(CommitDelta) -> publishRun, which has its own catch and which M5.47 is queued to delete -- so the property has no test on the live path today and none at all after M5.47. Round-1 named 'the open()-throws catch in deliver' and 'the per-sink catch in writeHeldBytes' by name; both are still unreachable. The fix is one test in the file that now exists: a FailingSink published with heldBytes non-null under an inlining policy, asserting the healthy sinks still receive the whole segment AND are completed.  Not measured, same unexercised region: no test anywhere throws from a sink while this pod HOLDS the bytes, so writeHeldBytesChunked's live.remove(i) at :475 has no input that reaches it either."
+    },
+    {
+      "severity": "minor",
+      "file": "ingest/src/main/java/binjava/ingest/SegmentServing.java:42",
+      "summary": "The new record's constructor guards are unconstrained, including the requireNonNull this commit's javadoc offers as the rung-1 replacement for the nullable-proxy refusal round 1 objected to.",
+      "failure_scenario": "MEASURED: deleting `Objects.requireNonNull(proxy, \"proxy\")` at SegmentServing.java:42 leaves :ingest:test green -- no test constructs SegmentServing with a null component, so none of the three guards is exercised. The javadoc at :27-35 argues the guard is what makes the bad state unrepresentable (non-negotiable 9, rung 1); as it stands that claim rests on a line nothing runs. The sibling from the same milestone does it the other way: FetchPolicyTest.theConstructorsREFUSEWhatTheirMessagesSayTheyRefuse:147 exists precisely because round-1 review deleted every guard in M5.11 at once and the suite stayed green -- 'validation nothing exercises is a comment that throws' (testing.md rule 14). Three assertThatThrownBy lines in the new failure file would close it."
+    },
+    {
+      "severity": "minor",
+      "file": "ingest/src/main/java/binjava/ingest/SubscriptionHub.java:344",
+      "summary": "'NO READ FOR NOBODY' -- the early return that makes an unsubscribed segment cost zero requests -- is asserted nowhere.",
+      "failure_scenario": "MEASURED: disabling BOTH early returns (`if (targets.isEmpty())` at :344 and `if (opened.isEmpty())` at :413, each `&& false`) leaves :ingest:test green at 198/198. Neither guard alone is observable either, since each masks the other. Every publish in AssembledServingPathTest and AssembledServingPathFailureTest has at least one live subscriber for every segment it names, and DefaultIngest's request-counting tests always hold their own bytes, so a GET bought for a segment nobody wants is invisible. The comment at :341-343 claims this is 'what makes criterion 8's zero hold at fan-out'. With the guard gone a batched delta naming another pod's unsubscribed segment buys one GET per publish, and on a presign-capable backend the held branch would call modeFor with segmentFanOut == 0, which FetchPolicyTest.fanOutZEROIsBelowTheDefaultThresholdOfONE:131 pins to DIRECT -- the switch arm at :370 throws, and pushLoop drops the delta. One assertion (publish a delta whose segment has no subscriber, heldBytes null, assert gets == 0) closes it."
+    }
+  ]
+}

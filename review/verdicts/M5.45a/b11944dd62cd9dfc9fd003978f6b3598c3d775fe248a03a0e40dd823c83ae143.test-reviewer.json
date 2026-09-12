@@ -1,0 +1,38 @@
+{
+  "task": "M5.45a",
+  "role": "test-reviewer",
+  "diff_sha256": "b11944dd62cd9dfc9fd003978f6b3598c3d775fe248a03a0e40dd823c83ae143",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "severity": "blocking",
+      "file": "ingest/src/test/java/binjava/ingest/AssembledServingPathTest.java:288",
+      "summary": "Criterion 3's INTERLEAVING bound is not asserted anywhere on the assembled path; theServingPathHandsOffNoMoreThanACHUNKAtAnyK asserts only the hand-off size, which the criterion names as the form that passes against the falsifier.",
+      "failure_scenario": "MEASURED, not argued. Mutation applied to ingest/src/main/java/binjava/ingest/SegmentProxy.java:181 -- `byte[] allOfIt = in.readAllBytes();` followed by chunkBytes-sized System.arraycopy slices into the same buffer (service memory becomes O(segment), SPEC criterion 6's named falsifier). Result: `./gradlew :ingest:test --tests binjava.ingest.AssembledServingPathTest` -> tests=\"8\" skipped=\"0\" failures=\"0\". The ONLY test in the tree that kills it is SegmentProxyTest.theFIRSTHandOffHappensBeforeTheStreamIsDRAINED (M5.12, 9 tests, 1 failed) -- i.e. exactly the 'against SegmentProxy in isolation' coverage criterion 3 says is insufficient. The new file adds no assertion on how much has been READ when the first byte is DELIVERED. Second half of the same gap: the held-bytes chunked path (SubscriptionHub.writeHeldBytesChunked:412), which is the path DefaultIngest actually takes because the ingester always holds the segment it just wrote, is exercised at K=1 only (proxyForBytesTheNodeHOLDSCostsZEROReads:330); the K=1/K=64 loop at :288 publishes with heldBytes==null and so drives the store path instead. So no K=64 assertion exists for the production-typical proxy path at all."
+    },
+    {
+      "severity": "blocking",
+      "file": "ingest/src/test/java/binjava/ingest/AssembledServingPathTest.java:190",
+      "summary": "Nothing at T0/T1 constrains the per-run fields (key, recordCount, firstOffset) of the Push built by the new publish path; the test that guarded that property is on the overload this commit orphans.",
+      "failure_scenario": "MEASURED. Mutation at ingest/src/main/java/binjava/ingest/SubscriptionHub.java:353 -- replace `t.run()` with `targets.get(0).run()`, so every subscriber of a multi-run segment is handed the FIRST run's key, recordCount and firstOffset. Result: `./gradlew :ingest:test :http:test :plugin:test` green (195 ingest tests, 0 failures). aSegmentOfMANYRunsIsReadONCENotOncePerRun already builds 8 runs with distinct RunKeys and distinct firstOffsets (100*partition) and 8 distinct sinks, and asserts only gets==1 and the segment bytes -- one added assertion on push.key()/push.firstOffset() per sink would kill the mutant. In production this is delivery of another shard's records under offsets the commit log does not agree with, silently. The existing guard, SubscriptionHubTest.everyRunIsDeliveredUnderITSOWNSegmentNotTheFirstInTheBatch, runs against publish(CommitDelta, byte[]) -- the overload this commit leaves with no production caller and that M5.47 is queued to delete, so the property is about to lose its only test. This is also criterion 1's gap: 'BYTE-IDENTICAL RECORDS AT THE CONSUMER' is asserted as byte-identical SEGMENT bytes at a SegmentSink (inlineAndProxyDeliverBYTEIDENTICALBytes:154), and what turns segment bytes into records -- key plus firstOffset -- is precisely the part nothing pins. No test below T4 decodes a record through ConsumerClient on the new path: EndToEndTest still calls the old hub.publish(delta, segment) (plugin/src/test/java/binjava/plugin/EndToEndTest.java:223), and BulkThroughTheRealStackTest reads the segment back from the store rather than through a consumer."
+    },
+    {
+      "severity": "major",
+      "file": "ingest/src/test/java/binjava/ingest/AssembledServingPathTest.java:1",
+      "summary": "No failure-path test on the new serving path: every catch block, the Tracking/failed machinery and the null-proxy refusal are unreachable from any test.",
+      "failure_scenario": "AssembledServingPathTest contains no throwing sink, no null sink, no failing store and no SegmentServing with a null proxy (the string 'throw' appears only in 'throws Exception'). MEASURED: dropping `failed = true;` at SubscriptionHub.java:454 and neutering `if (sink.failed)` at :382 leaves :ingest:test, :http:test and :plugin:test green. That mutant is the outcome deliver()'s own javadoc calls 'THE WORST OUTCOME AVAILABLE' -- a subscriber that threw mid-stream is completed with a truncated prefix it cannot tell from a whole segment, decoding fewer records under offsets the commit log says are there. Unreachable from any test for the same reason: the open()-throws catch in deliver, the sink==null branch, the UncheckedIOException wrap on store failure, the per-sink catch in writeHeldBytes, the live.remove(i) in writeHeldBytesChunked, and streamFromStore's 'this deployment has no SegmentProxy' refusal (which SegmentServing's javadoc states as a REFUSE-rather-than-degrade contract). M5.12 criterion 5 ('a consumer that throws mid-stream stops neither the others nor the read') is asserted for SegmentProxy in isolation only. Note also that SubscriptionHubTest.aThrowingSubscriberDoesNotStopTheOthersOrTheCommit's fault injection moved in this commit: the lambda now throws from Subscriber.open(), i.e. BEFORE any byte is written, where the old Consumer<Push> threw at delivery -- so even the old publishRun path no longer injects a mid-delivery sink failure."
+    },
+    {
+      "severity": "minor",
+      "file": "ingest/src/main/java/binjava/ingest/SubscriptionHub.java:412",
+      "summary": "writeHeldBytesChunked's documented 'the loop order IS the memory bound' invariant is unconstrained.",
+      "failure_scenario": "MEASURED: rewriting the loop consumer-OUTER / chunk-INNER (each sink walked over the whole array before the next sees a byte) leaves :ingest:test, :http:test and :plugin:test green. Minor rather than major because for an array the pod already holds the swap costs ordering and fairness rather than memory -- but the javadoc states it as the property, and SegmentProxy's equivalent claim is backed by a test."
+    },
+    {
+      "severity": "minor",
+      "file": "ingest/src/test/java/binjava/ingest/AssembledServingPathTest.java:114",
+      "summary": "aSegmentOVERTheInlineCapIsServedPROXYFromONEReadForEverySubscriber does not test what its name and its as() message claim.",
+      "failure_scenario": "It publishes with heldSegmentKey/heldBytes both null, so `via` comes from the unconditional `heldBytes == null ? PROXY : policy.modeFor(...)` ternary and FetchPolicy is never consulted; the 512 KiB size and the inline cap play no part. Surviving mutation: raise the inline cap in serving() to Long.MAX_VALUE -- the test stays green. What it genuinely constrains is one GET for 64 subscribers, which is real and worth keeping; the size-drives-the-mode property is carried by theREALIngesterChoosesTheModeFromTheSegmentSIZE:378 instead. Renaming or adding held bytes would make the test say what it does."
+    }
+  ]
+}

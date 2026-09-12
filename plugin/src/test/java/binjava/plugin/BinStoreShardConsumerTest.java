@@ -7,6 +7,7 @@ import binjava.client.ConsumerClient;
 import binjava.client.Delivery;
 import binjava.client.SubscriptionTransport;
 import binjava.format.OpType;
+import binjava.format.FetchMode;
 import binjava.format.RunKey;
 import binjava.format.SegmentRecord;
 import binjava.format.SegmentWriter;
@@ -44,7 +45,8 @@ class BinStoreShardConsumerTest {
             w.add(KEY, new SegmentRecord(id, OpType.INDEX, OptionalLong.of(1),
                     ("{\"id\":\"" + id + "\"}").getBytes(StandardCharsets.UTF_8)), 1L);
         }
-        return new Delivery(KEY, "seg", ids.length, firstOffset, w.toByteArray(1L));
+        return new Delivery(KEY, "seg", ids.length, firstOffset, FetchMode.INLINE,
+                w.toByteArray(1L));
     }
 
     @Test

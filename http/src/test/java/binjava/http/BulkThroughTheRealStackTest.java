@@ -95,7 +95,7 @@ class BulkThroughTheRealStackTest {
         CountingBinStore store = new CountingBinStore(new MemoryBinStore());
         SubscriptionHub hub = new SubscriptionHub();
         List<SubscriptionHub.Push> pushed = new CopyOnWriteArrayList<>();
-        try (var sub = hub.subscribe(new RunKey(LOGS, 3), pushed::add);
+        try (var sub = hub.subscribe(new RunKey(LOGS, 3), SubscriptionHub.assembling(pushed::add));
                 DefaultIngest ingest = new DefaultIngest(
                         new IngestConfig(Duration.ofMillis(30), 8L << 20, "cluster-a"),
                         store, "bins/cluster-a", "pod1", TestSequencers.leased(store, "bins/cluster-a", "pod1"), hub,
