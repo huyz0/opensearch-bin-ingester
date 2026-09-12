@@ -98,10 +98,21 @@ which is the exact failure this paragraph exists to prevent.
    triple and the leaseholder's dedup could not match a retry. ⚠️ **DONE at
    M5.2**, which hoists the request into a named local so it can be held and
    resent; the `flushSeq++` itself still sits in that constructor call, and
-   moving it was never the point. ⚠️ **NOTHING PINS IT**: review MEASURED that
-   reverting M5.2 leaves the whole suite green, `CommitRetryTripleTest`
-   included. Recorded as M5.32. ⚠️ So this prerequisite is BUILT but not PROVEN,
-   and nothing downstream should read "M5.2 landed" as "the property holds".
+   moving it was never the point. ⚠️ **NOTHING PINS IT AT THIS SEAM, AND
+   NOTHING CAN**: M5.32 measured reverting M5.2 leaving the whole suite green,
+   `CommitRetryTripleTest` included, and then measured WHY -- the hoist is a
+   semantics-preserving transformation (`javap -c` differs only by an
+   `astore`/`aload` pair and the position of a `getfield` on a `private final`
+   field), so it is an equivalent mutant rather than a hole.
+   ⚠️ **THE PROPERTY IS PINNED, AT THE SEAM WHERE A RETRY EXISTS**: M5.32 added
+   `RemoteSequencerTest.aFollowedResendCarriesTheSAMETripleAsTheRefusedAttempt`,
+   because `RemoteSequencer.commitAll` already resends the refused request to
+   the pod a re-read lease names -- and nothing constrained it, so rebuilding
+   that request with `flushSeq() + 1` left all 495 sequencer tests green while
+   the delta landed under a `flushSeq` the pod never issued.
+   ⚠️ So this prerequisite is BUILT and PROVEN where a retry happens; what
+   stays unproven is the AMBIGUOUS-reply resend on the `DefaultIngest` path,
+   which is criterion 4 below and is owned by **M5.52**.
 4. **A `SequencerTransport` seam** and its fake, because the remote
    implementation must be testable at T1 without a socket. ⚠️ **The lease is the
    truth about who holds it** (ADR-0012): a peer hint may accelerate, never
@@ -320,8 +331,11 @@ here, not a constant. M4 applied the same discipline to the lease TTL.
 4. **A retry reuses its triple end to end**: killing the reply on the
    *production* path — `DefaultIngest`, not a fake — and retrying produces one
    delta, not two. ⚠️ **STILL UNMET, and not for the reason first written**:
-   M5.2 makes the request resendable, but no production caller resends an
-   ambiguous commit, so there is no end-to-end retry to observe. M5.32.
+   M5.2 makes the request resendable, and `RemoteSequencer` resends a REFUSED
+   commit -- pinned since M5.32 -- but no production caller resends an
+   AMBIGUOUS one, and `RemoteSequencer` deliberately declines to
+   (`anAMBIGUOUSFailureIsNOTResent`). So there is no end-to-end ambiguous retry
+   to observe. Owned by **M5.52**, not by M5.32, which is closed.
 5. **All three fetch modes deliver identical bytes** for the same segment, and
    the mode is chosen by the ingester — a consumer asking for `direct` at
    fan-out > 1 is served something else.
@@ -393,7 +407,7 @@ as invisible to the gate remain so until `check-mutants.sh` is wired.
 | Risk | What reveals it |
 |---|---|
 | Forwarding becomes a second coordination path | Criterion 1's assertion that only the leaseholder writes the chain |
-| Forwarding is wired before a retry is answerable | Criteria 3 and 4. ⚠️ Criterion 3 holds in the general case since M5.1/M5.25 but NOT unconditionally -- **M5.34** enumerates the retries that are appended or refused instead, and M5.20 must not mark it verified without them. Criterion 4 is still unmet, but because nothing resends an ambiguous commit end to end (M5.32), not for the reason first written |
+| Forwarding is wired before a retry is answerable | Criteria 3 and 4. ⚠️ Criterion 3 holds in the general case since M5.1/M5.25 but NOT unconditionally -- **M5.34** enumerates the retries that are appended or refused instead, and M5.20 must not mark it verified without them. Criterion 4 is still unmet, but because nothing resends an ambiguous commit end to end -- **M5.52** owns it, and M5.20 must not mark it verified without that row. Not for the reason first written, and not M5.32, which is closed: M5.32 pinned the REFUSED resend and found criterion 4 pointing at itself in three places, of which this was the third |
 | `proxy` buffers under load | Criterion 6's memory bound, at K=64 |
 | `direct` becomes the default by accident | Criterion 5: the ingester chooses, and a consumer cannot demand it |
 | The zero-idle criterion repeats M1's non-proof | Criterion 8 requires a **recorded red** against a serving path that fetches per empty poll, and requires the injected clock to be READ -- M1.16b was withdrawn for a clock that was not |
@@ -417,7 +431,7 @@ worklist. Until then a reader of this file meets the false answer first.
 |---|---|
 | M5.0 | This spec, the roadmap row corrected to name commit forwarding, and NFR-7/NFR-13 reassigned rather than silently claimed |
 | M5.1 | Inherit the idempotency window across a takeover (the unowned M4.10f) |
-| M5.2 | A retry reuses its triple: move `flushSeq` off the call site in `DefaultIngest` |
+| M5.2 | A retry reuses its triple: hoist the `CommitRequest` into a named local in `DefaultIngest` ⚠️ **NOT "move `flushSeq` off the call site"**, which this row said until M5.32. §3 above said the SAME wrong thing until M5.27 corrected it and missed this row -- they agreed and were both wrong, which is why nothing caught it -- the increment still sits in that constructor call and moving it was never the point |
 | M5.3 | `SequencerTransport` seam and its fake |
 | M5.4 | `RemoteSequencer`: read the lease, forward, return the delta |
 | M5.5 | Follow the lease when the target refuses or it moves |

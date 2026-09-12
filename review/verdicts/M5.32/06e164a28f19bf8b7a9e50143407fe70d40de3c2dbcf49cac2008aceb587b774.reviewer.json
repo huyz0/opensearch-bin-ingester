@@ -1,0 +1,22 @@
+{
+  "task": "M5.32",
+  "role": "reviewer",
+  "diff_sha256": "06e164a28f19bf8b7a9e50143407fe70d40de3c2dbcf49cac2008aceb587b774",
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "docs/internal/product/milestones/M5/SPEC.md:434",
+      "summary": "\"they agreed and were both wrong, which is why nothing caught it for thirteen commits\" attaches 13 to the window in which the two did NOT agree; the agreement lasted 19 commits and the row was wrong for 32",
+      "detail": "MEASURED: git rev-list --count 66f4020..d043479 = 19 (the window in which SPEC.md 3 and this Tasks row both said 'flushSeq off the call site'), d043479..HEAD = 13 (the window AFTER M5.27 corrected 3, i.e. the window in which the file contradicted itself), 66f4020..HEAD = 32 (the whole time this Tasks row has been wrong). The sentence offers the agreement as the reason nothing caught it 'for thirteen commits', but during those thirteen commits the two disagreed -- agreement is precisely the explanation that does not apply there. The backlog's own M5.2 row states the decomposition correctly ('the SPEC contradicted itself from d043479 to here -- two SPEC.md-touching commits, thirteen in absolute terms'), so the two new sites now disagree about what 13 counts. Failure scenario: M5.20 sweeping this SPEC for VERIFIED.md, or whoever implements M0.111-style history checks, recomputes the window from the two commit IDs the backlog cell names, gets 19 rather than 13, and concludes the correction record is itself wrong -- which is the fourth iteration of this same sentence being wrong and the exact class of defect M5.32 exists to end. Correct statement: uncaught for 32 commits, 19 of them because 3 agreed and 13 more after M5.27 corrected 3 and missed this row.",
+      "failure_scenario": "M5.20 sweeps this SPEC for M5's VERIFIED.md, recomputes the window from the two commit IDs the backlog cell names (66f4020..d043479 = 19 commits, not 13), finds the two new sites disagreeing about what 13 counts, and records the correction record itself as wrong -- the fourth iteration of this same sentence being wrong."
+    },
+    {
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:47",
+      "summary": "M0.109's new closing sentence -- 'THE GATE MUST COUNT CELLS AFTER ACCOUNTING FOR CODE SPANS' -- is readable as 'ignore pipes inside code spans', which would build a gate blind to the instance that opened the row",
+      "detail": "The same cell states, correctly, that GFM 'splits on [a literal |] even inside backticks'. An implementer who reads the closing sentence as 'strip code spans, then count cells' computes 4 cells for the PRE-FIX M5.34 row -- the row with unescaped `!hasPointer() || incarnationId() == null` and 6 raw cells, whose FR-11 and todo GFM dropped -- and the gate passes exactly the defect this commit just repaired by hand. The intended reading is the narrower 'honour a backslash-escaped pipe even when it sits inside a code span, so an already-fixed row is not false-flagged', and only that reading is compatible with the sentence above it. Failure scenario: check-backlog-table.sh lands stripping code spans before splitting, M0.109 is marked done, and the next row that quotes an unescaped || in backticks loses its State cell silently with a green gate -- the M5.10 shape the row was opened for, now with a gate certifying it. Naming the two rules separately ('split on unescaped pipes only; a \\| does not split, inside a code span or out; an unescaped | inside a code span DOES split and is the defect') removes the ambiguity.",
+      "failure_scenario": "check-backlog-table.sh is implemented from this sentence by stripping code spans before splitting, so it computes 4 cells for the PRE-FIX M5.34 row (unescaped `!hasPointer() || incarnationId() == null`, 6 raw cells, FR-11 and todo dropped by GFM) and passes it. M0.109 is marked done, and the next row quoting an unescaped || in backticks loses its State cell silently with a green gate."
+    }
+  ]
+}

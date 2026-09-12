@@ -1,0 +1,15 @@
+{
+  "task": "M5.32",
+  "role": "test-reviewer",
+  "diff_sha256": "06e164a28f19bf8b7a9e50143407fe70d40de3c2dbcf49cac2008aceb587b774",
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "docs/internal/product/milestones/M5/SPEC.md:434",
+      "summary": "The Tasks row attributes the 13-commit window to the agreement, but the two sites agreed for 19 commits and DISAGREED for those 13 -- backlog.md's own M5.2 row states it exactly right in the same commit",
+      "detail": "SPEC.md:434 reads: 'section 3 above said the SAME wrong thing until M5.27 corrected it and missed this row -- they agreed and were both wrong, which is why nothing caught it for thirteen commits'. MEASURED: the agreement window is 66f4020 (M5.0, where section 3 first carried `DefaultIngest.java:355` writes `flushSeq++` at the commit call site) to d043479 (M5.27, which rewrote section 3), and `git rev-list --count 66f4020..d043479` is 19, not 13. The thirteen-commit window is `git rev-list --count d043479..HEAD` = 13, which is precisely the span in which the two sites CONTRADICTED each other, section 3 correct and the Tasks row still wrong. So the sentence pins the cause (they agreed) to the window in which that cause had already ended. backlog.md's M5.2 row gets this exactly right in the same commit -- 'the SPEC contradicted itself from d043479 to here -- two SPEC.md-touching commits, thirteen in absolute terms' -- and I verified both halves: d043479..HEAD touches SPEC.md in exactly two commits (d354af9, d5b5f21) out of 13.",
+      "failure_scenario": "A reader auditing why this class of error survives reads SPEC.md:434, concludes a 13-commit agreement window, then cross-checks backlog.md's M5.2 row in the same commit, which says 13 commits of CONTRADICTION (d043479..HEAD, two SPEC.md-touching commits -- both verified by git rev-list). Two different mechanisms carry the same number, so the reader cannot tell which failure mode M0.109's gate would have to catch, and the measured 19-commit agreement window (66f4020..d043479) appears nowhere."
+    }
+  ]
+}

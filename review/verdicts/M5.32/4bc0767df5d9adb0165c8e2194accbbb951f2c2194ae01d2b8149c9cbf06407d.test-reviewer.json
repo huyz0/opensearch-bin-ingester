@@ -1,0 +1,15 @@
+{
+  "task": "M5.32",
+  "role": "test-reviewer",
+  "diff_sha256": "4bc0767df5d9adb0165c8e2194accbbb951f2c2194ae01d2b8149c9cbf06407d",
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:41",
+      "summary": "The 'RE-MEASURED ON THIS TREE' sequencer count says 495; this tree has 496, and the extra one is the pin the same cell adds",
+      "detail": "The M5.32 cell says 'RE-MEASURED ON THIS TREE: reverting M5.2 leaves :ingest:test (205) and :sequencer:test (495) green at exit 0'. The ingest number is right -- the last local run has tests=\"205\" summed over ingest/build/test-results/test/*.xml. The sequencer number is one short: the same sum over sequencer/build/test-results/test/*.xml is 496, and TEST-binjava.sequencer.RemoteSequencerTest.xml contains aFollowedResendCarriesTheSAMETripleAsTheRefusedAttempt. 495 is the PRE-pin count, correct in the cell's own earlier sentence ('rebuilding that request with flushSeq() + 1 left all 495 sequencer tests GREEN') and correct at SPEC.md:111, where both are historical. Labelled 'ON THIS TREE' it is stale by exactly the test this commit adds -- reverting M5.2 is an ingest-side change and cannot remove a sequencer test, so the re-measurement either predates the pin or carried the old number forward. Failure scenario: a later reader re-runs the revert to check whether the hoist is still unpinned, gets 496 green, and cannot tell whether the suite grew or the claimed measurement was never made -- which is the one thing non-negotiable 4 asks a number to settle. No assertion is weakened and the conclusion it supports (the revert leaves the suite green, so the hoist is an equivalent mutant) stands independently on the javap evidence, which I checked: javap.clean.txt vs javap.rev.txt differ by the astore_3/aload_3 pair and by hoisting 'getfield sequencer' above the CommitRequest construction, a read of a private final field (DefaultIngest.java:70) that flushSeq++ cannot affect. Per review.md rule 11 this is recorded, not fixed.",
+      "failure_scenario": "A later reader re-runs the M5.2 revert to check whether the hoist is still unpinned, gets 496 green from :sequencer:test rather than the 495 this cell says was measured ON THIS TREE, and cannot tell whether the suite grew since or the re-measurement was never actually run -- which is the one thing non-negotiable 4 asks a recorded number to settle. Verified: summing tests=\"N\" over sequencer/build/test-results/test/*.xml gives 496 and TEST-binjava.sequencer.RemoteSequencerTest.xml contains aFollowedResendCarriesTheSAMETripleAsTheRefusedAttempt; the same sum over ingest gives 205, so only the sequencer half is stale, by exactly the pin this commit adds."
+    }
+  ]
+}

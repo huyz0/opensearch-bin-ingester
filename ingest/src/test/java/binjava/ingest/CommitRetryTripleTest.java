@@ -24,9 +24,21 @@ import org.junit.jupiter.api.Test;
  * was written against, not as a sentence to go and find.
  *
  * <p>⚠️ M5 WILL MAKE ONE REACH IT — but not yet, and this commit deliberately
- * stops short. {@code DefaultIngest} wrote {@code flushSeq++} inside the
- * {@code CommitRequest} constructor call, so the request could not be resent at
+ * stops short. {@code DefaultIngest} BUILT the {@code CommitRequest} inside the
+ * {@code sequencer.commit(...)} call, so the request could not be resent at
  * all. It is now a named local, which is the whole change.
+ *
+ * <p>⚠️ THE {@code flushSeq++} DID NOT MOVE, and an earlier wording here said
+ * it did -- the fifth of five sites M5.32 found carrying that. The increment
+ * still sits inside that constructor call and always should: what made a retry
+ * mint a different triple was REBUILDING THE REQUEST per attempt, not where the
+ * increment lives.
+ *
+ * <p>⚠️ AND THE PROPERTY IS PINNED NOW, at the seam where a retry actually
+ * exists: {@code RemoteSequencerTest.aFollowedResendCarriesTheSAMETripleAsThe}
+ * {@code RefusedAttempt}. It is NOT pinned here, and cannot be -- M5.32
+ * measured reverting the hoist to be a semantics-preserving transformation that
+ * no behavioural test can separate.
  *
  * <p>⚠️ NO RETRY IS ADDED HERE, AND ADDING ONE WOULD STILL BE WRONG TODAY --
  * for a NARROWER reason than when this was written. {@code Sequencer.commit}'s

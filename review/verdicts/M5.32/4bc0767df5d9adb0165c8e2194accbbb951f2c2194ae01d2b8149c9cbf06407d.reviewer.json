@@ -1,0 +1,29 @@
+{
+  "task": "M5.32",
+  "role": "reviewer",
+  "diff_sha256": "4bc0767df5d9adb0165c8e2194accbbb951f2c2194ae01d2b8149c9cbf06407d",
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:41",
+      "summary": "M5.32's own State cell still says M5.27 corrected SPEC \u00a73 'two commits ago' while M5.2's row, edited in the same commit, says thirteen",
+      "detail": "The new M5.32 State cell reads 'M5.27 corrected \u00a73 two commits ago and missed its own Tasks row', unqualified. MEASURED: d043479 (M5.27) is HEAD~13 -- `git rev-list --count d043479..HEAD` is 13 -- and only two of those thirteen commits touched SPEC.md (d5b5f21 M5.10, d354af9 M5.11). The disambiguation exists in this very diff, one row away, at backlog.md:71: 'two `SPEC.md`-touching commits, thirteen in absolute terms'. Failure scenario: a reader auditing the M5.32 cell -- the cell whose job is to record what M5.32 found and corrected -- reads 'two commits ago', runs `git log --oneline -3`, does not find M5.27, and concludes the cell's account of when \u00a73 was corrected is wrong; and the file contradicts itself on its face between rows 41 and 71. Same class of count-falsified-by-later-commits that M5.32 exists to remove. Fix is the same clause already written at line 71.",
+      "failure_scenario": "A reader auditing M5.32's State cell -- the cell whose job is to record what M5.32 found -- reads 'two commits ago', runs `git log --oneline -3`, does not find M5.27 (it is HEAD~13), and concludes the cell's account of when SPEC \u00a73 was corrected is wrong; the file also contradicts itself between row 41 and row 71, which says 'thirteen in absolute terms'."
+    },
+    {
+      "severity": "minor",
+      "file": "docs/internal/product/milestones/M5/SPEC.md:434",
+      "summary": "The new SPEC Tasks-row annotation re-asserts, at the SPEC, the 'SPEC \u00a73 had it right all along' claim the same commit corrects twice in the backlog",
+      "detail": "The added clause reads: 'NOT \"move `flushSeq` off the call site\", which this row said until M5.32 while \u00a73 above said the opposite'. MEASURED against `git show d043479~1:docs/internal/product/milestones/M5/SPEC.md`: at the commit before M5.27, \u00a73 read '`DefaultIngest.java:355` writes `flushSeq++` at the commit call site, so a retry mints a DIFFERENT triple' -- the SAME wrong sentence as the Tasks row. \u00a73 did not say the opposite until d043479, i.e. for all but the last 13 commits \u00a73 and the Tasks row AGREED and were both wrong. The backlog states this correctly twice in this same diff (line 41: 'SPEC.md \u00a73 DID NOT HAVE IT RIGHT ALL ALONG, which a draft of this cell claimed'; line 71: 'the SPEC contradicted itself from `d043479` to here'). Failure scenario: a reader of M5's SPEC -- the widest-readership site and the one M5.27/M5.32 exist to protect -- takes away that \u00a73 was trustworthy back to M5's start and that only the Tasks row drifted, so the 13-commit self-contradiction window disappears from the SPEC's own record and the next SPEC-correction task re-derives it. Minor rather than major only because 'while \u00a73 above said the opposite' admits a present-tense reading ('whereas \u00a73 above now says the opposite'); the historical reading is the natural one and is false.",
+      "failure_scenario": "A reader of M5's SPEC Tasks row concludes that \u00a73 stated the hoist correctly from M5's start and that only this Tasks row drifted. It did not: before d043479, \u00a73 carried the same wrong sentence ('`DefaultIngest.java:355` writes `flushSeq++` at the commit call site'). The 13-commit window in which the SPEC contradicted itself disappears from the SPEC's own record, and the next SPEC-correction task re-derives it from git rather than reading it."
+    },
+    {
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:43",
+      "summary": "The handoff this commit writes INTO M5.34's cell renders in the State column, because the same commit declines to escape the two pipes in the cell it is editing",
+      "detail": "Routing the GATE to M0.109 is right -- the cell-count predicate is M0.109's row and non-negotiable 9 puts it at rung 3 -- and recording the live instance there rather than hand-fixing is consistent with M5.10's precedent. What does not follow is leaving the escape undone in a cell this commit is itself rewriting. MEASURED on the staged file: M5.34's row carries 7 unescaped pipes, so its raw cells are [M5.34][prose up to `!hasPointer() ][empty][ incarnationId() == null` ... through the NEW 'AND M5.32 HANDS THIS ROW A FOURTH SITE' paragraph][FR-11][todo]; GFM keeps the first four against the four-column header. Failure scenario: after this commit the rendered M5.34 row shows an EMPTY Serves column and a State column containing the new handoff prose, with `FR-11` and `todo` dropped entirely -- so the very sentence M5.32 adds to tell M5.34 about `DefaultIngest.java:384` renders as M5.34's state, and a reader or `next-task` scanning States sees a paragraph where `todo` should be. M5.10's deferral rationale ('they belong to other rows') does not transfer to a row being edited here, and the repair is two backslashes inside that code span.",
+      "failure_scenario": "After this commit the rendered M5.34 row shows an empty Serves column and a State column containing the new 'M5.32 HANDS THIS ROW A FOURTH SITE' paragraph, with `FR-11` and `todo` dropped by GFM (7 unescaped pipes, four-column header). The handoff M5.32 writes to M5.34 renders as M5.34's state, and a reader or `next-task` scanning the State column sees prose where `todo` should be."
+    }
+  ]
+}

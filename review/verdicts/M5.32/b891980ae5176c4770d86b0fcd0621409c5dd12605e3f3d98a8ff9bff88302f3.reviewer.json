@@ -1,0 +1,22 @@
+{
+  "task": "M5.32",
+  "role": "reviewer",
+  "diff_sha256": "b891980ae5176c4770d86b0fcd0621409c5dd12605e3f3d98a8ff9bff88302f3",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "severity": "major",
+      "file": "docs/internal/product/milestones/M5/SPEC.md:410",
+      "summary": "A THIRD site still points criterion 4 at M5.32, in the Risks row that instructs M5.20 on verification -- and backlog.md:41 asserts that pointing has stopped",
+      "detail": "Round one's major named two sites naming M5.32 as criterion 4's owner: Scope item 3 (SPEC.md:98-115) and acceptance criterion 4 (SPEC.md:331-338). Both are re-pointed correctly and I verified them -- item 3 now ends 'owned by **M5.52**', criterion 4 ends 'Owned by **M5.52**, not by M5.32, which is closed', M5.52 exists at backlog.md:67, its ID is unused elsewhere, and its statement of the gap checks out against the code (RemoteSequencer.commitAll:64-104 resends only the NotTheLeaseholderException arm and propagates an IOException with the comment saying why; anAMBIGUOUSFailureIsNOTResent exists at RemoteSequencerTest:366). A THIRD site was not swept. SPEC.md:410, the Risks table row 'Forwarding is wired before a retry is answerable', still reads: 'Criterion 3 holds ... **M5.34** enumerates the retries ... and M5.20 must not mark it verified without them. Criterion 4 is still unmet, but because nothing resends an ambiguous commit end to end (M5.32), not for the reason first written'. That row is untouched by this diff (verified with git diff --cached). Two things make it the same defect round one raised rather than a stylistic leftover. First, the row establishes its own convention one clause earlier -- a bold row ID is the owner and M5.20 is told to consult it -- so '(M5.32)' reads as criterion 4's owner, and M5.32 is now done. Second, the M5.32 State cell at backlog.md:41 closes with 'the AMBIGUOUS-reply resend on the `DefaultIngest` path, which is SPEC criterion 4 and now has an owner in **M5.52** rather than pointing at this closed row' -- a claim the tree falsifies at SPEC.md:410. This is also the exact miss the commit is correcting elsewhere: M5.27's own cell records that the Risks table was a site found only at round two, and M5.32's cell records M5.27 correcting SPEC section 3 while missing its own Tasks row. Fix is one token: '(M5.52)'.",
+      "failure_scenario": "M5.20 works M5's Risks table for VERIFIED.md -- the row it must read, because it is the row that names it. It reads 'Criterion 4 is still unmet ... (M5.32)', applies the same reading the same sentence teaches two clauses earlier for M5.34, opens the backlog, finds M5.32 **done**, and records criterion 4's blocker as discharged. Nothing downstream catches a false milestone completion claim, and the row that actually owns it (M5.52, todo) is never reached."
+    },
+    {
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:41",
+      "summary": "The row closes listing TWO unpinned properties and re-homes only one: the SPEC's incarnation limit is left named solely inside a done cell",
+      "detail": "The State cell ends 'STILL UNPINNED: the SPEC's incarnation limit, whose consequence no test asserts in either direction; and the AMBIGUOUS-reply resend on the `DefaultIngest` path, which is SPEC criterion 4 and now has an owner in **M5.52**'. The second gets a row; the first does not, in the same sentence and after the commit has just demonstrated why an unmet item recorded only in a closed row stops being anyone's. The nearest candidate is M5.34 (backlog.md:43), but its text explicitly hands the pins away rather than owning them -- 'TWO REFINEMENTS REVIEW MEASURED, needed by whoever writes the pins' -- so after this commit the incarnation-limit pin is owned by no todo row in the file. Re-homing it is one clause, the same clause M5.52 got, and this file's convention is M5.25's 'TWO ITEMS THIS ROW ONCE OWNED ARE NOT CLOSED HERE and are re-homed rather than deleted'.",
+      "failure_scenario": "A reader sweeping M5's backlog for unpinned properties before VERIFIED.md greps the todo rows, finds no row carrying 'a superseded incarnation's replay lands twice', and concludes the limits M5.34 enumerates are all either pinned or merely documentation -- the incarnation limit's consequence is then never pinned in either direction, and criterion 3's 'NOT MET UNCONDITIONALLY' caveat at SPEC.md:405 stays unbacked by any test."
+    }
+  ]
+}

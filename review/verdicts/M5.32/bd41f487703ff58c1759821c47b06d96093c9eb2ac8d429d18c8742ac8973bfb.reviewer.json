@@ -1,0 +1,22 @@
+{
+  "task": "M5.32",
+  "role": "reviewer",
+  "diff_sha256": "bd41f487703ff58c1759821c47b06d96093c9eb2ac8d429d18c8742ac8973bfb",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "severity": "major",
+      "file": "docs/internal/product/backlog.md:47",
+      "summary": "M0.109's new 'STATED IN WORDS BECAUSE IT CANNOT BE STATED IN SYMBOLS HERE' sentence is false: a backslash-escaped pipe inside a code span in a GFM table cell renders as a literal pipe, not as a backslash -- and the same row, three sentences earlier, says so correctly",
+      "detail": "The new text asserts 'a table cell cannot carry a literal pipe in a code span at all -- escaping it renders the backslash, and not escaping it splits the cell'. MEASURED against GitHub's own renderer (POST /markdown, mode gfm) with the row `| x `p \\| q` y | z |`: the output is <td>x <code>p | q</code> y</td> -- a literal pipe, no backslash. Reproduced independently with a GFM-conformant renderer (markdown-it gfm-like), which also matches the GFM tables spec's own example (`b `\\|` az` -> <code>|</code>). Only the second half of the claim holds: a bare pipe does split, even inside backticks (verified: the pre-fix M5.34 row yields 6 raw cells and GFM drops FR-11 and todo, exactly as this row says). The false half contradicts this row's own earlier sentence 'The fix it should suggest is `\\|` inside the span, which GFM honours in a table cell even inside a code span', and it contradicts what this very commit did to the M5.34 row, whose `` `!hasPointer() \\|\\| incarnationId() == null` `` renders as !hasPointer() || incarnationId() == null. Failure scenario: whoever implements M0.109 takes the sentence at face value -- it is offered explicitly as what is 'worth knowing before writing the gate's own error message' -- and either writes an error message telling authors no escape exists (so the only remedy is rewording the quoted expression, losing the exact source text these rows quote), or, worse, treats the already-escaped M5.34 row as rendering stray backslashes and removes the escapes, which puts back the six-cell row that drops FR-11 and todo -- the exact defect this gate exists to catch. Correction is one clause: escaping works, including inside a code span; what cannot be written is a BARE pipe.",
+      "failure_scenario": "An implementer of M0.109 reads the sentence as the guidance it says it is ('worth knowing before writing the gate's own error message'), writes an error message stating no escape exists, and 'corrects' the already-escaped M5.34 row by removing its backslashes -- restoring a six-cell row in a four-column table, so FR-11 and todo are dropped from the render again: the exact defect the gate exists to catch."
+    },
+    {
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:47",
+      "summary": "'would ... PASS the exact instance that opened this row' names the wrong instance: the row was opened by M5.10's FIVE-cell row, which a code-span-ignoring gate still fails",
+      "detail": "This row's opening sentence says it was 'OPENED BY M5.10 ROUND-4 REVIEW, which caught the M5.10 row itself carrying FIVE cells in a four-column table'. That extra cell came from a structural pipe, not from a code span, so a gate that ignored pipes inside code spans would still fail it. The instance such a gate would pass is the pre-fix M5.34 row, named correctly one clause earlier. Failure scenario: an implementer of M0.109 uses the M5.10 row as the acceptance case for 'a code-span-blind gate must not pass this' and finds it fails either way, then concludes the warning was overstated and builds the code-span-suppressing gate anyway. Noted as minor and not as a defect of judgement: the phrase was the round-4 finding's own wording, adopted verbatim.",
+      "failure_scenario": "An implementer of M0.109 uses the M5.10 row as the acceptance case for 'a code-span-blind gate must not pass this', finds their code-span-suppressing prototype fails it anyway, concludes the warning was overstated, and ships the suppressing gate -- which then passes the M5.34-shaped instance."
+    }
+  ]
+}

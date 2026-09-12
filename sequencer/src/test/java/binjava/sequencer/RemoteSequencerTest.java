@@ -120,6 +120,78 @@ class RemoteSequencerTest {
         }
     }
 
+    /**
+     * A followed resend carries the SAME triple as the attempt that was refused.
+     *
+     * <p>⚠️ THIS IS "a retry reuses its triple" AS BEHAVIOUR, AT THE ONE
+     * SEAM WHERE A RETRY ACTUALLY EXISTS. M5.2 hoisted {@code DefaultIngest}'s
+     * {@code CommitRequest} into a local so it COULD be resent, and M5.32
+     * measured that reverting that hoist leaves the whole tree green -- because
+     * the hoist is a semantics-preserving transformation and no behavioural
+     * test can separate the two programs. The property is unobservable THERE.
+     *
+     * <p>⚠️ BUT THE RESEND IS HERE, in production, today:
+     * {@code RemoteSequencer.commitAll} re-reads the lease on a refusal and
+     * sends {@code requests.get(0)} to the pod the re-read named. Review
+     * MEASURED that nothing constrained it -- rebuilding that request with
+     * {@code flushSeq() + 1} left all 495 sequencer tests green while the delta
+     * landed carrying a {@code flushSeq} the pod never issued, which is exactly
+     * the duplicate the leaseholder's dedup exists to refuse.
+     *
+     * <p>⚠️ EQUALITY, NOT IDENTITY, and that is what keeps this from being
+     * an implementation-shape assertion. {@code CommitRequest} is a record, so
+     * a resend rebuilt from equal fields passes and a refactor that stops
+     * holding the same object survives. What fails is a resend that MINTS a
+     * different triple, which is the regression.
+     */
+    @Test
+    void aFollowedResendCarriesTheSAMETripleAsTheRefusedAttempt() throws Exception {
+        MemoryBinStore store = new MemoryBinStore();
+        LocalSequencer first = LocalSequencer.start(
+                store, PREFIX, leaderAt(store, "poda", A), 8).orElseThrow();
+        InProcessTransport inner = new InProcessTransport().at(A, first);
+        List<CommitRequest> sent = new java.util.ArrayList<>();
+
+        SequencerTransport movesUnderneath = new SequencerTransport() {
+            private boolean moved;
+
+            @Override
+            public CommitDelta send(String endpoint, CommitRequest request)
+                    throws IOException {
+                sent.add(request);
+                if (!moved && A.equals(endpoint)) {
+                    moved = true;
+                    first.close();
+                    inner.gone(A);
+                    LocalSequencer second = LocalSequencer.start(
+                            store, PREFIX, leaderAt(store, "podc", C), 8).orElseThrow();
+                    inner.at(C, second);
+                    throw new NotTheLeaseholderException("fenced: the term moved");
+                }
+                return inner.send(endpoint, request);
+            }
+
+            @Override
+            public void close() throws IOException {
+                inner.close();
+            }
+        };
+
+        try (RemoteSequencer remote =
+                new RemoteSequencer(store, config("podb", B), movesUnderneath)) {
+            remote.commit(flush(0, "seg/0"));
+        }
+
+        assertThat(sent)
+                .as("one refused attempt and the resend that followed the lease")
+                .hasSize(2);
+        assertThat(sent.get(1))
+                .as("the resend carries the triple the refused attempt used -- a fresh "
+                        + "`flushSeq` would be a second identity for one flush, which the "
+                        + "leaseholder's dedup could not match against the first")
+                .isEqualTo(sent.get(0));
+    }
+
     @Test
     void aLeaseThatMovesDURINGTheCommitIsFollowedAfterOneRefusal() throws Exception {
         MemoryBinStore store = new MemoryBinStore();
