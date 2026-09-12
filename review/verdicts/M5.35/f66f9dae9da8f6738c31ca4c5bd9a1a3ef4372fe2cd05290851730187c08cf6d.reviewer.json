@@ -1,0 +1,42 @@
+{
+  "diff_sha256": "f66f9dae9da8f6738c31ca4c5bd9a1a3ef4372fe2cd05290851730187c08cf6d",
+  "verdict": "changes-requested",
+  "summary": "The four new cases do exactly what the row asked and every sole-killer claim in them reproduces: continue->break, the deleted break, writesBefore=0, before=0 and refusalsSeen=0 were each mutated on a clean worktree at the staged bytes and red precisely the named case (501 tests; before=0 and refusalsSeen=0 also red the sweep, as the case's own javadoc says). The compound writesBefore claim also reproduces: the LocalSequencer.close swap alone reds the gracefulReleases floor at 0 against 1000, and the swap plus writesBefore=0 leaves CommitProtocolSweepTest green with only the new case red. What is wrong is prose in the comment block the commit rewrote: one retained sentence was made false by this very commit, and the tier vocabulary contradicts the same class's own prior labelling.",
+  "findings": [
+    {
+      "id": "M5.35-1",
+      "severity": "major",
+      "file": "sequencer/src/test/java/binjava/sequencer/GracefulReleaseMeter.java",
+      "line": 94,
+      "what": "The retained sentence 'Counting after survives the sweep and is caught only by the T1 case -- MEASURED, both ways' is falsified by this commit and was left standing in the very comment block the commit rewrote. MEASURED on a clean worktree: moving `refusalsSeen++` below the carve-out (`if (!(\"pod:\" + leaderPod).equals(one.key())) { refusedForAnotherPod++; break; } refusalsSeen++;`) reds ONE test at HEAD -- aRefusalBLAMINGANOTHERPODIsCountedAndTheReleaseIsNotCredited, 497 tests, sweep green -- and TWO tests on the staged tree, that one plus the commit's own TWORefusalsBLAMINGANOTHERPODCountTheWINDOWOnce, 501 tests, sweep still green. The word 'only' is now wrong, and the new case is the second catcher. The same commit narrowed the refusalsSeen() javadoc and the sentence immediately below this one for exactly this reason, so the check was made for one claim in the block and not for the adjacent one.",
+      "failure_scenario": "A later author grepping this file for what constrains the increment's position reads 'caught only by the T1 case', concludes one case pins it, and either deletes the new case as redundant to the ordering property or re-measures and reports the comment as another instance of the staleness family M5.29 and M5.35 exist to close. The sentence is one word from true: 'caught by aRefusalBLAMINGANOTHERPODIsCountedAndTheReleaseIsNotCredited and by TWORefusalsBLAMINGANOTHERPODCountTheWINDOWOnce, and not by the sweep' -- names rather than a count, which is the rule M5.29 and M5.34 both landed after losing rounds to counts.",
+      "evidence": "worktree at staged bytes: mutation 'count after' -> 501 tests, 2 failures (GracefulReleaseMeterTest.TWORefusalsBLAMINGANOTHERPODCountTheWINDOWOnce, GracefulReleaseMeterTest.aRefusalBLAMINGANOTHERPODIsCountedAndTheReleaseIsNotCredited); same mutation at HEAD -> 497 tests, 1 failure (aRefusalBLAMINGANOTHERPODIsCountedAndTheReleaseIsNotCredited). CommitProtocolSweepTest green in both."
+    },
+    {
+      "id": "M5.35-2",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/GracefulReleaseMeter.java",
+      "line": 103,
+      "what": "The rewrite re-binds a pronoun and makes a measured number false. The new text reads '... `TWORefusalsBLAMINGANOTHERPODCountTheWINDOWOnce` is where they coincide at 1. They also coincide at 38 over the sweep today'. In the preceding clause 'they' is refusalsSeen and refusedForAnotherPod (both 1 in that case). Under that nearest antecedent the next sentence says both counters are 38 over the sweep, and they are not: CommitProtocolSweepTest asserts gracefulReleasesRefused isZero, while gracefulReleaseRefusalsSeen is 38. The pre-existing wording had 'they' = the two UNITS (refusals versus windows carrying one), which is what the trailing 'measured by forcing this loop to stop at the first, which also gives 38' actually supports.",
+      "failure_scenario": "A reader takes 'both coincide at 38 over the sweep' at face value, runs the sweep, finds refusedForAnotherPod at 0 against the comment's 38, and opens an investigation into a counter that is behaving exactly as CommitProtocolSweepTest.java:396 asserts it must."
+    },
+    {
+      "id": "M5.35-3",
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/GracefulReleaseMeterTest.java",
+      "line": 546,
+      "what": "The new prose calls the cases in this file T0; this repository calls them T1, and testing.md agrees. Three sites in the diff: this javadoc ('SURVIVED EVERY T0 CASE IN THIS FILE') and the backlog cell twice ('four T0 cases in `GracefulReleaseMeterTest`', 'those two now die at T0'). Every case in this class constructs `new MemoryBinStore()` inside a `FaultInjectingStore`, which testing.md puts at T1 ('component with fakes | MemoryBinStore'); GracefulReleaseMeter.java:210 calls a case of this same class 'the T1 case'; M5.29's done cell says 'T1 cases now pin it' naming three of them; M5.31's cell and review/overrides.md say the same.",
+      "failure_scenario": "A reader auditing tier coverage of the meter greps for T1 and finds the class described as T0 in its newest javadoc and in the backlog, or reads 'T0' as testing.md's 'no fixture' tier and proposes moving the cases off MemoryBinStore, which is the fixture that injects the faults the cases exist to count. It also splits the vocabulary the three sibling rows share for the same class."
+    },
+    {
+      "id": "M5.35-4",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md",
+      "line": 44,
+      "what": "The done cell opens with 'four T0 cases ... and each was MEASURED as the SOLE killer of the mutation it is named for, across the sequencer module's 501 tests with the 1,000-seed sweep included'. That is false for the fourth: refusalsACCUMULATEAcrossWindowsAndAreNotRECOUNTED is not the sole killer of `int before = 0` or of `refusalsSeen = 0` -- MEASURED, each mutation reds two tests, that case AND CommitProtocolSweepTest.theInvariantsHoldAcrossEverySeed. The cell contradicts its own opening two sentences later ('which the sweep also reds'), and the case's javadoc states it correctly.",
+      "failure_scenario": "The cell is the durable record. A reader harvesting it at the milestone boundary carries forward 'sole killer, sweep included' for all four, and then treats the sweep's refusals floor as unconstrained-by-duplication when deciding whether the 20-refusal floor can be dropped -- a claim the row itself already measured at a margin of one. The blanket sentence is the one that goes into the summary; the correction two sentences later is the one that does not."
+    }
+  ],
+  "task": "M5.35",
+  "role": "reviewer"
+}

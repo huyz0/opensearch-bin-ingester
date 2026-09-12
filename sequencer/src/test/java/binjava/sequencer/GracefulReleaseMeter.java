@@ -91,14 +91,27 @@ final class GracefulReleaseMeter {
             }
             // ⚠️ COUNTED BEFORE THE CARVE-OUT, so the floor over it measures
             // what this loop can SEE rather than what it concludes. Counting
-            // after survives the sweep and is caught only by the T1 case --
-            // MEASURED, both ways.
-            // ⚠️ THIS COUNTS REFUSALS; `refusedForAnotherPod` breaks, so it
-            // counts WINDOWS. They coincide at 38 today only because
-            // `refuseIfPartitioned` throws and aborts the release, so no
-            // window carries two -- measured by forcing this loop to stop at
-            // the first, which also gives 38. A release path that swallowed
-            // the IOException and kept calling would separate them.
+            // after survives the sweep and is caught by
+            // `aRefusalBLAMINGANOTHERPODIsCountedAndTheReleaseIsNotCredited`
+            // and by `TWORefusalsBLAMINGANOTHERPODCountTheWINDOWOnce` --
+            // MEASURED, both ways. Named rather than counted, because the
+            // count here read "one" until the second of those cases arrived.
+            // ⚠️ THIS INCREMENT SITS ABOVE THE KEY TEST, so it counts every
+            // refusal the scan REACHES -- and the `break` below ends the scan,
+            // so what it reaches is every refusal up to and including the
+            // first that blames another pod. It separates from
+            // `refusedForAnotherPod` only across refusals blaming the LEADER,
+            // which is `TWORefusalsInOneWindowAreCountedTWICE`;
+            // `TWORefusalsBLAMINGANOTHERPODCountTheWINDOWOnce` is where the
+            // two COUNTERS coincide, at 1.
+            // ⚠️ THE TWO UNITS COINCIDE OVER THE SWEEP TODAY AT 38 REFUSALS
+            // SEEN -- which is NOT 38 apiece, and the counters are not what
+            // coincides there: `CommitProtocolSweepTest` asserts
+            // `gracefulReleasesRefused` is ZERO. `refuseIfPartitioned` throws
+            // and aborts the release, so no window carries two, and forcing
+            // this loop to stop at the first also gives 38. A release path
+            // that swallowed the IOException and kept calling would separate
+            // them.
             refusalsSeen++;
             if (!("pod:" + leaderPod).equals(one.key())) {
                 refusedForAnotherPod++;
@@ -146,10 +159,15 @@ final class GracefulReleaseMeter {
      * Partition refusals the store raised inside a release window, whoever it
      * blamed (M5.28).
      *
-     * <p>⚠️ REFUSALS, NOT RELEASES, and the unit is load-bearing: {@link
-     * #refusedForAnotherPod} breaks and so counts WINDOWS, this one does not.
-     * Reading this as a release count is how a reader re-derives the retracted
-     * claim that the two are ordered by construction.
+     * <p>⚠️ REFUSALS, NOT RELEASES. {@link #refusedForAnotherPod} counts at
+     * most one per window, because it breaks. This one counts every refusal
+     * the scan REACHES, which the same break bounds: every refusal up to and
+     * including the first that blames another pod. So the two units separate
+     * only across refusals blaming the LEADER -- {@code
+     * TWORefusalsInOneWindowAreCountedTWICE} is 2 there, and {@code
+     * TWORefusalsBLAMINGANOTHERPODCountTheWINDOWOnce} is 1 for a window that
+     * also holds two. Reading this as a release count is how a reader
+     * re-derives the retracted claim that the two are ordered by construction.
      *
      * <p>⚠️ THIS IS WHAT MAKES {@link #refusedForAnotherPod} FALSIFIABLE. That
      * one is asserted to be ZERO, so it can only fail by OVER-counting: review

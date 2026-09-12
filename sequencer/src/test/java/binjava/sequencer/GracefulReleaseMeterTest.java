@@ -434,4 +434,188 @@ class GracefulReleaseMeterTest {
                 .as("returning is not releasing -- an empty lambda returns perfectly well")
                 .isZero();
     }
+
+    /**
+     * A PARTITION refusal AFTER a non-partition fault in the same window is
+     * still counted (M5.35).
+     *
+     * <p>⚠️ THE KIND GUARD IS A SKIP, NOT A STOP, and nothing said so.
+     * MEASURED: {@code continue;} -> {@code break;} in that guard is killed by
+     * THIS CASE AND BY NOTHING ELSE in the sequencer module's 501 tests, the
+     * 1,000-seed sweep included. It blinds the meter to a partition refusal
+     * FOLLOWING a non-partition fault in one window -- M5.28's family, at a
+     * decision point M5.28 itself created by splitting a compound {@code if}
+     * into a guard plus an inner test.
+     *
+     * <p>⚠️ IT HAS TO BE A SIBLING RATHER THAN A LINE ADDED TO
+     * {@code aNONPARTITIONFaultInTheWindowIsNotCountedAsARefusal}, which
+     * already builds a window with an {@code unreachable} in it. {@code list}
+     * draws its {@code unreachable} ABOVE {@code refuseIfPartitioned}, so a
+     * partitioned actor calling {@code list} records no partition at all --
+     * and adding one to that case falsifies both its
+     * {@code containsExactly("unreachable")} and its {@code isZero()}.
+     */
+    @Test
+    void aPARTITIONRefusalAFTERANonPartitionFaultIsSTILLCounted() throws Exception {
+        FaultInjectingStore faulty = new FaultInjectingStore(
+                new MemoryBinStore(), 1L, new FaultInjectingStore.Faults(1, 0, 0, 0));
+        faulty.partition("poda");
+        GracefulReleaseMeter meter = new GracefulReleaseMeter(faulty);
+
+        meter.observe("poda", () -> {
+            try {
+                faulty.list("ctl/", null, 10);
+            } catch (java.io.IOException swallowed) {
+                // deliberately: `list` draws its `unreachable` ABOVE
+                // `refuseIfPartitioned`, so a partitioned actor calling it
+                // records no partition -- and a refusal aborts the release, so
+                // the second call only happens if the first throw is caught
+            }
+            faulty.stat("ctl/lease");
+        });
+
+        assertThat(faulty.injected())
+                .as("the window must hold the non-partition fault FIRST and the refusal "
+                        + "AFTER it, or this pins nothing -- the store is fresh, so its whole "
+                        + "list IS the window")
+                .extracting(FaultInjectingStore.Injected::kind)
+                .containsExactly("unreachable", "partition");
+        assertThat(meter.refusalsSeen())
+                .as("the scan SKIPS the `unreachable` and goes on to the refusal behind it; "
+                        + "stopping there instead counts 0")
+                .isEqualTo(1);
+        assertThat(meter.refusedForAnotherPod()).isZero();
+    }
+
+    /**
+     * TWO refusals both blaming ANOTHER pod count the WINDOW once (M5.35).
+     *
+     * <p>⚠️ THE {@code break} AFTER {@code refusedForAnotherPod++} WAS
+     * UNPINNED. MEASURED: deleting it is killed by THIS CASE AND BY NOTHING
+     * ELSE in the sequencer module's 501 tests, the 1,000-seed sweep included,
+     * and it turns that counter from WINDOWS into REFUSALS while
+     * {@code observe}'s own inline comment beside it states the distinction as
+     * fact. Not reachable on today's single-call release path, so this is
+     * M5.29's staleness class rather than live loss.
+     *
+     * <p>⚠️ AND THE SAME {@code break} TRUNCATES {@code refusalsSeen}, which
+     * is why this case asserts that too: the increment sits ABOVE the key
+     * test, so the scan counts every refusal up to AND INCLUDING the first
+     * that blames another pod, and then stops. A window holding two of them
+     * reads 1, not 2. {@code TWORefusalsInOneWindowAreCountedTWICE} is the
+     * other half -- two refusals blaming the LEADER, where nothing breaks and
+     * the count is 2.
+     */
+    @Test
+    void TWORefusalsBLAMINGANOTHERPODCountTheWINDOWOnce() throws Exception {
+        FaultInjectingStore faulty = new FaultInjectingStore(
+                new MemoryBinStore(), 1L, FaultInjectingStore.Faults.none());
+        faulty.partition("podb");
+        GracefulReleaseMeter meter = new GracefulReleaseMeter(faulty);
+
+        meter.observe("poda", () -> {
+            faulty.actingAs("podb");
+            try {
+                faulty.stat("ctl/lease");
+            } catch (java.io.IOException swallowed) {
+                // deliberately: a refusal aborts the release
+            }
+            faulty.stat("ctl/lease");
+        });
+
+        assertThat(faulty.injected())
+                .as("the premise: the window really holds TWO refusals and both blame podb, "
+                        + "not the releasing leader")
+                .extracting(FaultInjectingStore.Injected::key)
+                .containsExactly("pod:podb", "pod:podb");
+        assertThat(meter.refusedForAnotherPod())
+                .as("ONE WINDOW, however many refusals it carried -- without the break this "
+                        + "is 2 and the counter silently changes unit")
+                .isEqualTo(1);
+        assertThat(meter.refusalsSeen())
+                .as("and the same break stops this scan too, so the refusal counter is "
+                        + "TRUNCATED here rather than reaching 2 -- stated because the "
+                        + "accessor's javadoc contrasts the two units and this is where they "
+                        + "coincide")
+                .isEqualTo(1);
+    }
+
+    /**
+     * Refusals ACCUMULATE across windows and are not RE-counted (M5.35).
+     *
+     * <p>⚠️ TWO MUTATIONS AT THE TOP OF {@code observe} SURVIVED EVERY CASE
+     * IN THIS FILE, caught only by the 1,000-seed sweep and the second of them
+     * by a margin of ONE (19 against a floor of 20). MEASURED, both: {@code
+     * int before = 0} -- which makes every window start at the beginning of
+     * the whole injected list, so window two counts window one again -- and
+     * {@code refusalsSeen = 0} at the top, which turns the accumulator into a
+     * per-window count. Each is killed by THIS CASE and by
+     * {@code CommitProtocolSweepTest.theInvariantsHoldAcrossEverySeed}, and by
+     * nothing else in the module.
+     *
+     * <p>⚠️ THE REASON THEY HID IS ONE LINE: every other case here runs a
+     * SINGLE {@code observe} on a fresh store, so {@code before} is always 0
+     * and the accumulator is never read across windows. Two windows is the
+     * whole fixture.
+     */
+    @Test
+    void refusalsACCUMULATEAcrossWindowsAndAreNotRECOUNTED() throws Exception {
+        FaultInjectingStore faulty = new FaultInjectingStore(
+                new MemoryBinStore(), 1L, FaultInjectingStore.Faults.none());
+        faulty.partition("poda");
+        GracefulReleaseMeter meter = new GracefulReleaseMeter(faulty);
+
+        meter.observe("poda", () -> faulty.stat("ctl/lease"));
+        assertThat(meter.refusalsSeen())
+                .as("the premise: window one saw exactly one refusal")
+                .isEqualTo(1);
+
+        meter.observe("poda", () -> faulty.stat("ctl/lease"));
+
+        assertThat(meter.refusalsSeen())
+                .as("one refusal per window, TWO windows: 3 if the second window rescans the "
+                        + "first, 1 if the accumulator is reset at the top of `observe`")
+                .isEqualTo(2);
+    }
+
+    /**
+     * A SECOND window is not credited for the FIRST's write (M5.35).
+     *
+     * <p>⚠️ THE THIRD OF THE SAME FAMILY AND THE WORST OF THEM, BECAUSE THE
+     * SWEEP DOES NOT CATCH IT. MEASURED: {@code int writesBefore = 0} at the
+     * top of {@code observe} is killed by THIS CASE and by nothing else in the
+     * sequencer module's 501 tests -- unlike {@code int before = 0} and
+     * {@code refusalsSeen = 0}, which the sweep also reds. It degrades the
+     * credit from "this window issued a conditional write" to "this store has
+     * ever seen one", true by lease-acquire time.
+     *
+     * <p>⚠️ AND IT RESTORES EXACTLY THE BLINDNESS M5.29 REMOVED, measured
+     * compound: the production swap alone ({@code leases.release()} ->
+     * {@code store.stat(leases.key())}) REDS the {@code gracefulReleases}
+     * floor, and the same swap PLUS {@code writesBefore = 0} leaves it GREEN.
+     */
+    @Test
+    void aSECONDWindowIsNotCreditedForTheFIRSTSWrite() throws Exception {
+        FaultInjectingStore faulty = new FaultInjectingStore(
+                new MemoryBinStore(), 1L, FaultInjectingStore.Faults.none());
+        binjava.binstore.Version held = faulty.put("ctl/lease", FaultFixtures.body("held"));
+        GracefulReleaseMeter meter = new GracefulReleaseMeter(faulty);
+
+        meter.observe("poda",
+                () -> faulty.putIfMatch("ctl/lease", FaultFixtures.body("expired"), held));
+        assertThat(meter.released())
+                .as("the premise: window one wrote the expired lease back and is credited")
+                .isEqualTo(1);
+
+        meter.observe("poda", () -> { });
+
+        assertThat(meter.released())
+                .as("the second window touched nothing, so the credit stays at one -- a "
+                        + "baseline of 0 credits it again for a write another window issued")
+                .isEqualTo(1);
+        assertThat(faulty.calls("putIfMatch"))
+                .as("and the store really did see exactly one conditional write across both "
+                        + "windows, or the assertion above is trivially true")
+                .isEqualTo(1);
+    }
 }
