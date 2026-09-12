@@ -156,6 +156,47 @@ public final class FaultInjectingStore implements BinStore {
         return calls;
     }
 
+    /** Calls of ONE verb, refused ones included (M5.29). */
+    int calls(String verb) {
+        return byVerb.getOrDefault(verb, 0);
+    }
+
+    /**
+     * Records one call, and does NOTHING else (M5.29).
+     *
+     * <p>⚠️ COUNTING IS SEPARATED FROM REFUSING, and the two jobs used to
+     * share {@code refuseIfPartitioned}. That made the meter's coverage a
+     * side effect of the partition rule: three verbs never call that method --
+     * {@code capabilities}, {@code close} and {@code presign} -- so three verbs
+     * were invisible, and {@code list} was invisible on the ~3% of calls where
+     * its injected {@code unreachable} fires first.
+     *
+     * <p>⚠️ THE THIRD VERB ARRIVED AFTER THE ROW, WHICH IS THE ARGUMENT.
+     * M5.29 named {@code capabilities} and {@code close} and predicted "both
+     * are staleness the next verb makes real". {@code presign} reached this
+     * class at {@code d5b5f21} (M5.10), fifteen hours after the row was written
+     * at {@code b44817a}, and made it real -- so the answer is to separate the
+     * two jobs rather than to add a fourth exception and wait for a fifth.
+     *
+     * <p>⚠️ COUNTED, NOT REFUSED, for those three. Routing them through the
+     * partition check would change what a partition MEANS -- {@code close}
+     * would start throwing on a cut-off pod, and a leader that cannot close is
+     * a different simulation. Counting is passive; refusing is not.
+     *
+     * <p>⚠️ AND IT CONSUMES NO RANDOM STREAM, which is why it can sit at
+     * the top of every verb while {@code refuseIfPartitioned} stays exactly
+     * where each verb puts it. This file's round-3 note measured that moving a
+     * guard across the draws re-aligns every fault class; this method draws
+     * nothing, so it cannot.
+     */
+    private void record(String verb) {
+        calls++;
+        byVerb.merge(verb, 1, Integer::sum);
+    }
+
+    /** One counter per verb, in first-seen order so a dump reads chronologically. */
+    private final Map<String, Integer> byVerb = new java.util.LinkedHashMap<>();
+
     /** Cut {@code podId} off from the store until {@link #heal} is called. */
     void partition(String podId) {
         partitioned.add(podId);
@@ -182,20 +223,10 @@ public final class FaultInjectingStore implements BinStore {
      * the thing that makes a zombie a zombie.
      */
     private void refuseIfPartitioned() throws IOException {
-        // ⚠️ COUNTED HERE BECAUSE THE VERBS THAT REACH THE STORE PASS
-        // THROUGH, which is the same reason the partition check lives here. A
-        // caller that needs to know whether the store did ANY work across a
-        // window -- M5.26's graceful release -- cannot ask the verbs one by
-        // one without going stale the next time one is added.
-        // ⚠️ TWO DO NOT REACH IT: `capabilities` and `close` never call this.
-        // `list` DOES, except on the ~3% of calls where its injected
-        // `unreachable` fires first -- an earlier version of this comment said
-        // list never reached it, which review measured as false. None is on a
-        // release path today: deleting `leases.release()` from
-        // `LocalSequencer.close` drives the floor to 0, MEASURED. So this
-        // counts a release now and needs revisiting if one ever comes to rest
-        // on `capabilities` or `close`.
-        calls++;
+        // ⚠️ NO LONGER THE METER (M5.29). Counting lived here, so what the
+        // meter could see was a side effect of which verbs the partition rule
+        // happened to cover -- and three do not call this at all. `record` is
+        // now called at the top of every verb; this method only refuses.
         if (isPartitioned()) {
             injected.add(new Injected("partition", "pod:" + actor));
             throw new IOException("injected: partition -- pod " + actor
@@ -442,6 +473,7 @@ public final class FaultInjectingStore implements BinStore {
     @Override
     public Optional<binjava.binstore.Version> putIfAbsent(String key, Body body)
             throws IOException {
+        record("putIfAbsent");
         // ⚠️ ALL FOUR DRAWN BEFORE ANY BRANCH, and the previous version got this
         // half right and half wrong. Removing the `p == 0` early return stopped a
         // DISABLED class from re-aligning the others; it did nothing about a
@@ -528,6 +560,7 @@ public final class FaultInjectingStore implements BinStore {
     }
 
     @Override public Optional<binjava.binstore.ObjectStat> stat(String k) throws IOException {
+        record("stat");
         refuseIfPartitioned();
         if (fires(unreachableDraws, faults.unreachable())) {
             injected.add(new Injected("unreachable", k));
@@ -537,6 +570,7 @@ public final class FaultInjectingStore implements BinStore {
     }
 
     @Override public java.io.InputStream get(String k) throws IOException {
+        record("get");
         refuseIfPartitioned();
         if (fires(unreachableDraws, faults.unreachable())) {
             injected.add(new Injected("unreachable", k));
@@ -546,17 +580,20 @@ public final class FaultInjectingStore implements BinStore {
     }
 
     @Override public java.io.InputStream getRange(String k, long a, long b) throws IOException {
+        record("getRange");
         refuseIfPartitioned();
         return delegate.getRange(k, a, b);
     }
 
     @Override public binjava.binstore.Version put(String k, Body b) throws IOException {
+        record("put");
         refuseIfPartitioned();
         return delegate.put(k, b);
     }
 
     @Override public Optional<binjava.binstore.Version> putIfMatch(String k, Body b,
             binjava.binstore.Version v) throws IOException {
+        record("putIfMatch");
         // ⚠️ ALL FOUR DRAWN, for the reason spelled out on putIfAbsent: a class
         // that fires must not shift the streams of the classes after it.
         // ⚠️ `unreachable` IS DRAWN AND DELIBERATELY NOT ACTED ON here. The lease
@@ -606,12 +643,14 @@ public final class FaultInjectingStore implements BinStore {
     }
 
     @Override public binjava.binstore.MultipartWriter multipart(String k) throws IOException {
+        record("multipart");
         refuseIfPartitioned();
         return delegate.multipart(k);
     }
 
     @Override public binjava.binstore.ListPage list(String p, String a, int m)
             throws IOException {
+        record("list");
         if (fires(unreachableDraws, faults.unreachable())) {
             injected.add(new Injected("unreachable", p));
             throw new IOException("injected: the store was unreachable");
@@ -621,16 +660,19 @@ public final class FaultInjectingStore implements BinStore {
     }
 
     @Override public void delete(java.util.List<String> keys) throws IOException {
+        record("delete");
         refuseIfPartitioned();
         delegate.delete(keys);
     }
 
     @Override public binjava.binstore.Capabilities capabilities() {
+        record("capabilities");
         return delegate.capabilities();
     }
 
     @Override public binjava.binstore.SignedUrl presign(String key, java.time.Duration ttl)
             throws java.io.IOException {
+        record("presign");
         // ⚠️ FORWARDED because a `default` method on the SPI cannot force a
         // decorator to do it, and review MEASURED that forgetting it makes a
         // capable backend pass the startup check and throw at first fetch.
@@ -638,6 +680,7 @@ public final class FaultInjectingStore implements BinStore {
     }
 
     @Override public void close() throws IOException {
+        record("close");
         delegate.close();
     }
 }

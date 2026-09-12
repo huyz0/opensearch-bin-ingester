@@ -1,0 +1,15 @@
+{
+  "task": "M5.29",
+  "role": "reviewer",
+  "diff_sha256": "4a1e392dc280aa4d49291deef20e17dfe8c6abfb22a093c648612813548d2ec0",
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/FaultInjectingStoreTest.java:71",
+      "summary": "`.as(\"and the total still answers what it always answered\")` reads as \"calls() is unchanged by this commit\", which the next test in the same file disproves",
+      "detail": "Before this change `calls()` was incremented inside `refuseIfPartitioned`, so it counted the nine verbs that call that guard and NOT `capabilities`, `close` or `presign` -- the M5.29 row's own opening sentence says exactly that. After it, `record(verb)` increments `calls` at the top of all twelve verbs. In THIS scenario (put + stat + stat) the total is 3 either way, so the assertion is true; the description generalises it. Sixty lines down, `theVerbsThatSKIPThePartitionCheckAreStillCOUNTED` asserts `calls()` is 3 for capabilities + presign + close, a window in which the pre-M5.29 total was 0 -- so the two descriptions in the same file say opposite things about whether the total changed. A defensible reading exists and is probably the intended one: `calls()`'s own javadoc ('Calls this store was asked to serve, refused ones included', unchanged by this commit) was false for three verbs before and is true now, so the CONTRACT is what is unchanged. A reader cannot tell which is meant. Failure scenario: someone adding an assertion over `calls()` on a path that closes the store or queries capabilities takes this sentence as saying the total still means 'calls that reached the partition check' -- the behaviour it actually had until this commit -- and writes a count that is short by exactly the verbs M5.29 added. \u26a0\ufe0f Recommended disposition is review.md rule 11: record it in the commit body, do NOT open a sixth round to reword it. Either drop the clause or make it 'and the no-arg javadoc's promise is now TRUE for every verb, which it was not'.",
+      "failure_scenario": "Someone adding an assertion over `calls()` on a path that closes the store or queries capabilities reads this sentence as saying the total still means what it meant before M5.29 -- 'calls that reached the partition check' -- and writes a count short by exactly the three verbs this commit brought into the total. `theVerbsThatSKIPThePartitionCheckAreStillCOUNTED` in the same file asserts 3 for a window whose pre-M5.29 total was 0, so the file says both things."
+    }
+  ]
+}

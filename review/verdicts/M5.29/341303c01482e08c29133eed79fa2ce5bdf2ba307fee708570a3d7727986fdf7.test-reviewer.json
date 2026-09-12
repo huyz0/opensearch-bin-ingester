@@ -1,0 +1,22 @@
+{
+  "task": "M5.29",
+  "role": "test-reviewer",
+  "diff_sha256": "341303c01482e08c29133eed79fa2ce5bdf2ba307fee708570a3d7727986fdf7",
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/FaultInjectingStore.java:596",
+      "summary": "The POSITION of `record` inside a verb is pinned for exactly ONE verb (`list`, against `unreachable`) and for no other -- including `putIfMatch`, the verb the meter now rests on. Two mutations MEASURED surviving the full 492-test suite, 1,000-seed sweep included",
+      "detail": "Round 1's `list` finding is dead (measured below), but it was one member of a family and the other members are still free. SURVIVING MUTATION A: move `record(\"stat\")` and `record(\"putIfMatch\")` from the top of their verbs to just BELOW `refuseIfPartitioned()`. MEASURED: `:sequencer:test` rc 0, 492 tests, zero failures. That falsifies `calls(String)`'s own javadoc at FaultInjectingStore.java:159 -- \"Calls of ONE verb, refused ones INCLUDED (M5.29)\" -- and is a regression against BOTH trees, since pre-M5.29 `calls++` was the first statement in `refuseIfPartitioned`, above the `isPartitioned()` test, so a refused call did move the counter. SURVIVING MUTATION B: move `record(\"putIfMatch\")` from line 596 to below the injected-ambiguous throw at line 630. MEASURED: rc 0, 492 tests, zero failures. That falsifies the new test's OWN javadoc (GracefulReleaseMeterTest.java:217-220, \"`record` runs at the top of the verb, the write lands, and the call reports failure anyway\") and the backlog cell's 1,732-against-1,608 measurement, which is the evidence the whole round rests on -- under B those 124 windows stop moving the counter and the number silently stops being true. NOT LIVE EITHER WAY: a refused or ambiguous call also sets `completed = false`, so `released()` is unchanged today; this is M5.29's own staleness class, which is why it is minor and not major. KILL FOR A: one line in the existing `theLEADERSOWNPartitionIsSEENButBlamedOnNOBODYElse` (GracefulReleaseMeterTest.java:98), which already partitions `poda` and calls `stat` -- `assertThat(faulty.calls(\"stat\")).isEqualTo(1)`. KILL FOR B: a sibling of `aReleaseWhoseWriteLANDEDButTHREWIsNOTCredited` built with `new FaultInjectingStore.Faults(0, 1, 0, 0)` so the STORE'S OWN ambiguous arm fires, asserting `released()` is 0 and `calls(\"putIfMatch\")` is 1 -- which would also model the real 124 windows rather than a caller-side throw.",
+      "failure_scenario": "A later edit moves a `record(...)` below its verb's guard -- the natural place, since every other check sits there, and the pre-M5.29 code had the count inside `refuseIfPartitioned` exactly so. Refused calls, or ambiguous landings, silently stop being counted; `calls(String)`'s javadoc and the backlog's 1,732/1,608 figure both become false with the full suite and the 1,000-seed sweep green. MEASURED: both mutations rc 0 over 492 tests."
+    },
+    {
+      "severity": "minor",
+      "file": "sequencer/src/test/java/binjava/sequencer/FaultInjectingStoreTest.java:78",
+      "summary": "Round 1's history finding was fixed in two of its three sites; this third site is unchanged and now CONTRADICTS a comment 25 lines below it in the same method",
+      "detail": "The javadoc still reads \"The M5.29 row named the first two; the third had already arrived by the time it was written, which is the row's own argument...\". The following clause fixes the referent of \"it\" as the row, and the row is `b44817a` (2026-09-10 09:34:48) while `presign` is `d5b5f21` (2026-09-11 00:42:06) -- fifteen hours LATER. The other two sites named in round 1 were corrected: FaultInjectingStore.java:163-168 now says \"THE THIRD VERB ARRIVED AFTER THE ROW, WHICH IS THE ARGUMENT\", and backlog.md's M5.29 cell says \"FIFTEEN HOURS AFTER\". So does the inline comment at FaultInjectingStoreTest.java:103-105, inside the very method this javadoc heads: \"It reached this class at `d5b5f21` (M5.10), fifteen hours AFTER the M5.29 row predicted...\". A reader of this one method is handed both versions. Pins nothing and weakens no assertion -- minor, and the true version is cornered by three correct statements including one in the same method.",
+      "failure_scenario": "A reader auditing why `presign` is in a task whose row names only `capabilities` and `close` reads the method javadoc, gets the reversed history, reads twenty-five lines further and gets the true one, and cannot tell which was checked."
+    }
+  ]
+}

@@ -40,6 +40,93 @@ class FaultInjectingStoreTest {
     }
 
 
+    /**
+     * The meter says WHICH verb, not merely how many (M5.29).
+     *
+     * <p>⚠️ A COUNT THAT CANNOT NAME THE VERB CANNOT CARRY A CLAIM ABOUT
+     * ONE. {@code GracefulReleaseMeter} USED TO lean on this store to
+     * mean "the release did store work" -- it now names {@code putIfMatch},
+     * which is what this case exists to make possible. Review MEASURED that
+     * before it, replacing
+     * {@code leases.release()} in {@code LocalSequencer.close} with another
+     * verb left the sweep's floor green -- {@code stat} gave 1,626 and shifted
+     * the run to 84,418 epochs. Only deleting the store call entirely redded
+     * it, at 0. The count does not generalise; the blindness does.
+     */
+    @Test
+    void theMeterNamesTheVERBAndNotMerelyTheCOUNT() throws Exception {
+        FaultInjectingStore faulty = new FaultInjectingStore(
+                new MemoryBinStore(), 1L, FaultInjectingStore.Faults.none());
+        faulty.actingAs("poda");
+        faulty.put("ctl/lease", body("one"));
+
+        faulty.stat("ctl/lease");
+        faulty.stat("ctl/lease");
+
+        assertThat(faulty.calls("stat")).isEqualTo(2);
+        assertThat(faulty.calls("putIfMatch"))
+                .as("a read is not a conditional write, and a release is a conditional write")
+                .isZero();
+        assertThat(faulty.calls())
+                .as("and the total still answers what it always answered")
+                .isEqualTo(3);
+    }
+
+    /**
+     * Counting is separated from REFUSING, so no verb escapes the meter.
+     *
+     * <p>⚠️ THREE VERBS NEVER REACHED {@code refuseIfPartitioned}, which is
+     * where the count lived: {@code capabilities}, {@code close} and
+     * {@code presign}. The M5.29 row named the first two and predicted "both
+     * are staleness the next verb makes real"; {@code presign} arrived fifteen
+     * hours later ({@code d5b5f21}, after the row at {@code b44817a}) and made
+     * it real. That is the argument for separating the two jobs rather than
+     * adding a fourth exception and waiting for a fifth.
+     *
+     * <p>⚠️ THEY ARE COUNTED, NOT REFUSED. Routing them through the
+     * partition check would change what a partition MEANS -- {@code close}
+     * would start throwing on a cut-off pod, and a release that cannot close
+     * is a different simulation. Counting is passive; refusing is not.
+     */
+    @Test
+    void theVerbsThatSKIPThePartitionCheckAreStillCOUNTED() throws Exception {
+        FaultInjectingStore faulty = new FaultInjectingStore(
+                new MemoryBinStore(), 1L, FaultInjectingStore.Faults.none());
+        faulty.actingAs("poda");
+        faulty.partition("poda");
+
+        faulty.capabilities();
+
+        assertThat(faulty.calls("capabilities"))
+                .as("counted even though a partitioned pod may still ask")
+                .isEqualTo(1);
+        assertThat(faulty.injected())
+                .as("and NOT refused -- counting must not change what a partition means")
+                .isEmpty();
+
+        // ⚠️ AND `presign`, THE VERB THAT PROVED THE ROW RIGHT. It reached
+        // this class at `d5b5f21` (M5.10), fifteen hours AFTER the M5.29 row
+        // predicted "both are staleness the next verb makes real". Counted
+        // before the delegate is asked, so a backend that cannot presign --
+        // `MemoryBinStore`, via the SPI default -- still moves the meter.
+        assertThatThrownBy(() -> faulty.presign("ctl/lease", java.time.Duration.ofSeconds(30)))
+                .isInstanceOf(UnsupportedOperationException.class);
+        assertThat(faulty.calls("presign")).isEqualTo(1);
+
+        faulty.close();
+        assertThat(faulty.calls("close")).isEqualTo(1);
+        // ⚠️ AND THE NO-ARG TOTAL, which is the one that reverts SILENTLY.
+        // Review MEASURED `calls++` deleted from `record` and put back as the
+        // first statement of `refuseIfPartitioned` surviving all 494 tests with
+        // the sweep byte-identical: `byVerb`, `calls(String)` and the meter all
+        // stay correct while `calls()` goes back to pre-M5.29 blindness for
+        // exactly these three verbs. ⚠️ AND M5.49's GREP CANNOT SEE IT -- every
+        // `record` call is still present and still at the top of its verb.
+        assertThat(faulty.calls())
+                .as("three verbs that never reach the partition check, all three in the total")
+                .isEqualTo(3);
+    }
+
     @Test
     void anAmbiguousPutLANDSWhileReportingFailure() throws Exception {
         // ⚠️ THE DEFINING PROPERTY, and the one a store that only fails cleanly

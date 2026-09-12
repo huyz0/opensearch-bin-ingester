@@ -49,7 +49,8 @@ final class GracefulReleaseMeter {
     void observe(String leaderPod, Release release) {
         faulty.actingAs(leaderPod);
         int before = faulty.injected().size();
-        int callsBefore = faulty.calls();
+        // ⚠️ THE VERB, NOT THE TOTAL (M5.29). See `released()`.
+        int writesBefore = faulty.calls("putIfMatch");
         boolean completed = true;
         try {
             release.run();
@@ -58,13 +59,15 @@ final class GracefulReleaseMeter {
             // exactly the ungraceful path
             completed = false;
         }
-        if (completed && faulty.calls() > callsBefore) {
-            // ⚠️ THE RELEASE THAT REACHED THE STORE, not the branch that was
-            // entered and not merely a call that returned. MEASURED, both:
-            // counting branch entries kept a floor at 1,713 with
-            // `leader.close()` DELETED outright, and counting normal returns
-            // kept it green with the close replaced by an empty lambda, which
-            // returns perfectly well and hands nothing back.
+        if (completed && faulty.calls("putIfMatch") > writesBefore) {
+            // ⚠️ THE RELEASE THAT ISSUED THE CONDITIONAL WRITE, not the
+            // branch that was entered, not merely a call that returned, and
+            // not merely a call that reached the store. "ISSUED", because
+            // `releaseLocked` discards the Optional -- see `released()`. MEASURED, all three: counting branch
+            // entries kept a floor at 1,713 with `leader.close()` DELETED
+            // outright; counting normal returns kept it green with the close
+            // replaced by an empty lambda; and counting ANY store call kept it
+            // green at 1,626 with the release swapped for a `stat`.
             released++;
         }
         List<FaultInjectingStore.Injected> during =
@@ -96,13 +99,30 @@ final class GracefulReleaseMeter {
     }
 
     /**
-     * Releases that returned AND reached the store.
+     * Releases that returned AND issued the conditional write.
+     *
+     * <p>⚠️ "ISSUED", NOT "WROTE". {@code LeaseManager.releaseLocked}
+     * DISCARDS the {@code Optional} its {@code putIfMatch} returns, and
+     * {@code release()}'s own javadoc says the call is "harmless when already
+     * fenced, because the conditional write simply loses" -- so a fenced leader
+     * completes, is credited here, and changed nothing on the store. The floor
+     * still binds: an issued-write count goes to 0 under the verb swap exactly
+     * as a landed-write count would.
      *
      * <p>⚠️ NOT "returned rather than throwing", which is the weaker rule
-     * this rejected: an empty lambda returns perfectly well and hands nothing
-     * back, and review MEASURED that version staying green with
+     * this rejected first: an empty lambda returns perfectly well and hands
+     * nothing back, and review MEASURED that version staying green with
      * {@code leader.close()} replaced by one. Simplifying the guard to
      * {@code if (completed)} reinstates exactly that hole.
+     *
+     * <p>⚠️ AND NOT "reached the store", which is the weaker rule M5.29
+     * replaced. A {@code stat} reaches the store exactly as a release does, so
+     * that version could not tell WHICH work was done: review MEASURED
+     * {@code leases.release()} in {@code LocalSequencer.close} swapped for
+     * another verb leaving the sweep's floor GREEN at 1,626. A release, in
+     * {@code LeaseManager.releaseLocked}, is a CONDITIONAL WRITE of the expired
+     * lease -- so {@code putIfMatch} is what gets credited, and the same swap
+     * now reds the floor at 0. MEASURED both ways.
      */
     int released() {
         return released;

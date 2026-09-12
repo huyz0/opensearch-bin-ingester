@@ -333,10 +333,20 @@ class CommitProtocolSweepTest {
         // 1,000-SEED FIGURE: under `-Dsweep.seeds=1` the margin is exactly
         // 1.0x, and the refusal signal below is 5 seeds in 1,000, so a
         // shortened bisect run meets this floor while seeing nothing.
+        // ⚠️ AND IT IS A RELEASE, NOT MERELY STORE WORK (M5.29). Until the
+        // meter could name the verb, this floor rested on "the window reached
+        // the store": review MEASURED `leases.release()` in
+        // `LocalSequencer.close` swapped for another verb leaving it GREEN at
+        // 1,626, and only DELETING the store call redding it. The meter now
+        // credits a `putIfMatch` -- what `LeaseManager.releaseLocked` actually
+        // does -- and the same swap gives 0 and reds this line. MEASURED, on
+        // this tree, at 1,000 seeds: 1,608 unmutated, 0 with `store.stat` in
+        // its place.
         assertThat(gracefulReleases)
                 .as("the polite-failover path must COMPLETE before a claim about how it is "
                         + "judged says anything -- a floor over attempts survives deleting "
-                        + "the release entirely")
+                        + "the release entirely, and a floor over store CALLS survives "
+                        + "replacing it with another verb")
                 .isGreaterThanOrEqualTo(SEEDS);
         assertThat(gracefulReleasesRefused)
                 .as("a leader releasing its lease politely is judged against ITSELF, so no "

@@ -104,6 +104,11 @@ class GracefulReleaseMeterTest {
                 .as("but it blamed the releasing leader itself, which is the ungraceful path "
                         + "rather than the defect")
                 .isZero();
+        assertThat(faulty.calls("stat"))
+                .as("and a REFUSED call is still counted, which is what `calls(String)`'s "
+                        + "javadoc says and what the pre-M5.29 `calls++` did -- moving `record` "
+                        + "below `refuseIfPartitioned` was otherwise unconstrained")
+                .isEqualTo(1);
     }
 
     /**
@@ -132,6 +137,11 @@ class GracefulReleaseMeterTest {
                 .as("an injected `unreachable` is not a partition refusal")
                 .isZero();
         assertThat(meter.refusedForAnotherPod()).isZero();
+        assertThat(faulty.calls("list"))
+                .as("and the call is COUNTED even though its injected fault fired before the "
+                        + "partition check -- `record` sits at the top of the verb, above the "
+                        + "throw, which review measured as otherwise unconstrained")
+                .isEqualTo(1);
     }
 
     /**
@@ -175,9 +185,175 @@ class GracefulReleaseMeterTest {
                 .isZero();
     }
 
-    /** A clean release is credited, and blames nobody. */
+    /**
+     * A clean release is credited, and blames nobody.
+     *
+     * <p>⚠️ ITS STAND-IN FOR A RELEASE CHANGED FROM {@code stat} TO
+     * {@code putIfMatch} (M5.29) AND THE ASSERTION DID NOT. Crediting any call
+     * that reached the store is what let {@code leases.release()} be replaced
+     * by another verb with the sweep's floor green at 1,626; a release is a
+     * CONDITIONAL WRITE of the expired lease, which is what
+     * {@code LeaseManager.releaseLocked} does. So this case now does what it
+     * always claimed to.
+     */
     @Test
     void aCLEANReleaseIsCreditedAndCountsNoRefusal() throws Exception {
+        FaultInjectingStore faulty = new FaultInjectingStore(
+                new MemoryBinStore(), 1L, FaultInjectingStore.Faults.none());
+        binjava.binstore.Version held = faulty.put("ctl/lease", FaultFixtures.body("held"));
+        GracefulReleaseMeter meter = new GracefulReleaseMeter(faulty);
+
+        meter.observe("poda",
+                () -> faulty.putIfMatch("ctl/lease", FaultFixtures.body("expired"), held));
+
+        assertThat(meter.released())
+                .as("it wrote the expired lease back and returned")
+                .isEqualTo(1);
+        assertThat(meter.refusalsSeen()).isZero();
+        assertThat(meter.refusedForAnotherPod()).isZero();
+    }
+
+    /**
+     * A release whose write LANDED but which then THREW is not credited.
+     *
+     * <p>⚠️ THE {@code completed} CONJUNCT WAS UNPINNED, AND NOT MERELY IN
+     * THEORY. Review MEASURED dropping it from the credit guard surviving the
+     * whole suite, and the 1,000-seed sweep then counts 1,732 instead of 1,608
+     * -- so **124 windows per 1,000 seeds move the verb counter and then
+     * throw**. ⚠️ NOT ONE ARM, AND NOT ALL OF THEM WROTE ANYTHING:
+     * {@code record} runs at the TOP of {@code putIfMatch}, which then throws
+     * from THREE places -- {@code refuseIfPartitioned} (nothing reaches the
+     * delegate at all), the {@code ambiguousPut} arm (the write lands, the
+     * response is lost) and the {@code withheldPut} arm (whose own comment says
+     * the version does not move). The sweep enables all three, and its 38
+     * refusal windows sit INSIDE the 124 with nothing written -- M5.28
+     * independently measured 124 faults in release windows carrying 86
+     * non-partition, and 124 = 38 + 86. ⚠️ WHICH MAKES THE CONJUNCT MORE
+     * NECESSARY, NOT LESS: crediting these would credit releases where nothing
+     * reached the store. Every {@code gracefulReleases} assertion is a FLOOR,
+     * so 1,732 clears them all and nothing reds.
+     *
+     * <p>⚠️ IT IS UNCREDITED ON PURPOSE, not by omission. The lease really
+     * is expired on the store, so a successor does not wait out the TTL -- but
+     * the releasing pod cannot know that, {@code LocalSequencer.close}
+     * propagates, and the pod dies reporting a failed release. What this meter
+     * counts is the path COMPLETING, which is the claim the sweep's floor
+     * carries. Crediting an ambiguous landing would be a different and larger
+     * claim about what the caller can observe.
+     */
+    @Test
+    void aReleaseWhoseWriteLANDEDButTHREWIsNOTCredited() throws Exception {
+        FaultInjectingStore faulty = new FaultInjectingStore(
+                new MemoryBinStore(), 1L, FaultInjectingStore.Faults.none());
+        binjava.binstore.Version held = faulty.put("ctl/lease", FaultFixtures.body("held"));
+        GracefulReleaseMeter meter = new GracefulReleaseMeter(faulty);
+
+        meter.observe("poda", () -> {
+            faulty.putIfMatch("ctl/lease", FaultFixtures.body("expired"), held);
+            throw new java.io.IOException("the response was lost after the write landed");
+        });
+
+        assertThat(meter.released())
+                .as("the write reached the store, so the verb counter moved -- only "
+                        + "`completed` says the release finished, and it did not")
+                .isZero();
+        assertThat(faulty.calls("putIfMatch"))
+                .as("and the premise: the write really did happen, or this pins nothing")
+                .isEqualTo(1);
+    }
+
+    /**
+     * A conditional write REFUSED by a partition is still counted.
+     *
+     * <p>⚠️ THE OTHER HALF OF THE POSITION PIN. Round 2 measured
+     * {@code record} moved below {@code refuseIfPartitioned} surviving for BOTH
+     * {@code stat} and {@code putIfMatch}; round 3 closed the {@code stat} half
+     * in {@link #theLEADERSOWNPartitionIsSEENButBlamedOnNOBODYElse} and left
+     * the verb the meter actually CREDITS open. Closing one of two is the
+     * failure mode this commit has now recorded twice.
+     *
+     * <p>⚠️ "REFUSED ONES INCLUDED" IS {@code calls(String)}'s CONTRACT and
+     * was the pre-M5.29 behaviour too, where {@code calls++} sat above the
+     * {@code isPartitioned()} test. Nothing is credited here -- the throw makes
+     * {@code completed} false -- so what this pins is the COUNTER, not the
+     * verdict.
+     */
+    @Test
+    void aConditionalWriteREFUSEDByAPartitionIsStillCOUNTED() throws Exception {
+        FaultInjectingStore faulty = new FaultInjectingStore(
+                new MemoryBinStore(), 1L, FaultInjectingStore.Faults.none());
+        binjava.binstore.Version held = faulty.put("ctl/lease", FaultFixtures.body("held"));
+        faulty.partition("poda");
+        GracefulReleaseMeter meter = new GracefulReleaseMeter(faulty);
+
+        meter.observe("poda",
+                () -> faulty.putIfMatch("ctl/lease", FaultFixtures.body("expired"), held));
+
+        assertThat(faulty.calls("putIfMatch"))
+                .as("counted above `refuseIfPartitioned`, which is what \"refused ones "
+                        + "included\" means and what `calls++` did before M5.29")
+                .isEqualTo(1);
+        assertThat(meter.released())
+                .as("and refused is not released")
+                .isZero();
+        assertThat(meter.refusalsSeen()).isEqualTo(1);
+    }
+
+    /**
+     * The store's OWN ambiguous write is counted, and still not credited.
+     *
+     * <p>⚠️ THE SIBLING OF THE CASE ABOVE, BUILT FROM THE INJECTOR RATHER
+     * THAN THE LAMBDA. There the test threw; here {@code FaultInjectingStore}
+     * does, from its {@code ambiguousPut} arm -- the write reaches the delegate
+     * and the call reports failure anyway. That is ONE of the three arms behind
+     * the sweep's 124 windows per 1,000 seeds (the others being
+     * {@code refuseIfPartitioned} and {@code withheldPut}, neither of which
+     * writes anything), and it is the only one that LANDS a write, so it is
+     * worth exercising through the real arm and not only through a
+     * hand-written throw.
+     *
+     * <p>⚠️ IT PINS WHERE {@code record} SITS. Review MEASURED
+     * {@code record("putIfMatch")} moved BELOW the ambiguous throw surviving
+     * the whole suite including the 1,000-seed sweep -- which would falsify the
+     * 1,732-against-1,608 figure this commit's evidence rests on, because the
+     * windows that throw would stop being counted at all.
+     */
+    @Test
+    void theStoresOWNAmbiguousWriteIsCOUNTEDAndStillNotCredited() throws Exception {
+        FaultInjectingStore faulty = new FaultInjectingStore(new MemoryBinStore(), 1L,
+                new FaultInjectingStore.Faults(0, 1, 0, 0));
+        binjava.binstore.Version held = faulty.put("ctl/lease", FaultFixtures.body("held"));
+        GracefulReleaseMeter meter = new GracefulReleaseMeter(faulty);
+
+        meter.observe("poda",
+                () -> faulty.putIfMatch("ctl/lease", FaultFixtures.body("expired"), held));
+
+        assertThat(faulty.injected())
+                .as("the window must contain the fault this case is named for")
+                .extracting(FaultInjectingStore.Injected::kind)
+                .contains("ambiguousPut");
+        assertThat(faulty.calls("putIfMatch"))
+                .as("counted at the TOP of the verb, above the injected throw")
+                .isEqualTo(1);
+        assertThat(meter.released())
+                .as("the write landed, the call failed, and the releasing pod cannot tell -- "
+                        + "so the polite path did not COMPLETE")
+                .isZero();
+    }
+
+    /**
+     * A release that only READ the store is not a release (M5.29).
+     *
+     * <p>⚠️ "THE STORE DID WORK" IS NOT "THE LEASE WAS RELEASED", and the
+     * gap is what review MEASURED: replacing {@code leases.release()} in
+     * {@code LocalSequencer.close} with another store verb left the sweep's
+     * {@code gracefulReleases} floor green at 1,626, because {@code stat}
+     * reaches the store exactly as a release does. Only deleting the store
+     * call outright redded it, at 0 -- so the COUNT did not generalise but the
+     * blindness did.
+     */
+    @Test
+    void aReleaseThatONLYREADTheStoreIsNOTCredited() throws Exception {
         FaultInjectingStore faulty = new FaultInjectingStore(
                 new MemoryBinStore(), 1L, FaultInjectingStore.Faults.none());
         GracefulReleaseMeter meter = new GracefulReleaseMeter(faulty);
@@ -185,10 +361,9 @@ class GracefulReleaseMeterTest {
         meter.observe("poda", () -> faulty.stat("ctl/lease"));
 
         assertThat(meter.released())
-                .as("it reached the store and returned")
-                .isEqualTo(1);
-        assertThat(meter.refusalsSeen()).isZero();
-        assertThat(meter.refusedForAnotherPod()).isZero();
+                .as("a stat is store work and is not a release; crediting ANY call is what let "
+                        + "the release be swapped for another verb with the sweep green")
+                .isZero();
     }
 
     /** A release that never touches the store is NOT credited. */
