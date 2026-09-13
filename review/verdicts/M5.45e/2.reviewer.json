@@ -1,0 +1,17 @@
+{
+  "diff_sha256": "d6c9cd7696c949d76da97d4afbacbe7629f95ec54c60e49fe7a030703dc16652",
+  "verdict": "pass",
+  "round": 2,
+  "summary": "Round 2, narrow scope. R1 (false 'no module sees both halves' premise) and R2 (wrong, vacuous check-module citation) are both genuinely fixed, verified against the tree rather than against the prose: the test is at plugin/src/test/java/binjava/plugin/ThreeModesAgreeTest.java, plugin/build.gradle.kts already carries api(project(\":client\")) + testImplementation(project(\":ingest\")) + testImplementation(project(\":binstore-backends\")), the staged set is exactly two files with no build change and a clean working tree, and check-module.sh:337 does resolve only `runtimeClasspath compileClasspath` so the old citation was indeed vacuous. Criterion 3 now cites ADR-0023's own named check, which is the right one. R3 is fixed: bodies() projects all three ConsumerRecord components and all four SegmentRecord components against absolute literals, and the fixture separates the segment createdAtMillis (11) from the run minTimestamp (7), so both a 0L constant and a wrong-source mutation red. Nothing passed at round 1 is broken by the move: the three modes are still individually pinned (INLINE/PROXY/DIRECT via distinct inlineCap/fanOut/directEnabled fixtures), criterion 2 still observes the mode off the delivery with a never-called source, and the class adds no production code and therefore no object-store request on any path. One minor recorded below; it does not block.",
+  "findings": [
+    {
+      "id": "R4",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:66",
+      "title": "'the grep is ZERO in both' is true of an import grep, not of the grep ADR-0023 names",
+      "failure_scenario": "The M5.45e cell discharges criterion 3 with \"`client` and `plugin` do not IMPORT `binjava.binstore` in `src/main`, and the grep is ZERO in both\". ADR-0023 \u00a7 the check names the literal command `grep -rn binjava.binstore plugin/src/main client/src/main` and asserts \"no matches\". Run today that command prints one hit -- client/src/main/java/binjava/client/SegmentSource.java:11, a javadoc line added by M5.45g explaining why the seam exists. The rule itself holds (zero imports), and M5.45g's own cell states it precisely (\"the only two `binjava.binstore` strings in `client/src` are javadoc ... not imports\"), so this is a phrasing regression against a sibling cell rather than a broken invariant. The failure it invites is the next reader running ADR-0023's literal command, seeing a hit, and concluding the seam was breached -- or, worse, 'fixing' it by deleting the javadoc that explains the seam. Related and OUTSIDE this diff: ADR-0023's own parenthetical \"-- no matches\" became stale when M5.45g landed, which is a backlog row rather than an edit here."
+    }
+  ],
+  "task": "M5.45e",
+  "role": "reviewer"
+}
