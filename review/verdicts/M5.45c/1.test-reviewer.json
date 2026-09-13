@@ -1,0 +1,49 @@
+{
+  "diff_sha256": "f46969100f74d4b1f911bfe476886b3fa0408b9a9fe23d39c1921cc9818f810b",
+  "verdict": "changes-requested",
+  "summary": "No code and no tests in this diff, so there is nothing to mutate today. Reviewed as the falsifiability of the criteria the three new rows will be tested against. M5.45h's criterion 1 counts fetches and asks nothing about what the K runs receive, and does not say the count is of INVOCATIONS -- the .distinct() collapse M5.45d measured returns unchanged, because the row itself states all K deliveries carry the SAME grant value. M5.45g's numbered criteria never require ConsumerClient to call the seam or to pass the grant that arrived; the 'assert bytes DECODED' clause that would fix it is in the prose, not in the acceptance list. M5.45f's criterion 3 has no artifact, and the same commit demonstrates the failure inside ADR-0043 itself.",
+  "findings": [
+    {
+      "file": "docs/internal/product/backlog.md",
+      "line": 69,
+      "severity": "major",
+      "title": "M5.45h criterion 1 counts fetches and never asks that the K runs get their records",
+      "failure_scenario": "Criterion 1 is 'a node holding K runs of one segment issues ONE fetch ... with the fetch count read from a fake that counts'. Criterion 2 is a residency bound, criterion 3 is a failure-semantics statement. Nothing in the row requires the K runs to still decode their own records out of the single fetch. Mutation that survives every criterion: coalesce by letting the first run's delivery fetch and decode, and hand the other 63 an empty byte array (or drop their deliveries at the node-scoped owner). Fetch count is 1, the residency bound is still a hold of C, the failure statement is still true -- and 63 shards silently ingest nothing. M5.45e cannot catch it either: its own status cell says it does NOT depend on M5.45h because 'byte-identical records is a correctness claim that holds at one fetch per run too', so M5.45e may legitimately be written against the per-run path. One clause fixes it: the same case asserts all K runs decode their own records from that one fetch, which is M5.45g's 'assert bytes DECODED, not calls made' applied to the row whose only assertion is a call count.",
+      "suggestion": "Add to criterion 1: '... and all K runs decode their own records from that one fetch, asserted through ConsumerClient, not only the count'."
+    },
+    {
+      "file": "docs/internal/product/backlog.md",
+      "line": 69,
+      "severity": "major",
+      "title": "M5.45h criterion 1 says 'a fake that counts' without saying it counts invocations -- the M5.45d .distinct() collapse returns",
+      "failure_scenario": "The row establishes two sentences earlier that a node gets 'one Delivery per RUN, each carrying the same key-scoped grant'. Grant is a record with value equality over (url, expiresAt), so all K fetch arguments are EQUAL values. A 'fake that counts' written as a Set -- Set<String> urlsRequested, or Set<SegmentKey>, asserted to have size 1 -- reads 1 under the per-run implementation this criterion exists to forbid AND under the per-node one. That is exactly the defect review measured on M5.45d, whose landed test carries the comment 'COUNTING SIGNINGS, NOT DISTINCT GRANTS ... review measured .distinct().count() reading 1 under the very implementation this case exists to forbid' (ingest/src/test/java/binjava/ingest/DirectServingTest.java:99-107). The lesson is in the test and not in the row that inherits it, and the new row makes the collapse MORE likely by emphasising that the grant value is identical across the K deliveries.",
+      "suggestion": "Say it in the criterion: 'the fetch count is a count of INVOCATIONS of the seam, not of distinct grants or keys -- all K deliveries carry the same Grant value, so a set-based count reads 1 under the per-run implementation this criterion forbids'."
+    },
+    {
+      "file": "docs/internal/product/backlog.md",
+      "line": 68,
+      "severity": "major",
+      "title": "M5.45g's numbered criteria never require the seam to be CALLED, nor the arriving grant to be the one passed; 'assert bytes DECODED' is sufficient for the prefix defect only",
+      "failure_scenario": "Two mutations survive criteria 1-3 as numbered. (a) THE SEAM IS NEVER CALLED: criterion 1 asks only for an interface in client taking a Grant and yielding bytes, criterion 2 for Delivery to carry the grant and refuse a DIRECT delivery without one, criterion 3 for the module gates. Make ConsumerClient's DIRECT path a no-op that yields zero records and all three stay green -- the interface exists, Delivery carries the field, the guard throws, no import of binjava.binstore appears. The clause that would catch it ('Assert bytes DECODED through ConsumerClient, not calls made') is in a warning paragraph attached to the counting-fake caveat, not in the acceptance list, and the row's closing clause tells the reader which parts of the prose are NOT criteria, so the numbered list is what a future author will build to. (b) THE GRANT IS IGNORED -- and this is the defect BOTH a request count and a bytes-decoded assertion miss, which is the question the row half-answers: have ConsumerClient call the seam with a locally constructed Grant, or have the test fetcher ignore its parameter and return the one segment it holds. A deterministic single-segment fetcher answers identically whatever url it is handed, so the byte-identical decode still passes while production fetches an unsigned or wrong-key URL. Same family as M5.45d's deterministic-fake finding, one layer out. Fix: the test fetcher serves bytes ONLY for the exact url in the grant that arrived in the Delivery and throws otherwise, and the case asserts the url the fetcher observed equals the one minted into that Delivery.",
+      "suggestion": "Promote 'a DIRECT delivery decodes its records through ConsumerClient, with bytes DECODED asserted rather than calls made' to a numbered criterion, and add that the test fetcher answers only the exact url carried by the arriving Grant so that ignoring the grant is a failure rather than a pass."
+    },
+    {
+      "file": "docs/internal/product/backlog.md",
+      "line": 67,
+      "severity": "minor",
+      "title": "M5.45f criterion 3 leaves no artifact -- 'confirmed' is indistinguishable from 'not looked at', and this commit already demonstrates the failure",
+      "failure_scenario": "Criterion 3 is 'every site asserting the coordinates earn their place is corrected or confirmed, found by grepping for the ROW ID as well as the claim'. It names a method but no output: a run that greps nothing and writes 'confirmed' satisfies it identically to one that swept, because 'confirmed' produces no diff and no list. The failure is live rather than hypothetical -- this very commit edited ADR-0043 and left docs/internal/product/decisions/0043-...md:77 saying '**M5.45c settles it**' and :105 saying 'M5.45c declines the range in favour of a whole-object GET', both contradicted by the Status block the same diff adds at :186 ('M5.45c ... owns none of these either ... are M5.45f'). Navigation still terminates, because M5.45c's status cell redirects, so this is a minor rather than a blocker -- but it is the exact class criterion 3 exists to prevent, found inside the file the criterion is about. Deterministic form (non-negotiable 9, rung 4): name the two grep patterns and require the resulting site list to be enumerated with a per-site disposition, so a missed site is a difference between a committed list and the tree rather than a matter of opinion.",
+      "suggestion": "Name the grep patterns in the criterion and require the site list with dispositions in the commit body or in the ADR, and sweep the two stale M5.45c pointers at ADR-0043:77 and :105 while that file is already open."
+    },
+    {
+      "file": "docs/internal/product/backlog.md",
+      "line": 68,
+      "severity": "minor",
+      "title": "No row states what a FAILING direct fetch does to a single run's stream before coalescing exists",
+      "failure_scenario": "M5.45h criterion 3 names the failure semantics of the COALESCED fetch ('one failed fetch fails every run that node holds'). M5.45g, which ships the seam and the per-run path that runs first and may run for several rows, has a failure-path criterion for a missing grant only. A fetcher that throws -- an expired grant, a 403, a truncated body -- has no stated behaviour, so a mutation that swallows the exception and yields zero records for that run, leaving the offset to advance, passes every criterion in M5.45g. The gap is narrow because M5.45g's decode assertion would catch a truncated body if the fix above lands, but nothing covers the throw.",
+      "suggestion": "One clause in M5.45g: a fetcher that throws fails that run's readNext visibly rather than yielding an empty batch."
+    }
+  ],
+  "task": "M5.45c",
+  "role": "test-reviewer"
+}

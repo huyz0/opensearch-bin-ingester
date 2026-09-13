@@ -1,0 +1,45 @@
+{
+  "diff_sha256": "60ab1b9fabbebd2ee89ebbd923a3a9cef9e699ae2adc282bdf7135724fbded42",
+  "verdict": "changes-requested",
+  "summary": "Round 2, production pass on a prose-only split. Three of the four round-1 findings are discharged cleanly: R1 is fixed at BOTH sites (ADR-0043:77 now reads 'M5.45f settles it', :108 no longer credits M5.45c with declining anything); R3 is fixed in both javadocs and grep finds no other Java citation of M5.45c; R4's Cost paragraph now reads in the past tense and its three factual claims check out against the tree -- the mint IS hoisted above both loops (SubscriptionHub.java:568, above the target loop at 570 and the run loop at 572), signing is not an object-store request per ADR-0041, and no consumer-side GET is issued by anything because Delivery still carries no grant. M5.45h's criterion 1 pins the right unit: one fetch per (node, segment), flat in nodes and segments, asserted at K = 64 runs on one node. R2 is the one that did NOT land intact. The guard was written into two rows and the two rows say different things: M5.45f's cell states flatly that the ADR records the fetcher is 'NOT WIRED INTO A CONSUMER PATH UNTIL M5.45h', while M5.45g's criterion 6 ends with an escape -- 'or it ships behind a flag that is OFF and whose default is ASSERTED' -- that licenses wiring a per-run fetcher now. That escape permits the exact rate the same criterion says non-negotiable 6 forbids by name and that the same criterion says nothing in the tree would see. F2-F4 are three stale ownership claims the sweep missed, all of the shape round 1 named as this milestone's most repeated defect. \u26a0\ufe0f The major is in prose the round-1 fix itself added, which review.md rule 11 anticipates; it is one clause, so rule 12's 'a round-two block means the commit is too big' does not read on this commit -- it is not oversized, the fix surface is.",
+  "findings": [
+    {
+      "id": "M5.45c-r2-1",
+      "severity": "major",
+      "file": "docs/internal/product/backlog.md",
+      "line": 68,
+      "title": "M5.45g criterion 6's escape clause licenses the shards-per-node fetcher the criterion exists to forbid, and contradicts the absolute form of the same guard in M5.45f's cell",
+      "failure_scenario": "Criterion 6 opens '(6) NO PRODUCTION FETCHER IS WIRED INTO A CONSUMER PATH UNTIL M5.45h LANDS' and closes 'So either the production implementation does not ship here, or it ships behind a flag that is OFF and whose default is ASSERTED.' The second discharge is strictly weaker than the first and is the cheaper one to take. Concretely: M5.45f picks a real HTTP adapter module and, per its own cell, writes into the ADR that the fetcher 'is NOT wired into a consumer path until M5.45h'. M5.45g's taker reads only its own row, wires the adapter behind `directFetchEnabled=false`, asserts the default, and every criterion 1-6 goes green. M5.45e then marks SPEC criterion 5 met. M5.45h stalls, because it depends on M5.62, which is `todo` under NFR-5 and outside M5's completion condition. The tree now holds a consumer-side fetcher called from `decodeInto` on a path where a node gets one `Delivery` per RUN -- ~400 whole-object GETs against one 8 MiB object per node per segment, scaling with shards-per-node, which cost.md R5 ('One fetch per object per node, shared by every shard on it') and non-negotiable 6 forbid by name. Criterion 6's own preceding sentence states that nothing observes it: SPEC criterion 8 counts through the INGESTER's `CountingBinStore`, and `GrantIssuer`'s javadoc records that consumer-side GETs are invisible to that meter. The flag makes the rate unreachable on today's backends only because neither shipping backend presigns; when a presigning backend lands the path goes live with no counter and no gate between it and the bill. Nothing in the standards carves out 'forbidden rate, but off by default' -- cost.md 18 says the opposite. Secondary effect: the two rows carrying the same guard now disagree, so whichever is read second is false about the tree.",
+      "suggested_fix": "Delete the trailing 'or it ships behind a flag that is OFF and whose default is ASSERTED' so criterion 6 has one discharge and matches the absolute sentence M5.45f's cell already requires the ADR to carry. If a flagged landing is genuinely wanted, it has to say that the flag itself is not offered until M5.45h -- a flag an operator can set is a reachable rate, not an absent one."
+    },
+    {
+      "id": "M5.45c-r2-2",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md",
+      "line": 66,
+      "title": "M5.45e's State cell was repointed to M5.45g in this diff; the same line's prose still names M5.45c for the identical fact",
+      "failure_scenario": "The edited line reads '... it cannot be made until a consumer can actually fetch with a grant (M5.45c) and the hub can actually issue one (M5.45d)' in the description, and 'todo -- depends on M5.45g (a consumer that can fetch) and M5.45d (done)' in the State cell -- two owners for one dependency, in one row, one of which the same commit marked as owning nothing. A taker running `next-task` on M5.45e reads the criteria top to bottom, opens M5.45c to learn what the fetcher looks like, and lands on a cell whose entire content is 'split -- see M5.45f, M5.45g and M5.45h' plus the split's rationale, with no criteria to work from. This is the same correction-applied-to-one-of-two-places defect round 1 raised as R1 and R3, here inside a single line the author edited.",
+      "suggested_fix": "Change the parenthetical to (M5.45g), matching the State cell."
+    },
+    {
+      "id": "M5.45c-r2-3",
+      "severity": "minor",
+      "file": "docs/internal/product/decisions/0043-the-grant-crosses-to-the-consumer-as-a-format-type-with-its-range.md",
+      "line": 96,
+      "title": "A third ownership claim in ADR-0043 survived the sweep: 'the exact coalescing M5.39 and M5.45b own' -- neither owns it",
+      "failure_scenario": "The diff repointed the two ownership claims round 1 named (:77 and :108) but left ':96', which still reads 'the exact coalescing M5.39 and M5.45b own defeated by the field meant to help it'. M5.39's State cell is 'done -- DISCHARGED BY THE ROWS THAT DID THE WORK', and M5.45b was split and, eleven lines below at :107, is explicitly said to own none of it. A reader who greps this record for who owns the coalescing -- the sweep M5.45f's criterion 3 will require, over exactly the pattern `ADR-0043` -- gets three answers from one file: M5.39/M5.45b at :96, nobody at :107-110, M5.45d plus M5.45h at :191-206. The Status note is right; :96 is the copy that goes with a reader who stops at the first hit.",
+      "suggested_fix": "Repoint :96 to the hub half (M5.45d, landed) and the consumer half (M5.45h), or make the tense historical -- 'the coalescing M5.39 and M5.45b owned when this was written'."
+    },
+    {
+      "id": "M5.45c-r2-4",
+      "severity": "minor",
+      "file": "docs/internal/product/decisions/0043-the-grant-crosses-to-the-consumer-as-a-format-type-with-its-range.md",
+      "line": 108,
+      "title": "The record now states the range DECLINED, attributing the reasoning to a cell that explicitly disclaims the decision, while :77 says the question is M5.45f's to settle",
+      "failure_scenario": "New text at :108-110 reads 'The range is DECLINED in favour of a whole-object GET -- the reasoning is in M5.45g's cell and in the Status note'. M5.45g's cell says 'WHETHER THE SEAM TAKES A RANGE IS M5.45f's DECISION AND NOT THIS ROW'S TO GUESS', and :77 of this same record says 'M5.45f settles it -- either a reader that can decode a run from a bounded read ... or this decision is amended'. So the record asserts the outcome of the question it elsewhere says is open, and routes the reader for its justification to the one row that refuses to own it. The taker of M5.45f opens this record to answer (b), reads the Status note's 'DECLINED' as the record's settled position, writes the new ADR without weighing the bounded-read arm that :77 names as one of exactly two, and then amends decision (b) to drop `byteStart`/`byteLen` from VERSION_3 -- a wire change under non-negotiable 8 -- on the strength of a conclusion that was asserted rather than derived. The conclusion may well survive (the grant is key-scoped for the independent reason at :87), but the stated ground for it -- 'in favour of a whole-object GET' -- is precisely what M5.45f may overturn.",
+      "suggested_fix": "Say what is actually true today: the range is declined AS LONG AS the fetch is whole-object, and M5.45f may reopen it -- and cite :77 rather than M5.45g's cell for the reasoning."
+    }
+  ],
+  "task": "M5.45c",
+  "role": "reviewer"
+}

@@ -446,8 +446,8 @@ public final class SubscriptionHub {
             // ⚠️ AND NO CONSUMER CAN ACT ON IT YET. `Delivery` carries no grant
             // and nothing in `client`, `plugin` or `http` mentions
             // `FetchMode.DIRECT`, so a consumer served this way learns a
-            // segment exists and has no way to fetch it -- M5.45c builds the
-            // seam and M5.45e proves the three modes agree. This arm used to
+            // segment exists and has no way to fetch it -- M5.45g builds the
+            // seam (M5.45c was split) and M5.45e proves the three modes agree. This arm used to
             // throw, which said so loudly; it now serves, so the gap is stated
             // here instead. In practice it is gated by `directEnabled`
             // defaulting off and by neither shipping backend presigning.

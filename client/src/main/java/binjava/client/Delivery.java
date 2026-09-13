@@ -14,7 +14,8 @@ import java.util.Objects;
  * consumer issues NO object-store request to read what it was just told about,
  * which is what makes the zero-idle-cost property hold under load rather than
  * merely at rest. `direct` -- where the consumer reads the store itself -- is
- * M5.45c and cannot reach this type yet.
+ * M5.45g and cannot reach this type yet. (It was M5.45c until that row was
+ * split; M5.45g is the half that adds the grant to this record.)
  *
  * <p>⚠️ {@code via} IS TOLD TO THE CONSUMER, NOT ASKED OF IT (FR-6). It is a
  * record component with no setter and nothing on {@code SubscriptionTransport}

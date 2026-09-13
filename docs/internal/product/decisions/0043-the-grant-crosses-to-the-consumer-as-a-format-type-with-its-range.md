@@ -74,9 +74,12 @@ is a plain GET with no range.
 If the fetch is whole-object, `byteStart`/`byteLen` buy nothing at the fetch:
 the request needs no bound, and `SegmentReader` reads the directory regardless.
 They still say which slice is a run's, and no reader in the tree uses that.
-**M5.45c settles it** — either a reader that can decode a run from a bounded
+**M5.45f settles it** — either a reader that can decode a run from a bounded
 read, which is its own row, or this decision is amended and VERSION_3 carries a
-field for a consumer that never arrives. Recorded here because the field is
+field for a consumer that never arrives. ⚠️ IT WAS M5.45c UNTIL THAT ROW WAS
+SPLIT, and M5.45f takes the question TOGETHER with where a production fetcher
+may live: a fetcher that cannot range at all makes these coordinates dead by
+construction, and one that can makes the bounded-read reader a live option. Recorded here because the field is
 already on the wire and a reader must not take the saving as banked. `GrantIssuer`'s javadoc records that
 consumer-side GETs are invisible to `CountingBinStore`, so nothing in the tree
 would have measured the difference either way.
@@ -90,8 +93,9 @@ case at ~400 events naming the same `segmentKey` per node per 8 MiB segment. A
 grant whose SIGNATURE covers one run's byte range cannot be shared by the other
 399, so reading this record literally would produce **400 consumer-side ranged
 GETs against one object** — a rate scaling with shards-per-node, which
-non-negotiable 6 forbids by name, and the exact coalescing M5.39 and M5.45b own
-defeated by the field meant to help it. Review measured the inversion: the
+non-negotiable 6 forbids by name, and the exact coalescing — M5.39's when this
+was written, M5.45d's at the hub and **M5.45h**'s at the consumer now — defeated
+by the field meant to help it. Review measured the inversion: the
 claimed saving reverses at K ≥ 2.
 
 ⚠️ **SO WHAT THE COORDINATES BUY IS COALESCING WITHOUT A DIRECTORY READ.** A
@@ -102,8 +106,14 @@ them it must read the directory first to learn the same thing.
 
 ⚠️ **AND RULE 3's RANGE HALF IS THEREFORE STILL OPEN.** Closing it needs a grant
 minted over the union for a specific (node, segment). ⚠️ M5.45b was SPLIT and
-owns none of it; M5.45c declines the range in favour of a whole-object GET, so
-rule 3's range half has **no owner** — see the Status note.
+owns none of it, and neither does M5.45c, which was split in turn. ⚠️ **AND
+"DECLINED" IS MORE THAN THIS RECORD KNOWS**: an earlier draft of this sentence
+said the range is declined in favour of a whole-object GET and cited M5.45g's
+cell, which disclaims the decision and hands it to **M5.45f** — the same row
+Decision (b) above names. So the honest statement is that no range is
+EXPRESSIBLE today, for the reasons under Decision (b), and whether one ever
+becomes fillable is M5.45f's to settle. Either way rule 3's range half has
+**no owner**.
 
 ⚠️ **They are not a duplicate of a per-run fact.** A subscription event is
 already per run — it carries `firstOffset` and `recordCount`, the run's LOGICAL
@@ -166,10 +176,16 @@ decoder that dropped the grant entirely would still have matched its golden
 file. They are in the list, and a case asserts that a differing grant makes two
 events unequal.
 
-**Cost: unchanged today, and at most one directory read per (node, segment)
-better when `direct` is assembled.** This commit adds no object-store request:
-nothing yet mints a grant, `SubscriptionHub` still throws on `DIRECT` (M5.45b),
-and the event is larger by the grant only when one is present. ⚠️ The saving is
+**Cost: unchanged BY THIS RECORD, and at most one directory read per
+(node, segment) better when `direct` is assembled.** The commit that made this
+decision added no object-store request: nothing minted a grant, `SubscriptionHub`
+still threw on `DIRECT`, and the event is larger by the grant only when one is
+present. ⚠️ **THAT IS NO LONGER THE STATE OF THE TREE, AND AN EARLIER DRAFT OF
+THIS PARAGRAPH READ IN THE PRESENT TENSE.** M5.45d landed: the hub mints one
+grant per segment and serves `DIRECT`, so a reader pricing `direct` today must
+read the Status note below rather than this paragraph. The CONSUMER-side GET
+those grants authorise is still not issued by anything (M5.45g), and when it is,
+`CountingBinStore` will not see it — `GrantIssuer`'s javadoc records why. ⚠️ The saving is
 the directory read, NOT a GET per consumer, and it is per (node, segment) rather
 than per run -- see the warning under Decision (b) for why the per-run reading
 inverts it.
@@ -177,14 +193,28 @@ inverts it.
 **What this record does NOT do**: mint a grant, wire `GrantIssuer`, or give the
 consumer a way to fetch with one.
 
-⚠️ **Status 2026-09-14: M5.45b was SPLIT and owns none of these.** The
-client-side seam and the union of a segment's ranges into one request are
-**M5.45c**; minting through `GrantIssuer`, the coalescing rule and the TTL clamp
-are **M5.45d**; the end-to-end "all three modes deliver byte-identical records"
-is **M5.45e**. ⚠️ The range half of security.md rule 3 that this record leaves
-open is **DECLINED** by M5.45c's criterion 5, not carried by it: a whole-object
-GET is scoped to one key and to no range. What criterion 5 owns is the
-COALESCING — one request per (node, segment) rather than one per run — which
-review caught the split dropping and which would otherwise have had no owner at
-all. Rule 3's range half stays open, and the paragraph under Decision (b) says
-why.
+⚠️ **Status 2026-09-14: M5.45b was SPLIT and owns none of these**, and
+**M5.45d has since LANDED** — minting through `GrantIssuer`, the coalescing rule
+at the hub and the TTL clamp are done, with the mint hoisted above both loops so
+one signature serves every consumer and every run of a segment. The end-to-end
+"all three modes deliver byte-identical records" is **M5.45e**.
+
+⚠️ **M5.45c was then SPLIT TOO, and owns none of these either.** Where a
+production fetcher may live, and this record's reopened `byteStart`/`byteLen`
+question, are **M5.45f**; the seam in `client` and `Delivery` carrying the grant
+are **M5.45g**; one fetch per (node, segment) is **M5.45h**, which depends on
+**M5.62** because the node-scoped subscriber it needs is the one M5.62 already
+owns building.
+
+⚠️ The range half of security.md rule 3 that this record leaves open is NOT
+CARRIED by any of the new rows, and saying it is **DECLINED** would be more than
+this record knows — **M5.45f** owns whether a range ever becomes fillable. What
+is true today is narrower: no range is EXPRESSIBLE, so a whole-object GET is
+scoped to one key and to no range. What M5.45h owns is the COALESCING — one request per (node, segment)
+rather than one per run — which review caught the M5.45b split dropping and
+which would otherwise have had no owner at all. Rule 3's range half stays open,
+and the paragraph under Decision (b) says why. ⚠️ **AND M5.45g's SEAM TAKES NO
+RANGE PARAMETER UNTIL M5.45f SAYS ONE CAN BE FILLED**: an earlier draft of
+M5.45c's criterion 1 asked for `Grant` plus a byte range, and that same cell
+establishes two paragraphs later that no range is expressible. A parameter no
+caller can fill reads as an implemented capability.

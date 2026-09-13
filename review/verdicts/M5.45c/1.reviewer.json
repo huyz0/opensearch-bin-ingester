@@ -1,0 +1,41 @@
+{
+  "verdict": "changes-requested",
+  "summary": "The split itself is sound -- every clause of the old M5.45c cell lands in exactly one of M5.45f/g/h or is explicitly declined, and the claims about SegmentReader.open, ConsumerClient.decodeInto, SegmentKey, NodeSubscriptions.clientFor and M5.62 check out against source. Two defects: the edited ADR still assigns the reopened coordinates question to M5.45c a hundred lines above the new paragraph saying M5.45c owns none of it, and the split moves the one-fetch-per-(node, segment) obligation out of the row that builds the fetcher into a row parked behind M5.62, with no row stating that a production fetcher may not ship before it.",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "major",
+      "file": "docs/internal/product/decisions/0043-the-grant-crosses-to-the-consumer-as-a-format-type-with-its-range.md:77",
+      "summary": "The record now says both 'M5.45c settles it' (line 77, under Decision (b)) and 'M5.45c was then SPLIT TOO, and owns none of these' (line 186, added by this diff). Line 105 has the same stale owner.",
+      "detail": "Decision (b)'s reopening paragraph was not repointed with the Status note. Line 77 reads '**M5.45c settles it** -- either a reader that can decode a run from a bounded read, which is its own row, or this decision is amended and VERSION_3 carries a field for a consumer that never arrives.' Line 105 reads 'M5.45c declines the range in favour of a whole-object GET'. Both name a row whose status cell, as of this diff, is 'split -- see M5.45f, M5.45g and M5.45h'.",
+      "failure_scenario": "Whoever takes M5.45f opens ADR-0043 to answer question (b), reads Decision (b) -- the section that IS the question -- and is told M5.45c settles it. M5.45c's row body still asks for 'an interface in `client` taking a `Grant` plus a byte range' and still says 'this row must settle' the coordinates, which is exactly the contradiction the split exists to remove; only the status cell and the ADR paragraph 109 lines further down say otherwise. This is the failure mode M5.45d's own round-4 finding recorded for GrantIssuer.grantFor -- 'a reader following it finds nothing, concludes the rule is unowned' -- and M5.45f's criterion (2) exists because 'round 3 of M5.45b measured a span correction landing in the backlog and not in the ADR it came from'. The fix is two words in each of lines 77 and 105: M5.45c -> M5.45f (and, at line 105, the declination is now M5.45g's seam plus M5.45h's coalescing)."
+    },
+    {
+      "id": "R2",
+      "severity": "major",
+      "file": "docs/internal/product/backlog.md:68",
+      "summary": "The split unbinds non-negotiable 6 from the row that creates the consumer-side request: M5.45g may ship a fetcher and M5.45e may declare SPEC criterion 5 met while M5.45h -- the only owner of one-fetch-per-(node, segment) -- waits on M5.62, which is todo and changes a transport interface across client and plugin.",
+      "detail": "Old M5.45c carried criterion (5), 'THE FETCHER UNIONS A SEGMENT'S RANGES INTO ONE REQUEST', in the same row that built the seam, so a fetcher could not land un-coalesced. After the split, M5.45g's own text says 'WHAT THIS ROW DOES NOT DO: coalesce. One `Delivery` per RUN means one fetch per run', M5.45e's status says 'NOT on M5.45h', and M5.45h's status is 'todo -- depends on M5.45g AND on M5.62'. No row says a production fetcher must not ship before M5.45h, and no gate can see it: M5 SPEC criterion 8 counts requests 'through the ingester's CountingBinStore', criterion 9 is ingester-side prefetch, and GrantIssuer.java:146 records that consumer-side GETs are invisible to CountingBinStore. NFR-4 maps to criterion 9 only, so the consumer-side half of 'never with shards' has no acceptance criterion anywhere -- it lives entirely in the backlog row this diff creates.",
+      "failure_scenario": "M5.45f decides (a) in favour of a new adapter module holding a real HTTP fetcher. M5.45g wires the seam and its criteria go green; M5.45e proves the three modes byte-identical and SPEC criterion 5 is marked met; `direct` now works end to end. M5.45h is still blocked on M5.62, which is a transport-interface change spanning client and plugin. An operator turns on `directEnabled` against the first presigning backend (M9) and every catch-up node holding ~400 runs of one 8 MiB segment issues ~400 whole-object GETs for it -- shards-per-node scaling, which non-negotiable 6 forbids by name -- with every gate green and no criterion violated. One clause closes it: state in M5.45f (a) and/or M5.45g that a PRODUCTION fetcher does not ship before M5.45h, or that `direct` stays off until it does."
+    },
+    {
+      "id": "R3",
+      "severity": "minor",
+      "file": "client/src/main/java/binjava/client/Delivery.java:17",
+      "summary": "Two production comments still name M5.45c as the row that builds the seam; the split did not sweep for the row ID in source.",
+      "detail": "Delivery.java:17 -- '`direct` -- where the consumer reads the store itself -- is M5.45c and cannot reach this type yet.' SubscriptionHub.java:449 -- 'a segment exists and has no way to fetch it -- M5.45c builds the seam and M5.45e proves the three modes agree.' Both should read M5.45g. M5.45f's own criterion (3) institutionalises this sweep ('found by grepping for the ROW ID as well as the claim, which M5.25 round 2 measured as the search that finds what either alone misses') -- this commit is the one that made the pointers stale.",
+      "failure_scenario": "Whoever picks up the seam starts from Delivery.java, follows M5.45c into the backlog, and reads a row whose criterion 1 asks for 'an interface in `client` taking a `Grant` plus a byte range'. The status cell warns that the signature was self-contradictory, but the body is read first and asks for a range parameter no caller can fill -- the exact field-that-reads-as-an-implemented-capability the ADR status note added here forbids. Minor rather than major because the status cell does redirect and the row is one hop away; the fix is two identifier edits."
+    },
+    {
+      "id": "R4",
+      "severity": "minor",
+      "file": "docs/internal/product/decisions/0043-the-grant-crosses-to-the-consumer-as-a-format-type-with-its-range.md:171",
+      "summary": "The Consequences section still says 'nothing yet mints a grant, `SubscriptionHub` still throws on `DIRECT` (M5.45b)', which the paragraph this diff adds at line 181 contradicts by name.",
+      "detail": "SubscriptionHub.java:454 is now `case DIRECT -> deliver(committed.segmentKey(), targets, FetchMode.DIRECT, sinks -> { }, serving.issuer())` and mintGrant is hoisted above both loops, so both halves of line 171 are false. The staleness predates this commit (M5.45d landed before it), but this commit is the one that writes 'M5.45d has since LANDED' ten lines below it.",
+      "failure_scenario": "A reader checking whether `direct` currently costs anything reads the Cost paragraph -- the paragraph that exists to answer exactly that -- and is told no grant is ever minted and the DIRECT arm throws. They conclude the consumer-side GET is still hypothetical and skip the coalescing question R2 is about. One clause dates or corrects it: 'as of M5.44; M5.45d now serves the arm and mints once per segment.'"
+    }
+  ],
+  "diff_sha256": "f46969100f74d4b1f911bfe476886b3fa0408b9a9fe23d39c1921cc9818f810b",
+  "task": "M5.45c",
+  "role": "reviewer"
+}
