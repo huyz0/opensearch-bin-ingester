@@ -1,0 +1,34 @@
+{
+  "task": "M5.39",
+  "role": "reviewer",
+  "round": 1,
+  "verdict": "pass",
+  "diff_sha256": "c55fbc068045a55c855181780539ca07bd13c417504145f37b3eb56647f74ef4",
+  "summary": "Docs-only close of a row whose deliverable was a STATEMENT. Both citations verified against the tree and against git log: GrantIssuer.java:140 carries 'ONE GRANT PER (NODE, SEGMENT), NEVER ONE PER RUN' and was introduced by faa2bb2 (M5.13); SegmentProxy.java:130 carries 'Call it ONCE PER SEGMENT with every interested sink, not once per run' and was introduced by f145c51 (M5.12), as were the ~1,600-GET figure, the ~178-runs figure and the one-entry-per-CONSUMER granularity. The CountingBinStore-invisibility claim and the 'mints fresh every call' claim are both in GrantIssuer's javadoc. M5.43 and M5.40 are both 'todo' at HEAD. No request rate is created or changed by this diff. Closing is honest; two minors are staleness against M5.45a/M5.45b, both in the safe (under-claiming) direction.",
+  "findings": [
+    {
+      "severity": "minor",
+      "location": "docs/internal/product/backlog.md, M5.39 State cell, clause 'ENFORCEMENT IS TRACKED AND NOT DONE ... M5.40 owns the proxy half, and both are open'",
+      "claim": "The cell is written against the pre-M5.45 picture and never names M5.45a, which landed the first production caller of the proxy path and implements exactly the rule this row asked someone to state. SubscriptionHub.publishSegment gathers Targets across every run of a segment and then calls serving.proxy().streamTo(segmentKey, sinks) ONCE per segment (SubscriptionHub.java:501), and M5.45a's own done cell two rows down in this same file says 'Grouping subscribers by SEGMENT before choosing discharges M5.40's caller-granularity half'. So for proxy, the caller-granularity half of the rule is not merely 'written where a caller reads it' -- it is implemented and tested. What genuinely remains on proxy is the per-NODE half (no cache, M5.16) and the per-CONSUMER dedup half: publishSegment still builds one Target per (subscription, run), so a node holding ~178 runs of a segment is handed the same 8 MiB 178 times, with the GET count still 1. M5.39's own body asks 'whoever takes it states which' of three named places; the answer turned out to be a fourth (the hub's publish site), and the closing cell does not record it.",
+      "failure_scenario": "Whoever takes M5.40 reads M5.39's closing cell, believes the proxy caller-granularity rule is unenforced anywhere, and either re-implements per-segment grouping that SubscriptionHub.publishSegment already does, or -- worse -- reads M5.40 and M5.39 as agreeing that the hub still loops per RunKey and 'fixes' a call site that is already correct, while the two halves that ARE open (no cache; one sink per subscription rather than per consumer, ~178 copies of 8 MiB to one node) stay unattributed in this row.",
+      "suggested_fix": "One clause naming M5.45a as where the proxy half was actually enforced (SubscriptionHub.publishSegment, one streamTo per segment), and saying that what M5.40 still owns is the per-NODE cache half plus the one-entry-per-CONSUMER half."
+    },
+    {
+      "severity": "minor",
+      "location": "docs/internal/product/backlog.md, M5.39 State cell, clause 'M5.43 owns the `direct` wiring that must respect the grant rule'",
+      "claim": "This faithfully copies GrantIssuer.java:140's 'M5.43 owns the wiring that must respect it', but that sentence was written in M5.13, before M5.45 was split. At HEAD, M5.43 is the row for expressing 'this deployment enables direct' (the startup refusal's call site), and M5.45b -- state 'blocked -- M5.43' -- is the row that assembles the direct serving path and therefore the one that must actually respect one-grant-per-(node,segment). Nothing here is false (both rows are open, and M5.45b is blocked ON M5.43), but the row a reader would follow for the grant rule is now M5.45b.",
+      "failure_scenario": "Whoever closes M5.43 (a config/enablement row) reads M5.39 as saying M5.43 carried the grant-coalescing obligation, marks it discharged, and M5.45b wires direct with one grant per run -- K consumer-side GETs for one node holding K runs of a ~1,600-run segment, a request rate scaling with shards per node, with nothing in the ingester's CountingBinStore able to see it.",
+      "suggested_fix": "Name M5.45b alongside M5.43 for the direct half, or say the obligation transfers to whichever row assembles the direct serving path."
+    }
+  ],
+  "verified": [
+    "GrantIssuer.java line 140 carries the quoted sentence verbatim; git log -S credits faa2bb2 'M5.13: the direct grant'.",
+    "SegmentProxy.java line 130 carries the quoted sentence verbatim; git log -S credits f145c51 'M5.12: proxy streams a segment through to many consumers, from one read'.",
+    "The ~1,600-GETs-for-one-8-MiB-segment figure and the 'one entry per CONSUMER, not one per subscription ... around 178' granularity both live in SegmentProxy's javadoc (lines 126-139), introduced by the same M5.12 commit.",
+    "GrantIssuer's javadoc does record that each grant is one consumer-side GET invisible to the ingester's CountingBinStore, and that the method mints fresh every call and reuses no unexpired grant.",
+    "M5.43 and M5.40 are both state 'todo' in backlog.md at HEAD.",
+    "Rung 7 = 'an instruction in a prompt' in gate-design/SKILL.md; using it for javadoc prose matches the tree's existing usage (M5.42's cell).",
+    "No object-store request rate is created, changed or re-justified by this diff: it adds no code, and the rates it describes (1 GET per segment on proxy, 1 grant per (node, segment) on direct) are the flat-in-segments shape non-negotiable 6 requires."
+  ],
+  "honesty_judgement": "Closing is honest. The row's deliverable was explicitly a statement of WHERE the coalescing obligation lives ('Whoever takes it states which'), the row itself says 'The rule is written; ENFORCING it is M5.43's, with the wiring', and both statements exist verbatim at the cited lines in commits credited correctly. The row owes nothing further. The only debt is cross-referencing: it closes without recording that M5.45a already answered the question in code for proxy, and without updating the direct half's owner for the M5.45a/b split."
+}
