@@ -1,0 +1,58 @@
+{
+  "diff_sha256": "f602b33cab34fc102c7ebe0efec0c23acd524fa7088c9285db5a0eabc6bc9329",
+  "verdict": "changes-requested",
+  "summary": "Tests, M0.107, round 3, measured at f602b33cab34 in a throwaway git worktree (PID+timestamp path), 16 cases green at baseline, thirteen production mutations RUN not reasoned, each as a full `./gradlew -p buildSrc test --tests binjava.IoSeamGateTest` (22 s a run). WHAT IS PINNED, verified by running the mutation: the round-3 addition is sound -- reverting the text-block branch's escape handling (`j += 2 if src[j] == '\\\\' else 1` -> `j += 1`) reds anESCAPEDDelimiterInsideATextBlockDoesNotBlankTheRestOfTheFile and nothing else, so the new case is its sole killer. The coverage assertion is NOT vacuous and closes round 1's T1: deleting two entries (`System.nanoTime(`, `Files.`) reds SEVEN cases; adding one (`('Clock', CLOCK)`) reds it too; it asserts the python exit status and uses containsExactlyInAnyOrder, so an empty or noisy list fails. Dropping the owner word-anchor reds exactly anIdentifierENDINGInABannedNameIsNotAViolation -- that javadoc's 'the ONLY thing in the suite that reds' is TRUE as measured. Scanning only part of the input dies too (`for path in paths[1:]` reds the char-blind case). Round 2's blocking scenario is answered: `log(\"see https://x/y\"); return Files.readAllBytes(p);` is now refused. Three counting claims re-derived and TRUE: 103 tracked src/main files (101 non-exempt), exactly one match on the whole tree (LocalFsBinStore), 11 `implements`-seam matches against the module's 2; BANNED is 36. WHAT IS NOT PINNED is `code_only`: the scanner's header makes a four-branch guarantee and the suite constrains ONE branch. Three silent-pass mutations survive all 16 cases, each demonstrated on well-formed Java fed straight to the scanner -- two comment branches that can blank to end of file, and the string/char branch's escape handling. Two of those three reproduce the previous test-review round's T1-r2 and T2-r2 at the same hash, re-measured here rather than copied. The third is NEW and is in the opposite direction to that round's T4-r2: the `new X(` arm's package-qualifier skip can be made MANDATORY (`*` -> `+`) with 16/16 green, because all twelve `new` samples are fully package-qualified and nothing exercises the ordinary import form. TREE LEFT AS FOUND: every measurement in throwaway worktrees; the live index still hashes to f602b33cab34.",
+  "findings": [
+    {
+      "id": "T1-r3",
+      "severity": "major",
+      "file": "buildSrc/src/test/java/binjava/IoSeamGateTest.java:354 (aBannedCallQUOTEDInACommentOrALiteralIsNotAViolation)",
+      "title": "Either comment branch can be made to blank to end of file with 16/16 green -- the case pins only the false-positive direction",
+      "failure_scenario": "TWO SURVIVING MUTATIONS, BOTH RUN at f602b33c, 16/16 green each including the real-tree case. (a) io_seam_scan.py code_only, the `//` branch: replace `j = src.find('\\n', i); j = n if j < 0 else j` with `j = n`. (b) the `/*` branch: replace `j = src.find('*/', i + 2); j = n if j < 0 else j + 2` with `j = n`. Non-equivalent, demonstrated by feeding two files straight to the mutated scanner: under (a) a class carrying `// a comment` on line 5, `Files.readAllBytes(p)` on line 6 and `System.nanoTime()` on line 7 is reported CLEAN (baseline reports both); under (b) a class whose first line is `/** Javadoc first. */` and which then does the same two calls is reported CLEAN. Since essentially every file in this tree opens with a javadoc or carries a `//`, either mutation disables the gate over the whole tree while the success line still prints the right file count -- the packet's 'clean line over a tree it never read', and the defect class the single-pass rewrite was written to close. The quoting case is where this belongs and it asserts exit 0 only: all four quoted constructs sit AFTER a comment, so no real call is ever behind one. Closure is two lines in that same fixture: one unquoted `Files.readAllBytes(p)` in a method after the multi-line javadoc and one after the `//` line, asserting exit 1 and both line numbers."
+    },
+    {
+      "id": "T2-r3",
+      "severity": "major",
+      "file": "buildSrc/src/test/java/binjava/IoSeamGateTest.java:392 (aCHARLiteralHoldingAQuoteDoesNotBlindTheScanner)",
+      "title": "Escape handling in the string/char branch is unpinned -- dropping it silently misses a real filesystem read",
+      "failure_scenario": "SURVIVING MUTATION, RUN at f602b33c: in code_only's `elif src[i] in '\"\\''` branch ONLY (leave the text block's copy intact), replace `j += 2 if src[j] == '\\\\' else 1` with `j += 1`. 16/16 green. Non-equivalent, demonstrated on well-formed Java fed straight to the scanner: `class Esc { String q(Path p) throws Exception { String x = \"\\\\\"\"; return Files.readString(p); } }` is reported CLEAN under the mutation and REFUSED at the staged bytes -- the literal ends early at the escaped quote, the real closing quote reopens a literal, and the newline guard then swallows the rest of the line including the read. This is the SAME defect round 2 measured in the text-block branch. Round 3 fixed that branch and gave it a case (verified above as its sole killer); the sibling branch got the same escape code and no case, so the suite pins one of the two branches that honour escapes while the scanner header claims all four do. The char-blind fixture is a character away from closing it: its char literal is `'\"'` with no backslash -- add `String q = \"\\\\\"\";` before the `Files.readString` and the mutation reds."
+    },
+    {
+      "id": "T3-r3",
+      "severity": "major",
+      "file": "buildSrc/src/test/java/binjava/IoSeamGateTest.java:180-208 (everyBANNEDConstructIsREFUSED, the twelve `new X(` samples)",
+      "title": "Every `new` sample is package-qualified, so the ordinary import form is unpinned: making the qualifier MANDATORY survives",
+      "failure_scenario": "SURVIVING MUTATION, RUN at f602b33c: in _shape's `new` arm, `qualifier = r'(?:[A-Za-z_$][\\w$]*\\s*\\.\\s*)*'` -> `...)+'`. 16/16 green, real tree green. Non-equivalent, demonstrated straight against the scanner: `package binjava.ingest; import java.net.Socket; class Bare { Object c() throws Exception { return new Socket(\"h\", 1); } }` is refused at the staged bytes and reported CLEAN under the mutation. That silently retires the import form of TWELVE of the 36 entries -- `new Socket(`, `new ServerSocket(`, `new DatagramSocket(`, `new URL(`, `new Date(`, `new File(`, `new FileInputStream/OutputStream/Reader/Writer(`, `new RandomAccessFile(` -- and the import form is how this tree actually writes Java; the fully-qualified `new java.net.Socket(` that all twelve samples use is the RARE shape, which the scanner's own comment says is the once-off case the qualifier exists for. Note this is the opposite direction to the previous round's T4-r2 (which measured `qualifier = r''` as this case's sole killer): the samples pin the qualified form and only the qualified form. Closure is one line: a thirteenth sample, or a second probe in this case asserting an unqualified `new Socket(\"h\", 1)` under an import is refused."
+    },
+    {
+      "id": "T4-r3",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/IoSeamGateTest.java:236 (theViolationNamesTheFileANDTheLINE)",
+      "title": "The reported LINE is unconstrained through the blanking path -- destroying newlines in _blank survives",
+      "failure_scenario": "SURVIVING MUTATION, RUN at f602b33c: `_blank` -> `re.sub(r'.', ' ', text, flags=re.S)`, i.e. blank the newlines inside comments and text blocks too. 16/16 green. Non-equivalent: every violation after a multi-line javadoc or text block is then reported at the wrong line -- and this tree's files all open with a multi-line javadoc, so in practice the line number would be wrong nearly everywhere. The case that exists to pin the line uses a fixture with no comment and no literal before the violation, so the offset-preservation that `_blank`'s docstring is entirely about is never exercised. Closure: give that fixture a multi-line javadoc above the violating method and keep asserting `Dirty.java:<n>:`."
+    },
+    {
+      "id": "T5-r3",
+      "severity": "minor",
+      "file": "scripts/io_seam_scan.py:_shape",
+      "title": "Two anchoring decisions in _shape that no case constrains -- both are false-refusal mutations",
+      "failure_scenario": "TWO SURVIVING MUTATIONS, BOTH RUN at f602b33c, 16/16 green each. (a) the required paren in the `new` arm: drop `+ r'\\s*\\('`. The comment says it is REQUIRED so that `new File(` does not also match `new FileInputStream(` and report the wrong name -- and the loop in everyBANNEDConstructIsREFUSED asserts only `contains(e.getKey())`, so an extra, wrongly-named violation line still satisfies it. (b) the whole-method-name anchor: `tail = re.escape(member) + (r'\\b' if whole and member else '')` -> `tail = re.escape(member)`, which is what stops `now` matching inside a longer name and is the same protection the suite spends a whole case on in the owner position (`dataFiles.size()`). Both are the false-refusal direction, which this suite argues twice is how a gate gets weakened rather than obeyed. Both close inside the existing identifier-suffix fixture at exit 0."
+    },
+    {
+      "id": "T6-r3",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/IoSeamGateTest.java:129 (thisRepositoryPassesAndTheGateSaysHowManyFilesItRead)",
+      "title": "The success line's OTHER number is unchecked: the banned-construct count can be a constant",
+      "failure_scenario": "SURVIVING MUTATION, RUN at f602b33c: in check-io-seam.sh replace `BANNED_COUNT=$(python3 -c ...)` with `BANNED_COUNT=16` (the pre-round-2 size). 16/16 green. The line then reads 'N business-logic file(s) name none of the 16 banned constructs' while the list holds 36 -- a false claim in the one line an author reads, in the same sentence whose file count this suite deliberately pins because 'exit 0 is also what a gate that read nothing returns'. One `contains(\"36 banned constructs\")`-style assertion derived from the live BANNED length closes it."
+    },
+    {
+      "id": "T7-r3",
+      "severity": "minor",
+      "file": "buildSrc/src/test/java/binjava/IoSeamGateTest.java:250-255 (takingAClockAsASeamParameterIsACCEPTED javadoc)",
+      "title": "The javadoc's MEASURED claim is not reproducible as written: a bare-type entry in the deny-list cannot express it",
+      "failure_scenario": "The javadoc says 'MEASURED: adding the bare type to the deny-list reds this case and the real tree, and nothing else.' RUN at f602b33c: adding `('Clock', CLOCK)` to BANNED reds exactly ONE case -- everyBANNEDConstructIsREFUSED, via the coverage assertion -- and NOT this case and NOT the real tree, because `_shape` partitions a separator-less literal to owner='Clock', member='' and compiles it to `\\bClock\\s*(?:\\.|::)\\s*`, which still demands a separator and so matches nothing in that fixture. The claim can only hold for a shape appended directly to SHAPES, which is not 'the deny-list' as every other sentence in this suite uses the word. Prose, not a test defect -- the case itself remains a legitimate accept-direction pin -- but AGENTS.md non-negotiable 4 is about exactly this kind of sentence."
+    }
+  ],
+  "task": "M0.107",
+  "role": "test-reviewer"
+}

@@ -1,0 +1,51 @@
+{
+  "diff_sha256": "caa693ca6b1e433207047503e8711fd9880728e8baff932a2a6b8e8f46a76bcf",
+  "verdict": "changes-requested",
+  "summary": "The package half of the gate claims closure it does not have: java.util.jar.JarFile -- a SUBCLASS of the banned java.util.zip.ZipFile, living outside the banned package -- opens a file from ingest business logic and passes, which is the precise escape route four documents say the package ban makes impossible. Separately, the MEASURED FREE claim in both script headers is false on this tree by 53 files. Four minors on counts, message wording and one false refusal. No object-store request is added by this change; the cost lens is not engaged.",
+  "findings": [
+    {
+      "id": "R7-1",
+      "severity": "major",
+      "file": "scripts/io_seam_scan.py:99-131, scripts/check-io-seam.sh:9-13, AGENTS.md:175-188, docs/internal/standards/code-structure.md:19-24",
+      "finding": "A SUBCLASS DOES ESCAPE THE PACKAGE BAN, which is the one thing the package half claims by construction. `java.util.jar.JarFile extends java.util.zip.ZipFile`: it is a subclass of a class in a banned package, it lives in `java.util.jar`, which is not on PACKAGES, and it opens a file on disk. `java.util.prefs.Preferences.userRoot()` is a second, non-subclass instance of the same gap. The sentence repeated in four places -- AGENTS.md 'so a subclass cannot escape the way it escapes a banned class name', code-structure.md 'so a subclass cannot escape it', check-io-seam.sh line 13 the same words, io_seam_scan.py 'a class cannot leave its package, so no sibling can appear ... the enumeration ends here rather than growing by one review round at a time' -- is false as written. What the package ban actually closes is escape by NAMING a sibling inside a listed package; it does not close escape by SUBCLASSING out of one, and `java.util.zip`/`java.util.jar` is exactly that pair. Either the list grows (`java.util.jar`, `java.util.prefs`) or the four claims are narrowed to what is true, but the current text tells the next reader the I/O half needs no further entries while the file-opening subclass of a banned class walks through.",
+      "failure_scenario": "MEASURED in a throwaway git worktree at the staged bytes (caa693ca6b1e), both files compiled clean by javac 25, staged, `./scripts/check-io-seam.sh --full` exit 0, `ok 103 business-logic file(s) name none of the 40 banned constructs`. (a) ingest/src/main/java/binjava/ingest/Jarred.java: `final class Jarred { long entries(String path) throws Exception { try (java.util.jar.JarFile jar = new java.util.jar.JarFile(path)) { return jar.stream().count(); } } }` -- opens and reads a file from the filesystem, in business logic, with no seam. (b) ingest/src/main/java/binjava/ingest/Prefs.java: `java.util.prefs.Preferences.userRoot().node(\"binjava\").get(key, \"none\")` -- reads persistent state off the disk. Both pass. Neither names any of the eight banned packages, and (a) is a direct subclass of the banned `java.util.zip.ZipFile`."
+    },
+    {
+      "id": "R7-2",
+      "severity": "major",
+      "file": "scripts/io_seam_scan.py:105-106, scripts/check-io-seam.sh:13",
+      "finding": "THE 'MEASURED FREE' CLAIM IS FALSE ON THIS TREE, in both script headers, and it contradicts the paragraph directly beneath it. io_seam_scan.py:105 says 'MEASURED FREE ON THIS TREE: no non-exempt `src/main` file names any of these packages at all, so the whole family costs nothing to forbid'; check-io-seam.sh:13 says 'MEASURED FREE: no non-exempt `src/main` file names any of them.' Fifty-three non-exempt `src/main` files name `java.io.` or `java.util.zip.` -- every file that imports `InputStream`, `IOException` or `CRC32C`. They pass only because ALLOWED carves them out, which the very next paragraph of io_seam_scan.py says. The backlog cell states the same fact correctly ('of the 103 tracked `src/main` files the RULE MATCHES exactly ONE'), so two of the four statements of one fact are wrong -- the same restated-prose defect this cell says was corrected five times already. It is not cosmetic: a reader who believes 'names any of these packages at all' concludes ALLOWED is dead weight, and deleting it reds 53 files.",
+      "failure_scenario": "MEASURED at the staged bytes: `git grep -lE 'java\\.io\\.|java\\.util\\.zip\\.' -- '*/src/main/java/binjava/*.java' | grep -v '^binstore-backends/' | wc -l` prints 53. `git grep -h 'import java.io.' -- '*/src/main/java/binjava/*.java' | sort -u` lists eight distinct types in non-exempt main, and format/src/main/java/binjava/format/SegmentReader.java:13 imports `java.util.zip.CRC32C`. Scanning all 103 tracked files confirms the rule matches exactly one file, LocalFsBinStore -- which is the true claim the headers should be making."
+    },
+    {
+      "id": "R7-3",
+      "severity": "minor",
+      "file": "scripts/io_seam_scan.py:129",
+      "finding": "STALE COUNT WRITTEN BY THIS ROUND'S OWN EDIT: 'The I/O half is closed BY CONSTRUCTION: all six entries are real PACKAGES' -- PACKAGES holds EIGHT entries, because `java.util.logging` and `java.sql` were added this round twelve lines above. AGENTS.md, code-structure.md, check-io-seam.sh's header and the backlog cell all say eight; this one says six.",
+      "failure_scenario": "Read at the staged bytes: io_seam_scan.py lines 108-119 enumerate eight tuples in PACKAGES; line 129 says six. A reader auditing whether the list matches its description counts eight and cannot tell which of the two numbers the author meant, which is the M5.34 defect (three disagreeing counts in one commit) at a fifth site."
+    },
+    {
+      "id": "R7-4",
+      "severity": "minor",
+      "file": "scripts/check-io-seam.sh:60, buildSrc/src/test/java/binjava/IoSeamGateTest.java:theSuccessLineCountsTheConstructsTheListACTUALLYHolds",
+      "finding": "THE SUCCESS LINE COUNTS THE CARVE-OUT AS BANS. It prints '101 business-logic file(s) name none of the 40 banned constructs', and 40 is `len(ALL_ENTRIES)` = 8 packages + 16 banned constructs + 16 ALLOWED entries. Only 24 are bans; the other 16 are the things the gate deliberately ACCEPTS. Folding ALLOWED into ALL_ENTRIES was the right answer to round 6's coverage gap, but reusing that same list for the reported ban count makes the gate's one success sentence overstate what it refuses by 67%, and the test pins the overstatement.",
+      "failure_scenario": "MEASURED at the staged bytes: `./scripts/check-io-seam.sh --full` prints 'none of the 40 banned constructs' while `java.io.InputStream`, `java.net.URI` and `java.util.zip.CRC32` -- 16 of those 40 -- are entries that must PASS, pinned as such by the accepted half of everyBANNEDConstructIsREFUSED. An operator reading the line and then the list to see what is forbidden finds a sixth of it is what is permitted."
+    },
+    {
+      "id": "R7-5",
+      "severity": "minor",
+      "file": "scripts/io_seam_scan.py:133, 189",
+      "finding": "THE MEASURED TYPE IS `CRC32C`, NOT `CRC32`. Both comments say 'this tree's non-exempt `src/main` uses exactly eight `java.io` types and `CRC32`' / 'exactly the eight `java.io` types below and `CRC32` appear in non-exempt `src/main`, and nothing else'. The tree uses `java.util.zip.CRC32C` in three files and `CRC32` in none; it is admitted only because ALLOWED is matched as a PREFIX. The eight `java.io` types check out exactly.",
+      "failure_scenario": "MEASURED at the staged bytes: `git grep -n 'CRC32' -- '*/src/main/java/binjava/*.java'` returns only `CRC32C` (format/SegmentReader.java:13, format/SegmentWriter.java:14, ingest/PeerRing.java:6). Anyone acting on the stated measurement -- for instance tightening ALLOWED from prefix to whole-name matching, which the header describes as a deliberate choice open to revisit -- reds three files that the comment says do not exist."
+    },
+    {
+      "id": "R7-6",
+      "severity": "minor",
+      "file": "scripts/io_seam_scan.py:118 ('.now()' entry)",
+      "finding": "FALSE REFUSAL ON A MEMBER NAMED `now()` THAT SOURCES NOTHING. The `.now()` shape has no owner anchor, so any zero-argument call or record accessor named `now` is refused as 'reaches the real clock directly'. A record carrying the instant it was stamped with -- `record Window(Instant now, long seq)` -- cannot read its own component. The tree has no such member today, so nothing reds; it is recorded because the accepted half of this gate exists precisely for the false-refusal direction, and the remedy (rename the component) is cheaper to state now than to discover as a gate to edit.",
+      "failure_scenario": "MEASURED at the staged bytes: ingest/src/main/java/binjava/ingest/Window.java containing `record Window(Instant now, long seq) { long age(Window later) { return later.now().toEpochMilli() - now().toEpochMilli(); } }` compiles clean under javac 25 and the gate exits 1 with 'Window.java:9: .now() reaches the real clock directly', pointing an author at a line that touches no clock."
+    }
+  ],
+  "task": "M0.107",
+  "role": "reviewer"
+}

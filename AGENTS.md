@@ -148,7 +148,31 @@ containing a procedure rather than a pointer is a fork waiting to drift.
    See [cost.md](docs/internal/standards/cost.md). *No script until the store SPI
    lands with its counting decorator.*
 7. **Business logic touches no socket, clock or object store directly.** If it
-   needs I/O to test, it is in the wrong layer. *No script yet.*
+   needs I/O to test, it is in the wrong layer.
+   → `scripts/check-io-seam.sh`
+   ⚠️ It bans twelve I/O PACKAGES outright -- `java.nio.file`, `java.nio.channels`,
+   `java.io`, `java.util.zip`, `java.util.jar`, `java.util.prefs`,
+   `java.util.logging`, `java.sql`, `javax.sql`, `javax.naming`, `java.net`,
+   `javax.net` -- so no sibling can
+   be NAMED inside one. ⚠️ It does NOT close subclassing OUT of one:
+   `java.util.jar.JarFile` extends the banned `java.util.zip.ZipFile` and passed
+   until its own package was listed, so every package a reach can live in must
+   be named. The byte, checksum and
+   exception types living in them are named exceptions, which is what makes
+   `java.io` bannable at all. The clock and the subprocess are banned by
+   CONSTRUCT instead (`.now()`, `currentTimeMillis(`, `Clock.system`, `.exec(`),
+   because their packages hold `Clock`, `Instant`, `List` and `Runtime` and
+   cannot be forbidden -- taking a `Clock` parameter is the shape this rule
+   REQUIRES, and `LocalDate.now(clock)` is how you read it.
+   `binstore-backends` is exempt: it is the adapter.
+   ⚠️ **NEITHER HALF IS CLOSED.** The package half must name every package a
+   reach can live in, and the construct half is a hand-named list; each is
+   exactly as complete as its enumeration. It does not close this rule. It reads source text: reflection reaches any banned construct, a
+   dependency's API can open a socket without naming one, and a helper inside
+   the exempt module reaches the filesystem for a caller outside it. It raises
+   the cost of reaching past a seam. The list it does enforce is in
+   `scripts/io_seam_scan.py` and every entry is pinned by a case, with the
+   sample table checked against the list itself so neither can drift.
 8. **A format change updates the format, every reader, every writer, the fakes,
    the golden files and the ADR in one commit.**
    See [`wire-format-change`](.agents/skills/wire-format-change/SKILL.md).
@@ -191,6 +215,7 @@ runs is exactly the list that goes stale:
 | `check-metric-cardinality.sh` | pre-commit | observability.md rule 1: no high-cardinality metric or span labels |
 | `check-test-budget.sh` | pre-commit | build.md: memory caps declared; a runaway dies as a JVM/Docker OOM, not a lost WSL2 session |
 | `check-file-size.sh` | pre-commit | code-structure.md rule 1: no source file over 700 lines |
+| `check-io-seam.sh` | pre-commit | non-negotiable 7: business logic takes a seam for every clock, socket and store |
 | `check-tdd.sh` | pre-commit | testing.md rule 2: every new test was observed to fail before the code existed |
 | `check-reviewed.sh` | pre-commit | non-negotiable 5: the staged bytes were reviewed by both reviewers |
 | `check-commit-msg.sh` | commit-msg | non-negotiable 1: the commit subject names a real backlog task |

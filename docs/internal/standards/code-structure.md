@@ -16,6 +16,26 @@
 2. **A method is at most ~50 lines.** No gate.
 3. **Business logic touches no socket, clock, or object store directly.** It
    takes a seam. If it needs I/O to test, it is in the wrong layer.
+   → `scripts/check-io-seam.sh`
+   ⚠️ The gate bans twelve I/O PACKAGES outright — `java.nio.file`,
+   `java.nio.channels`, `java.io`, `java.util.zip`, `java.util.jar`,
+   `java.util.prefs`, `java.util.logging`, `java.sql`, `javax.sql`,
+   `javax.naming`, `java.net`, `javax.net` —
+   so no sibling can be NAMED inside one, with the byte and checksum types that
+   live in them carved out and each pinned by a case that must PASS. ⚠️ It does
+   NOT close subclassing OUT of a listed package: `java.util.jar.JarFile`
+   extends `java.util.zip.ZipFile` and passed until `java.util.jar` was listed
+   too, so every package a reach can live in must be named. The clock and the subprocess are banned by
+   CONSTRUCT instead (`.now()`, `currentTimeMillis(`, `Clock.system`, `.exec(`),
+   because their packages hold `Clock`, `Instant` and `Runtime` and cannot be
+   forbidden. `LocalDate.now(clock)` — reading an INJECTED clock — passes.
+   `binstore-backends` is exempt, and by module rather than by `implements`:
+   eleven `src/main` files implement one of the five seams against that module's
+   two, so a seam-implementation carve-out is five times wider and takes
+   `LocalSequencer` with it.
+   ⚠️ It is a DENY-LIST and cannot be complete — reflection reaches anything,
+   and a dependency can open a socket without naming one. It raises the cost of
+   reaching past a seam; it does not make it impossible.
 4. **The seams are few and named**: `BinStore`, `Clock`, `Sequencer`,
    `SubscriptionTransport`, `Membership`. A new seam is an ADR.
 5. **Every seam has a fake** used by T0/T1 tests, kept in step with the real

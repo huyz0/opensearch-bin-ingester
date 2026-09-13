@@ -139,6 +139,13 @@ repos:
         stages: [pre-commit]
         pass_filenames: false
         always_run: true
+      - id: check-io-seam
+        name: "non-negotiable 7: business logic takes a seam for every clock, socket and store"
+        entry: scripts/check-io-seam.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
       - id: check-tdd
         name: "testing.md rule 2: every new test was observed to fail before the code existed"
         entry: scripts/check-tdd.sh
