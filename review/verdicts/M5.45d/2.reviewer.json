@@ -1,0 +1,44 @@
+{
+  "diff_sha256": "fc1da61e718c1d9afb48b9f7782f9ae116be913556dac3d4064722851c7d8514",
+  "verdict": "pass",
+  "summary": "Round 2. All four round-1 findings verified fixed: the mint is hoisted above both loops in deliver (SubscriptionHub.java:553-555) and is reached only after the targets.isEmpty() early return, so the signing rate is one per segment per publish and flat in consumers and in runs; AssemblingSubscriber passes push.grant() through (AssemblingSubscriber.java:188-189); coldMode corrects an INLINE answer to PROXY, which cannot mask a legitimate INLINE because a cold INLINE requires both caps to be Long.MAX_VALUE and this pod holds no bytes to inline at any size, and PROXY rather than DIRECT is right because DIRECT needs presign capability plus an issuer and would turn a config edge into an undeliverable segment. Serving DIRECT issues no store request (pinned) and the failure semantics of hoisting are an improvement: mintGrant throws before any sink is opened, so no subscriber is left opened-but-not-completed, publish aggregates it per segment as UncheckedIOException and pushLoop counts it. The split is at a defensible seam (consumer-side adapter out of a serving file), visibility is unchanged, and the only behaviour that moved with it is the grant fix. Five minor findings, all prose or an unpinned guard; none blocks.",
+  "findings": [
+    {
+      "id": "M5.45d-r2-1",
+      "file": "docs/internal/product/backlog.md:65",
+      "severity": "minor",
+      "title": "\"per-publish construction is not representable\" is false, and this commit's own test file falsifies it",
+      "failure_scenario": "The M5.45d cell (and DirectServingTest.java:357) claims per-publish construction of the issuer is not representable once it is a component of SegmentServing. SegmentServing is a public record whose canonical constructor takes the issuer, and SubscriptionHub.publish(delta, key, bytes, serving) takes a SegmentServing per call -- so DirectServingTest's own helper directServing(store, threshold) (DirectServingTest.java:544-555) constructs a fresh GrantIssuer inside every publishCold(...) call. A later agent reading the cell believes criterion 1b is satisfied by shape and stops checking it; a future wiring that builds SegmentServing inside pushLoop or in the http layer then allocates a GrantIssuer per flush -- exactly what 1b forbids -- with no gate, no test and a backlog row saying it cannot happen."
+    },
+    {
+      "id": "M5.45d-r2-2",
+      "file": "ingest/src/main/java/binjava/ingest/SubscriptionHub.java:528",
+      "severity": "minor",
+      "title": "deliver's @param still says one grant per CONSUMER after the hoist made it one per SEGMENT",
+      "failure_scenario": "The javadoc reads \"@param issuer mints one grant per CONSUMER for direct\"; after the hoist one mint serves every consumer of the segment (DirectServingTest.java:19 repeats the wording). Someone asked to scope a grant per consumer -- a plausible later security ask, e.g. binding a grant to a consumer identity -- reads this as the existing contract, moves the mint back inside the target loop to honour it, and reintroduces the per-run signing rate the round-1 blocking finding measured. The contradiction between the code and the sentence above it is the only warning they would get, and today it points the wrong way."
+    },
+    {
+      "id": "M5.45d-r2-3",
+      "file": "ingest/src/main/java/binjava/ingest/GrantIssuer.java:19",
+      "severity": "minor",
+      "title": "GrantIssuer's javadoc still says nothing constructs it and no setting enables direct; this commit made both false",
+      "failure_scenario": "DefaultIngest.java:221 now constructs GrantIssuer under config.directEnabled(), and M5.43 shipped the setting. The class javadoc still opens with \"BUT NOTHING CONSTRUCTS IT YET, AND NO SETTING SAYS THIS DEPLOYMENT ENABLES direct\", and goes on to describe the wiring decision as M5.43's open question. An agent taking M5.45c or M5.45e reads the class first, concludes the issuer has no call site, and wires a second construction site (or re-derives a ceiling) -- which is how two issuers with different TTL ceilings end up in one pod, the single-configuration-site reason criterion 1b gives."
+    },
+    {
+      "id": "M5.45d-r2-4",
+      "file": "ingest/src/main/java/binjava/ingest/SubscriptionHub.java:426",
+      "severity": "minor",
+      "title": "coldMode's INLINE correction -- the round-1 fix -- is not pinned by any case",
+      "failure_scenario": "MUTATION: change `return asked == FetchMode.INLINE ? FetchMode.PROXY : asked;` to `return asked;`. Nothing in the module goes red. A cold INLINE needs inlineCapBytes and crossAzCrossoverBytes both at Long.MAX_VALUE, and the only MAX/MAX config in the tree (AssembledServingPathTest.java:177) publishes HELD bytes; every cold publish in DirectServingTest uses caps of 1L. So the guard that stops a null array reaching writeHeldBytes can be deleted by a later refactor and the suite stays green, while the live behaviour is the one the cell describes: writeHeldBytes NPEs inside its own per-sink try, every subscriber is completed having been written nothing, and no log or counter records it. A killing fixture is cheap: cold publish (heldSegmentKey naming another segment), FetchPolicyConfig(Long.MAX_VALUE, Long.MAX_VALUE, 1, true), presign-capable store, assert via != INLINE and that the subscriber received the segment's bytes."
+    },
+    {
+      "id": "M5.45d-r2-5",
+      "file": "ingest/src/main/java/binjava/ingest/SubscriptionHub.java:437",
+      "severity": "minor",
+      "title": "DIRECT is now electable end to end with no consumer able to use it, and the loud refusal that said so is gone",
+      "failure_scenario": "The arm that used to throw IllegalStateException now delivers. A Push carrying via=DIRECT reaches a consumer with segment=EMPTY, Delivery has no grant field (M5.45c), and grep finds no FetchMode.DIRECT anywhere in client/, plugin/ or http/ main sources. So a deployment that sets directEnabled=true against any backend reporting presignedUrls()=true -- only a stand-in today, which is what keeps this out of production -- and publishes a batched delta naming a segment it does not hold, gets DIRECT elected, and ConsumerClient.decodeInto calls SegmentReader.open on a zero-byte array and throws UncheckedIOException: the window is lost for every subscriber of that segment. The backlog cell states the gap, the code does not: the DIRECT arm's comment says only \"no bytes at all, which is what direct means\". One sentence there naming M5.45c, or a refusal that survives until the consumer half lands, is what the old throw was buying."
+    }
+  ],
+  "task": "M5.45d",
+  "role": "reviewer"
+}

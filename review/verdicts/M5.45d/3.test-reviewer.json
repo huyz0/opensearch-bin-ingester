@@ -1,0 +1,46 @@
+{
+  "diff_sha256": "4fec1e0fab9bf2dca125a3eabc010ebafa9959c8fbe8959cb9c139115dea87ff",
+  "verdict": "pass",
+  "summary": "Every finding still open from rounds 1 and 2 is verified closed BY MEASUREMENT, not by reading the fix: each named mutation was re-applied to the staged bytes and each is now killed by exactly the case that claims it. Baseline :ingest:test green; tree restored and re-verified green after the last mutation. Twenty mutations applied in total; seventeen killed, three survive and are recorded below as minors. Acceptance criteria 1, 1b, 1c, 1d, 2 and 4 each have a case that goes red under a mutation of the code it covers. Criterion 3 is pinned for the LOG channel (measured) and unpinned for the ERROR-MESSAGE channel (minor t3-1).",
+  "verified_closed": [
+    "r1 blocking (per-run/per-target mint invisible to distinct()): MEASURED -- moving the mint from above both loops into the target loop now fails DirectServingTest.SIXTYFOURRunsOnSEPARATESubscribersCostONESigning, because StoreFakes.CanPresign counts signings and the case asserts isEqualTo(1) against 64 separate subscribers. CLOSED.",
+    "r1 major (both Push invariants deletable with the suite green): MEASURED -- deleting the grant-on-non-DIRECT guard and deleting the DIRECT-without-grant guard EACH ALONE now fails aMISMATCHEDViaAndGrantIsRefused. CLOSED.",
+    "r1 major (mintGrant's two failure branches dead): MEASURED -- deleting the null-issuer guard fails DIRECTWithNOIssuerIsRefused (the NPE is not an IllegalStateException); replacing the catch(IOException) body with a bogus unsigned Grant fails aSIGNINGFailureNamesTheSegmentAndDoesNotRollBack. CLOSED.",
+    "r1 minor (isSameAs tautology): the line is gone; theIssuerIsHeldPerPODAndOnlyWhenAsked now carries only the isNotNull/isNull pair, and BOTH wiring mutations are killed -- issuer never built fails it, issuer built unconditionally fails it plus 31 other cases. CLOSED.",
+    "r1 minor (TTL asserted against GrantIssuer.MAX_CEILING): MEASURED -- widening DEFAULT_CEILING and MAX_CEILING to 3600 s now fails theTTLIsCLAMPEDToSixtySecondsMeasuredFromTheEPOCH as well as GrantIssuerTest. The bound is the literal Duration.ofSeconds(60) and the measurement is EPOCH-relative. CLOSED.",
+    "r2-t1 major (criterion 1c asserted with contains): MEASURED -- mintGrant(issuer, segmentKey + \"0\") now fails BOTH theGrantNamesTheSegmentBeingSERVED (exact isEqualTo on the whole URL) and the new aBATCHEDDeltaGrantsEachSegmentItsOWNKey, which is also the two-segment delta that distinguishes the served key from delta.segments().get(0). CLOSED, both halves.",
+    "r2-t2 major (coldMode fan-out unconstrained): MEASURED -- replacing `consumers` with the literal 1 now fails aFanOutABOVETheThresholdGetsPROXYAndSignsNOTHING, which is the first fixture in the tree with a cold fan-out ABOVE the threshold, and it asserts signings==0 as well as via==PROXY. CLOSED.",
+    "r2-t3 minor (coldMode INLINE correction unpinned): MEASURED -- `return asked;` now fails aMAXCAPConfigStillCannotINLINEAColdSegment. CLOSED.",
+    "r2-t4 minor (DIRECT sends no bytes, unasserted): MEASURED -- the DIRECT arm's `sinks -> { }` replaced by a three-byte write now fails servingDIRECTIssuesNOStoreRequest, which captures the sink stream and asserts it empty. Routing DIRECT through streamFromStore fails 7 cases. CLOSED.",
+    "r2-t5 minor (ttlsAsked write-only): the field is deleted rather than asserted, which is the other correct answer. CLOSED.",
+    "Additional mutations measured and killed, not previously raised: coldMode bytesInServingAz false->true (8 cases red); coldMode servingPodUnderPressure false->true (aFanOutABOVE... red); coldMode batchBytes Long.MAX_VALUE->0, the reverted first attempt the cell describes (8 cases red); AssemblingSubscriber rebuilding the Push with the six-argument constructor, the live defect r2 found (theASSEMBLINGAdapterCarriesTheGrant red); a WARNING log of grant.url() from the hub (theGrantReachesNOLogLine red -- so the ROOT-logger probe is a live observer and not a vacuous negative)."
+  ],
+  "findings": [
+    {
+      "id": "M5.45d-r3-t1",
+      "severity": "minor",
+      "file": "ingest/src/test/java/binjava/ingest/DirectServingTest.java",
+      "line": 334,
+      "title": "criterion 3's ERROR-MESSAGE channel is unpinned: hasMessageContaining lets the guard's message carry the signed URL",
+      "failure_scenario": "MEASURED MUTATION (compiles, whole :ingest:test green, 0 failures): in SubscriptionHub.Push's compact constructor change the guard message to `\"a grant is for `direct`; this push is \" + via + \" \" + grant.url()`. The assertion at DirectServingTest.java:334 is `.hasMessageContaining(\"a grant is for `direct`\")`, which a message with the secret appended still satisfies. security.md rule 4 names an ERROR MESSAGE alongside a log and a trace, and criterion 3 repeats all three; the commit captures the log channel (measured live -- a WARNING carrying grant.url() from the hub does turn theGrantReachesNOLogLine red) and asserts nothing about the message channel. The guard is the ONLY error message in the new code with a Grant in scope, and it is not merely decorative: DefaultIngest.pushLoop catches every RuntimeException out of publish and logs `e.getMessage()` at WARNING (DefaultIngest.java:448-453), so an exception message is one hop from the log line the other case forbids. Minor rather than major because the guard cannot fire in production today -- the hub always pairs DIRECT with a grant and non-DIRECT with null -- so reaching the log needs a second defect as well. The kill is one line: `.hasMessageNotContaining(\"store.example\")` on both assertThatThrownBy chains, or assert the message equals its full text."
+    },
+    {
+      "id": "M5.45d-r3-t2",
+      "severity": "minor",
+      "file": "ingest/src/main/java/binjava/ingest/SubscriptionHub.java",
+      "line": 571,
+      "title": "\"sends no bytes\" is pinned at the SINK and not on the Push, so a DIRECT push carrying bytes survives",
+      "failure_scenario": "MEASURED MUTATION (compiles, whole :ingest:test green, 0 failures): in deliver change `new Push(run.key(), segmentKey, run.recordCount(), run.firstOffset(), via, EMPTY, grant)` to pass `new byte[] {9}` instead of EMPTY. Every consumer of every mode -- including `direct` -- is now handed a Push whose segment() is non-empty, and nothing goes red: servingDIRECTIssuesNOStoreRequest watches the SegmentSink stream (correctly closed by r2-t4) and the cases that collect Push records assert only via, segmentKey, grant and TTL. Note the fix r2-t4 suggested would NOT have caught this either: theASSEMBLINGAdapterCarriesTheGrant sees the adapter's own reassembled array, which is empty for `direct` regardless. The kill is one line in a RAW-subscriber case, e.g. theGrantNamesTheSegmentBeingSERVED: `assertThat(push.segment()).isEmpty()`. Minor because the EMPTY placeholder predates this commit and applies to all three modes; it is listed because this diff touched the line and because the row's headline claim is \"puts it on the Push, and sends no bytes\"."
+    },
+    {
+      "id": "M5.45d-r3-t3",
+      "severity": "minor",
+      "file": "ingest/src/test/java/binjava/ingest/DirectServingTest.java",
+      "line": 388,
+      "title": "aSIGNINGFailureNamesTheSegmentAndDoesNotRollBack asserts the first half of its name and not the second",
+      "failure_scenario": "NO SURVIVING MUTATION IS CLAIMED, and that is the finding: the case asserts the UncheckedIOException's type and that its message names `seg-unsignable` -- both live, the bogus-grant mutation kills it -- but nothing in it observes the two properties its name and javadoc assert. \"DOES NOT ROLL BACK\" is structural here (publish runs after the commit is durable and the case never looks at the commit), and \"DefaultIngest.pushLoop counts it\" is true of production -- undeliverablePushes.incrementAndGet() at DefaultIngest.java:442 -- but is reached only through pushLoop, which this case does not drive; a mutation deleting that increment leaves this case green. A name that asserts more than the body checks is the shape a later reader trusts and a later refactor deletes: either drop the two claims from the name and javadoc, or drive one signing failure through DefaultIngest and assert the counter moved."
+    }
+  ],
+  "task": "M5.45d",
+  "role": "test-reviewer"
+}

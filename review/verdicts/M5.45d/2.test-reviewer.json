@@ -1,0 +1,44 @@
+{
+  "diff_sha256": "fc1da61e718c1d9afb48b9f7782f9ae116be913556dac3d4064722851c7d8514",
+  "verdict": "changes-requested",
+  "summary": "Round 2, all mutations run in a throwaway worktree against :ingest:test (249 tests, baseline green, every mutant checked for `error:` in the build log). ALL FOUR ROUND-1 FINDINGS ARE VERIFIED DEAD. (a) mint inside the run loop -> SIXTYFOURRunsOnSEPARATESubscribersCostONESigning FAILED; (b) mint per target -> same case FAILED; so the signing count, not distinct(), is what sees it and `direct` is genuinely elected there (forcing coldMode to PROXY fails 7 of the 9 new cases, so DIRECT election is itself pinned). (c) deleting either Push guard, separately -> aMISMATCHEDViaAndGrantIsRefused FAILED both times. (d) deleting the null-issuer guard -> DIRECTWithNOIssuerIsRefused FAILED; dropping the segment key from the signing-failure message -> aSIGNINGFailureNamesTheSegmentAndDoesNotRollBack FAILED. (e) AssemblingSubscriber rebuilding the push with the six-argument constructor -> theASSEMBLINGAdapterCarriesTheGrant FAILED, and the move to AssemblingSubscriber changed nothing else the suite can see. (f) DefaultIngest never building an issuer -> theIssuerIsHeldPerPODAndOnlyWhenAsked FAILED. TWO NEW SURVIVORS, both in code this commit added and both killable by assertions in the file that already exists: the grant may name a DIFFERENT segment than the push (criterion 1c/1d, substring assertion), and coldMode may report a fan-out of 1 whatever the real consumer count is, which elects `direct` at any fan-out on the only path that can elect it. Two further minors measured, including the coldMode INLINE correction the production reviewer recorded as its r2-4.",
+  "findings": [
+    {
+      "id": "M5.45d-r2-t1",
+      "file": "ingest/src/test/java/binjava/ingest/DirectServingTest.java:137",
+      "severity": "major",
+      "title": "criterion 1c is asserted with `contains`, so a grant naming a DIFFERENT segment survives",
+      "failure_scenario": "MEASURED MUTATION (compiles, whole :ingest:test green, 0 failures): in SubscriptionHub.deliver change `mintGrant(issuer, segmentKey)` to `mintGrant(issuer, segmentKey + \"0\")`. The grant now signs a key that is NOT the segment being served, which is exactly ADR-0032's silent data error criterion 1c names -- and both assertions that claim to pin it are substring checks: DirectServingTest.java:137 `assertThat(push.grant().url()).contains(\"seg-the-one-served\")` and :234 `.contains(\"seg-cold\")`. A URL for any key having the served key as a PREFIX satisfies them, and that is not a contrived shape here: M5.45c's own row records that a segment key carries an `h<headerLen>` suffix, so `...-h123` and `...-h1234` are neighbours where one contains the other, and the consumer is sent to another segment's bytes under a valid signature. The kill is one character class of assertion: the fake is deterministic (`\"https://store.example/\" + key`), so `isEqualTo(\"https://store.example/seg-the-one-served\")` kills the mutant and pins criterion 1d's ONE KEY at the same time. SECOND HALF, unmeasurable for the same reason it matters: criterion 1c's named wrong implementation is `delta.segments().get(0)`, and every cold publish in this file uses a ONE-segment delta (publishCold, :45-47), where `get(0)` IS the segment served. A two-segment cold delta whose SECOND segment is the subscribed one, asserting the grant's exact URL, is what distinguishes them; today nothing does."
+    },
+    {
+      "id": "M5.45d-r2-t2",
+      "file": "ingest/src/main/java/binjava/ingest/SubscriptionHub.java:467",
+      "severity": "major",
+      "title": "coldMode's fan-out is unconstrained: `direct` may be elected at ANY consumer count",
+      "failure_scenario": "MEASURED MUTATION (compiles, whole :ingest:test green, 0 failures): change `new SegmentDelivery(Long.MAX_VALUE, false, consumers, false)` to `new SegmentDelivery(Long.MAX_VALUE, false, 1, false)`. coldMode is now the ONLY path in the tree that can elect DIRECT -- this commit made it so, by having the cold case ask the policy instead of forcing proxy -- and `directFanOutThreshold` is the single dial that keeps `direct` away from a wide replay (FetchPolicy.java:162, `segmentFanOut <= config.directFanOutThreshold()`). With the fan-out hardcoded, a cold segment with 300 subscribed consumers is answered DIRECT where the old code answered PROXY, every one of those consumers is told to fetch the object itself, and no case goes red: SIXTYFOURRuns... uses 64 consumers against a threshold of 64 and every other cold case uses 1 against 1, so no fixture anywhere has fan-out ABOVE the threshold on the cold path. Note the same measurement shows the threshold of 64 is not hiding the signing assertion -- forcing PROXY fails 7 cases, so DIRECT really is elected -- but it does mean 64<=64 is the only fan-out arithmetic ever exercised, and the refusal side of it is exercised nowhere. The kill is a sibling case: publish cold with `directServing(store, 1)` and TWO subscribers, assert `via` is PROXY and that `signer.signings.get()` is 0."
+    },
+    {
+      "id": "M5.45d-r2-t3",
+      "file": "ingest/src/main/java/binjava/ingest/SubscriptionHub.java:469",
+      "severity": "minor",
+      "title": "the coldMode INLINE correction is still unpinned (same as the production reviewer's r2-4, independently measured)",
+      "failure_scenario": "MEASURED MUTATION (compiles, whole :ingest:test green, 0 failures): `return asked == FetchMode.INLINE ? FetchMode.PROXY : asked;` -> `return asked;`. The fix this round added for the `MAX <= MAX` boundary is executed only on its uncorrected branch: every cold publish in DirectServingTest uses FetchPolicyConfig(1L, 1L, ...), so `Long.MAX_VALUE <= 1` is false and the INLINE arm is never reached. Minor rather than major only because production cannot reach it either -- DefaultIngest.java:227 builds the config through FetchPolicyConfig.defaultsFor(costs), which yields finite caps -- so the exposure is a test/edge config, not a shipping one. It is still a line of new production code that a later refactor can delete with the suite green, and the killing fixture is a dozen lines: a cold publish under FetchPolicyConfig(Long.MAX_VALUE, Long.MAX_VALUE, 1, true) asserting `via` is not INLINE."
+    },
+    {
+      "id": "M5.45d-r2-t4",
+      "file": "ingest/src/main/java/binjava/ingest/SubscriptionHub.java:443",
+      "severity": "minor",
+      "title": "\"no bytes at all, which is what `direct` means\" is asserted nowhere",
+      "failure_scenario": "MEASURED MUTATION (compiles, whole :ingest:test green, 0 failures): change the DIRECT arm's source from `sinks -> { }` to `sinks -> writeHeldBytes(new byte[] {7, 7, 7}, sinks)`. Every consumer of a `direct` segment is now written bytes it did not ask for and the suite does not notice, because servingDIRECTIssuesNOStoreRequest counts STORE REQUESTS (unchanged: the bytes came from memory) and no case looks at what reached the sink. The row's opening sentence -- \"puts it on the `Push`, and sends no bytes\" -- and the arm's own comment are the claim; the assertion that would carry it is one line in theASSEMBLINGAdapterCarriesTheGrant, which already receives the assembled array: `assertThat(push.segment()).isEmpty()`. A plausible regression it would catch is a later \"we hold the bytes anyway, may as well send them\" edit routing DIRECT through writeHeldBytesChunked, which silently costs the mode its whole saving."
+    },
+    {
+      "id": "M5.45d-r2-t5",
+      "file": "ingest/src/test/java/binjava/ingest/StoreFakes.java:287",
+      "severity": "minor",
+      "title": "`ttlsAsked` is written and never read -- a fixture shaped like an observer that observes nothing",
+      "failure_scenario": "StoreFakes.CanPresign now records every TTL it was asked for (\"so a clamp can be seen\"), and grep across ingest, client, plugin and http finds no reader: the only references are its declaration (:287) and its write (:301). The clamp is asserted instead through the EPOCH-relative expiry, which is correct and does kill `ttl = requested`. The risk is the next author's: a field whose javadoc says a property can be seen, in the one fake for signing, reads as though that property IS checked -- the same shape as the `distinct()` count this round had to replace. Either assert it (`assertThat(signer.ttlsAsked).containsExactly(Duration.ofSeconds(60))` in the TTL case, which additionally pins that the one-argument grantFor is the form used) or drop the field."
+    }
+  ],
+  "task": "M5.45d",
+  "role": "test-reviewer"
+}

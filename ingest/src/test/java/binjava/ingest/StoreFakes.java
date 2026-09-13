@@ -272,11 +272,45 @@ final class StoreFakes {
          * url.expiresAt())} at most ADR-0010's 60 s is what kills
          * {@code ttl = requested}.
          *
-         * <p>⚠️ NOTHING CALLS THIS YET, so the {@code ttl} it honours is
-         * unconstrained too -- replacing this body with a throw leaves the
-         * suite green. M5.45d is the first caller and the row that closes both.
+         * <p>⚠️ BOTH ARE NOW CONSTRAINED, and M5.45d is what closed them. An
+         * earlier draft of this paragraph said "nothing calls this yet, so the
+         * {@code ttl} it honours is unconstrained too -- replacing this body
+         * with a throw leaves the suite green", which was true when written and
+         * became false in the same commit that made it: replacing the body with
+         * a throw now reds
+         * {@code DirectServingTest#aSIGNINGFailureNamesTheSegmentAndDoesNotRollBack},
+         * and {@code theTTLIsCLAMPEDToSixtySecondsMeasuredFromTheEPOCH} pins the
+         * expiry in the EPOCH-relative form the paragraph above asks for. A
+         * later author reading "unconstrained" would edit exactly what these
+         * paragraphs exist to protect.
          */
-        @Override public binjava.binstore.SignedUrl presign(String key, java.time.Duration ttl) {
+
+        /** When set, every {@code presign} throws it -- the signing-failure path. */
+        java.io.IOException failSigningWith;
+
+        /** How many times anything asked this backend to sign. */
+        final java.util.concurrent.atomic.AtomicInteger signings =
+                new java.util.concurrent.atomic.AtomicInteger();
+
+        @Override public binjava.binstore.SignedUrl presign(String key, java.time.Duration ttl)
+                throws java.io.IOException {
+            // ⚠️ COUNTED, BECAUSE `CountingBinStore` DELIBERATELY DOES NOT.
+            // ADR-0041 says signing issues no object-store request, so the meter
+            // is right to ignore it -- and that leaves the SIGNING rate with no
+            // observer at all. Review measured the consequence: minting once per
+            // RUN instead of once per segment left the whole module green,
+            // because `Grant` is a record with value equality and this fake is
+            // deterministic per key, so 64 mints are 64 EQUAL values and
+            // counting `distinct()` sees one.
+            signings.incrementAndGet();
+            // ⚠️ THE CHECKED ONE, which is what `presign` declares. Wrapping
+            // it in `UncheckedIOException` walked straight past `mintGrant`'s
+            // `catch (IOException)` and out of `publish` with the fake's own
+            // message -- so the case passed through the path it meant to test
+            // and asserted on the wrong exception.
+            if (failSigningWith != null) {
+                throw failSigningWith;
+            }
             return new binjava.binstore.SignedUrl(
                     "https://store.example/" + key,
                     java.time.Instant.EPOCH.plus(ttl));

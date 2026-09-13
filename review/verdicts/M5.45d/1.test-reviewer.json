@@ -1,0 +1,44 @@
+{
+  "diff_sha256": "27165741b1f9ddcf0baf1576c8ac765b178455fff2ade6e5424c262cb1bb7e48",
+  "verdict": "changes-requested",
+  "summary": "Criterion (1), the coalescing rule this row exists to carry, has no falsifying test: minting a grant PER RUN instead of per consumer leaves the whole ingest module green (measured, 0 failures). KRunsOnONEConsumerCostONEGrantNotK counts distinct() grant VALUES, and binjava.format.Grant is a plain record while StoreFakes.CanPresign returns a deterministic url+expiry per key, so 64 per-run mints collapse to one distinct value. CountingBinStore does not count presign, so servingDIRECTIssuesNOStoreRequest cannot see it either. Criteria (1c), (2), (3) and (4) are genuinely falsifiable -- constant-url, wrong-key, cold-batchBytes=0, cold-bytesInServingAz=true, direct-arm-streams-from-store, direct-arm-delivers-nothing, no-clamp-with-a-6h-request, issuer-unconditional and issuer-never were all killed, and a positive control that logs the signed URL was killed by theGrantReachesNOLogLine. The two new Push invariants and both mintGrant failure branches are unconstrained.",
+  "findings": [
+    {
+      "severity": "blocking",
+      "file": "ingest/src/test/java/binjava/ingest/DirectServingTest.java",
+      "line": 78,
+      "title": "KRunsOnONEConsumerCostONEGrantNotK cannot see per-run minting -- the defect the row exists to prevent",
+      "failure_scenario": "MEASURED MUTATION: move the mint inside the run loop in SubscriptionHub.deliver (SubscriptionHub.java:563-570) -- `for (RunCommit run : t.runs()) { Grant grant = via == DIRECT ? mintGrant(issuer, segmentKey) : null; ... }`. Compiles, and `./gradlew :ingest:test` is BUILD SUCCESSFUL with 0 failures across the whole module, including all six new cases. Why it survives: format.Grant is `record Grant(String url, Instant expiresAt)` with no equals override, and StoreFakes.CanPresign returns `https://store.example/<key>` with `EPOCH.plus(ttl)` -- so 64 per-run mints are 64 EQUAL values and `.distinct().count()` is still 1. CountingBinStore.presign is deliberately NOT counted, so servingDIRECTIssuesNOStoreRequest (line 274) is blind to it too. In production that is 64 signatures and 64 consumer-side GETs for one object -- the shards-per-node rate non-negotiable 6 forbids -- shipping with a green suite. The assertion must count signing OPERATIONS, not distinct values: a store stand-in that increments a counter in presign and is asserted `isEqualTo(1)` after 64 runs, or grant IDENTITY (Collections.newSetFromMap(new IdentityHashMap<>())), either of which kills the mutation above."
+    },
+    {
+      "severity": "major",
+      "file": "ingest/src/main/java/binjava/ingest/SubscriptionHub.java",
+      "line": 101,
+      "title": "Both new Push invariants are unconstrained -- each can be deleted independently with the suite green",
+      "failure_scenario": "MEASURED, TWICE, EACH ALONE: (a) delete the `grant != null && via != FetchMode.DIRECT` throw (SubscriptionHub.java:99-102) -> whole ingest suite green; (b) delete the `grant == null && via == FetchMode.DIRECT` throw (SubscriptionHub.java:103-106) -> whole ingest suite green. No case anywhere constructs a Push with a mismatched (via, grant) pair. The backlog cell claims both refusals as a property of this commit (\"A GRANT ON A NON-`direct` PUSH IS REFUSED, and so is a `direct` push without one\"), and security.md rule 4 is the reason given for the first -- a guard nothing pins is prose. Two three-line cases asserting assertThatThrownBy on each pair close it."
+    },
+    {
+      "severity": "major",
+      "file": "ingest/src/main/java/binjava/ingest/SubscriptionHub.java",
+      "line": 502,
+      "title": "mintGrant's two failure branches are untested: a signing failure can be made to hand out an UNSIGNED url",
+      "failure_scenario": "MEASURED MUTATION (both at once, compiles, whole ingest suite green with 0 failures): delete the `if (issuer == null) throw new IllegalStateException(...)` guard (SubscriptionHub.java:502-505) AND replace the `catch (IOException) -> throw new UncheckedIOException(...)` body (SubscriptionHub.java:512-515) with `return new Grant(\"https://store.example/\" + segmentKey + \"?UNSIGNED\", Instant.EPOCH.plusSeconds(60))`. Nothing in `ingest` makes presign throw on the hub path -- StoreFakes.CanPresign never fails, and GrantNeverLoggedTest's throwing stand-in only reaches GrantIssuer -- so a signing failure that silently delivers a bogus grant (or an NPE instead of the stated refusal when serving.issuer() is null) would ship unnoticed. The javadoc's claim that `DefaultIngest.pushLoop` counts it and names the segment is asserted nowhere; a case publishing DIRECT against a presign that throws IOException, asserting the push is dropped and counted and that the message names the KEY and not a url, kills both."
+    },
+    {
+      "severity": "minor",
+      "file": "ingest/src/test/java/binjava/ingest/DirectServingTest.java",
+      "line": 240,
+      "title": "isSameAs(pod.serving().issuer()) is a tautology",
+      "failure_scenario": "`assertThat(pod.serving().issuer()).isSameAs(pod.serving().issuer())` compares one expression to itself, and DefaultIngest.serving() returns a final field (DefaultIngest.java:189-191), so no mutation of the issuer's lifetime can make it fail -- it is reference equality of a final field read twice. The two halves that DO constrain something are the isNotNull/isNull pair: issuer-unconditional and issuer-never were both killed by this case, so the criterion is covered and only this line is dead weight."
+    },
+    {
+      "severity": "minor",
+      "file": "ingest/src/test/java/binjava/ingest/DirectServingTest.java",
+      "line": 142,
+      "title": "The TTL assertion compares against GrantIssuer.MAX_CEILING rather than ADR-0010's literal 60 s",
+      "failure_scenario": "MEASURED: widen both DEFAULT_CEILING and MAX_CEILING to Duration.ofSeconds(3600) -- this case still passes, because its bound is the constant it is checking. It is killed only by the pre-existing GrantIssuerTest.bothCeilingsAreADR0010sSIXTYSECONDS, so the threshold is pinned somewhere, but not here. Separately, removing the clamp alone (`ttl = requested` in GrantIssuer) survives this case, because the hub asks for exactly the ceiling; it dies only when the call site also asks for longer (measured: the combined no-clamp + 6h request mutation was killed by this case and by GrantIssuerTest). Writing the bound as Duration.ofSeconds(60) would make the case self-contained."
+    }
+  ],
+  "task": "M5.45d",
+  "role": "test-reviewer"
+}

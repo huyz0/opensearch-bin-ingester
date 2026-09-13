@@ -1,0 +1,30 @@
+{
+  "diff_sha256": "4fec1e0fab9bf2dca125a3eabc010ebafa9959c8fbe8959cb9c139115dea87ff",
+  "verdict": "pass",
+  "summary": "Round 3. All eight findings still open from rounds 1-2 are genuinely closed in the production code: the mint is hoisted above both loops in deliver (one signature per segment, flat in consumers AND in runs, and StoreFakes.CanPresign now counts signings so the per-run mutation is observable); AssemblingSubscriber rebuilds the push with the seven-argument constructor carrying push.grant(); coldMode overrules an INLINE answer so the MAX/MAX config cannot inline a segment the pod does not hold; the grant key, the TTL from Instant.EPOCH, both Push invariants, the null-issuer guard and the signing-failure branch all now have cases that would fail without them. Cost: the DIRECT arm adds no serving-side request (the Source is a no-op lambda), signing is once per segment rather than once per target or per run, and with directEnabled off coldMode returns exactly what the old unconditional PROXY returned, so the cold path is behaviour-identical for every shipping deployment. Three minors, all prose: the change updates the DIRECT arm but leaves the comments that describe the arm's old shape and the Push contract's old scope, and leaves one import behind from the file split.",
+  "findings": [
+    {
+      "id": "M5.45d-r3-1",
+      "severity": "minor",
+      "file": "ingest/src/main/java/binjava/ingest/SubscriptionHub.java:286-289",
+      "title": "publish's catch comment is now false about what it catches, and still hands the DIRECT arm to this row",
+      "failure_scenario": "The comment reads: 'ONLY UncheckedIOException IS CAUGHT, so that sentence is about a failed READ and nothing else. The DIRECT arm below throws IllegalStateException and DOES still deny every later segment. M5.45d owns deciding what that arm becomes once it is live.' This commit IS M5.45d and both halves are now wrong. (a) mintGrant (line 507) throws UncheckedIOException for a SIGNING failure, so the catch at line 303 now also covers signing -- a signing failure on segment 1 of a batched delta no longer denies segments 2..n, which is a deliberate semantic this commit introduced and the comment denies. (b) The DIRECT arm no longer contains the throw the comment points at; the IllegalStateException that remains comes from mintGrant's null-issuer guard, a wiring defect rather than the not-yet-implemented placeholder described. Concretely: a maintainer reading this comment to decide whether a signer outage denies the rest of a batched delta gets the wrong answer, and the TODO naming M5.45d survives the row that was supposed to discharge it. (Adjacent, pre-existing and not this diff's: the next paragraph at 291-297 still says pushLoop has 'no log, no metric, no droppedPushes increment', which M5.48 falsified -- pushLoop now increments undeliverablePushes and logs WARNING at DefaultIngest.java:442-453 -- and it contradicts mintGrant's NEW javadoc at line 506 claiming pushLoop counts it and names the segment. Two comments in one file now say opposite things about the same handler.)"
+    },
+    {
+      "id": "M5.45d-r3-2",
+      "severity": "minor",
+      "file": "ingest/src/main/java/binjava/ingest/SubscriptionHub.java:47-67",
+      "title": "Push and Subscriber.open javadoc still describe direct as future work and do not state the zero-byte hand-off this commit created",
+      "failure_scenario": "Push's javadoc says the serving path 'writes the segment to the SegmentSink the subscriber opens -- one hand-off under `inline`, a chunk at a time under `proxy`' and closes with '`direct`, where the consumer does read the store, is M5.45d'. Subscriber.open (line 167-168) says 'Where this subscriber wants ONE segment's bytes written'. As of this commit there is a third case neither sentence admits: under DIRECT the hub opens the sink, writes ZERO bytes (publishSegment line 452, `sinks -> { }`), and still calls complete. A Subscriber author implementing against this contract -- and every one of the six HubTransport bridges is such an author -- reasonably treats open+complete as 'a segment arrived', so a DIRECT push yields a zero-length segment presented as a complete one. That is the truncation Tracking and the all-or-none rule exist to prevent, arrived at by a path the contract does not describe. It is unreachable today only because directEnabled defaults off and neither shipping backend presigns; the class javadoc is where a reader would learn that, and it instead points at this row as unfinished work."
+    },
+    {
+      "id": "M5.45d-r3-3",
+      "severity": "minor",
+      "file": "ingest/src/main/java/binjava/ingest/SubscriptionHub.java:9",
+      "title": "import java.io.ByteArrayOutputStream is dead after the AssemblingSink move",
+      "failure_scenario": "AssemblingSink moved to AssemblingSubscriber.java, which brings its own import; nothing in SubscriptionHub.java now names ByteArrayOutputStream (grep returns only line 9). It compiles and no gate objects, but it is an import of a java.io type left in a file the io-seam rule watches, and the next reader has to grep to learn it means nothing."
+    }
+  ],
+  "task": "M5.45d",
+  "role": "reviewer"
+}

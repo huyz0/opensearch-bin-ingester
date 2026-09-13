@@ -6,7 +6,6 @@ import binjava.format.FetchMode;
 import binjava.format.RunCommit;
 import binjava.format.RunKey;
 import binjava.format.SegmentCommit;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
@@ -63,18 +62,50 @@ public final class SubscriptionHub {
      * <p>⚠️ THE BYTES ARE STILL `inline` IN THE SENSE ADR-0004 MEANS IT:
      * the consumer issues NO object-store request to read what it was just
      * told about, which is what makes criterion 3's zero hold under load and
-     * not merely at rest. {@code via} says which path put them in the sink;
-     * `direct`, where the consumer does read the store, is M5.45d.
-
+     * not merely at rest. {@code via} says which path put them in the sink.
+     *
+     * <p>⚠️ UNDER {@code DIRECT} NOTHING IS PUT IN IT EITHER: the sink is
+     * opened and completed with ZERO bytes and the consumer fetches with
+     * {@link #grant()}, so a transport reading open-then-complete as "a
+     * segment arrived" sees an empty one and must branch on {@code via} first.
      */
     public record Push(RunKey key, String segmentKey, int recordCount, long firstOffset,
-            FetchMode via, byte[] segment) {
+            FetchMode via, byte[] segment, binjava.format.Grant grant) {
+
+        /**
+         * A push with no grant, which is every {@code inline} and {@code proxy}
+         * one.
+         *
+         * <p>⚠️ IT EXISTS SO THE GRANT COST NO CALL SITES -- the same reason
+         * {@code IngestConfig} and {@code SubscriptionEvent} have one. Sweeping
+         * the sites is how a fixture silently stops testing what it did, which
+         * M5.43's review measured happening to a case two hundred lines from
+         * anything its diff touched.
+         */
+        public Push(RunKey key, String segmentKey, int recordCount, long firstOffset,
+                FetchMode via, byte[] segment) {
+            this(key, segmentKey, recordCount, firstOffset, via, segment, null);
+        }
 
         public Push {
             Objects.requireNonNull(key, "key");
             Objects.requireNonNull(segmentKey, "segmentKey");
             Objects.requireNonNull(via, "via");
             Objects.requireNonNull(segment, "segment");
+            // ⚠️ A GRANT BELONGS TO `direct` AND NOWHERE ELSE. An `inline` push
+            // already carries the bytes and a `proxy` push is about to be
+            // written them, so a grant on either is a signed URL minted for a
+            // consumer that will never fetch with it -- a secret issued for no
+            // reason, which security.md rule 4 makes a cost rather than merely
+            // waste.
+            if (grant != null && via != FetchMode.DIRECT) {
+                throw new IllegalArgumentException(
+                        "a grant is for `direct`; this push is " + via);
+            }
+            if (grant == null && via == FetchMode.DIRECT) {
+                throw new IllegalArgumentException(
+                        "a `direct` push without a grant tells a consumer to fetch and not how");
+            }
         }
 
         public long lastOffset() {
@@ -136,7 +167,9 @@ public final class SubscriptionHub {
 
         /**
          * Where this subscriber wants ONE segment's bytes written, for every
-         * run of it this subscriber holds.
+         * run of it this subscriber holds -- ⚠️ EXCEPT UNDER
+         * {@code FetchMode.DIRECT}, where it is opened and completed EMPTY and
+         * the consumer fetches with {@link Push#grant()} instead.
          *
          * <p>⚠️ ONE SINK FOR ALL K PUSHES, WHICH IS THE WHOLE OF
          * M5.40a. A node holding K runs of a segment needs K pushes -- each
@@ -177,50 +210,14 @@ public final class SubscriptionHub {
     /**
      * A subscriber that assembles the whole segment and hands it over at once.
      *
-     * <p>⚠️ ONE ARRAY, SHARED BY REFERENCE ACROSS A CONSUMER'S RUNS. A
-     * subscriber holding K runs of a segment is handed K {@link Push} records
-     * whose {@code segment()} is the SAME array -- not K copies. A callback
-     * that decodes in place, or zeroes the buffer it was given, corrupts the
-     * other K-1; {@link SegmentSink}'s contract already says a consumer that
-     * needs to retain bytes copies them itself, and this is where that bites.
-     *
-     * <p>⚠️ IT PAYS O(SEGMENT) PER SUBSCRIBER ON PURPOSE, and that cost belongs
-     * to the subscriber rather than to the serving path: in production this
-     * side is a socket, and {@code SegmentSink}'s contract already says a sink
-     * that needs to retain bytes copies them itself. ⚠️ SO IT MUST NOT BE USED
-     * BY A TEST ASSERTING CRITERION 6 -- the bound that must be flat in K is the
-     * SERVICE's, and this adapter is the consumer.
+     * <p>⚠️ THE BODY MOVED TO {@link AssemblingSubscriber} and this name stayed,
+     * because {@code SubscriptionHub.assembling(...)} is what every call site
+     * uses. code-structure.md rule 1 forced the move: this file reached 730
+     * lines when {@code direct} landed, and an adapter for CONSUMERS is the part
+     * of it least about serving.
      */
     public static Subscriber assembling(Consumer<Push> onSegment) {
-        Objects.requireNonNull(onSegment, "onSegment");
-        return new Subscriber() {
-            @Override
-            public SegmentSink open(List<Push> pushes) {
-                return new AssemblingSink();
-            }
-
-            @Override
-            public void complete(List<Push> pushes, SegmentSink sink) {
-                // ⚠️ ONE COPY, HANDED OUT K TIMES. The array is built
-                // once and shared by reference across the K pushes; it is not
-                // copied per run, which is the cost this adapter's javadoc
-                // warns is O(SEGMENT) PER SUBSCRIBER and not per subscription.
-                byte[] whole = ((AssemblingSink) sink).out.toByteArray();
-                for (Push push : pushes) {
-                    onSegment.accept(new Push(push.key(), push.segmentKey(), push.recordCount(),
-                            push.firstOffset(), push.via(), whole));
-                }
-            }
-        };
-    }
-
-    private static final class AssemblingSink implements SegmentSink {
-        private final ByteArrayOutputStream out = new ByteArrayOutputStream();
-
-        @Override
-        public void write(byte[] buffer, int offset, int length) {
-            out.write(buffer, offset, length);
-        }
+        return AssemblingSubscriber.of(onSegment);
     }
 
     /** Registers interest in one stream. */
@@ -290,18 +287,17 @@ public final class SubscriptionHub {
         // durable, with `DefaultIngest.pushLoop` catching the throw as a slow
         // subscriber. Silent, for the whole window.
         //
-        // ⚠️ ONLY `UncheckedIOException` IS CAUGHT, so that sentence is about
-        // a failed READ and nothing else. The `DIRECT` arm below throws
-        // `IllegalStateException` and DOES still deny every later segment.
-        // M5.45d owns deciding what that arm becomes once it is live.
+        // ⚠️ ONLY `UncheckedIOException` IS CAUGHT, and M5.45d WIDENED WHAT
+        // THAT COVERS: `mintGrant` wraps a signing failure in one for exactly
+        // this reason, so a signer outage on segment 1 no longer denies 2..n.
+        // An earlier draft said the `DIRECT` arm throws `IllegalStateException`
+        // and does deny them; that arm serves now, and what is left of it is
+        // the null-issuer guard -- a misconfiguration, not an outage.
         //
-        // ⚠️ THE RETHROW CHANGES NOTHING OUTSIDE THIS PROCESS TODAY, and an
-        // earlier draft of this comment claimed it did. `pushLoop`'s only
-        // handler is `catch (RuntimeException e) { continue; }` -- no log, no
-        // metric, no `droppedPushes` increment -- so a store outage and a
-        // quiet window ARE indistinguishable from outside. M5.48 owns making
-        // the difference visible. What the rethrow preserves until then is the
-        // option, at the one frame that still knows the read failed.
+        // ⚠️ AND THE RETHROW IS VISIBLE OUTSIDE THIS PROCESS, which M5.48
+        // bought: `pushLoop` increments `undeliverablePushes` and logs a
+        // WARNING naming the segment. An earlier draft called this handler a
+        // bare `continue` with no log, metric or counter.
         UncheckedIOException firstFailure = null;
         for (SegmentCommit committed : delta.segments()) {
             byte[] held = committed.segmentKey().equals(heldSegmentKey) ? heldBytes : null;
@@ -394,8 +390,23 @@ public final class SubscriptionHub {
             return;
         }
 
+        // ⚠️ THE COLD CASE ASKS THE POLICY TOO, WHICH IS WHAT ASSEMBLING
+        // `direct` MEANT. Until now a segment this pod did NOT write was forced
+        // to `proxy` without consulting anything -- so `FetchPolicy`'s cold arm,
+        // the one `direct` exists for, was unreachable from the only caller.
+        // ⚠️ `bytesInServingAz` IS FALSE HERE AND TRUE BELOW, and that is the
+        // whole difference: we are holding the bytes in one case and not in the
+        // other. Passing `true` for both is what made the arm dead.
         FetchMode via = heldBytes == null
-                ? FetchMode.PROXY
+                // ⚠️ AND AN INLINE ANSWER IS CORRECTED RATHER THAN TRUSTED.
+                // `MAX <= MAX` is true, so a config whose two caps are both
+                // `Long.MAX_VALUE` answers INLINE for a cold segment -- and
+                // `writeHeldBytes` then dereferences a null array inside its own
+                // try, completing every subscriber with nothing. Six fixtures in
+                // the tree are that config and none publishes cold, which is the
+                // only reason the suite is green. A segment this pod does not
+                // hold cannot be inlined AT ANY SIZE.
+                ? coldMode(serving, targets.size())
                 : serving.policy().modeFor(
                         // ⚠️ CONSUMERS, NOT SUBSCRIPTIONS, and this number moved
                         // with M5.40a: `targets` used to hold one entry per
@@ -426,13 +437,78 @@ public final class SubscriptionHub {
                     heldBytes == null
                             ? sinks -> streamFromStore(serving, committed.segmentKey(), sinks)
                             : sinks -> writeHeldBytesChunked(heldBytes, serving, sinks));
-            // ⚠️ UNREACHABLE TODAY AND REFUSED RATHER THAN DEGRADED. `direct`
-            // needs a grant (M5.45d) and a client-side byte source (M5.45c);
-            // with bytes in hand and no pressure signal `FetchPolicy` cannot
-            // choose it, so this arm exists to fail loudly if that changes
-            // before the serving half does.
-            case DIRECT -> throw new IllegalStateException(
-                    "M5.45d owns `direct`; this serving path carries inline and proxy only");
+            // ⚠️ NO BYTES AT ALL, WHICH IS WHAT `direct` MEANS. The consumer
+            // fetches with the grant, so this pod writes nothing to the sink
+            // and issues no store request of its own -- the saving the mode
+            // exists for. The sink is still opened and completed, because that
+            // is how a subscriber learns what it was told about.
+            //
+            // ⚠️ AND NO CONSUMER CAN ACT ON IT YET. `Delivery` carries no grant
+            // and nothing in `client`, `plugin` or `http` mentions
+            // `FetchMode.DIRECT`, so a consumer served this way learns a
+            // segment exists and has no way to fetch it -- M5.45c builds the
+            // seam and M5.45e proves the three modes agree. This arm used to
+            // throw, which said so loudly; it now serves, so the gap is stated
+            // here instead. In practice it is gated by `directEnabled`
+            // defaulting off and by neither shipping backend presigning.
+            case DIRECT -> deliver(committed.segmentKey(), targets, FetchMode.DIRECT,
+                    sinks -> { }, serving.issuer());
+        }
+    }
+
+    /**
+     * The mode for a segment this pod does NOT hold: never {@code inline}.
+     *
+     * <p>⚠️ THE POLICY IS ASKED, AND ITS INLINE ANSWER IS OVERRULED. Before
+     * M5.45d this case forced {@code proxy} without asking anything, which is
+     * why {@code FetchPolicy}'s cold arm — the one {@code direct} exists for —
+     * was unreachable from the only caller. Asking it is the change; correcting
+     * {@code INLINE} is the part that keeps the change safe.
+     *
+     * <p>⚠️ {@code batchBytes} IS UNKNOWABLE HERE. The real size would cost a
+     * {@code stat} per segment, which is the request this path exists to avoid,
+     * so {@code Long.MAX_VALUE} says "larger than any cap". It is not quite
+     * enough on its own: the comparison is {@code <=}, so a config whose caps
+     * are also {@code Long.MAX_VALUE} answers {@code INLINE} — and an
+     * {@code inline} delivery of bytes we do not hold completes every
+     * subscriber with nothing, silently, because {@code writeHeldBytes}
+     * swallows the resulting failure per sink.
+     */
+    private static FetchMode coldMode(SegmentServing serving, int consumers) {
+        FetchMode asked = serving.policy().modeFor(
+                new SegmentDelivery(Long.MAX_VALUE, false, consumers, false),
+                serving.capabilities());
+        return asked == FetchMode.INLINE ? FetchMode.PROXY : asked;
+    }
+
+    /**
+     * One grant for one consumer's read of one segment.
+     *
+     * <p>⚠️ THE TTL IS THE ISSUER'S CEILING, not a number chosen here.
+     * {@code GrantIssuer.grantFor(String)} applies ADR-0010's 60 s, and asking
+     * for it by the one-argument form keeps that in one place rather than at
+     * every call site.
+     *
+     * <p>⚠️ AND THE STORE'S {@code SignedUrl} BECOMES A {@code format.Grant}
+     * HERE, because this is the boundary where it stops being the store's. The
+     * two types exist for the reason ADR-0043 records: {@code format} depends
+     * on nothing, so the value that crosses to a consumer cannot be
+     * {@code binstore-spi}'s.
+     */
+    private static binjava.format.Grant mintGrant(GrantIssuer issuer, String segmentKey) {
+        if (issuer == null) {
+            throw new IllegalStateException("`direct` was chosen with no grant issuer; a "
+                    + "deployment enabling it constructs one at startup (M5.43)");
+        }
+        try {
+            binjava.binstore.SignedUrl signed = issuer.grantFor(segmentKey);
+            return new binjava.format.Grant(signed.url(), signed.expiresAt());
+        } catch (IOException signingFailed) {
+            // ⚠️ THE SAME SHAPE AS A FAILED READ, and for the same reason: the
+            // commit is already durable, so a signing failure must not roll it
+            // back. `DefaultIngest.pushLoop` counts it and names the segment.
+            throw new UncheckedIOException(
+                    "segment " + segmentKey + " could not be signed for delivery", signingFailed);
         }
     }
 
@@ -457,17 +533,45 @@ public final class SubscriptionHub {
      * it. M5.58 owns closing that before the other overload is wired.
      */
     private void deliver(String segmentKey, List<Target> targets, FetchMode via, Source source) {
+        deliver(segmentKey, targets, via, source, null);
+    }
+
+    /**
+     * @param issuer mints one grant per SEGMENT for {@code direct}, and is
+     *     null for every other mode. ⚠️ PER SEGMENT, and an earlier draft of
+     *     this line said per CONSUMER -- which is what the mint did before it
+     *     was hoisted, and what made it per RUN for every real caller
+     */
+    private void deliver(String segmentKey, List<Target> targets, FetchMode via, Source source,
+            GrantIssuer issuer) {
         List<Tracking> opened = new ArrayList<>();
         List<List<Push>> pushes = new ArrayList<>();
         List<Target> live = new ArrayList<>();
+        // ⚠️ ONE GRANT PER SEGMENT, MINTED ABOVE BOTH LOOPS, and an
+        // earlier version minted once per TARGET believing that was once per
+        // consumer. It is not: grouping is by `Subscriber` IDENTITY, and every
+        // transport in the tree registers a FRESH subscriber per `RunKey` --
+        // M5.40a measured it ("K is always 1") and M5.62 exists because
+        // production never opts into the merge. So per-target minting is
+        // per-RUN for every real caller: ~400 signatures for one 8 MiB object
+        // on a catch-up node, shards-per-node, which non-negotiable 6 forbids
+        // and which `CountingBinStore` cannot see because signing issues no
+        // request.
+        //
+        // ⚠️ HOISTING IS SOUND BECAUSE THE GRANT IS A PURE FUNCTION of
+        // `(segmentKey, ceiling)`: every consumer of one segment wants the
+        // same URL, so one mint serves all of them whatever the subscriber
+        // granularity turns out to be. That makes the rate flat in consumers
+        // AND in runs, rather than flat only if callers group the way one
+        // test grouped them.
+        binjava.format.Grant grant = via == FetchMode.DIRECT
+                ? mintGrant(issuer, segmentKey)
+                : null;
         for (Target t : targets) {
-            // ⚠️ K PUSHES, ONE OPEN. Each run keeps its own key, record count
-            // and first offset -- a consumer needs all K to know what it just
-            // received -- while the BYTES are handed over once.
             List<Push> forThisConsumer = new ArrayList<>(t.runs().size());
             for (RunCommit run : t.runs()) {
                 forThisConsumer.add(new Push(run.key(), segmentKey, run.recordCount(),
-                        run.firstOffset(), via, EMPTY));
+                        run.firstOffset(), via, EMPTY, grant));
             }
             try {
                 SegmentSink sink = t.subscriber().open(List.copyOf(forThisConsumer));

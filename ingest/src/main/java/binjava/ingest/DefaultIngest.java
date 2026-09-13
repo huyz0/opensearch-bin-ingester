@@ -236,7 +236,15 @@ public final class DefaultIngest implements Ingest {
                         // A deployment that configures a larger segment than
                         // the default would otherwise exceed a fixed ceiling
                         // with EVERY segment, cache nothing, and say nothing.
-                        SegmentCache.forSegmentsOf(config.maxSegmentBytes())));
+                        SegmentCache.forSegmentsOf(config.maxSegmentBytes())),
+                // ⚠️ ONCE PER POD, NOT ONCE PER PUBLISH. An issuer per publish
+                // would allocate on the serving path for every flush, and it
+                // would put the TTL ceiling's configuration in a loop rather
+                // than at one site. ⚠️ AND NULL WHEN `direct` IS OFF, because
+                // the constructor REFUSES a backend that cannot presign -- so
+                // on either shipping backend there is no issuer to hold, which
+                // is the same refusal the line above already made.
+                config.directEnabled() ? new GrantIssuer(store) : null);
         this.sequencer = Objects.requireNonNull(sequencer, "sequencer");
         this.podShortId = podShortId;
         this.hub = Objects.requireNonNull(hub, "hub");

@@ -110,74 +110,15 @@ class GrantNeverLoggedTest {
     }
 
     /**
-     * Runs {@code work} with the streams AND the logging system captured, and
-     * returns everything written.
-     *
-     * <p>⚠️ THE STREAM SWAP ALONE IS NOT ENOUGH, and round-1 review measured
-     * exactly how it fails. {@code System.Logger} is the only logging facility
-     * in this codebase (java-style.md; the sequencer alone has four
-     * {@code System.getLogger} sites), and JUL's {@code ConsoleHandler} binds
-     * {@code System.err} when the HANDLER is constructed. Once anything in the
-     * JVM has logged — any earlier test in the same worker counts — later
-     * records go to the ORIGINAL stream and never reach the buffer below.
-     * MEASURED: a {@code System.Logger} leak of the grant SURVIVED the stream
-     * swap at both INFO and ERROR, while the identical {@code println} was
-     * caught. Criterion 7's "appears in no LOG" was the clause left unasserted.
-     *
-     * <p>⚠️ SO A JUL HANDLER IS ATTACHED TO THE ROOT LOGGER TOO, at
-     * {@code Level.ALL} with the level forced, catching records however the
-     * console handler is bound. Both instruments feed one buffer, so a leak
-     * through either fails the same assertion.
+     * ⚠️ THE PROBE MOVED TO {@link LogCapture}, WHICH IS A ROW OF ITS OWN'S
+     * WORTH OF REASON. {@code DirectServingTest} needed the same assertion for
+     * the hub's `direct` path, re-implemented this helper, and dropped two of
+     * its three channels -- review measured a parameterised
+     * {@code System.Logger} leak and a bare {@code println} of the grant both
+     * surviving the whole module green. One instrument, two callers.
      */
-    private static String capturing(ThrowingRunnable work) throws Exception {
-        ByteArrayOutputStream captured = new ByteArrayOutputStream();
-        PrintStream sink = new PrintStream(captured, true, StandardCharsets.UTF_8);
-        PrintStream realOut = System.out;
-        PrintStream realErr = System.err;
-
-        java.util.logging.Logger root = java.util.logging.LogManager.getLogManager()
-                .getLogger("");
-        java.util.logging.Level realLevel = root.getLevel();
-        StringBuilder logged = new StringBuilder();
-        java.util.logging.Handler probe = new java.util.logging.Handler() {
-            @Override public void publish(java.util.logging.LogRecord record) {
-                logged.append(record.getMessage()).append('\n');
-                Object[] params = record.getParameters();
-                if (params != null) {
-                    for (Object p : params) {
-                        logged.append(p).append('\n');
-                    }
-                }
-                if (record.getThrown() != null) {
-                    logged.append(record.getThrown()).append('\n');
-                }
-            }
-
-            @Override public void flush() {
-            }
-
-            @Override public void close() {
-            }
-        };
-        probe.setLevel(java.util.logging.Level.ALL);
-        try {
-            System.setOut(sink);
-            System.setErr(sink);
-            root.addHandler(probe);
-            root.setLevel(java.util.logging.Level.ALL);
-            work.run();
-        } finally {
-            System.setOut(realOut);
-            System.setErr(realErr);
-            root.removeHandler(probe);
-            root.setLevel(realLevel);
-        }
-        return captured.toString(StandardCharsets.UTF_8) + logged;
-    }
-
-    @FunctionalInterface
-    private interface ThrowingRunnable {
-        void run() throws Exception;
+    private static String capturing(LogCapture.ThrowingRunnable work) throws Exception {
+        return LogCapture.capturing(work);
     }
 
     /**

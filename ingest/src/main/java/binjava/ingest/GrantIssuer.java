@@ -16,10 +16,13 @@ import java.util.Objects;
  * use": if the backend is one of the two that ship today, constructing this
  * fails.
  *
- * <p>⚠️ BUT NOTHING CONSTRUCTS IT YET, AND NO SETTING SAYS "THIS DEPLOYMENT
- * ENABLES `direct`". Round-1 review pointed out that makes "at startup" a
- * property of a call site that does not exist -- {@code IngestConfig} has no
- * such flag and {@code FetchPolicyConfig} carries only the fan-out dial. ⚠️ And
+ * <p>⚠️ BOTH HALVES OF THAT LANDED, AND THIS PARAGRAPH USED TO SAY NEITHER
+ * HAD. M5.43 added {@code IngestConfig.directEnabled} and
+ * {@code FetchPolicyConfig.directEnabled}, so a deployment can say it wants
+ * {@code direct}; M5.45d constructs this class in {@code DefaultIngest} under
+ * that flag, once per pod, which is the call site "at startup" needed. What is
+ * still true is the ORDER: the refusal happens when the pod is built, not when
+ * a consumer first asks. ⚠️ And
  * the two halves of the system disagree about what to do when the backend
  * cannot sign: {@code FetchPolicy.modeFor} silently DEGRADES to {@code PROXY},
  * while this class REFUSES TO EXIST. Wire it unconditionally and every pod
@@ -147,7 +150,17 @@ public final class GrantIssuer {
      * runs of a ~1,600-run segment, a rate scaling with shards per node that
      * non-negotiable 6 forbids by name. ⚠️ THE API DOES NOT RESIST IT: this
      * method mints fresh every call and reuses no unexpired grant for the same
-     * key. M5.43 owns the wiring that must respect it.
+     * key.
+     *
+     * <p>⚠️ THE WIRING THAT RESPECTS IT IS {@code SubscriptionHub.deliver},
+     * WHICH HOISTS THE MINT ABOVE BOTH LOOPS (M5.45d). An earlier draft of this
+     * sentence handed it to M5.43, which shipped the two {@code directEnabled}
+     * settings and no minting at all, so a reader following the pointer found
+     * nothing and could reasonably conclude the rule was unowned -- and then
+     * moving the mint back inside the target loop reads as a tidy-up. That is
+     * the mutation round-1 review measured leaving the whole module green.
+     * ⚠️ M5.65 will MOVE {@code deliver}, so whoever splits that file is the
+     * next reader of this paragraph.
      *
      * <p>⚠️ THE TTL IS CLAMPED, NOT REFUSED, and the direction is deliberate: a
      * caller asking for longer than the ceiling gets the ceiling, because the

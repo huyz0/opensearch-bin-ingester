@@ -34,7 +34,22 @@ import java.util.Objects;
  *     instead -- non-negotiable 9, rung 1 -- and a segment this pod does not
  *     hold has no other byte source anyway
  */
-public record SegmentServing(FetchPolicy policy, Capabilities capabilities, SegmentProxy proxy) {
+public record SegmentServing(FetchPolicy policy, Capabilities capabilities, SegmentProxy proxy,
+        GrantIssuer issuer) {
+
+    /**
+     * A serving path with no issuer, which is every deployment that has not
+     * enabled {@code direct}.
+     *
+     * <p>⚠️ NULL IS THE RIGHT ABSENCE HERE, not a no-op issuer: a
+     * {@code GrantIssuer} cannot be CONSTRUCTED against a backend that cannot
+     * presign -- its constructor is criterion 7's startup refusal -- so a pod
+     * on either shipping backend has no issuer to hold, and pretending
+     * otherwise would need a fake that mints something.
+     */
+    public SegmentServing(FetchPolicy policy, Capabilities capabilities, SegmentProxy proxy) {
+        this(policy, capabilities, proxy, null);
+    }
 
     public SegmentServing {
         Objects.requireNonNull(policy, "policy");
