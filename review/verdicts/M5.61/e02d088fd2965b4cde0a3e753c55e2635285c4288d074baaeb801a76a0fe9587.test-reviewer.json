@@ -1,0 +1,22 @@
+{
+  "diff_sha256": "e02d088fd2965b4cde0a3e753c55e2635285c4288d074baaeb801a76a0fe9587",
+  "verdict": "changes-requested",
+  "round": 1,
+  "summary": "The three production mutations that the test must kill still die, measured against the staged tree in a throwaway worktree: the two-argument UncheckedIOException reduced to new UncheckedIOException(storeFailed) (SubscriptionHub:388), WARNING demoted to TRACE (DefaultIngest:403), and the whole LOG.log statement deleted. The last one spins to the 10 s deadline and reds, so the new wait has not opened a way to pass without the production line. What this change ADDS, however, is unconstrained: namesTheUnreadableSegment mutated to a constant true is BUILD SUCCESSFUL 3 of 3, and constant-true is exactly the old logged.isEmpty() behaviour this task exists to remove.",
+  "findings": [
+    {
+      "file": "ingest/src/test/java/binjava/ingest/UndeliverablePushTest.java:166",
+      "severity": "major",
+      "title": "The predicate this task delivers survives being replaced by constant true, and a deterministic three-line test kills it",
+      "failure_scenario": "MEASURED against the staged tree in a detached worktree: replacing the body of namesTheUnreadableSegment with `return record != null || true;` leaves :ingest:test --tests binjava.ingest.UndeliverablePushTest BUILD SUCCESSFUL on 3 of 3 --rerun-tasks runs. Constant-true is not an arbitrary mutant: it is byte-for-byte the semantics of the `while (logged.isEmpty() && ...)` wait at 7bb469c, i.e. the defect M5.61 names. So the one behaviour this commit claims to add can be reverted in full with the suite green, and nothing in the tree distinguishes the fixed wait from the broken one. The row's stated reason for shipping with no red -- that the only deterministic construction is a store fake that logs a foreign WARNING and then BLOCKS until the test releases it -- rests on a construction that cannot work (see the next finding), and a cheaper one was not considered: the predicate is now a named static method, so a T0 case over it alone is deterministic, has no fixture, no thread and no clock: assertThat(namesTheUnreadableSegment(new LogRecord(Level.WARNING, \"an unrelated warning from somewhere else\"))).isFalse() plus assertThat(namesTheUnreadableSegment(new LogRecord(Level.WARNING, \"segment seg-no-pod-ever-wrote-this could not be read for delivery\"))).isTrue() and, to pin the INFO/level half, assertThat(namesTheUnreadableSegment(new LogRecord(Level.INFO, \"... seg-no-pod-ever-wrote-this ...\"))).isFalse(). The first assertion reds on constant-true and on the old wait's semantics; the second reds on a predicate narrowed to nothing; all three are pure T0 and produce a genuine red record, which is testing.md rule 2's requirement that this row currently waives."
+    },
+    {
+      "file": "docs/internal/product/backlog.md:79",
+      "severity": "minor",
+      "title": "The row's 'a deterministic construction exists' is false as written, and it is the justification for having no red",
+      "failure_scenario": "The row tells a future session that falsifiability here could have been bought by having the store fake log a foreign WARNING and then BLOCK until the test releases it. MEASURED: that construction cannot discriminate. (a) If the release is driven by the test's probe handler, java.util.logging calls Handler.publish synchronously on the LOGGING thread, so the countdown happens on the push thread before its own await and nothing ever blocks -- I built exactly this in the worktree (foreign WARNING + CountDownLatch released from the probe) and the OLD `logged.isEmpty()` wait was BUILD SUCCESSFUL 3 of 3, the same non-result the row already records for its first attempt. (b) If the release comes from the test thread after the wait, the NEW wait cannot exit -- the record it waits for is produced by the thread being blocked -- so the test spins the full 10 s and FAILS on a correct tree. Either way it is not a test that passes on the new wait and reds on the old one. Leaving the sentence in sends the next session to build something that does not work and to conclude, wrongly, that the property is unpinnable. The fix in the previous finding supersedes the sentence; if the row survives, it should say what was measured here instead."
+    }
+  ],
+  "task": "M5.61",
+  "role": "test-reviewer"
+}

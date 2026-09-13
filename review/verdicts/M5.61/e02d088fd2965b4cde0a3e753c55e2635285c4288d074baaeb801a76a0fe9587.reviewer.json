@@ -1,0 +1,21 @@
+{
+  "task": "M5.61",
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "ingest/src/test/java/binjava/ingest/UndeliverablePushTest.java",
+      "lines": "154-168",
+      "description": "The javadoc on the new namesTheUnreadableSegment predicate (lines 160-165) claims 'The one predicate, so the wait and the assertion cannot drift apart', but the final assertion (anySatisfy at lines 154-157) does not call namesTheUnreadableSegment -- it re-implements the same two conditions (level == WARNING, message contains the segment key) inline in its own lambda. There are two independent copies of the same logic, not one shared predicate; the comment overstates the code's actual structure. Currently harmless because the assertion re-scans the whole accumulated `logged` list regardless of why the wait exited, so a future divergence between the two copies would still only produce a spurious red at the 10s deadline (per the row's own stated invariant), never a false pass -- but the 'cannot drift apart' claim is false as written and should either be softened or the assertion should be rewritten to call the shared predicate.",
+      "failure_scenario": "A future editor loosens or changes the substring/level check in the anySatisfy assertion (e.g. widening the message match) without updating namesTheUnreadableSegment, believing the javadoc's claim that there is 'one predicate' means editing one edits both. The wait then exits on a record satisfying the OLD, narrower predicate while the assertion now wants a broader one, or vice versa, and a maintainer debugging the resulting spurious 10s-deadline red has to discover -- by reading both blocks side by side -- that the 'shared predicate' the comment promises does not actually exist in the assertion."
+    }
+  ],
+  "notes": [
+    "Backlog row and comment claim verified against code: DefaultIngest.flushLocked completes each Pending's future (p.done().complete, line 462) and only afterward enqueues the push (pushes.add, line 492), and both happen synchronously on the thread that calls flushNow() (the main test thread via IngestTestSupport.appendOnce). So by the time appendOnce() returns to the test, the push has already been queued for the separate pushLoop virtual thread, which is consistent with 'appendOnce waits for durability before returning and that hands the push thread a head start' -- an injected foreign WARNING placed after appendOnce() returns would race against a push that is already in flight or already logged, explaining the measured 0-of-10 reds with the old logged.isEmpty() wait. The explanation is accurate, not a plausible-sounding but wrong story.",
+    "The claimed deterministic construction (store fake logs a foreign WARNING then blocks on a latch until released) is workable: StoreFakes.java already uses exactly this CountDownLatch-gate pattern (GatedCommit), ReadFailsWithoutNamingTheKey only overrides get/getRange (leaving putIfMatch/stat, and therefore LocalSequencer's lease renewer and BatchingSequencer, untouched by the fixture), and the failing read path (SubscriptionHub.deliver's UncheckedIOException, caught by DefaultIngest.pushLoop, which logs the real WARNING) is reachable by adding a block inside a get() override before it throws. Nothing about StoreFakes.ReadFailsWithoutNamingTheKey or SubscriptionHub.streamFromStore contradicts this being buildable; the row's claim that a deterministic version exists but was judged not worth the fixture entanglement is honest and not a fabricated escape hatch.",
+    "No assertion was removed or loosened versus 7bb469c: the diff only replaces the wait's exit condition (logged.isEmpty() -> a predicate match) and adds a comment and a private method; the anySatisfy assertion block is byte-for-byte unchanged. The new wait condition is strictly more specific than the old one, so this is a strengthening, not a weakening, and the row's 'no red, stated rather than hidden' disclosure is accurate to what the diff contains.",
+    "Backlog row's 'NO' on request-rate lens: change touches only test code and log-record predicates, no object-store call sites added, moved, or put inside a loop."
+  ],
+  "diff_sha256": "e02d088fd2965b4cde0a3e753c55e2635285c4288d074baaeb801a76a0fe9587",
+  "role": "reviewer"
+}

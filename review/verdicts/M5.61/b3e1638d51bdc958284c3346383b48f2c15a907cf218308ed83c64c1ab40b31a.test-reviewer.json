@@ -1,0 +1,39 @@
+{
+  "diff_sha256": "b3e1638d51bdc958284c3346383b48f2c15a907cf218308ed83c64c1ab40b31a",
+  "verdict": "pass",
+  "summary": "Round-1 major is answered and MEASURED closed. Against the staged tree in a throwaway worktree, all six mutations of UnreadableSegmentWarning.names die on theWaitsQuestionIsNotAlwaysYESAndNotBlindToTheLEVEL: `return true;`, `return record != null || true;`, dropping the level conjunct, dropping the contains conjunct, `==` -> `!=`, and `contains(KEY)` -> `equals(KEY)` (the last two also red the log case). Moving the predicate did NOT weaken the log case: SubscriptionHub's two-arg UncheckedIOException -> one-arg, DefaultIngest's Level.WARNING -> Level.TRACE, and deleting the whole LOG.log statement all still red theWarningNamesTheSegmentThatCouldNotBeREAD. Full :ingest:test green on the staged tree. Four minors, none blocking.",
+  "findings": [
+    {
+      "file": "ingest/src/test/java/binjava/ingest/UndeliverablePushTest.java:151",
+      "severity": "minor",
+      "title": "anyMatch loses the failure text the old anySatisfy printed, and the .as dump does not replace it because LogRecord has no toString",
+      "failure_scenario": "MEASURED with SubscriptionHub's two-arg UncheckedIOException reverted to one-arg (the exact M5.48 round-1 production defect: the WARNING arrives but does not name the failing segment). The test still fails -- correctness is unaffected -- but the whole message is: '[the line must name the segment the store could not read, at a level an operator sees\n[java.util.logging.LogRecord@4afd21c6]] Expecting any elements of: [java.util.logging.LogRecord@4afd21c6] to match given predicate but none did.' java.util.logging.LogRecord overrides no toString (javap: 0 hits), so the %n%s dump renders identity hashes and names neither the level nor the message. The old anySatisfy form printed the actual text ('Expecting actual: \"push undelivered: ...\" to contain \"seg-no-pod-ever-wrote-this\"'), i.e. it showed the WRONG KEY that was logged -- exactly the diagnosis a future session needs. One map in the description args (r -> r.getLevel() + \" \" + r.getMessage()) restores it without reintroducing the two-restatements-of-one-predicate problem."
+    },
+    {
+      "file": "docs/internal/product/backlog.md:96",
+      "severity": "minor",
+      "title": "the row's '0 of 10' and the test comment's '10 times out of 10' describe the same measurement with opposite numbers",
+      "failure_scenario": "The row says 'Injecting a foreign WARNING ahead of the push left the old wait green **0 of 10**'. UndeliverablePushTest.java:137-141 says of the same experiment 'injecting a foreign WARNING ahead of the push left the old wait green 10 times out of 10'. Read literally the row says the old wait was green zero times, i.e. the injection DID reproduce the defect every run -- which would mean the construction worked and should have been kept. A reader reconciling the two has to guess which is the typo. The intended fact is the file's: the injection never reproduced the ordering, so it was dropped. Not a test-strength finding; it is the kind of claim that outlives the session and misleads whoever re-attempts the construction."
+    },
+    {
+      "file": "ingest/src/test/java/binjava/ingest/UndeliverablePushTest.java:142",
+      "severity": "minor",
+      "title": "the deliverable itself is still revertible green; only the predicate is now pinned",
+      "failure_scenario": "MEASURED: reverting the wait to `while (logged.isEmpty() && System.nanoTime() < deadline)` -- i.e. deleting this task's entire production-of-the-test change while keeping the new file and the T0 case -- leaves :ingest:test BUILD SUCCESSFUL. So nothing mechanically pins that the WAIT uses the predicate; what the T0 case pins is that the predicate is non-trivial, which was the round-1 ask and is the half that WAS revertible before. Raised as minor and not major because the gap is disclosed in the test comment ('NO TEST PINS THIS, AND THE ROW SAYS SO ... this is argued, not measured') and in the row, two constructions to close it were built and measured failing, and the residual direction is a spurious red rather than a hidden defect. Naming it so the next reader does not have to re-derive which half is mechanical."
+    },
+    {
+      "file": "ingest/src/test/java/binjava/ingest/UnreadableSegmentWarning.java:219",
+      "severity": "minor",
+      "title": "the level half is pinned by identity, not by severity, contrary to the assertion's own prose",
+      "failure_scenario": "`record.getLevel() == Level.WARNING` accepts exactly WARNING. The assertion it backs describes itself as 'at a level an operator sees'. Promote the production line to SEVERE -- strictly better by that stated intent -- and the wait never satisfies the predicate, spins the full 10 s deadline and the assertion reds. Direction is a spurious red, never a false pass, and it is the same failure mode M5.61 exists to remove, one notch less likely. `record.getLevel().intValue() >= Level.WARNING.intValue()` says what the prose says. Left as minor because the demotion case -- the one that hides a defect -- is correctly killed either way (MEASURED: Level.WARNING -> Level.TRACE reds)."
+    }
+  ],
+  "checked_and_clear": [
+    "KEY sharing is not tautological. The fixture mints the delta key from UnreadableSegmentWarning.KEY and the predicate looks for the same constant, but reverting SubscriptionHub's exception to the one-arg form REDS -- so the key reaches the WARNING only through the path under test, not through the fixture or the MemoryBinStore cause. A wrong KEY value could only produce a false pass if it collided with the pod's own generated segment key, which 'seg-no-pod-ever-wrote-this' cannot.",
+    "The 'own file so it can have a red' justification is true, not tidiness: tdd_scan.py:226 records sha256 of the file the test lives in, and .harness/tdd/red.json carries a record for theWaitsQuestionIsNotAlwaysYESAndNotBlindToTheLEVEL.",
+    "Wait predicate and assertion predicate are the same call on the same monotonically-growing CopyOnWriteArrayList, so an early exit does imply the assertion passes and the 10 s deadline is the only failure timer, as the row claims.",
+    "The row's account of the blocking-store-fake failure matches what round 1 built and measured: j.u.l Handler.publish is synchronous on the logging thread; it does not overclaim."
+  ],
+  "task": "M5.61",
+  "role": "test-reviewer"
+}

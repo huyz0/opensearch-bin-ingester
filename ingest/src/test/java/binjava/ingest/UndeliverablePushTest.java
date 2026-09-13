@@ -125,7 +125,22 @@ class UndeliverablePushTest {
             root.setLevel(java.util.logging.Level.INFO);
             appendOnce(ingest, "logs", 3, 10);
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-            while (logged.isEmpty() && System.nanoTime() < deadline) {
+            // ⚠️ WAIT FOR THE RECORD THE ASSERTION WANTS, not for any
+            // record at all. The probe is on the ROOT logger, so every WARNING
+            // in the JVM reaches it -- the lease renewer on its own timer
+            // thread (`LocalSequencer`), the checkpoint writer, the batching
+            // sequencer. A wait that ended at the FIRST record would run the
+            // assertion against a list that does not yet hold the push line and
+            // RED on a correct tree.
+            //
+            // ⚠️ NO TEST PINS THIS, AND THE ROW SAYS SO. The ordering
+            // cannot be produced on demand: injecting a foreign WARNING ahead of
+            // the push left the old wait green 10 times out of 10, because
+            // `appendOnce` waits for durability first and that hands the push
+            // thread a head start every time. So this is argued, not measured --
+            // the deadline is now the only failure timer either way.
+            while (!logged.stream().anyMatch(UnreadableSegmentWarning::names)
+                    && System.nanoTime() < deadline) {
                 Thread.onSpinWait();
             }
         } finally {
@@ -134,12 +149,38 @@ class UndeliverablePushTest {
         }
 
         assertThat(logged)
-                .as("the line must name the segment the store could not read, at a level an "
-                        + "operator sees%n%s", logged)
-                .anySatisfy(record -> {
-                    assertThat(record.getMessage()).contains("seg-no-pod-ever-wrote-this");
-                    assertThat(record.getLevel()).isEqualTo(java.util.logging.Level.WARNING);
-                });
+                .as("the line must name the segment the store could not read, at WARNING%n%s",
+                        logged.stream()
+                                .map(r -> r.getLevel() + " " + r.getMessage())
+                                .toList())
+                .anyMatch(UnreadableSegmentWarning::names);
+    }
+
+    /**
+     * The wait's question is not trivially YES, and not blind to the level.
+     *
+     * <p>⚠️ THIS IS THE RED THE ROW SAID DID NOT EXIST, and review found
+     * it after measuring {@code return true;} -- which is exactly the
+     * {@code logged.isEmpty()} wait this task replaces -- surviving the whole
+     * suite. Asked of {@link UnreadableSegmentWarning} directly it needs no
+     * fixture, no thread and no clock, and it reds on the first assertion.
+     */
+    @Test
+    void theWaitsQuestionIsNotAlwaysYESAndNotBlindToTheLEVEL() {
+        assertThat(UnreadableSegmentWarning.names(new java.util.logging.LogRecord(
+                java.util.logging.Level.WARNING, "an unrelated warning from somewhere else")))
+                .as("a foreign record must not end the wait -- `return true` is the old behaviour")
+                .isFalse();
+        assertThat(UnreadableSegmentWarning.names(new java.util.logging.LogRecord(
+                java.util.logging.Level.WARNING,
+                "segment " + UnreadableSegmentWarning.KEY + " could not be read for delivery")))
+                .as("and the line the assertion wants must end it, or the wait always deadlines")
+                .isTrue();
+        assertThat(UnreadableSegmentWarning.names(new java.util.logging.LogRecord(
+                java.util.logging.Level.INFO,
+                "segment " + UnreadableSegmentWarning.KEY + " could not be read for delivery")))
+                .as("the LEVEL half is pinned too: the same text below WARNING is not the line")
+                .isFalse();
     }
 
     /**
@@ -165,7 +206,7 @@ class UndeliverablePushTest {
             @Override
             public CommitDelta commitAll(List<CommitRequest> requests) throws IOException {
                 CommitDelta delta = real.commitAll(requests);
-                return new CommitDelta(delta.sequence(), "seg-no-pod-ever-wrote-this",
+                return new CommitDelta(delta.sequence(), UnreadableSegmentWarning.KEY,
                         delta.runs());
             }
 
