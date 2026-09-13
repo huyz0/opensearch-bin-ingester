@@ -241,6 +241,89 @@ final class StoreFakes {
     }
 
     /**
+     * A store whose read hands over a PREFIX and then throws.
+     *
+     * <p>⚠️ THE ONLY WAY TO SEE "A PREFIX IS NEVER CACHED". A store that fails
+     * on its first byte proves nothing about admission, because there is
+     * nothing to admit; the defect is caching what was read BEFORE the failure
+     * and serving it to a later subscriber as a whole segment.
+     */
+    static final class ReadThrowsPartWayThrough implements BinStore {
+        private final BinStore delegate;
+        private final int bytesBeforeFailure;
+
+        ReadThrowsPartWayThrough(BinStore delegate, int bytesBeforeFailure) {
+            this.delegate = delegate;
+            this.bytesBeforeFailure = bytesBeforeFailure;
+        }
+
+        @Override public InputStream get(String key) throws IOException {
+            InputStream real = delegate.get(key);
+            return new InputStream() {
+                private int served;
+
+                @Override public int read() throws IOException {
+                    byte[] one = new byte[1];
+                    return read(one, 0, 1) == -1 ? -1 : one[0] & 0xff;
+                }
+
+                @Override public int read(byte[] b, int off, int len) throws IOException {
+                    if (served >= bytesBeforeFailure) {
+                        throw new IOException("the stream died part way through");
+                    }
+                    int n = real.read(b, off, Math.min(len, bytesBeforeFailure - served));
+                    if (n > 0) {
+                        served += n;
+                    }
+                    return n;
+                }
+
+                @Override public void close() throws IOException {
+                    real.close();
+                }
+            };
+        }
+
+        @Override public InputStream getRange(String k, long s, long e) throws IOException {
+            return delegate.getRange(k, s, e);
+        }
+
+        @Override public Optional<Version> putIfAbsent(String k, Body b) throws IOException {
+            return delegate.putIfAbsent(k, b);
+        }
+
+        @Override public Optional<Version> putIfMatch(String k, Body b, Version v)
+                throws IOException {
+            return delegate.putIfMatch(k, b, v);
+        }
+
+        @Override public Version put(String k, Body b) throws IOException {
+            return delegate.put(k, b);
+        }
+
+        @Override public Optional<ObjectStat> stat(String k) throws IOException {
+            return delegate.stat(k);
+        }
+
+        @Override public MultipartWriter multipart(String k) throws IOException {
+            return delegate.multipart(k);
+        }
+
+        @Override public ListPage list(String prefix, String startAfter, int maxKeys)
+                throws IOException {
+            return delegate.list(prefix, startAfter, maxKeys);
+        }
+
+        @Override public void delete(List<String> keys) throws IOException {
+            delegate.delete(keys);
+        }
+
+        @Override public Capabilities capabilities() { return delegate.capabilities(); }
+
+        @Override public void close() throws IOException { delegate.close(); }
+    }
+
+    /**
      * A store whose failed read does NOT name the object it failed on.
      *
      * <p>⚠️ THIS IS WHAT A REAL BACKEND DOES. S3 answers a bad read with

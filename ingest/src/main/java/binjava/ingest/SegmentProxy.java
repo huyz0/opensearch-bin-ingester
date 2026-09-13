@@ -20,16 +20,15 @@ import java.util.Objects;
  * {@code FetchPolicy}'s load-bearing inline-first ordering. The code is
  * right; the sentence was not.
  *
- * <p>⚠️ THAT IS NOT YET cost.md R5, and an earlier draft of this paragraph
- * claimed it was. R5 is "one fetch per object per NODE, shared by every shard
- * on it"; this class holds no cache and coalesces nothing in flight, so a
- * second call for the same segment is a second GET. M5's SPEC names "a late
- * subscriber" as a proxy trigger, and a late subscriber is by construction not
- * in a list that has already been served — so one fan-out of 64 plus three
- * late subscribers is four GETs for one object on one node. ⚠️ The per-AZ
- * prefetch that makes it one-per-node is M5.16's, and the cache SPEC rule R11
- * puts in the ingester pods is not built; until then this class's only byte
- * source is the store. M5.40 owns closing it.
+ * <p>⚠️ HALF OF cost.md R5, AND THE HALF THAT IS LEFT IS NAMED. R5 is "one
+ * fetch per object per NODE, shared by every shard on it". A repeat across
+ * publishes now costs no GET: {@link SegmentCache} holds whole segments and
+ * this class consults it, so one fan-out of 64 plus three LATE subscribers is
+ * ONE read (M5.40b). ⚠️ WHAT IS STILL TWO READS is two publishes of the same
+ * segment that OVERLAP IN TIME: admission happens when a read completes, so
+ * both miss and both fetch. That is M5.63. ⚠️ And the per-AZ prefetch that
+ * makes one read serve a whole availability zone is M5.16's, which is a
+ * different scope from either.
  *
  * <p>⚠️ AND PER-CONSUMER FETCHING IS NOT AN NFR-4 VIOLATION, which an earlier
  * draft of this paragraph also got wrong — the same inversion M5.10's review
@@ -41,10 +40,17 @@ import java.util.Objects;
  * exists to make a large fan-out cheap, so paying K GETs where one serves all K
  * spends the entire advantage the mode has over {@code direct}.
  *
- * <p>⚠️ STREAMED, NEVER BUFFERED (ADR-0004). The loop below reads a chunk and
- * hands that same array to every consumer before reading the next, so the
- * bytes this class materialises are {@code chunkBytes} — independent of the
- * SEGMENT SIZE and of K. Buffering the segment and forwarding it is the
+ * <p>⚠️ STREAMED, NEVER BUFFERED PER CONSUMER (ADR-0004). The loop below reads
+ * a chunk and hands that same array to every consumer before reading the next,
+ * so what this class materialises is independent of K — one chunk serves the
+ * whole fan-out, whether K is 1 or 64. ⚠️ IT IS NO LONGER INDEPENDENT OF THE
+ * SEGMENT SIZE, and M5.40b is what changed that: a cache admission accumulates
+ * the segment so it can be held. That is ADR-0004's own design rather than its
+ * violation -- the ADR's text is "the pod that wrote a segment still holds it
+ * in RAM" -- but the claim this paragraph used to make, that the bytes
+ * materialised are {@code chunkBytes} full stop, was true before that commit
+ * and is not now. With a cache of capacity 0 it is true again, which is what
+ * {@code SegmentProxyTest}'s criterion-6 cases build. Buffering the segment and forwarding it is the
  * implementation M5's SPEC names as this row's falsifier: it makes service
  * memory scale with fan-out, which is NFR-6, and it is what ADR-0004 rejected
  * at $3,732/month.
@@ -76,18 +82,34 @@ public final class SegmentProxy {
 
     private final BinStore store;
     private final int chunkBytes;
+    private final SegmentCache cache;
 
     public SegmentProxy(BinStore store) {
         this(store, DEFAULT_CHUNK_BYTES);
     }
 
     public SegmentProxy(BinStore store, int chunkBytes) {
+        this(store, chunkBytes, new SegmentCache(0));
+    }
+
+    /**
+     * @param cache repeats across publishes are served from here rather than
+     *     from a GET; a capacity of {@code 0} turns caching off and restores
+     *     the pre-M5.40b behaviour exactly
+     */
+    public SegmentProxy(BinStore store, int chunkBytes, SegmentCache cache) {
         this.store = Objects.requireNonNull(store, "store");
         if (chunkBytes <= 0) {
             throw new IllegalArgumentException(
                     "a chunk of " + chunkBytes + " bytes streams nothing");
         }
         this.chunkBytes = chunkBytes;
+        this.cache = Objects.requireNonNull(cache, "cache");
+    }
+
+    /** The cache repeats are served from; capacity {@code 0} means none. */
+    public SegmentCache cache() {
+        return cache;
     }
 
     /** The largest slice any consumer is handed. */
@@ -142,10 +164,10 @@ public final class SegmentProxy {
      * identity so a consumer is one entry however many runs it holds, and
      * {@code OneStreamPerConsumerTest} exercises that through
      * {@code SegmentServing} into this method (M5.40a). ⚠️ WHAT IS STILL OPEN
-     * IS M5.40b, one fetch per node across SEPARATE publishes, and M5.62, the
-     * plugin wiring that makes a node register ONE subscriber instead of one
-     * per run -- until that lands, production still hands this method a node's
-     * runs as separate consumers.
+     * IS M5.62, the plugin wiring that makes a node register ONE subscriber
+     * instead of one per run -- until that lands, production still hands this
+     * method a node's runs as separate consumers, so the duplication above is
+     * real in a deployment even though the hub can now avoid it.
      *
      * <p>⚠️ AN EMPTY LIST STILL READS, and that is a description rather than a
      * recommendation. An earlier draft justified it by claiming the same branch
@@ -184,14 +206,64 @@ public final class SegmentProxy {
         // Allocating inside the loop would be correct and would still be flat
         // in K; it is out here so that the ONLY allocation proportional to
         // anything is this one, and it is proportional to the chunk.
-        byte[] buffer = new byte[chunkBytes];
         List<SegmentSink> live = new ArrayList<>(consumers);
+
+        // ⚠️ A HIT COSTS NO GET, which is the whole of M5.40b. The bytes are
+        // still handed over A CHUNK AT A TIME: a hit must not become the
+        // buffer-then-forward this class exists to forbid just because the
+        // buffer happens to be ours.
+        //
+        // ⚠️ AND IT IS CHECKED BEFORE THE CHUNK BUFFER IS ALLOCATED, so a hit
+        // garbages nothing.
+        byte[] hit = cache.get(segmentKey);
+        if (hit != null) {
+            writeChunked(hit, live);
+            return live.size();
+        }
+
+        byte[] buffer = new byte[chunkBytes];
+
+        // ⚠️ GROWN, NOT DOUBLED WITHOUT A LIMIT, and abandoned the moment the
+        // running total would cross the ceiling. Accumulating first and
+        // checking afterwards would hold a whole oversized segment to decide
+        // not to keep it -- the ceiling breached by the one object most able to
+        // exhaust the heap.
+        //
+        // ⚠️ THE CEILING BOUNDS RESIDENCY, NOT THE TRANSIENT PEAK, and an
+        // earlier version of this used a `ByteArrayOutputStream`, whose
+        // doubling review measured at ~67 MiB transient for a 16 MiB segment.
+        // Growth is clamped to the ceiling here and the trim below copies once,
+        // so the peak is the accumulator plus one copy rather than an unbounded
+        // double-and-copy -- stated because `bytesHeld()` cannot show it.
+        byte[] admitting = cache.capacityBytes() > 0 ? new byte[0] : null;
+        int admitted = 0;
 
         try (InputStream in = store.get(segmentKey)) {
             int read;
             while ((read = in.read(buffer)) != -1) {
                 if (read == 0) {
                     continue;
+                }
+                if (admitting != null) {
+                    // ⚠️ LONG ARITHMETIC. `admitted + read` in int overflows
+                    // against a ceiling above 2 GiB and turns a refusal into an
+                    // OutOfMemoryError mid-serve.
+                    if ((long) admitted + read > cache.capacityBytes()) {
+                        admitting = null;
+                    } else {
+                        if (admitted + read > admitting.length) {
+                            // ⚠️ LONG THROUGHOUT. `admitting.length * 2` and
+                            // `admitted + read` in int overflow negative above a
+                            // 2 GiB ceiling, turning a growth step into a
+                            // NegativeArraySizeException mid-serve.
+                            long want = Math.max((long) admitting.length * 2,
+                                    (long) admitted + read);
+                            admitting = java.util.Arrays.copyOf(admitting,
+                                    (int) Math.min(want, cache.capacityBytes()));
+                        }
+                        System.arraycopy(buffer, 0, admitting, admitted, read);
+                        admitted += read;
+                    }
                 }
                 // ⚠️ CHUNK OUTER, CONSUMER INNER. Swapping these two loops is
                 // buffer-then-forward, and is the mutation this class exists
@@ -207,7 +279,44 @@ public final class SegmentProxy {
                 }
             }
         }
+        // ⚠️ ADMITTED ONLY AFTER THE READ COMPLETED, so a stream that THREW
+        // part way leaves by the exception above and its prefix is never handed
+        // to a later subscriber as a whole segment.
+        //
+        // ⚠️ A SHORT READ THAT DOES NOT THROW IS NOT COVERED BY THAT, and the
+        // cache makes it worse rather than better: an `InputStream` that ends
+        // early without an exception used to cost ONE truncated delivery, and
+        // now that truncation is admitted and served to every later subscriber
+        // for as long as the entry lives. Closing it needs the expected length,
+        // which this method does not have without a `stat` -- one request per
+        // segment, which is the thing this row exists to remove. M5.64.
+        if (admitting != null) {
+            cache.put(segmentKey, admitted == admitting.length
+                    ? admitting
+                    : java.util.Arrays.copyOf(admitting, admitted));
+        }
         return live.size();
+    }
+
+    /**
+     * Hands an in-memory segment over a chunk at a time.
+     *
+     * <p>⚠️ CHUNKED, EVEN THOUGH WE HOLD IT ALL. Writing the whole array in one
+     * call would make every consumer's sink see a segment-sized slice, which is
+     * the shape {@code SegmentSink}'s contract exists to avoid and what a
+     * socket-backed consumer would have to buffer.
+     */
+    private void writeChunked(byte[] segment, List<SegmentSink> live) {
+        for (int offset = 0; offset < segment.length && !live.isEmpty(); offset += chunkBytes) {
+            int length = Math.min(chunkBytes, segment.length - offset);
+            for (int i = live.size() - 1; i >= 0; i--) {
+                try {
+                    live.get(i).write(segment, offset, length);
+                } catch (IOException | RuntimeException slowOrDeadConsumer) {
+                    live.remove(i);
+                }
+            }
+        }
     }
 
     /**
@@ -348,8 +457,10 @@ public final class SegmentProxy {
      * <p>⚠️ THE BYTES STAY FLAT IN K -- one shared buffer, as before, and no
      * per-consumer copy. What is NOT flat in K is the task count, and saying so
      * is the honest scope of criterion 6's claim for this path: the criterion
-     * measures the largest array the serving path materialises, and that is
-     * still the chunk.
+     * measures the largest array the serving path materialises, and on THIS
+     * overload that is still the chunk -- it has no cache (M5.40b gave one only
+     * to the two-argument form, which is the only one with a production
+     * caller), so nothing here accumulates a segment.
      */
     private void handOff(java.util.concurrent.ExecutorService workers,
             List<SegmentSink> live, byte[] buffer, int read,

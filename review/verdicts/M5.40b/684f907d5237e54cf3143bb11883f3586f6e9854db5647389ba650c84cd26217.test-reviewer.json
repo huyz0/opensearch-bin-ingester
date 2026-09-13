@@ -1,0 +1,51 @@
+{
+  "diff_sha256": "684f907d5237e54cf3143bb11883f3586f6e9854db5647389ba650c84cd26217",
+  "verdict": "changes-requested",
+  "summary": "Round-2 test pass, all mutations MEASURED in a throwaway worktree (gradlew :ingest:test, compile log checked for 'error:'). Both round-1 majors and both round-1 minors are now KILLED, and the author's claim about the arithmetic fixture is confirmed: with b[i]=(byte)(i*31+7) restored, write(segment,0,length) SURVIVES; with the seeded Random it FAILS three cases. Two NEW surviving mutations, both in code this commit added: the accumulator trim and the config-derived ceiling. Three minors.",
+  "findings": [
+    {
+      "id": "T1",
+      "file": "ingest/src/test/java/binjava/ingest/SegmentProxyCacheTest.java:39",
+      "severity": "major",
+      "title": "every fixture is 4096 bytes at a 1024 chunk, the one size where the accumulator never overshoots, so the trim is unconstrained",
+      "failure_scenario": "MEASURED SURVIVING: SegmentProxy.java:281 'cache.put(segmentKey, admitted == admitting.length ? admitting : Arrays.copyOf(admitting, admitted))' replaced by 'cache.put(segmentKey, admitting)' passes the whole ingest suite. It is not an equivalent mutant: a probe test with a 4097-byte segment and a 1024 chunk fails under it and passes on the staged tree (measured both ways). The doubling ladder for 4096/1024 lands exactly on 4096, so admitted == admitting.length in EVERY case in the file and the trim branch is only ever taken in its no-op direction. In production a segment is any size up to maxSegmentBytes, so the untrimmed array is longer than the segment: the cache admits trailing zero padding and every LATE subscriber -- the whole point of M5.40b -- is handed a segment with garbage appended and no error anywhere, exactly the 'a fragment labelled as a segment' defect aREADThatDIEDPartWayCachesNOTHING exists to forbid, on the success path instead of the failure path. Fix is one line: make SEGMENT a non-power-of-two multiple of the chunk (e.g. nonRepeatingBytes(4097) or chunk 1000), which also strengthens every other case in the file."
+    },
+    {
+      "id": "T2",
+      "file": "ingest/src/test/java/binjava/ingest/SegmentProxyCacheTest.java:215",
+      "severity": "major",
+      "title": "theINGESTERAPodActuallyRunsHasTheCacheON builds the pod with the DEFAULT segment size, so it cannot tell forSegmentsOf(config) from the constant it was written to forbid",
+      "failure_scenario": "MEASURED SURVIVING: DefaultIngest.java:224 'SegmentCache.forSegmentsOf(config.maxSegmentBytes())' replaced by 'new SegmentCache(SegmentCache.DEFAULT_CAPACITY_BYTES)' passes the whole ingest suite. The case passes pinnedIntervalConfig(NEVER, 8L << 20) and 8 MiB IS IngestConfig.DEFAULT_MAX_SEGMENT_BYTES, so forSegmentsOf(8 MiB) and DEFAULT_CAPACITY_BYTES are the same number and isEqualTo(DEFAULT_CAPACITY_BYTES) cannot discriminate. This is precisely the regression SegmentCache.java:45-56 and the backlog cell describe at length -- 'with maxSegmentBytes configured to 64 MiB every segment fails the oversized check, put returns silently, bytesHeld() reads zero forever and every repeat read is a fresh GET again, no log, no metric, every test green' -- and it is the fix for round-1 major F3, landed unpinned. No other test in the tree calls forSegmentsOf at all (grepped): its <=0 guard and its multiplication by a NON-default size are both unexercised. Fix is one line: build the pod with a non-default maxSegmentBytes (e.g. 16L << 20) and assert capacityBytes() == 4 * that, which kills both the constant and a dropped multiplier."
+    },
+    {
+      "id": "T3",
+      "file": "ingest/src/main/java/binjava/ingest/SegmentCache.java:134",
+      "severity": "minor",
+      "title": "no case ever puts the same key twice, so the replaced-bytes accounting is unconstrained",
+      "failure_scenario": "MEASURED SURVIVING: deleting 'if (replaced != null) { bytesHeld -= replaced.length; }' passes the whole ingest suite. Non-equivalent: a probe doing cache.put(\"k\", 100 bytes) three times expects bytesHeld()==100 and fails under it (measured), because bytesHeld grows by 100 per re-put while residency does not. The path is reachable and this commit's own backlog cell says so -- M5.63, 'two publishes of the same segment that overlap in time both miss and both GET', and both then put the same key -- after which bytesHeld() over-reports permanently, can EXCEED capacityBytes (breaking its own javadoc 'never exceeds capacityBytes()', the number the class tells an operator to size a heap from) and the eviction loop starves the cache down to nothing, silently restoring one GET per repeat read. One three-line case in SegmentCacheTest closes it."
+    },
+    {
+      "id": "T4",
+      "file": "ingest/src/main/java/binjava/ingest/SegmentProxy.java:257",
+      "severity": "minor",
+      "title": "the growth clamp -- the fix for round-1's 'advertised ceiling was not the residency bound' -- is never exercised",
+      "failure_scenario": "MEASURED SURVIVING: '(int) Math.min(want, cache.capacityBytes())' replaced by '(int) want' passes the whole ingest suite. The clamp only binds when the doubling ladder would pass the ceiling, i.e. capacity < 2x the segment; every fixture here is either exactly one segment (4096/4096, which the ladder hits exactly) or 256x it. Stated rather than demanded as a test, because it is arguably unobservable through this seam: the clamp changes only a TRANSIENT allocation, and bytesHeld() after the trim is identical either way -- and under the production ceiling (forSegmentsOf = 4 x maxSegmentBytes) doubling can reach at most 2 x maxSegmentBytes = C/2, so the clamp cannot bind in the deployed configuration at all. Whoever wants it pinned needs a heap probe, not an assertion; worth saying in the commit body rather than chasing."
+    },
+    {
+      "id": "T5",
+      "file": "ingest/src/main/java/binjava/ingest/SegmentCache.java:138",
+      "severity": "minor",
+      "title": "the EVICTION boundary is untested -- aSegmentEXACTLYTheSizeOfTheCeiling pins the REFUSAL boundary only",
+      "failure_scenario": "MEASURED SURVIVING: 'while (bytesHeld + segment.length > capacityBytes && ...)' flipped to '>=' passes the whole ingest suite. aSegmentEXACTLYTheSizeOfTheCeilingIsCACHED kills the >= flip on line 131 (the oversized refusal -- measured KILLED) but not this one, because its cache is empty when it puts, so oldestFirst.hasNext() is false and the loop body never runs whichever comparison is used. Under >= a cache that would sit EXACTLY at its ceiling evicts one more entry than it needs to, so a 4-segment ceiling permanently holds 3 -- a 25% hit-rate loss with no symptom, on the class whose whole purpose is the hit. A case that fills to exactly the ceiling with two entries and then puts a third would kill it."
+    },
+    {
+      "id": "T6",
+      "file": "ingest/src/test/java/binjava/ingest/SegmentProxyCacheTest.java:39",
+      "severity": "minor",
+      "title": "round-1 verification, recorded not requested: both halves of the fixture claim are confirmed by measurement",
+      "failure_scenario": "Restoring b[i] = (byte)(i * 31 + 7) AND mutating SegmentProxy writeChunked to write(segment, 0, length): BUILD PASSED -- the arithmetic fixture really was still vacuous, for the reason the author gives (period 256, 31*1024 = 0 mod 256, so every 1024-byte chunk is byte-identical). With the staged seeded Random(20260913L) the same mutation FAILS aHITIsHandedOverACHUNKAtATimeAndNotInONEWrite, aFanOutOfSIXTYFOURPlusThreeLATESubscribersIsONEGetNotFOUR and aSegmentEXACTLYTheSizeOfTheCeilingIsCACHED. Also re-measured KILLED: writeChunked collapsed to one segment-sized write (offset += segment.length) -> aHIT... FAILED; the oversized-refusal >= flip -> aSegmentEXACTLY... FAILED; caching the prefix from a catch(IOException) before rethrowing -> aREADThatDIEDPartWayCachesNOTHING FAILED, so that case does pass for the right reason and the throw is from the store read (StoreFakes.ReadThrowsPartWayThrough hands over 2048 of 4096 first, and the sinks never throw); SegmentCache access-order true->false -> aSegmentSTILLBeingReadSurvivesAnOlderUntouchedOne FAILED. Math.max->Math.min on the growth and dropping 'admitted += read' are both KILLED (4 and 3 cases respectively)."
+    }
+  ],
+  "task": "M5.40b",
+  "role": "test-reviewer"
+}

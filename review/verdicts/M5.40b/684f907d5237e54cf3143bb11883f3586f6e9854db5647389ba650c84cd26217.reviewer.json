@@ -1,0 +1,51 @@
+{
+  "diff_sha256": "684f907d5237e54cf3143bb11883f3586f6e9854db5647389ba650c84cd26217",
+  "verdict": "changes-requested",
+  "summary": "The four round-1 majors are answered in the production code: the accumulator is genuinely bounded (admitting.length is clamped to the ceiling by Math.min, and the guard proves admitted+read <= length before every arraycopy), the trim alias is safe (the proxy drops the reference at return and the array is never the shared chunk buffer), and the ceiling now comes from config. What is NOT answered is that F3's fix is defended by nothing: the only test that reads the production ceiling configures the DEFAULT segment size and asserts equality against the very constant the fix exists to avoid, so reverting the fix is green. Four minors, all prose, including one comment that states the opposite of the line it sits above.",
+  "findings": [
+    {
+      "id": "G1",
+      "severity": "major",
+      "file": "ingest/src/main/java/binjava/ingest/DefaultIngest.java:224",
+      "title": "F3's fix survives its own mutation -- the only test of the production ceiling pins the constant the fix removed",
+      "failure_scenario": "Mutate DefaultIngest.java:224 from SegmentCache.forSegmentsOf(config.maxSegmentBytes()) back to new SegmentCache(SegmentCache.DEFAULT_CAPACITY_BYTES) -- literally the round-1 defect. The whole suite stays green. The only case that reads the wired ceiling, SegmentProxyCacheTest.theINGESTERAPodActuallyRunsHasTheCacheON at SegmentProxyCacheTest.java:219-226, builds its config with IngestTestSupport.pinnedIntervalConfig(NEVER, 8L << 20) -- 8 MiB, exactly IngestConfig.DEFAULT_MAX_SEGMENT_BYTES -- and then asserts capacityBytes() isEqualTo(SegmentCache.DEFAULT_CAPACITY_BYTES). At the default size forSegmentsOf and the constant return the same 32 MiB, so the assertion cannot tell them apart; worse, it asserts the trap's own value, so the reverted code passes BY NAME. No other test in the tree references SegmentCache or proxy().cache() (grep: only SegmentCacheTest and SegmentProxyCacheTest, and forSegmentsOf has no test caller at all). Consequence in the field: the next refactor that drops the config plumbing -- or a merge that takes the simpler-looking constant -- lands green, and a deployment with maxSegmentBytes = 64 MiB caches nothing, put returns silently, bytesHeld() reads zero forever and every repeat read is a fresh GET again. That is the exact silent cost regression round 1 blocked on, one edit away with zero signal. The fix is two lines: configure a NON-default maxSegmentBytes in that case (e.g. 64L << 20) and assert 4L * 64L << 20, which reds against the constant."
+    },
+    {
+      "id": "G2",
+      "severity": "minor",
+      "file": "ingest/src/main/java/binjava/ingest/DefaultIngest.java:216",
+      "title": "New comment says 'Built with the default ceiling' three lines above the code that does not",
+      "failure_scenario": "The comment added by this commit reads 'THE CACHE IS ON IN PRODUCTION ... Built with the default ceiling', and the comment four lines below reads 'FROM THE CONFIG, NOT FROM THE DEFAULT CONSTANT'. They contradict. A maintainer auditing for the M5.48 silent-regression class reads the first sentence, concludes the ceiling is the fixed 32 MiB constant, and either files a defect that does not exist or 'restores consistency' by making the code match the comment -- which is G1's mutation, landed deliberately. This is the leftover sentence from the pre-F3 version of this hunk."
+    },
+    {
+      "id": "G3",
+      "severity": "minor",
+      "file": "ingest/src/main/java/binjava/ingest/SegmentCache.java:61",
+      "title": "forSegmentsOf's javadoc calls maxSegmentBytes 'the size THIS deployment is configured to write'; IngestConfig says it is a flush TRIGGER, not a cap",
+      "failure_scenario": "IngestConfig.java:37-42 states the opposite in this project's own words: maxSegmentBytes 'is a flush TRIGGER, not a segment cap -- Accumulator checks it only after a caller's whole record list is buffered, so one 32 MiB _bulk body makes one ~32 MiB segment.' So on the DEFAULT config the ceiling is 4 x 8 MiB = 32 MiB while a single large bulk body produces a ~32 MiB segment on its own: SegmentProxy.java:251 refuses the admission (or SegmentCache.put returns at line 130-132), bytesHeld() never moves, and every repeat read of that segment -- the most expensive object to re-GET, and the one a late subscriber is most likely to want -- is a fresh GET, silently, with no log and no metric. The ceiling is derived from a number the tree documents as not being an upper bound on what it must hold, so F3's failure mode is narrowed rather than closed, and the javadoc sentence asserting otherwise is what stops a reader noticing. Deriving from the actual segment cap (or documenting that a segment above the ceiling is served uncached BY DESIGN, at the ceiling's own javadoc rather than only at put's) would state the real contract."
+    },
+    {
+      "id": "G4",
+      "severity": "minor",
+      "file": "ingest/src/main/java/binjava/ingest/SegmentProxy.java:277",
+      "title": "'A PREFIX IS NEVER CACHED' is stronger than the premise under it supports",
+      "failure_scenario": "The comment's premise is 'a stream that threw part way leaves this method by the exception above' -- true -- and the conclusion drawn is unconditional. It holds only while a truncated read THROWS. BinStore.get's contract (binstore-spi/src/main/java/binjava/binstore/BinStore.java:39, 'The whole object, streamed. Never materialised.') promises nothing about a stream that ends early without throwing, and nothing here knows the expected length (SegmentCommit carries segmentKey, runs and attribution -- no byte count). A short read that surfaces as EOF rather than IOException is admitted as a whole segment and then served from memory to every later subscriber for that key until eviction, with no further store contact. Before this commit the same truncation was transient: each publish re-read. The cache makes it sticky, which is a new failure mode the sentence tells a reader does not exist. Scoping the claim to 'a read that THREW' costs one clause."
+    },
+    {
+      "id": "G5",
+      "severity": "minor",
+      "file": "ingest/src/main/java/binjava/ingest/SegmentProxy.java:255",
+      "title": "F5 made the refusal guard long arithmetic; the growth clamp beside it is still int",
+      "failure_scenario": "admitting.length can never exceed the ceiling and the arraycopy can never overrun -- min(want, capacityBytes) >= admitted + read holds in every case, at the ceiling, one byte under and one byte over. But the cast is unguarded: (int) Math.min(want, cache.capacityBytes()) at line 256-257 goes NEGATIVE when want reaches 2^31 and the ceiling is at or above it, i.e. when admitting.length has grown to 2^30 and capacityBytes >= 2 GiB. Arrays.copyOf then throws NegativeArraySizeException -- a RuntimeException, not the declared IOException -- out of streamTo mid-serve, leaving all K sinks holding a truncated prefix they cannot tell from a whole segment. Second operand of the same Math.max, 'admitted + read', is int-typed and overflows in the same regime. Reachability: IngestConfig validates only maxSegmentBytes > 0 (IngestConfig.java:110), so forSegmentsOf(1 GiB) = 4 GiB is constructible; the config is absurd for a 256 MB heap, which is why this is minor rather than major, but the guard at line 251 was widened to long for precisely this class of overflow and the two lines below it were not."
+    },
+    {
+      "id": "G6",
+      "severity": "minor",
+      "file": "ingest/src/main/java/binjava/ingest/SegmentCache.java:36",
+      "title": "'NOT THREAD SAFE BY ITSELF -- every method synchronizes on the instance' states both halves of a contradiction",
+      "failure_scenario": "Each method IS synchronized, so the class is internally thread-safe; what is not safe is a check-then-act ACROSS two calls (get then put), which is what a second caller would actually get wrong. As written a reader wiring the cache into a second serving path cannot tell which claim to believe and adds an outer lock around a synchronized object -- or, reading the second half only, assumes get-then-put is atomic and races two admissions of different keys' bytes. Saying 'thread-safe per call, not across calls' is the fact."
+    }
+  ],
+  "task": "M5.40b",
+  "role": "reviewer"
+}

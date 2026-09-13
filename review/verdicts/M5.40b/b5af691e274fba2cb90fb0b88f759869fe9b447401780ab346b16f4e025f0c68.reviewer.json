@@ -1,0 +1,74 @@
+{
+  "diff_sha256": "b5af691e274fba2cb90fb0b88f759869fe9b447401780ab346b16f4e025f0c68",
+  "verdict": "changes-requested",
+  "summary": "The cost direction is right: a hit costs zero requests, a miss costs exactly one GET as before, and nothing scales with records, shards, partitions or indices. Segment keys carry a millisecond timestamp plus pod id plus per-pod sequence, so a rewritten key is not reachable and a hit cannot be stale. But the class the diff edits still states, in its own javadoc, the exact absence this commit removes, and the memory ceiling the row demanded is advertised at roughly a third of the real peak. One cost regression is reachable on a supported configuration.",
+  "findings": [
+    {
+      "id": "F1",
+      "file": "ingest/src/main/java/binjava/ingest/SegmentProxy.java:23",
+      "severity": "major",
+      "title": "The class javadoc still says this class holds no cache, in the commit that gives it one",
+      "failure_scenario": "Lines 23-32 read 'this class holds no cache and coalesces nothing in flight, so a second call for the same segment is a second GET ... one fan-out of 64 plus three late subscribers is four GETs for one object on one node ... the cache SPEC rule R11 puts in the ingester pods is not built; until then this class's only byte source is the store. M5.40 owns closing it.' Line 160 adds 'WHAT IS STILL OPEN IS M5.40b, one fetch per node across SEPARATE publishes.' SegmentProxyCacheTest.aFanOutOfSIXTYFOURPlusThreeLATESubscribersIsONEGetNotFOUR, added in this same commit, asserts ONE. The taker of M5.63 (in-flight coalescing) or M5.16 (per-AZ prefetch) opens the only written description of this class, reads that it has no cache and that M5.40 still owns closing it, and either builds a second cache in front of one that already exists or sizes the prefetch on the assumption that every serve is a GET. This is the defect class M5.40a's own backlog cell records as the major that round blocked on -- SegmentDelivery's @param segmentFanOut describing an over-count that the call site eight lines away no longer produced -- except here the stale sentence is in the file the diff edits."
+    },
+    {
+      "id": "F2",
+      "file": "ingest/src/main/java/binjava/ingest/SegmentProxy.java:44",
+      "severity": "major",
+      "title": "'the bytes this class materialises are chunkBytes, independent of the SEGMENT SIZE' is now false on both the hit and the miss path",
+      "failure_scenario": "The STREAMED, NEVER BUFFERED (ADR-0004) paragraph at 44-50 asserts the class materialises chunkBytes only. The miss path at 220-235 accumulates the whole segment into a ByteArrayOutputStream up to cache.capacityBytes(); the hit path at 210-214 holds the whole segment. M5's SPEC risk table names 'proxy buffers under load' as a risk revealed by criterion 6, and criterion 6's own test -- SegmentProxyTest:276-283, thePeakHandOffAndTheReadCountAreIDENTICALAtKONEAndKSIXTYFOUR -- constructs new SegmentProxy(one) and new SegmentProxy(many), i.e. capacity 0, so it now measures a configuration production no longer builds. The same claim is repeated at 415-419 ('the criterion measures the largest array the serving path materialises, and that is still the chunk'). Failure: an operator or the M5.20 verifier sizes the serving pod against ADR-0004's ~33 MiB/s per pod on the stated chunk-sized bound, and the pod holds 32 MiB resident plus a full segment in flight. The prose must either be corrected to state the new residency or the criterion-6 test must be run against the configuration DefaultIngest builds; today neither is true."
+    },
+    {
+      "id": "F3",
+      "file": "ingest/src/main/java/binjava/ingest/DefaultIngest.java:212",
+      "severity": "major",
+      "title": "The ceiling is hardcoded at 32 MiB while maxSegmentBytes is unbounded above, so a supported configuration silently reverts M5.40b",
+      "failure_scenario": "DefaultIngest holds `config` and still passes the constant SegmentCache.DEFAULT_CAPACITY_BYTES (4 x the DEFAULT segment size = 32 MiB). IngestConfig.java:110 rejects only maxSegmentBytes <= 0, and SegmentProxy.java:72 itself names a 32 MiB bulk body as a documented operating point. Configure a pod with maxSegmentBytes = 64 MiB: every segment it serves fails `segment.length > capacityBytes` at SegmentCache.java:105, put returns silently, bytesHeld() reads 0 forever, and every repeat read across publishes is a fresh GET again -- the exact request rate this row exists to remove, gone, with no log, no metric, no error and every test still green. Configure 32 MiB and the cache holds exactly one segment and thrashes, so the late subscriber to the publish before last still misses. The ceiling should derive from config.maxSegmentBytes() (e.g. max(DEFAULT_CAPACITY_BYTES, 4 * config.maxSegmentBytes())) or the configuration should be refused; a constant that silently disables the feature is worse than a smaller one that works."
+    },
+    {
+      "id": "F4",
+      "file": "ingest/src/main/java/binjava/ingest/SegmentCache.java:45",
+      "severity": "major",
+      "title": "The advertised ceiling is not the residency bound; the in-flight accumulator is invisible to bytesHeld() and to every test",
+      "failure_scenario": "DEFAULT_CAPACITY_BYTES's javadoc says 'if residency on the serving path turns out to matter, this is the first number to revisit, and bytesHeld() is what a test or an operator reads to find out', and bytesHeld()'s javadoc says it 'never exceeds capacityBytes()'. Both are true of the map and false of the serving path. Take a segment of 16,777,217 bytes with a 32 MiB ceiling: ByteArrayOutputStream doubles its internal array to 33,554,432, and during that last Arrays.copyOf it holds the old 16 MiB array and the new 32 MiB array at once (~50 MiB); SegmentProxy.java:254 then calls toByteArray(), a third 16 MiB copy. That is ~67 MiB transient for a 16 MiB segment, on top of up to 32 MiB already resident, against the 256 MB heap IngestConfig.java:76-79 names in its own javadoc and the 64 MiB already committed to DEFAULT_MAX_QUEUED_PUSH_BYTES. An operator who does exactly what the javadoc tells them -- read bytesHeld() -- sizes the heap roughly three times too small and gets an OutOfMemoryError on the serving path. The row asked for 'a memory ceiling with an assertion of its OWN'; what landed asserts a number that is not the peak. Note the multiplier is per concurrent streamTo: only one is reachable today because DefaultIngest.java:231 publishes on the single binstore-push virtual thread, but streamTo is public, takes no lock, and its javadoc does not say one call at a time."
+    },
+    {
+      "id": "F5",
+      "file": "ingest/src/main/java/binjava/ingest/SegmentProxy.java:230",
+      "severity": "minor",
+      "title": "The admission guard is int arithmetic against a long ceiling",
+      "failure_scenario": "`admitting.size() + read > cache.capacityBytes()` promotes an int sum to long only after the int addition. SegmentCache(long) accepts any non-negative long, so with a capacity above Integer.MAX_VALUE (a 4 GiB cache on a large pod) the sum overflows negative once size() passes 2 GiB, the guard never fires, and the accumulator grows until ByteArrayOutputStream throws OutOfMemoryError mid-serve -- killing the serve and every consumer on it, where the intended behaviour was to decline the admission and stream through. `(long) admitting.size() + read` fixes it."
+    },
+    {
+      "id": "F6",
+      "file": "ingest/src/main/java/binjava/ingest/SegmentProxy.java:203",
+      "severity": "minor",
+      "title": "The chunk buffer is allocated before the cache is consulted, so every hit allocates and discards 64 KiB",
+      "failure_scenario": "byte[chunkBytes] is allocated at 203 and the hit check is at 210-214, which returns without ever using it. On the path this commit exists to make cheap -- the repeated serve -- the pod allocates and immediately garbages 64 KiB per serve. Harmless in isolation, but the comment at 199-202 makes a point of 'the ONLY allocation proportional to anything is this one', and on a hit it is proportional to nothing at all."
+    },
+    {
+      "id": "F7",
+      "file": "ingest/src/main/java/binjava/ingest/SegmentProxy.java:267",
+      "severity": "minor",
+      "title": "writeChunked keeps looping chunks after every consumer has been dropped",
+      "failure_scenario": "The sibling that does the same job one file over, SubscriptionHub.writeHeldBytesChunked at SubscriptionHub.java:554, guards its outer loop with `&& !live.isEmpty()`. writeChunked does not, so after the last sink throws on chunk 1 of a 32 MiB segment the method still walks 511 more offsets doing nothing. Behaviourally identical, but the two now disagree about the same loop for no stated reason, and the next reader has to work out which one is deliberate."
+    },
+    {
+      "id": "F8",
+      "file": "ingest/src/test/java/binjava/ingest/SegmentProxyCacheTest.java:93",
+      "severity": "minor",
+      "title": "An orphaned javadoc block documents the wrong test",
+      "failure_scenario": "Two javadoc blocks sit back to back at 93-96 and 97-107. The first -- 'A segment too big for the ceiling is served, and served again, and the ceiling is never breached' -- is dropped by javadoc and describes aSegmentTOOBIGForTheCeilingIsStillSERVEDAndNeverRESIDENT at line 128, which is 35 lines further down and now has no javadoc at all, while theINGESTERAPodActuallyRunsHasTheCacheON appears to carry a description of a test it is not. A reader auditing which cases cover the too-big path finds the sentence attached to the wiring test and concludes the refusal case is the one that checks the wiring."
+    }
+  ],
+  "verified_no_finding": [
+    "Request rate direction: a hit issues zero object-store requests, a miss issues exactly one GET as before, and SegmentCache itself performs no I/O. Nothing added scales with records, shards, partitions or indices. The row's claim that 64 + 3 late subscribers drops from four GETs to one is measured by SegmentProxyCacheTest and holds.",
+    "Staleness: a cache hit cannot serve superseded bytes. SegmentKey (format/src/main/java/binjava/format/SegmentKey.java) is <prefix>/data/.../<ms-timestamp>-<pod>-<seq>-h<headerLen>-<filter>.bseg, and SegmentPublisher.java:133-141 explains that the pod id plus per-pod sequence make the key unique without coordination. Two different bodies under one key would need the same millisecond, pod and sequence. Write-once holds.",
+    "Prefix caching: admission happens only after the read loop completes (SegmentProxy.java:253), and a throwing store leaves by the exception, so a truncated prefix is never admitted. Verified from control flow, not from the comment.",
+    "Lock discipline: SegmentCache does no I/O under its monitor, every method is synchronized on the instance, capacityBytes is final and read unsynchronized safely, and LinkedHashMap's access-order mutation on get() happens inside the monitor. Two concurrent misses on one key both GET and both put -- correct, wasteful, and honestly deferred to M5.63.",
+    "The array is taken by reference but never aliased in production: SegmentProxy passes admitting.toByteArray(), a fresh copy. The public put() aliasing hazard is documented at SegmentCache.java:88-91.",
+    "The three-argument streamTo overload genuinely has no production caller: the only non-test call site in the tree is SubscriptionHub.java:568, which uses the two-argument form. The named asymmetry costs nothing today.",
+    "Criterion 6 is not violated in its own terms: the accumulator is per call, not per consumer, so serving memory remains flat in K. The gap is that criterion 6 cannot see C, which the backlog row states correctly."
+  ],
+  "task": "M5.40b",
+  "role": "reviewer"
+}

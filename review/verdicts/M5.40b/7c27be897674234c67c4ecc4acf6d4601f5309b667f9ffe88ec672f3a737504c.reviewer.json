@@ -1,0 +1,28 @@
+{
+  "task": "M5.40b",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "M5.64-headerLen",
+      "severity": "major",
+      "file": "docs/internal/product/backlog.md",
+      "line": 82,
+      "description": "M5.64's row states: \"The segment header carries its own length (`headerLen` is in the key), so the honest options are to validate against that or to have `BinStore.get` expose the object size it already knows from the response.\" This conflates the HEADER's length with the SEGMENT's total length. Per format/src/main/java/binjava/format/SegmentKey.java's own javadoc, `headerLen` in the key exists so a reader can do `GET Range: bytes=0-(32+headerLen-1)` to retrieve PREAMBLE + DIRECTORY only -- it says nothing about the DATA section or FOOTER that follow. Per SegmentFormat.java, a segment is PREAMBLE(32B) + DIRECTORY(headerLen bytes) + DATA(sum of each run's byteLen) + FOOTER(24B); the DATA section, not the header, is the overwhelming majority of a segment's bytes (a header is a few dozen directory entries; DATA can be tens of MiB). 'Validate against headerLen' therefore only detects a read truncated inside the header (a tiny prefix) -- it is blind to a read that ends early anywhere in the DATA section, which is exactly where a truncated read is most likely to land given the DATA section's overwhelming size share. So the row's first 'honest option' does not actually close M5.64's gap for the case that matters; only the second option (BinStore.get exposing the object's total size, an SPI change) does.",
+      "failure_scenario": "A future engineer takes M5.64, reads 'validate against headerLen', implements a check that compares bytes-read against PREAMBLE_BYTES + headerLen, ships it believing the gap is closed. A segment's InputStream still ends early after the header but partway through DATA (the realistic truncation case) -- the check passes (header length matched), the truncated segment is admitted to SegmentCache as before, and M5.64's defect (a short read served as a whole segment to every later subscriber) survives unchanged despite the row being marked closed."
+    }
+  ],
+  "confirmed_accurate": [
+    "forSegmentsOf's javadoc (SegmentCache.java) correctly states maxSegmentBytes is a flush TRIGGER not a cap, matching IngestConfig.java's own javadoc (a single large _bulk body can make a segment exceed it); such an oversized segment is genuinely served uncached rather than refused.",
+    "The narrowed 'a prefix is never cached' claim is accurate: cache.put is only reached after the try block completes without throwing (SegmentProxy.java), so a read that throws never admits (pinned by aREADThatDIEDPartWayCachesNOTHING), and a short read that ends via EOF without throwing does fall through to admission (the open M5.64 gap).",
+    "The thread-safety paragraph in SegmentCache.java is no longer self-contradictory and its 'two concurrent callers both miss, both read, both admit' claim is accurate: cache.get and cache.put are separately synchronized calls with the uncached store read happening outside any lock in SegmentProxy.streamTo, so two overlapping callers each independently miss/read/admit (M5.63).",
+    "All open findings from round 2 (G1, T1, T2, F1-F4, and the two unlabeled all-zero-fixture/single-write findings) are now pinned: the DefaultIngest wiring test configures 16 MiB (non-default) and asserts 4x64MiB rather than DEFAULT_CAPACITY_BYTES; the trim is now exercised via a 4097-byte non-repeating (seeded Random) fixture where the doubling ladder does not land exactly; boundary (== ceiling) and hit-path chunking are covered by dedicated cases."
+  ],
+  "minor_note": {
+    "file": "ingest/src/main/java/binjava/ingest/SegmentCache.java",
+    "location": "forSegmentsOf javadoc",
+    "description": "'Such a segment is refused by {@link #put} and served uncached' slightly misattributes the mechanism: in SegmentProxy's actual call path, an oversized segment never reaches cache.put() at all -- SegmentProxy sets its local `admitting` accumulator to null mid-loop once the running total would exceed the ceiling, and the post-loop `if (admitting != null) cache.put(...)` guard skips the call entirely. SegmentCache.put's own oversized check is only exercised directly by SegmentCacheTest, not through this path. Outcome (uncached, served in full) is correct; the stated mechanism is not."
+  },
+  "hash_verified_before_recording": "7c27be897674234c67c4ecc4acf6d4601f5309b667f9ffe88ec672f3a737504c",
+  "diff_sha256": "7c27be897674234c67c4ecc4acf6d4601f5309b667f9ffe88ec672f3a737504c",
+  "role": "reviewer"
+}

@@ -1,0 +1,23 @@
+{
+  "diff_sha256": "06dc24279e246f299641b1938d810eb0a924df9616a448d0e24f291b4a7aa9a8",
+  "verdict": "pass",
+  "summary": "Round-4 narrow pass over the three round-3 minors only. All three mutations the round-3 test pass named are now killed, verified by running them in a throwaway worktree with the build log checked for 'error:': both key arguments constant (killed by TWOSegmentsThroughONEProxyKeepTheirOWNBytes on content AND on gets()==2), each key argument constant singly (killed on the GET count), emptying the hit path's catch so live.remove(i) never runs (killed at SegmentProxyCacheTest.java:123, deadWrites reads 5 not 1 because a 4097-byte fixture at a 1024 chunk is 5 hand-offs), DEFAULT_SEGMENTS_HELD 4 -> 1 (killed by theINGESTERAPodActuallyRunsHasTheCacheON), the hit path returning consumers.size() instead of live.size() (killed by the same hit-path case), and reverting the wiring to a hardcoded DEFAULT_CAPACITY_BYTES ceiling (killed by the pod case). The wiring comment's arithmetic is right: 4 x 16 MiB = 64L << 20, and at the default 8 MiB it would collide with DEFAULT_CAPACITY_BYTES = 32 MiB, which is what the case now avoids. The keying case's javadoc consequence claim is literally what the mutation produces -- firstB is handed SEGMENT rather than 'other'. Both production prose corrections check out against the code: SegmentProxy sets admitting = null the moment (long) admitted + read crosses the ceiling, so an oversized segment never reaches put and is served uncached, and put's length check is the backstop the javadoc now calls it; the M5.64 row no longer claims headerLen bounds the segment and points at the directory's per-run offsets instead, which RunEntry and SegmentWriter.java:98 confirm exist and make the total derivable. Two nits, neither blocking.",
+  "findings": [
+    {
+      "file": "ingest/src/test/java/binjava/ingest/SegmentProxyCacheTest.java:102",
+      "severity": "minor",
+      "finding": "False citation in the new hit-path case's javadoc: 'the miss path's identical logic is covered in SegmentProxyTest'. SegmentProxyTest contains no throwing sink at all -- grep for 'throw new IOException' in that file returns nothing. The miss-path drop cases are in SegmentProxyFailureTest (aConsumerThatTHROWSStopsNeitherTheOthersNorTheRead:52, aConsumerThatDiesPARTWAYTHROUGH:77, aSinkThrowingAnUNCHECKEDExceptionIsDroppedToo:115).",
+      "failure_scenario": "A maintainer asked whether the miss path's drop is still pinned follows the citation to SegmentProxyTest, finds no throwing-sink case, and concludes the miss path is uncovered -- either duplicating the three cases that already exist in SegmentProxyFailureTest, or, worse, deleting the miss-path catch believing nothing constrains it. Fix is one word: SegmentProxyFailureTest.",
+      "suggestion": "Change the reference to SegmentProxyFailureTest."
+    },
+    {
+      "file": "ingest/src/test/java/binjava/ingest/SegmentProxyCacheTest.java:106",
+      "severity": "minor",
+      "finding": "aConsumerThatTHROWSOnAHitIsDroppedAndTheOthersAreSERVED never asserts that the second streamTo took the HIT path. It asserts deadWrites, the healthy bytes and the return count, all of which the MISS path produces identically. The case is correct today -- mutating the hit-path catch alone does kill it, which proves the path is taken -- but nothing inside the case holds it there.",
+      "failure_scenario": "Admission regresses later (say a future change makes put refuse in some case, or the hit check moves below the read): every assertion in this case still passes because the miss path's loop drops a throwing sink after exactly one write too, so the case silently becomes a fourth copy of SegmentProxyFailureTest's miss-path coverage while its name and javadoc still claim the hit path. The suite as a whole still catches that mutation (aFanOutOfSIXTYFOURPlusThreeLATESubscribersIsONEGetNotFOUR fails on the GET count), which is why this is a nit and not a major.",
+      "suggestion": "Add assertThat(store.counts().gets()).as(\"the second call was a hit\").isEqualTo(1) after the second streamTo."
+    }
+  ],
+  "task": "M5.40b",
+  "role": "test-reviewer"
+}

@@ -1,0 +1,33 @@
+{
+  "verdict": "changes-requested",
+  "diff_sha256": "b5af691e274fba2cb90fb0b88f759869fe9b447401780ab346b16f4e025f0c68",
+  "summary": "The cache's own behaviour is well pinned -- eight mutations of SegmentCache and the SegmentProxy cache path were killed, including access-order, evict-oldest-first, the bytesHeld decrement, the oversized refusal, the lookup, the put, and the DefaultIngest wiring. What is NOT pinned is the new writeChunked hand-off: two mutations of it survive the whole :ingest:test suite, because the only fixture it is ever handed is a 4096-byte array of zeros and nothing asserts the slice sizes. Measured in a throwaway worktree with the staged diff applied; baseline :ingest:test green.",
+  "findings": [
+    {
+      "file": "ingest/src/test/java/binjava/ingest/SegmentProxyCacheTest.java:26",
+      "severity": "major",
+      "title": "The hit path's bytes are an all-zero fixture, so corrupting the hand-off survives",
+      "failure_scenario": "SEGMENT is `new byte[4096]` -- every byte is 0. Mutating SegmentProxy.java:271 from `live.get(i).write(segment, offset, length)` to `write(segment, 0, length)` makes every consumer of a CACHE HIT receive the first chunk four times instead of the segment. MEASURED: `./gradlew :ingest:test` is BUILD SUCCESSFUL with that mutation -- all 4 SegmentProxyCacheTest cases, all 5 SegmentCacheTest cases and the rest of the module pass. The assertion `isEqualTo(SEGMENT)` only constrains LENGTH here, so 'a late subscriber gets the SEGMENT, not an empty hit' is true of the empty case and vacuous about content. A real segment served from cache would be delivered corrupt with a green suite. Fix: fill the fixture with a position-dependent pattern (e.g. `(byte) (i * 31 + 7)`) so array equality carries byte identity; nothing else in the file needs to change."
+    },
+    {
+      "file": "ingest/src/main/java/binjava/ingest/SegmentProxy.java:267",
+      "severity": "major",
+      "title": "writeChunked's chunking contract has no test -- a single segment-sized write survives",
+      "failure_scenario": "Mutating the loop head to `for (int offset = 0; offset < segment.length; offset += segment.length) { int length = segment.length; ... }` -- i.e. one write of the whole 4 KiB array per consumer -- leaves `./gradlew :ingest:test` BUILD SUCCESSFUL (measured). No case counts writes or asserts that any slice is <= chunkBytes on the hit path, so the class's own stated contract ('A HIT IS STILL HANDED OVER A CHUNK AT A TIME ... would turn a hit into the buffer-then-forward ADR-0004 forbids', SegmentProxy.java:261-266, restated in the backlog cell) is prose with no test behind it. The miss path HAS this guard (SegmentProxyTest pins chunk-outer/consumer-inner); the new hit path inherits none of it, and the hit path is the one that already holds the whole segment in memory, i.e. the one where regressing to buffer-then-forward is a single line. Fix: one sink that records the length of every write, asserting max length <= proxy.chunkBytes() and a write count > 1 for a 4 KiB segment at a 1 KiB chunk."
+    },
+    {
+      "file": "ingest/src/main/java/binjava/ingest/SegmentCache.java:106",
+      "severity": "minor",
+      "title": "No case sits exactly on the ceiling -- three boundary flips survive",
+      "failure_scenario": "Every fixture is strictly inside or strictly outside the ceiling (cap 250 with 100-byte segments, cap 1<<20 with 4096, cap 100 with 4096), so `>` -> `>=` is invisible in all three places it appears. MEASURED SURVIVING against the full :ingest:test suite: (1) SegmentCache.java:106 `segment.length > capacityBytes` -> `>=`, which refuses a segment of exactly C and turns every cached repeat of a max-size segment back into a GET; (2) SegmentCache.java:114 `bytesHeld + segment.length > capacityBytes` -> `>=`, which evicts one entry more than the ceiling requires on an exact fill; (3) SegmentProxy.java:230 `admitting.size() + read > cache.capacityBytes()` -> `>=`, which abandons admission of a segment exactly C bytes long. DEFAULT_CAPACITY_BYTES is exactly 4 x DEFAULT_MAX_SEGMENT_BYTES, so 'exactly at the ceiling' is a shape production can actually produce at C/4 granularity. A case with one segment of exactly capacityBytes, and one of capacityBytes + 1, kills all three."
+    },
+    {
+      "file": "ingest/src/test/java/binjava/ingest/SegmentProxyCacheTest.java:1",
+      "severity": "minor",
+      "title": "'A PREFIX IS NEVER CACHED' is killed only incidentally, by a test about push counting",
+      "failure_scenario": "Moving the admission into a catch clause -- `catch (RuntimeException | IOException e) { if (admitting != null) cache.put(segmentKey, admitting.toByteArray()); throw e; }` -- caches the prefix of a read that threw. MEASURED: SegmentProxyCacheTest (4/4), SegmentCacheTest (5/5) and SegmentProxyFailureTest (10/10) all PASS under it; the only test that fails is UndeliverablePushTest.aPushThatCouldNotBeDeliveredIsCOUNTEDSeparatelyFromBackPressure:73 (expected 2L but was 1L), which fails because the second failed publish became a cache hit, not because anything asserts residency after a failure. So the claim holds today by accident of an unrelated counter assertion: if that test's second publish or its key ever changes, a failed read silently becomes a cached fragment served to the next subscriber as a whole segment, with no case in either new file noticing. A direct case -- a store that throws part way through, then assert cache.bytesHeld() is zero and the next call still issues a GET -- is a handful of lines and belongs in the file that claims it."
+    }
+  ],
+  "task": "M5.40b",
+  "role": "test-reviewer"
+}

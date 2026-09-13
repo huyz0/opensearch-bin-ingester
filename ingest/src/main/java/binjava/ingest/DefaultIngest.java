@@ -177,6 +177,19 @@ public final class DefaultIngest implements Ingest {
         return undeliverablePushes.get();
     }
 
+    /**
+     * How this pod serves segment bytes, so a test can see what was WIRED.
+     *
+     * <p>⚠️ PACKAGE-PRIVATE AND FOR THAT REASON ONLY. Without it, building the
+     * proxy with no cache -- the pre-M5.40b line -- leaves every test green
+     * while production issues a fresh GET for every repeat read, which is the
+     * whole defect that row records. The serving path itself is reached
+     * through {@code hub.publish}, never through this.
+     */
+    SegmentServing serving() {
+        return serving;
+    }
+
     /** How many pushes were dropped because a subscriber could not keep up. */
     public long droppedPushes() {
         lock.lock();
@@ -199,7 +212,16 @@ public final class DefaultIngest implements Ingest {
         this.serving = new SegmentServing(
                 new FetchPolicy(FetchPolicyConfig.defaultsFor(storeCapabilities.costs())),
                 storeCapabilities,
-                new SegmentProxy(store));
+                // ⚠️ THE CACHE IS ON IN PRODUCTION, which is what makes
+                // M5.40b a number rather than a capability. A repeat read
+                // across publishes -- a late subscriber, an AZ replaying a
+                // backlog -- costs no GET.
+                new SegmentProxy(store, SegmentProxy.DEFAULT_CHUNK_BYTES,
+                        // ⚠️ FROM THE CONFIG, NOT FROM THE DEFAULT CONSTANT.
+                        // A deployment that configures a larger segment than
+                        // the default would otherwise exceed a fixed ceiling
+                        // with EVERY segment, cache nothing, and say nothing.
+                        SegmentCache.forSegmentsOf(config.maxSegmentBytes())));
         this.sequencer = Objects.requireNonNull(sequencer, "sequencer");
         this.podShortId = podShortId;
         this.hub = Objects.requireNonNull(hub, "hub");
