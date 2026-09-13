@@ -1,0 +1,49 @@
+{
+  "diff_sha256": "c297f3e510fbd6196c4a2b7060ecd0f2c4e8d1dec21153b19fb9cefc1019dab9",
+  "verdict": "changes-requested",
+  "summary": "The version bump, the presence byte, the decode bounds checks and the two golden files are right, and decision (a) (Grant as a format type) is correct and honestly argued against architecture.md rule 1. Three things are not: encode() emits a v3 body its own decode() refuses (the exact option ADR-0042's amendment named and told this row to decide, undecided in ADR-0043); the ADR's cost argument for the coordinates asserts a saving that inverts at the run count ADR-0042 itself sized, and points at a per-run grant that cannot be coalesced; and the grant's expiry does not survive a round trip at better-than-millisecond precision, which is what a real presigner produces.",
+  "findings": [
+    {
+      "id": "M5.44-1",
+      "severity": "blocking",
+      "file": "format/src/main/java/binjava/format/SubscriptionEvent.java:381",
+      "title": "encode() produces a v3 body that decode() refuses, and ADR-0043 does not record the decision ADR-0042 assigned to this row by name",
+      "detail": "`carriesSessionEpoch = carriesGrant || sessionEpoch != SESSION_EPOCH_ABSENT` stamps VERSION_3 whenever a grant is present, and then writes SESSION_EPOCH_ABSENT (0) into the session-epoch slot. decode() at :505 refuses any v3 body whose epoch slot holds the sentinel. ADR-0042's amendment states this choice in advance -- 'an event carrying that field but no session epoch must be v3, so its session-epoch slot holds 0 -- either a v3 body carries the sentinel, re-opening the in-band collision round 1 blocked on, or the slot is special-cased ... Deciding that is part of adding the field, not after it.' ADR-0043 records neither option; its Consequences assert 'A grant implies a session epoch' as though the code enforced it, which it does not -- the record's compact constructor accepts the pair. The implementation silently takes the first option (a v3 body carries the sentinel) and moves the refusal to the reader. SubscriptionEventGrantTest:97 pins that as intended under the name 'refused on the wire', which is the writer's defect described as the reader's correctness.",
+      "failure_scenario": "Measured against the staged source: `new SubscriptionEvent(\"s\", 1, SESSION_EPOCH_ABSENT, key, \"seg\", 0, 1, DIRECT, new byte[0], grant, RANGE_ABSENT, RANGE_ABSENT).encode()` returns 58 bytes stamped version 3, and `SubscriptionEvent.decode` on those same bytes throws `IOException: a version 3 event may not carry an absent session epoch`. M5.45b mints the first real grant while M5.15b (the row that owns 'a live writer never emits ABSENT') is still todo, so a session registry that leaves a `long` at Java's default -- the exact failure SESSION_EPOCH_ABSENT's own javadoc warns about -- produces events the ingester encodes and ships successfully and every consumer throws on. The direct push is lost for every subscriber, each falls back to the commit log, and nothing on the ingester side can see it. Fix: refuse `grant != null && sessionEpoch == SESSION_EPOCH_ABSENT` in the compact constructor, so the error lands at the mint site rather than on the wire, and record that choice in ADR-0043 as ADR-0042's amendment requires."
+    },
+    {
+      "id": "M5.44-2",
+      "severity": "major",
+      "file": "docs/internal/product/decisions/0043-the-grant-crosses-to-the-consumer-as-a-format-type-with-its-range.md:57",
+      "title": "The cost argument for the coordinates inverts at the run count ADR-0042 sized, and a per-run range grant is the one shape that cannot be coalesced",
+      "detail": "ADR-0043 argues for byteStart/byteLen on the ground that 'a reader given coordinates needs zero directory reads, where one without them reads the directory and then the payload -- two GETs per consumer per segment rather than one'. That arithmetic assumes one run per segment per consumer. A SubscriptionEvent is per RunKey, and ADR-0042's own Consequences size the real case: 'a node holding ~400 streams in one 8 MiB segment therefore receives ~400 events naming the same segmentKey -- and if they say via=DIRECT, one event/one fetch means ~400 fetches for one object, a rate scaling with shards.' The same paragraph says the escape is that 'coalescing stays constructible because segmentKey is on every event', and M5.39/M5.45b carry it as 'one grant, or one serve, per (node, segment) rather than per run'. A grant scoped to ONE RUN's byte range is precisely the shape that defeats that escape: 400 runs cannot share one range-scoped grant. ADR-0043 never states which granularity the range is for, the backlog row and the research banner repeat the saving verbatim, and nothing in the three documents reconciles the coordinates with the coalescing rule the next row must implement.",
+      "failure_scenario": "A catch-up node holds 400 of a segment's runs. M5.45b reads ADR-0043's cost paragraph literally, mints one range-scoped grant per event because that is what the range is for, and the node issues 400 consumer-side ranged GETs against one 8 MiB object instead of 1 whole-object GET plus at most 1 directory read. That is a request rate scaling with shards-per-node, which non-negotiable 6 forbids by name, and GrantIssuer's own javadoc records that consumer-side GETs are invisible to CountingBinStore -- so no counting decorator and no gate would see it. The claimed saving is a loss of 398 GETs per (node, segment). The decision record needs to say either that a coalesced grant carries the segment-wide range (or none), or that a per-run range is priced against the coalescing rule and why."
+    },
+    {
+      "id": "M5.44-3",
+      "severity": "major",
+      "file": "format/src/main/java/binjava/format/SubscriptionEvent.java:415",
+      "title": "The grant expiry does not round-trip at better-than-millisecond precision, which is the precision a real presigner produces",
+      "detail": "encode writes `grant.expiresAt().toEpochMilli()` and decode rebuilds it with `Instant.ofEpochMilli` (:519), while `Grant`'s compact constructor accepts any Instant and its `equals` is the record's generated one, comparing nanos. SubscriptionEvent.equals now includes the grant, so the truncation is an inequality rather than a rounding. The new cases construct every expiry with `Instant.ofEpochMilli`, so nothing exercises a value the wire cannot hold. Separately, `Grant` accepts `Instant.MAX`, for which `toEpochMilli()` throws `ArithmeticException: long overflow` out of `encode()` -- an unchecked escape from a method that validates everything else.",
+      "failure_scenario": "Measured against the staged source: an event whose grant expires at `Instant.ofEpochSecond(1000, 123456789)` encodes and decodes back to `1970-01-01T00:16:40.123Z`, and `decode(e.encode()).equals(e)` is false. A real GrantIssuer builds its SignedUrl from `clock.instant().plus(ttl)`, and `Clock.systemUTC().instant()` carries microseconds on Linux/JDK 25, so essentially every grant minted at M5.45b hits this. The M5.45b end-to-end assertion that the event the consumer decoded equals the one the ingester sent fails for all but the ~1-in-1000 grants whose clock reading lands on a whole millisecond, which reads as flakiness and invites weakening the assertion instead. Fix in `Grant`'s compact constructor -- `expiresAt.truncatedTo(ChronoUnit.MILLIS)` plus a bound that keeps `toEpochMilli` in range -- so the in-memory type cannot hold precision the wire does not carry."
+    },
+    {
+      "id": "M5.44-4",
+      "severity": "minor",
+      "file": "format/src/main/java/binjava/format/SubscriptionEvent.java:220",
+      "title": "A negative byteStart is accepted in memory and refused on the wire, falsifying the comment that claims otherwise",
+      "detail": "The constructor guards the pair (both-or-neither) and `byteLen <= 0`, but never `byteStart < 0` for values other than the -1 sentinel. decode does check it (:527). The comment at :205 -- 'Refusing here is what keeps encode-decode-equals total' -- is therefore false for this case.",
+      "failure_scenario": "Measured: `event(grant, -5L, 10L)` constructs without complaint and encodes, and `SubscriptionEvent.decode` on those bytes throws `IOException: a byte range of (-5, 10) is not a range`. An issuer that computes byteStart by subtraction and underflows builds an event the ingester accepts and no consumer can read -- the same lost-push shape as finding 1, and the very asymmetry the two guards above it were written to prevent. One clause (`byteStart < 0`) closes it."
+    },
+    {
+      "id": "M5.44-5",
+      "severity": "minor",
+      "file": "format/src/main/java/binjava/format/SubscriptionEvent.java:324",
+      "title": "toString did not gain the three new components, which is the defect recorded four lines above it as caught by the previous round",
+      "detail": "`equals` and `hashCode` gained grant/byteStart/byteLen; the hand-written `toString` did not, and neither did the record's @param list (:69-102). The comment at :327 records round-1 review of M5.15a finding exactly this for sessionEpoch: 'the object could distinguish the two cases while nothing a human reads could.' Redaction is unaffected and was verified -- `Grant.toString` redacts and the event's toString omits the grant entirely, so no path in the tree prints the URL.",
+      "failure_scenario": "An operator debugging a direct fetch that returned 403 prints the event from a log line and sees no grant field at all: they cannot tell an event that carried no grant from one whose grant had expired, which is the single fact `Grant`'s javadoc says the visible expiry exists to answer ('what an operator needs when a fetch fails: whether the grant had run out'). Printing `grant` (already redacted) and the range closes it."
+    }
+  ],
+  "task": "M5.44",
+  "role": "reviewer"
+}

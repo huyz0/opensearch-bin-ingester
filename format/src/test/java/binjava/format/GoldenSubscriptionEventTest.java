@@ -57,6 +57,131 @@ class GoldenSubscriptionEventTest {
                 1_000L, 128, FetchMode.DIRECT, new byte[0]);
     }
 
+    private static SubscriptionEvent v3DirectWithRange() {
+        return new SubscriptionEvent("sess-abc", 42L, 3L, KEY, "seg/2026/09/11/xyz",
+                1_000L, 128, FetchMode.DIRECT, new byte[0],
+                new Grant("https://store.example/seg/2026/09/11/xyz?sig=abc",
+                        java.time.Instant.ofEpochMilli(1_757_764_800_000L)),
+                4_096L, 65_536L);
+    }
+
+    private static SubscriptionEvent v3DirectWholeObject() {
+        return new SubscriptionEvent("sess-abc", 42L, 3L, KEY, "seg/2026/09/11/xyz",
+                1_000L, 128, FetchMode.DIRECT, new byte[0],
+                new Grant("https://store.example/seg/2026/09/11/xyz?sig=abc",
+                        java.time.Instant.ofEpochMilli(1_757_764_800_000L)),
+                SubscriptionEvent.RANGE_ABSENT, SubscriptionEvent.RANGE_ABSENT);
+    }
+
+    /**
+     * A v3 {@code direct} event carrying a grant AND its byte range.
+     *
+     * <p>⚠️ THE RANGE IS THE HALF security.md RULE 3 ASKED FOR: a grant "scoped
+     * to one key and where possible one range". ADR-0042 dropped the
+     * coordinates and named M5.44 as the row that decides whether closing that
+     * means bringing them back; this file is that decision in bytes.
+     */
+    @Test
+    void aV3DIRECTEventWithARangeMatchesItsGoldenBytes() throws Exception {
+        byte[] stored = golden("subscription-event-direct-v3.bin");
+        assertThat(v3DirectWithRange().encode()).as("the WRITER has not drifted")
+                .isEqualTo(stored);
+        assertThat(SubscriptionEvent.decode(stored))
+                .as("and a READER built today parses the grant and the range back")
+                .isEqualTo(v3DirectWithRange());
+    }
+
+    /**
+     * A v3 event whose grant covers the WHOLE object still encodes, and its
+     * range reads back ABSENT rather than as byte zero.
+     *
+     * <p>⚠️ THE PRESENCE BYTE IS WHAT MAKES THIS DISTINGUISHABLE.
+     * {@code byteStart = 0} is the first byte of a real segment, so a sentinel
+     * varint would have collided with a legitimate range starting at zero.
+     */
+    @Test
+    void aV3GrantWithNORangeReadsBackABSENTNotZERO() throws Exception {
+        byte[] stored = golden("subscription-event-direct-v3-whole.bin");
+        assertThat(v3DirectWholeObject().encode()).isEqualTo(stored);
+        SubscriptionEvent back = SubscriptionEvent.decode(stored);
+        assertThat(back).isEqualTo(v3DirectWholeObject());
+        assertThat(back.byteStart())
+                .as("absent, and NOT the first byte of the object")
+                .isEqualTo(SubscriptionEvent.RANGE_ABSENT);
+        assertThat(back.grant()).isNotNull();
+    }
+
+    /**
+     * The grant and the range are part of the VALUE, not decoration.
+     *
+     * <p>⚠️ {@code equals} HERE IS HAND-WRITTEN AND ENUMERATES COMPONENTS, so a
+     * field added to the record and not to that list is invisible to every
+     * {@code isEqualTo} above -- including the golden assertions. A decoder
+     * that dropped the grant entirely would have matched its golden file.
+     */
+    @Test
+    void aDifferingGRANTOrRANGEMakesTwoEventsUNEQUAL() {
+        assertThat(v3DirectWithRange()).isNotEqualTo(v3DirectWholeObject());
+        assertThat(v3DirectWithRange()).isNotEqualTo(v2Direct());
+        assertThat(v3DirectWithRange().hashCode())
+                .isNotEqualTo(v3DirectWholeObject().hashCode());
+
+        // ⚠️ DIFFERING ONLY IN THE GRANT, AND THE THREE ABOVE DO NOT.
+        // `v3DirectWithRange` and `v3DirectWholeObject` differ in the RANGE
+        // too, and so does `v2Direct` -- so `byteStart == that.byteStart`
+        // satisfies every one of them on its own and the grant component was
+        // unconstrained. Review measured `Objects.equals(grant, that.grant)`
+        // relaxed to `true` surviving the whole suite, and worse: that
+        // relaxation PLUS a decode building the Grant with a constant url left
+        // both golden cases green as well.
+        SubscriptionEvent otherUrl = new SubscriptionEvent("sess-abc", 42L, 3L, KEY,
+                "seg/2026/09/11/xyz", 1_000L, 128, FetchMode.DIRECT, new byte[0],
+                new Grant("https://store.example/DIFFERENT?sig=abc",
+                        java.time.Instant.ofEpochMilli(1_757_764_800_000L)),
+                4_096L, 65_536L);
+        SubscriptionEvent otherExpiry = new SubscriptionEvent("sess-abc", 42L, 3L, KEY,
+                "seg/2026/09/11/xyz", 1_000L, 128, FetchMode.DIRECT, new byte[0],
+                new Grant("https://store.example/seg/2026/09/11/xyz?sig=abc",
+                        java.time.Instant.ofEpochMilli(1_757_764_800_001L)),
+                4_096L, 65_536L);
+
+        assertThat(v3DirectWithRange())
+                .as("a different URL is a different event, whatever the range says")
+                .isNotEqualTo(otherUrl);
+        assertThat(v3DirectWithRange())
+                .as("and so is a different expiry")
+                .isNotEqualTo(otherExpiry);
+
+        // ⚠️ hashCode TOO, AND THE EQUALS HALF ALONE LEFT IT FREE. Review
+        // measured `grant` dropped from the `Objects.hash(...)` list surviving:
+        // the hashCode comparison above is between a pair that ALSO differs in
+        // the range, so the grant rode free there exactly as it did in equals.
+        assertThat(v3DirectWithRange().hashCode())
+                .as("a different grant is a different hash, with the range held equal")
+                .isNotEqualTo(otherUrl.hashCode());
+
+        // ⚠️ AND EACH RANGE COMPONENT SEPARATELY. Dropping `byteStart` or
+        // `byteLen` from equals survived independently, because no pair in the
+        // suite differed in exactly one of them.
+        SubscriptionEvent otherStart = new SubscriptionEvent("sess-abc", 42L, 3L, KEY,
+                "seg/2026/09/11/xyz", 1_000L, 128, FetchMode.DIRECT, new byte[0],
+                new Grant("https://store.example/seg/2026/09/11/xyz?sig=abc",
+                        java.time.Instant.ofEpochMilli(1_757_764_800_000L)),
+                8_192L, 65_536L);
+        SubscriptionEvent otherLen = new SubscriptionEvent("sess-abc", 42L, 3L, KEY,
+                "seg/2026/09/11/xyz", 1_000L, 128, FetchMode.DIRECT, new byte[0],
+                new Grant("https://store.example/seg/2026/09/11/xyz?sig=abc",
+                        java.time.Instant.ofEpochMilli(1_757_764_800_000L)),
+                4_096L, 32_768L);
+
+        assertThat(v3DirectWithRange())
+                .as("a different start alone is a different event")
+                .isNotEqualTo(otherStart);
+        assertThat(v3DirectWithRange())
+                .as("and a different length alone is too")
+                .isNotEqualTo(otherLen);
+    }
+
     /**
      * A v2 {@code inline} event encodes to exactly the bytes on disk.
      *

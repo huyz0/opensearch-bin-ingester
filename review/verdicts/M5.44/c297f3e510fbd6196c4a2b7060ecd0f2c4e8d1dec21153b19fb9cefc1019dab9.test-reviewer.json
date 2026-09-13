@@ -1,0 +1,62 @@
+{
+  "diff_sha256": "c297f3e510fbd6196c4a2b7060ecd0f2c4e8d1dec21153b19fb9cefc1019dab9",
+  "verdict": "changes-requested",
+  "summary": "26 mutations run in a throwaway worktree against :format:test; 22 killed, 4 survived (compile checked on every run). The two new golden files are load-bearing and are the sole killer for several encoder mutations. Four gaps: the grant component of the hand-written equals is unconstrained (the very defect the ADR claims a case pins), the range-present flag's refusal branch has no test, a negative byteStart is constructible but un-decodable (round trip not total), and a zero-length url on the wire escapes decode as IllegalArgumentException rather than IOException.",
+  "findings": [
+    {
+      "file": "format/src/test/java/binjava/format/GoldenSubscriptionEventTest.java:123",
+      "severity": "major",
+      "title": "aDifferingGRANTOrRANGEMakesTwoEventsUNEQUAL never exercises the grant component of equals",
+      "surviving_mutation": "In SubscriptionEvent.equals, replace `&& Objects.equals(grant, that.grant)` with `&& true`. MEASURED: the whole :format:test suite stays green.",
+      "failure_scenario": "Both isNotEqualTo comparisons differ in the RANGE as well as the grant: v3DirectWithRange (4096/65536) vs v3DirectWholeObject (RANGE_ABSENT) and vs v2Direct (RANGE_ABSENT). The byteStart/byteLen comparison alone satisfies every assertion in the case, so the grant component is dead weight the suite cannot see. ADR-0043 states 'a case asserts that a differing grant makes two events unequal' and the backlog cell states 'a case pins it' -- neither is true as written. Compounded, MEASURED: equals-drops-grant PLUS a decode that builds the Grant with a constant URL (`new Grant(\"https://constant.example/x\", ...)`) leaves the entire suite green, including both new golden cases -- exactly the 'a decoder that dropped the grant would still have matched its golden file' failure the commit says it closed, one step removed. Fix: one assertion comparing two events that differ ONLY in the grant (same range, different url or expiry).",
+      "mutation_evidence": "Q1_equals_drops_grant SURVIVED; Z4_equals_drops_grant_AND_decode_constant_url SURVIVED; D4_constant_url alone KILLED (by the equals component this finding says nothing tests)."
+    },
+    {
+      "file": "format/src/main/java/binjava/format/SubscriptionEvent.java:521",
+      "severity": "major",
+      "title": "the range-present flag's refusal branch has no test",
+      "surviving_mutation": "Replace `if (rangePresent != 0 && rangePresent != 1)` with `if (false)`. MEASURED: the whole :format:test suite stays green.",
+      "failure_scenario": "No case feeds decode a v3 body whose presence byte is anything but 0 or 1. With the guard removed, a flag byte of 2 -- a corrupted object, or a future writer that widened the byte into an enum -- falls through `rangePresent == 1` and decodes as a grant with NO range, i.e. a whole-object grant. security.md rule 3's 'scoped to one key and where possible one range' is silently downgraded to the whole key, and the consumer reports a clean stream. Every other refusal in this decoder (unsupported version, trailing bytes, absent session epoch, unknown fetch mode) has a case; this new one does not. VERIFIED by probe that the guard does fire today (IOException 'a range-present flag is 0 or 1, got 2'), so the case is writable in three lines against the existing encode output.",
+      "mutation_evidence": "D5_flag_not_validated SURVIVED."
+    },
+    {
+      "file": "format/src/test/java/binjava/format/SubscriptionEventGrantTest.java:80",
+      "severity": "major",
+      "title": "a negative byteStart is constructible and does not round trip -- no case covers it",
+      "surviving_mutation": "None needed: production is already wrong and no test sees it. The equivalent mutation is that the compact constructor's range guards can lose their byteStart half entirely and nothing fails, because nothing asserts one.",
+      "failure_scenario": "MEASURED by probe against the staged code: `new SubscriptionEvent(..., GRANT, -7L, 5L)` is ACCEPTED by the compact constructor (byteStart != RANGE_ABSENT, byteLen != RANGE_ABSENT, byteLen > 0), encodes to 98 bytes (putUvarint writes -7 as a ten-byte varint), and decode then REFUSES it with `IOException: a byte range of (-7, 5) is not a range`. The constructor's own comment at line 214 says 'Refusing here is what keeps encode-decode-equals total' -- it is not total, for every negative byteStart other than -1. aHALFRangeIsRefusedInBothDirections covers (start, ABSENT), (ABSENT, len) and (start, 0) but never a negative start, and the length guard `byteLen <= 0` has no byteStart counterpart. A caller that computes a range from a subtraction that underflows builds an event the peer cannot parse.",
+      "mutation_evidence": "probe run in a throwaway worktree; C1/C2/C3 guard mutations all KILLED, so the three guards that exist are pinned -- this is the fourth that is not."
+    },
+    {
+      "file": "format/src/main/java/binjava/format/SubscriptionEvent.java:519",
+      "severity": "major",
+      "title": "a zero-length url on the wire leaves decode as IllegalArgumentException, and no case covers it",
+      "surviving_mutation": "Delete the `catch (IllegalArgumentException malformed) -> IOException` wrapping at line 570 for the grant path, or move the `new Grant(...)` in or out of that try: no test distinguishes the two placements.",
+      "failure_scenario": "MEASURED by probe: a hand-crafted v3 body with a zero-length url string makes decode throw `java.lang.IllegalArgumentException: a grant needs a url`, not an IOException. `new Grant(url, ...)` at line 519 sits OUTSIDE the try that exists at line 570 precisely so that 'a violation arriving over the wire is a parse failure rather than a programming error -- a caller decoding untrusted bytes must not have to catch two kinds of thing'. The comment at line 516 ('THE RECORD'S OWN GUARD REFUSES A BLANK URL, and letting it do so keeps one definition') reads as if this were handled. The consumer's decode loop catches IOException; an unchecked exception from a hostile or truncated event escapes it. GrantTest pins the guard at the record level and SubscriptionEventGrantTest pins nothing at the wire level, so the two halves never meet in a test.",
+      "mutation_evidence": "probe run in a throwaway worktree against the staged code."
+    },
+    {
+      "file": "format/src/test/java/binjava/format/SubscriptionEventGrantTest.java:41",
+      "severity": "minor",
+      "title": "aV3EventSurvivesAROUNDTrip killed nothing the golden files did not",
+      "surviving_mutation": "n/a -- redundancy, not weakness. Across all 26 mutations run, every mutation this case killed was also killed by aV3DIRECTEventWithARangeMatchesItsGoldenBytes or aV3GrantWithNORangeReadsBACKABSENTNotZERO. Its javadoc claims it catches 'a change that broke both directions symmetrically', but a symmetric encode/decode change moves the BYTES, which is what the golden files assert.",
+      "failure_scenario": "It costs nothing and breaks nothing; recorded so the claim in its javadoc is not read later as a reason to skip a golden file. Its third list element (RANGE_ABSENT) and the `event(GRANT, 0L, 1L)` element also duplicate aRangeStartingAtBYTEZEROIsNotMistakenForABSENT."
+    },
+    {
+      "file": "format/src/main/java/binjava/format/SubscriptionEvent.java:515",
+      "severity": "minor",
+      "title": "a grant expiry decoded from a ten-byte varint with bit 63 set is accepted unchecked",
+      "surviving_mutation": "n/a -- there is no branch to mutate; there is no guard.",
+      "failure_scenario": "`long expiresAtMillis = c.uvarint()` accepts a negative long (the same ten-byte-varint shape this class already guards against for recordCount and partition, with the round-2 measurements quoted at lines 551-565), and Instant.ofEpochMilli happily yields a 1969 expiry. Nothing refuses it and no case probes it. Harmless today because nothing consults the expiry, and it becomes live with M5.45b's clamp assertion -- which is where the backlog already warns that an expiry fake that ignores its ttl reads as clamped."
+    },
+    {
+      "file": "format/src/test/java/binjava/format/SubscriptionEventGrantTest.java:104",
+      "severity": "minor",
+      "title": "aVERSIONFOUREventIsREFUSEDNotSkipped is honest, with one soft spot",
+      "surviving_mutation": "n/a -- V1_accept_any_version was KILLED by this case and by SubscriptionEventTest.anUNKNOWNVersionIsREFUSED.",
+      "failure_scenario": "Byte 7 IS the version's low byte: the golden hex dump reads `4253 5542 0000 0003`, magic big-endian in 0-3 and the version big-endian int in 4-7. The case does not assert that v3[7] == 3 before flipping it, so if the version field ever moved the case would be flipping an unrelated byte -- but it would then fail rather than pass vacuously, because the assertion pins the message text 'unsupported subscription event version: 4' and a flipped payload byte yields a different IOException or none. Layout is pinned by the golden files anyway. Recorded, not a defect."
+    }
+  ],
+  "task": "M5.44",
+  "role": "test-reviewer"
+}

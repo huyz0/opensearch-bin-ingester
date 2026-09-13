@@ -1,0 +1,42 @@
+{
+  "diff_sha256": "dc3c271073d0de7e2c55b708712a76d40da5524a6e531adebc944e7e67f093df",
+  "verdict": "changes-requested",
+  "summary": "Round 2, tests only. All four round-1 majors re-measured and each now dies under its own mutation, and both new byte-offset cases self-check against fixture drift. One half of the round-2 decode fix is unpinned: decode's new negative-expiry guard has no case, and deleting it leaves all 277 format tests green while decode escapes with IllegalArgumentException on crafted bytes -- the exact defect the blank-url case was added for, measured by probe. Three minors, each with a surviving mutation named.",
+  "findings": [
+    {
+      "file": "format/src/main/java/binjava/format/SubscriptionEvent.java:565",
+      "severity": "major",
+      "title": "decode's new negative-expiry guard is unpinned -- the blank-url fix applied in one direction only",
+      "failure_scenario": "MEASURED in a throwaway worktree against the staged tree, no compile error in the build log: mutate `if (expiresAtMillis < 0) {` to `if (false) {` and all 277 :format tests pass. The consequence is not hypothetical -- a probe crafting a v3 body whose expiry is a ten-byte uvarint (reading back as -1) prints, unmutated: `java.io.IOException: a grant expiry of -1 is not an instant`; with the guard removed: `java.lang.IllegalArgumentException: a grant expiry before the epoch has already run out: 1969-12-31T23:59:59.999Z`. That IAE is thrown at line 569's `new Grant(...)`, which is OUTSIDE the try at line 617, so it escapes `decode` unchanged -- the identical defect round 1 raised as a major for the blank url, and the commit body claims both were fixed together ('decode now guards the url and the expiry itself'). One is pinned by `aBLANKUrlOnTheWireIsAnIOExceptionLikeEveryOtherMalformedField` (verified: deleting `if (url.isBlank())` fails exactly that case); the other is pinned by nothing, so a future refactor deleting it reintroduces an unchecked exception out of a decoder reading untrusted subscription bytes and the suite stays green. The remedy is one case beside the blank-url one at SubscriptionEventGrantTest.java:185, splicing a ten-byte expiry varint the same way, asserting IOException with 'is not an instant'."
+    },
+    {
+      "file": "format/src/main/java/binjava/format/Grant.java:60",
+      "severity": "minor",
+      "title": "Grant's pre-epoch expiry guard has no case",
+      "failure_scenario": "MEASURED: mutate `if (millis < 0) {` to `if (false) {` -- all 277 :format tests green, no compile error. Probe measured the behaviour that guard prevents: `new Grant(\"https://x/y\", Instant.ofEpochSecond(-100))` would construct, `encode` writes the negative millis as a ten-byte uvarint, and `decode` then refuses it with `IOException: a grant expiry of -100000 is not an instant` -- an event this class produces and cannot read back, which is the same encode-decode asymmetry round 1 raised for the negative byteStart and which `aNEGATIVEByteStartIsRefused` now pins for its own field. GrantTest covers null url, blank url and null expiry, and SubscriptionEventGrantTest covers Instant.MAX, so the lower bound is the one bound of the four with no case."
+    },
+    {
+      "file": "format/src/main/java/binjava/format/SubscriptionEvent.java:336",
+      "severity": "minor",
+      "title": "hashCode's grant component is unconstrained -- the equals half was fixed, the hashCode half was not",
+      "failure_scenario": "MEASURED: drop `grant` from the `Objects.hash(...)` argument list (`recordCount, via, grant, byteStart, byteLen` -> `recordCount, via, byteStart, byteLen`) and all 277 tests pass. GoldenSubscriptionEventTest.java:126 asserts hashCode inequality only between v3DirectWithRange and v3DirectWholeObject, which differ in the RANGE too -- so byteStart/byteLen carry that assertion on their own and the grant rides for free. It is the same enumerate-the-components hole the ADR's own Consequences paragraph and the new `otherUrl`/`otherExpiry` events exist to close, left open one method down: the fix is to compare `otherUrl.hashCode()` against `v3DirectWithRange().hashCode()`, the pair that already differs only in the grant."
+    },
+    {
+      "file": "format/src/main/java/binjava/format/SubscriptionEvent.java:331",
+      "severity": "minor",
+      "title": "equals pins byteStart and byteLen only as a pair -- each is individually unconstrained",
+      "failure_scenario": "TWO mutations MEASURED, each surviving alone: dropping `&& byteLen == that.byteLen` from equals leaves 277 green, and dropping `&& byteStart == that.byteStart` leaves 277 green. No event in the suite differs in exactly one of the two: v3DirectWithRange (4096/65536) vs v3DirectWholeObject (-1/-1) differ in both, and the new otherUrl/otherExpiry differ in the grant. Blast radius is smaller than round 1's grant finding because `aRangeStartingAtBYTEZEROIsNotMistakenForABSENT` asserts back.byteStart() and back.byteLen() through the accessors, so a decoder bug in either is still caught -- but equals itself is now the field-added-and-not-compared hazard the commit's own ADR paragraph names, for the next commit that adds a coordinate. One extra event differing only in byteLen closes it."
+    }
+  ],
+  "verified_from_previous_round": [
+    "M5.44-equals-grant: `&& Objects.equals(grant, that.grant)` -> `&& true` now FAILS GoldenSubscriptionEventTest.aDifferingGRANTOrRANGEMakesTwoEventsUNEQUAL. The paired decode mutation (building the Grant with a constant url) now fails five cases including both golden ones.",
+    "M5.44-range-flag: `if (rangePresent != 0 && rangePresent != 1)` -> `if (false)` now FAILS aRangePresentFLAGThatIsNeitherZeroNorOneIsREFUSED. Its `length - 6` offset is correct and self-checking: changing the fixture range to (1, 2) makes the case FAIL on its `flag really is here` assertion rather than silently miss the field.",
+    "M5.44-negative-byteStart: the constructor guard -> `if (false)` now FAILS aNEGATIVEByteStartIsRefused.",
+    "M5.44-blank-url: `if (url.isBlank())` -> `if (false)` now FAILS aBLANKUrlOnTheWireIsAnIOExceptionLikeEveryOtherMalformedField, so the hand-spliced array does reach the guard rather than passing on a trailing-bytes refusal. Its offsets are self-checking: shortening the fixture expiry to ofEpochMilli(1000) makes the case FAIL on its length-prefix assertion.",
+    "Grant truncation: deleting `truncatedTo(ChronoUnit.MILLIS)` FAILS aSUBMILLISECONDExpirySurvivesTheWire, so that case does pin the truncation and not merely the round trip. Coarsening it to ChronoUnit.SECONDS also dies -- on aDifferingGRANTOrRANGEMakesTwoEventsUNEQUAL, whose otherExpiry differs by one millisecond.",
+    "Grant expiry bound: Instant.MAX is pinned by anExpiryTooFARForEpochMillisIsRefused.",
+    "Constructor refusal of a grant with an absent session epoch is pinned by aGrantWithoutASessionEPOCHIsRefusedWhereItIsBUILT; decode's range swap is pinned by three cases; no existing assertion was weakened (the golden test diff is purely additive)."
+  ],
+  "task": "M5.44",
+  "role": "test-reviewer"
+}

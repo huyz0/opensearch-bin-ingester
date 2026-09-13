@@ -205,7 +205,26 @@ event.
 > the preamble and the directory without GUESSING — which removes the guess, not the lookup, and
 > matters only on the `direct` path. `codec` went for a different reason: it is recorded per run in
 > the segment header (doc 01 §4), so an event carrying it would repeat what the bytes already say.
-> ⚠️ ADR-0042 records the consequence for security.md rule 3's "where possible one range". ⚠️ The event
+> ⚠️ ADR-0042 records the consequence for security.md rule 3's "where possible one range".
+> ⚠️ **AND TWO OF THE THREE CAME BACK AT VERSION 3 (M5.44, ADR-0043).** `byteStart` and `byteLen`
+> are on the event again, alongside the grant, because a reader given coordinates can issue ONE
+> request where one without them reads the directory and then the payload. ⚠️ **Not "zero directory
+> reads", which ADR-0042 says and ADR-0043 corrects**: `codecFlags` is per run in the DIRECTORY and
+> DATA carries no codec id, so a slice-only GET cannot decompress what it fetched. The single
+> request spans `[0, max(byteStart+byteLen))` — header included — which R7's `h<headerLen>` makes
+> computable in advance. ⚠️ **The saving
+> is per (node, segment), NOT per consumer per run**, and ADR-0043 records an earlier draft of this
+> banner pricing it the second way: a grant whose SIGNATURE covers one run's range cannot be shared
+> by the ~400 other runs a node holds for that segment, so the per-run reading produces 400 ranged
+> GETs against one object — a rate scaling with shards-per-node. The grant stays scoped to the KEY;
+> the coordinates let a node union its runs into one ranged GET without reading the directory, which
+> is what "one grant per (node, segment)" needs. security.md rule 3's range half is still open.
+> They are NOT a duplicate of a per-run fact: the
+> event already carries `firstOffset` and `recordCount`, the run's LOGICAL coordinates, and these
+> are the same run's PHYSICAL ones. ⚠️ **`codec` did NOT come back** and the reason above is
+> untouched. ⚠️ The range is OPTIONAL within the grant and a presence byte says which, because
+> `byteStart = 0` is a real offset and `byteLen = 0` a real emptiness, so no value is spare to mean
+> absent. ⚠️ The event
 > is encoded **binary**, behind a magic-and-version header, rather than as the JSON drawn here;
 > §2a's `HTTP/2 + NDJSON` recommendation is about the CHANNEL and is **not** overturned — the
 > framing is still open, and ADR-0042 records that its fields carry over unchanged if the channel
