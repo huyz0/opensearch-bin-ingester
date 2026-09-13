@@ -73,9 +73,17 @@ public final class FetchPolicy {
         // shipping the bytes costs less than the GET it saves. Collapsing them
         // to one number would either pay a fetch to avoid free bytes or inline
         // 100 MiB/s cross-AZ at ~$340/day.
+        // ⚠️ THE CAP BOUNDS BOTH PATHS, and the billed path takes whichever
+        // of the two bounds is smaller. The cap protects the push channel and the consumer's heap,
+        // and neither cares which AZ the bytes came from -- so applying it to
+        // the same-AZ path alone inverted the order whenever a low transfer
+        // price derived a crossover above it. MEASURED at 1,000
+        // micro-dollars/GB: a 400,000-byte crossover against a 262,144 cap
+        // inlined 300 KiB when the bytes had to CROSS an AZ and answered
+        // `PROXY` when they were local and FREE.
         long inlineBound = delivery.bytesInServingAz()
                 ? config.inlineCapBytes()
-                : config.crossAzCrossoverBytes();
+                : Math.min(config.inlineCapBytes(), config.crossAzCrossoverBytes());
         if (delivery.batchBytes() <= inlineBound) {
             return FetchMode.INLINE;
         }

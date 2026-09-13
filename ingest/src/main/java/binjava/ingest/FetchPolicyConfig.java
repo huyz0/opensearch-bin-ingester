@@ -29,13 +29,15 @@ import binjava.binstore.CostTable;
  * the store. Extending it would make every backend declare a number it does
  * not know, for a contract change nothing else needed.
  *
- * @param inlineCapBytes the largest segment inlined when the bytes are already
- *     in the serving pod's AZ. ⚠️ Intra-AZ transfer is free, so this is a
- *     generous cap protecting the push channel and the consumer's heap rather
- *     than a cost threshold -- research doc 04 defaults it to 256 KiB
- * @param crossAzCrossoverBytes the largest segment inlined when the bytes are
- *     only in another AZ. ⚠️ This one IS a cost threshold and is normally
- *     derived by {@link #derivedFrom}
+ * @param inlineCapBytes the ceiling on BOTH paths, and the largest segment
+ *     inlined when the bytes are already in the serving AZ. It protects the
+ *     push channel and the consumer's heap, neither of which cares which AZ
+ *     the bytes came from.
+ * @param crossAzCrossoverBytes an upper bound on the segment inlined when the
+ *     bytes are only in another AZ -- the LARGEST such segment is
+ *     {@code min(inlineCapBytes, crossAzCrossoverBytes)}, because the cap
+ *     bounds both paths. Below this, shipping the bytes costs less than the
+ *     GET it saves (cost model R12); above it the GET is cheaper.
  * @param directFanOutThreshold at or below this many consumers, a segment too
  *     large to inline is served by {@code DIRECT} rather than {@code PROXY}.
  *     ⚠️ CONFIGURATION, NOT A CONSTANT: the fan-out at which `direct` wins is

@@ -1,0 +1,38 @@
+{
+  "diff_sha256": "dfc627f15b0ff057480ca3a94e7d065352ef76378925dc1f0f8ba86ae747c2c6",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "severity": "major",
+      "file": "ingest/src/main/java/binjava/ingest/FetchPolicyConfig.java:36",
+      "summary": "The @param contract for crossAzCrossoverBytes -- 'the largest segment inlined when the bytes are only in another AZ' -- is made false by this diff in exactly the configurations the diff exists to fix, and is not updated.",
+      "failure_scenario": "After the Math.min, the largest segment inlined cross-AZ is min(inlineCapBytes, crossAzCrossoverBytes), not crossAzCrossoverBytes. The param doc still states the old contract, and it is false precisely when crossover > cap -- i.e. at the crossAzMicroDollarsPerGb = 1_000 config this commit's own test and comment use, and at every transfer price below ~1,526 micro-dollars/GB at S3's GET price. It stays true for every config that ships today (defaultsFor gives 0 or 20,000 against a 262,144 cap), so nothing reveals the drift. Concrete failure: an operator lowers the transfer price to 1_000 to reflect a cheap-egress deployment, reads the record's javadoc, expects a 400,000-byte cross-AZ batch to be INLINE, measures PROXY, and files the bug against modeFor -- the doc points at the wrong component and says the Math.min is the defect. Same sentence is the one a future task would 'restore' the old behaviour from. The sibling @param inlineCapBytes ('the largest segment inlined when the bytes are already in the serving pod's AZ') is now also an understatement: it is the ceiling on BOTH paths, which is the whole content of this change and is documented only in a comment inside modeFor. One clause in each @param, in this commit, since it is the same contract the diff changes."
+    },
+    {
+      "severity": "minor",
+      "file": "ingest/src/main/java/binjava/ingest/FetchPolicy.java:80",
+      "summary": "The headline sentence of the new comment -- 'THE CAP BOUNDS BOTH PATHS; the crossover bounds the billed one FURTHER' -- is inverted in the only case where the added Math.min does anything.",
+      "failure_scenario": "When crossover > cap the binding constraint on the billed path is the CAP, not the crossover: min(262144, 400000) = 262144. The sentence as written describes only the crossover < cap case, which is the case where the Math.min is a no-op -- so read on its own it makes the added line look pointless. The next sentence ('applying it to the same-AZ path alone inverted the order whenever a low transfer price derived a crossover above it') rescues the meaning, so this is loose rather than wrong. Failure scenario: a later reader trusting the first sentence concludes the cross-AZ bound is always the crossover, and re-derives the same inversion when adding a third bound. The same sentence opens the backlog State cell. 'whichever of the two is smaller bounds the billed path' says what the code does."
+    },
+    {
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:52",
+      "summary": "The State cell claims the property test catches 'a future config that reopens the inversion at a different size'; the test constructs exactly one config and never varies it.",
+      "failure_scenario": "theCROSSAZPathNeverInlinesASizeTheSAMEAZPathWouldNot hard-codes new FetchPolicyConfig(256L * 1024L, 400_000L, 8) and loops eight sizes. It is a property over SIZES at one config, not over configs. (With the Math.min in place no config can reopen the inversion at all, so the sentence also describes an impossible trigger.) Failure scenario: M5.43 or a later row adds a fan-out-scaled or mode-scaled cross-AZ allowance that inverts the order only at a cap below 64 KiB; the suite stays green and this cell says it would have redded, so nobody adds the case. State the property the test actually has -- the ordering holds for every size at a config where the crossover exceeds the cap -- or parameterise the config."
+    },
+    {
+      "severity": "minor",
+      "file": "ingest/src/test/java/binjava/ingest/FetchPolicyTest.java:475",
+      "summary": "300,000 bytes is labelled '300 KiB' in the new test's javadoc, its assertion description and the production comment, in a class whose sibling constant carries a paragraph on decimal-vs-binary units.",
+      "failure_scenario": "300 KiB is 307,200 bytes; the test asserts on 300_000L, which is 293 KiB. The outcome is unaffected (both exceed the 262,144 cap), but DEFAULT_CROSS_AZ_MICRO_DOLLARS_PER_GB's javadoc exists specifically to stop this confusion ('per DECIMAL GB (10^9 bytes), not per GiB ... would move the crossover to ~21.0 KiB and silently disagree with the number every document in this repository quotes'). Failure scenario: someone reproducing the measured example from the comment enters 307,200 as 'the 300 KiB case', or converts the other way and computes a cap of 256,000; the same slip one order of magnitude up is the GiB/GB error that document warns about. Write 300,000 bytes, or use 300L * 1024."
+    },
+    {
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:52",
+      "summary": "'derivedFrom would throw at any transfer price below about 1,500 micro-dollars/GB' is stated unconditionally; the threshold is getPerThousand * 1e6 / inlineCapBytes and moves with both.",
+      "failure_scenario": "I checked the arithmetic: at S3's 400 micro-dollars per 1,000 GETs and the 256 KiB default cap the threshold is 400e6 / 262144 = 1,525.9 micro-dollars/GB, so the figure is right for that pair only. At the 'dear' backend already used in this test file (4,000 per 1,000 GETs) the rejected invariant would throw below 15,259 micro-dollars/GB, and above ~5,243 micro-dollars per 1,000 GETs even defaultsFor at the DEFAULT 20,000 transfer price would throw. That makes the rejection argument stronger, not weaker, so the conclusion stands -- but a reader who later revisits the constructor-invariant option and tests only near 1,500 will conclude the row overstated the problem and reopen it. Name the two inputs the number comes from."
+    }
+  ],
+  "task": "M5.38",
+  "role": "reviewer"
+}

@@ -1,0 +1,41 @@
+{
+  "diff_sha256": "1b63c93d43e6cb517e9ea5b4780ff8d47610d3fd785f6e4c2f4665989b150992",
+  "verdict": "pass",
+  "summary": "Round 2. The round-1 major is fixed: both @params now state that inlineCapBytes is the ceiling on both paths and that the largest cross-AZ inlined segment is min(inlineCapBytes, crossAzCrossoverBytes). modeFor's comment is no longer inverted. The at-cap assertion pins the cross-AZ bound from below and kills both mutations the test review measured surviving (cap/2 -> 131,072 and cap-1 -> 262,143 both answer not-INLINE at 262,144). The ordering case is eight sizes in one hardcoded config, as the State cell now says. No forbidden scaling: the min can only lower a bound, so the change moves deliveries from INLINE to PROXY/DIRECT and never the reverse, the only production call site (SubscriptionHub.publishSegment) passes bytesInServingAz=true so the changed arm is unreached, and both shipping backends derive a crossover of 0. Four minors, all prose or formatting, none blocking.",
+  "findings": [
+    {
+      "id": "r2-stale-first-paragraph",
+      "severity": "minor",
+      "file": "ingest/src/main/java/binjava/ingest/FetchPolicy.java:72",
+      "title": "The preserved paragraph still states the pre-change cross-AZ rule without qualification",
+      "failure_scenario": "Lines 69-75 read 'cross-AZ is billed, so that bound is cost model R12's crossover'. After this change that bound is min(inlineCapBytes, crossAzCrossoverBytes), not the crossover. This is the same defect class as the round-1 major on @param crossAzCrossoverBytes -- the untouched half of a two-part comment describing the old behaviour -- and it stayed invisible for the same reason: it is true in every shipping config, where the derived crossover is 0. It is a minor rather than a major only because the correcting paragraph is the very next line; a reader who stops at line 75, or a future edit that moves the two blocks apart, gets the old contract.",
+      "suggestion": "Fold the correction into the existing paragraph rather than appending a second one, or qualify line 72-73 with 'up to the cap'."
+    },
+    {
+      "id": "r2-300-kib-not-converted",
+      "severity": "minor",
+      "file": "ingest/src/main/java/binjava/ingest/FetchPolicy.java:82",
+      "title": "'300 KiB' remains where the cited case uses 300,000 bytes",
+      "failure_scenario": "The comment says 'inlined 300 KiB when the bytes had to CROSS an AZ'; 300 KiB is 307,200 bytes, and aCROSSAZBatchABOVETheInlineCapIsNotINLINED measures 300,000. Same in the new backlog State cell ('inlining 300 KiB cross-AZ', docs/internal/product/backlog.md:52). The statement is not false -- 307,200 sits in the same (262,144, 400,000] band -- but a reader matching the comment to the case it names finds two different numbers, which is the unit ambiguity the round-1 minor asked to remove. The test javadoc was converted; these two were not.",
+      "suggestion": "Say 300,000 bytes in both, matching the case."
+    },
+    {
+      "id": "r2-indentation-still-two-space",
+      "severity": "minor",
+      "file": "ingest/src/test/java/binjava/ingest/FetchPolicyTest.java:464",
+      "title": "The two new cases are still indented against the file's convention, and their braces do not line up with each other",
+      "failure_scenario": "Lines 464-515 use a 2-space member indent and a 4-space body indent where every other member of this 516-line file uses 4 and 8 (compare lines 455-462). Line 514 closes the for loop at 4 spaces while line 515 closes the enclosing method at 2, so the closing braces read as though the method ended first. No gate sees this -- there is no checkstyle or spotless config in the tree -- so it survives until a human reads the file. Related: ingest/src/main/java/binjava/ingest/FetchPolicy.java:77 is 99 columns where every other line in that comment block is at most 84.",
+      "suggestion": "Reindent the two cases to 4/8 and rewrap FetchPolicy.java:77."
+    },
+    {
+      "id": "r2-band-moves-to-a-request-paying-mode",
+      "severity": "minor",
+      "file": "ingest/src/main/java/binjava/ingest/FetchPolicy.java:86",
+      "title": "The band (cap, crossover] now takes the mode the cost model calls the more expensive one, and no prose says so",
+      "failure_scenario": "Math.min can only lower the cross-AZ bound, so in any config where crossAzCrossoverBytes exceeds inlineCapBytes every delivery in (cap, crossover] moves from INLINE, which costs zero requests, to PROXY or DIRECT, which costs one. By cost model R12's own arithmetic those are exactly the sizes where shipping the bytes is CHEAPER than the GET, so the change knowingly buys the dearer option there to keep the push channel and the consumer's heap bounded -- which is the trade the task asked for, and it is bounded by two configured constants rather than by any record, shard, partition or index count. Two things keep it off the bill today: the only production caller, SubscriptionHub.publishSegment, passes bytesInServingAz=true so the changed arm is never evaluated, and both shipping backends report CostTable.free() so the derived crossover is 0. The gap is that the new prose presents cap-bounds-both purely as an ordering fix; the deliberate cost consequence in the band is left for the reader to derive from the @param's 'below this, shipping the bytes costs less than the GET it saves'. Where it will bite is the future cross-AZ wiring: a DIRECT chosen in the band is one consumer GET per delivery, and deliveries are per run until M5.39's one-grant-per-(node, segment) rule is enforced.",
+      "suggestion": "One clause in modeFor's comment: in (cap, crossover] the cap deliberately overrides the cost-optimal choice, because memory and channel are the binding constraint rather than dollars."
+    }
+  ],
+  "task": "M5.38",
+  "role": "reviewer"
+}

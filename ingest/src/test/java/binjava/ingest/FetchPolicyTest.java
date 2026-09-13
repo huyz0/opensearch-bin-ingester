@@ -460,4 +460,57 @@ class FetchPolicyTest {
         assertThat(p.modeFor(otherAz(4L * 1024 * 1024, 0), caps(true))).isEqualTo(FetchMode.PROXY);
         assertThat(p.modeFor(otherAz(4L * 1024 * 1024, 1), caps(true))).isEqualTo(FetchMode.PROXY);
     }
+
+  /**
+   * A cross-AZ batch above the inline cap is not INLINED.
+   *
+   * <p>⚠️ THE CAP PROTECTS THE PUSH CHANNEL AND THE CONSUMER'S HEAP, and
+   * neither cares which AZ the bytes came from -- so it must bound BOTH paths.
+   * It bounded only the same-AZ one, and review MEASURED the incoherence at
+   * {@code crossAzMicroDollarsPerGb = 1_000}: a derived crossover of 400,000
+   * against a 262,144-byte cap inlines a 300,000-byte batch when its bytes CROSS an
+   * AZ and answers {@code PROXY} when they are local and FREE. The cheaper
+   * path took the more expensive mode.
+   */
+    @Test
+    void aCROSSAZBatchABOVETheInlineCapIsNotINLINED() {
+    FetchPolicy p = new FetchPolicy(new FetchPolicyConfig(256L * 1024L, 400_000L, 8));
+
+    assertThat(p.modeFor(otherAz(300_000L, 1), caps(false)))
+            .as("300,000 bytes crossing an AZ is above the 262,144-byte cap, so the cap "
+                    + "must stop it")
+            .isNotEqualTo(FetchMode.INLINE);
+
+    // ⚠️ AND THE BOUND FROM BELOW, or the cross-AZ arm is constrained in one
+    // direction only. Review MEASURED `Math.min(inlineCapBytes() / 2, ...)`
+    // and `inlineCapBytes() - 1` surviving the whole module: a strictly
+    // TIGHTER bound satisfies both "not INLINE above the cap" and the ordering
+    // property trivially. The same-AZ path has had a both-sides boundary since
+    // M5.11; this arm had none.
+    assertThat(p.modeFor(otherAz(256L * 1024L, 1), caps(false)))
+            .as("exactly at the cap the billed path still inlines -- the cap is the bound, "
+                    + "not something below it")
+            .isEqualTo(FetchMode.INLINE);
+  }
+
+  /**
+   * The cross-AZ path never inlines a size the same-AZ path would not.
+   *
+   * <p>⚠️ THE ORDERING IS THE PROPERTY, and the single case above is one
+   * point on it. Cross-AZ bytes are billed and same-AZ bytes are free, so any
+   * size the expensive path will inline must also be one the free path will.
+   */
+    @Test
+    void theCROSSAZPathNeverInlinesASizeTheSAMEAZPathWouldNot() {
+    FetchPolicy p = new FetchPolicy(new FetchPolicyConfig(256L * 1024L, 400_000L, 8));
+
+    for (long bytes : new long[] {1L, 262_143L, 262_144L, 262_145L, 300_000L, 399_999L,
+        400_000L, 400_001L}) {
+      boolean local = p.modeFor(sameAz(bytes, 1), caps(false)) == FetchMode.INLINE;
+      boolean crossAz = p.modeFor(otherAz(bytes, 1), caps(false)) == FetchMode.INLINE;
+      assertThat(crossAz && !local)
+          .as("at %d bytes the billed path inlines and the free path does not", bytes)
+          .isFalse();
+    }
+  }
 }

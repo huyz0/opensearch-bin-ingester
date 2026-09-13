@@ -1,0 +1,24 @@
+{
+  "diff_sha256": "1b63c93d43e6cb517e9ea5b4780ff8d47610d3fd785f6e4c2f4665989b150992",
+  "verdict": "pass",
+  "summary": "Round 2, tests. The round-1 major is closed and MEASURED closed: the new at-cap assertion in aCROSSAZBatchABOVETheInlineCapIsNotINLINED kills both surviving mutations, each on its own. Eight mutations of FetchPolicy.modeFor run against :ingest:test (207 tests), all killed, no survivor found. Both new cases earn their place -- the point case is the sole killer of the two tighter-bound mutations, the ordering case is the sole killer of min(cap + 1, crossover). The backlog State cell's corrected wording about the ordering case is accurate. No existing assertion was weakened; the test-file hunk is pure addition.",
+  "findings": [],
+  "measurements": [
+    "baseline: ./gradlew :ingest:test on the staged tree, 207 tests, green",
+    "min(inlineCapBytes()/2, crossover) -> KILLED, only by FetchPolicyTest.aCROSSAZBatchABOVETheInlineCapIsNotINLINED ('exactly at the cap the billed path still inlines'). Round-1 survivor, now dead.",
+    "min(inlineCapBytes()-1, crossover) -> KILLED, only by the same at-cap assertion. Round-1 survivor, now dead.",
+    "batchBytes() <= inlineBound  =>  < -> KILLED by 4 cases incl. both pre-existing at-the-bound cases",
+    "ternary arms swapped -> KILLED by 8 cases across FetchPolicyTest and AssembledServingPathTest",
+    "min(inlineCapBytes()+1, crossover), the off-by-one in the OTHER direction -> KILLED, only by theCROSSAZPathNeverInlinesASizeTheSAMEAZPathWouldNot at 262,145 bytes. The ordering case is therefore not trivially satisfied.",
+    "the fix reverted (: crossAzCrossoverBytes()) -> KILLED by both new cases",
+    "min(cap, crossover*2), loosening the crossover while keeping the cap -> KILLED by pastTheCrossoverCrossAZBytesAreNOTInlined",
+    "same-AZ arm -> Long.MAX_VALUE -> KILLED by 10 cases; the same-AZ side is still pinned after the change"
+  ],
+  "verified_from_earlier_rounds": [
+    "[major] cross-AZ bound unconstrained downward -- FIXED and measured: the at-cap assertion at FetchPolicyTest.java:487-490 is the sole killer of both mutations reported in round 1.",
+    "[major] @param crossAzCrossoverBytes contract overstated -- FIXED in FetchPolicyConfig.java: the param now reads 'an upper bound ... the LARGEST such segment is min(inlineCapBytes, crossAzCrossoverBytes)'.",
+    "[minor] State cell called the ordering case a property over configs -- corrected. Checked true: the array holds exactly eight sizes (1, 262143, 262144, 262145, 300000, 399999, 400000, 400001) spanning the 262,144 cap and the 400,000 crossover in one hardcoded config, the case never reads the config back, and at a 1 MiB cap against a 2 MiB crossover every sampled size inlines on both paths so it would stay green."
+  ],
+  "task": "M5.38",
+  "role": "test-reviewer"
+}

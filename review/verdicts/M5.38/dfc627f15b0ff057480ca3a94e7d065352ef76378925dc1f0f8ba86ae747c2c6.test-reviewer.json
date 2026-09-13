@@ -1,0 +1,34 @@
+{
+  "diff_sha256": "dfc627f15b0ff057480ca3a94e7d065352ef76378925dc1f0f8ba86ae747c2c6",
+  "verdict": "changes-requested",
+  "summary": "The two new cases do kill the mutation the task is about: Math.min -> Math.max and the revert to crossAzCrossoverBytes alone both red, measured. What neither case pins is the VALUE of the new cross-AZ bound in the downward direction: nothing asserts that a cross-AZ batch of exactly inlineCapBytes IS inlined when the crossover exceeds the cap, so the whole new min-selects-the-cap branch may be any size <= the cap and the suite stays green. Measured: replacing Math.min(config.inlineCapBytes(), ...) with Math.min(config.inlineCapBytes() / 2, ...) produces ZERO failures across the entire :ingest:test module. One assertion closes it.",
+  "findings": [
+    {
+      "file": "ingest/src/test/java/binjava/ingest/FetchPolicyTest.java:474",
+      "severity": "major",
+      "title": "The cross-AZ inline bound is unconstrained downward: shrinking the cap on the cross-AZ path survives the whole module suite",
+      "failure_scenario": "MEASURED, not argued. Mutate FetchPolicy.java:86 to `: Math.min(config.inlineCapBytes() / 2, config.crossAzCrossoverBytes());` and run `./gradlew :ingest:test`: 0 failures across every test in the module. `Math.min(config.inlineCapBytes() - 1, ...)` survives for the same reason. Both new cases are one-sided. `aCROSSAZBatchABOVETheInlineCapIsNotINLINED` asserts only isNotEqualTo(INLINE) at 300,000 bytes -- above ANY bound at or below the cap. `theCROSSAZPathNeverInlinesASizeTheSAMEAZPathWouldNot` asserts the implication `!(crossAz && !local)`, which a strictly TIGHTER cross-AZ bound satisfies trivially (crossAz inlines a subset of what local inlines). The existing `pastTheCrossoverCrossAZBytesAreNOTInlined` pins the cross-AZ bound exactly, but only in the crossover<cap regime where min selects the CROSSOVER -- so the arm this commit adds, where min selects the CAP, has no both-sides boundary anywhere in the tree, while the same-AZ path has one (`theSameAZCapIsSEPARATEAndLarger`: at the cap INLINE, one byte past PROXY). Fix is one line in the point case, against the same config: `assertThat(p.modeFor(otherAz(256L * 1024L, 1), caps(false))).isEqualTo(FetchMode.INLINE)` -- it holds today, and it kills the halved bound, the off-by-one bound, and `<=` -> `<` on the cross-AZ arm."
+    },
+    {
+      "file": "docs/internal/product/backlog.md:52",
+      "severity": "minor",
+      "title": "The State cell calls the second case a property over configs; it is eight literal sizes in one hardcoded config",
+      "failure_scenario": "The cell says the property case means `a future config that reopens the inversion at a different size reds too`. It would not. `theCROSSAZPathNeverInlinesASizeTheSAMEAZPathWouldNot` hardcodes `new FetchPolicyConfig(256L * 1024L, 400_000L, 8)` and eight literal sizes, and never reads `config.inlineCapBytes()` or `crossAzCrossoverBytes()`. Reopen the inversion at, say, cap 1 MiB against a 2 MiB crossover: the inversion lives at 1,048,577..2,097,152 bytes, every one of the eight sampled sizes is below the cap and inlines on BOTH paths, and the case stays green. The claim is true of the sizes in one config, not of configs. Accurate wording: `asserts the relation over eight sizes spanning both bounds in one config`. Everything else in the cell checks out: the 400,000-byte crossover at 1,000 micro-dollars/GB is 400*1_000_000/1_000 (verified), and the two red points are the real first failures under the pre-fix code -- the point case at 300,000, and the property loop's first failing element at 262,145 (1, 262,143 and 262,144 inline on both paths and pass)."
+    }
+  ],
+  "checked": [
+    "Math.min -> Math.max: killed by BOTH new cases (plus 2 existing). Measured.",
+    "Math.min(...) -> config.crossAzCrossoverBytes() (the revert): killed by BOTH new cases and nothing else. Measured -- this is the pair's real value.",
+    "Math.min(...) -> config.inlineCapBytes() alone: survives both new cases; killed by existing pastTheCrossoverCrossAZBytesAreNOTInlined and aFREEBackendInlinesNOTHINGCrossAZ. Measured.",
+    "ternary arms swapped: survives both new cases; killed by 4 existing. Measured.",
+    "batchBytes() <= inlineBound -> <: survives both new cases; killed by 3 existing. Measured.",
+    "modeFor returning a constant PROXY: survives both new cases (case 1 asserts only isNotEqualTo(INLINE); case 2's implication is satisfied by all-false) -- killed by 10 existing. Both new cases are therefore tautological in isolation; the file carries them.",
+    "The loop's sampling: no size escapes it for THIS config. The two bounds differ only on (262,144, 400,000] under a min->max or revert mutation, and the loop samples 262,145, 300,000, 399,999 and 400,000 -- both endpoints of that interval.",
+    "Tier: T0, pure function, no store/clock/socket. Correct layer, consistent with non-negotiable 7 and the file's own header.",
+    "No existing assertion weakened: the test hunk is @@ -460,4 +460,45 @@, additions only.",
+    "FetchPolicy has no caller outside the ingest module (only a javadoc mention in format/FetchMode.java), so :ingest:test is the full surface for the mutation runs above.",
+    "Both new javadocs check out against the code: the 400,000/262,144 arithmetic, and the direction of the ordering claim (billed path must inline a subset of the free path's sizes)."
+  ],
+  "task": "M5.38",
+  "role": "test-reviewer"
+}
