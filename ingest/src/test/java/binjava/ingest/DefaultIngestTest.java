@@ -193,6 +193,17 @@ class DefaultIngestTest {
                     .as("delivery releases the budget, so a later push is admitted")
                     .isEqualTo(1);
             awaitDelivered(sink, 2);
+
+            // ⚠️ PINS THE OTHER COUNTER AT ZERO ON A HEALTHY POD. Two
+            // pushes were delivered here and none threw, so an increment moved
+            // off the catch -- to the publish call, or to the finally -- would
+            // read 2. Without this line `undeliverablePushes` is only ever
+            // asserted where every push fails, and "counts pushes rather than
+            // failures" survives: the metric then rises on every flush and
+            // pages an operator whose store is fine.
+            assertThat(ingest.undeliverablePushes())
+                    .as("a delivered push is not an undeliverable one")
+                    .isZero();
         }
     }
 

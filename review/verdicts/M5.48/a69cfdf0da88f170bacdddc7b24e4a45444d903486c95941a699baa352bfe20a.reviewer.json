@@ -1,0 +1,39 @@
+{
+  "diff_sha256": "a69cfdf0da88f170bacdddc7b24e4a45444d903486c95941a699baa352bfe20a",
+  "verdict": "changes-requested",
+  "summary": "The counter is right; the log line names the WRONG segment, and by construction it always will. The only exception that reaches pushLoop's catch is the UncheckedIOException from streamFromStore, which runs only when held == null -- i.e. only for a segment whose key is NOT the push's segmentKey. The line logs next.segmentKey(), the key this pod wrote and which the store HAS. Measured: the test's own WARNING names bins/cluster-a/data/.../-h49-A.bseg while the unreadable key is seg-no-pod-ever-wrote-this. No test pins the line, so this is invisible to the suite. Earlier rounds' findings (R1, M5.48-1, M5.48-2) are resolved: the reachability claim is corrected in the status cell in M5.26's style, and the 'inject SegmentServing to get DIRECT' sentence is gone and replaced by a claim that checks out (SegmentDelivery's second component is bytesInServingAz and publishSegment passes true). No object-store request rate changes: the diff adds a counter, a log line and a test; the only get is the test's deliberate miss, one per push, not per record/shard/partition.",
+  "findings": [
+    {
+      "file": "ingest/src/main/java/binjava/ingest/DefaultIngest.java:380",
+      "severity": "blocking",
+      "title": "The WARNING names the held segment key, which is never the segment that failed",
+      "failure_scenario": "The catch can only be entered by SubscriptionHub.deliver:382's UncheckedIOException (writeHeldBytes and writeHeldBytesChunked swallow per sink and never let an IOException escape writeTo, and the DIRECT arm's IllegalStateException is unreachable while publishSegment passes bytesInServingAz=true). deliver:382 fires only from streamFromStore, which publishSegment:320 selects only when heldBytes == null, i.e. only when committed.segmentKey() != heldSegmentKey. So the failing key is by construction different from next.segmentKey() -- which is published.key() from DefaultIngest:485, the object this pod just PUT and which the store does hold. Production case: a batched delta where another pod's segment 404s or times out; the ingester logs 'push undelivered for segment <this pod's own healthy segment>'. The operator greps that key, finds the object present and readable, and concludes the log is lying or the store is fine. That is worse than the silence M5.48 exists to end, and it is exactly what the comment three lines above promises not to do ('An operator needs to know WHICH segment'). Measured in this commit's own test: system-err carries 'push undelivered for segment bins/cluster-a/data/2026/09/13/08/0000001789289048005-pod1-0000000000000000-h49-A.bseg' while the cause is 'no such key: seg-no-pod-ever-wrote-this'. The true key survives only inside the cause's message, and only because MemoryBinStore happens to put it there -- a backend whose IOException message omits the key leaves the failing object unnamed anywhere in the line. The backlog status cell's claim 'a WARNING line beside the increment names the segment' is false as written. Fix means carrying the failing key out of the hub (a typed throw, or logging at the frame that knows it) rather than reading it off the push."
+    },
+    {
+      "file": "ingest/src/test/java/binjava/ingest/UndeliverablePushTest.java:59",
+      "severity": "major",
+      "title": "Half the deliverable -- the log line -- has no assertion; deleting LOG.log leaves the suite green",
+      "failure_scenario": "The task's deliverable is a counter AND a WARNING naming the segment; the test asserts only the counter. Surviving mutation: delete the whole LOG.log(...) call. undeliverablePushes() is still 1, droppedPushes() is still 0, seen is still empty, the suite is green, and the process is back to a silence distinguishable only by a number with no key attached. The same blindness is why finding 1 shipped: an assertion on the logged text would have failed the moment it named the written key instead of seg-no-pod-ever-wrote-this. The mechanism to capture it already exists in this module -- GrantNeverLoggedTest attaches a handler to the ROOT logger precisely because swapping System.err misses JUL's ConsoleHandler -- so this is reuse, not new machinery."
+    },
+    {
+      "file": "ingest/src/main/java/binjava/ingest/DefaultIngest.java:160",
+      "severity": "minor",
+      "title": "Javadoc says 'could not deliver at all', which SubscriptionHub.publish contradicts",
+      "failure_scenario": "publish:264-278 catches UncheckedIOException per segment, keeps publishing the rest, and rethrows the first at the end. So a delta whose foreign segment fails while the held one is delivered inline increments this counter with several subscribers correctly served. An operator reading 'how many pushes pushLoop could not deliver AT ALL' concludes those windows were lost and starts a recovery that is not needed. The honest wording is per-push: the push threw and at least one segment was not delivered."
+    },
+    {
+      "file": "ingest/src/main/java/binjava/ingest/DefaultIngest.java:143",
+      "severity": "minor",
+      "title": "Fully-qualified java.util.concurrent.atomic.AtomicLong where the file already imports it",
+      "failure_scenario": "Line 24 imports java.util.concurrent.atomic.AtomicLong and the adjacent field (queuedPushBytes, line 130) uses the short name. The new field spells the package twice. No runtime effect; it makes the two counter fields read as if they were different types, which is the first question a reader asks about a pair of counters deliberately kept separate."
+    },
+    {
+      "file": "ingest/src/test/java/binjava/ingest/UndeliverablePushTest.java:62",
+      "severity": "minor",
+      "title": "undeliverablePushes.incrementAndGet() -> set(1) survives",
+      "failure_scenario": "The fixture drives exactly one failed push and asserts isEqualTo(1), so a counter blinded to a flag is indistinguishable from a correct one -- the M5.57 family already recorded in this backlog. Under a real store outage the metric then reads 1 for a thousand undelivered pushes, and the operator sizes the incident from it. Kill: two appends producing two pushes against the renaming sequencer, asserting 2."
+    }
+  ],
+  "task": "M5.48",
+  "role": "reviewer"
+}

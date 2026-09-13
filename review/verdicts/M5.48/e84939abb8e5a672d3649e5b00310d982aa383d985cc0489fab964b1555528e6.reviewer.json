@@ -1,0 +1,37 @@
+{
+  "task": "M5.48",
+  "role": "reviewer",
+  "diff_sha256": "e84939abb8e5a672d3649e5b00310d982aa383d985cc0489fab964b1555528e6",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "id": "M5.48-1",
+      "severity": "blocking",
+      "file": "docs/internal/product/backlog.md:M5.48",
+      "title": "The central new claim is false: the UncheckedIOException handler IS reachable from a test today, with no production seam and no second pod",
+      "failure_scenario": "The row says 'THE HANDLER IS UNREACHABLE FROM A TEST TODAY ... WHOEVER TAKES IT OWES A SEAM OR A SECOND POD', resting on '(b) the UncheckedIOException needs a segment the pod does NOT hold, which only a BATCHED delta produces -- and a single-pod LocalSequencer never returns one'. That is true of LocalSequencer and false of DefaultIngest. Sequencer is a CONSTRUCTOR PARAMETER of DefaultIngest (ingest/src/main/java/binjava/ingest/DefaultIngest.java:167-169), the delta it returns is queued verbatim ('pushes.add(new PendingPush(delta, published.key(), published.segment(), bytes))', DefaultIngest.java:~443), and the tree ALREADY decorates that seam: IngestCommitPathTest:175 'private static final class Recording implements Sequencer' wraps a real sequencer and returns 'delegate.commitAll(requests)'. A decorator that returns 'new CommitDelta(seq, List.of(published-segment-commit, foreign-segment-commit))' -- a two-SegmentCommit delta already built freely in AssembledServingPathTest:299 and AssembledServingPathFailureTest:178 -- makes publish() take the heldBytes==null branch for the foreign key. SubscriptionHub.publishSegment then picks PROXY unconditionally for it, streamFromStore calls SegmentProxy.streamTo, which opens 'store.get(segmentKey)' (SegmentProxy.java:182) on the SAME injected BinStore the test supplies; a key that is absent, or a FaultInjectingStore get fault, throws IOException, deliver() wraps it as UncheckedIOException, publish() rethrows it, and pushLoop's 'catch (RuntimeException e) { continue; }' is entered. The subscriber on the foreign run's RunKey comes from the SubscriptionHub that is also a constructor parameter, so targets is non-empty and the early 'if (targets.isEmpty()) return' does not fire. Concretely: this commit defers a task that is takeable TDD-first today, and records the deferral as MEASURED (AGENTS.md non-negotiable 4). The next implementer reads 'owes a seam' and adds a production seam the counter does not need, which is scope widening bought with a false premise. The row should either state the fixture above or the task should simply be taken."
+    },
+    {
+      "id": "M5.48-2",
+      "severity": "major",
+      "file": "docs/internal/product/backlog.md:M5.48",
+      "title": "The DIRECT seam the row recommends does not work: injecting SegmentServing into DefaultIngest cannot make modeFor answer DIRECT",
+      "failure_scenario": "The row directs the next implementer with 'injecting the SegmentServing into DefaultIngest would let a policy answer DIRECT'. It cannot, for any policy, any FetchPolicyConfig and any Capabilities. SubscriptionHub.publishSegment hard-codes two of the four SegmentDelivery fields: 'new SegmentDelivery(heldBytes.length, true, targets.size(), false)' is bytesInServingAz=true and servingPodUnderPressure=false. FetchPolicy.wantsDirect is 'servingPodUnderPressure || (!bytesInServingAz && threshold > 0 && fanOut <= threshold)', so it evaluates to 'false || (false && ...)' = false under every configuration, and FetchPolicy is a final class with no subclass or interface to substitute. So the DIRECT arm is unreachable through the HUB, not through the ingester's wiring, and reaching it needs a production change in SubscriptionHub.publishSegment -- which is M5.45b's territory. An implementer following this sentence adds a SegmentServing constructor parameter to DefaultIngest (a production change with no test able to exercise it), finds modeFor still answers INLINE or PROXY, and has widened scope for nothing. The row's own diagnosis paragraph (a) states the hard-coded values correctly; the remedy paragraph then contradicts it."
+    },
+    {
+      "id": "M5.48-3",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:M5.48",
+      "title": "'publish throws from exactly two places' misses a third, which behaves differently from the two named",
+      "failure_scenario": "A BinStore backend that raises an UNCHECKED exception inside SegmentProxy.streamTo (an SDK exception, or an UncheckedIOException from a decorating store) escapes deliver()'s 'catch (IOException storeFailed)' entirely and is not the DIRECT arm's IllegalStateException either. It matters beyond bookkeeping: publish()'s per-segment isolation loop catches only UncheckedIOException, so a plain RuntimeException from the store denies EVERY LATER SEGMENT in a batched delta -- the exact failure the round-1 comment in SubscriptionHub.publish says it fixed -- and then lands in pushLoop's silent continue. The row's enumeration reads as exhaustive and is not; whoever takes M5.48 will size the log line's message against two causes when there are three. Preconditions are the same as (b), so this does not by itself change the reachability conclusion -- finding 1 does that."
+    },
+    {
+      "id": "M5.48-4",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:M5.48",
+      "title": "The DIRECT-unreachability argument omits the presign guard, and 'System.Logger is already the idiom' is true only outside this module",
+      "failure_scenario": "Two small imprecisions in otherwise-verified prose. (1) modeFor gates DIRECT on 'capabilities.presignedUrls() && wantsDirect(delivery)'; the row cites only wantsDirect. Neither shipping backend can presign (ADR-0041), so the omission understates the claim rather than overstating it -- but a reader re-deriving the argument from this cell alone will conclude one guard stands where two do. (2) 'System.Logger is already the idiom -- CheckpointWriter and BatchingSequencer use it' is true, and every System.getLogger call in src/main is in the sequencer module; ingest/src/main has none, so M5.48 introduces the first logger in its own module. Neither changes what the implementer should do."
+    }
+  ],
+  "notes": "Docs-only, one backlog cell, no code. Verified against the tree rather than against the prose: SubscriptionHub.publishSegment's SegmentDelivery field order, FetchPolicy.wantsDirect, SegmentProxy.streamTo's store.get, DefaultIngest's constructor seams and flushLocked's PendingPush construction. The counter-shape half of the row is CORRECT and needs no rework: observability.md rule 1 lists 'object key' and 'segment id' as never-a-label, so the segment key belongs in the log line; rule 5 does not forbid an object key there; and a second counter rather than a branch on droppedPushes is consistent with rule 3's actionability argument. Recording a measured finding instead of implementing is the right SHAPE for this row -- sdd.md prefers rewriting a wrong spec over quietly disobeying it -- but the measurement itself is wrong, so what lands is a deferral with a false premise and a false remedy. No cost finding: the diff adds no object-store request, and the row's own reasoning correctly keeps the store out of the held-bytes path."
+}

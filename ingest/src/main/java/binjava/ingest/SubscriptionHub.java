@@ -379,7 +379,14 @@ public final class SubscriptionHub {
         } catch (IOException storeFailed) {
             // ⚠️ NOBODY IS COMPLETED, so no subscriber mistakes a prefix for a
             // segment. `DefaultIngest.pushLoop` catches this and drops the push.
-            throw new UncheckedIOException(storeFailed);
+            //
+            // ⚠️ AND THE KEY IS IN THE MESSAGE, because this is the last frame
+            // that knows it. `pushLoop` holds only the key THIS POD WROTE, and
+            // by construction that is never the one that failed -- a read
+            // happens only for a segment the pod does NOT hold. A log line up
+            // there naming its own key sends an operator to a healthy object.
+            throw new UncheckedIOException(
+                    "segment " + segmentKey + " could not be read for delivery", storeFailed);
         }
         for (int i = 0; i < opened.size(); i++) {
             Tracking sink = opened.get(i);

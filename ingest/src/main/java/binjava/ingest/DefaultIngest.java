@@ -50,6 +50,9 @@ import java.util.concurrent.locks.ReentrantLock;
  */
 public final class DefaultIngest implements Ingest {
 
+    private static final System.Logger LOG =
+            System.getLogger(DefaultIngest.class.getName());
+
     private final IngestConfig config;
     private final Accumulator accumulator;
     private final SegmentPublisher publisher;
@@ -137,6 +140,7 @@ public final class DefaultIngest implements Ingest {
     private final Thread flusher;
     private volatile boolean closed;
     private long droppedPushes;
+    private final AtomicLong undeliverablePushes = new AtomicLong();
 
     /**
      * One queued delivery; the shutdown sentinel is the instance below.
@@ -151,6 +155,27 @@ public final class DefaultIngest implements Ingest {
 
     /** Ends {@link #pushLoop} without interrupting a delivery in flight. */
     private static final PendingPush POISON = new PendingPush(null, null, new byte[0], 0);
+
+    /**
+     * How many pushes {@link #pushLoop} could not deliver.
+     *
+     * <p>⚠️ A DIFFERENT CAUSE FROM {@link #droppedPushes()}, and two counters
+     * on purpose. That one is BACK-PRESSURE -- the queue budget was full, the
+     * subscriber is behind, and the answer is to slow down or raise the budget.
+     * This one is a delivery that THREW -- any {@link RuntimeException} out of
+     * {@link SubscriptionHub#publish}, which today is a segment that could not
+     * be read and is not limited to that -- so the count alone does not say
+     * where to look and the log line beside the increment quotes the cause.
+     * Collapsing the two into one number would make the metric unactionable,
+     * which is the objection to the silence this counter ends.
+     *
+     * <p>⚠️ NO SEGMENT KEY HERE. observability.md rule 1 names an object key
+     * among the things that are never a label, so WHICH segment failed goes in
+     * the log line beside the increment and only the count is exported.
+     */
+    public long undeliverablePushes() {
+        return undeliverablePushes.get();
+    }
 
     /** How many pushes were dropped because a subscriber could not keep up. */
     public long droppedPushes() {
@@ -357,6 +382,30 @@ public final class DefaultIngest implements Ingest {
                 // ⚠️ A subscriber's failure is its own. SubscriptionHub already
                 // isolates a sink that throws; this is the backstop that keeps
                 // one bad sink from ending delivery for every other consumer.
+                //
+                // ⚠️ BUT IT IS NO LONGER SILENT, which is M5.48. Until this
+                // counter and this line existed, a store outage and a quiet
+                // window were indistinguishable from outside the process:
+                // `droppedPushes` counts the OTHER drop, the queue budget, so a
+                // reader of it was told about back-pressure and told nothing
+                // about a failed read.
+                //
+                // ⚠️ THE KEY GOES IN THE LOG AND NOT IN A LABEL. An operator
+                // needs to know WHICH segment; observability.md rule 1 names an
+                // object key among the things that are never a metric label, so
+                // the counter carries the count and the line carries the name.
+                undeliverablePushes.incrementAndGet();
+                // ⚠️ THE CAUSE NAMES THE FAILING SEGMENT, not this frame. The
+                // only key here is `next.segmentKey()`, the object this pod just
+                // PUT and the store therefore holds; a read only ever happens
+                // for a segment the pod does NOT hold, so naming this one would
+                // send an operator to a healthy object and a wrong conclusion.
+                LOG.log(System.Logger.Level.WARNING,
+                        "push undelivered: " + e.getMessage()
+                                + " -- this pod's own segment for that commit was "
+                                + next.segmentKey()
+                                + "; the commit is durable and consumers recover from the "
+                                + "commit log", e);
                 continue;
             } finally {
                 queuedPushBytes.addAndGet(-next.bytes());

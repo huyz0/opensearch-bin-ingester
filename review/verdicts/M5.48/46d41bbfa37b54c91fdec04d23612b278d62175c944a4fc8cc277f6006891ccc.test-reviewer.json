@@ -1,0 +1,16 @@
+{
+  "task": "M5.48",
+  "role": "test-reviewer",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "T3",
+      "severity": "minor",
+      "file": "ingest/src/test/java/binjava/ingest/UndeliverablePushTest.java:128",
+      "summary": "The spin in theWarningNamesTheSegmentThatCouldNotBeREAD ends on the FIRST record the root logger sees, not on the record it is looking for, so an unrelated WARNING from the sequencer would red the test spuriously.",
+      "detail": "`while (logged.isEmpty() && ...)` exits as soon as ANY LogRecord reaches the probe, and the probe is attached to the ROOT logger at Level.ALL. The assertion then runs immediately; if the record that ended the spin was not the push WARNING, `anySatisfy` fails on a correct tree.\n\nCandidate emitters inside the window (root handler is added AFTER construction, so startup logging is excluded, but the flush is not): `LocalSequencer.java:184` and `:192` (lease renewer, WARNING, on a timer thread for the duration of the test), `CheckpointWriter.java:125/240/274` (WARNING) and `BatchingSequencer.java:253/304/453`. None of them is LIKELY here -- the renewer's `putIfMatch`/`stat` are not anonymised by the new fake and succeed against `MemoryBinStore` -- so this is a low-probability flake rather than a present failure, and its direction is a spurious RED, never a false pass. Recorded rather than blocking for that reason.\n\nFix is one line: spin until a record SATISFYING the predicate appears (`logged.stream().anyMatch(r -> r.getLevel() == Level.WARNING && String.valueOf(r.getMessage()).contains(\"seg-no-pod-ever-wrote-this\"))`) instead of until `logged` is non-empty. That also keeps the 10 s deadline as the only failure timer.",
+      "failure_scenario": "A WARNING from the lease renewer (LocalSequencer:184, on its own timer thread) or from CheckpointWriter reaches the root logger before DefaultIngest's push thread publishes its line. `logged.isEmpty()` becomes false, the spin exits early, and the assertion runs against a list that does not yet hold the push WARNING -- anySatisfy reds on a correct tree. Low probability (those paths do not fail against MemoryBinStore, and the new fake anonymises only get/getRange), and the direction is a spurious red, not a false pass."
+    }
+  ],
+  "diff_sha256": "46d41bbfa37b54c91fdec04d23612b278d62175c944a4fc8cc277f6006891ccc"
+}

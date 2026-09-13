@@ -1,0 +1,37 @@
+{
+  "diff_sha256": "948e92e6a6beb6e41676482f9ca4f763567e5f0d13541aac77659b0552c65b4a",
+  "verdict": "changes-requested",
+  "summary": "Round 2. Both open findings from round 1 are answered: the log now quotes SubscriptionHub.deliver's message, which carries the key that actually failed, and theWarningNamesTheSegmentThatCouldNotBeREAD asserts that text. The exception-message change is safe (an object key is banned as a metric LABEL by observability.md rule 1 and is not on rule 5's or security.md rule 4's log/error-message ban-list; hub.publish has exactly one production caller, pushLoop, so the key never reaches an HTTP response) and breaks no caller (:ingest:test on UndeliverablePushTest + AssembledServingPathFailureTest green in a throwaway worktree at this hash; nothing asserts the message or cause shape). What is still unconstrained is the counter's NEGATIVE case: no test anywhere pins undeliverablePushes() at 0 on a successful push, so the increment can be hoisted out of the catch and the whole suite stays green.",
+  "findings": [
+    {
+      "id": "M5.48-r2-1",
+      "severity": "major",
+      "file": "ingest/src/main/java/binjava/ingest/DefaultIngest.java:395",
+      "title": "Nothing pins undeliverablePushes() at 0 on a SUCCESSFUL push, so an unconditional increment survives the whole suite",
+      "failure_scenario": "Surviving mutation: move `undeliverablePushes.incrementAndGet()` from the catch block up to just before `hub.publish(...)` at DefaultIngest:378 (equivalently, put it in the `finally`). UndeliverablePushTest drives TWO pushes and BOTH fail, so the mutant still reports 2 and `isEqualTo(2)` still passes; theWarningNamesTheSegmentThatCouldNotBeREAD only waits for the counter to become non-zero and asserts on log text, so it passes too; `undeliverablePushes` is referenced in no other test in the tree (grep: only DefaultIngest.java and UndeliverablePushTest.java), and no gate reads it. The mutant counter then increments on every healthy flush, so an operator alerting on undeliverablePushes > 0 pages continuously on a pod with no store fault at all -- which is the 'unactionable metric' the row's own prose says the two-counter split exists to avoid, arrived at from the other direction. `set(1)` is killed by isEqualTo(2); 'counts pushes rather than failures' is not killed by anything. One line closes it: assert `undeliverablePushes()` isZero in an existing success-path push test (DefaultIngestTest already asserts droppedPushes there), or add the same assertion to a passing push in this file before the failing fixture."
+    },
+    {
+      "id": "M5.48-r2-2",
+      "severity": "minor",
+      "file": "ingest/src/main/java/binjava/ingest/DefaultIngest.java:159-172",
+      "title": "The counter's javadoc narrows a catch of RuntimeException to 'a segment that could not be read'",
+      "failure_scenario": "The handler is `catch (RuntimeException e)`, not `catch (UncheckedIOException e)`. Today only SubscriptionHub.deliver:388 can reach it (writeHeldBytes and writeHeldBytesChunked swallow per sink), but publishSegment's DIRECT arm throws IllegalStateException by design as a fail-loud guard, and any NPE inside the hub lands here as well. The javadoc tells the reader 'This one is a delivery that THREW, a segment that could not be read, and the answer is to look at the store'. When M5.45b makes the DIRECT arm reachable, the counter rises and the documented remedy sends the operator to a healthy store for a wiring bug. The log line survives this (it quotes e.getMessage(), which names M5.45b); the counter's documented meaning does not. Either narrow the catch to UncheckedIOException with a separate arm for the rest, or say in the javadoc that the count is 'a delivery that threw', with the store being the usual but not the only cause."
+    },
+    {
+      "id": "M5.48-r2-3",
+      "severity": "minor",
+      "file": "ingest/src/main/java/binjava/ingest/DefaultIngest.java:401",
+      "title": "'push undelivered' and one quoted key are both wrong for a PARTIALLY delivered batched push",
+      "failure_scenario": "SubscriptionHub.publish deliberately continues past a failing segment and rethrows only the FIRST UncheckedIOException with the rest addSuppressed. So for a delta of three segments where two fail and one is delivered, the counter rises by one, the line reads 'push undelivered' for a push that partly succeeded, and e.getMessage() names one of the two failing keys -- the other appears only in the stack trace the WARNING's throwable renders. Unreachable today only because flushLocked refuses a batched delta, which is M5.60, the row this same commit adds: the row that makes the counter's unit wrong is queued one line below the counter, and neither the row nor the comment at DefaultIngest:393-400 says so."
+    },
+    {
+      "id": "M5.48-r2-4",
+      "severity": "minor",
+      "file": "ingest/src/test/java/binjava/ingest/UndeliverablePushTest.java:105-124",
+      "title": "The log assertion's visibility rests on drainPushes' 5 s join, not on anything the test states",
+      "failure_scenario": "`logged` is a plain StringBuilder appended from the pusher thread and read from the test thread. The spin the test states waits on `undeliverablePushes()`, which is incremented one statement BEFORE LOG.log, so exiting the spin does not imply the append happened, let alone that it is visible. What actually makes the read safe is DefaultIngest.close() -> drainPushes() -> pusher.join(Duration.ofSeconds(5)) inside the try-with-resources. If that join ever times out -- a loaded CI box, a 5 s budget -- the pusher is interrupted, the handler is removed in the finally, and the assertion reads a builder with no happens-before: an intermittent 'the line must name the segment the store could not read' with an empty dump. Spinning on the logged text itself (or a synchronized/CopyOnWrite collector) states the condition the test actually depends on. The probe's own cleanup is correct: removeHandler and setLevel are both in the finally, and the root level captured before the change is restored, so nothing leaks into GrantNeverLoggedTest, which uses the same idiom."
+    }
+  ],
+  "task": "M5.48",
+  "role": "reviewer"
+}

@@ -239,4 +239,76 @@ final class StoreFakes {
 
         @Override public void close() throws IOException { delegate.close(); }
     }
+
+    /**
+     * A store whose failed read does NOT name the object it failed on.
+     *
+     * <p>⚠️ THIS IS WHAT A REAL BACKEND DOES. S3 answers a bad read with
+     * {@code Access Denied} or a reset connection; the SDK's exception carries a
+     * request id, not an object key. {@link binjava.binstore.backend.MemoryBinStore}
+     * is the exception rather than the rule -- it throws
+     * {@code IOException("no such key: " + key)}, and a test driven through it
+     * cannot tell a caller that names the failing key from one that does not,
+     * because the key arrives in the cause's message either way. Review measured
+     * exactly that: reverting {@code SubscriptionHub.deliver} to
+     * {@code new UncheckedIOException(storeFailed)} left every assertion green.
+     */
+    static final class ReadFailsWithoutNamingTheKey implements BinStore {
+        private final BinStore delegate;
+
+        ReadFailsWithoutNamingTheKey(BinStore delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override public InputStream get(String key) throws IOException {
+            try {
+                return delegate.get(key);
+            } catch (IOException anonymised) {
+                throw new IOException("connection reset by peer");
+            }
+        }
+
+        @Override public InputStream getRange(String key, long start, long endIncl)
+                throws IOException {
+            try {
+                return delegate.getRange(key, start, endIncl);
+            } catch (IOException anonymised) {
+                throw new IOException("connection reset by peer");
+            }
+        }
+
+        @Override public Optional<Version> putIfAbsent(String k, Body b) throws IOException {
+            return delegate.putIfAbsent(k, b);
+        }
+
+        @Override public Optional<Version> putIfMatch(String k, Body b, Version v)
+                throws IOException {
+            return delegate.putIfMatch(k, b, v);
+        }
+
+        @Override public Version put(String k, Body b) throws IOException {
+            return delegate.put(k, b);
+        }
+
+        @Override public Optional<ObjectStat> stat(String k) throws IOException {
+            return delegate.stat(k);
+        }
+
+        @Override public MultipartWriter multipart(String k) throws IOException {
+            return delegate.multipart(k);
+        }
+
+        @Override public ListPage list(String prefix, String startAfter, int maxKeys)
+                throws IOException {
+            return delegate.list(prefix, startAfter, maxKeys);
+        }
+
+        @Override public void delete(List<String> keys) throws IOException {
+            delegate.delete(keys);
+        }
+
+        @Override public Capabilities capabilities() { return delegate.capabilities(); }
+
+        @Override public void close() throws IOException { delegate.close(); }
+    }
 }
