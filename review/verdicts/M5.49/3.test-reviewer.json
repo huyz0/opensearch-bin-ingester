@@ -1,0 +1,37 @@
+{
+  "diff_sha256": "e7c250334c5ed0698d5ac0a53b1115ddc73fa62cdb0b334de5839fff129efe80",
+  "verdict": "pass",
+  "summary": "Round-3 test pass. I rebuilt the twelve cases as a shell harness driving a COPY of the script (nothing in scripts/ was touched) and confirmed the copy is 12/12 green before mutating. All four of my round-2 scope survivors are dead, each measured: examine-only-the-first-@Override and skip-past-line-100 red on unmetered-in-the-middle; double-the-count and repoint-the-default red on theRealFaultInjectingStoreIsFullyMetered, because the count now comes from the predicate loop and the expected value is derived from the store's own 12 @Override lines rather than a literal. missing[:1] reds on two-unmetered; sig = src[0] reds on the two naming rows; dropping the comment filter entirely reds on no-verbs; the crash guard is pinned by the python3 stub. The round-1 blocking window defect and both round-2 majors (vacuous zero-verb pass, 'first statement' claimed but not enforced) are closed and each has a fixture that reds without the fix. Four minors remain, all with a surviving mutation measured against all twelve cases, none blocking: the '(' in record( is unpinned, the verb-naming lookahead is unpinned for the one multi-line signature the real store actually has, the no-body branch has no fixture and its natural input bleeds forward to the next verb's call, and the crash case scratches in the system temp against testing.md rule 17. Also still open and NOT re-raised: my round-2 minor 3 (the one-line body `@Override public void close() { record(\"close\"); }` is falsely refused, and the plausible fix `or 'record(' in line: continue` still leaves all twelve green) -- measured again here, unchanged, and review.md rule 11 says a minor lands.",
+  "findings": [
+    {
+      "file": "buildSrc/src/test/java/binjava/FaultStoreRecordsTest.java:26",
+      "severity": "minor",
+      "finding": "Nothing separates `record(` from `record`. Mutation `stmt.startswith('record(')` -> `stmt.startswith('record')` leaves all twelve cases green (measured). I then ran the mutant over a verb whose first statement is `recorded = true;` and got `ok 1 verb(s) metered`. guarded-inline pins startswith-vs-substring; no fixture pins the open paren, so the predicate's last character is free.",
+      "failure_scenario": "The gate's whole claim is that the FIRST statement is the meter call. Under the loosened predicate a verb starting `recordedCalls++;`, `recorder.log(k);` or `recordLater(\"presign\");` -- the exact rename my round-2 probe used to simulate an unmetered verb -- reports ok. The verb is invisible to the meter, a release-path floor later reds with no defect present, and that is the M5.29 history this task exists to end.",
+      "suggestion": "One row: a fixture whose verb's first statement is `recorded = true;` (or `recordLater(\"presign\");`), expecting exit 1 and `first statement is`. It costs one file and kills the mutation."
+    },
+    {
+      "file": "buildSrc/src/test/java/binjava/FaultStoreRecordsTest.java:54",
+      "severity": "minor",
+      "finding": "The verb-naming lookahead is pinned only for the one-line `@Override public ...` shape. Mutation `sig = next((s.strip() for s in src[i:i + 3] if 'public' in s), line.strip())` -> `src[i:i + 1]`, and the stronger `sig = line.strip()`, both leave all twelve green (measured), because every fixture whose verb is REPORTED puts the signature on the @Override's own line. Run against a verb declared `@Override` on its own line with the signature below, the mutant prints `... :7  @Override  -- first statement is: return ...` -- the line number survives, the verb name does not.",
+      "failure_scenario": "That shape is not hypothetical: FaultInjectingStore.java:487 declares putIfAbsent exactly that way, and it is the only one of the twelve verbs that does. So the one verb in the real subject whose refusal message would lose its name is the one no fixture represents. Fails closed, and the line number still points at the verb, so the cost is an author's reading time rather than a missed defect.",
+      "suggestion": "Give unmetered-in-the-middle (or a new fixture) a verb declared `@Override` on its own line, signature on the next, and assert its name -- the putIfAbsent shape, which is also the shape google-java-format produces for a long signature."
+    },
+    {
+      "file": "buildSrc/src/test/java/binjava/FaultStoreRecordsTest.java:26",
+      "severity": "minor",
+      "finding": "No fixture carries an @Override with no body, so the `-- no body found` branch is unexecuted: replacing it with `pass` leaves all twelve green (measured). Worse, the branch is close to unreachable from the natural input, which I measured against the UNMUTATED script: a file containing `@Override public abstract String toString();` inside a nested abstract class, followed by a metered `get`, reports `ok 2 verb(s) metered`. first_statement_after scans forward to the next `{` in the FILE, not the end of this declaration, so a brace-less @Override is credited with the NEXT verb's record( call.",
+      "failure_scenario": "This is the round-1 forward-bleed defect class in the one shape no fixture has -- the eight-line window reached past a short method, and this reaches past a body-less one. Not reachable in the concrete class today; it becomes reachable the moment the file grows a nested abstract type or an interface, and the file is at exactly 700 lines with a split named as its next change, which is the scenario no-verbs.java exists for. The count is inflated too: 2 reported over 1 metered verb, and EXAMINED is what the real-store case checks against.",
+      "suggestion": "A fixture with a body-less @Override ahead of a metered verb, asserting exit 1. Whether the gate should say 'no body found' or simply refuse an unmeterable declaration is the author's call; either way the input should reach the branch rather than bleed past it."
+    },
+    {
+      "file": "buildSrc/src/test/java/binjava/FaultStoreRecordsTest.java:101",
+      "severity": "minor",
+      "finding": "testing.md rule 17: `java.nio.file.Files.createTempDirectory(\"no-python\")` scratches in the system temp rather than under build/tmp, and the directory with its python3 stub is never deleted, so every run of the harness leaves one behind. Not a weak assertion -- the case itself is the strongest one here, since deleting the `|| { fail ...; finish; }` guard reds it and nothing else.",
+      "failure_scenario": "Litter under the system temp on every buildSrc run rather than a wrong verdict. Noted because the rule is explicit and the fix is `@TempDir Path bin` in the signature; FreshCheckoutTest.java:249 has the same shape, so the precedent is in the tree and this is the author's call, not a new defect class.",
+      "suggestion": "`@TempDir Path bin` (buildSrc already uses it throughout ModuleGateTest), or Path.of(\"build/tmp\") under the module."
+    }
+  ],
+  "task": "M5.49",
+  "role": "test-reviewer"
+}

@@ -104,6 +104,13 @@ repos:
         stages: [pre-commit]
         pass_filenames: false
         always_run: true
+      - id: check-fault-store-records
+        name: "non-negotiable 9 / M5.49: every verb of the fault-injecting store is metered"
+        entry: scripts/check-fault-store-records.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
       - id: check-license-headers
         name: "build.md: every source file carries the SPDX Apache-2.0 header"
         entry: scripts/check-license-headers.sh

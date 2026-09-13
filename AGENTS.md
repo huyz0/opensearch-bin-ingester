@@ -210,6 +210,7 @@ runs is exactly the list that goes stale:
 | `check-links.sh` | pre-commit | every relative markdown link resolves |
 | `scripts/build-index.sh --check` | pre-commit | the generated index regions in AGENTS.md and skills/README.md are current |
 | `check-terminology.sh` | pre-commit | glossary.md: one name per concept -- producer/ingester/writer/reader/consumer/plugin |
+| `check-fault-store-records.sh` | pre-commit | non-negotiable 9 / M5.49: every verb of the fault-injecting store is metered |
 | `check-license-headers.sh` | pre-commit | build.md: every source file carries the SPDX Apache-2.0 header |
 | `check-dependency-licenses.sh` | pre-commit | build.md: no GPL/AGPL/SSPL dependencies in an Apache-2.0 project |
 | `check-metric-cardinality.sh` | pre-commit | observability.md rule 1: no high-cardinality metric or span labels |
