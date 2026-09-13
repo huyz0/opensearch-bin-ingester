@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package binjava.client;
 
+import binjava.format.FetchMode;
 import binjava.format.RunEntry;
 import binjava.format.RunKey;
 import binjava.format.SegmentReader;
@@ -41,8 +42,15 @@ public final class ConsumerClient implements AutoCloseable {
     private final Deque<ConsumerRecord> ready = new ArrayDeque<>();
     private final AutoCloseable subscription;
     private final RunKey key;
+    private final SegmentSource segmentSource;
 
     public ConsumerClient(SubscriptionTransport transport, RunKey key, int queueCapacity) {
+        this(transport, key, queueCapacity, null);
+    }
+
+    public ConsumerClient(SubscriptionTransport transport, RunKey key, int queueCapacity,
+            SegmentSource segmentSource) {
+        this.segmentSource = segmentSource;
         this.key = Objects.requireNonNull(key, "key");
         if (queueCapacity <= 0) {
             throw new IllegalArgumentException("queue capacity must be positive");
@@ -75,7 +83,7 @@ public final class ConsumerClient implements AutoCloseable {
 
     private void decodeInto(Delivery delivery, Deque<ConsumerRecord> out) {
         try {
-            SegmentReader reader = SegmentReader.open(delivery.segment());
+            SegmentReader reader = SegmentReader.open(bytesOf(delivery));
             RunEntry entry = reader.find(key).orElseThrow(
                     () -> new IOException("segment " + delivery.segmentKey()
                             + " carries no run for " + key));
@@ -91,6 +99,33 @@ public final class ConsumerClient implements AutoCloseable {
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
+    }
+
+    /**
+     * The segment's bytes: carried on the delivery, or fetched under a grant.
+     *
+     * <p>⚠️ A FAILED FETCH PROPAGATES. Catching it and returning an empty array
+     * would have {@code readNext} report an ordinary empty poll while a whole
+     * window went missing -- the caller is told the stream is healthy and the
+     * records are simply gone. An expired grant and a 403 are the NORMAL
+     * failures on this path rather than the corrupt-segment case, so the quiet
+     * handling is the likely one and is what this method refuses.
+     *
+     * <p>⚠️ AND NO SOURCE IS AN {@code IllegalStateException}, not a silent
+     * empty stream: it is the mirror of {@code SubscriptionHub}'s null-issuer
+     * guard, and a pod that elects {@code direct} for a consumer built without
+     * a source is a misconfiguration an operator must see.
+     */
+    private byte[] bytesOf(Delivery delivery) throws IOException {
+        if (delivery.via() != FetchMode.DIRECT) {
+            return delivery.segment();
+        }
+        if (segmentSource == null) {
+            throw new IllegalStateException("segment " + delivery.segmentKey()
+                    + " was served `direct` to a consumer with no segment source; a deployment "
+                    + "enabling `direct` builds one (M5.45g)");
+        }
+        return segmentSource.fetch(delivery.grant());
     }
 
     /** How many deliveries are queued but not yet decoded. */

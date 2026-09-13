@@ -1,0 +1,25 @@
+{
+  "diff_sha256": "b777f6e747d34c5c8a5e1846ef7cdac30e379ca0738055de6bf73747d1389fa5",
+  "verdict": "pass",
+  "round": 2,
+  "summary": "All three round-1 findings hold under the exact mutations that motivated them, verified by running :client:test with each mutation applied rather than by reading: (A) hoisting the null-source check above the via check -> 1 failure; (B) `via != DIRECT` -> `via == INLINE` -> 1 failure; (C) memoizing the first grant -> 1 failure. Two further mutations I tried also die: swallowing the fetch IOException and returning an empty array (killed by the message assertion, since SegmentReader.open's truncation message does not name the segment), and the DIRECT-without-grant / grant-on-non-DIRECT build guards. One measured survivor remains, minor: the fixture makes every grant url a pure function of the segment key, so a client that fabricates the url instead of using the arriving grant decodes and passes.",
+  "findings": [
+    {
+      "file": "client/src/test/java/binjava/client/DirectFetchTest.java:43-46",
+      "severity": "minor",
+      "title": "Every grant url is a pure function of the segment key, so the fabricated-url mutation criterion 4 names by name survives",
+      "failure_scenario": "MEASURED, not argued. Replace `segmentSource.fetch(delivery.grant())` in ConsumerClient.bytesOf:128 with `segmentSource.fetch(new Grant(\"https://store.example/\" + delivery.segmentKey(), delivery.grant().expiresAt()))` -- the arriving grant's url is discarded and one is invented from the segment key. `./gradlew :client:test` is GREEN: all 7 cases in DirectFetchTest pass and so does the rest of the module. It survives because GRANT.url() is \"https://store.example/\" + \"seg-the-one-granted\" and SECOND_GRANT.url() is \"https://store.example/\" + \"seg-the-second\", so the derived url equals the real one for both deliveries and `containsExactly(urlOne, urlTwo)` at :214 still holds. This is exactly the defect criterion 4 forbids -- \"a ConsumerClient passing a LOCALLY CONSTRUCTED grant ... decodes correctly while production fetches an unsigned or wrong-key URL\" -- and the round-1 fix closed the memoization half of it but not this half: the second url distinguishes \"the arriving grant\" from \"the first grant\", but nothing distinguishes it from \"a url the client can derive\". A real presigned url's defining property is the part the consumer cannot invent. Kill it by putting an unguessable token in each fixture url (e.g. \"https://store.example/obj-9f3c?sig=c0ffee\" and \"...obj-71a2?sig=decafb\"), so the url stops being reconstructible from the segment key; under that fixture the mutation above fails ServesOneUrl's url check and the case goes red. NOT blocking: the mutation as written has to hardcode the test's own hostname in production code, which is why this is minor rather than major -- but the fixture is the only thing standing between the suite and a client that ignores the grant, and making the urls opaque is a two-line change with no behaviour cost."
+    }
+  ],
+  "verified": [
+    "Round-1 finding 1 (seam unconstrained off the DIRECT path): FIXED and pinned. theSEAMIsNOTUsedWhenViaIsNotDIRECT:186-199 pushes an INLINE delivery with real bytes to a client built WITH a source and asserts both the decoded offsets and `source.asked` empty. Mutation `if (segmentSource != null) return segmentSource.fetch(delivery.grant());` hoisted above the via check -> 7 tests completed, 1 failed.",
+    "Round-1 finding 2 (`via != DIRECT` -> `via == INLINE`): FIXED and pinned. aGrantOnANonDIRECTDeliveryIsRefused:160-175 now asserts PROXY as well as INLINE. Mutation applied to Delivery.java's compact constructor -> 7 tests completed, 1 failed.",
+    "Round-1 finding 3 (one delivery cannot tell the arriving grant from the first): FIXED and pinned. theSEAMIsHandedTheGrantFromTheDELIVERY:199-215 pushes a second delivery under a second url and asserts containsExactly. Mutation memoizing the first grant in a field -> 7 tests completed, 1 failed.",
+    "Criterion 5 (a failing fetch has ASSERTED behaviour): pinned beyond the throw type. Mutation wrapping the fetch in `catch (IOException) { return new byte[0]; }` -> 7 tests completed, 1 failed, because the hasMessageContaining(\"seg-the-one-granted\") assertion at :238 discriminates the fetch failure from SegmentReader.open's truncation message, which names no segment.",
+    "Red records: all 7 cases recorded against sha256 95a8c2418e3474d9ba9a4f5aed35dcafb3e00af81066c2b3614fc192f76ea9bc, which is the hash of the staged bytes of DirectFetchTest.java.",
+    "No existing assertion was weakened: the staged diff touches no pre-existing test file.",
+    "Tier and testing.md: T0 throughout -- no socket, no clock, no Thread.sleep, no temp dir. The 50 ms readNext argument is a queue poll bound, and the fake transport delivers synchronously on the pushing thread before readNext is called, so there is no race to flake on."
+  ],
+  "task": "M5.45g",
+  "role": "test-reviewer"
+}

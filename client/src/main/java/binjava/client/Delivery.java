@@ -8,14 +8,31 @@ import java.util.Objects;
 /**
  * One stream's share of a commit, as the transport hands it over.
  *
- * <p>WARNING: the segment bytes are IN HAND by the time a delivery exists. How
- * they got here is what {@code via} records: `inline` means they travelled with
- * the push, `proxy` that the ingester streamed them through. Either way the
- * consumer issues NO object-store request to read what it was just told about,
- * which is what makes the zero-idle-cost property hold under load rather than
- * merely at rest. `direct` -- where the consumer reads the store itself -- is
- * M5.45g and cannot reach this type yet. (It was M5.45c until that row was
- * split; M5.45g is the half that adds the grant to this record.)
+ * <p>WARNING: under `inline` and `proxy` the segment bytes are IN HAND by the
+ * time a delivery exists. How they got here is what {@code via} records:
+ * `inline` means they travelled with the push, `proxy` that the ingester
+ * streamed them through. On both the consumer issues NO object-store request to
+ * read what it was just told about, which is what makes the zero-idle-cost
+ * property hold under load rather than merely at rest.
+ *
+ * <p>⚠️ UNDER `direct` THE BYTES ARE NOT IN HAND AND THE CONSUMER DOES ISSUE A
+ * REQUEST -- {@link #segment()} is EMPTY and {@link #grant()} is what
+ * {@code ConsumerClient} fetches with, through {@link SegmentSource} (M5.45g).
+ * An earlier version of this paragraph said the bytes are always in hand, that
+ * the consumer issues no request either way, and that `direct` "cannot reach
+ * this type yet"; the commit that added {@link #grant()} falsified all three
+ * and left them standing.
+ *
+ * <p>⚠️ AND THAT REQUEST IS PER RUN, WHICH IS WHERE THE COALESCING HAS TO GO.
+ * One delivery is one run, so a node holding K runs of a segment fetches K
+ * times unless something above this type merges them -- ~400 whole-object GETs
+ * for one 8 MiB segment on a catch-up node, shards-per-node, which
+ * non-negotiable 6 forbids by name and which nothing in the tree can measure,
+ * since consumer-side GETs are invisible to the ingester's
+ * {@code CountingBinStore}. **M5.45h** owns the merge, and **no production
+ * {@link SegmentSource} ships until it lands** (M5.45g criterion 6, ADR-0044).
+ * A reader looking for the coalescing point should look at
+ * {@code ConsumerClient.decodeInto}, not at the hub.
  *
  * <p>⚠️ {@code via} IS TOLD TO THE CONSUMER, NOT ASKED OF IT (FR-6). It is a
  * record component with no setter and nothing on {@code SubscriptionTransport}
@@ -25,7 +42,13 @@ import java.util.Objects;
  * reproduce the $3,732/month design ADR-0004 rejected.
  */
 public record Delivery(RunKey key, String segmentKey, int recordCount, long firstOffset,
-        FetchMode via, byte[] segment) {
+        FetchMode via, byte[] segment, binjava.format.Grant grant) {
+
+    /** A delivery with no grant, which is every {@code inline} and {@code proxy} one. */
+    public Delivery(RunKey key, String segmentKey, int recordCount, long firstOffset,
+            FetchMode via, byte[] segment) {
+        this(key, segmentKey, recordCount, firstOffset, via, segment, null);
+    }
 
     public Delivery {
         Objects.requireNonNull(key, "key");
@@ -37,6 +60,23 @@ public record Delivery(RunKey key, String segmentKey, int recordCount, long firs
         }
         if (firstOffset < 0) {
             throw new IllegalArgumentException("offsets are never negative");
+        }
+        // ⚠️ REFUSED WHERE IT IS BUILT, which is the asymmetry M5.44 closed
+        // three times over on the wire and M5.45d closed one layer up on
+        // `SubscriptionHub.Push`. A `direct` delivery without a grant tells a
+        // consumer to fetch and not how; it would reach `decodeInto`, find an
+        // EMPTY segment, and throw somewhere far from the mistake.
+        if (grant == null && via == FetchMode.DIRECT) {
+            throw new IllegalArgumentException(
+                    "a `direct` delivery without a grant tells a consumer to fetch and not how");
+        }
+        // ⚠️ AND THE OTHER DIRECTION, because security.md rule 4 makes an
+        // unnecessary secret a COST rather than waste: a signed URL minted for
+        // a consumer that will never fetch with it is one more place it leaks
+        // from, and every such place is one a future reader has to check.
+        if (grant != null && via != FetchMode.DIRECT) {
+            throw new IllegalArgumentException(
+                    "a grant is for `direct`; this delivery is " + via);
         }
     }
 }

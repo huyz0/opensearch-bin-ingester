@@ -1,0 +1,30 @@
+{
+  "diff_sha256": "e7c2bfb09d30ae75ab9a25cc2438a4def71c0475037e31e4b63534f4e54f26cb",
+  "verdict": "changes-requested",
+  "summary": "The seam, the guards and the failure path are right, and criterion 6 holds: the only SegmentSource in the tree is the test one, no production Delivery is constructed anywhere (all 12 construction sites are tests or ITs), and no fetcher is wired into a consumer path. Request rate is unchanged by this commit because nothing production-side can call fetch. One major: Delivery's own class javadoc, untouched by a diff that falsifies it, still states that direct cannot reach this type and that the consumer issues NO object-store request -- the load-bearing cost claim about the very type this commit changed, and exactly the input M5.45h's owner needs correct. Two minors recorded.",
+  "findings": [
+    {
+      "id": "M5.45g-1",
+      "severity": "major",
+      "file": "client/src/main/java/binjava/client/Delivery.java:11-18",
+      "title": "The class javadoc says direct cannot reach this type and that the consumer issues no object-store request; this diff makes both false",
+      "failure_scenario": "The diff adds a `grant` component and a guard that admits FetchMode.DIRECT, and ConsumerClient.bytesOf now issues a fetch for exactly those deliveries. The javadoc immediately above the record still reads 'the segment bytes are IN HAND by the time a delivery exists', 'Either way the consumer issues NO object-store request to read what it was just told about, which is what makes the zero-idle-cost property hold under load', and '`direct` -- where the consumer reads the store itself -- is M5.45g and cannot reach this type yet.' All three are now false, and the second is a claim about request rate. Concretely: the owner of M5.45h (ONE FETCH PER (NODE, SEGMENT)) opens Delivery.java to find where the per-run fetch is issued, reads that this type carries the bytes already and that direct cannot reach it, and looks for the coalescing point in the hub instead of at the one-Delivery-per-RUN call site in ConsumerClient.decodeInto -- the ~400-whole-object-GETs shape the row says nothing in the tree can see. Same for any reader reasoning about consumer-side request rate from the type's own contract. Fix is the one paragraph: say that direct now reaches this type, carries no bytes, and that the consumer issues exactly one GET per delivery under the grant until M5.45h coalesces them."
+    },
+    {
+      "id": "M5.45g-2",
+      "severity": "minor",
+      "file": "client/src/main/java/binjava/client/ConsumerClient.java:119-129",
+      "title": "A normal, retryable fetch failure loses the delivery permanently, leaving an offset gap the tree cannot see",
+      "failure_scenario": "readNext polls the Delivery off the ArrayBlockingQueue (line 76) before decodeInto runs, so when segmentSource.fetch throws, the UncheckedIOException reaches the caller and the delivery is gone. BinStoreShardConsumer.drain does not catch it, so OpenSearch's ingestion loop sees the error, calls readNext again, and gets the NEXT delivery: records [firstOffset, firstOffset+recordCount) are never emitted, offsets stay monotonic but gapped, and nothing asserts gaplessness. The propagation itself is what criterion 5 asked for and it is correctly implemented and asserted; the point is that an expired grant or a 403 -- which the method's own javadoc calls the NORMAL failures on this path -- now reaches a drop-the-window mechanism that previously only a corrupt segment could reach. Not reachable in production today (no production SegmentSource exists, criterion 6), so this is a backlog row for M5.45f/M5.45h to close before any real fetcher is wired, not a change to make here."
+    },
+    {
+      "id": "M5.45g-3",
+      "severity": "minor",
+      "file": "client/src/main/java/binjava/client/SegmentSource.java:44-55",
+      "title": "The seam contract fixes the failure semantics but says nothing about bounding wall time, inside a method documented to return within pollTimeout",
+      "failure_scenario": "fetch(Grant) is called synchronously from decodeInto, inside readNext, whose javadoc promises 'the next record, or empty if none arrived within pollTimeout' and whose class javadoc is entirely about blocking behaviour. A real HTTP implementation with no connect/read timeout parks the shard's ingestion thread indefinitely on one unreachable object-store endpoint; with maxMessages spanning several deliveries, BinStoreShardConsumer.drain can do it more than once per call after setting budget to ZERO. The interface javadoc already tells implementations what to do on failure (throw, never yield nothing) -- one more sentence requiring a bounded wall time, or a note that M5.45f owns the timeout, closes it before the real adapter inherits an unspecified one."
+    }
+  ],
+  "task": "M5.45g",
+  "role": "reviewer"
+}

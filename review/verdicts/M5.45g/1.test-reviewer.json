@@ -1,0 +1,30 @@
+{
+  "diff_sha256": "e7c2bfb09d30ae75ab9a25cc2438a4def71c0475037e31e4b63534f4e54f26cb",
+  "verdict": "changes-requested",
+  "summary": "The six cases are real tests, not coverage: the one-url fake plus the exact-url assertion genuinely closes criterion 4's locally-constructed-grant defect, and criterion 5's swallow defect dies on a measured mutation. What is unconstrained is the OTHER half of the new bytesOf branch -- no test ever gives a ConsumerClient a SegmentSource and then pushes a non-DIRECT delivery, so hoisting the null-source check above the via check survives the entire 1287-test suite while every inline delivery would issue a consumer-side GET.",
+  "findings": [
+    {
+      "file": "client/src/test/java/binjava/client/DirectFetchTest.java",
+      "line": 131,
+      "severity": "major",
+      "title": "Nothing constrains that the seam is NOT used when via is not DIRECT",
+      "failure_scenario": "MEASURED SURVIVING MUTATION. In ConsumerClient.bytesOf (client/src/main/java/binjava/client/ConsumerClient.java:119-129) swap the two guards so the source wins whenever one is configured:\n\n    private byte[] bytesOf(Delivery delivery) throws IOException {\n        if (segmentSource == null) {\n            if (delivery.via() != FetchMode.DIRECT) {\n                return delivery.segment();\n            }\n            throw new IllegalStateException(...unchanged...);\n        }\n        return segmentSource.fetch(delivery.grant());\n    }\n\nFull 'GATE_SCOPE default ./gradlew test' is GREEN with that applied (verified, exit 0, all modules). Every ConsumerClient built with a SegmentSource lives in DirectFetchTest (lines 134, 157, 180) and every one of them pushes only DIRECT deliveries; every test that pushes INLINE (ConsumerClientTest, BinStoreShardConsumerTest, RestartResumeTest, EndToEndTest) builds the 3-arg ConsumerClient where segmentSource is null. So the 'delivery.via() != FetchMode.DIRECT' branch is EXECUTED constantly and CONSTRAINED never -- testing.md rule 8's exact failure. The bug it lets through is the project's central cost property: with a real source wired at M5.45h, every INLINE delivery -- the default mode, the one that makes zero consumer-side requests hold -- would fetch over the network (and NPE on the null grant in any real fetcher), and testing.md rule 22 makes 'zero requests on the hot path' a test obligation rather than a dashboard. Closing it is one case: build the client WITH a ServesOneUrl, push an INLINE delivery carrying real bytes, assert the records decode AND assert source.asked is empty."
+    },
+    {
+      "file": "client/src/main/java/binjava/client/Delivery.java",
+      "line": 60,
+      "severity": "minor",
+      "title": "The grant-on-non-DIRECT guard is asserted for INLINE only; PROXY is unconstrained",
+      "failure_scenario": "MEASURED SURVIVING MUTATION. Narrow the second guard from the negation to the single value that is tested:\n\n    if (grant != null && via == FetchMode.INLINE) {\n\nFull './gradlew test' is GREEN with that applied (verified, exit 0). aGrantOnANonDIRECTDeliveryIsRefused (DirectFetchTest.java:115) passes FetchMode.INLINE and no test anywhere constructs a client-side Delivery with FetchMode.PROXY -- grep confirms the only PROXY usages are in format and ingest tests. So a PROXY delivery carrying a signed URL is accepted, which is precisely the state security.md rule 4 and the guard's own comment ('a signed URL minted for a consumer that will never fetch with it is one more place it leaks from') exist to forbid: PROXY is the mode where the INGESTER streams the bytes, so the consumer will never fetch, and the secret is pure leak surface. Two lines close it -- a @ParameterizedTest over {INLINE, PROXY}, or a second assertThatThrownBy. (For the record, the message assertions themselves are NOT the weakness: deleting either guard makes assertThatThrownBy fail with 'no exception thrown', so both cases survive guard deletion and only break on rewording.)"
+    },
+    {
+      "file": "client/src/test/java/binjava/client/DirectFetchTest.java",
+      "line": 154,
+      "severity": "minor",
+      "title": "The grant binding is pinned for the FIRST delivery only, not per-delivery",
+      "failure_scenario": "MEASURED SURVIVING MUTATION. Memoize the first grant a client ever sees:\n\n    private binjava.format.Grant firstGrantSeen;\n    ...\n    if (firstGrantSeen == null) { firstGrantSeen = delivery.grant(); }\n    return segmentSource.fetch(firstGrantSeen);\n\n':client:test' is GREEN with that applied (verified). Every source-bearing case pushes exactly ONE DIRECT delivery, so 'the ARRIVING grant' and 'the first grant' are indistinguishable and criterion 4's wording is only half-pinned: a client that cached a grant -- a realistic optimisation, grants have a TTL and 'reuse while valid' is the obvious idea -- would serve the first run's object for every later run, which is exactly the 'quietly fetch the wrong object' defect the one-url fake was built to catch. Closing it is one more push in theSEAMIsHandedTheGrantFromTheDELIVERY: a second delivery under a SECOND url, a source that serves both, and containsExactly(urlOne, urlTwo) in order. This matters more at M5.45h, whose whole subject is many deliveries."
+    }
+  ],
+  "task": "M5.45g",
+  "role": "test-reviewer"
+}
