@@ -1,0 +1,22 @@
+{
+  "diff_sha256": "476f8fa4eca2db7c195244f4562159ba230433d5ee9ce762929988a121fb9e41",
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md",
+      "line": 51,
+      "description": "M5.42's row is left with State=todo (unchanged, verified in the tree) while the M5.37 row and the roadmap both now say M5.42's case is booked into M9. Every other backlog row that is blocked on a dependency spells it in the State cell itself (e.g. M5.45b: 'blocked -- M5.43'); M5.42 does not follow that convention, so a mechanical State-column scan (which is what M0.111's not-yet-built check-backlog-state.sh would do) cannot distinguish this row from ordinary available work. Today the only guard is that a reader must parse the row's own prose ('Whoever lands the first capable backend adds the case') rather than the State cell.",
+      "failure_scenario": "Once check-backlog-state.sh (M0.111) lands and next-task starts trusting the State column mechanically, M5.42 will look identical to any other 'todo' row and get picked up as available work, producing exactly the wasted-session problem M0.105/M0.111 exist to prevent -- even though this commit's own text already knows it is blocked."
+    },
+    {
+      "severity": "minor",
+      "file": "docs/internal/product/roadmap.md",
+      "line": 18,
+      "description": "The M9 row now correctly avoids overclaiming that M9 builds the first S3/MinIO backend, and says plainly 'WHICH MILESTONE BUILDS THAT BACKEND IS UNASSIGNED ... needs a decision of its own.' But no row, ADR or open-question tracks that decision: it is not added to the 'Deferred into a later milestone' table (which is where this repo's own convention puts an obligation with 'milestone not yet assigned', e.g. the lone-producer throughput row), and 50-open-questions.md has no matching entry.",
+      "failure_scenario": "The unassigned decision ('who builds the first real BinStore backend, and does it have to precede M8's chaos/RPO-0 evidence') has nowhere a future session would look to find it, so it can be silently lost the same way M5.42's reassignment nearly was -- a correct disclosure with no place for the next reader to rediscover it."
+    }
+  ],
+  "task": "M5.37",
+  "role": "reviewer"
+}

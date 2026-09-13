@@ -1,0 +1,8 @@
+{
+  "task": "M5.37",
+  "round": 2,
+  "diff_sha256": "476f8fa4eca2db7c195244f4562159ba230433d5ee9ce762929988a121fb9e41",
+  "verdict": "pass",
+  "findings": [],
+  "role": "test-reviewer"
+}

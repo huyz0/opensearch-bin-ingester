@@ -1,0 +1,27 @@
+{
+  "diff_sha256": "e5a5018ef4366d5ee18c0b614a9b3d7bb76a25ac637297499aebebe776248641",
+  "verdict": "pass",
+  "summary": "Documentation-only closure of M5.37 by decision. The central factual claim checks out against the tree: MemoryBinStore (MemoryBinStore.java:266) and LocalFsBinStore (LocalFsBinStore.java:434) are the only BinStore implementations outside test source sets and both construct Capabilities with presignedUrls=false; every presignedUrls=true in the tree is a test stand-in (CountingBinStoreTest CapableStore, GrantIssuerTest CapableStore, GrantNeverLoggedTest SigningStore, FetchPolicyTest's literal). No S3/MinIO client is in gradle/libs.versions.toml or any build.gradle.kts, and M0.16's MinIO fixture is a docker-compose.test.yml service with no Java surface and no integrationTest source set, so it cannot make residue (1) buildable in M5. CountingBinStoreTest.newStore() does return new CountingBinStore(new CapableStore()) and that class extends BinStoreConformance, so the 'the capable branch executes against a stand-in' claim holds. The four unchanged M5.37 citations (BinStore.java:169, GrantIssuer.java:178, GrantIssuerTest.java:283, SegmentProxyTest.java:193) each cite the row as a record of a measured fact, which a done row still is; only the PresignConformance one implied future work and it is the one corrected. The M9 clause follows the M7/M8 'ALSO OWNS ..., reassigned from M5' idiom. No code, so no object-store request rate is touched. Three minors, none blocking.",
+  "findings": [
+    {
+      "file": "docs/internal/product/backlog.md:51",
+      "severity": "minor",
+      "title": "'presign implementations of which there are currently ZERO' is false against the tree, and it is the load-bearing half of the non-negotiable-9 argument",
+      "failure_scenario": "The tree holds at least three presign implementations today: binstore-backends/src/test/java/binjava/binstore/backend/CountingBinStoreTest.java's CapableStore (line 455 onward), ingest/src/test/java/binjava/ingest/GrantIssuerTest.java:45, and ingest/src/test/java/binjava/ingest/GrantNeverLoggedTest.java:53. The same State cell relies on one of them two sentences earlier ('the capable branch executes against CountingBinStoreTest's CapableStore stand-in'), so the cell contradicts itself. The conclusion survives -- all three are stand-ins, and a scanner over fixture bodies constrains no backend author, which is the honest form of the argument -- but the premise as written does not. Concrete cost: whoever later revisits the rung-3 question reads 'ZERO', believes there is no input set, and never notices that a scanner over presign bodies in this repository would in fact have flagged the stat-before-signing stand-in this row says it measured; or an auditor checks the sentence against the tree, finds it false, and reopens a decision that is actually correct. Fix is one clause: 'zero BACKEND implementations -- the three in the tree are test stand-ins, so a scanner over them constrains nothing a backend author will read'."
+    },
+    {
+      "file": "docs/internal/product/backlog.md:51",
+      "severity": "minor",
+      "title": "'M5.42 ... moves with it' asserts a move the tree does not show; M5.42's row still reads todo in the current-milestone backlog",
+      "failure_scenario": "The roadmap edit does record M9 as owning 'the case M5.42 specifies', so the decision is in the tree; what is not in the tree is any mark on M5.42's own row (backlog.md:58), whose State cell still reads 'todo' in a file whose header says it decomposes the CURRENT milestone only. If the promised follow-up commit does not land -- session ends, priorities move -- M5 carries an open todo row whose enabling backend the roadmap has placed in M9, which is exactly the drift M0.111 was opened for: next-task takes the top unblocked todo, and the only thing stopping it here is prose inside M5.42's Task cell rather than its State cell. It also reads as the 'I will fix it in the next commit' shape AGENTS.md forbids. Either fold M5.42's State cell into this commit (it is the same decision, so it does not widen scope) or soften the sentence to say the reassignment of M5.42 lands in the row that follows."
+    },
+    {
+      "file": "docs/internal/product/roadmap.md:18",
+      "severity": "minor",
+      "title": "'M9 ... already owns the S3/MinIO work' overstates the prior state: this commit creates the assignment of the first real backend, and places it after M6, M7 and M8",
+      "failure_scenario": "Before this diff, M9's condition owned 'S3/MinIO benchmarks' -- measurement, not implementation -- and the 'Deferred into a later milestone' table (roadmap.md:29) assigns only GCS and Azure backends, to no milestone at all. No row anywhere owned building the first real object-store backend. The new clause therefore creates that ownership rather than noting it, and places it after M7 (retention and GC from the commit log) and M8 (chaos matrix including AZ partition, RPO 0 demonstrated). Concrete consequence: a reader planning M8 sees the first capable/real backend booked for M9 and demonstrates RPO 0 and AZ partition against MemoryBinStore and LocalFsBinStore, producing resilience evidence on a store whose failure modes are not the production store's -- the same modelled-not-measured trap M9's own condition exists to avoid. If that ordering is intended it should be said; if not, the backend belongs earlier and only the presign CHECK belongs in M9."
+    }
+  ],
+  "task": "M5.37",
+  "role": "reviewer"
+}

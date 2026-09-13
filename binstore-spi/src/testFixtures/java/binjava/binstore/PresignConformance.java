@@ -27,7 +27,9 @@ import org.junit.jupiter.api.Test;
  * MEASURED a stand-in doing {@code stat(key)} before signing surviving both
  * this suite and a {@code CountingBinStore} wrapped around it, because a meter
  * ABOVE a backend cannot see the backend's internal traffic. That half rests on
- * the contract being read, and on M5.37.
+ * {@link BinStore#presign}'s javadoc being read, and on nothing else -- M5.37
+ * closed having established that no test ABOVE a backend can buy it, rather
+ * than having bought it.
  *
  * <p>⚠️ SITS IN THE CHAIN so every backend runs it without opting in.
  * {@code MultipartConformance -> ConditionalWriteConformance -> this ->
