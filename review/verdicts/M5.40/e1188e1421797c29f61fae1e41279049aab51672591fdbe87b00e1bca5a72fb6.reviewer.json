@@ -1,0 +1,36 @@
+{
+  "diff_sha256": "e1188e1421797c29f61fae1e41279049aab51672591fdbe87b00e1bca5a72fb6",
+  "verdict": "changes-requested",
+  "summary": "The two claims the split rests on check out against the tree: SubscriptionHub.publishSegment gathers targets across every run and calls streamTo once (SubscriptionHub.java:343-387, 499-502, the only production streamTo call site), AssembledServingPathTest.aSegmentOfMANYRunsIsReadONCENotOncePerRun builds an 8-run delta and asserts gets()-getsBefore == 1 so a per-run loop reds it at 8, the ~178-of-~1,600 figure derives from docs/research/00-problem/02-cost-model.md:136, SegmentProxy.java's javadoc does carry the per-consumer rule, each Push does carry its own run's key/recordCount/firstOffset, the Tracking failure-path description is accurate, and SPEC R11 (M5/SPEC.md:299) plus M5.16 do own the cache. The division into a and b is sound. One major defect: M5.40a's Serves cell cites NFR-4 (read request rate) for a defect the row itself says leaves the request count at 1, and never names NFR-5, the requirement it actually breaks by ~5 orders of magnitude.",
+  "findings": [
+    {
+      "id": "F1",
+      "file": "docs/internal/product/backlog.md:55",
+      "severity": "major",
+      "title": "M5.40a cites NFR-4 for a byte defect its own text says costs no requests, and never names NFR-5",
+      "failure_scenario": "The row's Serves cell is NFR-4, whose target in requirements.md:33 is 'Read request rate | scales with segments, AZs, nodes -- never with shards, partitions or indices'. The row's own body says 'THE GET COUNT STAYS 1', so by its own account the read request rate is untouched and NFR-4 is not at risk. What the duplication does break is NFR-5 (requirements.md:34, 'Cross-AZ bytes < 0.1% of ingested bytes'), which the row never mentions. The magnitude is not a rounding error: one Target per (subscription, run) means total push bytes for one segment are (runs in segment) x (segment size) = 1,600 x 8 MiB = 12.8 GiB per 8 MiB segment, ~1,600x the ingested bytes, with roughly two thirds of it crossing an AZ boundary to consumers in the other two AZs. Against a 0.1% budget that is about five orders of magnitude over. Consequence for whoever picks the row up: it reads as tidiness ('this is pod BANDWIDTH ... the waste is real') under a requirement that is already satisfied, so it is priced as low and its acceptance criterion will be written against a GET count that is already 1 and always was. Fix is one cell and one clause: Serves NFR-5 (add NFR-4 only with a sentence saying why a byte defect is cited against a request-rate requirement), and state the amplification as a number so the row carries its own severity. M5.40b's NFR-4 is fine by contrast -- cost.md rule 5 'One fetch per object per node' is the operationalisation of NFR-4's 'scales with ... nodes', and exceeding it is a request-rate defect."
+    },
+    {
+      "id": "F2",
+      "file": "docs/internal/product/backlog.md:56",
+      "severity": "minor",
+      "title": "M5.40b sends the taker to a measurement that cannot see the ceiling it demands",
+      "failure_scenario": "The cell closes with 'a cache is a new residency bound, so it owes an eviction rule and a memory ceiling that criterion 6's flat-in-K measurement can see'. M5/SPEC.md:342 defines criterion 6 as 'serving an N MiB segment to K consumers holds service memory flat in K, at K = 1 and K = 64, with a bound independent of K', and M5.12's row records that it is asserted as an EQUALITY between K=1 and K=64. A cache of capacity C adds the same C at both K, so the equality holds and the criterion passes identically whether C is 8 MiB or 8 GiB. A taker who follows this sentence implements a cache, sees criterion 6 stay green, and ships an unbounded residency with the row's own evidence behind it. The cache ceiling needs its own assertion (residency at rest, independent of K), not criterion 6."
+    },
+    {
+      "id": "F3",
+      "file": "docs/internal/product/backlog.md:55",
+      "severity": "minor",
+      "title": "'names this row as carrying it' is one hop off: the javadoc names M5.40, not M5.40a",
+      "failure_scenario": "SegmentProxy.java's per-consumer paragraph ends '...no test can see it, because every test in this file measures a single call; M5.40 carries it.' M5.40a says the javadoc 'names this row as carrying it'. After this commit M5.40's State cell redirects, so a reader still arrives -- but the same one-hop staleness is what this very commit found in M5.39 and M5.12, and the diff does not update the javadoc that is now one row out of date. Not worth a fix round on its own; worth doing in the commit that takes M5.40a, which touches that javadoc anyway."
+    }
+  ],
+  "notes": [
+    "Split judgement: sound, and not deferral. The two remainders have disjoint mechanisms and disjoint fixes -- M5.40a is duplicate sinks within ONE publish (a cache cannot help: the bytes are already read once and handed over K times), M5.40b is repeat reads across SEPARATE publishes (a call-site rule cannot help: the second publish does not exist when the first is served). They also have disjoint surfaces: M5.40a is a Subscriber/Push contract change reaching six test bridges plus a failure-semantics decision (all-K-fail or none), M5.40b is a new component with an eviction rule and a memory ceiling behind or beside the BinStore seam. Either one alone is a full commit; together they would be the shape review.md rule 12 exists to prevent. In-flight coalescing is correctly left inside M5.40b rather than treated as a third path: a joiner arriving mid-read can only be served a suffix unless the bytes are retained, and retaining them is the cache.",
+    "Scope: the diff is one row rewritten and two added, all inside the current-milestone table. No scope widening. The closure claim on M5.40's first half is genuinely load-bearing on committed code (d944a24 M5.45a), not on the working tree.",
+    "Neither new row names M5.43, which will wire `direct` and will face the identical (node, segment)-versus-run granularity question on the grant side that M5.40a faces on the sink side -- M5.39's closing cell states the rule for it. Not a finding; a cross-reference worth one clause when M5.40a is taken.",
+    "Cosmetic: M5.40b writes 'Doc 10 s4' where every other occurrence in the file writes 'Doc 10 s4' as 'Doc 10 SECTION 4' with the section sign. Not worth a round."
+  ],
+  "task": "M5.40",
+  "role": "reviewer"
+}

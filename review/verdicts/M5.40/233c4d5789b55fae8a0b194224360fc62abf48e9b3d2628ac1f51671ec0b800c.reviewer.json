@@ -1,0 +1,24 @@
+{
+  "diff_sha256": "233c4d5789b55fae8a0b194224360fc62abf48e9b3d2628ac1f51671ec0b800c",
+  "verdict": "pass",
+  "round": 3,
+  "summary": "Round-3 verification of the three round-2 items on M5.40's split. All three hold. (1) TABLE WHOLE: header `| ID | Task | Serves | State |` is line 25 and every line from 26 to the end of the table is pipe-prefixed -- no blank line survives inside it; rows read M5.39 (53), M5.40 (54), M5.40a (55), M5.40b (56), M5.41 (57). (2) BOTH NUMBERS CORRECT: 12,800 MiB / 1024 = 12.5 GiB exactly; 1,600 / 0.001 = 1.6e6 = six orders; charging only the cross-AZ share, (2/3)(1.6e6) = 1.07e6, still six. No `12.8 GiB`, no 'five orders' and no `%%` anywhere in the file. The PREMISE was checked against the code rather than the prose: SubscriptionHub.publishSegment builds one Target per (subscription, run) (SubscriptionHub.java:345-354) and deliver() opens one sink per Target then calls source.writeTo(all sinks) ONCE, so every sink receives the WHOLE segment -- 1,600 targets x 8 MiB is what the code does. (3) CRITERION-6 PREMISE CORRECT: M5/SPEC.md:342-343 reads 'holds service memory flat in K, at K = 1 and K = 64, with a bound independent of K'. M5.40b now restates it as flat-in-K with a K-independent bound, which is what makes the 'a cache of capacity C adds C at every K' argument follow, and it names thePeakHandOffAndTheReadCountAreIDENTICALAtKONEAndKSIXTYFOUR (SegmentProxyTest.java:270) as one test OF the criterion; that test's own javadoc does say 'It is not evidence for criterion 6 on its own', as cited. CITATIONS CHECKED AGAINST THE TREE: M5.45a resolves (backlog.md:62) and is committed (d944a24); AssembledServingPathTest.aSegmentOfMANYRunsIsReadONCENotOncePerRun exists (AssembledServingPathTest.java:202), so M5.40's 'a test does see it' is true of the tree and not only of the row. COST LENS: the closing claim is that the caller-granularity half is closed -- one streamTo per segment, GET count 1 -- and the code shows exactly one serving call for all targets. Nothing here adds an object-store request that scales with runs, shards or indices; what scales with runs is PUSH BYTES, which is where M5.40a now files it. Recommend landing.",
+  "findings": [
+    {
+      "severity": "minor",
+      "where": "docs/internal/product/backlog.md:56 (M5.40b)",
+      "what": "`Doc 10 s4's` where every other section reference in the file uses the section sign: lines 41, 53, 54, 60, 79, 98-101, 254, 257, 266 all read `\u00a7<n>`. Line 56 is the only `s<n>` in the file -- the same class of leftover as the `%%` already fixed.",
+      "failure_scenario": "A reader grepping backlog.md for `\u00a74` to find every row that leans on doc 10 section 4 misses M5.40b, which is the row whose whole cost argument rests on doc 10 \u00a74's 'AZ recovery: many nodes replaying the same backlog'. One character.",
+      "blocking": false
+    },
+    {
+      "severity": "minor",
+      "where": "docs/internal/product/backlog.md:55 (M5.40a)",
+      "what": "The row pins its severity to NFR-5's ABSOLUTE target (< 0.1% of ingested bytes, requirements.md:34), but that target is not reachable by the FIX either: one stream per CONSUMER still pushes the whole 8 MiB to each of ~9 nodes, ~6x ingested bytes crossing an AZ, three orders over 0.1%. The property a taker can actually write a criterion against is PROPORTIONALITY -- pushed bytes scale with consumers per segment, never with runs per segment.",
+      "failure_scenario": "This is the mirror of the round-2 finding the row was split to answer. There the risk was a criterion written against a number that is already correct (NFR-4's GET count); here it is a criterion written against a number nothing can reach, so a taker who writes 'cross-AZ bytes < 0.1% of ingested' as M5.40a's acceptance criterion cannot close the row even after implementing exactly the contract change the row asks for, and discovers that only after doing the work.",
+      "blocking": false
+    }
+  ],
+  "task": "M5.40",
+  "role": "reviewer"
+}
