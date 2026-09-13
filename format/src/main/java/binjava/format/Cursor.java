@@ -4,25 +4,48 @@ package binjava.format;
 import java.io.IOException;
 
 /**
- * A bounds-checked read cursor over a chain entry's bytes.
+ * A bounds-checked read cursor over one framed object's bytes.
  *
  * <p>⚠️ BOUNDS-CHECKED BEFORE ALLOCATING: the commit log is untrusted input
  * too. A length field read out of a corrupt object must not become an array
  * size.
  *
- * <p>⚠️ Shared by all three chain shapes rather than copied into each. It was
- * private to {@code CommitDelta} until M4.5 added two more shapes that need
- * exactly the same primitives; a second copy is how two shapes come to disagree
- * about what a malformed varint is.
+ * <p>⚠️ Shared rather than copied into each caller. It was private to
+ * {@code CommitDelta} until M4.5 added two more chain shapes that need exactly
+ * the same primitives; a second copy is how two formats come to disagree about
+ * what a malformed varint is.
+ *
+ * <p>⚠️ ITS CALLERS ARE NOT ALL CHAIN SHAPES, which is why {@link #what}
+ * exists: {@code Checkpoint} has constructed one since M4.0 and
+ * {@code SubscriptionEvent} since M5.14. An earlier version of this paragraph
+ * said "shared by all three chain shapes" and then that a non-chain caller
+ * arrived "since M5.14" — stale in the first half and off by a milestone and a
+ * caller in the second, which the same commit conceded by passing
+ * {@code "checkpoint"}. Both bounds
+ * messages used to say "chain entry ends inside …" verbatim whoever was
+ * reading, so a short read on the SUBSCRIPTION channel produced text naming the
+ * COMMIT LOG. ⚠️ THE COST IS AN OPERATOR'S TIME, NOT DATA: a runbook grepping
+ * that string sends someone to investigate commit-log corruption for a fault
+ * entirely elsewhere. Round-3 review of M5.14 measured the strings and M5.46
+ * fixed them here rather than by wrapping every read at the boundary, which
+ * would have buried the four bounds guards that took three rounds to get right.
  */
 final class Cursor {
 
     private final byte[] a;
+    private final String what;
     private int i;
 
-    Cursor(byte[] a, int from) {
+    /**
+     * @param what what is being read, named in every bounds failure — "chain
+     *     entry", "subscription event", "checkpoint". It is a CONSTRUCTOR
+     *     argument rather than a field on the exception so that a caller cannot
+     *     forget it at one of the four guards and get another format's name.
+     */
+    Cursor(byte[] a, int from, String what) {
         this.a = a;
         this.i = from;
+        this.what = what;
     }
 
     boolean atEnd() {
@@ -56,7 +79,7 @@ final class Cursor {
         int shift = 0;
         while (true) {
             if (i >= a.length) {
-                throw new IOException("chain entry ends inside a varint");
+                throw new IOException(what + " ends inside a varint");
             }
             int b = a[i++] & 0xFF;
             value |= (long) (b & 0x7F) << shift;
@@ -75,7 +98,7 @@ final class Cursor {
         // large length field and lets the very allocation this guard exists to
         // prevent through as an OutOfMemoryError.
         if (n < 0 || n > a.length - i) {
-            throw new IOException("chain entry ends inside a field");
+            throw new IOException(what + " ends inside a field");
         }
         byte[] out = new byte[n];
         System.arraycopy(a, i, out, 0, n);

@@ -502,16 +502,14 @@ public record SubscriptionEvent(String session, long sequencerEpoch, long sessio
      *     do not parse -- never a partially-populated event
      */
     public static SubscriptionEvent decode(byte[] bytes) throws IOException {
-        // ⚠️ A TRUNCATED FRAME REPORTS ITSELF AS A CHAIN ENTRY, and round-3
-        // review measured the strings: `Cursor` has exactly two messages, "chain
-        // entry ends inside a varint" and "...inside a field", and this class is
-        // its fourth caller and the first that is not a chain shape. An operator
-        // -- or a runbook grepping that text -- would investigate commit-log
-        // corruption for a fault entirely in the subscription channel.
-        // ⚠️ NOT FIXED HERE ON PURPOSE: `Cursor` is shared by three chain
-        // formats, so re-wording it is their change as much as this one's, and
-        // wrapping every read to re-message it would bury the guards this class
-        // just spent three rounds getting right. M5.46 owns it.
+        // ⚠️ A TRUNCATED FRAME NAMES THE SUBSCRIPTION, which M5.46 fixed at
+        // the source: `Cursor` takes WHAT IT IS READING and both bounds
+        // messages interpolate it, so the call below passes "subscription
+        // event" and a short read says so instead of naming the commit log.
+        // ⚠️ AN EARLIER VERSION OF THIS COMMENT SAID THE OPPOSITE and that the
+        // row was still open, twenty-six lines above the line that closed it --
+        // so a reader writing the runbook this fix exists to protect would have
+        // written it against "chain entry".
         Objects.requireNonNull(bytes, "bytes");
         if (bytes.length < 8) {
             throw new IOException("a subscription event is at least 8 bytes, got " + bytes.length);
@@ -528,7 +526,7 @@ public record SubscriptionEvent(String session, long sequencerEpoch, long sessio
             // while losing records.
             throw new IOException("unsupported subscription event version: " + version);
         }
-        Cursor c = new Cursor(bytes, 8);
+        Cursor c = new Cursor(bytes, 8, "subscription event");
         String session = getString(c);
         long sequencerEpoch = c.uvarint();
         long indexHi = getLongBE(c);

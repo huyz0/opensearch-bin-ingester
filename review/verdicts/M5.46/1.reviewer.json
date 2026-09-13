@@ -1,0 +1,30 @@
+{
+  "diff_sha256": "4cd003ad8f82e5008f5061145a0ea0c4a7a51525538b70a6c56d831c8c6098ae",
+  "verdict": "changes-requested",
+  "summary": "The mechanism is right and is the cheaper of the two options the row left open: a `what` constructor argument on `Cursor`, interpolated into both bounds messages, fixes all three construction sites at the source rather than wrapping four guards at one boundary, and `ChainEntry` keeps \"chain entry\" verbatim so no landed assertion moved. No object-store request is added, moved or reshaped -- `Cursor` is a pure in-memory byte walk and the diff touches no get/put/list/stat, so the request rate still scales with segments and nodes. `SegmentReader`'s private `Cursor` is a different class and correctly untouched. Two things block. (1) The comment inside `SubscriptionEvent.decode` that declares this exact defect LIVE and assigns it to M5.46 is still there, 26 lines above the line that fixes it -- the milestone's most repeated defect, a correction applied to one of two places, and this time both places are in the same file. (2) The one new case asserts only the NEGATIVE half of the property: `hasMessageNotContaining(\"chain entry\")` leaves the message free to name any other subsystem, so passing \"checkpoint\" or \"\" at the construction site -- the realistic copy-paste regression -- is green, and the row's stated outcome (\"now says 'subscription event ends inside a varint'\") is pinned nowhere in the tree.",
+  "findings": [
+    {
+      "id": "R1",
+      "severity": "major",
+      "file": "format/src/main/java/binjava/format/SubscriptionEvent.java:505-514",
+      "title": "the comment declaring this defect UNFIXED and assigning it to M5.46 still sits 26 lines above the line that fixes it",
+      "failure_scenario": "The block reads \"\u26a0\ufe0f A TRUNCATED FRAME REPORTS ITSELF AS A CHAIN ENTRY ... `Cursor` has exactly two messages, \\\"chain entry ends inside a varint\\\" and \\\"...inside a field\\\" ... \u26a0\ufe0f NOT FIXED HERE ON PURPOSE ... M5.46 owns it.\" Every clause of that is false as of line 531 of the same method, which now passes \"subscription event\". The same commit marks M5.46 done in backlog.md, so the tree contradicts itself in one diff. Concrete failure: the next reader of `decode` -- the most likely being whoever writes or greps the runbook this row exists to protect -- is told the emitted text names the commit log and that a backlog row is still open on it. They either re-open M5.46 and re-do the work, or (worse) write the runbook against \"chain entry\" because the comment in the production file is more specific than the message string and reads as current. The task row itself calls this shape out: a correction applied to one of two places is this milestone's most repeated defect, and the author's own sweep question 3 (\"other places in the tree that still describe these messages in the old terms\") has its answer in the file being edited."
+    },
+    {
+      "id": "R2",
+      "severity": "major",
+      "file": "format/src/test/java/binjava/format/SubscriptionEventTest.java:335-343",
+      "title": "the only new case asserts the negative half only, so every wrong-but-not-chain name survives",
+      "failure_scenario": "`aTRUNCATEDFrameNamesTheSUBSCRIPTIONAndNeverTheCHAIN` is `aTRUNCATEDEventNeverDecodesToAValue` plus one `hasMessageNotContaining(\"chain entry\")`. Its own name claims it pins that the frame NAMES the subscription; nothing asserts that. Surviving mutations, all green across the suite: (a) `new Cursor(bytes, 8, \"checkpoint\")` at SubscriptionEvent.java:531 -- the literal copy-paste from Checkpoint.java:233 two files over, and it reinstates the row's defect exactly (an operator greps \"checkpoint ends inside a varint\" and goes to look at the sequencer's checkpoint object for a fault entirely in the subscription channel); (b) `new Cursor(bytes, 8, \"\")`, which emits \" ends inside a varint\" and names no subsystem at all; (c) deleting the interpolation from the varint guard at Cursor.java:77 and hardcoding \"ends inside a varint\", which reverts half the fix. The row's stated acceptance is that the message \"now says 'subscription event ends inside a varint'\", and after this commit no assertion anywhere in the tree contains the string \"subscription event ends\". One `hasMessageContaining(\"subscription event\")` inside the same loop kills all three, and the loop over both guards -- which is the right shape and is the part the case gets right -- then buys what its javadoc claims."
+    },
+    {
+      "id": "R3",
+      "severity": "minor",
+      "file": "format/src/main/java/binjava/format/Cursor.java:13,18-19",
+      "title": "the sentence the row quotes as stale is unchanged, and the paragraph added to explain it is itself wrong about Checkpoint",
+      "failure_scenario": "Line 13 still reads \"Shared by all three chain shapes rather than copied into each\" -- verbatim the sentence the task quotes as the stale claim. The new paragraph mitigates it but introduces a second inaccuracy: \"SINCE M5.14 IT HAS A CALLER THAT IS NOT A CHAIN SHAPE AT ALL -- `SubscriptionEvent`\". `Checkpoint` is not a chain shape either (`ChainEntry` permits only `CommitDelta`, `Seal`, `Continue`) and has constructed a `Cursor` since M4.0 -- which this very diff concedes by passing it its own name. So the class doc now says three-and-one where the truth is three construction sites, two of them non-chain, and the arrival date given for the first non-chain caller is off by a milestone. Concrete failure: someone adding a fourth format counts \"three chain shapes plus SubscriptionEvent\", concludes `Cursor` is chain-flavoured with one exception, and re-derives the wrong sharing story -- the same misreading this row was opened to correct. A minor: the `what` argument makes the miscount harmless at runtime."
+    }
+  ],
+  "task": "M5.46",
+  "role": "reviewer"
+}

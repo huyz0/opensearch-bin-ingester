@@ -112,7 +112,7 @@ public sealed interface ChainEntry permits CommitDelta, Seal, Continue {
             throw new IOException("not a chain entry: bad magic");
         }
         int version = b.getInt(4);
-        Cursor c = new Cursor(bytes, 8);
+        Cursor c = new Cursor(bytes, 8, "chain entry");
         ChainEntry entry = switch (version) {
             case VERSION_DELTA -> CommitDelta.decodeBody(c);
             case VERSION_KINDED -> decodeKinded(c);

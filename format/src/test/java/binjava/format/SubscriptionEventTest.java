@@ -315,6 +315,41 @@ class SubscriptionEventTest {
     }
 
     /**
+     * A truncated subscription frame names the SUBSCRIPTION, not the commit log.
+     *
+     * <p>⚠️ THE COST IS AN OPERATOR'S TIME, NOT DATA. {@code Cursor} is shared
+     * with the chain shapes and its two bounds messages both said "chain entry
+     * ends inside …" verbatim, so a short read on the subscription channel
+     * produced text naming the commit log — a runbook grepping that string
+     * sends someone to investigate commit-log corruption for a fault that is
+     * entirely in the subscription channel. Round-3 review of M5.14 measured
+     * the strings; M5.46 is the row that fixes them.
+     *
+     * <p>⚠️ ASSERTED AT EVERY TRUNCATION LENGTH, not at one, because the two
+     * messages come from different guards — {@code uvarint()} and
+     * {@code bytes(n)} — and which one fires depends on where the bytes stop.
+     * A fix that renamed only the varint message would pass a single-length
+     * case.
+     */
+    @Test
+    void aTRUNCATEDFrameNamesTheSUBSCRIPTIONAndNeverTheCHAIN() {
+        byte[] whole = inlineEvent().encode();
+        for (int length = 8; length < whole.length; length++) {
+            byte[] cut = java.util.Arrays.copyOf(whole, length);
+            assertThatThrownBy(() -> SubscriptionEvent.decode(cut))
+                    .as("truncated to %d of %d bytes", length, whole.length)
+                    .isInstanceOf(IOException.class)
+                    // ⚠️ BOTH HALVES. The negative alone is satisfied by
+                    // passing "checkpoint" at the call site -- which review
+                    // measured, and which REINSTATES the defect pointing at the
+                    // sequencer instead -- or by passing "" , or by hardcoding
+                    // the bare "ends inside a varint" back into `Cursor`.
+                    .hasMessageContaining("subscription event")
+                    .hasMessageNotContaining("chain entry");
+        }
+    }
+
+    /**
      * The via/inline pairing is enforced, and over the wire it is a PARSE
      * failure.
      *

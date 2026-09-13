@@ -1,0 +1,36 @@
+{
+  "verdict": "changes-requested",
+  "diff_sha256": "4cd003ad8f82e5008f5061145a0ea0c4a7a51525538b70a6c56d831c8c6098ae",
+  "findings": [
+    {
+      "id": "T1",
+      "severity": "major",
+      "file": "format/src/test/java/binjava/format/SubscriptionEventTest.java:342",
+      "summary": "SURVIVING MUTATION, FULL SUITE: the whole `what` parameter can be made DEAD -- neither bounds message interpolating it -- and every test in every module stays green. The new case pins only that the message does NOT say \"chain entry\"; nothing pins that it says \"subscription event\", which is the property the row exists to buy.",
+      "failure_scenario": "MEASURED, two mutations. (a) In Cursor.java:77 and :96 replace `what + \" ends inside a varint\"` with `\"a frame ends inside a varint\"` and `what + \" ends inside a field\"` with `\"a frame ends inside a field\"`. The constructor argument, the field and the javadoc all survive; only the interpolation dies. `./gradlew test` -> BUILD SUCCESSFUL, all modules, including the new case at all 64 truncation lengths. (b) In SubscriptionEvent.java:530 pass `new Cursor(bytes, 8, \"checkpoint\")` instead of `\"subscription event\"` -- an ordinary argument-swap mutation, and the exact class of mistake the Cursor javadoc says the constructor argument exists to prevent. `:format:test` -> BUILD SUCCESSFUL, 273 tests. THE OPERATOR COST IS THE ROW'S OWN STATED COST: under (a) a short read on the subscription channel says \"a frame ends inside a varint\" and names no channel at all, so a runbook has nothing to grep; under (b) it names the CHECKPOINT object and sends someone to the wrong artifact -- the same wrong-artifact defect as \"chain entry\", one name over. `hasMessageNotContaining` can only ever forbid ONE wrong answer out of infinitely many, so it cannot pin a naming property. The close is one line in the same assertion chain: `.hasMessageContaining(\"subscription event\")` beside the existing `.hasMessageNotContaining(\"chain entry\")` -- it reds (a) and (b) at length 8 and needs no new case, no new fixture and no new sweep."
+    },
+    {
+      "id": "T2",
+      "severity": "major",
+      "file": "format/src/main/java/binjava/format/Checkpoint.java:233",
+      "summary": "SURVIVING MUTATION: `Checkpoint`'s message changed from \"chain entry\" to \"checkpoint\" with NO test anywhere in the tree. Reverting the literal is green. A production message changed in a commit whose subject is that exact class of message, unguarded.",
+      "failure_scenario": "MEASURED: change Checkpoint.java:233 back to `new Cursor(bytes, 8, \"chain entry\")` -> `:format:test` BUILD SUCCESSFUL, 273 tests, 0 failures. Nothing sees it, and grep says why: the only checkpoint truncation cases are CheckpointDecodeRefusalTest:97 (`a truncated header is corrupt input, not an unchecked throw`) and :429 (`a v1 checkpoint missing its slot tail is corrupt, not pointerless`), and BOTH assert `isInstanceOf(IOException.class)` and nothing about the text; no test in the module asserts any Cursor bounds message for the checkpoint format. The failure is M5.46's own, one caller over and with the same cost the row prices: a truncated checkpoint object reports \"chain entry ends inside a field\", a runbook grepping that string sends an operator to investigate commit-log corruption, and the fault is in the checkpoint object. The completion cell claims the constructor argument \"fixes all three at the source and cannot be forgotten\"; two of the three sites have no test that would notice it being forgotten or mistyped. A truncation case in CheckpointDecodeRefusalTest asserting `hasMessageContaining(\"checkpoint\")` on a body cut inside a varint and one cut inside a field closes it, and CheckpointTest.fixture() is already the fixture."
+    },
+    {
+      "id": "T3",
+      "severity": "minor",
+      "file": "format/src/test/java/binjava/format/ChainEntryTest.java:178",
+      "summary": "SURVIVING MUTATION: \"chain entry\" is unpinned for its OWN format. The nearest assertion constrains the message SUFFIX (\"ends inside a field\") -- the half this commit does not vary -- and not the prefix, which is the half it now makes a call-site literal.",
+      "failure_scenario": "MEASURED: change ChainEntry.java:115 to `new Cursor(bytes, 8, \"subscription event\")` -> `:format:test` BUILD SUCCESSFUL, 273 tests. ChainEntryTest:178 (`aHugeLengthFieldIsRefusedRatherThanAllocated`) asserts `hasMessageContaining(\"ends inside a field\")`, which the mutant still satisfies, and no other test in the tree reads a Cursor bounds message for a chain shape. The defect this admits is M5.46 inverted: a corrupt COMMIT-LOG entry reporting itself as a subscription frame, sending an operator away from the commit log rather than to it, which is strictly worse than the bug being fixed because the commit log is the durable artifact. It is minor because the gap predates this commit -- but the commit is what turns a hardcoded string into an argument that a future edit to three adjacent call sites can transpose, and the completion cell's claim \"`ChainEntry` keeps 'chain entry' verbatim\" currently rests on reading the diff rather than on anything that would red. Widening the existing assertion to `hasMessageContaining(\"chain entry ends inside a field\")` costs one edit and is a STRENGTHENING, not a weakening, so check-test-integrity is unaffected."
+    },
+    {
+      "id": "T4",
+      "severity": "minor",
+      "file": "format/src/main/java/binjava/format/SubscriptionEvent.java:505",
+      "summary": "The ten-line comment directly above the changed line still states the defect as OPEN -- \"A TRUNCATED FRAME REPORTS ITSELF AS A CHAIN ENTRY\", \"NOT FIXED HERE ON PURPOSE\", \"M5.46 owns it\" -- and M5.46 is this commit. Production prose, raised because no gate and no test reads a comment.",
+      "failure_scenario": "The comment at SubscriptionEvent.java:505-514 and the line it annotates now contradict each other: the comment says the wrap was declined and the row is open, while :530 passes \"subscription event\" and Cursor's new javadoc says M5.46 closed it here rather than by wrapping. No test can fail on this and no gate reads it, which is why it is recorded rather than measured. The concrete cost is a reader of `decode` -- the first place anyone lands when a subscription frame is short -- being told the fix has not happened, and either re-opening the row or re-applying the boundary wrap that Cursor's javadoc says was rejected for burying the four bounds guards. This is the 'contract prose restated everywhere' shape: the same claim now lives in four files (Cursor's class javadoc, the `what` param javadoc, the test javadoc and this comment) and this copy is the one that went stale in the commit that made it stale. Deleting the stale half of the comment, keeping the sentence that explains WHY the argument exists, is the smaller change. Flagged from the test packet because both reviewers read the same diff and this sits two lines from the line under review."
+    }
+  ],
+  "task": "M5.46",
+  "role": "test-reviewer"
+}

@@ -175,7 +175,12 @@ class ChainEntryTest {
             (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, 0x07};
         assertThatThrownBy(() -> ChainEntry.decode(hugeKeyLength))
                 .isInstanceOf(IOException.class)
-                .hasMessageContaining("ends inside a field");
+                // ⚠️ THE WHOLE MESSAGE, PREFIX INCLUDED. This asserted only
+                // "ends inside a field" -- the SUFFIX, the half M5.46 does not
+                // vary -- so `new Cursor(bytes, 8, "subscription event")` in
+                // `ChainEntry` stayed green. That is M5.46's defect INVERTED and
+                // worse: it sends an operator AWAY from the durable artifact.
+                .hasMessageContaining("chain entry ends inside a field");
     }
 
     @Test

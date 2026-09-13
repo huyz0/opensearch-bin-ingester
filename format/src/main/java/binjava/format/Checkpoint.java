@@ -230,7 +230,7 @@ public record Checkpoint(long sequence,
         if (version != VERSION && version != VERSION_ATTRIBUTED) {
             throw new IOException("unsupported checkpoint version: " + version);
         }
-        Cursor c = new Cursor(bytes, 8);
+        Cursor c = new Cursor(bytes, 8, "checkpoint");
         try {
             return decodeBody(c, version);
         } catch (IllegalArgumentException refused) {

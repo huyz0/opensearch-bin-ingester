@@ -1,0 +1,15 @@
+{
+  "verdict": "pass",
+  "diff_sha256": "8715bc1d95231d799b9a53450521c356bcc6b5f36c4c6c0dfc9cea953f52cb2f",
+  "task": "M5.46",
+  "role": "reviewer",
+  "findings": [
+    {
+      "id": "R4",
+      "severity": "minor",
+      "file": "format/src/main/java/binjava/format/Cursor.java:13",
+      "summary": "The R3 fix leaves two history claims in adjacent paragraphs that a reader takes as contradictory: the retained sentence says Cursor \"was private to CommitDelta until M4.5\", and the new sentence says \"Checkpoint has constructed one since M4.0\". Both are true, but in two different milestone-numbering frames, and the javadoc gives no signpost.",
+      "failure_scenario": "Read literally and in one frame, M4.5 is after M4.0, so the paragraph says Checkpoint constructed a class that was still private to CommitDelta. Verified against the tree: the top-level Cursor.java and Checkpoint's `new Cursor(bytes, 8)` both arrive in the same commit, 0f7f6fd `M4.0: port the sequencer and commit log onto main`, and no M4.5 commit exists on main -- M4.5 is a row from `archive/m4`, the 60 ported commits M4.0's backlog row names, so it chronologically PRECEDES the port. A reader reconstructing when the class stopped being chain-only -- which is the very question this paragraph exists to answer, and the question R3 was raised about -- gets an ordering that cannot be reconciled without opening backlog.md:129. It is minor because the M4.5 half is pre-existing prose and neither claim misstates behaviour; it is worth recording because R3's fix is what put the two in contact. Rule 11 applies: recording it in the commit body is the cheaper answer than a fifth round on this javadoc."
+    }
+  ]
+}

@@ -428,7 +428,17 @@ class CheckpointDecodeRefusalTest {
 
         assertThatThrownBy(() -> Checkpoint.decode(truncated))
                 .as("a v1 checkpoint missing its slot tail is corrupt, not pointerless")
-                .isInstanceOf(IOException.class);
+                .isInstanceOf(IOException.class)
+                // ⚠️ AND THE MESSAGE NAMES THE CHECKPOINT, NOT THE COMMIT LOG.
+                // M5.46 gave `Cursor` the name of what it is reading, and review
+                // measured this caller shipping unguarded: reverting it to
+                // "chain entry" left the whole module green, which is M5.46's
+                // own defect one caller over. ⚠️ THE ASSERTION HAS TO SIT ON A
+                // CUT THAT REACHES A `Cursor` GUARD -- an earlier attempt put it
+                // on a seven-byte header, which fails `Checkpoint`'s own length
+                // check before a `Cursor` is ever constructed, and so survived
+                // the mutation it was written to kill.
+                .hasMessageContaining("checkpoint ends inside");
     }
 
     /**

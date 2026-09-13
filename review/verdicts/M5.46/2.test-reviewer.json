@@ -1,0 +1,8 @@
+{
+  "diff_sha256": "8715bc1d95231d799b9a53450521c356bcc6b5f36c4c6c0dfc9cea953f52cb2f",
+  "verdict": "pass",
+  "summary": "Round 2, tests. All four round-1 findings verified closed by running the mutations, not by reading the fix. Five mutations executed against :format:test (282 tests): (1) Checkpoint.java:233 -> \"chain entry\" reds CheckpointDecodeRefusalTest.aV1SlotTruncatedAfterItsWatermarkIsREFUSEDNotReadAsBare, with the stack showing Cursor.uvarint <- Checkpoint.attributedSlot, so the cut genuinely reaches a Cursor guard (T2 closed); (2) ChainEntry.java:115 -> \"subscription event\" reds ChainEntryTest.aHugeLengthFieldIsRefusedRatherThanAllocated (T3 closed); (3) both Cursor messages hardcoded to \"a frame ends inside ...\", making the what parameter dead, reds all three cases, one per call site (T1 closed); (4) only the bytes(n) message hardcoded to \"chain entry ends inside a field\", leaving uvarint interpolated, reds the subscription sweep at length 9 of 72 -- so the sweep genuinely covers BOTH guards and the single-length weakness T1 named is closed; (5) SubscriptionEvent.java:529 -> \"checkpoint\" reds the sweep. Baseline restored and re-run: 282 tests, 0 failures. Widening ChainEntryTest is strictly stronger containment and weakens nothing. No findings.",
+  "findings": [],
+  "task": "M5.46",
+  "role": "test-reviewer"
+}
