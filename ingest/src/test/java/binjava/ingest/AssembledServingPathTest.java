@@ -336,7 +336,7 @@ class AssembledServingPathTest {
         // and the two are independently mutable. This is ADR-0032's silent
         // data error -- the push SUCCEEDS, the offsets look right, and the
         // consumer is handed another pod's object name. It is the field
-        // M5.45b's `direct` grant and M5.16's late subscriber fetch BY.
+        // M5.45d's `direct` grant and M5.16's late subscriber fetch BY.
         assertThat(minesLabels)
                 .as("each run is labelled with ITS OWN segment, not the first in the batch")
                 .containsExactly("seg-mine");

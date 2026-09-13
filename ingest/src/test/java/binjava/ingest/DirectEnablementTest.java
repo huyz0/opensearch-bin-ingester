@@ -125,7 +125,7 @@ class DirectEnablementTest {
      *
      * <p>⚠️ WHAT IT WOULD COST: on a signing backend a deployment that never
      * opted in gets {@code DIRECT}, having skipped the startup refusal -- and
-     * M5.45b builds {@code GrantIssuer} under the same
+     * M5.45d builds {@code GrantIssuer} under the same
      * {@code config.directEnabled()} guard, so the policy would elect a mode
      * for which no issuer exists.
      */

@@ -257,7 +257,7 @@ final class StoreFakes {
 
         /**
          * ⚠️ HONOURS ITS {@code ttl}, and the fixed expiry it used to return was
-         * a trap for M5.45b. That row must assert ADR-0010's 60 s clamp, and
+         * a trap for M5.45d. That row must assert ADR-0010's 60 s clamp, and
          * this is the only signing fake in {@code ingest} -- so a
          * {@code GrantIssuer} that DROPPED the clamp and passed {@code ttl}
          * straight through would still have read as clamped against a stand-in
@@ -274,7 +274,7 @@ final class StoreFakes {
          *
          * <p>⚠️ NOTHING CALLS THIS YET, so the {@code ttl} it honours is
          * unconstrained too -- replacing this body with a throw leaves the
-         * suite green. M5.45b is the first caller and the row that closes both.
+         * suite green. M5.45d is the first caller and the row that closes both.
          */
         @Override public binjava.binstore.SignedUrl presign(String key, java.time.Duration ttl) {
             return new binjava.binstore.SignedUrl(

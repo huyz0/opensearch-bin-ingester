@@ -66,7 +66,7 @@ public final class DefaultIngest implements Ingest {
      * <p>⚠️ DERIVED, NOT CONFIGURED, AND THAT IS A LIMIT WORTH NAMING: the
      * `direct` fan-out threshold is configuration by M5.11's own acceptance
      * criteria, and nothing here lets a deployment set it. It does not matter
-     * yet because `direct` is unreachable until M5.45b gives it a serving path
+     * yet because `direct` is unreachable until M5.45d gives it a serving path
      * and M5.43 gives it a setting; both rows own making the dial reachable.
      */
     private final SegmentServing serving;

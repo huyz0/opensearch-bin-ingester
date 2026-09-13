@@ -32,7 +32,7 @@ import java.time.Instant;
  * epoch millis, and once that event's {@code equals} compares the grant, a
  * value carrying micros -- which is what {@code clock.instant().plus(ttl)}
  * returns on Linux -- would not survive a round trip. Truncating here makes the
- * in-memory value the one that travels. ⚠️ M5.45b's adapter from
+ * in-memory value the one that travels. ⚠️ M5.45d's adapter from
  * {@code binjava.binstore.SignedUrl} is where that difference will first be
  * compared for equality.
  */

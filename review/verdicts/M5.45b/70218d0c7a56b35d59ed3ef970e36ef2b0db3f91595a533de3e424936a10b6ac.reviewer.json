@@ -1,0 +1,59 @@
+{
+  "diff_sha256": "70218d0c7a56b35d59ed3ef970e36ef2b0db3f91595a533de3e424936a10b6ac",
+  "verdict": "changes-requested",
+  "summary": "The split itself is justified, not avoidance: M5.45c is an ADR plus a module-boundary seam in `client`, M5.45d is hub-side minting in `ingest`, M5.45e is an end-to-end assertion that cannot exist until both do -- three modules, three contracts, matching the M5.15/M5.40 precedent. The central technical claim also checks out: check-io-seam.sh excludes only `binstore-backends/` and scans only `*/src/main/java/binjava/*.java`, io_seam_scan.py bans `java.net`/`javax.net` by package literal, and ADR-0023 keeps `binstore-spi` off `client`'s main classpath while architecture rule 4 keeps anything from depending on `http` -- so new module / second exemption / test-only-and-say-so really is the whole option set for a production fetcher. What the split loses is on the cost side. The obligation ADR-0043 records in its own words -- one ranged GET per (node, segment), 'rule 3's range half is therefore still OPEN ... which is M5.45b's' -- is carried by none of the three rows, and M5.45d's coalescing criterion is phrased so that the defect it names can pass it.",
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "major",
+      "file": "docs/internal/product/backlog.md:64",
+      "claim": "M5.45c's acceptance criteria define the client-side fetch seam ('an interface in `client` taking a `Grant` plus a byte range and yielding bytes') without any bound on how many times a consumer calls it per (node, segment), and M5.45d's criterion 4 explicitly scopes its no-new-request claim to 'the serving side'. So after all three rows close, nothing constrains the CONSUMER-side request count -- which is the only side that issues requests in `direct`.",
+      "failure_scenario": "A `SegmentDelivery` gives a node one `Push`/`Delivery` per run (M5.45a), each carrying the same key-scoped grant and its own `byteStart`/`byteLen` (M5.44). The natural M5.45c implementation calls the fetcher from `ConsumerClient.decodeInto`, i.e. once per `Delivery`. A catch-up node holding ~400 runs of one 8 MiB segment then issues 400 ranged GETs against one object -- a request rate scaling with shards-per-node, which non-negotiable 6 forbids by name. Every row's criteria still pass: M5.45d minted exactly one grant per consumer per segment, M5.45d added no serving-side request, and M5.45e's records are byte-identical. ADR-0043 already priced this exact inversion ('reading this record literally would produce 400 consumer-side ranged GETs against one object'), named the fix ('can union them into ONE ranged GET under ONE key-scoped grant -- which is what \"one grant per (node, segment)\" means'), and assigned it: 'RULE 3's RANGE HALF IS THEREFORE STILL OPEN. Closing it needs a grant minted over the union for a specific (node, segment), which is M5.45b's.' M5.45b is now `split`, and the union appears in no criterion of c, d or e. This is also sdd.md rule 9 silence: neither M5.45c nor M5.45e states a cost impact, and 'None' would be false for the row that builds the consumer's fetch path.",
+      "suggested_fix": "Give M5.45c (or M5.45e, observed from outside) a criterion that the fetcher is invoked at most ONCE per (consumer, segment) for a node holding K runs, asserted at K >> 1 against a counting fetcher, and say in M5.45c or M5.45d which row closes security.md rule 3's range half -- or state explicitly that it stays open and name the row that inherits it, so ADR-0043's assignment does not dangle."
+    },
+    {
+      "id": "F2",
+      "severity": "major",
+      "file": "docs/internal/product/backlog.md:65",
+      "claim": "M5.45d criterion (1) -- 'a `DIRECT` publish mints exactly ONE grant per consumer per segment, asserted at K = 64' -- does not discriminate the defect the same row describes two sentences earlier ('a catch-up node holding K shards' runs is answered `DIRECT` K times'). In criterion (1) K reads as the CONSUMER count (that is what K means in M5.45a criterion 3, 'flat in K at K=1 and K=64'); in the coalescing paragraph K is RUNS PER CONSUMER. Only the second makes the criterion falsifiable.",
+      "failure_scenario": "A taker writes the case with 64 subscribers each holding one `RunKey` -- the shape every existing fixture uses -- and asserts 64 grants for 64 consumers. A per-run implementation (`for (RunCommit r : target.runs()) issuer.grant(r)`) mints exactly 64 grants too and passes, and the coalescing rule ships unenforced into a milestone that believes it is enforced. This is the measured failure mode, not a hypothetical: M5.40a's own State cell records the identical survivor -- 'the loop this commit added to `assembling` reduced to its first push survived, because every caller in the tree subscribes one `RunKey` per `Subscriber` so K is always 1'.",
+      "suggested_fix": "Phrase criterion (1) in the quantity that varies: 'one consumer holding R runs of one segment is minted exactly ONE grant, asserted at R = 64 with disjoint runs', and keep the consumer count separate if it is wanted at all."
+    },
+    {
+      "id": "F3",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:63",
+      "claim": "Of the five parts of SPEC criterion 7 that old M5.45b criterion (2) demanded 'in full on the assembled path' -- TTL <= 60 s, read-only, one key, refused AT STARTUP and not at first fetch, and never logged -- the union of M5.45c/d/e carries two (TTL via d(2), logging via d(3)). Read-only and one-key are defensibly discharged at M5.13 ('neither is a promise this layer can keep alone ... what this row owns is not widening either'), but the startup half is not: M5.43's State cell says in terms that `GrantIssuer` is still uncalled and that M5.45b 'is where the issuer gets its caller', and no criterion in the three new rows says where it is constructed.",
+      "failure_scenario": "M5.45a deliberately passes `SegmentServing` as a parameter 'so the hub keeps no store', so the shortest path for M5.45d is to build or receive a `GrantIssuer` per publish. All four of M5.45d's criteria still pass -- one grant per consumer, clamped TTL, nothing logged, no serving-side GET -- while `GrantIssuer`'s constructor refusal, the thing M5.13 built so a misconfiguration names itself instead of surfacing as an `UnsupportedOperationException` at first fetch, has moved to first publish. Only M5.43's separate `DefaultIngest.requirePresignedUrls()` call still fires at startup, which is why this is minor rather than major.",
+      "suggested_fix": "Add to M5.45d: 'the issuer is constructed once, at ingester construction under `directEnabled`, asserted by a case that a pod on a non-signing backend fails to START rather than at first publish' -- or state in the M5.45b split cell that criterion 7's startup half was discharged by M5.43 and needs no restatement."
+    },
+    {
+      "id": "F4",
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:65",
+      "claim": "M5.45d's State cell says 'todo -- depends on M5.45c', but none of M5.45d's four criteria needs anything M5.45c produces. M5.45d mints a grant and puts it on `SubscriptionHub.Push`, which lives in `ingest`; M5.45c builds an interface in `client` and a field on `Delivery`. The two touch disjoint modules and can land in either order. Only M5.45e genuinely depends on both, and it says so.",
+      "failure_scenario": "An agent running `next-task` at a moment when M5.45c is blocked on its ADR (the row's own 'hard half') reads M5.45d as unavailable and takes work outside M5, or serialises two independent commits behind an ADR review. A stated dependency that does not exist is also the kind of claim non-negotiable 4 is about: it was not derived from either row's criteria.",
+      "suggested_fix": "Make M5.45d's State plain `todo`, or say what the dependency actually is (ordering preference so the grant's consumer exists before it is minted) rather than asserting one."
+    },
+    {
+      "id": "F5",
+      "severity": "minor",
+      "file": "docs/internal/product/decisions/0043-the-grant-crosses-to-the-consumer-as-a-format-type-with-its-range.md:165",
+      "claim": "ADR-0043 closes with 'What this record does NOT do: mint a grant, wire `GrantIssuer`, or give the consumer a way to fetch with one. M5.45b owns all three, and the client-side byte-source seam that is not a `BinStore` remains its own design decision.' After this commit M5.45b owns none of the three; c, d and e own them one each. `SubscriptionHub.java:435`'s exception text ('M5.45b owns `direct`') and four more `src/main` pointers are in the same position.",
+      "failure_scenario": "A reader arriving from ADR-0043 -- the record that supplies the coordinates whose USE is the open obligation in F1 -- lands on a row whose State is `split` and whose cell argues why it was split, not on the row that now owns the union. The project has treated this exact pattern as a defect twice in this milestone: M5.40a's major was a javadoc still naming a split M5.40, and M5.44 gave ADR-0041 a dated `Status:` note when its assignment moved. The redirect through the surviving M5.45b row is why this is minor rather than major.",
+      "suggested_fix": "Either a one-line `Status:` note on ADR-0043 pointing at M5.45c/d/e, or an explicit sentence in the M5.45b split cell that every existing pointer to M5.45b resolves through this row -- and, per the M5.40a precedent, correct the `src/main` sites in the commit that makes each one false."
+    }
+  ],
+  "checked_and_true": [
+    "check-io-seam.sh excludes only `binstore-backends/` (scripts/check-io-seam.sh:58) and scans only `*/src/main/java/binjava/*.java`, so M5.45c's third option (a test-only implementation plus a stated gap) really is available and the exemption claim is exact.",
+    "io_seam_scan.py bans `java.net` and `javax.net` as package literals; ADR-0023 states `client` depends only on `format` and that `binstore-spi` is not on its main classpath; architecture rule 4 (nothing depends on `http`) closes the one existing module that could otherwise have hosted a fetcher. No fourth option beyond the three the row names, other than reaching a socket through a dependency's API without naming one -- which io_seam_scan.py's own header records as a hole in the gate, not a legitimate route.",
+    "`SubscriptionHub.publishSegment`'s `case DIRECT -> throw new IllegalStateException(\"M5.45b owns `direct`...\")` at SubscriptionHub.java:434-435, as M5.45d states.",
+    "`GrantIssuer` has no production caller: the only `src/main` mentions outside its own file are a javadoc in FetchPolicy.java:138 and one in BinStore.java:155.",
+    "M5.40a's identity grouping exists as claimed -- `ByIdentity` with `==` and `System.identityHashCode` (SubscriptionHub.java:352-360), keyed into `byConsumer` at :376-383.",
+    "`StoreFakes.CanPresign` honours its ttl and expires at `Instant.EPOCH.plus(ttl)`, always in the past (StoreFakes.java:255-267) -- M5.45d(2)'s 'assert relative to Instant.EPOCH' is the right instruction and is carried over intact.",
+    "The `ConsoleHandler` claim attributed to M5.13 is real: GrantNeverLoggedTest.java:119, an M5.13 test, records that swapping `System.err` alone misses a handler that binds the stream at construction.",
+    "M5.45e is not a restatement of M5.45d: d asserts what the hub MINTS (count, TTL, silence), e asserts that a consumer given what was minted decodes the same bytes as one given them inline, driven through `ConsumerClient`. Its criterion (3) does duplicate M5.45c(3) (`check-module` / ADR-0023 green), which is harmless -- e adds test-source dependencies c does not."
+  ],
+  "task": "M5.45b",
+  "role": "reviewer"
+}

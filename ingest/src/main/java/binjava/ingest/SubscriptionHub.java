@@ -64,7 +64,7 @@ public final class SubscriptionHub {
      * the consumer issues NO object-store request to read what it was just
      * told about, which is what makes criterion 3's zero hold under load and
      * not merely at rest. {@code via} says which path put them in the sink;
-     * `direct`, where the consumer does read the store, is M5.45b.
+     * `direct`, where the consumer does read the store, is M5.45d.
 
      */
     public record Push(RunKey key, String segmentKey, int recordCount, long firstOffset,
@@ -293,7 +293,7 @@ public final class SubscriptionHub {
         // ⚠️ ONLY `UncheckedIOException` IS CAUGHT, so that sentence is about
         // a failed READ and nothing else. The `DIRECT` arm below throws
         // `IllegalStateException` and DOES still deny every later segment.
-        // M5.45b owns deciding what that arm becomes once it is live.
+        // M5.45d owns deciding what that arm becomes once it is live.
         //
         // ⚠️ THE RETHROW CHANGES NOTHING OUTSIDE THIS PROCESS TODAY, and an
         // earlier draft of this comment claimed it did. `pushLoop`'s only
@@ -410,7 +410,7 @@ public final class SubscriptionHub {
                         // this caller passes `true` for the second and `false`
                         // for the first -- so the INLINE/PROXY choice here turns
                         // on `batchBytes` alone. The number matters to the
-                        // CONTRACT, which M5.43 and M5.45b will read, not to the
+                        // CONTRACT, which M5.43 and M5.45d will read, not to the
                         // branch taken from this line.
                         new SegmentDelivery(heldBytes.length, true, targets.size(), false),
                         serving.capabilities());
@@ -427,12 +427,12 @@ public final class SubscriptionHub {
                             ? sinks -> streamFromStore(serving, committed.segmentKey(), sinks)
                             : sinks -> writeHeldBytesChunked(heldBytes, serving, sinks));
             // ⚠️ UNREACHABLE TODAY AND REFUSED RATHER THAN DEGRADED. `direct`
-            // needs a grant and a client-side byte source, which is M5.45b;
+            // needs a grant (M5.45d) and a client-side byte source (M5.45c);
             // with bytes in hand and no pressure signal `FetchPolicy` cannot
             // choose it, so this arm exists to fail loudly if that changes
             // before the serving half does.
             case DIRECT -> throw new IllegalStateException(
-                    "M5.45b owns `direct`; this serving path carries inline and proxy only");
+                    "M5.45d owns `direct`; this serving path carries inline and proxy only");
         }
     }
 

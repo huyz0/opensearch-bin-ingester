@@ -59,12 +59,25 @@ GET that fetches only a run's DATA slice cannot decompress what it fetched, and
 this record deliberately keeps `codec` off the event. The claim holds only while
 every segment is `CODEC_NONE`.
 
-⚠️ **SO THE ONE REQUEST SPANS `[0, max(byteStart + byteLen))`**, from the first
-byte through the last run this node wants — preamble and directory included.
-That is still **one** request, it leaves every run decodable, and cost.md R7's
-`h<headerLen>` in the key is what makes the upper bound computable without a
-prior read. The coordinates buy the COALESCING and the single request; they do
-not buy skipping the header. `GrantIssuer`'s javadoc records that
+⚠️ **SO THE ONE REQUEST IS A WHOLE-OBJECT GET, and an earlier draft of this
+paragraph said `[0, max(byteStart + byteLen))` — wrong twice.** A prefix ending
+at the last wanted run has **no FOOTER**, and `SegmentReader.open` checks the
+footer magic *before* it reads the directory, so such a read throws
+`"segment is truncated: no footer magic"` on every delivery;
+`ConsumerClient.decodeInto` opens the whole array with no partial path. And
+cost.md R7's `h<headerLen>` does **not** make that bound computable — it gives
+the HEADER's extent, not the object's, and nothing the consumer holds carries
+the object length, so `[0, objectLen)` is not expressible either. The request
+is a plain GET with no range.
+
+⚠️ **WHICH LEAVES THE COORDINATES WITH NO CONSUMER, AND REOPENS THIS DECISION.**
+If the fetch is whole-object, `byteStart`/`byteLen` buy nothing at the fetch:
+the request needs no bound, and `SegmentReader` reads the directory regardless.
+They still say which slice is a run's, and no reader in the tree uses that.
+**M5.45c settles it** — either a reader that can decode a run from a bounded
+read, which is its own row, or this decision is amended and VERSION_3 carries a
+field for a consumer that never arrives. Recorded here because the field is
+already on the wire and a reader must not take the saving as banked. `GrantIssuer`'s javadoc records that
 consumer-side GETs are invisible to `CountingBinStore`, so nothing in the tree
 would have measured the difference either way.
 
@@ -88,9 +101,9 @@ key-scoped grant — which is what "one grant per (node, segment)" means. Withou
 them it must read the directory first to learn the same thing.
 
 ⚠️ **AND RULE 3's RANGE HALF IS THEREFORE STILL OPEN.** Closing it needs a grant
-minted over the union for a specific (node, segment), which is M5.45b's — this
-record supplies the coordinates that make such a grant *constructible*, and does
-not construct one.
+minted over the union for a specific (node, segment). ⚠️ M5.45b was SPLIT and
+owns none of it; M5.45c declines the range in favour of a whole-object GET, so
+rule 3's range half has **no owner** — see the Status note.
 
 ⚠️ **They are not a duplicate of a per-run fact.** A subscription event is
 already per run — it carries `firstOffset` and `recordCount`, the run's LOGICAL
@@ -162,5 +175,16 @@ than per run -- see the warning under Decision (b) for why the per-run reading
 inverts it.
 
 **What this record does NOT do**: mint a grant, wire `GrantIssuer`, or give the
-consumer a way to fetch with one. M5.45b owns all three, and the client-side
-byte-source seam that is not a `BinStore` remains its own design decision.
+consumer a way to fetch with one.
+
+⚠️ **Status 2026-09-14: M5.45b was SPLIT and owns none of these.** The
+client-side seam and the union of a segment's ranges into one request are
+**M5.45c**; minting through `GrantIssuer`, the coalescing rule and the TTL clamp
+are **M5.45d**; the end-to-end "all three modes deliver byte-identical records"
+is **M5.45e**. ⚠️ The range half of security.md rule 3 that this record leaves
+open is **DECLINED** by M5.45c's criterion 5, not carried by it: a whole-object
+GET is scoped to one key and to no range. What criterion 5 owns is the
+COALESCING — one request per (node, segment) rather than one per run — which
+review caught the split dropping and which would otherwise have had no owner at
+all. Rule 3's range half stays open, and the paragraph under Decision (b) says
+why.
