@@ -209,6 +209,7 @@ class CommitProtocolSweepTest {
         long readersChecked = 0;
         boolean ackFloorAlwaysZero = true;
         long ackEvents = 0;
+        long ackKindEvents = 0;
         int zeroCommitSeeds = 0;
         long gracefulReleases = 0;
         long gracefulReleasesRefused = 0;
@@ -230,6 +231,9 @@ class CommitProtocolSweepTest {
             gracefulReleaseRefusalsSeen += run.gracefulReleaseRefusalsSeen();
             releasesDespiteOwnPartition += run.gracefulReleasesDespiteOwnPartition();
             ackEvents += run.acks().size();
+            ackKindEvents += run.acks().stream()
+                    .filter(AckOrderInvariants.AckEvent::isAck)
+                    .count();
             for (long epoch = 1; epoch <= run.highestEpoch(); epoch++) {
                 long floor = run.lowestAckedSequenceIn(epoch);
                 if (floor > 0) {
@@ -335,25 +339,67 @@ class CommitProtocolSweepTest {
         // a prefix minimum -- 17.53/5 is 3.506x, so it cannot have been a mean.
         // The prefix minimum is again at N=1.
         //
-        // ⚠️ AND 30.60x IS HEADROOM OVER THE WRONG POPULATION, which review
-        // MEASURED and M5.50 owns. This trace is 93% CONFIRMED events: 149.37
-        // per seed against 11.11 ACK per seed. `checkAckOrder`'s only two
-        // `found.add` sites sit past an `if (!e.isAck()) continue;`, so it is
-        // the ACK HALF that this floor exists to guarantee is non-empty -- and
-        // that half clears by 2.22x on the mean, by **1.18x at N=8** on the
-        // tightest prefix, and 12 seeds emit ZERO ack events. Review
-        // demonstrated the gap: strip the three `acks.add(...acked(...))`
-        // calls and M4.50's ack+1 defect goes to 0 violations while this floor
-        // stays green at 29.83x. ⚠️ THE VIOLATION COUNT IS PER RUN LENGTH --
-        // 2,295 at 200 seeds, 11,110 at 1,000, one per ack -- so it is stated
-        // with its N here rather than left to be read against the 1,000-seed
-        // figures twelve lines up. The 29.83x is a RATIO and holds at both. A single floor over a 93/7 mixture
-        // cannot guard the minority half at any seed-invariant value; the
-        // answer is to split it, not to raise it.
+        // ⚠️ AND 30.60x IS HEADROOM OVER THE WRONG POPULATION, which M5.50
+        // CLOSED by adding a second floor over the ACK half alone -- see the
+        // block below, which carries the measured figures. ⚠️ THEY ARE NOT
+        // RESTATED HERE ON PURPOSE: an earlier version of this comment repeated
+        // all five of them twenty lines from the block that owns them, in the
+        // file whose recorded failure mode is exactly a stale figure in a floor
+        // comment (M5.30 was a whole task spent on that), and the next
+        // re-measurement would have had two places to update and updated one.
+        // ⚠️ AN EARLIER VERSION ALSO READ "which review MEASURED and M5.50
+        // owns", presenting as open the row that closed it.
         assertThat(ackEvents)
                 .as("the ack trace must be non-empty before its floor says anything -- "
                         + "`checkAckOrder` over an empty list reports nothing, forever")
                 .isGreaterThanOrEqualTo(SEEDS * 5L);
+        // ⚠️ A SECOND FLOOR, OVER THE ACK-KIND EVENTS ALONE, because the floor
+        // above is over a 93/7 MIXTURE and cannot guard the minority half at
+        // any seed-invariant value. Measured at 1,000 seeds: 160,478 events of
+        // which only 11,110 are ACK -- 149.37 CONFIRMED per seed against 11.11
+        // ACK. `checkAckOrder`'s only two `found.add` sites sit past
+        // `if (!e.isAck()) { ...; continue; }`, so a trace with no ACK events
+        // reports nothing FOREVER, which is verbatim the vacuity the floor
+        // above says it refuses.
+        //
+        // ⚠️ THE GAP WAS DEMONSTRATED, NOT INFERRED: stripping the three
+        // `acks.add(...acked(...))` calls in `CommitProtocolSimulation` takes
+        // M4.50's own ack+1 defect from 11,110 violations to ZERO while the
+        // mixture floor stays green at 29.83x.
+        //
+        // ⚠️ `SEEDS * 3`, AND THE ALTERNATIVES ARE MEASURED RATHER THAN
+        // ARGUED. At the tightest cumulative prefix, N=8, the trace carries 47
+        // ack-kind events: `SEEDS * 5` is 40, which clears by 1.175x -- seven
+        // events of slack, one unlucky seed from a false red; `SEEDS * 3` is
+        // 24 and clears by 1.958x; `SEEDS * 8` is 64 and FALSE-REDS at 0.734x.
+        // ⚠️ AND `SEEDS * 1` FAILS THE WORKLOAD PROPERTY OUTRIGHT, which is
+        // sharper than "holds almost nothing": at ROUNDS=3 the ack half totals
+        // 1,017, so a floor of 1,000 stays GREEN on the shallow run by seventeen
+        // events. `SEEDS * 3` reds that run by 2.95x and clears the real one by
+        // 1.96x at its tightest prefix -- the best-separated of the four.
+        //
+        // ⚠️ AND "TIGHTEST" IS EXHAUSTIVE, NOT SAMPLED: review instrumented
+        // every prefix N in 1..1000 and the minimum ratio is 1.9583, at N=8,
+        // with no prefix below 3N -- or below 5N either. ⚠️ NOTE N=1 IS 2.667x,
+        // so unlike the readers and mixture floors in this method the tightest
+        // prefix here is NOT N=1, which is why two sampled points would have
+        // been the wrong evidence even though they agreed.
+        //
+        // ⚠️ AND NOT `isPositive()`, for the reason this file's own workload
+        // note gives rather than the one an earlier draft of M5.50 gave: a
+        // positive-only floor does not hold the WORKLOAD and stays green at
+        // ROUNDS 120 -> 3, one fortieth of the work. ⚠️ THE WORKLOAD PROPERTY
+        // IS NOT WHAT DISTINGUISHES THIS FLOOR FROM THE ONE ABOVE -- at
+        // ROUNDS=3 the mixture floor reds too, 3,553 against 5,000. What this
+        // floor adds is the POPULATION: the ack half alone. (The draft cited the 12
+        // zero-ack seeds; that does not transfer, because the earliest is seed
+        // 197, seed 0 emits 8, and `-Dsweep.seeds=N` only ever takes the
+        // PREFIX from seed 0 -- no prefix fails a cumulative positive floor.)
+        assertThat(ackKindEvents)
+                .as("the ACK half of the trace must be non-empty and must hold the workload -- "
+                        + "`checkAckOrder` skips every non-ack event, so a trace of pure "
+                        + "CONFIRMED events reports nothing, forever")
+                .isGreaterThanOrEqualTo(SEEDS * 3L);
         assertThat(ackFloorAlwaysZero)
                 .as("every chain's ack trace is based at 0, which is what the slot-0 CONTINUE "
                         + "event exists to guarantee -- it was documented in three places and "

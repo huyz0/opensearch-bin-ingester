@@ -1,0 +1,23 @@
+{
+  "diff_sha256": "27c12bbb19c81e72648932731e8d578286f1ff3848b5a7367ea69f634eb50511",
+  "verdict": "pass",
+  "summary": "The row's shape is implemented exactly and every number in it was re-verified independently against the pristine build: 11,110 ack-kind events and 160,478 trace events at 1,000 seeds, 12 zero-ack seeds with the earliest at 197, seed 0 emitting 8, cumulative-prefix minimum 47 at N=8 scanned over ALL N in [1,1000] (no prefix is tighter), 1.958x against SEEDS*3, 1.175x against SEEDS*5, 0.734x against SEEDS*8. SEEDS*3 is the right choice and the comment understates the case for it: at ROUNDS=3 the population totals 1,017, so SEEDS*1 would have stayed GREEN on the shallow run by 17 events rather than merely 'holding almost nothing'. Nothing else reds first on the stripped-ack defect, verified by reading rather than assumed. Two minor findings, neither blocking.",
+  "findings": [
+    {
+      "id": "M5.50-R1-1",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSweepTest.java:390",
+      "severity": "minor",
+      "title": "The new floor's population is provably identical to `commits`, whose floor is already SEEDS*3 -- so 73% of the ack emissions stay deletable, and the exact relation that would close that is free",
+      "failure_scenario": "MEASURED over the 1,000 pristine seeds: ackKindEvents == commits for every seed (11,110 == 11,110), and structurally so -- every `acks.add(...acked(...))` in CommitProtocolSimulation sits adjacent to a `commits++` (lines 407/409 and 598/599) or a `zombieWrites++` (571/572), and the sweep calls the four-argument `run(...)` overload, so forwarding is OFF and site 407 is dead while zombieWrites is 0. `assertThat(commits).isGreaterThan(SEEDS * 3L)` already sits at line 274 over that same population at the same threshold. The new floor therefore adds exactly one bit -- that the `acked(...)` emission exists at all -- and tolerates dropping 73% of it (11,110 down to 3,000) with the sweep green. Concrete surviving mutation: guard the live leader-path emission at CommitProtocolSimulation.java:598 with `if (acked.sequence() % 3 != 0)`. ackKindEvents falls to ~7,400, still above 3,000; `commits` is untouched; `checkAckOrder` is blind to a third of the acknowledgements it exists to judge; `lowestAckedSequenceIn` reads CONFIRMED events too so `ackFloorAlwaysZero` stays true; the whole suite stays green. The relation `ackKindEvents == commits + zombieWrites` holds by construction at all three emission sites, survives the sweep later switching to `runForwarding`, and kills every partial reduction -- and it is this file's own established answer to a constant floor that cannot distinguish (M5.28 answered the refusalsSeen/released transposition with `refusalsSeen < gracefulReleases`). NOT proposed as a fix in this commit: the M5.50 row specified the shape as a floor over `acks().stream().filter(AckEvent::isAck)` and that is what was delivered; changing to a relation is a new row, not a defect in this one."
+    },
+    {
+      "id": "M5.50-R1-2",
+      "file": "sequencer/src/test/java/binjava/sequencer/CommitProtocolSweepTest.java:342",
+      "severity": "minor",
+      "title": "Five measured figures and the `found.add`-past-`if (!e.isAck())` sentence now exist in two copies twenty lines apart, and the older copy still says M5.50 OWNS the gap this commit closes",
+      "failure_scenario": "Lines 342-354 (the mixture floor's comment) and lines 361-373 (the new one) both carry 160,478, 11,110, 149.37 per seed, 11.11 per seed and 29.83x, plus the same sentence about the two `found.add` sites sitting past the `isAck` guard. This file's recorded failure mode is precisely a stale figure in a floor comment -- M5.30 was a whole task spent correcting 17.53/3.09x and 74.17/7.3x, and its own row says a floor whose stated headroom is wrong cannot be reasoned about when it next needs tightening. The next re-measurement (there have been three) now has two places to update and will update one. Second half, same region: line 343 still reads 'which review MEASURED and M5.50 owns', presenting as open work the task this very commit closes, with the answer sitting eighteen lines below it -- a reader follows the pointer to backlog.md, finds the row done, and has to reconcile. Not proposed for a fix under review.md rule 11: the surface a prose fix creates is the prose the fix adds. Worth recording in the commit body or as a row."
+    }
+  ],
+  "task": "M5.50",
+  "role": "reviewer"
+}
