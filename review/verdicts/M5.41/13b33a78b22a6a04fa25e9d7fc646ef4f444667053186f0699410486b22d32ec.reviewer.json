@@ -1,0 +1,58 @@
+{
+  "diff_sha256": "13b33a78b22a6a04fa25e9d7fc646ef4f444667053186f0699410486b22d32ec",
+  "verdict": "changes-requested",
+  "summary": "The per-chunk deadline bounds each HAND-OFF but not the CALL, and the two claims that make the design safe are both false against the tree. (1) The executor is in the same try-with-resources as the store InputStream, and ExecutorService.close() is shutdown() plus an unbounded awaitTermination -- it waits for the cancelled-but-still-running task. Measured on java-25 in this environment: a 200 ms invokeAll deadline against a sink that ignores interruption for 4 s returns from invokeAll at 202 ms and from close() at 4011 ms, with in.close() running AFTER workers.close() because of reverse declaration order. So the serving thread and the open store InputStream are held for the slow sink's full duration -- the exact chain M5.41 quotes -- and the State cell's 'a sink that BLOCKS is handled exactly as one that THROWS' is not true: a throwing sink costs the call nothing. (2) SubscriptionHub.Tracking sets `failed` only in its catch block, so a sink dropped for MISSING THE DEADLINE has failed==false and deliver() completes it -- handing a subscriber a prefix, or under the documented buffer race a torn next chunk, as a whole segment. The javadoc's 'SubscriptionHub completes only sinks that took every byte' is the argument that licenses the deliberate data race, and it does not hold. Cost is clean: one GET per call before and after, no LIST, nothing per record/shard/partition/index; the early `!live.isEmpty()` stop removes bytes, never requests. Findings 3-6 are minor divergences between the two overloads and two overstated javadoc sentences.",
+  "findings": [
+    {
+      "id": "M5.41-1",
+      "severity": "blocking",
+      "file": "ingest/src/main/java/binjava/ingest/SegmentProxy.java:261-270",
+      "title": "workers.close() reintroduces the unbounded stall, and holds the store InputStream while it does",
+      "failure_scenario": "invokeAll(tasks, deadline) cancels a task by interrupting it; it does not make the task stop. ExecutorService.close() is the Java 19 default method: shutdown(), then awaitTermination in a loop until terminated, calling shutdownNow() only if the CALLING thread is interrupted. try-with-resources closes in reverse declaration order, so workers.close() runs first and in.close() second. Measured in this environment (java-25, /tmp scratchpad probe): two tasks, one of which swallows InterruptedException for 4 s, with a 200 ms invokeAll bound -- invokeAll returns at 202 ms with future[0].isCancelled()==true, and the try-with-resources block exits at 4011 ms. Concretely: consumer 7 of 64 is a plugin-supplied SegmentSink that blocks on a bounded queue put, a lock, a synchronized block, or any loop that swallows interruption -- SegmentSink's javadoc imposes no interruptibility requirement anywhere. The other 63 do get every chunk on time, but streamTo does not return and the store InputStream stays open until consumer 7 unblocks. That is 'holds the serving thread ... and the open store InputStream' from M5.41's own failure chain, unchanged; the store connection idling past its read timeout now throws from in.close() AFTER every sink was served whole, and SubscriptionHub.deliver turns that IOException into 'NOBODY IS COMPLETED' -- a single slow consumer still costs all 64 their segment. The suite cannot see it because BlockingSegmentSink catches InterruptedException and returns, so it is interruptible by construction; the deadline is only enforceable against interruptible sinks, and neither the javadoc nor SegmentSink says so."
+    },
+    {
+      "id": "M5.41-2",
+      "severity": "major",
+      "file": "ingest/src/main/java/binjava/ingest/SegmentProxy.java:234-241",
+      "title": "'SubscriptionHub completes only sinks that took every byte' is false for the timeout path, and it is the argument licensing the buffer race",
+      "failure_scenario": "SubscriptionHub.Tracking (SubscriptionHub.java:508-524) sets `failed = true` only inside `catch (IOException | RuntimeException e)`. A sink dropped for missing the per-chunk deadline never throws -- its task is cancelled and SegmentProxy removes it from `live` -- so the Tracking wrapper's `failed` stays false. deliver() (SubscriptionHub.java:437-447) iterates `opened`, skips only `sink.failed`, and calls subscriber.complete(push, sink.delegate). The timed-out subscriber is therefore COMPLETED holding a prefix, or worse: this javadoc paragraph documents that a cancelled task may still be inside write() while the array is refilled, so the last thing that subscriber received can be a torn mixture of two chunks. It then decodes fewer or garbage records under offsets the commit log says are there -- precisely what SubscriptionHub.deliver's own javadoc calls 'THE WORST OUTCOME AVAILABLE'. Nothing catches it: deliver ignores streamTo's return value, so live.size()==2 against opened.size()==3 is never compared, and streamTo returns only a COUNT so the hub cannot learn WHICH sink timed out -- the hub javadoc says it wraps each sink for exactly that reason and the wrapper only sees throws. It is not reachable today because streamFromStore calls the two-argument overload, but the javadoc states the containment as a present fact about the tree, and whoever does the wiring the State cell assigns to M5.45b/M5.13/M5.14 will read it and conclude the race is already contained. Either Tracking must learn about timeouts in this commit, or the javadoc must say the containment does not yet exist and name the row that owes it."
+    },
+    {
+      "id": "M5.41-3",
+      "severity": "minor",
+      "file": "ingest/src/main/java/binjava/ingest/SegmentProxy.java:264",
+      "title": "the new overload abandons the read when live empties, silently reversing a settled decision of the two-argument method",
+      "failure_scenario": "`while ((read = in.read(buffer)) != -1 && !live.isEmpty())` re-checks emptiness, which the two-argument method deliberately does not: its javadoc at lines 141-155 records that a round-3 review examined and rejected an emptiness guard, and SegmentProxyFailureTest.anEMPTYFanOutStillREADSAndServesNobody pins the behaviour. Two overloads of the same name now read the object differently and the new javadoc says nothing about it. Observable consequences: called with an empty consumers list the new overload performs exactly ONE read (the check is after the read) and stops, so a store that would have failed on a later read no longer reports it; and on a real backend, closing a GET body with bytes unread aborts the connection rather than returning it to the pool, which is a reconnect on the next GET. Request COUNT is unaffected, so this is not a cost.md finding."
+    },
+    {
+      "id": "M5.41-4",
+      "severity": "minor",
+      "file": "ingest/src/main/java/binjava/ingest/SegmentProxy.java:229-232",
+      "title": "'NO CLOCK IS READ HERE ... business logic takes a seam rather than sourcing time' is not accurate",
+      "failure_scenario": "AbstractExecutorService.invokeAll(tasks, timeout, unit) computes its deadline from System.nanoTime(); the clock is read one frame down, not avoided. There is also no seam: the executor is constructed inline by Executors.newVirtualThreadPerTaskExecutor() at line 262 rather than injected, so nothing a test can substitute controls the passage of time. The consequence is the one non-negotiable 7 exists to prevent and it is already visible: aSinkThatBLOCKSIsDroppedAndTheOthersAreServedWHOLE is a wall-clock test with a real 200 ms budget and a 5 s fixture latch, and on a loaded CI box a RecordingSink that takes over 200 ms on one chunk is dropped and the test fails with 'served == 1'. Accumulator and DefaultIngest in this same module do take a clock seam, so the claim also reads as a precedent the file is not following."
+    },
+    {
+      "id": "M5.41-5",
+      "severity": "minor",
+      "file": "ingest/src/main/java/binjava/ingest/SegmentProxy.java:223-227",
+      "title": "'the rest of the fan-out is never held for longer than the deadline' holds per hand-off, not per call",
+      "failure_scenario": "Every sink waits on the same invokeAll barrier, so a consumer that takes deadline-minus-epsilon on EVERY chunk is never dropped and paces the whole fan-out. With the 200 ms of the new test and the 64 KiB default chunk that is 16 x 200 ms = 3.2 s for the 1 MiB fixture segment and 128 x 200 ms = 25.6 s for an 8 MiB one -- strictly more than a per-segment budget would allow, which is the design this paragraph rejects for 'letting one consumer spend the whole of it and stall the others for its duration'. The per-chunk choice is defensible; the sentence claiming the fan-out is never held longer than the deadline is not, and a reader sizing the deadline will read it as a bound on the call."
+    },
+    {
+      "id": "M5.41-6",
+      "severity": "minor",
+      "file": "ingest/src/main/java/binjava/ingest/SegmentProxy.java:329",
+      "title": "an Error thrown by a sink is now silently reclassified as a dead consumer",
+      "failure_scenario": "The two-argument loop catches `IOException | RuntimeException`, so a StackOverflowError or OutOfMemoryError raised inside a sink propagates out of streamTo and up. In the new path any Throwable from the task is wrapped in ExecutionException, and tookIt catches it under the name `slowOrDeadConsumer` and returns false -- so an OOM in one subscriber's buffer is now indistinguishable from a zero TCP window, that consumer is dropped, and serving continues on a JVM that is out of memory with no log, metric or rethrow anywhere. This is a behavioural divergence between the two overloads that neither javadoc mentions."
+    },
+    {
+      "id": "M5.41-7",
+      "severity": "minor",
+      "file": "ingest/src/main/java/binjava/ingest/SegmentProxy.java:278-287",
+      "title": "the task count per byte moved on the path that carries every ingested byte, with no measurement",
+      "failure_scenario": "One virtual thread per sink per 64 KiB chunk plus a full K-way barrier per chunk: an 8 MiB segment to 64 consumers is 128 x 64 = 8192 task submissions and 8192 park/unpark, where the previous loop was 8192 direct calls on one thread. performance.md is in this review's standard set and this is the serving hot path, but the javadoc asserts the cost qualitatively ('the cost is a task rather than an OS thread') and nothing measures it; the bench skill exists for exactly this claim. Not a cost.md finding -- no object-store request moves -- and probably small in absolute terms, but it is a throughput claim made without a number on the path where throughput is the product."
+    }
+  ],
+  "task": "M5.41",
+  "role": "reviewer"
+}

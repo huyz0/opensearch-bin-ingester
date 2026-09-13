@@ -400,7 +400,11 @@ public final class SubscriptionHub {
      * tell from a whole segment, and would decode fewer records under offsets
      * the commit log says are there. {@code SegmentProxy.streamTo} drops a
      * throwing sink and returns only a COUNT, so the hub wraps each sink to
-     * learn WHICH. ⚠️ A sink that merely BLOCKS is still unhandled -- M5.41.
+     * learn WHICH. ⚠️ A sink that merely BLOCKS is unhandled ON THIS PATH:
+     * M5.41 added a per-chunk deadline to {@code streamTo}'s three-argument
+     * overload and this hub calls the two-argument one, because a sink dropped
+     * for missing a deadline never throws and {@link Tracking} would not mark
+     * it. M5.58 owns closing that before the other overload is wired.
      */
     private void deliver(String segmentKey, List<Target> targets, FetchMode via, Source source) {
         List<Tracking> opened = new ArrayList<>();

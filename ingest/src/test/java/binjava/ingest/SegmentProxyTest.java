@@ -2,6 +2,7 @@
 package binjava.ingest;
 
 import static binjava.ingest.SegmentProxyFixtures.KEY;
+import static binjava.ingest.SegmentProxyFixtures.RecordingSink;
 import static binjava.ingest.SegmentProxyFixtures.SEGMENT_BYTES;
 import static binjava.ingest.SegmentProxyFixtures.segment;
 import static binjava.ingest.SegmentProxyFixtures.sinks;
@@ -13,6 +14,7 @@ import binjava.binstore.Body;
 
 import binjava.binstore.CountingBinStore;
 import binjava.binstore.backend.MemoryBinStore;
+import java.time.Duration;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
@@ -345,8 +347,103 @@ class SegmentProxyTest {
         }
     }
 
+    /**
+     * A sink that BLOCKS is dropped, and every other consumer is served WHOLE.
+     *
+     * <p>⚠️ THE FAILURE CHAIN THIS PREVENTS IS CONCRETE. Consumer 7 of 64
+     * stalls on a zero TCP window and holds the serving thread, the shared
+     * chunk buffer and the open store {@code InputStream}; the store connection
+     * idles past its read timeout and throws; {@code streamTo} propagates, and
+     * all 64 sinks are left holding a TRUNCATED PREFIX they cannot tell from a
+     * whole segment. That is the outcome this method's own "the read is not
+     * abandoned" paragraph exists to prevent, and only the THROWING half of it
+     * was implemented.
+     *
+     * <p>⚠️ DROPPED, NOT BUFFERED, and the row that opened this asked whoever
+     * took it to decide. Buffering a slow consumer reintroduces per-consumer
+     * memory, which criterion 6 forbids by name; dropping costs that consumer
+     * nothing it cannot recover, because it replays from the commit log
+     * exactly as a dead one does. A slow consumer and a dead consumer get the
+     * same answer, which is also the simplest contract to state.
+     *
+     * <p>⚠️ THE WHOLE-SEGMENT ASSERTIONS ARE THE OTHER HALF OF THE PROPERTY,
+     * and they are here rather than in a case of their own: a serving loop that
+     * gave up on the SEGMENT when one sink stalled would also leave the stalled
+     * consumer uncounted, so the count alone does not separate "dropped the
+     * slow one" from "failed the whole fan-out". What separates them is that
+     * the survivors hold every byte. ⚠️ A SEPARATE CASE FOR IT WOULD HAVE HAD
+     * NO RED RECORD: the unfixed loop already delivered the whole segment to a
+     * live sink -- it merely blocked first -- so that assertion passes before
+     * and after, and testing.md rule 2 wants a test observed failing first.
+     */
+    @Test
+    void aSinkThatBLOCKSIsDroppedAndTheOthersAreServedWHOLE() throws Exception {
+        byte[] bytes = segment();
+        SegmentProxy proxy = new SegmentProxy(storeHolding(bytes));
+        BlockingSegmentSink stalled = new BlockingSegmentSink();
+        RecordingSink first = new RecordingSink();
+        RecordingSink second = new RecordingSink();
+
+        int served = proxy.streamTo(KEY, List.of(first, stalled, second),
+                Duration.ofMillis(200));
+
+        assertThat(stalled.writes())
+                .as("PREMISE: the serving path did hand the stalled sink a chunk -- without "
+                        + "this the count below would pass against a fan-out that never "
+                        + "reached it")
+                .isPositive();
+        assertThat(served)
+                .as("the two live consumers are served and the stalled one is not counted")
+                .isEqualTo(2);
+        assertThat(first.received.toByteArray())
+                .as("a live consumer gets the WHOLE segment")
+                .isEqualTo(bytes);
+        assertThat(second.received.toByteArray())
+                .as("and so does the other one")
+                .isEqualTo(bytes);
+        stalled.release();
+    }
 
 
+    /**
+     * A sink that IGNORES interruption does not hold the call.
+     *
+     * <p>⚠️ THE CASE THAT WOULD HAVE CAUGHT THE FIRST FIX BEING WRONG. That
+     * version closed its executor with try-with-resources, and {@code
+     * ExecutorService.close()} is {@code shutdown()} plus an UNBOUNDED {@code
+     * awaitTermination} -- so the deadline dropped the slow sink from the
+     * fan-out and the call then waited for it anyway, holding the store {@code
+     * InputStream} open, which is the stall this method exists to remove.
+     * Review MEASURED 202 ms to leave {@code invokeAll} and 4,011 ms to leave
+     * the try block. Every case here passed, because the other fixture returns
+     * when interrupted and so cannot tell waiting from walking away.
+     *
+     * <p>⚠️ THE ASSERTION IS ORDERING, NOT TIMING: if {@code streamTo} has
+     * returned while the sink is STILL INSIDE {@code write}, the serving path
+     * did not wait for it. Asking the same question with a stopwatch would be
+     * the flaky way.
+     */
+    @Test
+    void aSinkThatIGNORESInterruptionDoesNotHoldTheCall() throws Exception {
+        byte[] bytes = segment();
+        SegmentProxy proxy = new SegmentProxy(storeHolding(bytes));
+        UninterruptibleSegmentSink deaf = new UninterruptibleSegmentSink();
+        RecordingSink live = new RecordingSink();
 
+        int served = proxy.streamTo(KEY, List.of(deaf, live), Duration.ofMillis(200));
 
+        assertThat(deaf.everEntered())
+                .as("PREMISE: the serving path did hand this sink a chunk")
+                .isTrue();
+        assertThat(deaf.stillInsideWrite())
+                .as("streamTo returned while the deaf sink was still in write(), so it walked "
+                        + "away rather than waiting -- false if the executor is closed with "
+                        + "try-with-resources")
+                .isTrue();
+        assertThat(served).as("and only the live consumer is counted").isEqualTo(1);
+        assertThat(live.received.toByteArray())
+                .as("which still received the whole segment")
+                .isEqualTo(bytes);
+        deaf.release();
+    }
 }

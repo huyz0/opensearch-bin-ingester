@@ -1,0 +1,41 @@
+{
+  "diff_sha256": "7edb4e3b4076221b7dd44e0de0b9f24397c697ec0b8601441afce9be23005e15",
+  "verdict": "changes-requested",
+  "summary": "Round 1's blocking finding (the stall) is genuinely closed and I measured it: aSinkThatIGNORESInterruptionDoesNotHoldTheCall completes in 0.206 s against a 200 ms deadline and a sink that swallows interruption for up to 10 s, where round 1 measured 4,011 ms. Round 1's major (the false containment claim) is closed too: SubscriptionHub.streamFromStore:501 calls the two-argument overload, and Tracking.write sets failed only from its catch, so the replacement paragraph is true as written. No request-rate finding: the overload issues exactly one store.get per call, unchanged from the two-argument method, and an idle consumer issues none. No double-count or missed sink: invokeAll's returned futures are all done-or-cancelled, tookIt checks isCancelled first so get() never blocks, and every sink still in `live` provably returned from write before the buffer was refilled -- so the documented buffer race can only touch a sink that was already dropped. What remains is that this commit closes M5.41 while creating an obligation that now has no open owner.",
+  "findings": [
+    {
+      "id": "M5.41-3",
+      "severity": "major",
+      "file": "ingest/src/main/java/binjava/ingest/SegmentProxy.java:262-266",
+      "title": "The 'must not be wired' obligation this commit creates is assigned to three rows that are already done and one that does not carry it, and two src/main javadocs still point a reader at M5.41 as the open row",
+      "failure_scenario": "The javadoc says: 'Whoever wires a blocking sink -- M5.13/M5.14 for the consumer socket, M5.45b for `direct` -- owes that before using this one, and M5.41's row records it.' Checked against the staged backlog: M5.13 is done, M5.14 is done, M5.41 is marked done by this very diff, and M5.45b's three numbered acceptance criteria are about presign/TTL/module scope and mention neither this overload nor the obligation to learn which sinks were dropped. So the prohibition has no open row. Concretely: a later task wires SubscriptionHub.streamFromStore to streamTo(key, sinks, deadline) because it is the overload that handles a socket sink; Tracking.failed is set only from a catch (SubscriptionHub.java:521) and a deadline drop never throws, so deliver's loop at SubscriptionHub.java:436 finds failed == false and calls subscriber.complete(push, sink.delegate) on a consumer that received a truncated prefix -- 'the worst outcome available' by deliver's own javadoc at SubscriptionHub.java:397, and the exact failure chain M5.41's row opens with. Two untouched src/main javadocs make it worse rather than better by sending the reader to the closed row: SegmentProxy.java:118 still says 'M5.41 owns it, and until then a caller must not hand this method a sink that can block indefinitely', and SubscriptionHub.java:403 still says 'A sink that merely BLOCKS is still unhandled -- M5.41.' Following either now lands on a done row. This is the same defect M5.44's row records round-1 review of M5.14 catching -- an obligation left pointing at a task that had already declined the work. Fix: put the obligation in an open row's acceptance criteria (M5.45b is the only open candidate named) and repoint the two javadoc references there, or open a row for it.",
+      "suggested_fix": "Add the 'a caller must be able to learn WHICH sinks were dropped before wiring the three-argument streamTo' obligation to M5.45b's acceptance criteria (or a new open row), and change SegmentProxy.java:118, SegmentProxy.java:266 and SubscriptionHub.java:403 to name that row instead of M5.41/M5.13/M5.14."
+    },
+    {
+      "id": "M5.41-4",
+      "severity": "minor",
+      "file": "ingest/src/main/java/binjava/ingest/SegmentProxy.java:288-292",
+      "title": "The comment's causal clause about the InputStream being held open is unsupported by the reverse-order rule it cites in the same sentence",
+      "failure_scenario": "The comment reads: 'try-with-resources closes in reverse declaration order -- so closing it here would wait for the very sink the deadline just dropped, and hold the store `InputStream` open while it did.' Reverse declaration order produces that consequence only if `workers` was declared AFTER `in`. If `workers` was declared first -- which is where it now sits, immediately above the try -- reverse order closes `in` first, so the stream would have been closed at ~202 ms and the unbounded await would have held no stream at all. The quoted measurement (202 ms out of invokeAll, 4,011 ms out of the try block) does not distinguish the two orders. A reader who trusts the clause will believe try-with-resources on an executor leaks an open store connection for the duration of the await, which is true under only one of the two declaration orders and the comment does not say which was used. Per the 'answer a prose finding by cutting the clause' rule, delete 'and hold the store `InputStream` open while it did' rather than explaining it. The same clause is restated in SegmentProxyTest.java:409-411.",
+      "suggested_fix": "Cut the clause in both places; the stall alone is the finding, and it stands without it."
+    },
+    {
+      "id": "M5.41-5",
+      "severity": "minor",
+      "file": "ingest/src/main/java/binjava/ingest/SegmentProxy.java:177-181",
+      "title": "The new overload documents neither @return nor @throws, and it throws IOException for something the two-argument @throws explicitly excludes",
+      "failure_scenario": "The two-argument streamTo documents '@return how many sinks received the whole segment' and '@throws IOException if the STORE fails -- that is not one consumer's problem'. The new overload has only @param. Its return value now means something subtly different (a sink can be absent from the count for missing a deadline rather than for throwing), and handOff throws `new IOException(\"serving was interrupted\")` on InterruptedException -- an IOException raised when the store did not fail, contradicting the sibling method's documented meaning of the type. A caller that maps IOException to 'the store is down' (deliver does exactly that at SubscriptionHub.java:431, converting it to UncheckedIOException so pushLoop drops the push) would attribute a thread interrupt to the object store in whatever it logs.",
+      "suggested_fix": "Add @return and an @throws IOException that names both causes."
+    },
+    {
+      "id": "M5.41-6",
+      "severity": "minor",
+      "file": "ingest/src/test/java/binjava/ingest/BlockingSegmentSink.java:48-60",
+      "title": "Two accessors on the new fixture are never called",
+      "failure_scenario": "awaitEntered() and writes() have no caller anywhere in the tree; the only test using BlockingSegmentSink calls release() alone. awaitEntered() in particular carries the AssertionError 'the serving loop never reached this sink', which is a premise the blocking case never checks -- aSinkThatBLOCKSIsDroppedAndTheOthersAreServedWHOLE would still assert served == 2 if the stalled sink were never handed a chunk at all, and the deaf case needed an explicit everEntered() premise assertion for exactly that reason. Dead fixture API also invites the next author to assume it is load-bearing.",
+      "suggested_fix": "Either assert the premise in the blocking case with awaitEntered()/writes(), or delete the two unused accessors."
+    }
+  ],
+  "task": "M5.41",
+  "role": "reviewer"
+}
