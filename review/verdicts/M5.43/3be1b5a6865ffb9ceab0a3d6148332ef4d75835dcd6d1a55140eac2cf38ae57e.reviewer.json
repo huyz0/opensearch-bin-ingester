@@ -1,0 +1,45 @@
+{
+  "diff_sha256": "3be1b5a6865ffb9ceab0a3d6148332ef4d75835dcd6d1a55140eac2cf38ae57e",
+  "verdict": "changes-requested",
+  "summary": "The central factual claim checks out: at HEAD, wantsDirect returns true for servingPodUnderPressure() BEFORE the directFanOutThreshold() > 0 guard, so zeroing the dial never disabled direct and a separate flag is the right answer. The flag reaches the only place in src/main that can answer DIRECT (FetchPolicy.java:92) and the only presign call site (GrantIssuer.java:190) is still uncalled, so coverage is complete. requirePresignedUrls() at construction is the same refusal GrantIssuer's constructor makes. Three things block. (1) Closing M5.43 orphans M5.39's coalescing obligation, which M5.39's own closed cell assigns to 'M5.43, with the wiring', and M5.45b's criteria do not carry it -- that is the one open request-rate defect in the direct path and after this commit no open row owns it. (2) FetchPolicy.java:110 still calls the zero threshold 'the operator's off switch' 26 lines above the new comment saying it reads like one and is not -- the file contradicts itself on the exact point the commit exists to fix. (3) FetchPolicyConfig.derivedFrom, the only public factory that takes the fan-out dial, now pins directEnabled to false silently and documents nothing.",
+  "findings": [
+    {
+      "file": "docs/internal/product/backlog.md:59",
+      "severity": "major",
+      "title": "Closing M5.43 orphans M5.39's one-grant-per-(node,segment) enforcement, the direct path's only shard-scaling request rate",
+      "failure_scenario": "M5.39's State cell (backlog.md:53) closed with 'The rule is written; ENFORCING it is M5.43's, with the wiring' and 'M5.43 owns the direct wiring that must respect the grant rule ... both are open'. This diff flips M5.43 to done without discharging or reassigning that enforcement, and M5.45b's three acceptance criteria (backlog.md:63 -- criterion 5, criterion 7, check-module) never mention it. So after this commit a closed row cites a closed row for work nobody owns. The rate it guards is the one non-negotiable 6 forbids: a SegmentDelivery is one batch event per run, so a catch-up node holding ~178 of an 8 MiB segment's ~1,600 runs is answered DIRECT 178 times and mints 178 grants -- 178 consumer-side GETs for one object, scaling with shards-per-node -- and GrantIssuer.java:140's own javadoc records that those GETs are invisible to the ingester's CountingBinStore, so no test in this process can measure the regression. Fix is cheap and textual: either state in the M5.43 cell that the coalescing enforcement is NOT part of this row and add it to M5.45b's criteria, or reopen it as its own row. Do not close M5.43 leaving the pointer dangling."
+    },
+    {
+      "file": "ingest/src/main/java/binjava/ingest/FetchPolicy.java:110",
+      "severity": "major",
+      "title": "The javadoc still calls a zero fan-out threshold 'the operator's off switch', 26 lines above the new comment that says it is not",
+      "failure_scenario": "wantsDirect's javadoc at lines 110-111 reads 'A THRESHOLD OF ZERO TURNS THE FAN-OUT ARM OFF ENTIRELY, which is the operator's off switch and is what the > 0 guard buys'. The comment added at lines 126-136 says the opposite in as many words: 'directFanOutThreshold = 0 reads like an off switch and is not one'. Both are in the same method. An operator or the M5.45b taker reads the javadoc -- which is the rendered contract, while the new text is a // comment inside the body -- sets directFanOutThreshold = 0 believing it disables the mode, and reproduces exactly the defect this row exists to fix the moment a signing backend lands and the pod sheds load. The class javadoc has the same hole: the ordered list at line 35 still states the DIRECT rule as 'if the backend can sign and EITHER the bytes are COLD ... OR the pod is shedding', with no mention of the deployment flag, so the documented contract of the class is now incomplete as well as internally contradicted. Both need editing in this commit; M5.40a blocked on precisely this shape of stale contract javadoc."
+    },
+    {
+      "file": "ingest/src/main/java/binjava/ingest/FetchPolicyConfig.java:114",
+      "severity": "major",
+      "title": "derivedFrom, the only public factory carrying the fan-out dial, silently pins directEnabled to false and says nothing about it",
+      "failure_scenario": "derivedFrom(costs, price, cap, threshold) is the documented derivation entry point and the only factory that accepts directFanOutThreshold; defaultsFor(costs, true) hardcodes the threshold to 1. So 'direct enabled AND a measured M3 threshold' is expressible only through the canonical constructor. The diff's own test demonstrates the problem: FetchPolicyTest.java:502 had to call derivedFrom and then rebuild the record by hand to flip the flag. Concretely: when M9 settles M3 and a configuration layer sets the threshold through derivedFrom, IngestConfig.directEnabled = true still passes the startup refusal at DefaultIngest.java:224, the pod comes up, and FetchPolicy silently answers PROXY forever -- a second silent off switch in the same record, which is the class of defect this row was opened to remove. There is no error and nothing logs it. Either add a derivedFrom overload taking directEnabled, or state on derivedFrom's javadoc that it always returns the mode disabled and name the factory that does not."
+    },
+    {
+      "file": "ingest/src/main/java/binjava/ingest/FetchPolicyConfig.java:47",
+      "severity": "minor",
+      "title": "The new record component has no @param on either record",
+      "failure_scenario": "FetchPolicyConfig's record javadoc documents inlineCapBytes, crossAzCrossoverBytes and directFanOutThreshold with @param and stops; directEnabled, added on line 48, has none. IngestConfig.java:67 is the same -- all nine original components carry an @param and directEnabled does not. The only prose for the FetchPolicyConfig component sits on the defaultsFor(CostTable, boolean) overload at line 123, which a reader of the type does not see. A taker reading the record's javadoc sees three documented dials plus an undocumented boolean, and the paragraph they DO see says the fan-out threshold 'ships as a dial the same way M4 shipped the lease TTL' -- pushing them back toward the dial as the switch."
+    },
+    {
+      "file": "ingest/src/main/java/binjava/ingest/IngestConfig.java:73",
+      "severity": "minor",
+      "title": "'A deployment asks for direct explicitly' overstates what exists: no production path can set the flag",
+      "failure_scenario": "The only construction of IngestConfig in any src/main is IngestConfig.defaults(String) at line 189, which goes through the nine-argument constructor and therefore always yields false; there is no settings, environment or JSON layer anywhere in the tree that builds one. So the true branch at DefaultIngest.java:223-224 is reachable only from a test, and criterion 7's 'refused at startup' holds for a deployment nobody can currently express. That is consistent with M5.45b owning the wiring, but the javadoc sentence at IngestConfig.java:73-74 and the backlog cell both read as though an operator can already ask. A reader auditing criterion 7 would conclude the refusal is live in production when it is not."
+    },
+    {
+      "file": "docs/internal/product/backlog.md:59",
+      "severity": "minor",
+      "title": "'its fourteen sites took a literal false' is thirteen existing sites",
+      "failure_scenario": "Counted at HEAD, `new FetchPolicyConfig(` appears at 13 sites (FetchPolicyConfig.java:114, AssembledServingPathFailureTest x3, AssembledServingPathTest x2, FetchPolicyTest x5, OneStreamPerConsumerTest:334, SubscriptionHubTest:62). The staged tree has 18 construction sites, 14 of which pass a literal false -- the fourteenth is a case this diff added. So the sentence is true of the post-change tree and false under the reading it invites, which is the count of existing sites swept, in a clause whose whole job is to contrast with IngestConfig's twenty-that-compiled-unchanged. The IngestConfig figure is correct: exactly 20 matching lines at HEAD. This repository's own memory notes that prose claims outlive the commit that made them; a later reader re-deriving the number finds it does not reproduce."
+    }
+  ],
+  "task": "M5.43",
+  "role": "reviewer"
+}

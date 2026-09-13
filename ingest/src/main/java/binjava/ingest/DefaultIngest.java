@@ -209,8 +209,23 @@ public final class DefaultIngest implements Ingest {
                 Objects.requireNonNull(prefix, "prefix"),
                 Objects.requireNonNull(podShortId, "podShortId"));
         Capabilities storeCapabilities = store.capabilities();
+        // ⚠️ THE STARTUP REFUSAL, AND M5.43 IS WHAT GAVE IT A CALLER. Criterion
+        // 7 asks that a deployment wanting `direct` against a backend that
+        // cannot sign fail at STARTUP rather than at the first fetch, and until
+        // this line nothing expressed "this deployment wants direct" -- so the
+        // refusal `Capabilities.requirePresignedUrls` implements had no call
+        // site anywhere in the tree.
+        //
+        // ⚠️ CONDITIONAL, NECESSARILY. Calling it unconditionally fails every
+        // pod to start on both shipping backends, neither of which presigns;
+        // calling it lazily puts the refusal back at the first fetch, which is
+        // what it exists to prevent.
+        if (config.directEnabled()) {
+            storeCapabilities.requirePresignedUrls();
+        }
         this.serving = new SegmentServing(
-                new FetchPolicy(FetchPolicyConfig.defaultsFor(storeCapabilities.costs())),
+                new FetchPolicy(FetchPolicyConfig.defaultsFor(
+                        storeCapabilities.costs(), config.directEnabled())),
                 storeCapabilities,
                 // ⚠️ THE CACHE IS ON IN PRODUCTION, which is what makes
                 // M5.40b a number rather than a capability. A repeat read

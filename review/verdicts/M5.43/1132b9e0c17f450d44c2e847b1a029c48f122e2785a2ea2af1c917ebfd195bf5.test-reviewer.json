@@ -1,0 +1,16 @@
+{
+  "verdict": "pass",
+  "diff_sha256": "1132b9e0c17f450d44c2e847b1a029c48f122e2785a2ea2af1c917ebfd195bf5",
+  "findings": [
+    {
+      "id": "R3-1",
+      "severity": "minor",
+      "file": "ingest/src/test/java/binjava/ingest/StoreFakes.java:754",
+      "summary": "SURVIVING MUTATION: StoreFakes.CanPresign.presign is never CALLED by any test, so the round-2 fix that made it honour its ttl is itself unconstrained -- the whole body can be replaced by a throw and :ingest:test stays green",
+      "detail": "MEASURED in a throwaway worktree at diff sha 1132b9e0, no `error:` in the build log: replacing the body of CanPresign.presign with `throw new UnsupportedOperationException(...)` gives :ingest:test rc=0, 239 testcases, 0 failures. Every use of CanPresign in this commit goes through capabilities().presignedUrls(); nothing mints a SignedUrl. So reverting `Instant.EPOCH.plus(ttl)` to a fixed Instant today is invisible, exactly as the fixed expiry was invisible before. This is a fixture change bought for M5.45b rather than for this commit, which is why it is minor and not major: the change is in the right direction and the row that will exercise it is named in the javadoc. Two things to carry forward. (1) The javadoc's claim about the clamp is ACCURATE as far as it goes -- GrantIssuer.grantFor clamps `requested` to `ceiling` and returns the store's own SignedUrl (GrantIssuer.java:188-190), so with a ttl-honouring fake the clamp is observable in expiresAt, and with the old fixed expiry a GrantIssuer mutated to `Duration ttl = requested;` would have produced an identical SignedUrl. (2) But EPOCH+ttl is always in the PAST, so an M5.45b assertion phrased against the wall clock -- `expiresAt.isBefore(Instant.now().plusSeconds(60))` -- passes under BOTH the clamped and the unclamped issuer; only an assertion phrased relative to Instant.EPOCH (e.g. Duration.between(Instant.EPOCH, url.expiresAt()) is at most 60s) kills `ttl = requested`. The trap is narrowed, not closed.",
+      "failure_scenario": "MEASURED, throwaway worktree, diff sha 1132b9e0, build log free of `error:`: replace StoreFakes.CanPresign.presign's body with `throw new UnsupportedOperationException(\"mutant\")` -> `./gradlew :ingest:test` rc=0, 239 testcases, 0 failures. Concretely: a future edit reverting the expiry to a constant Instant (the exact defect round 2 raised) is caught by nothing in the tree today. And in M5.45b, if the clamp assertion is written against the wall clock rather than against Instant.EPOCH, mutating GrantIssuer.java:188 from `requested.compareTo(ceiling) > 0 ? ceiling : requested` to plain `requested` still passes, because EPOCH plus any sub-56-year ttl is in the past and satisfies any `before now+60s` bound."
+    }
+  ],
+  "task": "M5.43",
+  "role": "test-reviewer"
+}

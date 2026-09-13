@@ -174,7 +174,7 @@ class AssembledServingPathTest {
         try (var ignored = inlineHub.subscribe(key, push -> viaInline)) {
             inlineHub.publish(oneRun("seg", key, 3, 10), "seg", segment,
                     servingWith(store, new FetchPolicy(
-                            new FetchPolicyConfig(Long.MAX_VALUE, Long.MAX_VALUE, 1))));
+                            new FetchPolicyConfig(Long.MAX_VALUE, Long.MAX_VALUE, 1, false))));
         }
 
         Collecting viaProxy = new Collecting();
@@ -558,7 +558,7 @@ class AssembledServingPathTest {
      * legal cap is what forces every real segment past it.
      */
     private static FetchPolicy proxyAlways() {
-        return new FetchPolicy(new FetchPolicyConfig(1, 0, 1));
+        return new FetchPolicy(new FetchPolicyConfig(1, 0, 1, false));
     }
 
     private static SegmentServing serving(CountingBinStore store) {

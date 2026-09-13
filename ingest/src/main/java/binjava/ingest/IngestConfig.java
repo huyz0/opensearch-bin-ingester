@@ -60,11 +60,41 @@ import java.util.Objects;
  *     the FAST half of the same asymmetry; the M3 SPEC's own chosen default
  *     is zero (react on the very next flush, protecting latency immediately
  *     once volume rises, with no debounce)
+ * @param directEnabled whether this DEPLOYMENT wants the {@code direct} fetch
+ *     mode; on it, a pod whose backend cannot presign refuses to START
+ *     rather than failing the first consumer that asks for a grant
  */
 public record IngestConfig(Duration intervalFloor, long maxSegmentBytes, String trustDomain,
         long maxQueuedPushBytes, Duration intervalCeiling, double fillRatioLowThreshold,
         double fillRatioHighThreshold, Duration intervalLengthenDelay,
-        Duration intervalShortenDelay) {
+        Duration intervalShortenDelay, boolean directEnabled) {
+
+    /**
+     * Every field but {@code directEnabled}, which defaults to OFF.
+     *
+     * <p>⚠️ OFF IS THE ONLY SAFE DEFAULT, because on it a pod refuses to start
+     * against a backend that cannot presign -- which is both shipping backends.
+     * ⚠️ AND NOTHING IN {@code src/main} CAN SET IT TRUE TODAY: the only
+     * production construction is {@link #defaults(String)}, and there is no
+     * settings or environment layer to carry an operator's answer. So the flag
+     * is reachable from tests and from a caller assembling an
+     * {@code IngestConfig} by hand, and the sentence "a deployment asks for
+     * {@code direct} explicitly" -- which an earlier draft of this one made --
+     * describes an intent rather than a path that exists.
+     *
+     * <p>⚠️ AND IT EXISTS SO THE FLAG COST NO CALL SITES. A record may declare
+     * constructors beside its canonical one, so the twenty existing
+     * {@code new IngestConfig(...)} sites keep compiling unchanged rather than
+     * being swept for a value every one of them would have written the same.
+     */
+    public IngestConfig(Duration intervalFloor, long maxSegmentBytes, String trustDomain,
+            long maxQueuedPushBytes, Duration intervalCeiling, double fillRatioLowThreshold,
+            double fillRatioHighThreshold, Duration intervalLengthenDelay,
+            Duration intervalShortenDelay) {
+        this(intervalFloor, maxSegmentBytes, trustDomain, maxQueuedPushBytes, intervalCeiling,
+                fillRatioLowThreshold, fillRatioHighThreshold, intervalLengthenDelay,
+                intervalShortenDelay, false);
+    }
 
     /** M1's fixed operating point, now the floor of the adaptive range (M3). */
     public static final Duration DEFAULT_INTERVAL_FLOOR = Duration.ofMillis(250);

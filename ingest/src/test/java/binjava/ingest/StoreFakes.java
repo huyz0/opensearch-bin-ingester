@@ -241,6 +241,93 @@ final class StoreFakes {
     }
 
     /**
+     * A backend that CAN presign, which neither shipping one can.
+     *
+     * <p>⚠️ WITHOUT IT, HALF OF M5.43's WIRING IS UNREACHABLE. A pod with
+     * {@code directEnabled} refuses to start against a store that cannot sign,
+     * so every test constructing a pod had to leave the flag off -- and
+     * review measured the consequence: dropping {@code config.directEnabled()}
+     * from the policy `DefaultIngest` builds survived, because the enabled arm
+     * was never executed. When a real signer lands, an operator enabling
+     * {@code direct} would have got a pod that starts and answers
+     * {@code PROXY} forever, with every test green.
+     */
+    static final class CanPresign implements BinStore {
+        private final BinStore delegate = new MemoryBinStore();
+
+        /**
+         * ⚠️ HONOURS ITS {@code ttl}, and the fixed expiry it used to return was
+         * a trap for M5.45b. That row must assert ADR-0010's 60 s clamp, and
+         * this is the only signing fake in {@code ingest} -- so a
+         * {@code GrantIssuer} that DROPPED the clamp and passed {@code ttl}
+         * straight through would still have read as clamped against a stand-in
+         * whose expiry never moved.
+         *
+         * <p>⚠️ AND THAT NARROWS THE TRAP WITHOUT CLOSING IT, which review
+         * measured. {@code Instant.EPOCH} is 1970, so this expiry is always in
+         * the PAST: a clamp assertion phrased against the wall clock --
+         * {@code expiresAt().isBefore(Instant.now().plusSeconds(60))} -- passes
+         * under the clamped issuer AND the unclamped one. Assert relative to
+         * {@code Instant.EPOCH} instead: {@code Duration.between(EPOCH,
+         * url.expiresAt())} at most ADR-0010's 60 s is what kills
+         * {@code ttl = requested}.
+         *
+         * <p>⚠️ NOTHING CALLS THIS YET, so the {@code ttl} it honours is
+         * unconstrained too -- replacing this body with a throw leaves the
+         * suite green. M5.45b is the first caller and the row that closes both.
+         */
+        @Override public binjava.binstore.SignedUrl presign(String key, java.time.Duration ttl) {
+            return new binjava.binstore.SignedUrl(
+                    "https://store.example/" + key,
+                    java.time.Instant.EPOCH.plus(ttl));
+        }
+
+        @Override public Capabilities capabilities() {
+            Capabilities real = delegate.capabilities();
+            return new Capabilities(real.conditionalWrites(), real.batchDelete(), true,
+                    real.maxKeyBytes(), real.minPartSize(), real.costs());
+        }
+
+        @Override public InputStream get(String k) throws IOException { return delegate.get(k); }
+
+        @Override public InputStream getRange(String k, long s, long e) throws IOException {
+            return delegate.getRange(k, s, e);
+        }
+
+        @Override public Optional<Version> putIfAbsent(String k, Body b) throws IOException {
+            return delegate.putIfAbsent(k, b);
+        }
+
+        @Override public Optional<Version> putIfMatch(String k, Body b, Version v)
+                throws IOException {
+            return delegate.putIfMatch(k, b, v);
+        }
+
+        @Override public Version put(String k, Body b) throws IOException {
+            return delegate.put(k, b);
+        }
+
+        @Override public Optional<ObjectStat> stat(String k) throws IOException {
+            return delegate.stat(k);
+        }
+
+        @Override public MultipartWriter multipart(String k) throws IOException {
+            return delegate.multipart(k);
+        }
+
+        @Override public ListPage list(String prefix, String startAfter, int maxKeys)
+                throws IOException {
+            return delegate.list(prefix, startAfter, maxKeys);
+        }
+
+        @Override public void delete(List<String> keys) throws IOException {
+            delegate.delete(keys);
+        }
+
+        @Override public void close() throws IOException { delegate.close(); }
+    }
+
+    /**
      * A store whose read hands over a PREFIX and then throws.
      *
      * <p>⚠️ THE ONLY WAY TO SEE "A PREFIX IS NEVER CACHED". A store that fails

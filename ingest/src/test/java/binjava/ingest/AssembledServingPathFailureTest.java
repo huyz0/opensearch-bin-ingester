@@ -129,7 +129,7 @@ class AssembledServingPathFailureTest {
         }
 
         hub.publish(oneRun("seg-chunked", key, 3, 10), null, null,
-                new SegmentServing(new FetchPolicy(new FetchPolicyConfig(1, 0, 1)),
+                new SegmentServing(new FetchPolicy(new FetchPolicyConfig(1, 0, 1, false)),
                         store.capabilities(), new SegmentProxy(store, 7000)));
         for (AutoCloseable h : handles) {
             h.close();
@@ -347,7 +347,7 @@ class AssembledServingPathFailureTest {
         }
 
         hub.publish(oneRun("seg-order", key, 3, 10), "seg-order", segment,
-                new SegmentServing(new FetchPolicy(new FetchPolicyConfig(1, 0, 1)),
+                new SegmentServing(new FetchPolicy(new FetchPolicyConfig(1, 0, 1, false)),
                         store.capabilities(), new SegmentProxy(store, 7000)));
         for (AutoCloseable h : handles) {
             h.close();
@@ -470,7 +470,7 @@ class AssembledServingPathFailureTest {
         }
 
         hub.publish(oneRun("seg-held", key, 3, 10), "seg-held", segment,
-                new SegmentServing(new FetchPolicy(new FetchPolicyConfig(1, 0, 1)),
+                new SegmentServing(new FetchPolicy(new FetchPolicyConfig(1, 0, 1, false)),
                         store.capabilities(), new SegmentProxy(store, 7000)));
         for (AutoCloseable h : handles) {
             h.close();

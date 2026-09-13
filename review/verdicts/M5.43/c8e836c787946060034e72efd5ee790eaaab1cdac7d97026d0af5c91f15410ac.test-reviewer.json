@@ -1,0 +1,24 @@
+{
+  "verdict": "changes-requested",
+  "diff_sha256": "c8e836c787946060034e72efd5ee790eaaab1cdac7d97026d0af5c91f15410ac",
+  "findings": [
+    {
+      "id": "R2-1",
+      "severity": "major",
+      "file": "ingest/src/test/java/binjava/ingest/DirectEnablementTest.java:98",
+      "summary": "SURVIVING MUTATION, MEASURED: DefaultIngest hardcoding `true` into the policy it builds leaves :ingest:test fully green. The round-1 finding was fixed in the OFF->ON direction only; the ON->always-ON half of the same line is still unpinned.",
+      "detail": "Round 1 blocked on `defaultsFor(costs, config.directEnabled())` -> `defaultsFor(costs, false)`. That mutant is now dead (killed by anENABLEDPodsPolicyReallyAnswersDIRECT, MEASURED in a clean worktree at this hash). Its mirror is not: `defaultsFor(storeCapabilities.costs(), config.directEnabled())` -> `defaultsFor(storeCapabilities.costs(), true)` at DefaultIngest.java:228 gives BUILD SUCCESSFUL on the whole :ingest:test suite. Nothing asserts what a DISABLED pod's policy answers, because every existing disabled-pod case runs against a store that cannot presign, where `capabilities.presignedUrls() && ...` in modeFor short-circuits DIRECT away before the flag is ever read -- so the disabled arm of the wiring is executed but never constrained. StoreFakes.CanPresign, which this commit adds precisely to escape that, is used by the enabled case only. The gap is the one the row exists to close, stated in DefaultIngest's own comment ('a deployment says whether it does direct AT ALL'): under the mutant a deployment that never opted in gets DIRECT on a signing backend, and since M5.45b will construct GrantIssuer under the same `config.directEnabled()` guard, the policy would elect a mode with no issuer built. The fix is four lines in the file this commit already adds, and I verified it: a case building `pod(withDirect(false), new CountingBinStore(new StoreFakes.CanPresign()), hub)` and asserting `ingest.serving().policy().modeFor(new SegmentDelivery(4L << 20, false, 1, false), store.capabilities())` is PROXY passes unmutated and FAILS under the mutant (MEASURED, both runs).",
+      "failure_scenario": "MEASURED in a throwaway worktree at diff sha c8e836c7, no compile errors in the build log: change DefaultIngest.java:228 from `FetchPolicyConfig.defaultsFor(storeCapabilities.costs(), config.directEnabled())` to `FetchPolicyConfig.defaultsFor(storeCapabilities.costs(), true)` -> `./gradlew :ingest:test` rc=0, whole suite green. The escaping defect: on M9's signing backend, a pod whose IngestConfig.directEnabled is false builds a policy that answers DIRECT for any cold fan-out-1 delivery -- the opt-in is decorative, the startup refusal was skipped, and M5.45b's GrantIssuer (built under the same flag) would not exist for the mode the policy just elected."
+    },
+    {
+      "id": "R2-2",
+      "severity": "minor",
+      "file": "ingest/src/test/java/binjava/ingest/StoreFakes.java:258",
+      "summary": "CanPresign.presign ignores its `ttl` and returns a fixed already-past expiry (Instant.EPOCH.plusSeconds(3600)). It is sound for THIS commit -- nothing calls it -- but it is the only signing fake in `ingest`, and M5.45b must assert ADR-0010's <=60 s clamp through one.",
+      "detail": "Soundness for this diff checked and confirmed: `grep -rn CanPresign` finds exactly one use (DirectEnablementTest:99), the class is new, and its only behaviour any test reads is `capabilities().presignedUrls()==true` -- which the case asserts explicitly before relying on it. Nothing else in the tree behaves differently. The residue is forward-looking: `presign` returns an expiry unrelated to the requested ttl, so a later case wiring GrantIssuer through this fake and asserting 'the grant expires within 60 s' would be asserting the fixture's constant rather than the clamp, and would pass whatever ttl the production code passed down. Cheap to remove the trap now: `return new SignedUrl(\"https://store.example/\" + key, Instant.EPOCH.plus(ttl))` makes the fake echo its argument, so a clamp assertion becomes falsifiable the day it is written. Recording rather than requesting under review.md rule 11 -- it constrains nothing today and blocks nothing.",
+      "failure_scenario": "Surviving mutation on the fixture itself: replace CanPresign.presign's body with `return new SignedUrl(\"https://x\", java.time.Instant.EPOCH);` -> suite green, because presign has no caller. The cost lands later: M5.45b asserting GrantIssuer clamps a grant to <=60 s through this fake reads a hardcoded 3600 s expiry that no production code chose, so a GrantIssuer that dropped the clamp entirely and passed `ttl` straight through would still be reported as clamped."
+    }
+  ],
+  "task": "M5.43",
+  "role": "test-reviewer"
+}

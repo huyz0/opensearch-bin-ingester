@@ -38,6 +38,8 @@ import binjava.binstore.CostTable;
  *     {@code min(inlineCapBytes, crossAzCrossoverBytes)}, because the cap
  *     bounds both paths. Below this, shipping the bytes costs less than the
  *     GET it saves (cost model R12); above it the GET is cheaper.
+ * @param directEnabled whether this DEPLOYMENT wants {@code direct} at all; when
+ *     false the policy never answers {@code DIRECT}, whatever the dial says
  * @param directFanOutThreshold at or below this many consumers, a segment too
  *     large to inline is served by {@code DIRECT} rather than {@code PROXY}.
  *     ⚠️ CONFIGURATION, NOT A CONSTANT: the fan-out at which `direct` wins is
@@ -45,7 +47,7 @@ import binjava.binstore.CostTable;
  *     way M4 shipped the lease TTL. Defaults to 1 -- catch-up replay
  */
 public record FetchPolicyConfig(long inlineCapBytes, long crossAzCrossoverBytes,
-        int directFanOutThreshold) {
+        int directFanOutThreshold, boolean directEnabled) {
 
     /** Research doc 04's default: intra-AZ is free, so the cap is generous. */
     public static final long DEFAULT_INLINE_CAP_BYTES = 256L * 1024L;
@@ -100,6 +102,22 @@ public record FetchPolicyConfig(long inlineCapBytes, long crossAzCrossoverBytes,
      */
     public static FetchPolicyConfig derivedFrom(CostTable costs, long crossAzMicroDollarsPerGb,
             long inlineCapBytes, int directFanOutThreshold) {
+        return derivedFrom(costs, crossAzMicroDollarsPerGb, inlineCapBytes,
+                directFanOutThreshold, false);
+    }
+
+    /**
+     * @param directEnabled whether this DEPLOYMENT wants {@code direct} at all
+     *
+     * <p>⚠️ THE FOUR-ARGUMENT FORM DEFAULTS IT OFF, AND SAYING SO IS THE POINT.
+     * Review measured that overload silently pinning the flag: a caller asking
+     * for a fan-out threshold got a config that could never answer
+     * {@code DIRECT}, which is a second silent off switch inside the record
+     * whose first one M5.43 exists to remove. It is still the default, because
+     * OFF is the only safe one, but it is now written down and reachable.
+     */
+    public static FetchPolicyConfig derivedFrom(CostTable costs, long crossAzMicroDollarsPerGb,
+            long inlineCapBytes, int directFanOutThreshold, boolean directEnabled) {
         if (crossAzMicroDollarsPerGb <= 0) {
             throw new IllegalArgumentException(
                     "cross-AZ transfer at " + crossAzMicroDollarsPerGb + " micro-dollars/GB would "
@@ -111,12 +129,20 @@ public record FetchPolicyConfig(long inlineCapBytes, long crossAzCrossoverBytes,
         // message blaming the crossover rather than the price that produced it.
         long crossover = Math.multiplyExact(costs.getPerThousand(), 1_000_000L)
                 / crossAzMicroDollarsPerGb;
-        return new FetchPolicyConfig(inlineCapBytes, crossover, directFanOutThreshold);
+        return new FetchPolicyConfig(inlineCapBytes, crossover, directFanOutThreshold,
+                directEnabled);
     }
 
     /** {@link #derivedFrom} with research doc 04's and cost model R12's defaults. */
     public static FetchPolicyConfig defaultsFor(CostTable costs) {
+        return defaultsFor(costs, false);
+    }
+
+    /**
+     * @param directEnabled whether this DEPLOYMENT wants {@code direct} at all
+     */
+    public static FetchPolicyConfig defaultsFor(CostTable costs, boolean directEnabled) {
         return derivedFrom(costs, DEFAULT_CROSS_AZ_MICRO_DOLLARS_PER_GB,
-                DEFAULT_INLINE_CAP_BYTES, 1);
+                DEFAULT_INLINE_CAP_BYTES, 1, directEnabled);
     }
 }

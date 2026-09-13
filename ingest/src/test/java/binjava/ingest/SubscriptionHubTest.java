@@ -60,7 +60,7 @@ class SubscriptionHubTest {
         hub.publish(delta, delta.segmentKey(), HELD,
                 new SegmentServing(
                         new FetchPolicy(new FetchPolicyConfig(
-                                Long.MAX_VALUE, Long.MAX_VALUE, 1)),
+                                Long.MAX_VALUE, Long.MAX_VALUE, 1, false)),
                         store.capabilities(), new SegmentProxy(store)));
     }
 

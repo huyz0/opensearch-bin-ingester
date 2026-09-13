@@ -175,7 +175,7 @@ public class ShardFanOutIT extends OpenSearchSingleNodeTestCase {
                 new binjava.ingest.SegmentServing(
                         new binjava.ingest.FetchPolicy(
                                 new binjava.ingest.FetchPolicyConfig(
-                                        Long.MAX_VALUE, Long.MAX_VALUE, 1)),
+                                        Long.MAX_VALUE, Long.MAX_VALUE, 1, false)),
                         store.capabilities(), new binjava.ingest.SegmentProxy(store)));
     }
 }

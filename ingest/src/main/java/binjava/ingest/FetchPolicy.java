@@ -108,7 +108,12 @@ public final class FetchPolicy {
      * would rather pay a GET than keep the queue.
      *
      * <p>⚠️ A THRESHOLD OF ZERO TURNS THE FAN-OUT ARM OFF ENTIRELY, which is
-     * the operator's off switch and is what the {@code > 0} guard buys:
+     * what the {@code > 0} guard buys. ⚠️ IT IS NOT THE OPERATOR'S OFF SWITCH,
+     * which this paragraph called it until M5.43: the PRESSURE arm above
+     * returns before the threshold is ever consulted, so zeroing the dial left
+     * {@code direct} reachable the moment the pod shed load.
+     * {@code directEnabled} is the off switch, and it is checked ahead of both
+     * arms. What zeroing the dial turns off is this arm, and only this arm:
      * without it, a threshold of 0 would still match a fan-out of 0 through
      * {@code 0 <= 0}, so setting the dial to "never" would elect {@code DIRECT}
      * for exactly the deliveries nobody is subscribed to. ⚠️ Under a threshold
@@ -119,6 +124,24 @@ public final class FetchPolicy {
      * which review pointed out is the opposite of what the code does.
      */
     private boolean wantsDirect(SegmentDelivery delivery) {
+        // ⚠️ BEFORE THE PRESSURE ARM, AND THAT ORDER IS THE POINT (M5.43). A
+        // deployment says whether it does `direct` AT ALL; everything below is
+        // the policy deciding when, and none of it should run for a deployment
+        // that never asked. Putting this check after the pressure arm -- where
+        // the fan-out dial sits -- is the defect this row exists to fix:
+        // `directFanOutThreshold = 0` reads like an off switch and is not one,
+        // because pressure returns true before the threshold is consulted, so
+        // an operator who zeroed the dial still gets a signed URL the moment
+        // the pod sheds load.
+        //
+        // ⚠️ AND IT IS WHAT GIVES M5.13's STARTUP REFUSAL A CALLER. If this is
+        // false the policy never answers DIRECT, so no `GrantIssuer` is needed
+        // and a pod on a backend that cannot sign starts normally; if it is
+        // true, `DefaultIngest` builds one and the refusal happens at startup
+        // rather than at the first fetch.
+        if (!config.directEnabled()) {
+            return false;
+        }
         if (delivery.servingPodUnderPressure()) {
             return true;
         }

@@ -1,0 +1,39 @@
+{
+  "diff_sha256": "3be1b5a6865ffb9ceab0a3d6148332ef4d75835dcd6d1a55140eac2cf38ae57e",
+  "verdict": "changes-requested",
+  "summary": "The DirectEnablementTest cases and the two new FetchPolicyTest cases are sound -- every mutation of the flag guard and of the DefaultIngest refusal is killed. But one existing case, aThresholdOfZERODisablesDIRECT, stopped constraining anything in this commit: it builds its config through derivedFrom, which now hard-codes directEnabled=false, so the new short-circuit answers before the threshold arm it exists to pin. Measured: deleting `config.directFanOutThreshold() > 0` is green with the change and red at HEAD, killed there by exactly that case. Two further new production lines carry surviving mutants: FetchPolicyConfig's OFF default (both factories) and DefaultIngest's hand-off of the flag to the policy.",
+  "findings": [
+    {
+      "file": "ingest/src/test/java/binjava/ingest/FetchPolicyTest.java:522",
+      "severity": "blocking",
+      "title": "aThresholdOfZERODisablesDIRECT no longer constrains the threshold guard -- an existing assertion weakened by a production default in the same commit",
+      "failure_scenario": "The case builds its config with FetchPolicyConfig.derivedFrom(S3, ..., 0), and derivedFrom now hard-codes directEnabled=false (FetchPolicyConfig.java:114). wantsDirect's new `if (!config.directEnabled()) return false;` answers before the fan-out arm is ever reached, so both assertions return PROXY for a reason that has nothing to do with the dial. MEASURED: with the staged change applied, deleting `&& config.directFanOutThreshold() > 0` from FetchPolicy.wantsDirect (FetchPolicy.java:156) leaves ./gradlew :ingest:test GREEN (0 compile errors, rc=0). The same mutation at HEAD is RED, and the JUnit XML names exactly one killer: FetchPolicyTest.aThresholdOfZERODisablesDIRECT. So the operator's off switch -- threshold 0 -- is now untested: a regression letting fan-out 0 through `0 <= 0` into DIRECT ships unnoticed, which is the very scenario the case's javadoc says it exists to prevent. testing.md rules 4-5. Fix: build that case's config with directEnabled=true (canonical constructor or a derivedFrom overload) so it exercises the arm again."
+    },
+    {
+      "file": "ingest/src/main/java/binjava/ingest/FetchPolicyConfig.java:114",
+      "severity": "major",
+      "title": "Nothing pins that either FetchPolicyConfig factory defaults direct to OFF",
+      "failure_scenario": "MEASURED, two surviving mutants on lines this commit adds: (a) derivedFrom's `new FetchPolicyConfig(inlineCapBytes, crossover, directFanOutThreshold, false)` changed to `true` leaves :ingest:test green; (b) the one-argument `defaultsFor(costs)` changed from `defaultsFor(costs, false)` to `defaultsFor(costs, true)` leaves :ingest:test green. DIRECTIsOFFUnlessAskedFor pins the default only for IngestConfig's nine-argument constructor. So a later edit that flipped either factory's default would silently put every deployment built through them on the direct path -- signed URLs issued for bytes a proxy read would serve, and a pod that should have refused to start instead degrading to PROXY at the first fetch. One assertion each closes it: assertThat(FetchPolicyConfig.defaultsFor(S3).directEnabled()).isFalse() and the same for derivedFrom(...)."
+    },
+    {
+      "file": "ingest/src/main/java/binjava/ingest/DefaultIngest.java:227",
+      "severity": "major",
+      "title": "The flag's hand-off from IngestConfig to FetchPolicyConfig is unpinned",
+      "failure_scenario": "MEASURED: replacing `FetchPolicyConfig.defaultsFor(storeCapabilities.costs(), config.directEnabled())` with a literal `false` leaves :ingest:test green (rc=0, no compile error). No test can construct an enabled pod today -- both shipping backends refuse at requirePresignedUrls -- so the half of the wiring that makes directEnabled MEAN anything in the assembled pod is executed only in its false form. Scenario: M9 lands a signing backend, an operator sets directEnabled=true, the pod starts (the refusal passes), and its policy still answers PROXY forever because the flag never reached FetchPolicyConfig; every test stays green and the task's headline claim is unverified. It needs a presign-capable BinStore stand-in visible from ingest test scope, asserting the constructed pod's policy answers DIRECT for a cold, large, fan-out-1 delivery."
+    },
+    {
+      "file": "ingest/src/test/java/binjava/ingest/DirectEnablementTest.java:88",
+      "severity": "minor",
+      "title": "DIRECTIsOFFUnlessAskedFor constrains something, but only redundantly",
+      "failure_scenario": "It does kill the requested mutation -- IngestConfig's nine-argument delegating constructor passing `true` instead of `false` fails it -- so it is not a restatement. But that mutation also fails dozens of unrelated cases (AssembledServingPathTest, CommitRetryTripleTest, DefaultIngestTest and more, because every pod then refuses to start), so the case adds naming rather than constraint. Recorded, not asked to change: the equivalent assertion for FetchPolicyConfig, which finding 2 shows is the one genuinely missing, is where the same effort buys coverage."
+    }
+  ],
+  "checked": [
+    "Q1: aPodThatWantsDIRECTOnABackendThatCannotSIGNRefusesToSTART passes for the right reason. Capabilities.requirePresignedUrls (binstore-spi/.../Capabilities.java:62) is the only IllegalStateException thrower on the DefaultIngest construction path, its message is 'backend cannot presign (ADR-0041) -- refusing to start with the `direct` fetch mode enabled', and the case additionally asserts presignedUrls()==false first so the fixture cannot rot into vacuity. All three requested DefaultIngest mutations are KILLED: deleting the block -> killed by this case; making it unconditional -> killed by it plus ~50 others; inverting the condition -> killed.",
+    "FetchPolicy.wantsDirect guard: deleting it -> KILLED by FetchPolicyTest.aDeploymentThatDidNotENABLEDirectNeverGetsItEvenUnderPRESSURE; moving it AFTER the pressure arm -> KILLED by the same case. That case is the strongest thing in the diff.",
+    "The 14 added `false` literals: measured inert. Flipping all seven in AssembledServingPathTest, AssembledServingPathFailureTest, SubscriptionHubTest and OneStreamPerConsumerTest to `true` leaves :ingest:test green, because modeFor gates DIRECT on capabilities.presignedUrls() and every one of those sites passes a MemoryBinStore-backed store that answers false. EndToEndTest, SearchableIT and ShardFanOutIT have the identical shape (store.capabilities() from CountingBinStore(MemoryBinStore)) -- reasoned, not run. FetchPolicyTest's aCROSSAZBatchABOVETheInlineCapIsNotINLINED and theCROSSAZPathNeverInlinesASizeTheSAMEAZPathWouldNot pass caps(false) throughout, so their literals are inert too. No DIRECT coverage was removed at those sites.",
+    "policy() flipped to directEnabled=true: strengthens rather than weakens. The four DIRECT-asserting cases (fanOutZEROIsBelowTheDefaultThresholdOfONE, aLargeCOLDBatchAtFanOutONEIsDIRECT, aPodUNDERPRESSUREAnswersDIRECTAtAnyFanOut, theDIRECTFanOutThresholdIsCONFIGURATION) would have inverted to PROXY without it, and DIRECTIsNeverChosenWhenTheBackendCannotPRESIGN keeps its meaning."
+  ],
+  "task": "M5.43",
+  "role": "test-reviewer"
+}

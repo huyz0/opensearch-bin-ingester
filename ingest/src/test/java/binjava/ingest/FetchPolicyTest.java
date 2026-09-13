@@ -23,12 +23,103 @@ class FetchPolicyTest {
     /** S3's real prices: $0.0004 per 1,000 GETs, in micro-dollars. */
     private static final CostTable S3 = new CostTable(5_000L, 400L, 5_000L);
 
+    /**
+     * Both factories default the deployment flag OFF.
+     *
+     * <p>⚠️ REVIEW MEASURED EITHER DEFAULT FLIPPED TO {@code true} SURVIVING.
+     * {@code DIRECTIsOFFUnlessAskedFor} pins {@code IngestConfig}'s default and
+     * nothing pinned these, so a config built through the convenience factories
+     * could have started answering {@code DIRECT} on a signing backend with no
+     * deployment having asked for it -- which is the failure the whole row
+     * exists to make impossible.
+     */
+    @Test
+    void BOTHFactoriesDefaultTheDeploymentFlagOFF() {
+        assertThat(FetchPolicyConfig.defaultsFor(S3).directEnabled())
+                .as("the one-argument form is OFF")
+                .isFalse();
+        assertThat(FetchPolicyConfig.derivedFrom(
+                S3, FetchPolicyConfig.DEFAULT_CROSS_AZ_MICRO_DOLLARS_PER_GB,
+                FetchPolicyConfig.DEFAULT_INLINE_CAP_BYTES, 1).directEnabled())
+                .as("and so is the four-argument one, which no case pinned before")
+                .isFalse();
+        assertThat(FetchPolicyConfig.defaultsFor(S3, true).directEnabled())
+                .as("and asking for it gets it, or OFF would be the only answer")
+                .isTrue();
+    }
+
+    /**
+     * A deployment that has not enabled {@code direct} never gets it.
+     *
+     * <p>⚠️ AND THE PRESSURE ARM IS WHY THIS IS A FLAG RATHER THAN THE DIAL.
+     * {@code directFanOutThreshold = 0} reads like the off switch and is not
+     * one: {@code wantsDirect} returns TRUE for
+     * {@code servingPodUnderPressure} before it ever looks at the threshold,
+     * so an operator who zeroed the dial to disable the mode still gets a
+     * signed URL the moment the pod sheds load. Latent only because neither
+     * shipping backend presigns -- the first real signer makes it live.
+     *
+     * <p>⚠️ THIS IS WHAT GIVES M5.13's STARTUP REFUSAL A MEANING. If the
+     * deployment has not asked for {@code direct}, the policy never chooses it
+     * and no {@code GrantIssuer} is needed; if it has, the pod refuses to start
+     * against a backend that cannot sign, rather than discovering it at the
+     * first fetch.
+     */
+    @Test
+    void aDeploymentThatDidNotENABLEDirectNeverGetsItEvenUnderPRESSURE() {
+        FetchPolicy off = new FetchPolicy(
+                new FetchPolicyConfig(1L, 1L, 1, false));
+        FetchPolicy on = new FetchPolicy(
+                new FetchPolicyConfig(1L, 1L, 1, true));
+        SegmentDelivery underPressure = new SegmentDelivery(1L << 20, false, 1, true);
+
+        assertThat(off.modeFor(underPressure, caps(true)))
+                .as("not enabled, so not chosen -- however hard this pod is being pushed")
+                .isEqualTo(FetchMode.PROXY);
+        assertThat(on.modeFor(underPressure, caps(true)))
+                .as("and enabled, it IS chosen, or the flag would be an off switch only")
+                .isEqualTo(FetchMode.DIRECT);
+    }
+
+    /**
+     * The fan-out dial still decides, once the deployment has enabled the mode.
+     *
+     * <p>⚠️ TWO SETTINGS, NOT ONE RENAMED: {@code directEnabled} is the
+     * deployment's answer to "do we do this at all", and
+     * {@code directFanOutThreshold} is the policy's answer to "for how small a
+     * fan-out". Collapsing them would make zeroing the dial refuse startup on a
+     * backend that cannot sign, which is the opposite of what zeroing it means.
+     */
+    @Test
+    void theFANOUTDialStillDecidesOnceTheDeploymentHasEnabledTheMode() {
+        FetchPolicy on = new FetchPolicy(new FetchPolicyConfig(1L, 1L, 2, true));
+
+        assertThat(on.modeFor(new SegmentDelivery(1L << 20, false, 2, false), caps(true)))
+                .as("at the threshold, direct")
+                .isEqualTo(FetchMode.DIRECT);
+        assertThat(on.modeFor(new SegmentDelivery(1L << 20, false, 3, false), caps(true)))
+                .as("above it, proxy -- enabling the mode does not disable the dial")
+                .isEqualTo(FetchMode.PROXY);
+    }
+
     private static Capabilities caps(boolean presign) {
         return new Capabilities(true, true, presign, 1024L, 5L * 1024 * 1024, S3);
     }
 
+    /**
+     * A deployment that HAS enabled {@code direct}, which is what these cases
+     * are about.
+     *
+     * <p>⚠️ M5.43 ADDED THE FLAG AND THIS HELPER HAD TO SAY WHICH SIDE IT IS
+     * ON. Every case here asks what the POLICY chooses among the three modes;
+     * the flag is the deployment's prior question of whether {@code direct} is
+     * on the menu at all. Defaulting the helper to disabled would make four
+     * cases that assert DIRECT pass for the wrong reason -- by never reaching
+     * the arm they exist to cover -- so it is enabled here and the disabled
+     * side is covered by its own case.
+     */
     private static FetchPolicy policy() {
-        return new FetchPolicy(FetchPolicyConfig.defaultsFor(S3));
+        return new FetchPolicy(FetchPolicyConfig.defaultsFor(S3, true));
     }
 
     private static SegmentDelivery sameAz(long bytes, int fanOut) {
@@ -149,12 +240,12 @@ class FetchPolicyTest {
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("not a batch");
         assertThatThrownBy(() -> new SegmentDelivery(1L, true, -1, false))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("not a fan-out");
-        assertThatThrownBy(() -> new FetchPolicyConfig(0L, 1L, 1))
+        assertThatThrownBy(() -> new FetchPolicyConfig(0L, 1L, 1, false))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("inlines nothing ever");
-        assertThatThrownBy(() -> new FetchPolicyConfig(1L, -1L, 1))
+        assertThatThrownBy(() -> new FetchPolicyConfig(1L, -1L, 1, false))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("not a size");
-        assertThatThrownBy(() -> new FetchPolicyConfig(1L, 1L, -1))
+        assertThatThrownBy(() -> new FetchPolicyConfig(1L, 1L, -1, false))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("names no fan-out");
         assertThatThrownBy(() -> new FetchPolicy(null))
                 .isInstanceOf(NullPointerException.class).hasMessageContaining("config");
@@ -433,9 +524,11 @@ class FetchPolicyTest {
      */
     @Test
     void theDIRECTFanOutThresholdIsCONFIGURATION() {
-        FetchPolicyConfig wide = FetchPolicyConfig.derivedFrom(
+        FetchPolicyConfig derived = FetchPolicyConfig.derivedFrom(
                 S3, FetchPolicyConfig.DEFAULT_CROSS_AZ_MICRO_DOLLARS_PER_GB,
                 FetchPolicyConfig.DEFAULT_INLINE_CAP_BYTES, 8);
+        FetchPolicyConfig wide = new FetchPolicyConfig(derived.inlineCapBytes(),
+                derived.crossAzCrossoverBytes(), derived.directFanOutThreshold(), true);
         assertThat(new FetchPolicy(wide).modeFor(otherAz(4L * 1024 * 1024, 8), caps(true)))
                 .as("fan-out 8 is at the configured threshold, so direct still wins")
                 .isEqualTo(FetchMode.DIRECT);
@@ -453,9 +546,16 @@ class FetchPolicyTest {
      */
     @Test
     void aThresholdOfZERODisablesDIRECT() {
+        // ⚠️ ENABLED, OR THIS CASE STOPS TESTING THE DIAL. M5.43 added
+        // `directEnabled` and this config is built through `derivedFrom`, whose
+        // four-argument form defaults it OFF -- so without `true` here both
+        // assertions below pass because the DEPLOYMENT flag refused, never
+        // reaching the fan-out arm they exist to pin. Review measured exactly
+        // that: deleting `&& config.directFanOutThreshold() > 0` from
+        // `wantsDirect` went green, and this was the only case that killed it.
         FetchPolicyConfig off = FetchPolicyConfig.derivedFrom(
                 S3, FetchPolicyConfig.DEFAULT_CROSS_AZ_MICRO_DOLLARS_PER_GB,
-                FetchPolicyConfig.DEFAULT_INLINE_CAP_BYTES, 0);
+                FetchPolicyConfig.DEFAULT_INLINE_CAP_BYTES, 0, true);
         FetchPolicy p = new FetchPolicy(off);
         assertThat(p.modeFor(otherAz(4L * 1024 * 1024, 0), caps(true))).isEqualTo(FetchMode.PROXY);
         assertThat(p.modeFor(otherAz(4L * 1024 * 1024, 1), caps(true))).isEqualTo(FetchMode.PROXY);
@@ -474,7 +574,7 @@ class FetchPolicyTest {
    */
     @Test
     void aCROSSAZBatchABOVETheInlineCapIsNotINLINED() {
-    FetchPolicy p = new FetchPolicy(new FetchPolicyConfig(256L * 1024L, 400_000L, 8));
+    FetchPolicy p = new FetchPolicy(new FetchPolicyConfig(256L * 1024L, 400_000L, 8, false));
 
     assertThat(p.modeFor(otherAz(300_000L, 1), caps(false)))
             .as("300,000 bytes crossing an AZ is above the 262,144-byte cap, so the cap "
@@ -502,7 +602,7 @@ class FetchPolicyTest {
    */
     @Test
     void theCROSSAZPathNeverInlinesASizeTheSAMEAZPathWouldNot() {
-    FetchPolicy p = new FetchPolicy(new FetchPolicyConfig(256L * 1024L, 400_000L, 8));
+    FetchPolicy p = new FetchPolicy(new FetchPolicyConfig(256L * 1024L, 400_000L, 8, false));
 
     for (long bytes : new long[] {1L, 262_143L, 262_144L, 262_145L, 300_000L, 399_999L,
         400_000L, 400_001L}) {
