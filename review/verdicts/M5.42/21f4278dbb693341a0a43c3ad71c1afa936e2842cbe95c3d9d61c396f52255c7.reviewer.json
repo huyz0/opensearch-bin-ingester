@@ -1,0 +1,28 @@
+{
+  "task": "M5.42",
+  "diff_sha256": "21f4278dbb693341a0a43c3ad71c1afa936e2842cbe95c3d9d61c396f52255c7",
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "severity": "major",
+      "location": "docs/internal/product/backlog.md:83 (M5.37 State cell), :91 (M5.42 State cell)",
+      "summary": "The new 'two distinct State idioms' explanation is itself a false generalisation about the table.",
+      "detail": "Both corrected cells assert 'this table has two distinct State idioms and they mean different things': `blocked -- M5.43` and `todo, owned by M8/M9`. Enumeration of the State column shows this is not the full inventory: `split` is a third distinct idiom used three times (M5.40, M5.45, M5.15), and there are further one-off variants ('todo, cause unknown; symptom contained' at M0.104, 'done (unwired \u2014 see M0.39)' at M0.13).",
+      "failure_scenario": "A future reader (or next-task/milestone-review) reads M5.42's or M5.37's cell, takes 'this table has two distinct State idioms' at face value, and a few rows away sees M5.40's or M5.45's State cell reading 'split -- see M5.40a and M5.40b'. They now cannot tell whether `split` is a third idiom the sweep forgot, a bug in the row they're reading, or evidence the whole idiom taxonomy in this cell is unreliable -- exactly the restated-false-generalisation pattern this task's own history (M5.37 round 1's 'currently ZERO presign implementations') was supposed to have taught this table to stop doing. It reopens the same class of defect the round exists to close, and no gate can see it because the State column is rung 7 prose."
+    },
+    {
+      "severity": "minor",
+      "location": "review/overrides.md:605",
+      "summary": "A tracked, committed override entry still asserts M5.42 will use the `blocked` idiom, and this commit does not touch it.",
+      "detail": "The M5.37 override entry (signed by the standing M5 authority) reads: 'Round 3 is that one deferred-table row, plus one sentence recording M5.42's `blocked` idiom as its own commit's work.' That prediction is now false: this diff gives M5.42 `todo, owned by M9`, not `blocked`. Not blocking because review/overrides.md is an append-only audit trail of what was approved at the time, and retroactively editing a signed entry to match a later decision would misrepresent what was actually signed.",
+      "failure_scenario": "A future reader auditing why M5.37 was allowed a third review round opens review/overrides.md, reads that round 3's scope was 'one sentence recording M5.42's blocked idiom', then opens backlog.md and finds M5.42 reads 'todo, owned by M9' -- the override log and the backlog now disagree about what was actually done, and nothing in the tree flags the drift or says which one is authoritative."
+    }
+  ],
+  "checks_confirmed": [
+    "No other backlog.md or roadmap.md prose (outside the two edited cells) predicts or asserts the `blocked` idiom for M5.42; roadmap.md's M9 row only names the reassignment, not the State-column token.",
+    "`binstore-backends` ships exactly two `implements BinStore` classes in src/main (MemoryBinStore, LocalFsBinStore); the only other src/main `implements BinStore` in the whole tree is `CountingBinStore` in binstore-spi, a forwarding decorator -- matching the corrected cell's claim exactly.",
+    "M0.111 resolves to a real backlog row (docs/internal/product/backlog.md:80) and does describe a State-column check (`check-backlog-state.sh`, verifying landed-work rows read `done`), so the pointer is not dangling.",
+    "Editing M5.37's previously-committed row in this commit rather than a separate one matches round 1's own instruction ('the fix belonged in M5.37's stale sentence') and the established convention elsewhere in this table of repointing stale cross-references in the commit that discovers them."
+  ],
+  "role": "reviewer"
+}

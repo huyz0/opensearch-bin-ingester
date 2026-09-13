@@ -1,0 +1,23 @@
+{
+  "verdict": "changes-requested",
+  "findings": [
+    {
+      "file": "docs/internal/product/backlog.md",
+      "line": 51,
+      "severity": "major",
+      "claim": "M5.37's row (already committed, line 51) explicitly commits to a specific outcome for this very commit: \"M5.42's State cell keeps the `blocked` idiom rather than plain `todo` -- review's other minor -- and that lands in M5.42's own commit, not folded in here.\" The `blocked` idiom (backtick-quoted, i.e. the literal State-column token) is the one already in use at M5.45b (\"blocked -- M5.43\"), meaning 'still M5's task, waiting on an M5 dependency'. The staged diff instead sets M5.42's State cell to `todo, owned by M9` (line 68), the reassignment idiom used at M5.6e (\"todo, owned by M8\"), meaning 'permanently handed to a different milestone'. These are two different, previously-established, semantically distinct idioms in this same table, and the commit under review does not reconcile the discrepancy with M5.37's explicit prediction, nor amend M5.37's now-stale sentence.",
+      "failure_scenario": "A future reader (or agent running next-task/milestone-review) reads M5.37's row first, is told M5.42 will read `blocked`, then finds M5.42 actually reads `todo, owned by M9` -- an unexplained contradiction in the one document AGENTS.md calls authoritative. This is exactly the 'restated stale prose' pattern this project's own history repeatedly flags (e.g. M5.6e's row lists sites whose assertions became false when a dependency changed, and M0.105 exists solely to correct stale State cells). Note: 'owned by M9' is arguably the semantically *correct* idiom here (M5.42 is permanently reassigned, not blocked-pending-an-M5-task), so the fix may be to correct M5.37's sentence rather than M5.42's -- but as staged, the tree now contains two committed cells that disagree about what M5.42's own State cell says, and nothing in this diff resolves that."
+    }
+  ],
+  "notes": [
+    "Verified accurate: GrantIssuer.grantFor (ingest/src/main/java/binjava/ingest/GrantIssuer.java:191-193) chains the cause via `new IOException(\"could not sign a grant for \" + segmentKey, signingFailed)` and never calls signingFailed.getMessage() or interpolates it -- the cell's claim 3 holds.",
+    "Verified accurate: roadmap.md's M9 row (line 18) names M5.42's security.md rule 4 case explicitly ('the case M5.42 specifies for security.md rule 4, asserting a signing failure's own message carries neither a signed URL nor a credential'), not just the capable-branch work.",
+    "Verified accurate: M5.6e's State cell (backlog.md:98) reads exactly `todo, owned by M8`, so M5.42's `todo, owned by M9` does match that precedent idiom textually (independent of the M5.37 contradiction above).",
+    "Checked but not blocking: 'MemoryBinStore and LocalFsBinStore are the only implementations in the tree' (backlog.md:68) is imprecise on its face -- CountingBinStore (binstore-spi/src/main/java/binjava/binstore/CountingBinStore.java) also `implements BinStore` in src/main, and several test stand-ins (CapableStore, SigningStore) do sign. However this exact unqualified phrasing already exists, previously reviewed and accepted, in M5.37's own committed cell and twice in roadmap.md (M9 row and the deferred-table row), and the immediately following clause ('...so PresignConformance's capable branch runs against a stand-in') shows the sentence already distinguishes stand-ins from 'implementations in the tree' by context. Not a fresh instance of the 'ZERO implementations' defect review caught earlier -- that defect was an execution/behavior claim, not this enumeration claim. Recording as informational only.",
+    "Checked but not blocking: the claim 'the State cell says owned by M9 rather than plain todo ... because ... only the State column [stops next-task picking a row up]' asserts a mechanism that no script or SKILL.md text actually enforces (next-task/SKILL.md defines 'blocked' only via unfinished dependencies or undecided decisions, not via a State-cell annotation). This is a rung-7 hope stated with more confidence than it has, but it exactly mirrors already-accepted phrasing at M5.6e, so it is not a new defect introduced by this commit.",
+    "No accounting problem: neither M5's SPEC.md nor any other M5 backlog row cites M5.42 as a dependency or completion criterion, so reassigning it to M9 does not strand any other M5 row or falsify a completion condition. M5 remains far from done regardless (dozens of other todo rows), so this reassignment does not change M5's completion accounting in a way that needs reconciling."
+  ],
+  "diff_sha256": "2a900a294af6090ac5e773fa776e2548080b2c4bb47b1162c8b2ec22677c3f3f",
+  "task": "M5.42",
+  "role": "reviewer"
+}
