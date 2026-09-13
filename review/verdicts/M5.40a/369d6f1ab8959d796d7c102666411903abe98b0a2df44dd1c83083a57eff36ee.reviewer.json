@@ -1,0 +1,15 @@
+{
+  "diff_sha256": "369d6f1ab8959d796d7c102666411903abe98b0a2df44dd1c83083a57eff36ee",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "M5.40a-r2-1",
+      "file": "ingest/src/main/java/binjava/ingest/SegmentProxy.java",
+      "line": "139-140",
+      "severity": "minor",
+      "failure_scenario": "The paragraph at :130-140 states the exact rule M5.40a implements ('ONE ENTRY PER CONSUMER, not one per subscription: a node subscribed to several runs of the same segment is ONE sink, not several') but its closing sentence still reads 'Nothing enforces that here and no test can see it, because every test in this file measures a single call; M5.40 carries it.' That is now stale on two counts: M5.40 no longer exists as a single open row (split into M5.40a, done, and M5.40b, open), and a test in the tree does see the property this paragraph states -- SubscriptionHub.publishSegment now groups by Subscriber identity and ingest/src/test/java/binjava/ingest/OneStreamPerConsumerTest.java exercises exactly that path end to end (through SegmentServing/SegmentProxy), plus AssembledServingPathTest and the mutation-kill notes in the backlog. A reader picking up M5.40b (the per-node cache across separate publishes) who trusts this comment could believe the one-entry-per-consumer contract is still unenforced anywhere and duplicate work already done in ingest, or could mistake M5.40b's scope for including the caller-grouping half M5.40a already closed. This is the same failure mode round 1 blocked on for SegmentDelivery's javadoc, left unswept in this sibling file. Not blocking: this text does not drive a runtime decision (unlike segmentFanOut feeding modeFor), it only misdescribes test coverage and task ownership."
+    }
+  ],
+  "task": "M5.40a",
+  "role": "reviewer"
+}

@@ -136,8 +136,16 @@ public final class SegmentProxy {
      * same 8 MiB once per {@code RunKey} it hosts -- around 178 of a segment's
      * ~1,600 runs. The GET count stays 1 and every test stays green; what is
      * spent is the pod bandwidth doc 10 §4 prices beside it.
-     * ⚠️ Nothing enforces that here and no test can see it, because every test
-     * in this file measures a single call; M5.40 carries it.
+     * ⚠️ STILL NOTHING ENFORCES IT HERE -- every test in this file measures a
+     * single call -- but it IS enforced one layer up, and a test does see it:
+     * {@code SubscriptionHub.publishSegment} groups by {@code Subscriber}
+     * identity so a consumer is one entry however many runs it holds, and
+     * {@code OneStreamPerConsumerTest} exercises that through
+     * {@code SegmentServing} into this method (M5.40a). ⚠️ WHAT IS STILL OPEN
+     * IS M5.40b, one fetch per node across SEPARATE publishes, and M5.62, the
+     * plugin wiring that makes a node register ONE subscriber instead of one
+     * per run -- until that lands, production still hands this method a node's
+     * runs as separate consumers.
      *
      * <p>⚠️ AN EMPTY LIST STILL READS, and that is a description rather than a
      * recommendation. An earlier draft justified it by claiming the same branch

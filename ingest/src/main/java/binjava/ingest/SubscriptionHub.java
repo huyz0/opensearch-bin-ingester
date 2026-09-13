@@ -10,6 +10,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -134,20 +135,54 @@ public final class SubscriptionHub {
     public interface Subscriber {
 
         /**
-         * Where this subscriber wants this push's segment bytes written.
+         * Where this subscriber wants ONE segment's bytes written, for every
+         * run of it this subscriber holds.
          *
-         * @throws IOException if it cannot take them; it is dropped from THIS
-         *     push and the rest are still served
+         * <p>⚠️ ONE SINK FOR ALL K PUSHES, WHICH IS THE WHOLE OF
+         * M5.40a. A node holding K runs of a segment needs K pushes -- each
+         * carries its own run key, record count and first offset -- while
+         * needing the BYTES once. The earlier contract took a single
+         * {@code Push} and so was opened once per run, handing the same
+         * segment over K times: for an 8 MiB segment of ~1,600 runs a node
+         * holding ~178 of them took ~1.4 GiB to receive 8 MiB.
+         *
+         * <p>⚠️ SO THE FAILURE PATHS MERGE TOO, and that is forced
+         * rather than chosen. One sink means one byte stream, and a stream that
+         * broke part way through has delivered a PREFIX -- no run of it is
+         * complete. A throw therefore fails ALL K of this subscriber's runs,
+         * never some of them, and {@code complete} is called for none.
+         *
+         * @param pushes one per run of this segment that this subscriber
+         *     holds, never empty. ⚠️ ONE PER SUBSCRIPTION, STRICTLY:
+         *     {@link SubscriptionHub#subscribe} does not dedupe, so the same
+         *     subscriber registered twice against one {@link RunKey} sees that
+         *     run twice here -- and through {@link #assembling} its consumer is
+         *     invoked twice with the same key and offset
+         * @throws IOException if it cannot take them; this subscriber is
+         *     dropped from ALL of them and other subscribers are still served
          */
-        SegmentSink open(Push push) throws IOException;
+        SegmentSink open(List<Push> pushes) throws IOException;
 
-        /** Called once the whole segment has been handed to {@code sink}. */
-        default void complete(Push push, SegmentSink sink) throws IOException {
+        /**
+         * Called once the whole segment has been handed to {@code sink}.
+         *
+         * <p>⚠️ ALL OR NONE, for the reason {@link #open} gives: the
+         * sink either took every byte, in which case every run in
+         * {@code pushes} is complete, or it did not and none of them is.
+         */
+        default void complete(List<Push> pushes, SegmentSink sink) throws IOException {
         }
     }
 
     /**
      * A subscriber that assembles the whole segment and hands it over at once.
+     *
+     * <p>⚠️ ONE ARRAY, SHARED BY REFERENCE ACROSS A CONSUMER'S RUNS. A
+     * subscriber holding K runs of a segment is handed K {@link Push} records
+     * whose {@code segment()} is the SAME array -- not K copies. A callback
+     * that decodes in place, or zeroes the buffer it was given, corrupts the
+     * other K-1; {@link SegmentSink}'s contract already says a consumer that
+     * needs to retain bytes copies them itself, and this is where that bites.
      *
      * <p>⚠️ IT PAYS O(SEGMENT) PER SUBSCRIBER ON PURPOSE, and that cost belongs
      * to the subscriber rather than to the serving path: in production this
@@ -160,15 +195,21 @@ public final class SubscriptionHub {
         Objects.requireNonNull(onSegment, "onSegment");
         return new Subscriber() {
             @Override
-            public SegmentSink open(Push push) {
+            public SegmentSink open(List<Push> pushes) {
                 return new AssemblingSink();
             }
 
             @Override
-            public void complete(Push push, SegmentSink sink) {
+            public void complete(List<Push> pushes, SegmentSink sink) {
+                // ⚠️ ONE COPY, HANDED OUT K TIMES. The array is built
+                // once and shared by reference across the K pushes; it is not
+                // copied per run, which is the cost this adapter's javadoc
+                // warns is O(SEGMENT) PER SUBSCRIBER and not per subscription.
                 byte[] whole = ((AssemblingSink) sink).out.toByteArray();
-                onSegment.accept(new Push(push.key(), push.segmentKey(), push.recordCount(),
-                        push.firstOffset(), push.via(), whole));
+                for (Push push : pushes) {
+                    onSegment.accept(new Push(push.key(), push.segmentKey(), push.recordCount(),
+                            push.firstOffset(), push.via(), whole));
+                }
             }
         };
     }
@@ -279,22 +320,73 @@ public final class SubscriptionHub {
         }
     }
 
-    /** One subscriber's share of one segment, paired with the run it is for. */
-    private record Target(Subscription subscription, RunCommit run) {
+    /**
+     * One CONSUMER's share of one segment: every run of it that consumer holds.
+     *
+     * <p>⚠️ ONE PER CONSUMER, NOT ONE PER SUBSCRIPTION, which is
+     * M5.40a. This record used to pair one subscription with one run, so a
+     * consumer holding K runs of a segment appeared K times and was handed the
+     * bytes K times.
+     */
+    private record Target(Subscriber subscriber, List<RunCommit> runs) {
+    }
+
+    /**
+     * A {@link Subscriber} keyed by IDENTITY, so grouping cannot be spoofed.
+     *
+     * <p>⚠️ {@code ==}, NOT {@code equals}. A {@code Subscriber} is
+     * caller-supplied and may implement {@code equals} however it likes; two
+     * subscribers that merely compare equal are still two consumers, and
+     * merging them would hand one of them the other's stream. A plain
+     * {@code HashMap<Subscriber, ...>} would do exactly that.
+     *
+     * <p>⚠️ AND A LINEAR SCAN WOULD BE O(RUNS x CONSUMERS). Comparing
+     * each of a segment's runs against every target already built costs 1,600 x
+     * ~9 at the scale the M5.40a row uses -- not ruinous, and quadratic only if
+     * consumers grew with runs. It is avoided because a hash lookup is simpler
+     * to read than a nested loop, not because the tree is on fire.
+     * ⚠️ {@link java.util.IdentityHashMap} IS THE JDK CONSTRUCT FOR
+     * THIS and is deliberately not used: it does not keep insertion order, and
+     * delivery order is worth having stable.
+     */
+    private record ByIdentity(Subscriber subscriber) {
+        @Override
+        public boolean equals(Object other) {
+            return other instanceof ByIdentity o && o.subscriber == this.subscriber;
+        }
+
+        @Override
+        public int hashCode() {
+            return System.identityHashCode(subscriber);
+        }
     }
 
     private void publishSegment(SegmentCommit committed, byte[] heldBytes,
             SegmentServing serving) {
-        List<Target> targets = new ArrayList<>();
+        // ⚠️ LINKED, so delivery order follows first-subscription order rather
+        // than a hash, which makes a failure reproducible run to run.
+        //
+        // ⚠️ NO TEST DEPENDS ON IT, AND AN EARLIER DRAFT OF THIS COMMENT SAID
+        // ONE DID. Review measured `HashMap` here surviving the whole suite:
+        // the assertions that look like they care use
+        // `containsExactlyInAnyOrder`, and `deliver`'s by-index pairing is
+        // between its OWN parallel lists, which cannot disagree with each
+        // other. So this is a choice about debuggability, not a pinned
+        // property -- said plainly rather than dressed as a constraint.
+        Map<ByIdentity, List<RunCommit>> byConsumer = new LinkedHashMap<>();
         for (RunCommit run : committed.runs()) {
             var list = subscribers.get(run.key());
             if (list == null) {
                 continue;
             }
             for (Subscription s : list) {
-                targets.add(new Target(s, run));
+                byConsumer.computeIfAbsent(new ByIdentity(s.subscriber), k -> new ArrayList<>())
+                        .add(run);
             }
         }
+        List<Target> targets = new ArrayList<>(byConsumer.size());
+        byConsumer.forEach((consumer, runs) ->
+                targets.add(new Target(consumer.subscriber(), runs)));
         // ⚠️ NO READ FOR NOBODY. A segment nobody subscribes to must cost zero
         // requests, which is what makes criterion 8's zero hold at fan-out
         // rather than merely at rest.
@@ -305,6 +397,21 @@ public final class SubscriptionHub {
         FetchMode via = heldBytes == null
                 ? FetchMode.PROXY
                 : serving.policy().modeFor(
+                        // ⚠️ CONSUMERS, NOT SUBSCRIPTIONS, and this number moved
+                        // with M5.40a: `targets` used to hold one entry per
+                        // (subscription, run), so a handful of nodes holding many
+                        // runs each reported a fan-out several times their count.
+                        //
+                        // ⚠️ IT CHANGES NO MODE TODAY, AND AN EARLIER DRAFT OF
+                        // THIS COMMENT CLAIMED OTHERWISE. Review measured it:
+                        // `modeFor` reads `segmentFanOut` only through
+                        // `wantsDirect`, which first needs
+                        // `servingPodUnderPressure || !bytesInServingAz`, and
+                        // this caller passes `true` for the second and `false`
+                        // for the first -- so the INLINE/PROXY choice here turns
+                        // on `batchBytes` alone. The number matters to the
+                        // CONTRACT, which M5.43 and M5.45b will read, not to the
+                        // branch taken from this line.
                         new SegmentDelivery(heldBytes.length, true, targets.size(), false),
                         serving.capabilities());
 
@@ -351,18 +458,24 @@ public final class SubscriptionHub {
      */
     private void deliver(String segmentKey, List<Target> targets, FetchMode via, Source source) {
         List<Tracking> opened = new ArrayList<>();
-        List<Push> pushes = new ArrayList<>();
+        List<List<Push>> pushes = new ArrayList<>();
         List<Target> live = new ArrayList<>();
         for (Target t : targets) {
-            Push push = new Push(t.run().key(), segmentKey, t.run().recordCount(),
-                    t.run().firstOffset(), via, EMPTY);
+            // ⚠️ K PUSHES, ONE OPEN. Each run keeps its own key, record count
+            // and first offset -- a consumer needs all K to know what it just
+            // received -- while the BYTES are handed over once.
+            List<Push> forThisConsumer = new ArrayList<>(t.runs().size());
+            for (RunCommit run : t.runs()) {
+                forThisConsumer.add(new Push(run.key(), segmentKey, run.recordCount(),
+                        run.firstOffset(), via, EMPTY));
+            }
             try {
-                SegmentSink sink = t.subscription().subscriber.open(push);
+                SegmentSink sink = t.subscriber().open(List.copyOf(forThisConsumer));
                 if (sink == null) {
                     continue;
                 }
                 opened.add(new Tracking(sink));
-                pushes.add(push);
+                pushes.add(List.copyOf(forThisConsumer));
                 live.add(t);
             } catch (IOException | RuntimeException slowOrDeadSubscriber) {
                 // ⚠️ Swallowed ON PURPOSE. The commit is already durable; a
@@ -394,7 +507,7 @@ public final class SubscriptionHub {
                 continue;
             }
             try {
-                live.get(i).subscription().subscriber.complete(pushes.get(i), sink.delegate);
+                live.get(i).subscriber().complete(pushes.get(i), sink.delegate);
             } catch (IOException | RuntimeException slowOrDeadSubscriber) {
                 continue;
             }

@@ -116,12 +116,13 @@ class AssembledServingPathFailureTest {
         for (SegmentSink sink : List.of(healthyOne, doomed, healthyTwo)) {
             handles.add(hub.subscribe(key, new SubscriptionHub.Subscriber() {
                 @Override
-                public SegmentSink open(SubscriptionHub.Push push) {
+                public SegmentSink open(java.util.List<SubscriptionHub.Push> pushes) {
                     return sink;
                 }
 
                 @Override
-                public void complete(SubscriptionHub.Push push, SegmentSink sink2) {
+                public void complete(java.util.List<SubscriptionHub.Push> pushes,
+                        SegmentSink sink2) {
                     completed.add(sink2);
                 }
             }));
@@ -233,13 +234,14 @@ class AssembledServingPathFailureTest {
         for (SegmentSink sink : List.of(first, doomed, last)) {
             handles.add(hub.subscribe(key, new SubscriptionHub.Subscriber() {
                 @Override
-                public SegmentSink open(SubscriptionHub.Push push) {
-                    modes.add(push.via());
+                public SegmentSink open(java.util.List<SubscriptionHub.Push> pushes) {
+                    pushes.forEach(push -> modes.add(push.via()));
                     return sink;
                 }
 
                 @Override
-                public void complete(SubscriptionHub.Push push, SegmentSink completedSink) {
+                public void complete(java.util.List<SubscriptionHub.Push> pushes,
+                        SegmentSink completedSink) {
                     completed.add(completedSink);
                 }
             }));
@@ -454,13 +456,14 @@ class AssembledServingPathFailureTest {
         for (SegmentSink sink : List.of(first, doomed, last)) {
             handles.add(hub.subscribe(key, new SubscriptionHub.Subscriber() {
                 @Override
-                public SegmentSink open(SubscriptionHub.Push push) {
-                    modes.add(push.via());
+                public SegmentSink open(java.util.List<SubscriptionHub.Push> pushes) {
+                    pushes.forEach(push -> modes.add(push.via()));
                     return sink;
                 }
 
                 @Override
-                public void complete(SubscriptionHub.Push push, SegmentSink completedSink) {
+                public void complete(java.util.List<SubscriptionHub.Push> pushes,
+                        SegmentSink completedSink) {
                     completed.add(completedSink);
                 }
             }));

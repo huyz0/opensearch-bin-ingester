@@ -91,8 +91,8 @@ class AssembledServingPathTest {
 
         try (var ignored = hub.subscribe(key, new SubscriptionHub.Subscriber() {
             @Override
-            public SegmentSink open(SubscriptionHub.Push push) {
-                modes.add(push.via());
+            public SegmentSink open(java.util.List<SubscriptionHub.Push> pushes) {
+                pushes.forEach(push -> modes.add(push.via()));
                 return sink;
             }
         })) {
@@ -137,8 +137,8 @@ class AssembledServingPathTest {
         for (int i = 0; i < 64; i++) {
             Collecting sink = new Collecting();
             sinks.add(sink);
-            handles.add(hub.subscribe(key, push -> {
-                modes.add(push.via());
+            handles.add(hub.subscribe(key, pushes -> {
+                pushes.forEach(push -> modes.add(push.via()));
                 return sink;
             }));
         }
@@ -224,8 +224,8 @@ class AssembledServingPathTest {
             sinks.add(sink);
             List<SubscriptionHub.Push> mine = new ArrayList<>();
             pushes.add(mine);
-            handles.add(hub.subscribe(key, push -> {
-                mine.add(push);
+            handles.add(hub.subscribe(key, forThisSubscriber -> {
+                mine.addAll(forThisSubscriber);
                 return sink;
             }));
         }
@@ -300,14 +300,18 @@ class AssembledServingPathTest {
                 new SegmentCommit("seg-mine", List.of(new RunCommit(minesKey, 3, 10))),
                 new SegmentCommit("seg-theirs", List.of(new RunCommit(theirsKey, 5, 20)))));
 
-        try (var ignoredA = hub.subscribe(minesKey, push -> {
-                    minesModes.add(push.via());
-                    minesLabels.add(push.segmentKey());
+        try (var ignoredA = hub.subscribe(minesKey, pushes -> {
+                    pushes.forEach(push -> {
+                        minesModes.add(push.via());
+                        minesLabels.add(push.segmentKey());
+                    });
                     return fromMine;
                 });
-                var ignoredB = hub.subscribe(theirsKey, push -> {
-                    theirsModes.add(push.via());
-                    theirsLabels.add(push.segmentKey());
+                var ignoredB = hub.subscribe(theirsKey, pushes -> {
+                    pushes.forEach(push -> {
+                        theirsModes.add(push.via());
+                        theirsLabels.add(push.segmentKey());
+                    });
                     return fromTheirs;
                 })) {
             hub.publish(batched, "seg-mine", mine, serving(store));
@@ -476,8 +480,8 @@ class AssembledServingPathTest {
         Collecting sink = new Collecting();
         List<FetchMode> modes = new ArrayList<>();
 
-        try (var ignored = hub.subscribe(key, push -> {
-            modes.add(push.via());
+        try (var ignored = hub.subscribe(key, pushes -> {
+            pushes.forEach(push -> modes.add(push.via()));
             return sink;
         })) {
             hub.publish(oneRun("seg-held", key, 3, 10), "seg-held", segment,

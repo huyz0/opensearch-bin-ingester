@@ -72,13 +72,22 @@ package binjava.ingest;
  *     lists of every run in the segment before choosing, so the number is
  *     per-SEGMENT as this field requires -- the defect the paragraph above
  *     describes is reaching for one run's list, and that is not what happens.
- *     But a node subscribed to SEVERAL runs of the same segment appears once
- *     per subscription rather than once, so the count runs high for a
- *     multi-shard consumer. It biases toward `proxy` and `direct`, never
- *     toward `inline`, and {@code SegmentProxy}'s javadoc names the same
- *     duplication as bandwidth already spent. M5.40 owns collapsing a node's
- *     subscriptions into one sink; until then this is an over-count, stated
- *     rather than hidden
+ *     ⚠️ AND IT IS NO LONGER AN OVER-COUNT, which M5.40a changed. It used to
+ *     be: a node subscribed to SEVERAL runs of one segment appeared once per
+ *     subscription, so the number ran high for a multi-shard consumer and
+ *     biased toward `proxy` and `direct`, never toward `inline`.
+ *     {@code SubscriptionHub.publishSegment} now groups by {@code Subscriber}
+ *     identity, so the number is BYTE STREAMS LEAVING THE POD -- one per
+ *     consumer of the segment, whatever share of its runs that consumer holds.
+ *     ⚠️ A READER COMPENSATING FOR THE OLD INFLATION WOULD NOW BE WRONG:
+ *     raising {@code directFanOutThreshold} to allow for it, or dividing by
+ *     assumed runs-per-node, elects {@code DIRECT} for fan-outs `proxy` should
+ *     serve -- one consumer-side GET per node where one proxy read served all.
+ *     ⚠️ WHAT REMAINS AN OVER-COUNT IS ONE CASE ONLY: the same
+ *     {@code Subscriber} registered twice against the same {@code RunKey}.
+ *     {@code subscribe} does not dedupe, so that run appears twice in the
+ *     consumer's push list. It does not change this number, which counts
+ *     consumers
  * @param servingPodUnderPressure whether the pod is shedding load, which is
  *     the other condition research doc 04 gives for {@code DIRECT}
  */
