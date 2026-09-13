@@ -102,6 +102,17 @@ The filter is over **indices, not tenants and not shards** — 10,000 ordinals, 
 
 On the hot path **none of them is read**: the ingester pushes exact byte ranges.
 
+> ⚠️ **REVISION 2026-09-14 (ADR-0044): "the ingester pushes exact byte ranges" is still TRUE
+> of the wire and no longer true of what happens with them.** The event does carry
+> `byteStart`/`byteLen` (§5 below), and **no reader in the tree consumes them**. ⚠️ A consumer-side bounded read is TWO expressible requests -- the header range `[0, PREAMBLE + headerLen)`, which is what `SegmentKey`'s `h<headerLen>` is for, then the run's slice -- and what is missing is only a `SegmentReader` entry point taking a directory and a slice separately. What is NOT expressible is `[0, objectLen)`, since nothing the consumer holds carries the object length, and any prefix `SegmentReader.open` would accept, since it checks the FOOTER magic first. The
+> `direct` fetch is a plain whole-object GET, after which the run is found through the segment's own
+> DIRECTORY — which this sentence's "none of them is read" was contrasting against. ADR-0044 keeps
+> the fields at a modelled 5.4% of the subscription stream -- derived once in that record -- because
+> they save one ROUND TRIP on it: the slice GET is issued WITHOUT waiting for the header. ⚠️ They
+> do NOT make that read possible -- `RunEntry` carries the same extent in the DIRECTORY, which such
+> a reader must fetch first anyway for `codecFlags`. **M5.66** owns whether one RTT is worth the
+> price, and so whether the fields stay.
+
 ## 5. How the plugin gets the data
 
 ```

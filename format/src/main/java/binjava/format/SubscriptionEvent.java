@@ -100,6 +100,39 @@ import java.util.Objects;
  * @param inline the bytes when {@code via} is {@code INLINE}, empty otherwise.
  *     ⚠️ EMPTY RATHER THAN NULL, so a decoder never has to distinguish
  *     "absent" from "zero-length" -- the case a nullable field gets wrong
+ * @param grant the signed URL a {@code direct} consumer fetches with, or
+ *     {@code null}. ⚠️ THE CORRESPONDENCE WITH {@code via} IS NOT CHECKED HERE,
+ *     and an earlier draft of this line stated it flatly as though it were:
+ *     the compact constructor refuses a grant without a session epoch and a
+ *     range without a grant, and nothing refuses a grant on an {@code INLINE}
+ *     event. {@code SubscriptionHub.Push} does enforce it one layer up, with a
+ *     case pinning each direction
+ * @param byteStart the run's first byte within the segment, or
+ *     {@link #RANGE_ABSENT}. ⚠️ **NO READER IN THE TREE CONSUMES THIS**, and
+ *     ADR-0044 keeps it anyway with the reason written down: a bounded read is
+ *     TWO expressible requests -- the header range, which is what
+ *     {@code SegmentKey}'s {@code h<headerLen>} is for, then this run's slice
+ *     -- and what is missing is only a {@code SegmentReader} entry point taking
+ *     a directory and a slice separately. ⚠️ A SLICE-ONLY GET would not do,
+ *     because {@code u32 codecFlags} lives per run in the DIRECTORY and DATA
+ *     carries no codec id; fetching the header first is what supplies it.
+ *     ⚠️ THIS FIELD DOES NOT MAKE THAT READ POSSIBLE -- {@code RunEntry}
+ *     carries the same extent in the DIRECTORY, which a bounded reader has
+ *     already fetched. What it buys is ONE ROUND TRIP: the slice GET can be
+ *     issued WITHOUT waiting for the header. The reader that would use it is
+ *     **M5.66**, which also owns whether one RTT is worth the price below. ⚠️ ADR-0043 said these buy
+ *     "coalescing without a directory read", which needs a ranged GET and is
+ *     therefore FALSE -- ADR-0044 replaced that justification rather than
+ *     repairing it, and priced carrying them at **5.4% of the subscription
+ *     stream** -- ADR-0044 derives that number once and this line deliberately
+ *     does not re-derive it, because three review rounds went on copies of it
+ *     disagreeing. ⚠️ It is MODELLED at the 8 MiB / ~1,600-run segment, not
+ *     measured; what is measured is the golden pair, 128 bytes with a range
+ *     against 123 without. ⚠️ NOT to be confused with {@code RunEntry}'s fields of the
+ *     same name, which are the segment DIRECTORY's own coordinates and are read
+ *     on every decode
+ * @param byteLen the run's length in bytes, or {@link #RANGE_ABSENT}. See
+ *     {@code byteStart} -- the two are absent together or present together
  */
 public record SubscriptionEvent(String session, long sequencerEpoch, long sessionEpoch,
         RunKey key, String segmentKey, long firstOffset, int recordCount, FetchMode via,

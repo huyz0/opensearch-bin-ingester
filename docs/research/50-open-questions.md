@@ -45,6 +45,16 @@ push path simple and makes the tier-2 fallback provably correct, because a
 dropped event costs latency and nothing else. Every event carries coordinates
 even when it also carries inline bytes, so a subscriber can always fall back.
 
+> ⚠️ **REVISION 2026-09-14 (ADR-0044): the ANSWER stands, the last sentence's reason does not.**
+> Push is still best-effort and tier-2 fallback is still correct, but it is not the coordinates
+> that make it so — **no reader in the tree consumes the event's `byteStart`/`byteLen`**, and
+> every fallback path is a WHOLE-OBJECT read that finds its run through the segment's own
+> DIRECTORY. ⚠️ A consumer-side bounded read is TWO expressible requests -- the header range `[0, PREAMBLE + headerLen)`, which is what `SegmentKey`'s `h<headerLen>` is for, then the run's slice -- and what is missing is only a `SegmentReader` entry point taking a directory and a slice separately. What is NOT expressible is `[0, objectLen)`, since nothing the consumer holds carries the object length, and any prefix `SegmentReader.open` would accept, since it checks the FOOTER magic first. ⚠️ **THIS MATTERS HERE MORE THAN ELSEWHERE**: this file is the
+> decision log AGENTS.md routes a reader to first, and **M5.66** — the row that decides whether
+> these fields come off the wire — would otherwise open Q8, find a DECIDED question saying the
+> coordinates are what makes fallback work, and close its own second arm on a reason ADR-0044
+> had already killed.
+
 ### Q11 — Format evolution: **readers lag writers by one release**
 Every format carries a version or tag byte. Adding a field to a versioned struct
 is not a contract change; changing the meaning of an existing one is. The policy:

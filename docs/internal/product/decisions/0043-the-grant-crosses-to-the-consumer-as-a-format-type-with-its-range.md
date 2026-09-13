@@ -1,6 +1,22 @@
 # 0043. The grant crosses to the consumer as a format type, with its range
 
-Status: accepted
+Status: accepted — ⚠️ **amended 2026-09-14 by ADR-0044** on decision (b)'s
+  JUSTIFICATION only. The fields stay; what they were said to buy — "coalescing
+  without a directory read" — is dead, because a bounded read must fetch the
+  DIRECTORY first (that is where `codecFlags` lives), so the directory read is
+  not avoided. ⚠️ NOT because a range cannot be named: two can be, and ADR-0044
+  §(b) is headed "NO RANGE IS EXPRESSIBLE" IS TOO STRONG. An earlier version of
+  this header said exactly that, across a line break, which is how a sweep for
+  the literal string missed it. ADR-0044 gives the reason they are kept, prices it at 5.4% of
+  the subscription stream the bytes travel on (0.134% of the segment), and creates M5.66 for the bounded reader that would use them. The
+  reopening under Decision (b) below is CLOSED by that record. ⚠️ security.md
+  rule 3's range half is **NOT closed** — it now has an OWNER, which is a
+  different thing: ADR-0044 Decision (c) is headed "NOT closed" and hands it to
+  M5.66, whose criterion 4 names the rule and the standard. An earlier version
+  of this line said the clause was closed, contradicting the record it cites, in
+  the block an auditor of ADR-0041's deferral reads first. The body below is
+  left standing because it is what was believed when the field shipped, with the
+  two ownership sentences marked in place.
 Date: 2026-09-13
 Requirements: FR-6, NFR-4
 Research: docs/research/30-design-space/04-discovery-and-tailing.md §2c (the event
@@ -112,8 +128,11 @@ said the range is declined in favour of a whole-object GET and cited M5.45g's
 cell, which disclaims the decision and hands it to **M5.45f** — the same row
 Decision (b) above names. So the honest statement is that no range is
 EXPRESSIBLE today, for the reasons under Decision (b), and whether one ever
-becomes fillable is M5.45f's to settle. Either way rule 3's range half has
-**no owner**.
+becomes fillable is M5.45f's to settle. ⚠️ **AND M5.45f HAS SINCE SETTLED IT:
+ADR-0044 Decision (c) gives rule 3's range half to M5.66**, whose criterion 4
+names the rule and the standard. An earlier version of this sentence ended
+"either way rule 3's range half has **no owner**", which was true when written
+and stopped being true in the record that closed this one.
 
 ⚠️ **They are not a duplicate of a per-run fact.** A subscription event is
 already per run — it carries `firstOffset` and `recordCount`, the run's LOGICAL
@@ -207,14 +226,20 @@ are **M5.45g**; one fetch per (node, segment) is **M5.45h**, which depends on
 owns building.
 
 ⚠️ The range half of security.md rule 3 that this record leaves open is NOT
-CARRIED by any of the new rows, and saying it is **DECLINED** would be more than
-this record knows — **M5.45f** owns whether a range ever becomes fillable. What
+CARRIED by M5.45f/g/h, and saying it is **DECLINED** would be more than this
+record knows. ⚠️ **ADR-0044 Decision (c) gives it to M5.66**, which owns
+whether a range ever becomes fillable — the row that either builds a bounded
+read, making a range expressible, or takes the coordinates off the wire, closing
+the clause by declining it with a reason. Its criterion 4 names this rule. What
 is true today is narrower: no range is EXPRESSIBLE, so a whole-object GET is
 scoped to one key and to no range. What M5.45h owns is the COALESCING — one request per (node, segment)
 rather than one per run — which review caught the M5.45b split dropping and
 which would otherwise have had no owner at all. Rule 3's range half stays open,
-and the paragraph under Decision (b) says why. ⚠️ **AND M5.45g's SEAM TAKES NO
-RANGE PARAMETER UNTIL M5.45f SAYS ONE CAN BE FILLED**: an earlier draft of
+and the paragraph under Decision (b) says why. ⚠️ **AND M5.45g's SEAM TAKES NO RANGE PARAMETER.
+M5.45f HAS SINCE ANSWERED, AND THE ANSWER IS "NOT YET"** (ADR-0044; M5.66 owns
+whether one ever becomes fillable): an earlier draft of
 M5.45c's criterion 1 asked for `Grant` plus a byte range, and that same cell
-establishes two paragraphs later that no range is expressible. A parameter no
-caller can fill reads as an implemented capability.
+establishes two paragraphs later that nothing fills it. A parameter no caller
+can fill reads as an implemented capability. ⚠️ ADR-0044 later found the
+stronger form of this claim — "no range is expressible" — to be wrong: two
+ranges are nameable, and what is absent is a reader that issues one.

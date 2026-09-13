@@ -180,6 +180,13 @@ Responsibilities:
 - **Endpoint discovery and AZ affinity** — prefer a same-AZ pod, fail over in-AZ then cross-AZ,
   and **log loudly on cross-AZ** ([az-topology §4](05-az-topology-and-data-flow.md)).
 - **Read coalescing** — merge adjacent ranges before requesting, in every mode.
+  > ⚠️ **REVISION 2026-09-14 (ADR-0044): the COALESCING stands, the RANGES do not.** A consumer
+  > cannot merge into one RANGED GET today. ⚠️ A consumer-side bounded read is TWO expressible requests -- the header range `[0, PREAMBLE + headerLen)`, which is what `SegmentKey`'s `h<headerLen>` is for, then the run's slice -- and what is missing is only a `SegmentReader` entry point taking a directory and a slice separately. What is NOT expressible is `[0, objectLen)`, since nothing the consumer holds carries the object length, and any prefix `SegmentReader.open` would accept, since it checks the FOOTER magic first. So the merge
+  > is of a node's many deliveries for one segment into ONE WHOLE-OBJECT GET, not of adjacent
+  > ranges into one ranged GET. That coalescing is **M5.45h**, and it is load-bearing: without it
+  > a node issues one GET per run, which is runs-per-node and forbidden by name. A reader who
+  > implements this line as written gets a throw on every `direct` delivery. **M5.66** owns making
+  > ranges expressible, or removing the coordinates.
 - **Frame decode + decompression** — one implementation of the segment format
   ([object-layout](01-object-layout-and-format.md)).
 - **A small node-local cache** — sized for retries and `forcedShardPointer` re-reads
@@ -203,6 +210,22 @@ fetch from.
 
 Because every event carries coordinates regardless of mode, **every mode can degrade to every other
 mode**. That is the property that makes shipping all three safe.
+
+> ⚠️ **REVISION 2026-09-14 (ADR-0044): the conclusion holds, the reason given for it does not.**
+> Every degradation path in the table above is a **whole-object** read. "Ignore it and fetch by
+> coordinates" is served by the segment's own DIRECTORY — `SegmentReader` finds a run from its
+> `RunKey` — and tier 2+ break-glass is "whole-object, no cleverness" in this section's own words.
+> The subscription event's `byteStart`/`byteLen` are used by **no reader in the tree**. All three
+> modes are still safe to ship, and the directory is what makes them so. ⚠️ **AND A BOUNDED READ
+> IS CONSTRUCTIBLE, WHICH AN EARLIER VERSION OF THIS BANNER DENIED** — it said a ranged read is
+> "not currently expressible at all", 36 lines below the §7 banner in the same commit saying the
+> opposite. It is TWO expressible requests: the header range `[0, PREAMBLE + headerLen)`, named
+> from `SegmentKey.headerLenOf` + `SegmentFormat.PREAMBLE_BYTES`, then the run's slice. The codec
+> objection — `codecFlags` per run in the directory, no codec id in DATA — rules out the
+> SLICE-ONLY form, and dissolves once the header is fetched. What is missing is one
+> `SegmentReader` entry point taking a directory and a slice separately, because `open` checks the
+> footer magic before the directory. That is **M5.66**, and it is a new method rather than a wire
+> change.
 
 ## 9. Open questions
 

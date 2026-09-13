@@ -58,6 +58,16 @@ Properties that matter:
   whose agents proxy fetches ([warpstream.md](../10-prior-art/01-warpstream.md) §6).
 - **Coalescable.** Events for many partitions from one segment arrive together, so the plugin's
   `FetchCoalescer` can turn them into **one** ranged GET (rule R4).
+  > ⚠️ **REVISION 2026-09-14 (ADR-0044): the COALESCING is load-bearing and still right; the
+  > RANGED GET and the bullet above it are not what happens.** No reader in the tree consumes the
+  > event's `byteStart`/`byteLen`, so the plugin does **not** fetch
+  > `segment[byteStart, byteStart+byteLen)`: `ConsumerClient` opens the whole array and
+  > `SegmentReader` finds the run through the segment's own DIRECTORY. The merge is of a node's
+  > many deliveries for one segment into ONE WHOLE-OBJECT GET — **M5.45h**, and without it a node
+  > issues one GET per run, which is runs-per-node and forbidden by name. ⚠️ A bounded read is
+  > constructible as TWO requests (the header range `h<headerLen>` names, then the slice) and
+  > needs only a `SegmentReader` entry point that takes a directory and a slice separately; that
+  > is **M5.66**, which also owns whether the coordinates stay on the wire at all.
 - **`tail` events keep `getPointerBasedLag()` and `latestPointer()` free** — they are called every
   10 s per shard and must never touch the store
   ([poller-semantics](../20-opensearch/02-poller-semantics-and-cost.md) §5).
@@ -219,6 +229,27 @@ event.
 > GETs against one object — a rate scaling with shards-per-node. The grant stays scoped to the KEY;
 > the coordinates let a node union its runs into one ranged GET without reading the directory, which
 > is what "one grant per (node, segment)" needs. security.md rule 3's range half is still open.
+>
+> ⚠️ **REVISION 2026-09-14 (ADR-0044): THREE CLAIMS IN THE PARAGRAPH ABOVE ARE RETIRED, AND ONE
+> OF THEM WILL BREAK A READER THAT ACTS ON IT.** (1) `[0, max(byteStart+byteLen))` is NOT a usable
+> span: `SegmentReader.open` checks the FOOTER magic before it reads the directory, so a prefix
+> ending at the last wanted run throws `"segment is truncated: no footer magic"` on every delivery,
+> and `h<headerLen>` gives the HEADER's extent rather than the object's, so `[0, objectLen)` is not
+> expressible either. ADR-0043:74-77 already corrected this and the correction did not reach here.
+> (2) "a reader given coordinates can issue ONE request where one without them reads the directory
+> and then the payload" — the request is a plain WHOLE-OBJECT GET with no range, which is one
+> request either way, and `SegmentReader` reads the directory regardless. (3) "the coordinates let a
+> node union its runs into one ranged GET without reading the directory" — the union is the whole
+> object, and the part that is truly impossible is the "WITHOUT READING THE DIRECTORY" half: a
+> bounded read must fetch the directory FIRST, which is where the per-run `codecFlags` lives. ⚠️ **WHAT SURVIVES**: the fields are still on the
+> wire, the grant is still scoped to the KEY and not the range, and the per-(node, segment) framing
+> is still right. ADR-0044 keeps the coordinates at a modelled 7 bytes per event -- 5.4% of the subscription
+> stream, derived once in that record -- because they save one ROUND TRIP on a BOUNDED read: the
+> slice GET can be issued WITHOUT waiting for the header. ⚠️ They do NOT make that read possible
+> -- `RunEntry` carries the same extent in the DIRECTORY, which such a reader must fetch first
+> anyway for `codecFlags`. **M5.66** owns whether one RTT is worth the price, and so whether the
+> fields stay, and owns security.md rule 3's range half with it.
+>
 > They are NOT a duplicate of a per-run fact: the
 > event already carries `firstOffset` and `recordCount`, the run's LOGICAL coordinates, and these
 > are the same run's PHYSICAL ones. ⚠️ **`codec` did NOT come back** and the reason above is

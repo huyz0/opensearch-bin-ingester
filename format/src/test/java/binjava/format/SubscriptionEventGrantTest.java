@@ -16,7 +16,22 @@ import org.junit.jupiter.api.Test;
  * nothing able to convey the URL a consumer would fetch with. ADR-0042 then
  * dropped research doc 04 §2c's {@code byteStart}/{@code byteLen} deliberately
  * and named this row as the one deciding whether closing security.md rule 3's
- * "where possible one range" means bringing them back. It does.
+ * "where possible one range" means bringing them back.
+ *
+ * <p>⚠️ **IT DOES NOT, AND AN EARLIER DRAFT OF THIS PARAGRAPH ENDED "It does."**
+ * The fields came back, but ADR-0044 records that rule 3's range half is still
+ * OPEN: the grant is scoped to one key and to NO range -- not because a range
+ * cannot be NAMED, which ADR-0044 sets out that two can be, but because no
+ * reader in the tree ISSUES one, so there is no range for a signature to cover.
+ * ⚠️ An earlier draft of this paragraph said "no range is expressible", which
+ * is the claim ADR-0044 itself had to retire in five places. **M5.66** owns
+ * building the reader that issues one, and owns whether these fields stay at
+ * all.
+ *
+ * <p>⚠️ THE ASSERTIONS BELOW ARE UNTOUCHED BY THAT, and review measured why
+ * they are worth keeping: forcing {@code decode} to return {@code RANGE_ABSENT}
+ * reds three cases here and in the golden test, so the fields are UNUSED by any
+ * reader in the tree but they are NOT unpinned.
  */
 class SubscriptionEventGrantTest {
 
@@ -263,8 +278,10 @@ class SubscriptionEventGrantTest {
                 .as("and the expiry IS what an operator needs when a direct fetch fails")
                 .contains("2025-09-13T12:00:00Z");
         assertThat(event.toString())
-                .as("the range prints too, because it is not a secret and it is what a "
-                        + "ranged GET was asked for")
+                .as("the range prints too, because it is not a secret and it is the "
+                        + "run's physical extent -- NOT because a ranged GET asked for it, "
+                        + "which an earlier version of this message said and ADR-0044 "
+                        + "retired: no reader in the tree issues a ranged GET")
                 .contains("byteStart=4096")
                 .contains("byteLen=65536");
 
