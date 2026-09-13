@@ -1,0 +1,39 @@
+{
+  "diff_sha256": "865b8d80df7ac8d25903dc2fc7950b63e9ac9c7efdf03a0c567169dfa49f0f79",
+  "verdict": "pass",
+  "task": "M5.47",
+  "role": "test-reviewer",
+  "summary": "Round 3, tests. F4 is ANSWERED BY MEASUREMENT, not by prose. I re-ran round 2's exact mutation (thread delta.segments().get(0).segmentKey() into publishSegment as a label parameter, use it at both deliver() call sites, leave streamFromStore on committed.segmentKey()): :ingest:test now RED, 207 tests / 1 failed, and the failure is AssembledServingPathTest:341 -- the new .as(\"and the other pod's run carries the other pod's segment key\") assertion, expecting [seg-theirs] and getting [seg-mine]. The kill is the new assertion and nothing incidental. F1, F2 and F3 are all discharged: publishRun is gone, the publish javadoc no longer names a method that does not exist, and the AssembledServingPathFailureTest paragraph's testable claim is TRUE by measurement -- making deliver's catch around open rethrow reds SubscriptionHubTest.aThrowingSubscriberDoesNotStopTheOthersOrTheCommit alongside the two AssembledServingPathFailureTest cases, exactly as the new prose says. One NEW minor: the label is pinned for the PROXY arm only; the same mutation applied to the INLINE deliver() alone is green across the whole module, because the carrier's batch puts the held segment FIRST. F5 re-checked and still legibility-only. Nothing lost by the delta: baseline :ingest:test green at 207, and :plugin:compileClusterTestJava green, which matters because the SearchableIT and ShardFanOutIT edits are invisible to ./gradlew test. Method: throwaway worktree at HEAD plus the staged patch, four mutations, :ingest:test per mutation, JUnit XML read for the failing assertion.",
+  "findings": [
+    {
+      "id": "F6",
+      "severity": "minor",
+      "file": "ingest/src/test/java/binjava/ingest/AssembledServingPathTest.java",
+      "line": 296,
+      "title": "the label is pinned for the PROXY arm only -- the same mutation on the INLINE deliver() alone survives the module",
+      "failure_scenario": "MEASURED SURVIVING MUTATION. Same thread-the-label mutation as F4, applied to ONE call site: `private void publishSegment(SegmentCommit committed, byte[] heldBytes, SegmentServing serving, String label)`, caller passes `delta.segments().get(0).segmentKey()`, then ONLY `case INLINE -> deliver(label, targets, FetchMode.INLINE, ...)` while PROXY keeps committed.segmentKey(). `./gradlew :ingest:test --offline` -> BUILD SUCCESSFUL, 207 tests, nothing red. The PROXY-only variant of the same mutation DIES (AssembledServingPathTest:341) and the both-sites variant dies at the same place, so the coverage is asymmetric: theirsLabels pins the PROXY label, minesLabels pins nothing that committed.segmentKey() does not already give for free. WHY IT SURVIVES: in aBATCHEDDeltaDeliversEverySegmentFromWhereItsBytesARE the batch is List.of(seg-mine, seg-theirs), so segments().get(0) IS the held segment and the mutated INLINE label is accidentally correct; the same is true of every other publish in the module, which is single-segment. WHAT THE SURVIVOR WOULD COST IN PRODUCTION: a batched delta in which THIS pod's segment is not the first the commit log lists -- ordinary, since the batch carries every pod's flush -- delivers this pod's own run labelled with another pod's object name. That is the same ADR-0032 silent data error F4 named, on the arm DefaultIngest takes for every segment under the inline cap. NOT A REGRESSION FROM THE DELETED TEST, and that matters for the severity: everyRunIsDeliveredUnderITSOWNSegmentNotTheFirstInTheBatch ran a SINGLE code path (publishRun), so it had no per-arm label to leave unpinned; the two call sites arrived with M5.45a. This diff restores parity with the deleted test and no more, which is what the row promised. FIX, if taken, is one line and must not be the obvious one: simply reversing the batch order moves the hole from INLINE to PROXY. A three-segment delta with the held segment in the MIDDLE (theirs-1, mine, theirs-2) kills both arms, because segments().get(0) is then wrong for the INLINE push and for one of the two PROXY pushes."
+    },
+    {
+      "id": "F5",
+      "severity": "minor",
+      "file": "ingest/src/test/java/binjava/ingest/SubscriptionHubTest.java",
+      "line": 58,
+      "title": "carried forward unfixed and RE-CHECKED: publishHeld's per-call store is legibility only, and hides no defect",
+      "failure_scenario": "Recorded in round 2, not fixed, and I confirm the disposition rather than restating it. The only store-count assertion in the file is manyIdleSubscribersIssueNoStoreRequestsAtAll:189/196, and BOTH the requestsBefore read and the isZero() assertion sit ABOVE the 1,600-iteration publishHeld loop at :201 -- so the 1,600 stores publishHeld builds cannot influence it even in principle, and the method's own javadoc already says that zero is held by construction and is not evidence. The backing MemoryBinStore is empty, so a production path that read the store instead of the held array would throw rather than pass quietly. I name no surviving mutation, which is why it stays minor: it is a reader wrinkle -- two unrelated stores that read as related -- and not a gap in what is constrained."
+    }
+  ],
+  "mutations_killed": [
+    "LABEL AT BOTH deliver() SITES (round 2's F4 mutation, verbatim): reds AssembledServingPathTest.aBATCHEDDeltaDeliversEverySegmentFromWhereItsBytesARE, 207 tests / 1 failed. JUnit XML confirms the failing assertion is the NEW one at AssembledServingPathTest.java:341, '[and the other pod's run carries the other pod's segment key] Expecting [\"seg-mine\"] to contain exactly [\"seg-theirs\"]' -- the kill is the new label assertions, not an incidental byte or mode assertion.",
+    "LABEL AT THE PROXY deliver() SITE ONLY: reds the same single test at the same assertion -- so the PROXY arm's label is genuinely pinned and the both-sites kill is not an artefact of the INLINE half.",
+    "deliver()'s catch around subscriber.open rethrows instead of continuing: reds SubscriptionHubTest.aThrowingSubscriberDoesNotStopTheOthersOrTheCommit AND AssembledServingPathFailureTest.aSubscriberWhoseOPENThrowsDoesNotDenyTheOthers AND aSegmentWHOSEEverySubscriberFailsToOpenCostsZEROReads. This VERIFIES BY MEASUREMENT the new javadoc claim at AssembledServingPathFailureTest.java:267-284 -- 'now publishes through the four-argument publish, so removing deliver's catch around open reds :ingest:test there too' is true as written, and F3 is discharged."
+  ],
+  "checked_clean": [
+    "F1 discharged: publishRun is deleted in this diff, so the private method with no remaining caller is gone rather than documented.",
+    "F2 discharged: the publish javadoc no longer says '{@link #publish(CommitDelta, byte[])} above' about a method that does not exist; it now says 'A removed overload took a bare byte[]' and keeps the reason the refusal was wrong.",
+    "F3 discharged and MEASURED rather than read -- see mutations_killed entry 3.",
+    "No assertion weakened by the delta. The only additions to AssembledServingPathTest are two new List<String> collectors and two containsExactly assertions; every pre-existing byte, mode and gets()==1 assertion in that test is untouched.",
+    "Baseline green before mutating: :ingest:test 207 tests, BUILD SUCCESSFUL, worktree at HEAD with the staged patch applied and git diff --stat matching the staged 10 files.",
+    ":plugin:compileClusterTestJava BUILD SUCCESSFUL. This is the check the green unit suite cannot give: SearchableIT and ShardFanOutIT are clusterTest sources, not compiled by ./gradlew test, and the backlog cell itself flags them as invisible to a green suite.",
+    "Tier unchanged and right: every rewritten case is T0 -- no socket, no clock, no Thread.sleep, no fixed port, no system temp. My own worktree is under the session scratchpad, not /tmp."
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "task": "M5.47",
+  "role": "reviewer",
+  "diff_sha256": "7c3aa120800b799c125d9e836ff9ad2fb5d4395a2ae756179d4d971c18330236",
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "ingest/src/test/java/binjava/ingest/AssembledServingPathFailureTest.java:270",
+      "summary": "The round-2 fix wraps the test name it cites across a line break inside {@code}: `aThrowingSubscriberDoesNot` / ` * StopTheOthersOrTheCommit`. The identifier renders with a space in it and does not grep.",
+      "failure_scenario": "A future reader who greps `aThrowingSubscriberDoesNotStopTheOthersOrTheCommit` to check whether this javadoc's claim is still true finds only SubscriptionHubTest and not this reference, so the next rename of that test leaves this comment pointing at a method name nothing resolves -- the same class of stale cross-reference the round-2 finding existed to remove. Cosmetic only: the claim itself is TRUE and was measured (see the verification note below). Fixing it re-rounds the review for one line break, so recording it is likely the right resolution."
+    },
+    {
+      "severity": "minor",
+      "file": "ingest/src/main/java/binjava/ingest/SubscriptionHub.java:67",
+      "summary": "Deleting the publishRun paragraph from Push's javadoc left a bare empty line with no leading asterisk inside the /** */ block.",
+      "failure_scenario": "No compiler, formatter or gate objects, and the rendered javadoc is unchanged. It is an editing artifact of the deletion, visible to the next reader of that record as a line that does not belong to the comment. Purely cosmetic; named so it is not re-discovered as a finding in a later round."
+    },
+    {
+      "severity": "minor",
+      "file": "docs/internal/product/backlog.md:100",
+      "summary": "publishRun survives in the tree in three backlog cells beyond the past-tense javadoc, two of them in the PRESENT tense: M5.12's criterion 5 (`matching publishRun's existing discipline`) and M5.45a's row (`SubscriptionHub.publishRun SWALLOWS the resulting throw`).",
+      "failure_scenario": "These are historical acceptance-criteria cells that this diff did not touch, and M5.47's own done-cell states `publishRun WENT WITH THEM`, so a reader working the backlog top-to-bottom is corrected. But M5.12's sentence is the exact discipline that SegmentProxy.java and SegmentProxyFailureTest.java were just re-pointed away from, so a reader following the surviving pointer from the backlog reaches a method that no longer exists and concludes the javadoc fix was incomplete. Not a defect in this diff -- backlog rows are the record as written, and rewriting a landed row's criteria after the fact is its own problem -- but the claim 'the only surviving publishRun mention is the past-tense one' is not literally true of the tree, and the commit body should not assert it."
+    }
+  ]
+}

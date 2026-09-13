@@ -99,7 +99,7 @@ public final class SegmentProxy {
      * Streams {@code segmentKey} to every sink in {@code consumers}.
      *
      * <p>⚠️ A CONSUMER THAT THROWS IS DROPPED, NOT PROPAGATED, and the read
-     * continues for the rest. This is {@code SubscriptionHub.publishRun}'s
+     * continues for the rest. This is {@code SubscriptionHub.deliver}'s
      * discipline and it is here for the same reason: the commit is already
      * durable, so a dead consumer must not stall or roll back a write that
      * succeeded — it falls behind and recovers from the commit log, which is

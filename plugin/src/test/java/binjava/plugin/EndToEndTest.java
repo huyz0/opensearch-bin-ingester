@@ -221,7 +221,15 @@ class EndToEndTest {
         store.put(key, new binjava.binstore.Body(segment.length,
                 () -> new java.io.ByteArrayInputStream(segment)));
         CommitDelta delta = log.commit(key, counts);
-        hub.publish(delta, segment);
+        // ⚠️ THE FOUR-ARGUMENT `publish`, because M5.47 removed the
+        // two-argument one. An inline-forever policy with the bytes in hand
+        // keeps this test's subject where it was and reads the store zero
+        // times, exactly as the two-argument method did.
+        hub.publish(delta, key, segment, new binjava.ingest.SegmentServing(
+                        new binjava.ingest.FetchPolicy(
+                                new binjava.ingest.FetchPolicyConfig(
+                                        Long.MAX_VALUE, Long.MAX_VALUE, 1)),
+                        store.capabilities(), new binjava.ingest.SegmentProxy(store)));
         return segment;
     }
 }

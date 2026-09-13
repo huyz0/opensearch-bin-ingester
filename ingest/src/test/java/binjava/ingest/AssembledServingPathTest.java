@@ -293,6 +293,8 @@ class AssembledServingPathTest {
         Collecting fromTheirs = new Collecting();
         List<FetchMode> minesModes = new ArrayList<>();
         List<FetchMode> theirsModes = new ArrayList<>();
+        List<String> minesLabels = new ArrayList<>();
+        List<String> theirsLabels = new ArrayList<>();
 
         CommitDelta batched = new CommitDelta(7, List.of(
                 new SegmentCommit("seg-mine", List.of(new RunCommit(minesKey, 3, 10))),
@@ -300,10 +302,12 @@ class AssembledServingPathTest {
 
         try (var ignoredA = hub.subscribe(minesKey, push -> {
                     minesModes.add(push.via());
+                    minesLabels.add(push.segmentKey());
                     return fromMine;
                 });
                 var ignoredB = hub.subscribe(theirsKey, push -> {
                     theirsModes.add(push.via());
+                    theirsLabels.add(push.segmentKey());
                     return fromTheirs;
                 })) {
             hub.publish(batched, "seg-mine", mine, serving(store));
@@ -320,6 +324,21 @@ class AssembledServingPathTest {
         assertThat(store.counts().gets() - getsBefore)
                 .as("ONE read: the segment we did not have, and only that one")
                 .isEqualTo(1);
+
+        // ⚠️ AND THE LABEL, WHICH THE BYTES DO NOT COVER. Review MEASURED
+        // it: passing `segments().get(0).segmentKey()` as the push label while
+        // leaving the byte source alone is green across the whole module,
+        // because the held-or-read decision happens one frame up in `publish`
+        // and the two are independently mutable. This is ADR-0032's silent
+        // data error -- the push SUCCEEDS, the offsets look right, and the
+        // consumer is handed another pod's object name. It is the field
+        // M5.45b's `direct` grant and M5.16's late subscriber fetch BY.
+        assertThat(minesLabels)
+                .as("each run is labelled with ITS OWN segment, not the first in the batch")
+                .containsExactly("seg-mine");
+        assertThat(theirsLabels)
+                .as("and the other pod's run carries the other pod's segment key")
+                .containsExactly("seg-theirs");
     }
 
     /**

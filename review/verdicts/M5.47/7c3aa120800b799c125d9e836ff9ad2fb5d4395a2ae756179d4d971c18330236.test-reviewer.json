@@ -1,0 +1,36 @@
+{
+  "diff_sha256": "7c3aa120800b799c125d9e836ff9ad2fb5d4395a2ae756179d4d971c18330236",
+  "verdict": "changes-requested",
+  "summary": "Round 2, tests. The seven rewritten routing cases are STRICTLY STRONGER than the path they replaced -- four mutations (per-RunKey routing dropped, close() a no-op, the RuntimeException catch around open narrowed, complete skipped) each red them, and the last of those verifies the new javadoc claim in AssembledServingPathFailureTest by measurement. The deletion of publishingABatchedDeltaWithONESharedPayloadIsRefused is sound: its subject is gone and a refusal that cannot be raised needs no carrier. The OTHER deletion is not. everyRunIsDeliveredUnderITSOWNSegmentNotTheFirstInTheBatch asserted Push.segmentKey for a batched delta, and the named carrier does not assert it -- a label-only mutation leaves the whole :ingest: suite green under --rerun-tasks. Method: throwaway worktree at HEAD plus the staged patch, five mutations, :ingest:test per mutation.",
+  "findings": [
+    {
+      "id": "F4",
+      "severity": "major",
+      "file": "ingest/src/test/java/binjava/ingest/SubscriptionHubTest.java",
+      "line": 30,
+      "title": "the label property the deleted test carried is asserted NOWHERE, and the named carrier does not carry it",
+      "failure_scenario": "MEASURED SURVIVING MUTATION. In SubscriptionHub.publishSegment, thread the delta's FIRST segment key in as the push label and use it only at the two deliver() call sites, leaving streamFromStore on committed.segmentKey(): `publishSegment(committed, held, serving, delta.segments().get(0).segmentKey())`, then `case INLINE -> deliver(label, ...)` and `case PROXY -> deliver(label, ...)`. `./gradlew :ingest:test --offline --rerun-tasks` -> BUILD SUCCESSFUL. Every run in a batched delta is now labelled with the first segment's key and nothing reds. NON-EQUIVALENT ON AN INPUT THE SUITE ALREADY RUNS: in AssembledServingPathTest.aBATCHEDDeltaDeliversEverySegmentFromWhereItsBytesARE (:281-323) the push for theirsKey carries segmentKey()==\"seg-mine\" under the mutation and \"seg-theirs\" without it, and the test passes both ways because it asserts fromTheirs.bytes(), theirsModes and gets()==1 and NEVER push.segmentKey(). backlog.md:65 claims that test carries the deleted property because it 'asserts the property at BYTE level rather than by label ... so a run delivered under the first segment in the batch reds it'. It does not: the byte assertion only kills a mutation that ALSO moves the store read, because the held/read selection is made one frame up in publish() from committed.segmentKey().equals(heldSegmentKey), so label and bytes are independently mutable. The second named killer, AssembledServingPathFailureTest.aSTOREFailureOnOneSegmentDoesNotDenyTheSegmentThisPodHOLDS, was also green under this mutation -- it pins order-independence of the held segment, not its label. The deleted test asserted exactly this with .as(\"pod B's run must not be delivered under pod A's segment\"), and unlike the other deletion its SUBJECT STILL EXISTS, so this is a delete-without-a-carrier whose stated carrier is falsified by measurement. Blast radius today is small -- Push.segmentKey/Delivery.segmentKey reaches production only as an error-message string at ConsumerClient.java:80 -- but it is the field M5.45b's `direct` grant and M5.16's late subscriber will FETCH BY, and from this commit it is unconstrained for every batched delta. FIX, one line: collect push.segmentKey() alongside push.via() in each of that test's two subscribers and assert \"seg-mine\" / \"seg-theirs\". That kills the mutation and makes the backlog sentence true as written."
+    },
+    {
+      "id": "F5",
+      "severity": "minor",
+      "file": "ingest/src/test/java/binjava/ingest/SubscriptionHubTest.java",
+      "line": 58,
+      "title": "publishHeld's CountingBinStore is decorative, and one reader-facing wrinkle it creates",
+      "failure_scenario": "publishHeld builds a fresh CountingBinStore(new MemoryBinStore()) per call, supplies capabilities() and a SegmentProxy the INLINE arm never touches, and asserts nothing about it. It is NOT hiding a defect: the backing MemoryBinStore is EMPTY, so a production path that read the store instead of the held array would throw rather than pass quietly, and the zero-reads-with-bytes-in-hand property is killed by AssembledServingPathTest.aSegmentUNDERTheInlineCapIsServedINLINEAndReadZEROTimes; the javadoc at :50-56 states that scope honestly. The wrinkle, worth a sentence and not a change: in manyIdleSubscribersIssueNoStoreRequestsAtAll the store.counts().total() assertion is over the test's OWN store while the 1,600 control pushes now use 1,600 DIFFERENT stores built inside publishHeld. The method comment already says that zero is 'held by construction, not asserted', so no false confidence is added, but the two stores now read as related and are not. I name no surviving mutation for this one -- it is a legibility finding, which is why it is minor."
+    }
+  ],
+  "mutations_killed": [
+    "per-RunKey routing dropped (subscribers.get(run.key()) -> every subscriber): reds aSubscriberIsNotWokenByOtherStreams, aCommitTouchingManyStreamsWakesEachOfThemOnce, manyIdleSubscribersIssueNoStoreRequestsAtAll plus 4 in the assembled files",
+    "Subscription.close() made a no-op: reds closingASubscriptionStopsDeliveryAndReleasesTheStream",
+    "catch (IOException | RuntimeException) around open in deliver narrowed to catch (IOException): reds SubscriptionHubTest.aThrowingSubscriberDoesNotStopTheOthersOrTheCommit AND AssembledServingPathFailureTest.aSubscriberWhoseOPENThrowsDoesNotDenyTheOthers -- this VERIFIES the new javadoc claim added at AssembledServingPathFailureTest.java:264-281, which was a testable assertion and is true",
+    "complete() skipped in deliver: reds all seven rewritten cases plus 8 others. Under the deleted one-argument publish the seven needed only open+write; through assembling they now require the full open/write/complete chain"
+  ],
+  "checked_clean": [
+    "No existing assertion weakened. aSubscriberIsPushedItsOwnStreamsCommits keeps all four field assertions; the only assertion removed, assertThat(p.segment()).isEmpty(), belonged to the deleted overload's own safety argument and has no subject left.",
+    "The three relocated callers (SearchableIT, ShardFanOutIT, EndToEndTest) each keep their own subject: single-segment delta, held key == delta key, inline-forever policy, so the INLINE arm and zero store reads, same as the two-argument method they replaced.",
+    "Tier is right: every rewritten case is T0 -- no socket, no clock, no sleep, no fixed port, no system temp."
+  ],
+  "task": "M5.47",
+  "role": "test-reviewer"
+}

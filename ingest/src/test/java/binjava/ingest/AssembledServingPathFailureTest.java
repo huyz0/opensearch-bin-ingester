@@ -264,11 +264,14 @@ class AssembledServingPathFailureTest {
     /**
      * A subscriber whose {@code open} throws costs only itself.
      *
-     * <p>⚠️ THE ONLY OTHER TEST OF THIS runs {@code publishRun}, the
-     * pre-M5.45a path M5.47 deletes -- so on the assembled path
-     * {@link SubscriptionHub#deliver}'s catch around {@code open} could be
-     * removed with {@code :ingest:test}, {@code :http:test} AND
-     * {@code :plugin:test} green. Without it the throw leaves {@code publish},
+     * <p>⚠️ IT IS NO LONGER THE ONLY TEST OF THIS, and M5.47 is what
+     * changed that: {@code SubscriptionHubTest.aThrowingSubscriberDoesNot
+     * StopTheOthersOrTheCommit} used to run the pre-M5.45a {@code publishRun}, which M5.47 REMOVED,
+     * and now publishes through the four-argument {@code publish}, so removing
+     * {@link SubscriptionHub#deliver}'s catch around {@code open} reds
+     * {@code :ingest:test} there too. This case remains the one that pins it
+     * on a MULTI-subscriber fan-out, where what the catch protects is the
+     * OTHER consumers. Without it the throw leaves {@code publish},
      * reaches {@code DefaultIngest.pushLoop}, and is counted as a slow
      * subscriber: one consumer that cannot allocate a sink silently drops the
      * commit for every other consumer of the segment.

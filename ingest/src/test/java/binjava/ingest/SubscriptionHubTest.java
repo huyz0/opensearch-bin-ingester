@@ -2,7 +2,6 @@
 package binjava.ingest;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import binjava.binstore.CountingBinStore;
 import binjava.binstore.backend.MemoryBinStore;
@@ -27,76 +26,52 @@ class SubscriptionHubTest {
         return new CommitDelta(seq, "seg-" + seq, List.of(new RunCommit(key, count, first)));
     }
 
-    @Test
-    void everyRunIsDeliveredUnderITSOWNSegmentNotTheFirstInTheBatch() {
-        // ⚠️ THE SILENT DATA ERROR ADR-0032 EXISTS TO PREVENT. A batched delta
-        // carries every pod's flush in one commit window, so it names many
-        // segments. Deliver a run under the wrong one and the push SUCCEEDS,
-        // the offsets look right, and the consumer fetches another pod's
-        // object -- nothing throws, and no test whose window happened to batch
-        // a single flush would notice.
-        SubscriptionHub hub = new SubscriptionHub();
-        var forA = new CopyOnWriteArrayList<SubscriptionHub.Push>();
-        var forB = new CopyOnWriteArrayList<SubscriptionHub.Push>();
-        CommitDelta batched = new CommitDelta(7, List.of(
-                new binjava.format.SegmentCommit("seg-from-pod-a",
-                        List.of(new RunCommit(new RunKey(A, 0), 3, 10))),
-                new binjava.format.SegmentCommit("seg-from-pod-b",
-                        List.of(new RunCommit(new RunKey(B, 0), 5, 20)))));
+    /**
+     * The bytes every routing case publishes.
+     *
+     * <p>⚠️ THE SIZE DECIDES NOTHING: the policy below is inline-forever, so
+     * these three bytes go {@code INLINE} because of the CONFIG and not because
+     * of their length. An earlier draft of this comment said "small enough
+     * that `FetchPolicy` answers INLINE", which would send a reader looking for
+     * a threshold that is not consulted.
+     */
+    private static final byte[] HELD = {1, 2, 3};
 
-        try (var ignoredA = hub.subscribe(new RunKey(A, 0), SubscriptionHub.assembling(forA::add));
-                var ignoredB = hub.subscribe(new RunKey(B, 0), SubscriptionHub.assembling(forB::add))) {
-            hub.publish(batched);
-        }
-
-        assertThat(forA).singleElement().satisfies(p -> {
-            assertThat(p.segmentKey()).isEqualTo("seg-from-pod-a");
-            assertThat(p.firstOffset()).isEqualTo(10);
-        });
-        assertThat(forB).singleElement().satisfies(p -> {
-            assertThat(p.segmentKey())
-                    .as("pod B's run must not be delivered under pod A's segment")
-                    .isEqualTo("seg-from-pod-b");
-            assertThat(p.firstOffset()).isEqualTo(20);
-            // ⚠️ THE PAYLOAD IS ASSERTED, not merely the key. This overload's
-            // whole safety argument is "no bytes, so nothing to mis-pair" --
-            // unpinned, `new byte[0]` could become any array and the argument
-            // would be false while every key assertion still passed.
-            assertThat(p.segment())
-                    .as("this overload attaches no bytes; that is why it is safe to batch")
-                    .isEmpty();
-        });
+    /**
+     * Publishes on the PRODUCTION path with the segment in hand.
+     *
+     * <p>⚠️ THESE CASES USED THE ONE-ARGUMENT {@code publish}, which M5.45a
+     * left without a production caller and which delivered every run with
+     * {@code new byte[0]} -- a real subscriber loses the whole window, because
+     * {@code ConsumerClient.decodeInto} opens {@code delivery.segment()} with
+     * no fallback. The routing assertions cost nothing by moving: the held key
+     * is the delta's only segment key at every call site, so {@code
+     * publishSegment} takes the INLINE arm and never touches {@code
+     * serving.proxy()}.
+     *
+     * <p>⚠️ THAT ZERO IS NOT ASSERTED HERE, and saying so is the honest
+     * scope: the store below exists to supply {@code capabilities()}, and
+     * nothing in this file counts its reads. {@code
+     * AssembledServingPathTest.aSegmentUNDERTheInlineCapIsServedINLINEAndReadZEROTimes}
+     * is what holds that property.
+     */
+    private static void publishHeld(SubscriptionHub hub, CommitDelta delta) {
+        CountingBinStore store = new CountingBinStore(new MemoryBinStore());
+        hub.publish(delta, delta.segmentKey(), HELD,
+                new SegmentServing(
+                        new FetchPolicy(new FetchPolicyConfig(
+                                Long.MAX_VALUE, Long.MAX_VALUE, 1)),
+                        store.capabilities(), new SegmentProxy(store)));
     }
 
-    @Test
-    void publishingABatchedDeltaWithONESharedPayloadIsRefused() {
-        // ⚠️ FIXING THE KEY IS NOT FIXING THE BYTES, and the first draft of
-        // this change did only the first. `Push` carries the segment INLINE
-        // (ADR-0004), so the payload is what the consumer parses and the key is
-        // only a label: handing every run the same array while pairing each
-        // with its own key leaves the bytes wrong. A subscriber whose stream is
-        // absent from the other pod's segment throws inside the sink and is
-        // SWALLOWED here as slow-or-dead — silent record loss — and where two
-        // pods committed the same RunKey in one window it decodes the WRONG
-        // RECORDS under its own offsets. Neither throws; no gate sees either.
-        SubscriptionHub hub = new SubscriptionHub();
-        CommitDelta batched = new CommitDelta(7, List.of(
-                new binjava.format.SegmentCommit("seg-from-pod-a",
-                        List.of(new RunCommit(new RunKey(A, 0), 3, 10))),
-                new binjava.format.SegmentCommit("seg-from-pod-b",
-                        List.of(new RunCommit(new RunKey(B, 0), 5, 20)))));
 
-        assertThatThrownBy(() -> hub.publish(batched, new byte[] {1, 2, 3}))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("cannot be the payload");
-    }
 
     @Test
     void aSubscriberIsPushedItsOwnStreamsCommits() {
         SubscriptionHub hub = new SubscriptionHub();
         var received = new CopyOnWriteArrayList<SubscriptionHub.Push>();
         try (var ignored = hub.subscribe(new RunKey(A, 0), SubscriptionHub.assembling(received::add))) {
-            hub.publish(delta(0, new RunKey(A, 0), 3, 10));
+            publishHeld(hub, delta(0, new RunKey(A, 0), 3, 10));
             assertThat(received).singleElement().satisfies(p -> {
                 assertThat(p.segmentKey()).isEqualTo("seg-0");
                 assertThat(p.firstOffset()).isEqualTo(10);
@@ -111,13 +86,13 @@ class SubscriptionHubTest {
         SubscriptionHub hub = new SubscriptionHub();
         AtomicInteger woken = new AtomicInteger();
         try (var ignored = hub.subscribe(new RunKey(A, 0), SubscriptionHub.assembling(p -> woken.incrementAndGet()))) {
-            hub.publish(delta(0, new RunKey(B, 0), 1, 0));
-            hub.publish(delta(1, new RunKey(A, 7), 1, 0));
+            publishHeld(hub, delta(0, new RunKey(B, 0), 1, 0));
+            publishHeld(hub, delta(1, new RunKey(A, 7), 1, 0));
             // ⚠️ Fanning every delta to every subscriber makes wakeups scale
             // with TOTAL cluster traffic rather than the subscriber's own -- the
             // same defect shape as a request that scales with indices.
             assertThat(woken.get()).isZero();
-            hub.publish(delta(2, new RunKey(A, 0), 1, 0));
+            publishHeld(hub, delta(2, new RunKey(A, 0), 1, 0));
             assertThat(woken.get()).isEqualTo(1);
         }
     }
@@ -129,7 +104,7 @@ class SubscriptionHubTest {
         AtomicInteger two = new AtomicInteger();
         try (var ignoredA = hub.subscribe(new RunKey(A, 0), SubscriptionHub.assembling(p -> one.incrementAndGet()));
                 var ignoredB = hub.subscribe(new RunKey(A, 0), SubscriptionHub.assembling(p -> two.incrementAndGet()))) {
-            hub.publish(delta(0, new RunKey(A, 0), 1, 0));
+            publishHeld(hub, delta(0, new RunKey(A, 0), 1, 0));
             assertThat(one.get()).isEqualTo(1);
             assertThat(two.get()).isEqualTo(1);
         }
@@ -140,9 +115,9 @@ class SubscriptionHubTest {
         SubscriptionHub hub = new SubscriptionHub();
         AtomicInteger woken = new AtomicInteger();
         var sub = hub.subscribe(new RunKey(A, 0), SubscriptionHub.assembling(p -> woken.incrementAndGet()));
-        hub.publish(delta(0, new RunKey(A, 0), 1, 0));
+        publishHeld(hub, delta(0, new RunKey(A, 0), 1, 0));
         sub.close();
-        hub.publish(delta(1, new RunKey(A, 0), 1, 1));
+        publishHeld(hub, delta(1, new RunKey(A, 0), 1, 1));
 
         assertThat(woken.get()).as("only the first").isEqualTo(1);
         assertThat(hub.subscriberCount(new RunKey(A, 0))).isZero();
@@ -162,7 +137,7 @@ class SubscriptionHubTest {
             // ⚠️ The commit is ALREADY DURABLE. A consumer that throws must not
             // roll back or stall a write that succeeded; it falls behind and
             // recovers from the log, which is what the log is for.
-            hub.publish(delta(0, new RunKey(A, 0), 1, 0));
+            publishHeld(hub, delta(0, new RunKey(A, 0), 1, 0));
             assertThat(healthy.get()).isEqualTo(1);
         }
     }
@@ -174,7 +149,7 @@ class SubscriptionHubTest {
         AtomicInteger b = new AtomicInteger();
         try (var ignored1 = hub.subscribe(new RunKey(A, 0), SubscriptionHub.assembling(p -> a.incrementAndGet()));
                 var ignored2 = hub.subscribe(new RunKey(B, 0), SubscriptionHub.assembling(p -> b.incrementAndGet()))) {
-            hub.publish(new CommitDelta(0, "seg", List.of(
+            publishHeld(hub, new CommitDelta(0, "seg", List.of(
                     new RunCommit(new RunKey(A, 0), 2, 0),
                     new RunCommit(new RunKey(B, 0), 5, 0))));
             assertThat(a.get()).isEqualTo(1);
@@ -223,7 +198,7 @@ class SubscriptionHubTest {
 
         // and a control push at the end must reach every one of them
         for (int i = 0; i < 1600; i++) {
-            hub.publish(delta(i, new RunKey(A, i), 1, 0));
+            publishHeld(hub, delta(i, new RunKey(A, i), 1, 0));
         }
         assertThat(wokenPerStream.stream().filter(c -> c.get() == 1).count())
                 .as("all 1,600 were alive, not merely silent").isEqualTo(1600);

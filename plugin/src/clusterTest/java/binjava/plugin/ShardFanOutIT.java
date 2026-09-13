@@ -165,6 +165,17 @@ public class ShardFanOutIT extends OpenSearchSingleNodeTestCase {
         String key = new SegmentKey("bins/cluster-a", reader.createdAtMillis(), "pod1", 0,
                 headerLen).key();
         store.put(key, new Body(segment.length, () -> new ByteArrayInputStream(segment)));
-        HUB.publish(new CommitLog(store, "bins/cluster-a", 0).commit(key, counts), segment);
+        // ⚠️ THE FOUR-ARGUMENT `publish`, because M5.47 removed the
+        // two-argument one. The serving is built here rather than shared: an
+        // inline-forever policy keeps this IT's subject the SHARD FAN-OUT
+        // rather than the fetch mode, and the held bytes mean it reads the
+        // store zero times, exactly as the two-argument method did.
+        HUB.publish(new CommitLog(store, "bins/cluster-a", 0).commit(key, counts),
+                key, segment,
+                new binjava.ingest.SegmentServing(
+                        new binjava.ingest.FetchPolicy(
+                                new binjava.ingest.FetchPolicyConfig(
+                                        Long.MAX_VALUE, Long.MAX_VALUE, 1)),
+                        store.capabilities(), new binjava.ingest.SegmentProxy(store)));
     }
 }
