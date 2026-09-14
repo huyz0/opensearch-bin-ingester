@@ -377,6 +377,12 @@ public final class LocalSequencer implements Sequencer {
             // and a pointer to the delta that last applied for each.
             sequencer.checkpoints = new CheckpointWriter(store, log, prefix,
                     checkpointEveryDeltas, CHECKPOINT_INTERVAL, checkpointTicker);
+            // ⚠️ AND THE WRITER INHERITS THE SAME MAP (M5.55). Seeding only the
+            // window left this leader's own checkpoint carrying cumulative
+            // offsets beside a TRUNCATED pods map, so the next successor's walk
+            // stopped at it and a pod that committed earlier lost its
+            // protection. The window and the writer must inherit together.
+            sequencer.checkpoints.inherit(log.recoveredPods());
             return Optional.of(sequencer);
         } catch (IOException failed) {
             // ⚠️ WE HOLD THE LEASE AND CANNOT USE IT. Returning empty here would

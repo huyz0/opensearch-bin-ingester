@@ -174,6 +174,120 @@ final class CheckpointWriter implements AutoCloseable {
     }
 
     /**
+     * Seeds the pod states this leader INHERITED, so its checkpoint carries
+     * pods it never saw commit (M5.55).
+     *
+     * <p>⚠️ WITHOUT THIS A MIDDLE LEADER SILENTLY TRUNCATES THE MAP, and the
+     * records duplicate. {@code LocalSequencer.start} seeded the in-memory
+     * window from {@code log.recoveredPods()} and built this writer with
+     * nothing, so a leader that took over, committed, and checkpointed wrote
+     * cumulative OFFSETS beside a pods map holding only the pods IT saw.
+     * {@code ChainReplay} stops the next successor's walk AT that checkpoint,
+     * so a pod that committed in the epoch before it is unprotected and its
+     * retry is applied a second time -- I2, reachable with NO restart and no
+     * legacy object, on any rolling deploy.
+     *
+     * <p>⚠️ THE KEYS ARRIVE SLOTTED AND ARE UN-SLOTTED HERE. {@code
+     * recoveredPods()} is keyed {@code podId\0incarnationId}, because the
+     * WINDOW must tell two incarnations apart; {@code Checkpoint.pods} is keyed
+     * by {@code podId} alone, with the incarnation carried as a VALUE beside
+     * the watermark. That is ADR-0036's explicit choice -- "{@code
+     * incarnationId} is a VALUE beside {@code flushSeq}, never a qualifier on
+     * the pod id" -- and it is what keeps this map ONE ENTRY PER POD rather
+     * than one per restart, so seeding it does not trade the RECOVERY bound
+     * away: the walk is bounded by the checkpoint sequence, which this does not
+     * move. ⚠️ BUT THE MAP ITSELF NOW GROWS AND NOTHING EVICTS, which an
+     * earlier draft of this paragraph denied by calling the size "bounded by
+     * the fleet". The truncation M5.55 removes WAS the de-facto eviction. The
+     * honest bound is DISTINCT podIds THAT HAVE EVER COMMITTED TO THIS CHAIN:
+     * scale to 200 pods and back to 10 and all 200 slots ride in every
+     * checkpoint thereafter. That is fleet-shaped only where pod names are
+     * stable AND reused; ADR-0031 assumes uniqueness among LIVE pods, not
+     * stability. {@code Checkpoint.PodState} names the invariant at stake --
+     * "the checkpoint would grow with history against ADR-0033" -- and M5.72
+     * owns the eviction rule.
+     *
+     * <p>⚠️ AND NO {@code cut < 0} ARM: every key is built by {@code
+     * ChainReplay.slot}, so the separator is always present -- the same
+     * construction proof as the paragraph below, and an earlier draft carried
+     * an unreachable branch for it. ⚠️ WHAT BREAKING THAT PROOF WOULD COST,
+     * stated because the price is out of proportion to the likelihood: a
+     * separator-less key makes {@code substring} throw {@code
+     * StringIndexOutOfBoundsException}, and this runs inside {@code
+     * LocalSequencer.start}'s try, whose only catch is {@code IOException},
+     * AFTER the renewer thread is up. An unchecked throw there escapes past
+     * {@code leases.release()}, and the severity is PERMANENT rather than one
+     * TTL: nothing then sets {@code closed} and nothing can set {@code fenced},
+     * so the renewer renews forever and no node can ever take that term again.
+     * ⚠️ AN EARLIER DRAFT OF THIS SENTENCE SAID "unusable for a full TTL",
+     * which is the LESSER failure and the wrong way round -- {@code
+     * renewForever} records that exact inversion being made and fixed once
+     * already. {@link #checkPolicy} exists to prevent the same outage. Anyone
+     * adding a second producer of {@code recoveredPods} owes this method either
+     * the separator or a guard.
+     *
+     * <p>⚠️ NO BARE-SLOT GUARD, DELIBERATELY. A v0 slot names no incarnation and
+     * could key nothing, but none can arrive: both producers of {@code
+     * recoveredPods} are {@code ChainReplay} outputs, and it skips a slot with
+     * no pointer or no incarnation before seeding. A guard here would be an
+     * unreachable branch -- measured, by deleting it and finding nothing red.
+     *
+     * <p>⚠️ COLLISIONS ARE RESOLVED BY THE POINTER, AND AN EARLIER DRAFT GOT
+     * THIS WRONG IN A WAY THAT DUPLICATED RECORDS HALF THE TIME. Two slots for
+     * one pod differ by incarnation, and un-slotting collapses them onto one
+     * key. That draft routed both through {@link #rememberPod} and argued the
+     * existing merge "decides it exactly as a live commit would" -- false twice
+     * over. A live commit resolves by ARRIVAL ORDER, which tracks recency;
+     * here the order is {@code Map.copyOf}'s, which the JDK randomises per JVM.
+     * And the merge keeps {@code existing} only when the incarnations MATCH, so
+     * across incarnations the last visited simply wins. A pod that restarted
+     * mid-term would have had its DEAD incarnation recorded and its live one
+     * dropped on roughly half of starts, and the live one's retry would
+     * duplicate at the next takeover.
+     *
+     * <p>⚠️ THE TIE IS REACHABLE AND IS BROKEN EXPLICITLY -- an earlier draft
+     * called it an EQUIVALENT MUTANT and both reviewers measured that false.
+     * The path is {@code commitAll} itself: {@code podb/i1} submits a flush,
+     * the pod dies and restarts as {@code i2}, and {@code i2} submits before
+     * the batcher drains. {@code BatchingSequencer.drainLoop} does not
+     * partition by pod, {@code CommitLog} requires only distinct SEGMENT keys,
+     * and the window keys on {@code (podId, incarnationId)} so neither is the
+     * other's replay -- ONE delta, TWO attributions for one podId, and {@link
+     * #capture} stamps both with the same pointer. That is the crash-during-
+     * flush case the incarnation id exists for.
+     *
+     * <p>⚠️ ON A TIE THE OUTCOME IS STABLE RATHER THAN RIGHT. The pointer is
+     * equal by construction and ADR-0036 makes the incarnation id unordered on
+     * purpose, so what the tie-break buys is DETERMINISM, not correctness: the
+     * outcome is arbitrary but reproducible, instead of {@code Map.copyOf}'s
+     * salted order picking differently on half of JVM starts. A checkpoint that
+     * consistently names one of the two can be reasoned about and reproduced;
+     * one that flips per start cannot. ⚠️ THE WATERMARK IS NOT A RULE HERE, and
+     * two drafts of this paragraph were wrong about it in opposite directions
+     * -- first that nothing discriminates at all, then that the restarted slot
+     * always holds the lower watermark. It holds over a window only: the
+     * replacement begins at 0, so {@code <}-on-watermark picks it while the
+     * dead slot's flush is not also that incarnation's first, and it inverts
+     * once the replacement climbs past the dead watermark. M5.72 records it as
+     * an option NOT TAKEN, with that window, rather than closing the case as
+     * undecidable; what does remain undecidable is recorded there too, with the
+     * rest of this map's open questions.
+     *
+     * <p>⚠️ THE ORDERING THAT DRAFT SAID DID NOT EXIST IS IN THE VALUE BEING
+     * MERGED. {@code PodState} carries {@code (epoch, sequence)} -- the pointer
+     * to the delta that last applied -- and that IS orderable even though the
+     * incarnation id is not. Resolving here by the higher pointer leaves the
+     * live commit path's semantics untouched.
+     */
+    synchronized void inherit(Map<String, Checkpoint.PodState> fromChain) {
+        Map<String, Checkpoint.PodState> newest = new HashMap<>();
+        fromChain.forEach((slot, state) -> newest.merge(
+                slot.substring(0, slot.indexOf('\0')), state, CheckpointWriter::newer));
+        newest.forEach((podId, state) -> rememberPod(podId, state.incarnationId(),
+                state.lastAppliedFlushSeq(), state.epoch(), state.sequence()));
+    }
+
+    /**
      * Records one pod's flush as applied at {@code (epoch, sequence)}.
      *
      * <p>⚠️ Math::max WITHIN AN INCARNATION, never across one. A retried or late
@@ -191,6 +305,28 @@ final class CheckpointWriter implements AutoCloseable {
                         && existing.incarnationId().equals(incoming.incarnationId())
                         && existing.lastAppliedFlushSeq() > incoming.lastAppliedFlushSeq()
                         ? existing : incoming);
+    }
+
+    /**
+     * Of two slots for one pod, the one to carry forward: higher pointer first,
+     * then a STABLE tie-break (M5.55).
+     *
+     * <p>⚠️ A TOTAL ORDER, DELIBERATELY. Returning either on a tie would leave
+     * the answer to {@code Map.copyOf}'s per-JVM salt, which is the defect this
+     * whole method exists to remove; the tie-break makes it arbitrary but
+     * REPRODUCIBLE. It is not a claim that the winner is the live incarnation
+     * -- see {@link #inherit} for what the fields do and do not settle.
+     */
+    private static Checkpoint.PodState newer(Checkpoint.PodState prior,
+            Checkpoint.PodState now) {
+        int byPointer = Long.compare(now.epoch(), prior.epoch());
+        if (byPointer == 0) {
+            byPointer = Long.compare(now.sequence(), prior.sequence());
+        }
+        if (byPointer != 0) {
+            return byPointer > 0 ? now : prior;
+        }
+        return now.incarnationId().compareTo(prior.incarnationId()) > 0 ? now : prior;
     }
 
     /**

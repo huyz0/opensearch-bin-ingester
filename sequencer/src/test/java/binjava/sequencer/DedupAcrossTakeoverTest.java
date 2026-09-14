@@ -485,6 +485,84 @@ class DedupAcrossTakeoverTest {
     }
 
     @Test
+    void aMIDDLELeadersCheckpointDoesNotDROPThePodsItNeverSaw() throws Exception {
+        // ⚠️ RECORDS DUPLICATED ACROSS TWO TAKEOVERS AND NOTHING KNEW (M5.55).
+        // `LocalSequencer.start` seeds the in-memory WINDOW from
+        // `log.recoveredPods()` and then builds the `CheckpointWriter` with
+        // NOTHING, so its pods map starts EMPTY. A middle leader therefore
+        // writes a checkpoint carrying cumulative OFFSETS but a TRUNCATED pods
+        // map, `ChainReplay` stops the next successor's walk AT that
+        // checkpoint, and a pod that committed in the epoch before it is
+        // unprotected -- its retry is applied a second time, which is I2.
+        //
+        // ⚠️ THE INTERMEDIATE CHECKPOINT IS THE MECHANISM, NOT THE INTERMEDIATE
+        // COMMITS, which is why the middle leader runs at K=1: with K high
+        // enough that no checkpoint is written, the same two commits leave the
+        // retry answered. ⚠️ AND THE MIDDLE LEADER MUST BE A DIFFERENT POD:
+        // were the commits podb's own, podb would be IN that checkpoint at a
+        // higher watermark and the retry refused by the pointer branch -- one
+        // delta, opposite outcome, different mechanism.
+        //
+        // ⚠️ IT NEEDS NO RESTART, NO v0 OBJECT AND NO LEGACY BUILD: two
+        // takeovers, i.e. any rolling deploy.
+        MemoryBinStore store = new MemoryBinStore();
+        CheckpointWriter.Ticker frozen = () -> new CountDownLatch(1).await();
+        // ⚠️ THE THREE COMPONENTS MUST DIFFER, and an earlier fixture left them
+        // equal. With `podb` committing a single flushSeq 0 as the chain's only
+        // delta, its inherited state was `PodState[i1, 0, epoch=1, sequence=1]`
+        // -- so review MEASURED two mutations of `inherit` surviving the whole
+        // module: TRANSPOSING `epoch` and `sequence` (both 1, a literal no-op)
+        // and replacing the watermark with the constant `0L` (the true value).
+        // ⚠️ THE SECOND IS THE DANGEROUS ONE: in production a constant watermark
+        // silently re-admits every retry of flushSeq 1..N for any pod that ever
+        // committed more than once. ⚠️ AND THE FIRST IS A TRAP THIS FILE ALREADY
+        // RECORDS, at the sibling case that notes `PodState(inc, 0, 1, 1)` gives
+        // epoch and sequence one value. A priming flush separates all three.
+        CommitRequest early = new CommitRequest("podb", "i1", 2, "seg/0", counts(3));
+
+        LocalSequencer first = takeOver(store, "poda");
+        try {
+            // ⚠️ TWO PRIMING FLUSHES, NOT ONE, SO ALL THREE COMPONENTS DIFFER.
+            // One left `PodState[i1, 1, epoch=1, sequence=2]` -- watermark and
+            // epoch BOTH 1 -- and review MEASURED that exchanging those two
+            // arguments still survived the module. Separating `sequence` fixed
+            // one instance of the trap and left another beside it. With two,
+            // podb inherits `[i1, 2, epoch=1, sequence=3]`.
+            first.commitAll(List.of(
+                    new CommitRequest("podb", "i1", 0, "seg/pre", counts(1))));
+            first.commitAll(List.of(
+                    new CommitRequest("podb", "i1", 1, "seg/pre2", counts(1))));
+            first.commitAll(List.of(early));
+        } finally {
+            first.close();
+        }
+
+        // The middle leader: a DIFFERENT pod, K=1 so it checkpoints.
+        LocalSequencer middle = LocalSequencer.start(store, PREFIX, manager(store, "pode"), 8,
+                LocalSequencer.sleepFor(java.time.Duration.ofSeconds(3)), 1, frozen)
+                .orElseThrow();
+        try {
+            middle.commitAll(List.of(new CommitRequest("pode", "i9", 0, "seg/m0", counts(2))));
+            middle.commitAll(List.of(new CommitRequest("pode", "i9", 1, "seg/m1", counts(2))));
+        } finally {
+            middle.close();
+        }
+
+        LocalSequencer third = takeOver(store, "podc");
+        try {
+            third.commitAll(List.of(early));
+        } finally {
+            third.close();
+        }
+
+        assertThat(deltasCarrying(store, "seg/0"))
+                .as("podb committed under the FIRST leader and its retry reaches the THIRD; "
+                        + "the middle leader's checkpoint must carry podb forward rather than "
+                        + "dropping it, or the same records land at two offsets")
+                .isEqualTo(1);
+    }
+
+    @Test
     void aGENUINELYNewFlushAfterATakeoverIsStillApplied() throws Exception {
         // ⚠️ THE NEGATIVE CONTROL, and it is doing real work: a window seeded
         // too eagerly -- one that treated any known incarnation as fully

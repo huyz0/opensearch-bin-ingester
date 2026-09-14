@@ -101,11 +101,17 @@ import java.util.List;
  * {@code SequencerDedupTest.aReplayThePointedDeltaDoesNotCarryIsREFUSED} and
  * {@code SequencerDedupTest.aSegmentMatchingOnlyPARTOfTheTripleAnswersNOTHING}.
  * </li>
- * <li><b>The pointer names a delta that is gone.</b> Only reachable once a
- * pointer is INHERITED from a predecessor's checkpoint and can outlive the
- * delta it names — every pointer this build writes is written beside its own
- * delta. ⚠️ UNPINNED: that branch's own comment says this "is where its
- * test lives", and no test lives there.</li>
+ * <li><b>The pointer names a delta that is gone.</b> Reachable once a pointer
+ * is INHERITED from a predecessor's checkpoint and can outlive the delta it
+ * names. ⚠️ M5.55 WIDENED THIS AND SAYS SO: an earlier version of this bullet
+ * read "every pointer this build writes is written beside its own delta",
+ * which was true only while a successor's writer started empty. Inherited
+ * pointers now ride in EVERY checkpoint and are re-propagated by each
+ * successor, so ADR-0036's retention obligation grows from one-term-old
+ * pointers to unbounded-age ones — the cost M5.55 accepted to stop records
+ * duplicating on any rolling deploy, and a live input to M7's retention rule.
+ * ⚠️ STILL UNPINNED: that branch's own comment says this "is where its test
+ * lives", and no test lives there.</li>
  * </ul>
  *
  * <p><b>DUPLICATED — not detected at all, and applied twice.</b> These are
@@ -114,8 +120,9 @@ import java.util.List;
  * checkpoint COULD have seeded and simply never recorded. An incomplete
  * generative rule is how the next one gets missed:
  * <ul>
- * <li><b>A superseded incarnation.</b> A checkpoint remembers a pod's LATEST
- * incarnation only, so a replay from one since superseded is treated as fresh.
+ * <li><b>A superseded incarnation.</b> A checkpoint remembers ONE incarnation per pod -- the latest, while only live
+ * commits build the map, and on a pointer TIE whichever
+ * {@code CheckpointWriter.newer} selects, which may be the dead one, so a replay from one since superseded is treated as fresh.
  * It needs a pod to restart between the original and its retry. Pinned in BOTH
  * directions by one fixture varying only which incarnation the slot names:
  * {@code DedupAcrossTakeoverTest.aSUPERSEDEDIncarnationsReplayIsAppliedTWICE_}
@@ -132,22 +139,16 @@ import java.util.List;
  * and asserts TWO deltas carry the segment. M5.22 landed with the gap open;
  * closing it means giving up bounded recovery for that chain, or an
  * unanswerable-watermark tier.</li>
- * <li><b>A pod absent from an intermediate checkpoint's pods map.</b> A
- * successor's {@code CheckpointWriter} starts EMPTY and is never handed what
- * the chain gave it: {@code LocalSequencer} seeds the in-memory window from
- * {@code log.recoveredPods()} and constructs the writer with nothing. So a
- * checkpoint written by a middle leader carries cumulative OFFSETS but a
- * TRUNCATED pods map, and {@code ChainReplay} stops the next successor's walk
- * at it — the epoch before is never read. ⚠️ THIS NEEDS NO RESTART, NO v0
- * OBJECT AND NO LEGACY BUILD: two takeovers, which is any rolling deploy.
- * MEASURED by review: leader 1 commits {@code podb/i1} flushSeq 0; leader 2 —
- * a DIFFERENT pod, at {@code K=1} so a checkpoint is written — commits twice;
- * leader 3 takes the retry, and TWO deltas carry the segment. Both details are
- * load-bearing: at {@code K=1000} no checkpoint is written and the answer is
- * one, and if leader 2's commits were {@code podb}'s own then {@code podb} is
- * in that checkpoint with a higher watermark and the retry is refused by the
- * pointer branch instead. M5.55 carries the full configuration.
- * ⚠️ UNPINNED, and M5.55 owns it.</li>
+ * <li><b>A pod absent from an intermediate checkpoint's pods map — CLOSED by
+ * M5.55.</b> A successor's {@code CheckpointWriter} used to start EMPTY while
+ * {@code LocalSequencer} seeded only the in-memory window, so a middle leader's
+ * checkpoint carried cumulative OFFSETS beside a TRUNCATED pods map and {@code
+ * ChainReplay} stopped the next successor's walk at it, leaving a pod that
+ * committed in the earlier epoch unprotected. It needed NO restart and no
+ * legacy object: two takeovers, i.e. any rolling deploy. {@code
+ * CheckpointWriter.inherit} now takes the same map the window does, and {@code
+ * DedupAcrossTakeoverTest.aMIDDLELeadersCheckpointDoesNotDROPThePodsItNeverSaw}
+ * pins it — two deltas before, one after.</li>
  * </ul>
  *
  * <p>⚠️ SO THE PROPERTY IS NOT "A RETRY CROSSING A TAKEOVER IS ANSWERED",
