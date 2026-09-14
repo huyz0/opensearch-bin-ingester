@@ -9,7 +9,9 @@ import binjava.binstore.BinStore;
 import binjava.binstore.CountingBinStore;
 import binjava.binstore.StoreCounts;
 import binjava.binstore.backend.MemoryBinStore;
+import binjava.format.CommitDelta;
 import binjava.format.RunKey;
+import java.io.IOException;
 import java.time.Clock;
 import java.time.ZoneOffset;
 import java.time.Duration;
@@ -53,6 +55,11 @@ class FleetSequencerCostTest {
 
     private static final String A = "poda:9000";
     private static final String B = "podb:9000";
+    /** A SECOND endpoint for the same leader, so a lease can move without a successor. */
+    private static final String C = "poda-alt:9000";
+    /** ⚠️ ONE key for the whole fleet: `leaseKey()` derives from the PREFIX alone,
+     * never from a pod id or an endpoint -- the invariant this fixture rests on. */
+    private static final String LEASE_KEY = config("poda", A).leaseKey();
 
     private static LeaseConfig config(String podId, String endpoint) {
         return new LeaseConfig(PREFIX, podId, endpoint,
@@ -61,6 +68,20 @@ class FleetSequencerCostTest {
 
     private static FleetSequencer pod(BinStore store, String podId, String endpoint,
             InProcessTransport transport) throws Exception {
+        return pod(store, podId, endpoint, transport, transport);
+    }
+
+    /**
+     * A pod that SENDS through {@code wire} but is REGISTERED on {@code registry}.
+     *
+     * <p>⚠️ THE TWO ARE THE SAME OBJECT FOR EVERY CALLER BUT ONE. Splitting them
+     * lets a follower's sends pass through a decorator while the leader stays
+     * reachable on the plain transport, which is what
+     * {@link #forwardedCommitCostWhenTheLeaseMoves(int)} needs and what keeps a
+     * successor -- and its seal and replay -- out of the counted window.
+     */
+    private static FleetSequencer pod(BinStore store, String podId, String endpoint,
+            InProcessTransport registry, SequencerTransport wire) throws Exception {
         // ⚠️ A FIXED CLOCK, and parking the tickers was NOT enough on its own.
         // Review MEASURED that with the renewer parked the lease (TTL 10 s) is
         // never renewed, so a 12 s stall ANYWHERE BEFORE the window lets it
@@ -71,7 +92,7 @@ class FleetSequencerCostTest {
         LeaseManager manager = new LeaseManager(store, config(podId, endpoint),
                 Clock.fixed(java.time.Instant.parse("2026-01-01T00:00:00Z"), ZoneOffset.UTC));
         FleetSequencer fleet = new FleetSequencer(store, config(podId, endpoint),
-                transport, () -> LocalSequencer.start(store, PREFIX, manager, 8,
+                wire, () -> LocalSequencer.start(store, PREFIX, manager, 8,
                         // ⚠️ THE RENEWER IS PARKED, because this file counts
                         // requests in a window and `leases.renew()` is a
                         // `putIfMatch` the same meter sees. The shipped 3 s
@@ -87,7 +108,7 @@ class FleetSequencerCostTest {
                         // the same class, 20x wider.
                         CheckpointWriter.sleepFor(java.time.Duration.ofDays(1))));
         if (fleet.leading()) {
-            transport.at(endpoint, fleet);
+            registry.at(endpoint, fleet);
         }
         return fleet;
     }
@@ -157,6 +178,201 @@ class FleetSequencerCostTest {
                 .as("and the SAME record at four streams -- every kind flat, not just the two "
                         + "this task happened to name first")
                 .isEqualTo(new StoreCounts(1, 2, 0, 1, 0));
+    }
+
+    @Test
+    void aForwardedCommitWhoseLEASEMOVEDCostsONEMoreREADAndNothingElse() throws Exception {
+        // ⚠️ THE SPEC's SECOND COST NUMBER, WHICH WAS STATED AS FACT AND PINNED
+        // NOWHERE: "it is FOUR when the lease has moved, because `commitAll`'s
+        // `NotTheLeaseholderException` arm re-reads it". M5.33 MEASURED two
+        // extra lease GETs on that arm surviving the whole sequencer module.
+        //
+        // ⚠️ THE OBVIOUS FIXTURE IS THE WRONG ONE, and the row warned so.
+        // `RemoteSequencerTest.aLeaseThatMovesDURINGTheCommitIsFollowedAfterOne`
+        // `Refusal` builds this race by CLOSING the leader and STARTING a
+        // successor inside the send, so a count around it is dominated by seal
+        // and replay -- `(puts 5, gets 8, lists 3, stats 6, deletes 0)`, a LIST
+        // on what is meant to be a commit-path pin.
+        //
+        // ⚠️ SO THE LEASE MOVES WITHOUT A SUCCESSOR, and the same leader is
+        // reachable at two endpoints. `RemoteSequencer` compares EPOCH and
+        // ENDPOINT, so either changing is a move to a forwarder -- and the two
+        // arms below use both shapes deliberately: the FIRST move bumps the
+        // epoch AND changes the endpoint A -> C, the SECOND bumps the epoch
+        // with the endpoint already at C. ⚠️ THAT SECOND SHAPE CARRIES A
+        // PROPERTY -- it is the only place the EPOCH half of that condition is
+        // exercised alone, which is why its `as(...)` says so rather than
+        // leaving the coverage to be discovered (M5.70). ⚠️ AND WHAT KEEPS THE WINDOW A COMMIT IS NOT THAT FIELD: an
+        // earlier comment here credited "keeping `holderPodId`", and review
+        // MEASURED that false -- rewriting the pod id, or bumping the epoch,
+        // both leave the record at (1, 3, 0, 1, 0). What holds it steady is the
+        // PARKED RENEWER and the FIXED CLOCK, which `pod()`'s own comment above
+        // already explains. ⚠️ NO CLAIM ABOUT WHICH CALLERS REACH `isOwnTerm`
+        // APPEARS HERE, deliberately: two drafts of this comment made one and
+        // both were wrong, the second omitting `acquireLocked` -- the election,
+        // which is the path this fixture runs inside the counted window.
+        // ⚠️ AND THE REWRITE ITSELF IS DELIBERATELY UNCOUNTED: it goes through
+        // the backing store, because moving a lease is the environment, not
+        // what this commit path costs.
+        // ⚠️ TWO STREAM COUNTS, FOR THE REASON THE SIBLING ABOVE ALREADY GIVES
+        // AND THIS CASE FIRST IGNORED. At ONE RunKey "one re-read per commit"
+        // and "one re-read per STREAM" are the same number, so a whole-record
+        // equality cannot separate them: review MEASURED a per-stream loop on
+        // the refusal arm leaving all 504 green. A flush of 200 streams would
+        // then pay 200 lease GETs whenever it straddles a lease move -- a read
+        // scaling with streams, which non-negotiable 6 forbids outright.
+        assertThat(forwardedCommitCostWhenTheLeaseMoves(1).delta())
+                .as("one forwarded commit whose lease moved: the SAME record as an "
+                        + "unmoved one plus exactly ONE more GET -- the re-read on the "
+                        + "refusal arm. Still no LIST, and still one PUT")
+                .isEqualTo(new StoreCounts(1, 3, 0, 1, 0));
+        assertThat(forwardedCommitCostWhenTheLeaseMoves(4).delta())
+                .as("and the SAME record at four streams -- the re-read is per COMMIT, "
+                        + "never per stream")
+                .isEqualTo(new StoreCounts(1, 3, 0, 1, 0));
+    }
+
+    /** While armed, refuses one send and moves the lease as it does. */
+    private static final class MovesTheLeaseWhenArmed implements SequencerTransport {
+        private final InProcessTransport inner;
+        private final BinStore uncounted;
+        private final String to;
+        private boolean armed;
+
+        MovesTheLeaseWhenArmed(InProcessTransport inner, BinStore uncounted, String to) {
+            this.inner = inner;
+            this.uncounted = uncounted;
+            this.to = to;
+        }
+
+        void arm() {
+            this.armed = true;
+        }
+
+        @Override
+        public CommitDelta send(String endpoint, CommitRequest request) throws IOException {
+            if (armed) {
+                armed = false;
+                binjava.format.Lease held;
+                try (java.io.InputStream in =
+                        uncounted.get(LEASE_KEY)) {
+                    held = binjava.format.Lease.decode(in.readAllBytes());
+                }
+                // ⚠️ THE EPOCH IS BUMPED, because no in-protocol takeover keeps it:
+                // `Lease.takenOverBy` is `new Lease(epoch + 1, ...)` and is the
+                // only takeover constructor `LeaseManager` reaches. An earlier
+                // fixture kept it, and review MEASURED what that hid -- M5.33's
+                // own two-extra-GET mutation, GUARDED by `if (moved.epoch() !=
+                // lease.epoch())`, survived both modules. That guard is the left
+                // half of the condition three lines above it in `commitAll`, so
+                // a same-epoch move pins the refusal arm for a move that never
+                // happens. ⚠️ `isOwnTerm` compares epoch and podId and never the
+                // endpoint, and nothing re-reads the leader's belief inside the
+                // window, so the leader is not fenced either way. The rewrite
+                // keeps `expiresAtMillis`, so the fixed clock still reads the
+                // lease unexpired and the election's own cost does not move.
+                binjava.format.Lease moved = new binjava.format.Lease(held.epoch() + 1,
+                        held.holderPodId(), to, held.expiresAtMillis());
+                byte[] bytes = moved.encode();
+                uncounted.put(LEASE_KEY,
+                        new binjava.binstore.Body(bytes.length,
+                                () -> new java.io.ByteArrayInputStream(bytes)));
+                throw new SequencerTransport.NotTheLeaseholderException("the term moved");
+            }
+            return inner.send(endpoint, request);
+        }
+
+        @Override
+        public void close() throws IOException {
+            inner.close();
+        }
+    }
+
+    /** What a follower's commit of {@code streams} runs costs when the lease moves. */
+    private static Cost forwardedCommitCostWhenTheLeaseMoves(int streams) throws Exception {
+        MemoryBinStore backing = new MemoryBinStore();
+        var store = new CountingBinStore(backing);
+        InProcessTransport inner = new InProcessTransport();
+        MovesTheLeaseWhenArmed moving = new MovesTheLeaseWhenArmed(inner, backing, C);
+        try (FleetSequencer leader = pod(store, "poda", A, inner);
+                FleetSequencer follower = pod(store, "podb", B, inner, moving)) {
+            assertThat(leader.leading()).isTrue();
+            assertThat(follower.leading()).isFalse();
+            // ⚠️ THE SAME LEADER AT A SECOND ENDPOINT, which is what makes the
+            // follow land without a successor to start.
+            inner.at(C, leader);
+            leader.commit(flush("poda", 0, "seg/a"));
+            Map<RunKey, Integer> runs = new LinkedHashMap<>();
+            for (int i = 0; i < streams; i++) {
+                runs.put(new RunKey(DedupFixtures.A, i), 2);
+            }
+            // ⚠️ THE PREMISE, ASSERTED, for the reason the sibling records: a
+            // one-character degradation to a single RunKey touches no assertion
+            // and `check-test-integrity` cannot see it.
+            assertThat(runs).hasSize(streams);
+            follower.commit(new CommitRequest("podb", "i1", 0, "seg/b", runs));
+
+            moving.arm();
+            var before = store.counts();
+            follower.commit(new CommitRequest("podb", "i1", 1, "seg/b2", runs));
+            var after = store.counts();
+            // ⚠️ THAT THE FOLLOW WENT TO THE MOVED ENDPOINT, not merely that it
+            // was resent. Both endpoints serve the same leader object, so the
+            // COUNTS cannot tell them apart -- review measured sending to
+            // `lease.holderEndpoint()` instead of `moved.holderEndpoint()`
+            // giving an identical record.
+            assertThat(inner.sentTo()).as("the retry went to the endpoint the RE-READ "
+                    + "lease named").endsWith(C);
+
+            // ⚠️ AND THE EXTRA READ IS FOR THE STRADDLING COMMIT ALONE, not a
+            // surcharge a fleet pays forever once it has seen a failover. The
+            // window above ends AT the move, so review MEASURED a permanent +1
+            // surviving both modules: a `sawMove` flag set on the refusal arm
+            // and re-read at the top of every later `commitAll` is invisible to
+            // a meter that stops at the commit which straddles. That would make
+            // every follower commit cost four reads after the first failover in
+            // a fleet's life, while the SPEC still prices the unmoved path at
+            // three.
+            // ⚠️ TWO COMMITS PAST THE MOVE, NOT ONE, AND THEN A SECOND MOVE.
+            // Both reviewers measured what one of each missed: a surcharge
+            // PHASE-SHIFTED by a commit (`since++ % 2 == 0`) steps over a single
+            // sample, and a re-read loop bounded by the number of moves this pod
+            // has FOLLOWED is indistinguishable from the one legitimate re-read
+            // while the fixture only ever moves once.
+            assertThat(costOf(store, follower, 2, runs))
+                    .as("the commit AFTER the move costs the UNMOVED record again -- the "
+                            + "re-read is per refusal, never a permanent surcharge")
+                    .isEqualTo(new StoreCounts(1, 2, 0, 1, 0));
+            assertThat(costOf(store, follower, 3, runs))
+                    .as("and so does the one after THAT -- a surcharge that skips a commit "
+                            + "steps over a single sample")
+                    .isEqualTo(new StoreCounts(1, 2, 0, 1, 0));
+            moving.arm();
+            assertThat(costOf(store, follower, 4, runs))
+                    .as("a SECOND move costs one more read and no more -- a re-read loop "
+                            + "counting the moves seen would cost two. ⚠️ AND THIS ARM "
+                            + "CARRIES A SECOND PROPERTY, so do not trim it for cost "
+                            + "reasons: the epoch bumps with the endpoint ALREADY at C, "
+                            + "so it is the only place the EPOCH half of `commitAll`'s "
+                            + "\"did the lease move\" test is exercised alone. Dropping "
+                            + "that half, or turning its `&&` into `||`, reds HERE and "
+                            + "nowhere else (M5.70)")
+                    .isEqualTo(new StoreCounts(1, 3, 0, 1, 0));
+            return new Cost(new StoreCounts(after.puts() - before.puts(),
+                    after.gets() - before.gets(), after.lists() - before.lists(),
+                    after.stats() - before.stats(), after.deletes() - before.deletes()));
+        }
+    }
+
+    /** What ONE more follower commit costs, as a whole {@link StoreCounts} delta. */
+    private static StoreCounts costOf(CountingBinStore store, FleetSequencer follower,
+            long flushSeq, Map<RunKey, Integer> runs) throws Exception {
+        var before = store.counts();
+        follower.commit(new CommitRequest("podb", "i1", flushSeq, "seg/post" + flushSeq, runs));
+        var after = store.counts();
+        return new StoreCounts(after.puts() - before.puts(), after.gets() - before.gets(),
+                after.lists() - before.lists(), after.stats() - before.stats(),
+                after.deletes() - before.deletes());
     }
 
     /**
