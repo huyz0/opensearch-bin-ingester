@@ -14,12 +14,12 @@ import java.util.List;
  * Fixtures shared by {@link SegmentProxyTest} and
  * {@link SegmentProxyFailureTest}.
  *
- * <p>⚠️ SPLIT OUT WHEN {@code SegmentProxyTest} CROSSED 700 LINES --
- * code-structure.md rule 1, split rather than raise, the same way
- * {@code DeadPeerTest} was split from {@code FleetSequencerTest}. The seam is
- * real rather than convenient: one file asks what {@code proxy} costs when
- * everything works, the other what it does when a consumer or the store fails,
- * and the two share only their scaffolding.
+ * <p>⚠️ A SEPARATE FILE UNDER code-structure.md rule 1, with NO LINE-COUNT
+ * TRIGGER CLAIMED (M5.54). ⚠️ AND NO SEAM IS CHARACTERISED HERE: the "one file
+ * asks what {@code proxy} costs when everything works, the other what it does
+ * when a consumer or the store fails" framing was measurably wrong -- {@code
+ * SegmentProxyTest} holds two consumer-failure cases of its own -- and a
+ * replacement offered during M5.54 was wrong too. Read the two files.
  *
  * <p>⚠️ {@link StubStore} IS THE REASON THIS FILE IS WORTH HAVING.
  * {@code MemoryBinStore} cannot produce a short read, a zero read, a mid-read

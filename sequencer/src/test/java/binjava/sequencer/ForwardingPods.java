@@ -11,9 +11,9 @@ import java.util.Optional;
  * The follower half of a simulated fleet: pods that FORWARD rather than lead
  * (M5.7).
  *
- * <p>⚠️ SPLIT OUT OF {@link CommitProtocolSimulation} when it crossed 700 lines
- * — code-structure rule 1, split rather than raise, the same way
- * {@code DedupFixtures} and {@code InvariantFixtures} were. The seam is real
+ * <p>⚠️ EXTRACTED FROM {@link CommitProtocolSimulation} under code-structure
+ * rule 1. NO LINE-COUNT TRIGGER IS CLAIMED (M5.54).
+ * The seam is real
  * rather than convenient: leading is about acquiring a lease and writing a
  * chain, and forwarding is about reaching whoever holds them, with no
  * coordination state of its own.

@@ -7,10 +7,9 @@ import java.util.List;
 /**
  * What the store JUDGED while a leader released its lease politely (M5.26).
  *
- * <p>⚠️ SPLIT OUT OF {@code CommitProtocolSimulation} when it crossed 700 lines
- * -- code-structure.md rule 1, split rather than raise, the same way {@code
- * SimulationVerdict} and {@code ForwardingPods} were. The seam is real: a
- * release is the one call in the run whose ACTOR is the question, and folding
+ * <p>⚠️ EXTRACTED FROM {@code CommitProtocolSimulation} under code-structure.md
+ * rule 1. NO LINE-COUNT TRIGGER IS CLAIMED (M5.54). The seam is real: the
+ * ACTOR of a release is the question it exists to ask, and folding
  * the reading into the driver is what let the first version measure nothing.
  *
  * <p>⚠️ IT READS THE STORE, NOT THE CALLER'S OWN ASSIGNMENT. The first version

@@ -284,9 +284,9 @@ public final class CommitProtocolSimulation {
         // what the assertion says.
         int zombieWrites = 0;
         int zombieAttempts = 0;
-        // ⚠️ THE FOLLOWER HALF OF THE FLEET, and a class of its own because
-        // this file crossed 700 lines -- code-structure rule 1, split rather
-        // than raise. The seam is real: leading is about the lease and the
+        // ⚠️ THE FOLLOWER HALF OF THE FLEET, and a class of its own under
+        // code-structure rule 1; no line-count trigger is claimed (M5.54).
+        // The seam is real: leading is about the lease and the
         // chain, forwarding is about reaching whoever holds them.
         ForwardingPods followers = new ForwardingPods(store, faulty);
         // ⚠️ DERIVED, NOT DECLARED. Recorded at the point of issue, so a test
@@ -605,9 +605,8 @@ public final class CommitProtocolSimulation {
             }
         }
 
-        // ⚠️ THE VERDICT IS A CLASS OF ITS OWN, split out when this file crossed
-        // 700 lines -- code-structure rule 1, split rather than raise, as
-        // `ForwardingPods` was. The seam is real: everything above DRIVES a
+        // ⚠️ THE VERDICT IS A CLASS OF ITS OWN, under code-structure rule 1; no
+        // line-count trigger is claimed (M5.54). The seam is real: everything above DRIVES a
         // fleet, everything in there JUDGES the bytes it left behind, and the
         // judging reads the backing store directly rather than through the
         // injector the driving goes through.

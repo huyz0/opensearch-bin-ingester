@@ -11,9 +11,9 @@ import java.util.function.Function;
 /**
  * What one simulated run left in the store, judged (M4.13, split out at M5.7).
  *
- * <p>⚠️ SPLIT OUT OF {@link CommitProtocolSimulation} when it crossed 700 lines
- * — code-structure rule 1, split rather than raise, the same way
- * {@link ForwardingPods} was. The seam is real rather than convenient:
+ * <p>⚠️ EXTRACTED FROM {@link CommitProtocolSimulation} under code-structure
+ * rule 1. NO LINE-COUNT TRIGGER IS CLAIMED (M5.54). The seam is real rather
+ * than convenient:
  * everything left there DRIVES a fleet through a fault injector, and everything
  * here JUDGES the bytes that fleet left behind, reading the backing store
  * DIRECTLY so that no injected fault can reach a checker.

@@ -11,8 +11,8 @@ import org.junit.jupiter.api.Test;
 /**
  * The lexer half of non-negotiable 7's gate: what counts as CODE.
  *
- * <p>⚠️ SPLIT OUT OF {@code IoSeamGateTest} when it crossed 700 lines --
- * code-structure.md rule 1, split rather than raise. The seam is real rather
+ * <p>⚠️ A SEPARATE FILE UNDER code-structure.md rule 1, no line-count trigger
+ * claimed (M5.54). The seam is real rather
  * than arithmetic: every case here is about {@code io_seam_scan.code_only}
  * deciding which bytes are code, and every case left behind is about what the
  * gate then DOES with them -- its scope, its one exemption, its reporting and

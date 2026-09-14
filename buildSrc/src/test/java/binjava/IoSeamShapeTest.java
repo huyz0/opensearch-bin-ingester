@@ -11,8 +11,8 @@ import org.junit.jupiter.api.Test;
 /**
  * The shape half of non-negotiable 7's gate: HOW a banned name is matched.
  *
- * <p>⚠️ SPLIT OUT OF {@code IoSeamGateTest} when it crossed 700 lines --
- * code-structure.md rule 1, split rather than raise. Three files, three
+ * <p>⚠️ A SEPARATE FILE UNDER code-structure.md rule 1, no line-count trigger
+ * claimed (M5.54). Three files, three
  * questions: {@code IoSeamGateTest} asks what the gate DOES, {@code
  * IoSeamLexerTest} asks what counts as CODE, and this one asks whether a given
  * spelling of a name IS the banned thing -- across a line break, through a

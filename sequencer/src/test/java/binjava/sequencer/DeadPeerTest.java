@@ -17,9 +17,10 @@ import org.junit.jupiter.api.Timeout;
 /**
  * What a pod does when a peer says NOTHING (M5.6j, ADR-0039).
  *
- * <p>⚠️ SPLIT OUT OF {@code FleetSequencerTest} when it crossed 700 lines —
- * code-structure.md rule 1, split rather than raise, the same way
- * {@code ForwardingPods} and {@code SimulationVerdict} were. The seam is real:
+ * <p>⚠️ A SEPARATE FILE UNDER code-structure.md rule 1, and NO LINE-COUNT
+ * TRIGGER IS CLAIMED -- see M5.54: the gate makes an over-cap version
+ * unrepresentable, so committed history can neither confirm nor refute one.
+ * The seam is real:
  * every test in that file drives peers that ANSWER, and this one exists because
  * that was the whole of the coverage.
  */

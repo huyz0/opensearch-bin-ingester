@@ -18,8 +18,8 @@ import org.junit.jupiter.api.Test;
 /**
  * What {@code proxy} does when a consumer or the store FAILS (M5.12).
  *
- * <p>⚠️ SPLIT FROM {@code SegmentProxyTest} at 700 lines (code-structure.md
- * rule 1), and the seam is the one the review rounds kept finding: every
+ * <p>⚠️ A SEPARATE FILE UNDER code-structure.md rule 1, no line-count trigger
+ * claimed (M5.54), and the seam is the one the review rounds kept finding: every
  * defect in this file was invisible because the happy-path fixtures could not
  * express failure. A {@code ByteArrayInputStream} never fails mid-read and has
  * a {@code close()} that does nothing -- and a production defect hid behind

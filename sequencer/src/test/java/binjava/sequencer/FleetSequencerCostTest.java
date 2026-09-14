@@ -28,16 +28,18 @@ import org.junit.jupiter.api.Test;
  * written into its own file instead. (An earlier draft said 723; the
  * merged file is longer than that now, and the number was never the
  * point.)
- * NOTHING WAS MOVED OUT and that file is untouched at 657 --
- * ⚠️ AND {@code DeadPeerTest} IS NOT THE CONTRAST AN EARLIER DRAFT HERE
- * CLAIMED. Its javadoc says it was "split out of {@code FleetSequencerTest}
- * when it crossed 700 lines", and review MEASURED `DeadPeerTest.java` in that
- * commit at 185 insertions and ZERO deletions, with `FleetSequencerTest.java`
- * absent from the commit's numstat entirely -- written new, moving nothing,
- * from a file that has been 657 lines since `11fe5d8` and never crossed 700.
+ *
+ * ⚠️ AND {@code DeadPeerTest} WAS CITED HERE AS A CONTRAST IT CANNOT CARRY. Its javadoc USED to say it was "split out of {@code
+ * FleetSequencerTest} when it crossed 700 lines"; M5.54 removed that trigger,
+ * so this is a quotation of retracted text. ⚠️ AND M5.54's OWN FIRST ANSWER WAS
+ * WRONG TOO: it read `DeadPeerTest`'s 185 insertions with ZERO deletions, and
+ * `FleetSequencerTest`'s maximum of 657, as DISPROOF. They are not. The cap
+ * gate makes an over-cap committed version unrepresentable, so a file can
+ * exceed it only in a working tree -- which is where a split happens and which
+ * git cannot see. The claim was UNDECIDABLE, not false.
  * (The COMMIT is seven files and 381 insertions; an earlier draft here quoted
- * the file's stat as the commit's.) That claim is pre-existing and
- * not this commit's to fix; repeating it as established fact was.
+ * the file's stat as the commit's.) M5.54 removed that trigger; what was
+ * wrong here was repeating it as established fact.
  * code-structure.md rule 1 is the rule either way: split rather than raise. The
  * seam is real rather than convenient: every other file here asks whether
  * forwarding is CORRECT, and this one asks what it costs. cost.md draws the
