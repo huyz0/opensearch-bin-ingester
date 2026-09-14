@@ -116,8 +116,12 @@ import java.util.List;
  * <ul>
  * <li><b>A superseded incarnation.</b> A checkpoint remembers a pod's LATEST
  * incarnation only, so a replay from one since superseded is treated as fresh.
- * It needs a pod to restart between the original and its retry. ⚠️ UNPINNED
- * in either direction — M5.52b owns writing it.</li>
+ * It needs a pod to restart between the original and its retry. Pinned in BOTH
+ * directions by one fixture varying only which incarnation the slot names:
+ * {@code DedupAcrossTakeoverTest.aSUPERSEDEDIncarnationsReplayIsAppliedTWICE_}
+ * {@code AndTheSAMEFixtureAnswersITSOwn} (M5.52b). ⚠️ PINNED IS NOT CLOSED:
+ * closing it is an ADR -- order incarnations, or give the window an
+ * unanswerable-watermark tier.</li>
  * <li><b>A bare v0 slot.</b> {@code ChainReplay} skips a slot with no pointer,
  * because seeding it would evict a real pointered slot and admit the literal
  * key {@code pod\0null} that nothing matches — so for a pod whose only record

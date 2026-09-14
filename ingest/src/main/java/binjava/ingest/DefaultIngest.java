@@ -584,7 +584,9 @@ public final class DefaultIngest implements Ingest {
      * leadership the mark lives on, and forwards the identical request to
      * another pod. Correlated, not independent: ADR-0027's self-fence fires on
      * an ambiguous lease RENEW. ⚠️ THAT IS ONE ROUTE, NOT THE ENUMERATION --
-     * M5.52b carries the rest, including one that needs no fence at all.
+     * {@link binjava.sequencer.Sequencer} holds it. A resend reaching a pod
+     * that never made the append is NOT by itself a duplicate: review measured
+     * one delta, because that pod seeds its window from the CHAIN.
      */
     private CommitDelta commitResendingOnceIfTheReplyIsLost(CommitRequest request)
             throws IOException {

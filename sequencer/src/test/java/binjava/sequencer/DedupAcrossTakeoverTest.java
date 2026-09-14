@@ -400,6 +400,90 @@ class DedupAcrossTakeoverTest {
                 .isEqualTo(2);
     }
 
+    /** Replays `early` behind a checkpoint whose podb slot names {@code inc}. */
+    private static int deltasAfterReplayBehindSlotNaming(String inc) throws Exception {
+        MemoryBinStore store = new MemoryBinStore();
+        CommitRequest early = new CommitRequest("podb", "i1", 0, "seg/0", counts(3));
+        LocalSequencer first = takeOver(store, "poda");
+        try {
+            first.commitAll(List.of(early));
+        } finally {
+            first.close();
+        }
+        // ⚠️ THE BOUND MUST FALL PAST THE i1 DELTA AND NOT PAST THE CHAIN'S END,
+        // which is refinement (a)'s "passes on the tail" trap. Below the delta
+        // the walk reads it and the replay is answered from the delta rather
+        // than the seed; beyond the chain's end the barrier guard rejects the
+        // checkpoint outright and the walk is never bounded at all. Either way
+        // it is ONE delta whatever the slot names, and the case constrains
+        // nothing. ⚠️ IT IS AN INTERVAL, NOT THE LITERAL 2: review swept 0-4 and
+        // measured 0,1 -> 1/1, 2 -> 1/2, 3 -> 1/2, 4 -> 1/1. An earlier comment
+        // here said "sequence 2 is load-bearing", which names a point where the
+        // code has a window -- and an author who moves the chain end while
+        // keeping the literal lands back on the tail.
+        binjava.format.Checkpoint cp = new binjava.format.Checkpoint(2L,
+                java.util.Map.of(),
+                java.util.Map.of("podb",
+                        new binjava.format.Checkpoint.PodState(inc, 0, 1, 1)));
+        byte[] bytes = cp.encode();
+        store.put(new LogKeys(PREFIX, 1L).latestCheckpointKey(),
+                new binjava.binstore.Body(bytes.length,
+                        () -> new java.io.ByteArrayInputStream(bytes)));
+
+        LocalSequencer successor = takeOver(store, "podc");
+        try {
+            successor.commitAll(List.of(early));
+        } finally {
+            successor.close();
+        }
+        return deltasCarrying(store, "seg/0");
+    }
+
+    @Test
+    void aSUPERSEDEDIncarnationsReplayIsAppliedTWICE_AndTheSAMEFixtureAnswersITSOwn()
+            throws Exception {
+        // ⚠️ THE SPEC's INCARNATION LIMIT, WHOSE CONSEQUENCE NOTHING ASSERTED IN
+        // EITHER DIRECTION until M5.52b. ADR-0036 states the price in as many
+        // words: an incarnation id is UNORDERED, so nothing tells a NEWER
+        // incarnation from an OLDER one, and the checkpoint holds ONE slot per
+        // pod -- "X commits (Ix, 5), Y commits (Iy, 3) and takes the slot, and
+        // X's retry of 5 is then tested against a foreign watermark".
+        //
+        // ⚠️ THE CONTRAST IS THE PROPERTY, AND ONE HALF ALONE WOULD NOT BE. The
+        // two runs differ in ONE character -- which incarnation the slot names --
+        // so the duplication cannot be blamed on the checkpoint bounding the
+        // walk, which is `aBAREV0CheckpointSlotLeavesItsPodUNPROTECTED`'s
+        // subject and would look identical from the duplicated half alone.
+        // MEASURED both ways before this was written.
+        //
+        // ⚠️ WHY: `ChainReplay` seeds `slot(pod, state.incarnationId())`, so a
+        // slot naming i2 seeds `podb\0i2` and i1's replay matches nothing. It is
+        // not detected and not refused -- it is treated as FRESH. That is the
+        // direction I2 forbids, pinned rather than fixed, because closing it is
+        // a DECISION (order incarnations, or give the window a second tier)
+        // rather than an oversight.
+        //
+        // ⚠️ TWO THINGS THIS FIXTURE DOES NOT PIN, so nothing credits it with
+        // them. The duplicate lands at the SAME offsets here, not at two
+        // different ones: the forged checkpoint carries no `streams`, so the
+        // successor rewinds and both deltas sit at 0..2 -- with realistic
+        // stream offsets the second would land at 3..5. And `PodState(inc, 0,
+        // 1, 1)` gives epoch and sequence the same value, so transposing them
+        // in `IdempotencyWindow` survives this case; three neighbours in this
+        // file kill it.
+        assertThat(deltasAfterReplayBehindSlotNaming("i1"))
+                .as("the slot names the replay's OWN incarnation, so it is answered from "
+                        + "the seed and applied once")
+                .isEqualTo(1);
+        assertThat(deltasAfterReplayBehindSlotNaming("i2"))
+                .as("a LATER incarnation took the one slot podb owns, so the replay "
+                        + "MATCHES NO KEY AT ALL and lands a SECOND time. Note what does "
+                        + "NOT happen: no watermark is compared -- `replayOf` keys on "
+                        + "(podId, incarnationId) and returns empty before any flushSeq "
+                        + "test. The stated price of an unordered incarnation id")
+                .isEqualTo(2);
+    }
+
     @Test
     void aGENUINELYNewFlushAfterATakeoverIsStillApplied() throws Exception {
         // ⚠️ THE NEGATIVE CONTROL, and it is doing real work: a window seeded
