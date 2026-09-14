@@ -54,6 +54,7 @@ class GracefulReleaseMeterTest {
         FaultInjectingStore faulty = new FaultInjectingStore(
                 new MemoryBinStore(), 1L, FaultInjectingStore.Faults.none());
         binjava.binstore.Version held = faulty.put("ctl/lease", FaultFixtures.body("held"));
+        binjava.binstore.Version other = faulty.put("ctl/lease-b", FaultFixtures.body("held"));
         faulty.partition("poda");
         GracefulReleaseMeter meter = new GracefulReleaseMeter(faulty);
 
@@ -64,14 +65,27 @@ class GracefulReleaseMeterTest {
             faulty.actingAs("podb");
             faulty.putIfMatch("ctl/lease", FaultFixtures.body("expired"), held);
         });
+        // ⚠️ A SECOND, CLEAN WINDOW SO THE TWO COUNTERS DO NOT COINCIDE, which
+        // is load-bearing rather than decorative. podb is not cut off, so this
+        // credits `released` WITHOUT crediting `releasedDespiteOwnPartition`.
+        // With one window both read 1, and review MEASURED what that costs:
+        // `releasedDespiteOwnPartition()` returning `counts().released()` was
+        // BUILD SUCCESSFUL over all 502 tests -- this case is the tree's ONLY
+        // reader of that accessor, so its fixture is the only thing that can
+        // falsify it, and two equal values falsify nothing.
+        meter.observe("podb",
+                () -> faulty.putIfMatch("ctl/lease-b", FaultFixtures.body("expired"), other));
 
         assertThat(meter.releasedDespiteOwnPartition())
-                .as("poda was cut off; its release must not have gone through")
+                .as("poda was cut off; its release must not have gone through -- and this must "
+                        + "not read the CREDIT counter, which the second window separates it "
+                        + "from")
                 .isEqualTo(1);
         assertThat(meter.released())
                 .as("and the harm is that it was CREDITED -- the graceful-release floor is met "
-                        + "by a release that should have been refused")
-                .isEqualTo(1);
+                        + "by a release that should have been refused. TWO here: the partitioned "
+                        + "release above plus the clean one")
+                .isEqualTo(2);
         assertThat(meter.refusedForAnotherPod())
                 .as("the refusal direction saw nothing -- HELD BY CONSTRUCTION, not by the "
                         + "meter's logic: `Faults.none()` with podb un-partitioned leaves the "
@@ -617,5 +631,38 @@ class GracefulReleaseMeterTest {
                 .as("and the store really did see exactly one conditional write across both "
                         + "windows, or the assertion above is trivially true")
                 .isEqualTo(1);
+    }
+
+    /**
+     * `plus` carries each counter to its own component.
+     *
+     * <p>⚠️ THIS PINS `plus` AND NOTHING ELSE, which the name and this comment
+     * both got wrong until review measured them. It never builds a
+     * `GracefulReleaseMeter` and never calls `counts()`, so all six `counts()`
+     * swaps leave it GREEN. `GracefulReleaseMeter.counts()` records what reds
+     * the M5.31 zero pair; the other four pairwise swaps are recorded nowhere,
+     * though review has measured all six red.
+     *
+     * <p>⚠️ THE FOUR COUNTERS ARE GIVEN DISTINCT VALUES ON PURPOSE -- two of
+     * them are honestly ZERO on a healthy sweep, so a fixture that let any two
+     * coincide would accept the very swap this pins, which is why the row
+     * could not be answered with a numeric relation.
+     *
+     * <p>⚠️ AND THE ROW IS NOT CLOSED BY THIS CASE OR BY THE TYPE -- see M5.68.
+     */
+    @org.junit.jupiter.api.Test
+    void plusCarriesEachCounterToItsOWNComponent() {
+        var a = new GracefulReleaseMeter.Counts(1, 2, 3, 4);
+        var b = new GracefulReleaseMeter.Counts(10, 20, 30, 40);
+
+        var sum = a.plus(b);
+        org.assertj.core.api.Assertions.assertThat(sum.released()).isEqualTo(11);
+        org.assertj.core.api.Assertions.assertThat(sum.refusedForAnotherPod()).isEqualTo(22);
+        org.assertj.core.api.Assertions.assertThat(sum.refusalsSeen()).isEqualTo(33);
+        org.assertj.core.api.Assertions.assertThat(sum.releasedDespiteOwnPartition()).isEqualTo(44);
+
+        org.assertj.core.api.Assertions.assertThat(GracefulReleaseMeter.Counts.none())
+                .as("the zero of plus, for a sweep that has run no seed")
+                .isEqualTo(new GracefulReleaseMeter.Counts(0, 0, 0, 0));
     }
 }

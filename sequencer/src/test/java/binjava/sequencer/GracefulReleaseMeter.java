@@ -146,13 +146,95 @@ final class GracefulReleaseMeter {
      * lease -- so {@code putIfMatch} is what gets credited, and the same swap
      * now reds the floor at 0. MEASURED both ways.
      */
+
     int released() {
-        return released;
+        return counts().released();
     }
+
+    /**
+     * All four counters together, as ONE value (M5.51).
+     *
+     * <p>⚠️ THIS EXISTS TO MAKE A TRANSPOSITION UNREPRESENTABLE, which is rung
+     * 1 rather than a guard. `CommitProtocolSimulation.Result` used to take the
+     * four as loose {@code int}s, and M5.31 MEASURED the consequence: passing
+     * {@code refusedForAnotherPod()} where {@code releasedDespiteOwnPartition()}
+     * belongs leaves the WHOLE suite green including the 1,000-seed sweep, and
+     * silently removes its only view of the wrongly-ALLOWED direction.
+     *
+     * <p>⚠️ AND A NUMERIC RELATION CANNOT ANSWER IT, which is what separates
+     * this from M5.28's `refusalsSeen &lt; gracefulReleases`: two of these four
+     * are HONESTLY ZERO on a healthy sweep, and no relation distinguishes a
+     * counter whose true value is 0 from another whose true value is 0.
+     *
+     * <p>⚠️ THIS DOES NOT CLOSE THE ROW. This constructor and {@link
+     * Counts#plus} are still transposable, and so are the sweep's reads of
+     * them. **M5.68 owns the residue and enumerates it. Do not re-derive that
+     * enumeration here** -- two copies of it is how this paragraph's own
+     * history went wrong.
+     *
+     * <p>⚠️ WHAT IS MEASURED ABOUT THIS CONSTRUCTOR, AND NOTHING BEYOND IT.
+     * The M5.31 zero-pair swap ({@code refusedForAnotherPod} for {@code
+     * releasedDespiteOwnPartition}) reds exactly three cases:
+     * {@code aReleaseTheLEADERSOwnPartitionShouldHaveREFUSEDIsCounted},
+     * {@code aRefusalBLAMINGANOTHERPODIsCountedAndTheReleaseIsNotCredited},
+     * {@code TWORefusalsBLAMINGANOTHERPODCountTheWINDOWOnce}. A swap of {@code
+     * released} with {@code refusalsSeen} reds the sweep even with every
+     * accessor rewritten to read its field directly, because {@link
+     * CommitProtocolSimulation} builds its {@code Result} from {@code counts()}
+     * as well.
+     *
+     * <p>⚠️ EVERY SENTENCE ABOVE IS A MEASUREMENT AND NOT A MECHANISM, and that
+     * is deliberate: four earlier drafts named a mechanism -- a test that never
+     * calls this method, then "the only route", which was one of two -- and
+     * each was false. Re-run the mutation before editing any of them.
+     */
+    Counts counts() {
+        return new Counts(released, refusedForAnotherPod, refusalsSeen, releasedDespiteOwnPartition);
+    }
+
+    /** The four release counters as one value; see {@link #counts()}. */
+    record Counts(int released, int refusedForAnotherPod, int refusalsSeen,
+            int releasedDespiteOwnPartition) {
+
+        /** The zero of {@link #plus}, for a sweep that has run no seed yet. */
+        static Counts none() {
+            return new Counts(0, 0, 0, 0);
+        }
+
+        /**
+         * Componentwise sum, so a sweep accumulates ONE value rather than four.
+         *
+         * <p>⚠️ THIS EXISTS BECAUSE CLOSING THE CONSTRUCTION SITE WAS NOT
+         * ENOUGH, and review measured the gap in the first version of M5.51:
+         * `CommitProtocolSweepTest`'s loop still added the four components into
+         * four longs, so
+         * {@code releasesDespiteOwnPartition += run.releases().refusedForAnotherPod()}
+         * compiled AND COULD NOT FAIL -- the sweep asserts both of those
+         * isZero, so swapping two expressions that are honestly 0 changes no
+         * assertion, no floor, not even the printf. That is verbatim the defect
+         * M5.31 measured, reintroduced one layer out by the fix for it.
+         *
+         * <p>⚠️ ACCUMULATING ONE VALUE COLLAPSES THOSE FOUR SITES INTO THIS
+         * CONSTRUCTOR -- pinned NOT the way {@link #counts()} is, which an
+         * earlier version of this sentence claimed. No accessor reaches here.
+         * What reds a swap here is {@code
+         * plusCarriesEachCounterToItsOWNComponent}, whose four counters are
+         * DISTINCT so no swap hides in a coincidence of zeros, and the
+         * 1,000-seed sweep itself. MEASURED: summing {@code refusalsSeen} into
+         * the {@code refusedForAnotherPod} component reds both.
+         */
+        Counts plus(Counts other) {
+            return new Counts(released + other.released,
+                    refusedForAnotherPod + other.refusedForAnotherPod,
+                    refusalsSeen + other.refusalsSeen,
+                    releasedDespiteOwnPartition + other.releasedDespiteOwnPartition);
+        }
+    }
+
 
     /** Releases the store refused while blaming a pod other than the leader. */
     int refusedForAnotherPod() {
-        return refusedForAnotherPod;
+        return counts().refusedForAnotherPod();
     }
 
     /**
@@ -182,7 +264,7 @@ final class GracefulReleaseMeter {
      * was added to end.
      */
     int refusalsSeen() {
-        return refusalsSeen;
+        return counts().refusalsSeen();
     }
 
     /**
@@ -221,6 +303,6 @@ final class GracefulReleaseMeter {
      * {@code aRefusalBLAMINGANOTHERPODIsCountedAndTheReleaseIsNotCredited}.
      */
     int releasedDespiteOwnPartition() {
-        return releasedDespiteOwnPartition;
+        return counts().releasedDespiteOwnPartition();
     }
 }

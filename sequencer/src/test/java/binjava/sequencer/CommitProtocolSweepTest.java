@@ -211,10 +211,15 @@ class CommitProtocolSweepTest {
         long ackEvents = 0;
         long ackKindEvents = 0;
         int zeroCommitSeeds = 0;
-        long gracefulReleases = 0;
-        long gracefulReleasesRefused = 0;
-        long gracefulReleaseRefusalsSeen = 0;
-        long releasesDespiteOwnPartition = 0;
+        // ⚠️ ONE ACCUMULATOR, NOT FOUR LONGS (M5.51). Four `+=` lines naming
+        // four components are four transposable sites, and review measured that
+        // closing the CONSTRUCTION site alone left them: `releasesDespiteOwn
+        // Partition += run.releases().refusedForAnotherPod()` compiles and
+        // CANNOT FAIL, because the sweep asserts both of those isZero and
+        // swapping two honestly-zero expressions changes no assertion, no
+        // floor, not even the printf. `plus` collapses them into one
+        // constructor that `GracefulReleaseMeterTest` pins.
+        GracefulReleaseMeter.Counts releases = GracefulReleaseMeter.Counts.none();
         long start = System.nanoTime();
         for (long seed = 0; seed < SEEDS; seed++) {
             var run = CommitProtocolSimulation.run(seed, ROUNDS, PODS, faults);
@@ -226,10 +231,7 @@ class CommitProtocolSweepTest {
             epochsBurned += run.highestEpoch();
             faultsFired += run.faults().size();
             readersChecked += run.readersChecked();
-            gracefulReleases += run.gracefulReleases();
-            gracefulReleasesRefused += run.gracefulReleasesRefusedForAnotherPod();
-            gracefulReleaseRefusalsSeen += run.gracefulReleaseRefusalsSeen();
-            releasesDespiteOwnPartition += run.gracefulReleasesDespiteOwnPartition();
+            releases = releases.plus(run.releases());
             ackEvents += run.acks().size();
             ackKindEvents += run.acks().stream()
                     .filter(AckOrderInvariants.AckEvent::isAck)
@@ -257,8 +259,8 @@ class CommitProtocolSweepTest {
         }
         System.out.printf("sweep: graceful releases %d, refused for another pod %d, refusals seen %d, "
                         + "despite own partition %d, zero-commit seeds %d%n",
-                gracefulReleases, gracefulReleasesRefused, gracefulReleaseRefusalsSeen,
-                releasesDespiteOwnPartition, zeroCommitSeeds);
+                releases.released(), releases.refusedForAnotherPod(), releases.refusalsSeen(),
+                releases.releasedDespiteOwnPartition(), zeroCommitSeeds);
         long elapsed = (System.nanoTime() - start) / 1_000_000;
 
         // ⚠️ ANTI-VACUITY FIRST, and it comes before the invariant assertion on
@@ -433,13 +435,13 @@ class CommitProtocolSweepTest {
         // does -- and the same swap gives 0 and reds this line. MEASURED, on
         // this tree, at 1,000 seeds: 1,608 unmutated, 0 with `store.stat` in
         // its place.
-        assertThat(gracefulReleases)
+        assertThat(releases.released())
                 .as("the polite-failover path must COMPLETE before a claim about how it is "
                         + "judged says anything -- a floor over attempts survives deleting "
                         + "the release entirely, and a floor over store CALLS survives "
                         + "replacing it with another verb")
                 .isGreaterThanOrEqualTo(SEEDS);
-        assertThat(gracefulReleasesRefused)
+        assertThat(releases.refusedForAnotherPod())
                 .as("a leader releasing its lease politely is judged against ITSELF, so no "
                         + "release is refused blaming another pod -- MEASURED at 5 with the "
                         + "defect reinstated at the store call, 0 without")
@@ -464,14 +466,14 @@ class CommitProtocolSweepTest {
         // lease to expire, which is the ungraceful path the cluster already
         // tolerates; a wrongly allowed one hands the lease back for a leader
         // that is cut off and cannot know, AND is credited by
-        // `gracefulReleases`, so that floor is partly met by releases which
+        // `releases.released()`, so that floor is partly met by releases which
         // should never have completed.
         // ⚠️ THIS `isZero` IS NOT VACUOUS, and the reason is the floor below
-        // rather than anything here: `gracefulReleaseRefusalsSeen` proves
+        // rather than anything here: `releases.refusalsSeen()` proves
         // release windows DO meet partitions -- 38 over 1,000 seeds. Without
         // that floor, "no release completed despite its own partition" would
         // also be satisfied by a sweep in which no release ever met one.
-        assertThat(releasesDespiteOwnPartition)
+        assertThat(releases.releasedDespiteOwnPartition())
                 .as("a release that completed while the LEADER was cut off is one the "
                         + "leader's own partition should have refused -- and it was credited "
                         + "as graceful while doing so")
@@ -497,17 +499,17 @@ class CommitProtocolSweepTest {
         // N < 50 the floor is 0 and this assertion is VACUOUS. A re-measured
         // `partitionRate`, or losing that one early window, reds a 50-seed
         // run with no defect present.
-        assertThat(gracefulReleaseRefusalsSeen)
+        assertThat(releases.refusalsSeen())
                 .as("the meter must SEE refusals inside release windows, or asserting it "
                         + "counts none of the wrong kind constrains nothing")
                 .isGreaterThanOrEqualTo(SEEDS / 50);
         // ⚠️ AND IT MUST BE THE REFUSAL COUNTER, not whichever `int`
-        // sits beside it. Review MEASURED that swapping
-        // `releases.refusalsSeen()` for `releases.released()` at the
-        // `Result` construction leaves this floor AND the whole suite
-        // green: FOUR adjacent `int` components fed from one object, no
-        // compile-time distinction, and ~1,608 clears a floor of 20
-        // easily. ⚠️ THE MARGIN IS MEASURED, NOT STRUCTURAL: 38
+        // sits beside it. M5.51 closed that at the `Result` CONSTRUCTION
+        // -- it is now an `incompatible types` error -- but NOT here, at
+        // the READ: `releases.refusalsSeen()` -> `releases.released()` on
+        // this very line is still green, and unkillably so, because :438
+        // already floors `released` at SEEDS while this floor is SEEDS/50.
+        // M5.68 owns the read side. ⚠️ THE MARGIN IS MEASURED, NOT STRUCTURAL: 38
         // against 1,608, 42x. A refusal aborting its release proves
         // only that a refusing window is not CREDITED; it does not
         // bound the refusal COUNT below the credit count, and
@@ -515,10 +517,11 @@ class CommitProtocolSweepTest {
         // proof -- one window adds 2 here and 0 there. Review measured
         // zero windows doing both over 1,000 seeds, and this green at
         // every prefix from N=1.
-        assertThat(gracefulReleaseRefusalsSeen)
-        .as("and it must be the REFUSAL counter, not whichever `int` sits beside it "
-                + "at the `Result` construction")
-        .isLessThan(gracefulReleases);
+        assertThat(releases.refusalsSeen())
+                .as("and it must be the REFUSAL counter, not whichever counter sits "
+                        + "beside it at this READ -- the `Result` construction no longer "
+                        + "admits the swap, this line still does (M5.68)")
+                .isLessThan(releases.released());
 
         // ⚠️ A SEED THAT COMMITS NOTHING HOLDS I1-I5 VACUOUSLY, and nothing was
         // counting them. Measured on this tree: 47 under the old profile, 137
