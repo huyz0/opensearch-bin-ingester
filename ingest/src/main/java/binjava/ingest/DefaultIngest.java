@@ -8,6 +8,7 @@ import binjava.format.RunCommit;
 import binjava.format.RunKey;
 import binjava.format.SegmentRecord;
 import binjava.security.Principal;
+import binjava.sequencer.AmbiguousAppendException;
 import binjava.sequencer.CommitRequest;
 import binjava.sequencer.Sequencer;
 import java.io.IOException;
@@ -485,7 +486,7 @@ public final class DefaultIngest implements Ingest {
             // request it resends has to be this one.
             CommitRequest request = new CommitRequest(podShortId, incarnationId, flushSeq++,
                     published.key(), published.recordCounts());
-            CommitDelta delta = sequencer.commit(request);
+            CommitDelta delta = commitResendingOnceIfTheReplyIsLost(request);
 
             Map<RunKey, Long> firstOffsets = new HashMap<>();
             for (RunCommit run : delta.runs()) {
@@ -541,6 +542,56 @@ public final class DefaultIngest implements Ingest {
                 p.done().completeExceptionally(e);
             }
             throw e;
+        }
+    }
+
+    /**
+     * Commits {@code request}, resending it ONCE if the reply is lost (M5.52a).
+     *
+     * <p>⚠️ ONLY {@link AmbiguousAppendException}, NEVER {@code IOException}. An
+     * ambiguous append NAMES THE SLOT it was attempted at, which is what lets a
+     * sequencer reconcile against the chain and answer the repeat instead of
+     * applying it twice; a bare {@code IOException} names no slot, and {@code
+     * CommitRetryTripleTest} says what retrying one costs. The narrowing is
+     * pinned by {@code anABANDONEDFlushBURNSItsNumberRatherThanWedgingThePod}:
+     * widening this catch reds it, and nothing else in the module.
+     *
+     * <p>⚠️ THE SAME REQUEST OBJECT, WHICH IS WHY M5.2 HOISTED IT -- the window
+     * answers only when the triple AND the segment key match. {@code flushSeq}
+     * advances at the construction above, once per flush, whatever happens here.
+     *
+     * <p>⚠️ ONCE, AND THE BOUND IS A COST CHOICE RATHER THAN A CORRECTNESS ONE.
+     * A second resend would also be answerable -- {@code
+     * LocalSequencer.applyFresh} records the NEW slot before rethrowing, so
+     * attempt n+1 reconciles attempt n's slot exactly as attempt 2 reconciles
+     * attempt 1's. What argues for one is that every attempt runs under the
+     * single per-pod APPEND LOCK, the pod-wide chokepoint, so a loop holds it
+     * for as long as the store stays sick and nothing bounds that. A second
+     * ambiguous reply abandons the flush and burns its number: the bytes have
+     * left the accumulator either way.
+     *
+     * <p>⚠️ THE LIMITS ARE NOT RESTATED HERE, AND NOT COUNTED --
+     * {@link binjava.sequencer.Sequencer} enumerates them under headings and
+     * says why no count appears beside them. What this buys is only: a reply
+     * lost between this pod and a sequencer that REMAINS the leaseholder is
+     * answered rather than committed twice. OTHER limits under its DUPLICATED
+     * heading reach pods that never restarted, so no new incarnation is minted
+     * and M5.52b's incarnation limit does not answer those.
+     *
+     * <p>⚠️ AND THE RESEND MAY NOT REACH THE INSTANCE THAT MADE THE APPEND:
+     * {@code LocalSequencer} throws {@link binjava.sequencer.FencedException}
+     * BEFORE reconciling, and {@code FleetSequencer} catches that, retires the
+     * leadership the mark lives on, and forwards the identical request to
+     * another pod. Correlated, not independent: ADR-0027's self-fence fires on
+     * an ambiguous lease RENEW. ⚠️ THAT IS ONE ROUTE, NOT THE ENUMERATION --
+     * M5.52b carries the rest, including one that needs no fence at all.
+     */
+    private CommitDelta commitResendingOnceIfTheReplyIsLost(CommitRequest request)
+            throws IOException {
+        try {
+            return sequencer.commit(request);
+        } catch (AmbiguousAppendException lost) {
+            return sequencer.commit(request);
         }
     }
 

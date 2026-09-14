@@ -55,11 +55,14 @@ import java.util.List;
  * ⚠️ THE RETRY MUST REUSE THE TRIPLE. A caller that mints a
  * fresh {@code flushSeq} for the retry is submitting a different commit, and
  * the same records are committed twice.
- * ⚠️ AND NO PRODUCTION CALLER RESENDS ONE YET, which is stated rather than
- * implied: {@code DefaultIngest} builds its request once (M5.2) but has no
- * retry loop, and {@code RemoteSequencer} resends only a REFUSED forward, never
- * an ambiguous one. What M5.23 changes is that such a resend is now SAFE, not
- * that anything makes it.
+ * ⚠️ AND ONE PRODUCTION CALLER NOW RESENDS ONE (M5.52a), which is stated rather
+ * than implied, because this paragraph said the opposite until it did:
+ * {@code DefaultIngest} resends the SAME request object exactly once, and only
+ * on {@link AmbiguousAppendException}. {@code RemoteSequencer} still resends
+ * only a REFUSED forward, never an ambiguous one. ⚠️ THAT CALLER DOES NOT MAKE
+ * THE LIMITS BELOW GO AWAY -- it narrows one case, a reply lost between a pod
+ * and a sequencer that REMAINS the leaseholder, and every limit enumerated
+ * here still applies to it.
  *
  * <p>⚠️ A SUCCESSOR INHERITS THE WINDOW FROM THE CHAIN (M5.1), rebuilt from the
  * replay that crosses from the predecessor, so a retry that crosses a takeover
@@ -114,7 +117,7 @@ import java.util.List;
  * <li><b>A superseded incarnation.</b> A checkpoint remembers a pod's LATEST
  * incarnation only, so a replay from one since superseded is treated as fresh.
  * It needs a pod to restart between the original and its retry. ⚠️ UNPINNED
- * in either direction — M5.52 owns writing it.</li>
+ * in either direction — M5.52b owns writing it.</li>
  * <li><b>A bare v0 slot.</b> {@code ChainReplay} skips a slot with no pointer,
  * because seeding it would evict a real pointered slot and admit the literal
  * key {@code pod\0null} that nothing matches — so for a pod whose only record

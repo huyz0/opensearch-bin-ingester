@@ -121,7 +121,7 @@ final class IdempotencyWindow {
      * <p>⚠️ THIS RESTATES A LIMIT {@link Sequencer} OWNS, and is the one
      * restatement M5.34 left standing: the mechanism ({@code Checkpoint.pods}
      * is keyed by {@code podId}) belongs beside the code that implements it.
-     * ⚠️ SO IT CAN DRIFT, and the drift to watch is M5.52 updating
+     * ⚠️ SO IT CAN DRIFT, and the drift to watch is M5.52b updating
      * {@link Sequencer}'s list alone. The warning is here rather than only in
      * the class javadoc because a reader who jumps straight to this method
      * never reads that one.

@@ -112,7 +112,8 @@ which is the exact failure this paragraph exists to prevent.
    the delta landed under a `flushSeq` the pod never issued.
    ⚠️ So this prerequisite is BUILT and PROVEN where a retry happens; what
    stays unproven is the AMBIGUOUS-reply resend on the `DefaultIngest` path,
-   which is criterion 4 below and is owned by **M5.52**.
+   which is criterion 4 below; its production half landed as **M5.52a** and its
+   incarnation limit is owned by **M5.52b**.
 4. **A `SequencerTransport` seam** and its fake, because the remote
    implementation must be testable at T1 without a socket. ⚠️ **The lease is the
    truth about who holds it** (ADR-0012): a peer hint may accelerate, never
@@ -330,12 +331,19 @@ here, not a constant. M4 applied the same discipline to the lease TTL.
    without reading that row.
 4. **A retry reuses its triple end to end**: killing the reply on the
    *production* path — `DefaultIngest`, not a fake — and retrying produces one
-   delta, not two. ⚠️ **STILL UNMET, and not for the reason first written**:
-   M5.2 makes the request resendable, and `RemoteSequencer` resends a REFUSED
-   commit -- pinned since M5.32 -- but no production caller resends an
-   AMBIGUOUS one, and `RemoteSequencer` deliberately declines to
-   (`anAMBIGUOUSFailureIsNOTResent`). So there is no end-to-end ambiguous retry
-   to observe. Owned by **M5.52**, not by M5.32, which is closed.
+   delta, not two. ⚠️ **THE END-TO-END RETRY NOW EXISTS (M5.52a)**:
+   `DefaultIngest` resends the same request object once, on
+   `AmbiguousAppendException` only, and `AmbiguousReplyResentTest` kills the
+   reply on the production path and asserts the records commit once.
+   `RemoteSequencer` still resends only a REFUSED forward and deliberately
+   declines an ambiguous one (`anAMBIGUOUSFailureIsNOTResent`). ⚠️ **NOT YET
+   VERIFIABLE AS A WHOLE, and M5.20 must not mark it so**: the resend covers a
+   reply lost between a pod and a sequencer that REMAINS the leaseholder.
+   `Sequencer` enumerates limits that still apply -- a DUPLICATED family it
+   calls the direction I2 forbids -- and **M5.52b** owns the incarnation limit,
+   which does NOT reach all of them: limits under that heading reach pods which
+   never restarted, so no new incarnation is minted. ⚠️ No count of them appears
+   here, for the reason `Sequencer` gives beside its own enumeration.
 5. **All three fetch modes deliver identical bytes** for the same segment, and
    the mode is chosen by the ingester — a consumer asking for `direct` at
    fan-out > 1 is served something else.
@@ -407,7 +415,7 @@ as invisible to the gate remain so until `check-mutants.sh` is wired.
 | Risk | What reveals it |
 |---|---|
 | Forwarding becomes a second coordination path | Criterion 1's assertion that only the leaseholder writes the chain |
-| Forwarding is wired before a retry is answerable | Criteria 3 and 4. ⚠️ Criterion 3 holds in the general case since M5.1/M5.25 but NOT unconditionally -- **M5.34** enumerates the retries that are appended or refused instead, and M5.20 must not mark it verified without them. Criterion 4 is still unmet, but because nothing resends an ambiguous commit end to end -- **M5.52** owns it, and M5.20 must not mark it verified without that row. Not for the reason first written, and not M5.32, which is closed: M5.32 pinned the REFUSED resend and found criterion 4 pointing at itself in three places, of which this was the third |
+| Forwarding is wired before a retry is answerable | Criteria 3 and 4. ⚠️ Criterion 3 holds in the general case since M5.1/M5.25 but NOT unconditionally -- **M5.34** enumerates the retries that are appended or refused instead, and M5.20 must not mark it verified without them. Criterion 4's end-to-end resend landed as **M5.52a** (`AmbiguousReplyResentTest`), but M5.20 must still not mark it verified: the resend covers a reply lost to a sequencer that REMAINS the leaseholder, `Sequencer`'s enumerated DUPLICATED limits still apply, and **M5.52b** owns the incarnation limit -- which does not reach all of them, since limits under that heading reach pods that never restarted. Not for the reason first written, and not M5.32, which is closed: M5.32 pinned the REFUSED resend and found criterion 4 pointing at itself in three places, of which this was the third |
 | `proxy` buffers under load | Criterion 6's memory bound, at K=64 |
 | `direct` becomes the default by accident | Criterion 5: the ingester chooses, and a consumer cannot demand it |
 | The zero-idle criterion repeats M1's non-proof | Criterion 8 requires a **recorded red** against a serving path that fetches per empty poll, and requires the injected clock to be READ -- M1.16b was withdrawn for a clock that was not |

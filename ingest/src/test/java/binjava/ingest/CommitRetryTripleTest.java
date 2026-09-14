@@ -40,8 +40,14 @@ import org.junit.jupiter.api.Test;
  * measured reverting the hoist to be a semantics-preserving transformation that
  * no behavioural test can separate.
  *
- * <p>⚠️ NO RETRY IS ADDED HERE, AND ADDING ONE WOULD STILL BE WRONG TODAY --
- * for a NARROWER reason than when this was written. {@code Sequencer.commit}'s
+ * <p>⚠️ NO RETRY IS ADDED HERE, AND A RETRY ON {@code IOException} WOULD STILL
+ * BE WRONG -- which is what this paragraph has always meant and what M5.52a
+ * observed. That row added a resend to {@code DefaultIngest} on {@link
+ * binjava.sequencer.AmbiguousAppendException} ALONE, and the narrowing is
+ * pinned by {@code anABANDONEDFlushBURNSItsNumberRatherThanWedgingThePod}
+ * below: widening the catch to {@code IOException} reds it and nothing else in
+ * the module. Read the rest of this paragraph as the reason for that narrowing,
+ * not as a claim that the tree has no retry. {@code Sequencer.commit}'s
  * {@code @throws} used to read "Retrying with the same (podId, incarnationId,
  * flushSeq) IS NOT YET SAFE" — quoted here as history, since M5.23 replaced
  * it: a retry to the SAME sequencer is now reconciled against the chain and
@@ -139,10 +145,11 @@ class CommitRetryTripleTest {
         assertThat(sent.segmentKey()).as("carries the segment it published").isNotBlank();
         assertThat(sent.podId()).isEqualTo("pod1");
         assertThat(sent.flushSeq()).isZero();
-        assertThat(flaky.seen()).as("one attempt -- no retry is added here, because a "
-                + "retry loop cannot tell a resend within a pod's CURRENT incarnation, "
-                + "which M5.23 and M5.25 answer, from one across a RESTART, which mints a "
-                + "new incarnation and duplicates")
+        assertThat(flaky.seen()).as("one attempt, because THIS FIXTURE NEVER FAILS -- "
+                + "`flaky(0)` throws nothing, so no retry of any kind could fire. This "
+                + "assertion does NOT guard M5.52a's narrowing to "
+                + "AmbiguousAppendException; `anABANDONEDFlushBURNSItsNumberRatherThan"
+                + "WedgingThePod` below is what reds when the catch is widened")
                 .hasSize(1);
     }
 
