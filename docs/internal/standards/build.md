@@ -121,9 +121,9 @@ a shared build file can put a dependency on a module's classpath without naming
 that module. `ModuleSelectionTest` is the authority on this mapping.
 
 ⚠️ **Delta scope matters more for the gates that are coming than for this one.**
-Compile, JaCoCo and PIT scale with the code they examine, and `check-mutants.sh`
-is diff-scoped by design: a whole-tree mutation score is dominated by code nobody
-touched and moves too slowly to gate a commit.
+Compile, JaCoCo and jzap (ADR-0045) scale with the code they examine, and
+`check-mutants.sh` is diff-scoped by design: a whole-tree mutation score is
+dominated by code nobody touched and moves too slowly to gate a commit.
 
 ## Execution layers — what runs when, and for how long
 

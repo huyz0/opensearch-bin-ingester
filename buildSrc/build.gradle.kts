@@ -4,7 +4,14 @@
 // project configuration is what makes a build resist ever being split up.
 plugins { `kotlin-dsl` }
 
-repositories { mavenCentral() }
+repositories {
+    mavenCentral()
+    // ADR-0045: the jzap Gradle plugin. Not mirrored to Maven Central -- its
+    // own release notes call the Central copy "engine modules only" -- so the
+    // plugin implementation jar comes from the Plugin Portal's own repository,
+    // which is where `id("io.github.huyz0.jzap")` below resolves it from.
+    gradlePluginPortal()
+}
 
 // buildSrc holds real logic now -- the licence gate and the Java-test parser the
 // TDD gates depend on -- so it gets tests like anything else.
@@ -19,6 +26,19 @@ dependencies {
     testImplementation(libs.findLibrary("junit-jupiter").get())
     testImplementation(libs.findLibrary("assertj-core").get())
     testRuntimeOnly(libs.findLibrary("junit-platform-launcher").get())
+
+    // ADR-0045: buildSrc's own plugin classpath, so binjava.java-conventions
+    // can `id("io.github.huyz0.jzap")` it -- a literal coordinate outside the
+    // catalog above, the same precedent the removed `pitest` Configuration
+    // set: that catalog pins what modules compile and test against, and this
+    // is neither.
+    // ⚠️ 0.1.1, NOT 0.1.0: 0.1.0's `contributeToAggregate` resolved a
+    // sibling project's test classpath eagerly inside `afterEvaluate`, which
+    // this repo's own module graph -- `binstore-backends` depending on
+    // `binstore-spi`'s test fixtures -- throws against on every build, not
+    // only a mutation one. Filed and fixed upstream same-day; verified on
+    // this tree with a local build before the 0.1.1 release existed.
+    implementation("io.github.huyz0:jzap-gradle:0.1.1")
 }
 
 tasks.withType<Test>().configureEach {

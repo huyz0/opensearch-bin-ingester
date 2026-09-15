@@ -15,6 +15,18 @@ plugins {
     // testing.md rule 19: the store conformance suite runs against every
     // backend, so it needs a home shared by T1 and T3 rather than a copy each.
     `java-test-fixtures`
+    // ADR-0045: replaces the hand-rolled `pitest` JavaExec task below with the
+    // plugin the PIT comment it replaces explicitly rejected -- that rejection
+    // was about `gradle-pitest-plugin` targeting Gradle 8 against this build's
+    // 9.7; this plugin's own compatibility page states Gradle 9.7, configuration
+    // cache compatible, tested, which is the same claim measured rather than
+    // taken on trust. ⚠️ NO VERSION HERE: a precompiled script plugin resolves
+    // this from buildSrc's own compile classpath, not from a `plugins{}`
+    // version -- Gradle refuses one with "Plugin requests from precompiled
+    // scripts must not include a version number". The version is pinned once,
+    // in buildSrc/build.gradle.kts, the same way every other buildSrc
+    // dependency is.
+    id("io.github.huyz0.jzap")
 }
 
 // JDK 25 LTS. OpenSearch 3.8 bundles 25.0.3+9, so one toolchain serves both the
@@ -160,65 +172,33 @@ tasks.named("check") {
 }
 
 // testing.md rule 9: mutation score is the metric that measures whether tests
-// constrain anything (M0.14).
+// constrain anything (M0.14). ADR-0045 records why this is jzap and not PIT.
 //
-// ⚠️ THE COMMAND-LINE ARTIFACT, NOT `gradle-pitest-plugin`. That plugin targets
-// Gradle 8; this build is Gradle 9.7, and a plugin incompatibility would take
-// the whole gate with it. Driving PIT as a plain JavaExec also keeps the
-// classpath explicit, which is what lets the gate scope mutation to the classes
-// a diff actually changed.
-val pitest: Configuration by configurations.creating
-// ⚠️ 1.21.x IS A FLOOR, NOT A PREFERENCE. `pitest-entry` SHADES ASM -- 149
-// bundled classes -- so the ASM version is fixed by the PIT release and cannot
-// be forced from outside; measured, forcing `org.ow2.asm:asm:9.10.1` onto the
-// classpath changed nothing. 1.19.1's copy cannot read Java 25 bytecode:
-// `IllegalArgumentException: Unsupported class file major version 69`, thrown
-// before a single mutant is generated.
-dependencies {
-    pitest("org.pitest:pitest-command-line:1.21.1")
-    pitest("org.pitest:pitest-junit5-plugin:1.2.3")
-}
+// The plugin registers `mutationTest` (whole module), `mutationTestDiff`
+// (changed lines since a base ref, defaulting to `HEAD..-Local-` -- staged and
+// unstaged work, which is what a pre-commit gate wants for free) and, on the
+// root project only, `mutationTestAll` (one pass across every module, so a
+// test in one module can kill a mutant in another). `check-mutants.sh` is
+// still `todo` (M0.14): it will drive `mutationTestDiff` rather than
+// hand-rolling the `-PmutantTargets`/`--targetClasses` scoping the removed
+// `pitest` task needed, because the plugin's diff mode replaces that
+// machinery rather than sitting next to it.
+jzap {
+    // ⚠️ REQUIRED, NOT A DEFAULT OVERRIDE: the extension's own convention
+    // falls back to `0.1.0-SNAPSHOT` when `project.version` is unset, which it
+    // is here (no module in this build declares one) -- so leaving this unset
+    // would resolve `io.github.huyz0:jzap-cli:0.1.0-SNAPSHOT`, a coordinate
+    // that does not exist on Maven Central, rather than a real released
+    // version. Verified against `JzapExtension.getEngineVersion()`'s javadoc
+    // and `JzapPlugin.versionOf`. Kept level with the plugin coordinate in
+    // buildSrc/build.gradle.kts -- the project publishes every module in
+    // lockstep, so a mismatched pair is two different releases, not one.
+    engineVersion = "0.1.1"
 
-tasks.register<JavaExec>("pitest") {
-    group = "verification"
-    description = "PIT mutation coverage; -PmutantTargets scopes it to changed classes"
-    dependsOn(tasks.named("testClasses"))
-    mainClass.set("org.pitest.mutationtest.commandline.MutationCoverageReport")
-    classpath = pitest + sourceSets.main.get().output + sourceSets.test.get().output +
-        configurations.testRuntimeClasspath.get()
-
-    val reportDir = layout.buildDirectory.dir("reports/pitest").get().asFile
-    // ⚠️ Resolved at CONFIGURATION time, like `scratch` above: reading these
-    // from a task action captures the Project and breaks the configuration
-    // cache.
-    val mainClassesDirs = sourceSets.main.get().output.classesDirs.asPath
-    val sourceDirs = sourceSets.main.get().java.srcDirs.joinToString(",")
-    val testClassesDirs = sourceSets.test.get().output.classesDirs.asPath
-    val targets = (project.findProperty("mutantTargets") as String?)?.takeIf { it.isNotBlank() }
-
-    // ⚠️ A module with no targets must NOT be silently skipped into a green
-    // result -- that is the "reports success while measuring nothing" shape
-    // build.md warns about. The gate script decides what to skip; this task
-    // fails loudly if asked to mutate nothing.
-    onlyIf { targets != null }
-
-    doFirst {
-        args = listOf(
-            "--reportDir", reportDir.absolutePath,
-            "--targetClasses", targets ?: "",
-            "--targetTests", "binjava.*",
-            "--sourceDirs", sourceDirs,
-            "--classPath", "$mainClassesDirs:$testClassesDirs",
-            "--outputFormats", "XML",
-            "--timestampedReports", "false",
-            "--testPlugin", "junit5",
-            "--threads", Runtime.getRuntime().availableProcessors().toString(),
-            "--failWhenNoMutations", "false",
-        )
-    }
-}
-
-tasks.register("pitestClasspath") {
-    val cp = tasks.named<JavaExec>("pitest").map { it.classpath.files.map { f -> f.name } }
-    doLast { cp.get().filter { it.contains("asm") }.forEach { println("CP: " + it) } }
+    // No `threshold` or `failOnSurvivors` here, matching the removed PIT
+    // task's own restraint (it had no `--mutationThreshold` either): pass/fail
+    // is `check-mutants.sh`'s decision to make from the report, not this
+    // task's, so the same build.gradle.kts serves a future gate that wants to
+    // read the JSON reporter and reason about it rather than trust an exit
+    // code alone.
 }
