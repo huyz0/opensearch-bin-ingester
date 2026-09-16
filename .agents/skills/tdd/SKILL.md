@@ -88,8 +88,9 @@ project.
   on the changed code. ⚠️ Coverage is a floor, not a measure: a line can execute
   without being constrained. Mutation score is the number that says whether the
   tests constrain anything.
-- **Both reviewers run** — `reviewer` on the production diff and `test-reviewer` on
-  the tests. See [`review`](../review/SKILL.md).
+- **Both review passes run** — production, then tests — by one agent that did
+  not write the change, recording a verdict per pass. See
+  [`review`](../review/SKILL.md).
 - If the change touches a hot path, run [`bench`](../bench/SKILL.md).
 - If the change touches the object-store call pattern, run
   [`cost-budget`](../cost-budget/SKILL.md). **A change that silently adds a

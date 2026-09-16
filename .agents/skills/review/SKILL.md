@@ -5,17 +5,27 @@ description: Review a staged change as an independent agent that did not write i
 
 # Review
 
-**Two independent reviewers, both mandatory:**
+**Two passes, both mandatory, run by ONE agent that did not write the change:**
 
-| Agent | Reviews | Its single question |
-|---|---|---|
-| `reviewer` | the production diff | *what is wrong with this change?* |
-| `test-reviewer` | the tests | *would this test fail if the code were wrong?* |
+| Pass | Reviews | Its single question | Verdict recorded as |
+|---|---|---|---|
+| 1 | the production diff | *what is wrong with this change?* | `reviewer` |
+| 2 | the tests | *would this test fail if the code were wrong?* | `test-reviewer` |
 
 ⚠️ **The test pass is not optional and not a sub-heading of the production pass.**
 Test weakness is invisible to every gate — coverage counts executed lines, not
-constrained ones — so it is reviewed by an agent whose only job is to find a
-mutation that survives.
+constrained ones — so it is a pass whose only job is to find a mutation that
+survives, asked after the production pass and recorded on its own.
+
+⚠️ **One agent, not two, since M0.114.** Two agents each re-read the same diff,
+packet and standards, which was the largest single cost of a round. What the
+separation actually buys — two questions, two findings lists, two verdicts bound
+to the same hash — is kept. What it loses is real and stated in review.md rules
+1c and 1d: an opinion formed in pass 1 travels into pass 2, and — the larger
+loss — there is no longer a second independent read of the PRODUCTION diff.
+This repository has the receipts for that one: M5.48's fifth round was the first
+test-reviewer pass on the task and found two majors four production rounds had
+missed. `tools/xreview/` therefore stays two agents.
 
 ⚠️ **This skill is run by agents that did not author the change.** A
 self-review inherits every blind spot that produced the defect — the same
@@ -26,7 +36,7 @@ a commitment bias toward work already done.
 
 ```
 scripts/review.sh context --task <ID>                 the packet: task, standards, gates, diff
-scripts/review.sh record --file v.json --task <ID>    validate and store the verdict
+scripts/review.sh record --file v.json --task <ID> --role <role>   store one verdict
 scripts/check-reviewed.sh                             the gate
 ```
 
@@ -96,9 +106,13 @@ only a reader can catch.
 - Is anything materialised whole that should be streamed (constraint C8)?
 - Is every queue and buffer pool bounded?
 
-## What the test reviewer looks for
+## What the test pass looks for
 
-Its full brief is `.claude/agents/test-reviewer.md`. The core of it:
+Its full brief is in the reviewer agent's own definition. ⚠️ No claim is made
+here about how much of the old separate brief survived the merge — round 2
+falsified the first such claim, and a completeness claim about a list that moves
+is the defect this repository has paid for repeatedly. Read the brief. The core
+of it:
 
 - **Mentally mutate the production code** — flip a boundary, negate a condition,
   return a constant, drop a side effect, make a method a no-op. **If a test still
@@ -135,8 +149,19 @@ finding's id and why it is not a defect). ⚠️ The entry must be **staged** �
 unstaged one suppresses a finding while leaving no trace of it.
 
 On a `pass` verdict a `minor` finding is recorded in the commit body and the
-commit lands; fixing it is permitted and usually wrong, because the new round's
-surface is the prose the fix just added.
+commit lands. ⚠️ **Opening a round for a minor is forbidden** (review.md rule
+11): measured across four M5 tasks, every round past the second was opened for a
+finding the gate does not block on, and most of those rounds found a new defect
+in the fix. ⚠️ **And there is no fix-it-before-the-verdict-is-recorded
+escape**, which an earlier draft of this paragraph offered: neither counter can
+see it — `review_rounds.py` counts distinct hashes among RECORDED verdicts, and
+xreview counts verdict files — so review, fix, re-review, never record leaves
+the count where it was. A minor goes to the commit body, or to a backlog row
+when it names work.
+
+⚠️ **Three rounds is the cap** (review.md rule 12): round one finds, round two
+fixes and finds in the fix, round three verifies. A fourth means the commit is
+too big.
 
 ⚠️ A growing argued-list is itself a signal: somebody is being systematically
 overruled, and one side is systematically wrong.

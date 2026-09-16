@@ -170,7 +170,7 @@ repos:
       # Last of the pre-commit stage: it is the gate a fresh clone is most
       # likely to trip, and its message is the longest.
       - id: check-reviewed
-        name: "non-negotiable 5: the staged bytes were reviewed by both reviewers"
+        name: "non-negotiable 5: the staged bytes carry both review verdicts"
         entry: scripts/check-reviewed.sh
         language: system
         stages: [pre-commit]

@@ -17,7 +17,11 @@ from common import die
 ROLES = ("reviewer", "test-reviewer")
 SEVERITIES = ("blocking", "major", "minor")
 VERDICTS = ("pass", "changes-requested")
-ROUND_CAP = 2
+# ⚠️ THREE SINCE M0.114, RAISED FROM TWO, and raised HERE as well as in
+# `scripts/check-reviewed.sh` because two enforcement paths with two different
+# caps is a tree that contradicts its own standard -- and this is the path whose
+# overrides file the signatures actually land in.
+ROUND_CAP = 3
 
 VERDICT_DIR = Path("review/verdicts")
 OVERRIDES = "review/overrides.md"

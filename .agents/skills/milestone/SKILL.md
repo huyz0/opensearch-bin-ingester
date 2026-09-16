@@ -16,8 +16,9 @@ until completion condition met:
     next-task            choose the top unblocked task, confirm it is ready
     tdd                  implement it test-first
     run the gates        every one that exists; report honestly which ran
-    review               BOTH agents: `reviewer` on production, `test-reviewer` on tests
-    resolve findings     fix, or argue in a staged baseline entry
+    review               ONE agent, TWO passes: production, then tests; two verdicts
+    resolve findings     blocking and major only -- fix, or argue in a staged
+                         baseline entry. A `minor` is recorded and the loop MOVES ON
     commit               one task, one commit, subject starts with the task ID
     update the backlog   in the same commit
 ```
@@ -28,7 +29,7 @@ until completion condition met:
 
 | Bound | Value | On breach |
 |---|---|---|
-| Review rounds per task | **2** (review.md rule 12) | Stop and report. Round one finds, round two verifies; only a blocking finding may extend it |
+| Review rounds per task | **3** (review.md rule 12) | Stop and report. Round one finds, round two fixes and finds in the fix, round three verifies. ⚠️ A round is never opened for a `minor` (rule 11) -- record it and land |
 | Red→green attempts per task | **3** | Stop and report. Three failures means the task or the spec is wrong, not the code |
 | Tasks between checkpoints | **5** | Emit a progress report — tasks done, gates run, cost delta — and continue. **Do not wait for a reply**; this is a report, not a question |
 

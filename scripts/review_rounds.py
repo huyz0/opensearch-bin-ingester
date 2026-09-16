@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """How many review rounds a task has had.
 
-⚠️ review.md rule 12 -- "two rounds is the cap" -- was violated on 7 of 12 tasks
+⚠️ review.md rule 12 -- "three rounds is the cap" since M0.114, two before it --
+was violated on 7 of 12 tasks
 in one session (five rounds on one, four on two others) because NOTHING COUNTED.
 A prose rule only a reviewer can uphold differs per run and dies with the
 session; this makes it a predicate over the verdict files.

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Build the review packet, and record a verdict bound to the staged diff by hash.
 #   review.sh context --task <ID>
-#   review.sh record  --file <verdict.json> --task <ID>
+#   review.sh record  --file <verdict.json> --task <ID> --role <reviewer|test-reviewer>
 # It does NOT spawn the reviewer: no script can do that across tools. It owns the
 # hash, the packet and the artifact; the agent owns the judgement.
 source "$(dirname "$0")/lib.sh"
@@ -40,17 +40,18 @@ case "$CMD" in
     # RECALL at the deciding moment is the weakest rung on non-negotiable 9's
     # ladder; this is the same rule as a line the reader cannot miss.
     ROUND_N=$(python3 scripts/review_rounds.py "$DIFF_SHA" 2>/dev/null || echo 0)
-    echo "This is round $((ROUND_N + 1)) of 2 for $TASK."
-    echo "review.md rule 12: round one finds, round two verifies. A blocking"
-    echo "finding in round two means the commit is TOO BIG -- it is split, not"
-    echo "reviewed a third time."
+    echo "This is round $((ROUND_N + 1)) of 3 for $TASK."
+    echo "review.md rule 12: round one finds, round two fixes and finds in the"
+    echo "fix, round three verifies. A blocking finding in round THREE means"
+    echo "the commit is TOO BIG -- it is split, not reviewed a fourth time."
     echo
     echo "⚠️ ONLY 'blocking' and 'major' block a commit (check-reviewed.sh)."
     echo "A 'pass' carrying 'minor' findings LANDS: they are recorded in the"
-    echo "commit body or become a backlog row. Rule 11 -- fixing a minor is"
-    echo "'permitted and usually wrong, because the new round's surface is the"
-    echo "prose the fix just added'. Measured here: one task reached ELEVEN"
-    echo "rounds that way, rounds 9-11 fixing minors that never blocked."
+    echo "commit body or become a backlog row. Rule 11 -- opening a round for a"
+    echo "minor is FORBIDDEN, not merely discouraged, and there is no fix-it-"
+    echo "before-recording escape either: neither counter can see one. Measured"
+    echo "here: one task reached EIGHTEEN rounds, and across four M5 tasks every"
+    echo "round past the second was opened for a finding that never blocked."
     echo
     echo "So: report severity honestly, and do not hunt for minors to justify"
     echo "the round. An empty findings list is a valid and expected outcome."

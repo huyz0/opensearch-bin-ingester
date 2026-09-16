@@ -218,16 +218,19 @@ expect_exit 2 "$?" "a --task with no backlog row is refused"
 expect_contains "$OUT" "no row" "says why"
 rm -rf "$D"
 
-# --- R4: the third round fails, and the escape is a signed line -------------
+# --- R4: the FOURTH round fails, and the escape is a signed line -------------
 #
 # 25 `rounds:` escapes sit in the archived baselines/review.txt, 21 of them M4,
 # and every one says "argued rather than split" -- the cap never once caused a
 # split. So the cap is real here: no env var, no self-service key. The only
 # way past is a line a person signs, which is a diff someone reads.
-case_start "R4 round three fails without a signed override"
+case_start "R4 round four fails without a signed override"
 fresh
 AGENT="$(stub_agent "$D" "$CLEAN_VERDICT")"
-for i in 1 2 3; do
+# ⚠️ FOUR ROUNDS SINCE M0.114, which raised the cap from two to three. The
+# numbers are the cap plus one on purpose: a loop that stopped at the cap would
+# pass whatever the cap were, including a cap of zero.
+for i in 1 2 3 4; do
   printf 'round %s\n' "$i" >> "$D/seed.txt"
   git -C "$D" add -A
   (cd "$D" && XREVIEW_AGENT_CMD="$AGENT" python3 "$XREVIEW" review --task H1.1 --role reviewer) >/dev/null 2>&1
@@ -235,7 +238,7 @@ for i in 1 2 3; do
   git -C "$D" add -A
   RC=0
   (cd "$D" && bash "$GATE") > "$OUT" 2>&1 || RC=$?
-  if [ "$i" -le 2 ]; then
+  if [ "$i" -le 3 ]; then
     expect_exit 0 "$RC" "round $i passes"
   else
     expect_exit 1 "$RC" "round $i fails at the cap"
@@ -260,7 +263,7 @@ rm -rf "$D"
 case_start "R5 an untracked overrides file silences nothing"
 fresh
 AGENT="$(stub_agent "$D" "$CLEAN_VERDICT")"
-for i in 1 2 3; do
+for i in 1 2 3 4; do
   printf 'round %s\n' "$i" >> "$D/seed.txt"
   git -C "$D" add -A
   (cd "$D" && XREVIEW_AGENT_CMD="$AGENT" python3 "$XREVIEW" review --task H1.1 --role reviewer) >/dev/null 2>&1
@@ -479,7 +482,7 @@ rm -rf "$D"
 case_start "V2 an override with no reason does not lift the cap"
 fresh
 AGENT="$(stub_agent "$D" "$CLEAN_VERDICT")"
-for i in 1 2 3; do
+for i in 1 2 3 4; do
   printf 'round %s\n' "$i" >> "$D/seed.txt"
   git -C "$D" add -A
   (cd "$D" && XREVIEW_AGENT_CMD="$AGENT" python3 "$XREVIEW" review --task H1.1 --role reviewer) >/dev/null 2>&1

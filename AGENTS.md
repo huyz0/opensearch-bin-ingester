@@ -134,12 +134,19 @@ containing a procedure rather than a pointer is a fork waiting to drift.
    rests on it: a green gate reported by someone who did not run it is worth less
    than no gate. It matters more here than in a human-written project, because no
    human reads the code.
-5. **Every commit is reviewed by two agents that did not write it** — `reviewer`
-   for production, `test-reviewer` for the tests — given the task and the diff but
-   never the author's reasoning, with the verdict bound to the staged diff by hash.
+5. **Every commit is reviewed by an agent that did not write it, in two passes
+   with two recorded verdicts** — `reviewer` for production, `test-reviewer` for
+   the tests — given the task and the diff but never the author's reasoning, with
+   each verdict bound to the staged diff by hash.
    → `scripts/review.sh`, `scripts/check-reviewed.sh`
    ⚠️ The test pass is separate because **test weakness is invisible to coverage**,
    which counts executed lines rather than constrained ones.
+   ⚠️ **One agent runs both passes** (M0.114). Two agents re-read the same diff,
+   packet and standards, which was the largest single cost of a round; the two
+   questions, the two findings lists and the two verdicts are what the separation
+   actually buys, and those are kept. What is lost is that an opinion formed in
+   pass 1 travels into pass 2 — review.md rules 1c and 1d say so rather than
+   pretending otherwise.
    ⚠️ The hash binds a verdict to a diff; it does **not** prove the reviewer was
    not the author — that is bought by the harness, and saying so is the same
    discipline as rule 3.
@@ -219,7 +226,7 @@ runs is exactly the list that goes stale:
 | `check-file-size.sh` | pre-commit | code-structure.md rule 1: no source file over 700 lines |
 | `check-io-seam.sh` | pre-commit | non-negotiable 7: business logic takes a seam for every clock, socket and store |
 | `check-tdd.sh` | pre-commit | testing.md rule 2: every new test was observed to fail before the code existed |
-| `check-reviewed.sh` | pre-commit | non-negotiable 5: the staged bytes were reviewed by both reviewers |
+| `check-reviewed.sh` | pre-commit | non-negotiable 5: the staged bytes carry both review verdicts |
 | `check-commit-msg.sh` | commit-msg | non-negotiable 1: the commit subject names a real backlog task |
 | `check-test-integrity.sh` | commit-msg | testing.md rules 4-5: no assertion weakened alongside a production change |
 
