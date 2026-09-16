@@ -50,18 +50,60 @@ public final class ConsumerClient implements AutoCloseable {
 
     public ConsumerClient(SubscriptionTransport transport, RunKey key, int queueCapacity,
             SegmentSource segmentSource) {
+        this(key, queueCapacity, segmentSource,
+                client -> Objects.requireNonNull(transport, "transport")
+                        .subscribe(key, client::deliver));
+    }
+
+    /**
+     * A client whose deliveries are FED to it, holding no subscription of its
+     * own (M5.62).
+     *
+     * <p>⚠️ IT EXISTS SO ONE SUBSCRIPTION CAN SERVE MANY RUNS. A node holding
+     * K runs of a segment used to build K clients and therefore K
+     * subscriptions, which is K consumers to {@code SubscriptionHub} and K
+     * copies of the bytes. The node-scoped subscriber registers ONCE for every
+     * key it holds and routes each delivery here by its {@link Delivery#key()}.
+     *
+     * <p>⚠️ CLOSING ONE IS NOT UNSUBSCRIBING. The subscription belongs to
+     * whoever fed it -- {@code NodeSubscriptions} -- and a client that tore it
+     * down on close would unsubscribe every OTHER run sharing it. So
+     * {@link #close()} here does NOTHING AT ALL: its subscription handle is a
+     * no-op, the queue is dropped with the client itself, and unsubscribing is
+     * the owner's to do.
+     */
+    public ConsumerClient(RunKey key, int queueCapacity, SegmentSource segmentSource) {
+        this(key, queueCapacity, segmentSource, client -> () -> { });
+    }
+
+    private ConsumerClient(RunKey key, int queueCapacity, SegmentSource segmentSource,
+            java.util.function.Function<ConsumerClient, AutoCloseable> subscribe) {
         this.segmentSource = segmentSource;
         this.key = Objects.requireNonNull(key, "key");
         if (queueCapacity <= 0) {
             throw new IllegalArgumentException("queue capacity must be positive");
         }
         this.deliveries = new ArrayBlockingQueue<>(queueCapacity);
-        this.subscription = Objects.requireNonNull(transport, "transport").subscribe(key, d -> {
-            // WARNING: OFFER, not put. A full queue must not block the ingester's
-            // commit path; the consumer falls behind and recovers from the log,
-            // which is what the log is for.
-            deliveries.offer(d);
-        });
+        this.subscription = subscribe.apply(this);
+    }
+
+    /**
+     * Queues one delivery for this stream.
+     *
+     * <p>⚠️ OFFER, NOT PUT. A full queue must not block the ingester's commit
+     * path; the consumer falls behind and recovers from the log, which is what
+     * the log is for. That was true when this client held its own subscription
+     * and is more so now that one subscription feeds many: a blocking client
+     * would stall every other run on the node as well as the ingester.
+     *
+     * <p>⚠️ IT DOES NOT CHECK THE KEY. The router that calls this is what knows
+     * which client a delivery belongs to, and a check here would be a second
+     * copy of that decision -- but a mis-routed delivery is not silent either:
+     * {@code decodeInto} looks up THIS client's key in the segment and throws
+     * if the segment carries no run for it.
+     */
+    public void deliver(Delivery delivery) {
+        deliveries.offer(Objects.requireNonNull(delivery, "delivery"));
     }
 
     /**
