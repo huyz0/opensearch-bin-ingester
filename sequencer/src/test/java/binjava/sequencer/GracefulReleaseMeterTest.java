@@ -665,4 +665,36 @@ class GracefulReleaseMeterTest {
                 .as("the zero of plus, for a sweep that has run no seed")
                 .isEqualTo(new GracefulReleaseMeter.Counts(0, 0, 0, 0));
     }
+
+    /**
+     * Refusals blaming another pod ACCUMULATE across windows (M5.57).
+     *
+     * <p>⚠️ {@code refusedForAnotherPod++} -> {@code refusedForAnotherPod = 1}
+     * SURVIVED ALL 501 TESTS, sweep included -- the member of M5.35's family
+     * M5.35 did not close. Every case reaching this counter runs a SINGLE
+     * {@code observe} on a fresh store, where a counter and a flag agree, and
+     * the sweep is blind because this counter is legitimately ZERO.
+     */
+    @Test
+    void refusalsBLAMINGANOTHERPODACCUMULATEAcrossWindows() throws Exception {
+        FaultInjectingStore faulty = new FaultInjectingStore(
+                new MemoryBinStore(), 1L, FaultInjectingStore.Faults.none());
+        faulty.partition("podb");
+        GracefulReleaseMeter meter = new GracefulReleaseMeter(faulty);
+
+        for (int window = 0; window < 2; window++) {
+            meter.observe("poda", () -> {
+                faulty.actingAs("podb");
+                faulty.stat("ctl/lease");
+            });
+        }
+
+        assertThat(faulty.injected())
+                .as("the premise: TWO refusals, one per window, both blaming podb")
+                .extracting(FaultInjectingStore.Injected::key)
+                .containsExactly("pod:podb", "pod:podb");
+        assertThat(meter.refusedForAnotherPod())
+                .as("ONE PER WINDOW, TWO WINDOWS -- an assignment of 1 reads 1 here")
+                .isEqualTo(2);
+    }
 }
