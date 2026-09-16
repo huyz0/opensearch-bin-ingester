@@ -79,6 +79,20 @@ public final class Leadership implements AutoCloseable {
     }
 
     /**
+     * The term this pod already holds, or {@code null} — WITHOUT electing
+     * (M5.15d).
+     *
+     * <p>⚠️ IT EXISTS BECAUSE {@link #sequencer()} ELECTS AS A SIDE EFFECT,
+     * which is right for a commit and wrong for a reader: the push site asks
+     * for the chain epoch once per flush, and taking a term to answer would
+     * make reading a field acquire a lease, seal an ancestor and replay a
+     * chain.
+     */
+    Sequencer heldWithoutElecting() {
+        return held.get();
+    }
+
+    /**
      * The sequencer this pod may write the chain with, or {@code null}.
      *
      * <p>⚠️ IT ELECTS INTO A VACANCY, because the holder may have died since the

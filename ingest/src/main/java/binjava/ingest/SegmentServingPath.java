@@ -86,7 +86,7 @@ final class SegmentServingPath {
     }
 
     void publishSegment(SegmentCommit committed, byte[] heldBytes,
-            SegmentServing serving) {
+            SegmentServing serving, long sequencerEpoch) {
         // ⚠️ LINKED, so delivery order follows first-subscription order rather
         // than a hash, which makes a failure reproducible run to run.
         //
@@ -152,7 +152,7 @@ final class SegmentServingPath {
 
         switch (via) {
             case INLINE -> deliver(committed.segmentKey(), targets, FetchMode.INLINE,
-                    sinks -> writeHeldBytes(heldBytes, sinks));
+                    sinks -> writeHeldBytes(heldBytes, sinks), null, sequencerEpoch);
             // ⚠️ FROM THE HELD ARRAY WHEN WE HAVE ONE, and only from the store
             // when we do not. `proxy` names how the bytes reach the CONSUMER;
             // it is never a reason to buy a GET for bytes this pod is already
@@ -160,7 +160,8 @@ final class SegmentServingPath {
             case PROXY -> deliver(committed.segmentKey(), targets, FetchMode.PROXY,
                     heldBytes == null
                             ? sinks -> streamFromStore(serving, committed.segmentKey(), sinks)
-                            : sinks -> writeHeldBytesChunked(heldBytes, serving, sinks));
+                            : sinks -> writeHeldBytesChunked(heldBytes, serving, sinks),
+                    null, sequencerEpoch);
             // ⚠️ NO BYTES AT ALL, WHICH IS WHAT `direct` MEANS. The consumer
             // fetches with the grant, so this pod writes nothing to the sink
             // and issues no store request of its own -- the saving the mode
@@ -176,7 +177,7 @@ final class SegmentServingPath {
             // here instead. In practice it is gated by `directEnabled`
             // defaulting off and by neither shipping backend presigning.
             case DIRECT -> deliver(committed.segmentKey(), targets, FetchMode.DIRECT,
-                    sinks -> { }, serving.issuer());
+                    sinks -> { }, serving.issuer(), sequencerEpoch);
         }
     }
 
@@ -259,19 +260,19 @@ final class SegmentServingPath {
      * sinks it dropped, so what is left there is this class crossing that list
      * off against {@link Tracking}, plus a per-chunk deadline that nothing yet
      * owns.
-     */
-    private void deliver(String segmentKey, List<Target> targets, FetchMode via, Source source) {
-        deliver(segmentKey, targets, via, source, null);
-    }
-
-    /**
+     *
      * @param issuer mints one grant per SEGMENT for {@code direct}, and is
      *     null for every other mode. ⚠️ PER SEGMENT, and an earlier draft of
      *     this line said per CONSUMER -- which is what the mint did before it
      *     was hoisted, and what made it per RUN for every real caller
+     * @param sequencerEpoch the chain epoch every push of this segment carries
+     *     (M5.15d), or {@link SubscriptionHub#EPOCH_UNKNOWN} from a publisher
+     *     that models no chain. ⚠️ EVERY ARM PASSES IT SEPARATELY, so pinning
+     *     one says nothing about the others -- review measured PROXY and DIRECT
+     *     passing the sentinel while the whole suite stayed green
      */
     private void deliver(String segmentKey, List<Target> targets, FetchMode via, Source source,
-            GrantIssuer issuer) {
+            GrantIssuer issuer, long sequencerEpoch) {
         List<Tracking> opened = new ArrayList<>();
         List<List<Push>> pushes = new ArrayList<>();
         List<Target> live = new ArrayList<>();
@@ -299,7 +300,7 @@ final class SegmentServingPath {
             List<Push> forThisConsumer = new ArrayList<>(t.runs().size());
             for (RunCommit run : t.runs()) {
                 forThisConsumer.add(new Push(run.key(), segmentKey, run.recordCount(),
-                        run.firstOffset(), via, EMPTY, grant));
+                        run.firstOffset(), via, EMPTY, grant, sequencerEpoch));
             }
             try {
                 SegmentSink sink = t.subscriber().open(List.copyOf(forThisConsumer));

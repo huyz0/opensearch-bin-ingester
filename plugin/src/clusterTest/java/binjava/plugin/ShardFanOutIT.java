@@ -71,7 +71,7 @@ public class ShardFanOutIT extends OpenSearchSingleNodeTestCase {
             return HUB.subscribe(key, SubscriptionHub.assembling(
                     push -> listener.onDelivery(new Delivery(push.key(), push.segmentKey(),
                             push.recordCount(), push.firstOffset(), push.via(),
-                            push.segment()))));
+                            push.segment(), push.grant(), push.sequencerEpoch()))));
         }
     }
 

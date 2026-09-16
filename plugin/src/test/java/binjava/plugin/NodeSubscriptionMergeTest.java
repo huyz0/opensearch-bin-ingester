@@ -97,7 +97,7 @@ class NodeSubscriptionMergeTest {
                     byte[] assembled = ((Assembling) sink).bytes();
                     pushes.forEach(push -> listener.onDelivery(new Delivery(push.key(),
                             push.segmentKey(), push.recordCount(), push.firstOffset(),
-                            push.via(), assembled)));
+                            push.via(), assembled, push.grant(), push.sequencerEpoch())));
                 }
             };
             java.util.Map<RunKey, AutoCloseable> handles = new java.util.LinkedHashMap<>();

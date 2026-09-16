@@ -257,6 +257,44 @@ public interface Sequencer extends AutoCloseable {
     CommitDelta commitAll(List<CommitRequest> requests) throws IOException;
 
     /**
+     * The chain epoch this sequencer's commits are landing under, or
+     * {@link #EPOCH_UNKNOWN} for an implementation that models no chain
+     * (M5.15d).
+     *
+     * <p>⚠️ IT EXISTS FOR THE PUSH CHANNEL, not for the commit path. A
+     * consumer's subscription carries the sequencer epoch beside its own
+     * session epoch so the two can be told apart (SPEC criterion 12), and the
+     * epoch lives on the chain KEY -- {@code LogKeys(prefix, epoch)}, which is
+     * package-private here -- so nothing outside this module can derive it
+     * from a {@link CommitDelta}, which carries {@code (sequence, segments)}
+     * and no epoch at all.
+     *
+     * <p>⚠️ IT IS THE SEQUENCER'S CURRENT EPOCH, NOT THE COMMITTED DELTA'S,
+     * and the difference is real though narrow: a lease that moves between a
+     * commit returning and this being read answers with the NEW epoch. What a
+     * consumer uses it for -- telling a failover from a session reset -- is
+     * unharmed by that, because a moved lease IS the failover it would be
+     * told about. A caller that needs the epoch a specific delta landed under
+     * cannot get it here, and putting it on the delta is a wire-format change
+     * with its own ADR.
+     *
+     * <p>⚠️ THE DEFAULT IS HONEST RATHER THAN CONVENIENT. {@link FakeSequencer}
+     * and the test stubs write no chain, so they HAVE no epoch, and answering
+     * zero would be indistinguishable from the reserved unleased epoch M4.4b
+     * forbids committing under. An implementation that does hold a lease
+     * overrides this.
+     */
+    default long epoch() {
+        return EPOCH_UNKNOWN;
+    }
+
+    /**
+     * What {@link #epoch()} answers when there is no chain: not a valid epoch,
+     * and deliberately not 0, which M4.4b reserves for "no lease".
+     */
+    long EPOCH_UNKNOWN = -1L;
+
+    /**
      * Releases whatever this instance holds. ⚠️ For an implementation holding a
      * lease that means RELEASING it voluntarily rather than waiting out the
      * TTL — the difference between a failover in milliseconds and one bounded

@@ -151,11 +151,13 @@ public final class DefaultIngest implements Ingest {
      * them and holding one copy costs one copy, bounded by
      * {@code maxQueuedPushBytes}.
      */
-    private record PendingPush(CommitDelta delta, String segmentKey, byte[] segment, int bytes) {
+    private record PendingPush(CommitDelta delta, String segmentKey, byte[] segment, int bytes,
+            long sequencerEpoch) {
     }
 
     /** Ends {@link #pushLoop} without interrupting a delivery in flight. */
-    private static final PendingPush POISON = new PendingPush(null, null, new byte[0], 0);
+    private static final PendingPush POISON =
+            new PendingPush(null, null, new byte[0], 0, SubscriptionHub.EPOCH_UNKNOWN);
 
     /**
      * How many pushes {@link #pushLoop} could not deliver.
@@ -428,7 +430,8 @@ public final class DefaultIngest implements Ingest {
                 return;
             }
             try {
-                hub.publish(next.delta(), next.segmentKey(), next.segment(), serving);
+                hub.publish(next.delta(), next.segmentKey(), next.segment(), serving,
+                        next.sequencerEpoch());
             } catch (RuntimeException e) {
                 // ⚠️ A subscriber's failure is its own. SubscriptionHub already
                 // isolates a sink that throws; this is the backstop that keeps
@@ -580,7 +583,11 @@ public final class DefaultIngest implements Ingest {
                 droppedPushes++;
             } else {
                 queuedPushBytes.addAndGet(bytes);
-                pushes.add(new PendingPush(delta, published.key(), published.segment(), bytes));
+                pushes.add(new PendingPush(delta, published.key(), published.segment(), bytes,
+                        // ⚠️ AT FLUSH TIME, not at push time: the pusher runs
+                        // off this lock and can lag, so reading it there labels
+                        // a push with the chain's LATER epoch (M5.15d).
+                        sequencer.epoch()));
             }
         } catch (IOException | RuntimeException e) {
             for (Pending p : batch) {

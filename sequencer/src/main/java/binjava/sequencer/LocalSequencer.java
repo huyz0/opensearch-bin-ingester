@@ -400,7 +400,17 @@ public final class LocalSequencer implements Sequencer {
         }
     }
 
-    /** The epoch this instance sequences at. */
+    /**
+     * The epoch this instance sequences at.
+     *
+     * <p>⚠️ IT IS ALSO {@link Sequencer#epoch()} SINCE M5.15d, which the push
+     * channel reads to carry the sequencer epoch beside a consumer's own
+     * session epoch (SPEC criterion 12). This method predates that and needed
+     * no change: it is the lease epoch this instance won, and it never moves
+     * for the life of the instance, because a lease that moves FENCES this one
+     * rather than re-pointing it.
+     */
+    @Override
     public long epoch() {
         return log.epoch();
     }

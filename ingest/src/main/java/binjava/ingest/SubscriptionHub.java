@@ -41,6 +41,14 @@ import java.util.function.Consumer;
 public final class SubscriptionHub {
 
     /**
+     * What {@link Push#sequencerEpoch()} carries when the publisher models no
+     * chain -- the same value and the same meaning as
+     * {@code Sequencer.EPOCH_UNKNOWN}, restated here because {@code ingest}
+     * must not depend on {@code sequencer} for a constant (architecture.md).
+     */
+    public static final long EPOCH_UNKNOWN = -1L;
+
+    /**
      * What a subscriber is handed when its stream advances.
      *
      * <p>⚠️ {@link #segment()} IS EMPTY IN EVERY PUSH THE SERVING PATH
@@ -71,7 +79,7 @@ public final class SubscriptionHub {
      * segment arrived" sees an empty one and must branch on {@code via} first.
      */
     public record Push(RunKey key, String segmentKey, int recordCount, long firstOffset,
-            FetchMode via, byte[] segment, binjava.format.Grant grant) {
+            FetchMode via, byte[] segment, binjava.format.Grant grant, long sequencerEpoch) {
 
         /**
          * A push with no grant, which is every {@code inline} and {@code proxy}
@@ -82,10 +90,22 @@ public final class SubscriptionHub {
          * the sites is how a fixture silently stops testing what it did, which
          * M5.43's review measured happening to a case two hundred lines from
          * anything its diff touched.
+         *
+         * <p>⚠️ AND IT NOW DEFAULTS THE SEQUENCER EPOCH TO
+         * {@code Sequencer.EPOCH_UNKNOWN} (M5.15d), which is honest for a
+         * caller that models no chain: every push a fixture builds by hand is
+         * exactly that. The production path takes the four-argument
+         * {@code publish} that carries a real one.
          */
         public Push(RunKey key, String segmentKey, int recordCount, long firstOffset,
                 FetchMode via, byte[] segment) {
-            this(key, segmentKey, recordCount, firstOffset, via, segment, null);
+            this(key, segmentKey, recordCount, firstOffset, via, segment, null, EPOCH_UNKNOWN);
+        }
+
+        /** A push with a grant and no chain, which is what a `direct` fixture builds. */
+        public Push(RunKey key, String segmentKey, int recordCount, long firstOffset,
+                FetchMode via, byte[] segment, binjava.format.Grant grant) {
+            this(key, segmentKey, recordCount, firstOffset, via, segment, grant, EPOCH_UNKNOWN);
         }
 
         public Push {
@@ -495,6 +515,28 @@ public final class SubscriptionHub {
      */
     public void publish(CommitDelta delta, String heldSegmentKey, byte[] heldBytes,
             SegmentServing serving) {
+        publish(delta, heldSegmentKey, heldBytes, serving, EPOCH_UNKNOWN);
+    }
+
+    /**
+     * Delivers a commit, telling every push which chain epoch it landed under
+     * (M5.15d).
+     *
+     * <p>⚠️ THE EPOCH COMES FROM THE SEQUENCER SEAM, NOT FROM THE DELTA.
+     * {@code CommitDelta} carries {@code (sequence, segments)} and no epoch --
+     * the epoch lives on the chain KEY, which is package-private in
+     * {@code sequencer} -- so {@code DefaultIngest} reads it from
+     * {@code Sequencer.epoch()} and passes it here. Putting it on the delta
+     * instead is a wire-format change with its own ADR.
+     *
+     * <p>⚠️ THE FOUR-ARGUMENT OVERLOAD ABOVE PASSES
+     * {@link SubscriptionHub#EPOCH_UNKNOWN}, which is what a caller modelling
+     * no chain honestly has. Every such caller in the tree is a fixture; the
+     * production path is {@code DefaultIngest.flushLocked} and it takes this
+     * one.
+     */
+    public void publish(CommitDelta delta, String heldSegmentKey, byte[] heldBytes,
+            SegmentServing serving, long sequencerEpoch) {
         Objects.requireNonNull(delta, "delta");
         Objects.requireNonNull(serving, "serving");
         // ⚠️ A FAILED READ ON ONE SEGMENT DOES NOT DENY THE OTHERS. Letting
@@ -519,7 +561,7 @@ public final class SubscriptionHub {
         for (SegmentCommit committed : delta.segments()) {
             byte[] held = committed.segmentKey().equals(heldSegmentKey) ? heldBytes : null;
             try {
-                servingPath.publishSegment(committed, held, serving);
+                servingPath.publishSegment(committed, held, serving, sequencerEpoch);
             } catch (UncheckedIOException storeFailed) {
                 if (firstFailure == null) {
                     firstFailure = storeFailed;

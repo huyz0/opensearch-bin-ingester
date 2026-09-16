@@ -38,6 +38,14 @@ public final class RemoteSequencer implements Sequencer {
 
     private final BinStore store;
     private final LeaseConfig leaseConfig;
+
+    /**
+     * ⚠️ VOLATILE, and written on the commit path while the push path reads it.
+     * A stale read costs a consumer one push labelled with the previous epoch,
+     * which is the same answer it would have got a millisecond earlier; a torn
+     * one is impossible for a {@code long} only because this is volatile.
+     */
+    private volatile long lastEpoch = EPOCH_UNKNOWN;
     private final SequencerTransport transport;
 
     public RemoteSequencer(BinStore store, LeaseConfig leaseConfig,
@@ -56,7 +64,16 @@ public final class RemoteSequencer implements Sequencer {
      */
     private Lease currentLease() throws IOException {
         try (InputStream in = store.get(leaseConfig.leaseKey())) {
-            return Lease.decode(in.readAllBytes());
+            Lease lease = Lease.decode(in.readAllBytes());
+            // ⚠️ REMEMBERED SO `epoch()` COSTS NO SECOND READ (M5.15d). The
+            // push site asks for the chain epoch once per flush, and answering
+            // it with its own GET doubled this follower's lease read rate --
+            // the same object, decoded twice in one flush, which cost.md R4
+            // calls a read to coalesce rather than to repeat. Every commit
+            // passes through here, so what `epoch()` returns is what THIS
+            // pod's last commit was routed by.
+            lastEpoch = lease.epoch();
+            return lease;
         }
     }
 
@@ -169,6 +186,26 @@ public final class RemoteSequencer implements Sequencer {
         throw new IOException("forwarding carries one request per send; got "
                 + requests.size() + ". Batching belongs to the pod that writes the chain "
                 + "(M4.7), not to the pod forwarding to it");
+    }
+
+    /**
+     * The epoch of the lease this pod last forwarded to (M5.15d).
+     *
+     * <p>⚠️ IT ISSUES NO REQUEST, which is the whole of its cost story. Every
+     * commit reads the lease already, so the epoch is in hand; an earlier draft
+     * read it again here and review measured the consequence -- this follower's
+     * lease GET rate doubled, one per flush becoming two, the same object
+     * decoded twice. cost.md R4 calls that a read to coalesce, not to repeat.
+     *
+     * <p>⚠️ SO IT IS THE LAST OBSERVED EPOCH, NOT A FRESH ONE, and a pod that
+     * has never committed answers {@link Sequencer#EPOCH_UNKNOWN}. That is
+     * honest rather than convenient: what a consumer is told is the epoch this
+     * pod's commits are actually being routed by, and before the first commit
+     * there is no such thing.
+     */
+    @Override
+    public long epoch() {
+        return lastEpoch;
     }
 
     @Override

@@ -156,6 +156,27 @@ public final class FleetSequencer implements Sequencer {
         return leadership.isHeld();
     }
 
+    /**
+     * The epoch this pod's commits land under, whichever way they travel
+     * (M5.15d).
+     *
+     * <p>⚠️ THE LEADER'S OWN, WHEN THIS POD LEADS, and the leaseholder's when
+     * it forwards -- which is the same number by construction, since a follower
+     * forwards to the holder of the lease whose epoch it is reading. Asking the
+     * leadership first avoids the store read {@link RemoteSequencer#epoch()}
+     * pays, on the pod where the answer is already in hand.
+     *
+     * <p>⚠️ IT DOES NOT ELECT. Asking {@code Leadership.sequencer()} would take
+     * a term to answer a question -- acquiring a lease, sealing an ancestor and
+     * replaying a chain -- so this reads the term already held and forwards
+     * otherwise.
+     */
+    @Override
+    public long epoch() {
+        Sequencer mine = leadership.heldWithoutElecting();
+        return mine != null ? mine.epoch() : remote.epoch();
+    }
+
     @Override
     public void close() throws IOException {
         // ⚠️ THE FLAG GOES UP FIRST, so a commit racing this shutdown is refused

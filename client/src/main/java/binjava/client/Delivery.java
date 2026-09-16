@@ -34,6 +34,13 @@ import java.util.Objects;
  * A reader looking for the coalescing point should look at
  * {@code ConsumerClient.decodeInto}, not at the hub.
  *
+ * <p>⚠️ {@code sequencerEpoch} IS THE CHAIN'S TERM, NOT THE SESSION'S
+ * (M5.15d, SPEC criterion 12). A consumer holds both and they answer different
+ * questions: this one moves when the leaseholder moves and says nothing about
+ * the consumer, while the session epoch orders that consumer's own requests and
+ * says nothing about the chain. Conflating them makes every failover look like
+ * a lost session, and every session reset look like a failover.
+ *
  * <p>⚠️ {@code via} IS TOLD TO THE CONSUMER, NOT ASKED OF IT (FR-6). It is a
  * record component with no setter and nothing on {@code SubscriptionTransport}
  * carries a preference, so there is no expression a consumer could write to
@@ -42,12 +49,35 @@ import java.util.Objects;
  * reproduce the $3,732/month design ADR-0004 rejected.
  */
 public record Delivery(RunKey key, String segmentKey, int recordCount, long firstOffset,
-        FetchMode via, byte[] segment, binjava.format.Grant grant) {
+        FetchMode via, byte[] segment, binjava.format.Grant grant, long sequencerEpoch) {
+
+    /**
+     * What {@link #sequencerEpoch()} carries when the publisher models no
+     * chain. ⚠️ Not 0, which M4.4b reserves for "no lease", and the same value
+     * {@code SubscriptionHub.EPOCH_UNKNOWN} and {@code Sequencer.EPOCH_UNKNOWN}
+     * carry -- restated rather than imported, because `client` depends on
+     * neither module (ADR-0023, architecture.md).
+     */
+    public static final long EPOCH_UNKNOWN = -1L;
 
     /** A delivery with no grant, which is every {@code inline} and {@code proxy} one. */
     public Delivery(RunKey key, String segmentKey, int recordCount, long firstOffset,
             FetchMode via, byte[] segment) {
-        this(key, segmentKey, recordCount, firstOffset, via, segment, null);
+        this(key, segmentKey, recordCount, firstOffset, via, segment, null, EPOCH_UNKNOWN);
+    }
+
+    /**
+     * A delivery with a grant and no chain.
+     *
+     * <p>⚠️ IT EXISTS SO THE EPOCH COST NO CALL SITES (M5.15d), which is the
+     * same licence the no-grant form above took. Every caller that omits it
+     * models no chain -- a fixture, or a transport under test -- and saying
+     * {@code EPOCH_UNKNOWN} out loud at seventeen sites would bury the two
+     * that carry a real one.
+     */
+    public Delivery(RunKey key, String segmentKey, int recordCount, long firstOffset,
+            FetchMode via, byte[] segment, binjava.format.Grant grant) {
+        this(key, segmentKey, recordCount, firstOffset, via, segment, grant, EPOCH_UNKNOWN);
     }
 
     public Delivery {

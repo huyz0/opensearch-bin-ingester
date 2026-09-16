@@ -100,6 +100,12 @@ final class ResendOnceSequencer implements Sequencer {
         return delegate.commitAll(requests);
     }
 
+    /** ⚠️ Straight through: a decorator writes no chain of its own. */
+    @Override
+    public long epoch() {
+        return delegate.epoch();
+    }
+
     @Override
     public void close() throws IOException {
         delegate.close();

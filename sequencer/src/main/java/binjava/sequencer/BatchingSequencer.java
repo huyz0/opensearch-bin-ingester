@@ -411,6 +411,12 @@ public final class BatchingSequencer implements Sequencer {
         }
     }
 
+    /** ⚠️ Straight through: a decorator writes no chain of its own. */
+    @Override
+    public long epoch() {
+        return delegate.epoch();
+    }
+
     /**
      * ⚠️ STOPS THE COMMITTER, THEN THE DELEGATE, and fails whatever was queued.
      * A caller blocked in {@link #commit} when close arrives must not wait for a

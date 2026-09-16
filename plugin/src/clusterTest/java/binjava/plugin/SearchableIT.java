@@ -76,7 +76,8 @@ public class SearchableIT extends OpenSearchSingleNodeTestCase {
             return HUB.subscribe(key, SubscriptionHub.assembling(push -> {
                 DELIVERED.addAndGet(push.recordCount());
                 listener.onDelivery(new Delivery(push.key(), push.segmentKey(),
-                        push.recordCount(), push.firstOffset(), push.via(), push.segment()));
+                        push.recordCount(), push.firstOffset(), push.via(), push.segment(),
+                        push.grant(), push.sequencerEpoch()));
             }));
         }
     }

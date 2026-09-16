@@ -156,7 +156,7 @@ class ThreeModesAgreeTest {
                 modesSeen.add(push.via());
                 listener.onDelivery(new Delivery(push.key(), push.segmentKey(),
                         push.recordCount(), push.firstOffset(), push.via(),
-                        push.segment(), push.grant()));
+                        push.segment(), push.grant(), push.sequencerEpoch()));
             }));
         }
     }
