@@ -1,6 +1,6 @@
 # 0015. The producer sends a routing value; the plugin registers the shard count
 
-Status: accepted
+Status: accepted; **§3 amended 2026-09-17 by [ADR-0046](0046-the-pending-pool-covers-an-unknown-index-not-an-unpushed-rollover.md)**
 Date: 2026-08-30
 Requirements: FR-13, FR-16, FR-19
 Research: docs/research/20-opensearch/01-pull-based-ingestion-spi.md §4
@@ -63,6 +63,16 @@ on connect and on every relevant cluster-state change.
 relationship that already exists for subscriptions carries the registration.
 
 ### 3. Buffer-and-reroute covers the window where the shard count is unknown
+
+⚠️ **AMENDED BY [ADR-0046](0046-the-pending-pool-covers-an-unknown-index-not-an-unpushed-rollover.md)
+(2026-09-17): the pool covers the UNKNOWN-INDEX case only.** The second trigger
+below — "a rollover the plugin has not yet pushed" — is not observable by the
+ingester: the previous registration is present and correct *for the index it
+describes*, so nothing distinguishes a current mapping from one that was current
+a millisecond ago, and detecting it means asking OpenSearch per record or on a
+timer, which §2 exists to avoid. **The shrink claim at the end of this section is
+withdrawn**; the staleness window is §4's, bounded by the plugin's push latency.
+Everything else here stands.
 
 ⚠️ **A buffered record has no offset yet, so it can still be moved between
 partitions.** That is a direct consequence of
