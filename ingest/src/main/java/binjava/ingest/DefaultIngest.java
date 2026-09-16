@@ -6,6 +6,7 @@ import binjava.binstore.Capabilities;
 import binjava.format.CommitDelta;
 import binjava.format.RunCommit;
 import binjava.format.RunKey;
+import binjava.format.SegmentCommit;
 import binjava.format.SegmentRecord;
 import binjava.security.Principal;
 import binjava.sequencer.CommitRequest;
@@ -492,15 +493,55 @@ public final class DefaultIngest implements Ingest {
                     published.key(), published.recordCounts());
             CommitDelta delta = sequencer.commit(request);
 
+            // ⚠️ PAIRED WITH THIS POD'S SEGMENT, NOT FLATTENED OVER THE DELTA
+            // (M5.60). `delta.runs()` delegates to `CommitDelta.only()`, which
+            // THROWS on any delta naming more than one segment -- and the throw
+            // lands in this method's own handler, which completes every waiting
+            // append exceptionally. So a pod whose sequencer answers with a
+            // batch could not flush AT ALL, not merely flush badly. That is the
+            // commit-forwarding shape: a follower's flush is committed by the
+            // leaseholder alongside other pods' flushes.
+            //
+            // ⚠️ AND FLATTENING EVERY SEGMENT'S RUNS INTO ONE MAP WOULD BE
+            // WORSE THAN THE THROW. Two pods can carry runs of the SAME stream
+            // in one batch, so a map keyed by `RunKey` alone takes whichever
+            // landed last and reads this pod's records against another pod's
+            // object -- ADR-0032 with no symptom, because the append SUCCEEDS
+            // and the offsets look like offsets. Pairing each run with its own
+            // segment is what `SegmentServingPath.publishSegment` does on the
+            // push path; this is the same rule on the ack path.
+            //
+            // ⚠️ BY THE KEY THIS FLUSH SUBMITTED, AT ANY SEGMENT COUNT. An
+            // earlier draft carved out the one-segment case -- take it whatever
+            // its key, since there is nothing to disambiguate -- and review
+            // measured that carve-out as the defect it was closing, one pod
+            // over: a forwarded reply is decoded from another pod's bytes, so a
+            // mis-routed one naming ONE foreign segment would have been read as
+            // this pod's answer, completing every waiting append with another
+            // pod's offsets while this pod's segment was never committed. An
+            // acknowledged write, lost, with no symptom -- and the SAME reply
+            // with one extra segment beside it would have failed cleanly, which
+            // is a rule whose outcome turns on how many OTHER pods flushed.
+            // `Sequencer` settles it the other way (M4.7b): a caller finds its
+            // offsets by the segment key it submitted, and a triple answered
+            // under a different key is refused, because answering with offsets
+            // belonging to other records is worse than failing.
             Map<RunKey, Long> firstOffsets = new HashMap<>();
-            for (RunCommit run : delta.runs()) {
-                firstOffsets.put(run.key(), run.firstOffset());
+            for (SegmentCommit segment : delta.segments()) {
+                if (!segment.segmentKey().equals(published.key())) {
+                    continue;
+                }
+                for (RunCommit run : segment.runs()) {
+                    firstOffsets.put(run.key(), run.firstOffset());
+                }
             }
             for (Pending p : batch) {
                 Long base = firstOffsets.get(p.stream());
                 if (base == null) {
                     p.done().completeExceptionally(new IOException(
-                            "the commit did not carry the stream this append wrote"));
+                            "the commit carried no run for the stream this append wrote, "
+                            + "under segment " + published.key() + " -- the delta names "
+                            + delta.segments().size() + " segment(s)"));
                     continue;
                 }
                 // ⚠️ The caller's SLICE of the run, not the whole run. Several

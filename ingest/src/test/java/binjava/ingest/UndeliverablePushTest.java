@@ -8,6 +8,7 @@ import binjava.binstore.CountingBinStore;
 import binjava.binstore.backend.MemoryBinStore;
 import binjava.format.CommitDelta;
 import binjava.format.RunKey;
+import binjava.format.SegmentCommit;
 import binjava.sequencer.CommitRequest;
 import binjava.sequencer.Sequencer;
 import java.io.IOException;
@@ -34,17 +35,28 @@ import org.junit.jupiter.api.Test;
  * <p>⚠️ THE FIXTURE TURNS ON A KEY COMPARISON, NOT A SEGMENT COUNT, and two
  * earlier attempts at this row got that wrong and concluded the handler was
  * UNREACHABLE. {@code SubscriptionHub.publish} chooses held bytes by
- * {@code committed.segmentKey().equals(heldSegmentKey)}. A delta naming ONE
- * segment that is not the one this pod just wrote therefore takes
- * {@code held == null} → {@code PROXY} → {@code streamFromStore} → a
- * {@code get} for a key the store never had. A BATCHED delta would be the
- * obvious way to get a foreign key in, and it does not work:
- * {@code flushLocked} calls {@code delta.runs()}, which refuses any delta with
- * more than one segment — measured, with that stack.
+ * {@code committed.segmentKey().equals(heldSegmentKey)}, so a segment that is
+ * not the one this pod just wrote takes {@code held == null} -> {@code PROXY}
+ * -> {@code streamFromStore} -> a {@code get} for a key the store never had.
  *
- * <p>⚠️ THE RUNS STAY REAL so the appends complete: only the segment key is
- * replaced, so {@code flushLocked}'s {@code firstOffsets} map still carries the
- * stream that was written.
+ * <p>⚠️ IT IS A BATCHED DELTA NOW, AND THAT IS M5.60. The foreign key used to
+ * arrive by RENAMING this pod's only segment, because a batched delta did not
+ * work: {@code flushLocked} called {@code delta.runs()}, which refuses any
+ * delta naming more than one segment. M5.60 fixed that path AND closed the
+ * leniency the rename depended on -- offsets are now found by the segment key
+ * this flush submitted, at any segment count, because a one-segment reply
+ * naming a foreign object is a mis-routed forwarded reply, and answering it
+ * would complete every append with another pod's offsets. So the rename built
+ * a delta the contract forbids ({@code Sequencer}, M4.7b) and was kept alive by
+ * production leniency. What the sequencer returns now is this pod's REAL
+ * segment beside an unreadable decoy, which is the shape a leaseholder's
+ * batched commit actually has.
+ *
+ * <p>⚠️ THE DECOY CARRIES THE SAME RUNS as the real segment, so the one
+ * subscriber is a target for BOTH: the segment this pod holds is delivered from
+ * memory and the decoy is read from a store that cannot answer. That is why the
+ * assertion below is about WHICH segment reached the subscriber rather than
+ * about nobody being completed at all.
  */
 class UndeliverablePushTest {
 
@@ -76,8 +88,15 @@ class UndeliverablePushTest {
                             + "reader of that counter is not told a story about slow consumers")
                     .isZero();
             assertThat(seen)
-                    .as("nobody is completed, so no subscriber mistakes a prefix for a segment")
-                    .isEmpty();
+                    .as("NOBODY IS COMPLETED FOR THE SEGMENT THAT COULD NOT BE READ, so no "
+                            + "subscriber mistakes a prefix for a segment -- this subscriber is "
+                            + "a target for the decoy too, and never hears about it")
+                    .noneMatch(p -> UnreadableSegmentWarning.KEY.equals(p.segmentKey()));
+            assertThat(seen)
+                    .as("and the segment this pod HELD is delivered anyway, once per flush: a "
+                            + "failed read on one segment must not deny the others, which is "
+                            + "also what stops the assertion above passing on an empty list")
+                    .hasSize(2);
         }
     }
 
@@ -198,16 +217,32 @@ class UndeliverablePushTest {
                 new StoreFakes.ReadFailsWithoutNamingTheKey(new MemoryBinStore()));
     }
 
-    /** An ingest whose sequencer renames the committed segment to one the store lacks. */
+    /** An ingest whose sequencer batches an unreadable segment beside the written one. */
     private static DefaultIngest ingestNamingAMissingSegment(CountingBinStore store,
             SubscriptionHub hub) throws IOException {
         Sequencer real = IngestTestSupport.sequencer(store, "pod1");
-        Sequencer renaming = new Sequencer() {
+        Sequencer widening = new Sequencer() {
             @Override
             public CommitDelta commitAll(List<CommitRequest> requests) throws IOException {
                 CommitDelta delta = real.commitAll(requests);
-                return new CommitDelta(delta.sequence(), UnreadableSegmentWarning.KEY,
-                        delta.runs());
+                // ⚠️ THIS POD'S OWN SEGMENT IS KEPT, UNTOUCHED, and the decoy
+                // is added beside it -- the leaseholder's batched commit. The
+                // decoy repeats the real segment's runs so the subscriber is a
+                // target for it too; without that, `publishSegment` returns at
+                // `targets.isEmpty()` and buys no read at all.
+                List<SegmentCommit> both = new ArrayList<>();
+                // ⚠️ THE DECOY GOES FIRST, so the failing read happens BEFORE
+                // the held segment is published and the per-segment isolation
+                // in `SubscriptionHub.publish` is what delivers it anyway.
+                // Appended last, the held one was already delivered by the time
+                // anything failed, and the assertion about isolation below
+                // claimed something this fixture did not exercise -- review
+                // measured it: replacing that isolation with a bare rethrow
+                // left this suite green.
+                both.add(new SegmentCommit(
+                        UnreadableSegmentWarning.KEY, delta.segments().get(0).runs()));
+                both.addAll(delta.segments());
+                return new CommitDelta(delta.sequence(), List.copyOf(both));
             }
 
             @Override
@@ -217,7 +252,7 @@ class UndeliverablePushTest {
         };
         return new DefaultIngest(IngestTestSupport.pinnedIntervalConfig(
                         IngestTestSupport.NEVER, 8L << 20),
-                store, IngestTestSupport.PREFIX, "pod1", renaming, hub,
+                store, IngestTestSupport.PREFIX, "pod1", widening, hub,
                 Clock.systemUTC(), index -> IngestTestSupport.LOGS);
     }
 }
