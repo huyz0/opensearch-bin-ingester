@@ -276,29 +276,56 @@ class AssembledServingPathTest {
      * <p>⚠️ AND IT IS WHERE {@link SegmentProxy} EARNS ITS PLACE ON THE PUSH
      * PATH: this pod holds its own segment and none of the others, so the
      * others are the bytes there is no way to serve except by reading them.
+     *
+     * <p>⚠️ THREE SEGMENTS WITH THE HELD ONE IN THE MIDDLE, AND THE ORDER IS
+     * THE PIN (M5.59). With two segments and the held one FIRST, the push
+     * label was constrained on the PROXY arm alone: MEASURED at M5.47,
+     * threading {@code segments().get(0).segmentKey()} through as the label and
+     * using it at the INLINE site was green across the module, because
+     * {@code segments().get(0)} WAS the inlined segment and the mutated label
+     * was accidentally correct. Reversing the order does not close that -- it
+     * moves the hole from INLINE to PROXY. A held segment with another pod's
+     * on EITHER side is what makes neither arm's label equal
+     * {@code segments().get(0)}.
+     *
+     * <p>⚠️ WHAT THE HOLE COSTS IS ADR-0032's SILENT DATA ERROR, on the arm
+     * {@code DefaultIngest} takes for every segment under the inline cap: a
+     * batched delta whose held segment is not first delivers this pod's own run
+     * under another pod's object name, the push SUCCEEDS, and the offsets look
+     * right.
      */
     @Test
     void aBATCHEDDeltaDeliversEverySegmentFromWhereItsBytesARE() throws Exception {
         CountingBinStore store = new CountingBinStore(new MemoryBinStore());
         byte[] mine = segmentOf(4096);
         byte[] theirs = segmentOf(8192);
+        byte[] alsoTheirs = segmentOf(2048);
         store.put("seg-mine", Body.ofBytes(mine));
         store.put("seg-theirs", Body.ofBytes(theirs));
+        store.put("seg-theirs-2", Body.ofBytes(alsoTheirs));
         long getsBefore = store.counts().gets();
 
         SubscriptionHub hub = new SubscriptionHub();
         RunKey minesKey = new RunKey(INDEX, 0);
         RunKey theirsKey = new RunKey(INDEX, 1);
+        RunKey theirsSecondKey = new RunKey(INDEX, 2);
         Collecting fromMine = new Collecting();
         Collecting fromTheirs = new Collecting();
+        Collecting fromTheirsSecond = new Collecting();
         List<FetchMode> minesModes = new ArrayList<>();
         List<FetchMode> theirsModes = new ArrayList<>();
         List<String> minesLabels = new ArrayList<>();
         List<String> theirsLabels = new ArrayList<>();
+        List<String> theirsSecondLabels = new ArrayList<>();
 
+        // ⚠️ THE HELD SEGMENT IS SECOND OF THREE, which is what makes both
+        // label sites falsifiable: `segments().get(0)` is another pod's, so
+        // neither the INLINE arm nor the PROXY arm can be accidentally right.
         CommitDelta batched = new CommitDelta(7, List.of(
+                new SegmentCommit("seg-theirs", List.of(new RunCommit(theirsKey, 5, 20))),
                 new SegmentCommit("seg-mine", List.of(new RunCommit(minesKey, 3, 10))),
-                new SegmentCommit("seg-theirs", List.of(new RunCommit(theirsKey, 5, 20)))));
+                new SegmentCommit("seg-theirs-2",
+                        List.of(new RunCommit(theirsSecondKey, 2, 30)))));
 
         try (var ignoredA = hub.subscribe(minesKey, pushes -> {
                     pushes.forEach(push -> {
@@ -313,6 +340,10 @@ class AssembledServingPathTest {
                         theirsLabels.add(push.segmentKey());
                     });
                     return fromTheirs;
+                });
+                var ignoredC = hub.subscribe(theirsSecondKey, pushes -> {
+                    pushes.forEach(push -> theirsSecondLabels.add(push.segmentKey()));
+                    return fromTheirsSecond;
                 })) {
             hub.publish(batched, "seg-mine", mine, serving(store));
         }
@@ -325,15 +356,23 @@ class AssembledServingPathTest {
         assertThat(theirsModes)
                 .as("bytes we do not hold cannot be inlined without buffering them first")
                 .containsExactly(FetchMode.PROXY);
+        assertThat(fromTheirsSecond.bytes())
+                .as("and the third segment, on the other side of the held one")
+                .isEqualTo(alsoTheirs);
         assertThat(store.counts().gets() - getsBefore)
-                .as("ONE read: the segment we did not have, and only that one")
-                .isEqualTo(1);
+                .as("TWO reads: the two segments we did not have, and only those -- the held "
+                        + "one is served from memory however many others are in the delta")
+                .isEqualTo(2);
 
         // ⚠️ AND THE LABEL, WHICH THE BYTES DO NOT COVER. Review MEASURED
         // it: passing `segments().get(0).segmentKey()` as the push label while
-        // leaving the byte source alone is green across the whole module,
+        // leaving the byte source alone was green across the whole module,
         // because the held-or-read decision happens one frame up in `publish`
-        // and the two are independently mutable. This is ADR-0032's silent
+        // and the two are independently mutable. ⚠️ IT IS NO LONGER GREEN, and
+        // this delta is why: with the held segment SECOND of three, that
+        // mutation reds this case and only this case, at the INLINE site and
+        // at the PROXY site alike (M5.59). The sentence above is what the
+        // mutation did to the TWO-segment fixture this case used to build. This is ADR-0032's silent
         // data error -- the push SUCCEEDS, the offsets look right, and the
         // consumer is handed another pod's object name. It is the field
         // M5.45d's `direct` grant and M5.16's late subscriber fetch BY.
@@ -341,8 +380,13 @@ class AssembledServingPathTest {
                 .as("each run is labelled with ITS OWN segment, not the first in the batch")
                 .containsExactly("seg-mine");
         assertThat(theirsLabels)
-                .as("and the other pod's run carries the other pod's segment key")
+                .as("and the other pod's run carries the other pod's segment key -- this one "
+                        + "IS `segments().get(0)`, so it is the arm that was already pinned")
                 .containsExactly("seg-theirs");
+        assertThat(theirsSecondLabels)
+                .as("and so does the third, which is neither held nor first -- the PROXY arm "
+                        + "labelled from `segments().get(0)` reads `seg-theirs` here")
+                .containsExactly("seg-theirs-2");
     }
 
     /**
