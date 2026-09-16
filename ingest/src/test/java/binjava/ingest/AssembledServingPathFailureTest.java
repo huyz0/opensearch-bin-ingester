@@ -208,7 +208,7 @@ class AssembledServingPathFailureTest {
      *
      * <p>⚠️ {@code break} IS THE WORSE OF THE TWO AND IT IS SILENT. A sink
      * after the failing one is never written to, so nothing sets its
-     * {@code Tracking.failed}, so {@link SubscriptionHub#deliver} COMPLETES it
+     * {@code Tracking.failed}, so {@code SegmentServingPath.deliver} COMPLETES it
      * -- holding zero bytes. Through {@link SubscriptionHub#assembling} that is
      * {@code new byte[0]}, and {@code ConsumerClient.decodeInto} throws inside
      * the sink, where the hub swallows it as a dead subscriber. The whole
@@ -270,7 +270,7 @@ class AssembledServingPathFailureTest {
      * changed that: {@code SubscriptionHubTest.aThrowingSubscriberDoesNot
      * StopTheOthersOrTheCommit} used to run the pre-M5.45a {@code publishRun}, which M5.47 REMOVED,
      * and now publishes through the four-argument {@code publish}, so removing
-     * {@link SubscriptionHub#deliver}'s catch around {@code open} reds
+     * {@code SegmentServingPath.deliver}'s catch around {@code open} reds
      * {@code :ingest:test} there too. This case remains the one that pins it
      * on a MULTI-subscriber fan-out, where what the catch protects is the
      * OTHER consumers. Without it the throw leaves {@code publish},
@@ -434,7 +434,7 @@ class AssembledServingPathFailureTest {
      * EVERYONE at the first throwing sink -- and the healthy sinks, whose
      * {@code Tracking.failed} is false because their own writes never threw,
      * are then COMPLETED HOLDING A PREFIX. That is the outcome
-     * {@link SubscriptionHub#deliver}'s javadoc calls the worst available, and
+     * {@code SegmentServingPath.deliver}'s javadoc calls the worst available, and
      * the one the first test in this file exists to prevent on the other path.
      */
     @Test

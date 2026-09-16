@@ -189,7 +189,7 @@ class UndeliverablePushTest {
      * <p>⚠️ {@link binjava.binstore.backend.MemoryBinStore} alone cannot
      * carry this test. It throws {@code IOException("no such key: " + key)}, so
      * the key reaches the WARNING through the CAUSE whether or not
-     * {@code SubscriptionHub.deliver} names it -- review measured the whole
+     * {@code SegmentServingPath.deliver} names it -- review measured the whole
      * {@code deliver} change reverting green against that fake. A real backend
      * answers with a reset connection and names no object.
      */

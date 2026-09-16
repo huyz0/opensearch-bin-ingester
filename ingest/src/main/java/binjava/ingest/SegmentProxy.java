@@ -121,7 +121,7 @@ public final class SegmentProxy {
      * Streams {@code segmentKey} to every sink in {@code consumers}.
      *
      * <p>⚠️ A CONSUMER THAT THROWS IS DROPPED, NOT PROPAGATED, and the read
-     * continues for the rest. This is {@code SubscriptionHub.deliver}'s
+     * continues for the rest. This is {@code SegmentServingPath.deliver}'s
      * discipline and it is here for the same reason: the commit is already
      * durable, so a dead consumer must not stall or roll back a write that
      * succeeded — it falls behind and recovers from the commit log, which is
@@ -160,7 +160,7 @@ public final class SegmentProxy {
      * spent is the pod bandwidth doc 10 §4 prices beside it.
      * ⚠️ STILL NOTHING ENFORCES IT HERE -- every test in this file measures a
      * single call -- but it IS enforced one layer up, and a test does see it:
-     * {@code SubscriptionHub.publishSegment} groups by {@code Subscriber}
+     * {@code SegmentServingPath.publishSegment} groups by {@code Subscriber}
      * identity so a consumer is one entry however many runs it holds, and
      * {@code OneStreamPerConsumerTest} exercises that through
      * {@code SegmentServing} into this method (M5.40a). ⚠️ WHAT IS STILL OPEN
@@ -373,7 +373,7 @@ public final class SegmentProxy {
      *
      * ⚠️ BUT THE HUB CANNOT YET TELL A TIMED-OUT SINK FROM A SERVED ONE, and
      * an earlier draft of this paragraph claimed it could. {@code
-     * SubscriptionHub.Tracking} marks a sink failed only from a CATCH, so a
+     * SegmentServingPath.Tracking} marks a sink failed only from a CATCH, so a
      * sink dropped for missing its deadline never throws, is never marked, and
      * would be handed {@code complete(...)} — exactly the truncated prefix the
      * failure chain above ends in. Nothing catches it: {@code deliver} ignores

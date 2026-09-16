@@ -152,15 +152,16 @@ public final class GrantIssuer {
      * method mints fresh every call and reuses no unexpired grant for the same
      * key.
      *
-     * <p>⚠️ THE WIRING THAT RESPECTS IT IS {@code SubscriptionHub.deliver},
+     * <p>⚠️ THE WIRING THAT RESPECTS IT IS {@code SegmentServingPath.deliver},
      * WHICH HOISTS THE MINT ABOVE BOTH LOOPS (M5.45d). An earlier draft of this
      * sentence handed it to M5.43, which shipped the two {@code directEnabled}
      * settings and no minting at all, so a reader following the pointer found
      * nothing and could reasonably conclude the rule was unowned -- and then
      * moving the mint back inside the target loop reads as a tidy-up. That is
      * the mutation round-1 review measured leaving the whole module green.
-     * ⚠️ M5.65 will MOVE {@code deliver}, so whoever splits that file is the
-     * next reader of this paragraph.
+     * ⚠️ M5.65 MOVED {@code deliver} out of {@code SubscriptionHub} into
+     * {@code SegmentServingPath}, and this paragraph moved with the pointer --
+     * which is the whole reason the sentence it replaces was written.
      *
      * <p>⚠️ THE TTL IS CLAMPED, NOT REFUSED, and the direction is deliberate: a
      * caller asking for longer than the ceiling gets the ceiling, because the

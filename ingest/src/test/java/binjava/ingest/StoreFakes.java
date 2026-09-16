@@ -454,7 +454,7 @@ final class StoreFakes {
      * {@code IOException("no such key: " + key)}, and a test driven through it
      * cannot tell a caller that names the failing key from one that does not,
      * because the key arrives in the cause's message either way. Review measured
-     * exactly that: reverting {@code SubscriptionHub.deliver} to
+     * exactly that: reverting {@code SegmentServingPath.deliver} to
      * {@code new UncheckedIOException(storeFailed)} left every assertion green.
      */
     static final class ReadFailsWithoutNamingTheKey implements BinStore {

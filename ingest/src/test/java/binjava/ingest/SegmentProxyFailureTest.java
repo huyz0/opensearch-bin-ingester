@@ -38,7 +38,7 @@ class SegmentProxyFailureTest {
      * Criterion 5: a consumer that throws stops neither the others nor the
      * read.
      *
-     * <p>⚠️ {@code SubscriptionHub.deliver}'S DISCIPLINE, and here for the
+     * <p>⚠️ {@code SegmentServingPath.deliver}'S DISCIPLINE, and here for the
      * same reason: the commit is already durable, so a slow or dead consumer
      * must not stall or roll back a write that succeeded. It falls behind and
      * recovers from the commit log.

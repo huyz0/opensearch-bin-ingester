@@ -36,7 +36,7 @@ package binjava.ingest;
  *     ⚠️ M5.45a THEN SETTLED WHAT THE SERVING PATH PASSES, AND IT IS THE
  *     SEGMENT'S OWN LENGTH. The round-1 correction above is about the
  *     CONTRACT -- this field is not DEFINED as the segment -- and it stands.
- *     What changed is the caller: {@code SubscriptionHub.publishSegment}
+ *     What changed is the caller: {@code SegmentServingPath.publishSegment}
  *     decides PER SEGMENT rather than per run, because `proxy` streams a whole
  *     segment and a hub choosing per run would issue one GET per run (~1,600
  *     for one 8 MiB segment). One decision covering every run in a segment has
@@ -68,7 +68,7 @@ package binjava.ingest;
  *     catch-up replay.
  *     ⚠️ WHAT M5.45a PASSES IS THE SUBSCRIPTIONS OF ONE SEGMENT, which is
  *     the right granularity and a slight OVER-COUNT.
- *     {@code SubscriptionHub.publishSegment} flattens the per-{@code RunKey}
+ *     {@code SegmentServingPath.publishSegment} flattens the per-{@code RunKey}
  *     lists of every run in the segment before choosing, so the number is
  *     per-SEGMENT as this field requires -- the defect the paragraph above
  *     describes is reaching for one run's list, and that is not what happens.
@@ -76,7 +76,7 @@ package binjava.ingest;
  *     be: a node subscribed to SEVERAL runs of one segment appeared once per
  *     subscription, so the number ran high for a multi-shard consumer and
  *     biased toward `proxy` and `direct`, never toward `inline`.
- *     {@code SubscriptionHub.publishSegment} now groups by {@code Subscriber}
+ *     {@code SegmentServingPath.publishSegment} now groups by {@code Subscriber}
  *     identity, so the number is BYTE STREAMS LEAVING THE POD -- one per
  *     consumer of the segment, whatever share of its runs that consumer holds.
  *     ⚠️ A READER COMPENSATING FOR THE OLD INFLATION WOULD NOW BE WRONG:
