@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -277,12 +278,75 @@ public final class SubscriptionHub {
         }
 
         /** The epoch this session has served, which starts at 0. */
-        public long epoch() {
+        public long epoch() throws SessionResetException {
             return sessions.epochOf(id);
         }
 
-        public List<RunKey> keys() {
+        public List<RunKey> keys() throws SessionResetException {
             return sessions.keysOf(id);
+        }
+
+        /**
+         * Drops this session server-side, so its next resume answers RESET.
+         *
+         * <p>⚠️ IT IS NOT {@link #close()}. Closing unregisters the
+         * subscriptions too, which is a consumer going away; a reset leaves the
+         * consumer connected and tells it to re-establish. The registrations
+         * are left alone deliberately -- a consumer that is about to re-send
+         * full state keeps receiving in the meantime, and tearing them down
+         * would make a reset a silent gap as well as a signal.
+         */
+        public void reset() {
+            sessions.reset(id);
+        }
+
+        /**
+         * Answers a {@link SessionResetException} with the consumer's FULL
+         * state, on this same session handle.
+         *
+         * <p>⚠️ THIS IS THE ONLY DUPLICATE-FREE AND GAP-FREE ANSWER, which
+         * review measured: re-opening a session hands the consumer every run
+         * TWICE, because the old registrations are still in place and
+         * {@code subscribe} does not dedupe; closing first leaves a window
+         * registered for nothing. Reconciling onto the registrations this
+         * handle already holds touches only the difference.
+         *
+         * <p>⚠️ ADDED BEFORE REMOVED, as in {@link #resume}: a stream present
+         * both before and after is never unregistered, so nothing can fall into
+         * a gap.
+         */
+        public synchronized void reestablish(Collection<RunKey> keys) {
+            List<RunKey> full = List.copyOf(new LinkedHashSet<>(keys));
+            // ⚠️ SUBSCRIBED BEFORE THE REGISTRY IS TOLD, which is the order
+            // `resume` takes twelve lines above and for the same reason. The
+            // other way round -- registry first -- leaves a window in which a
+            // key belongs to the session and is subscribed by nothing: a commit
+            // landing there reaches no subscriber, is never recorded in
+            // `lastDelivered`, and the next resume answers no offset for it.
+            // That is the SILENT SKIP half of criterion 11. This order's worst
+            // case is a push delivered but not yet recorded, which is a
+            // possible duplicate -- the half a consumer can act on.
+            List<Subscription> early = new ArrayList<>();
+            try {
+                for (RunKey key : full) {
+                    if (registrations.stream().noneMatch(r -> r.key.equals(key))) {
+                        early.add(subscribe(key, subscriber));
+                    }
+                }
+                sessions.reestablish(id, subscriber, full);
+            } catch (RuntimeException failed) {
+                // ⚠️ THE SAME ROLLBACK `resume` HAS, for the same reason: a
+                // registration the caller was never told about is one nothing
+                // can ever close.
+                early.forEach(Subscription::close);
+                throw failed;
+            }
+            registrations.addAll(early);
+            for (int i = registrations.size() - 1; i >= 0; i--) {
+                if (!full.contains(registrations.get(i).key)) {
+                    registrations.remove(i).close();
+                }
+            }
         }
 
         /**
@@ -295,7 +359,7 @@ public final class SubscriptionHub {
          * stream that is removed is unregistered after the new set is in place.
          */
         public synchronized Resumed resume(long sessionEpoch,
-                Collection<RunKey> add, Collection<RunKey> remove) {
+                Collection<RunKey> add, Collection<RunKey> remove) throws SessionResetException {
             List<RunKey> before = sessions.keysOf(id);
             // ⚠️ REGISTERED BEFORE THE REGISTRY IS TOLD, so an added stream has
             // no window in which it is part of the session and not yet
@@ -307,7 +371,7 @@ public final class SubscriptionHub {
             // OFF. A refused resume applies none of its deltas, and a
             // registration is a delta the consumer did not get told about.
             List<Subscription> early = new ArrayList<>();
-            for (RunKey key : new java.util.LinkedHashSet<>(add)) {
+            for (RunKey key : new LinkedHashSet<>(add)) {
                 if (!before.contains(key)) {
                     early.add(subscribe(key, subscriber));
                 }
@@ -315,7 +379,13 @@ public final class SubscriptionHub {
             Resumed answer;
             try {
                 answer = sessions.resume(id, sessionEpoch, add, remove);
-            } catch (RuntimeException refused) {
+            } catch (RuntimeException | SessionResetException refused) {
+                // ⚠️ BOTH, AND THE CHECKED ONE WAS THE GAP. `SessionResetException`
+                // arrived with M5.15c and this catch listed only
+                // `RuntimeException`, so a session reset interleaving with a
+                // resume left the early registrations neither closed nor
+                // recorded -- unreachable by `close()` and therefore permanent
+                // duplicate delivery.
                 early.forEach(Subscription::close);
                 throw refused;
             }
@@ -355,7 +425,7 @@ public final class SubscriptionHub {
         // `SegmentServingPath` put run C twice in the same consumer's push
         // list -- a duplicate delivery, which is the exact half of criterion 11
         // this task exists to make impossible.
-        List<RunKey> copy = List.copyOf(new java.util.LinkedHashSet<>(keys));
+        List<RunKey> copy = List.copyOf(new LinkedHashSet<>(keys));
         return new Session(sessions.open(subscriber, copy), subscriber, copy);
     }
 

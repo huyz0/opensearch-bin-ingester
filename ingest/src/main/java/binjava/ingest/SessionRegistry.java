@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -105,11 +106,11 @@ final class SessionRegistry {
     }
 
     /** The streams this session currently holds, in the order they were added. */
-    synchronized List<RunKey> keysOf(String session) {
+    synchronized List<RunKey> keysOf(String session) throws SessionResetException {
         return List.copyOf(state(session).keys);
     }
 
-    synchronized long epochOf(String session) {
+    synchronized long epochOf(String session) throws SessionResetException {
         return state(session).epoch;
     }
 
@@ -154,7 +155,7 @@ final class SessionRegistry {
      *     backwards
      */
     synchronized SubscriptionHub.Resumed resume(String session, long sessionEpoch,
-            Collection<RunKey> add, Collection<RunKey> remove) {
+            Collection<RunKey> add, Collection<RunKey> remove) throws SessionResetException {
         State state = state(session);
         if (sessionEpoch < state.epoch) {
             throw new IllegalStateException("session " + session + " is at epoch " + state.epoch
@@ -208,11 +209,66 @@ final class SessionRegistry {
         }
     }
 
-    private State state(String session) {
+    /**
+     * Drops a session server-side, so its next resume is answered with a RESET.
+     *
+     * <p>⚠️ THIS IS WHAT A SERVER DOES WHEN IT CANNOT HONOUR A RESUME (M5.15c).
+     * Today the only producer is an ingester restart -- the registry is
+     * in-memory, so every session goes with the process -- and this method is
+     * how that state is reachable from a test and from an operator action
+     * without one. It is deliberately NOT reachable from a resume: a session
+     * the registry still holds is honoured, and resetting one because a request
+     * was malformed would answer a client defect with state loss.
+     */
+    synchronized void reset(String session) {
+        close(session);
+    }
+
+    /**
+     * Re-establishes a reset session from FULL state, on the id it already has.
+     *
+     * <p>⚠️ IT IS WHAT THE SIGNAL ASKS FOR, and the reason it exists here
+     * rather than as "open a new session" is that opening one is neither
+     * duplicate-free nor gap-free. Re-opening leaves the old registrations in
+     * place and {@code subscribe} does not dedupe, so the consumer is handed
+     * every run twice -- MEASURED. Closing first opens a window in which the
+     * consumer is registered for nothing, which is the gap the reset was
+     * supposed to avoid. Re-establishing onto the SAME id reconciles instead:
+     * the caller's registrations are diffed against the full key set, so a
+     * stream carried across is never touched.
+     *
+     * <p>⚠️ THE EPOCH RESTARTS AT ZERO and the resume points are empty, which
+     * is what "full state" means: the ingester knows nothing about what this
+     * consumer received, so it must not pretend to. A consumer that needs to
+     * avoid re-reading what it already applied does that from its own
+     * checkpoint, which is where that knowledge actually lives.
+     */
+    synchronized void reestablish(String session, SubscriptionHub.Subscriber subscriber,
+            Collection<RunKey> keys) {
+        // ⚠️ ONLY ONTO A SESSION THAT WAS RESET, refused otherwise. Overwriting
+        // a session this registry still holds discards its epoch and every
+        // resume point silently -- and a consumer calling this without having
+        // been told to has misread a refusal as a reset. `open` refuses the
+        // analogous overwrite loudly and this is the same rule.
+        if (byId.containsKey(session)) {
+            throw new IllegalStateException("session " + session + " is still held; "
+                    + "re-establishing is the answer to a reset, not a way to discard state");
+        }
+        State state = new State(subscriber);
+        state.keys.addAll(new LinkedHashSet<>(keys));
+        byId.put(session, state);
+        idOf.put(new ByIdentity(subscriber), session);
+    }
+
+    private State state(String session) throws SessionResetException {
         State state = byId.get(Objects.requireNonNull(session, "session"));
         if (state == null) {
-            throw new IllegalStateException("no such session: " + session
-                    + "; a consumer whose session is gone re-subscribes rather than resuming");
+            // ⚠️ A RESET, NOT A REFUSAL. The session is gone -- restarted
+            // ingester, or an operator drop -- and there is nothing here to
+            // apply a delta to, so the only answer that leaves the consumer
+            // correct is "re-send full state". Refusing instead would leave a
+            // consumer retrying a resume nothing can ever honour.
+            throw new SessionResetException(session, SessionResetException.Reason.NOT_HELD);
         }
         return state;
     }

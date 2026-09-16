@@ -293,7 +293,7 @@ class SessionResumeTest {
     }
 
     @Test
-    void aSECONDSessionOnOneSubscriberIsREFUSED() {
+    void aSECONDSessionOnOneSubscriberIsREFUSED() throws Exception {
         SubscriptionHub hub = new SubscriptionHub();
         Consumer consumer = new Consumer(false);
 
