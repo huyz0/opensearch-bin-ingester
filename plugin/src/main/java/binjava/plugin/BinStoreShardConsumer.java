@@ -103,6 +103,20 @@ public final class BinStoreShardConsumer
         }
     }
 
+    /**
+     * Gaps this shard's stream has reported (M6.1).
+     *
+     * <p>⚠️ IT IS READ, NEVER THROWN. Research doc 02 § 6: "Any exception
+     * thrown from {@code readNext} pauses ingestion for that shard ... and
+     * requires operator intervention to resume" -- so a dropped delivery, which
+     * the records upstream survive, must not become a shard an operator has to
+     * restart by hand. What the SPI offers instead is nothing at all: it has no
+     * gap concept, so this is the surface an operator and a test read.
+     */
+    public long gapsDetected() {
+        return client.gapsDetected();
+    }
+
     @Override
     public IngestionShardPointer earliestPointer() {
         return new BinStoreOffset(0);
