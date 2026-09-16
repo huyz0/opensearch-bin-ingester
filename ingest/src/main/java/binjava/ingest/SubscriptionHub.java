@@ -8,6 +8,7 @@ import binjava.format.SegmentCommit;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -226,6 +227,144 @@ public final class SubscriptionHub {
      */
     public static Subscriber assembling(Consumer<Push> onSegment) {
         return AssemblingSubscriber.of(onSegment);
+    }
+
+    /**
+     * The session registry, which is the ingester side of SPEC criterion 11.
+     *
+     * <p>⚠️ IT IS A FIELD OF THE HUB rather than a seam, because a session is
+     * state ABOUT subscriptions and the hub is where subscriptions live. It
+     * holds no clock, no socket and no store, so non-negotiable 7 has nothing
+     * to say about it.
+     */
+    private final SessionRegistry sessions = new SessionRegistry();
+
+    /**
+     * What a resume answers: the epoch it served, and where each stream the
+     * session keeps goes on.
+     *
+     * <p>⚠️ PUBLIC, AND NESTED HERE RATHER THAN ON THE REGISTRY, because the
+     * registry is package-private and a public method returning a type an
+     * out-of-package caller cannot name is a method that caller cannot use. The
+     * first such caller is the transport M8 builds.
+     */
+    public record Resumed(long sessionEpoch, Map<RunKey, Long> nextOffset) {
+    }
+
+    /**
+     * A consumer's session: the registration, plus a resume point per stream.
+     *
+     * <p>⚠️ WHAT IT BUYS OVER {@link #subscribe} is exactly one thing -- a
+     * consumer that reconnects is told the offset it must see NEXT on every
+     * stream it keeps, so a reconnect is neither a duplicate nor a skip (SPEC
+     * criterion 11). A consumer that never reconnects needs none of it, which
+     * is why {@code subscribe} is untouched and every transport in the tree
+     * still uses it.
+     */
+    public final class Session implements AutoCloseable {
+        private final String id;
+        private final Subscriber subscriber;
+        private final List<Subscription> registrations = new ArrayList<>();
+
+        private Session(String id, Subscriber subscriber, List<RunKey> keys) {
+            this.id = id;
+            this.subscriber = subscriber;
+            keys.forEach(key -> registrations.add(subscribe(key, subscriber)));
+        }
+
+        public String id() {
+            return id;
+        }
+
+        /** The epoch this session has served, which starts at 0. */
+        public long epoch() {
+            return sessions.epochOf(id);
+        }
+
+        public List<RunKey> keys() {
+            return sessions.keysOf(id);
+        }
+
+        /**
+         * Reconnects at {@code sessionEpoch}, adding and removing streams, and
+         * answers where each stream this session keeps goes on.
+         *
+         * <p>⚠️ THE REGISTRATIONS ARE REBUILT TO MATCH, and the order is
+         * add-then-remove rather than close-then-open: a stream carried across
+         * the resume is never unregistered, so no push can fall into a gap. A
+         * stream that is removed is unregistered after the new set is in place.
+         */
+        public synchronized Resumed resume(long sessionEpoch,
+                Collection<RunKey> add, Collection<RunKey> remove) {
+            List<RunKey> before = sessions.keysOf(id);
+            // ⚠️ REGISTERED BEFORE THE REGISTRY IS TOLD, so an added stream has
+            // no window in which it is part of the session and not yet
+            // subscribed -- a publish landing there would be dropped, and the
+            // consumer would never learn of a commit it had asked for. The
+            // reverse order is the one that reads naturally and is wrong.
+            //
+            // ⚠️ IF THE REGISTRY REFUSES, THE EARLY REGISTRATIONS COME BACK
+            // OFF. A refused resume applies none of its deltas, and a
+            // registration is a delta the consumer did not get told about.
+            List<Subscription> early = new ArrayList<>();
+            for (RunKey key : new java.util.LinkedHashSet<>(add)) {
+                if (!before.contains(key)) {
+                    early.add(subscribe(key, subscriber));
+                }
+            }
+            Resumed answer;
+            try {
+                answer = sessions.resume(id, sessionEpoch, add, remove);
+            } catch (RuntimeException refused) {
+                early.forEach(Subscription::close);
+                throw refused;
+            }
+            registrations.addAll(early);
+            List<RunKey> after = sessions.keysOf(id);
+            // ⚠️ REMOVED LAST, for the same reason: a stream carried ACROSS the
+            // resume is never unregistered, so nothing can fall into a gap.
+            for (int i = registrations.size() - 1; i >= 0; i--) {
+                if (!after.contains(registrations.get(i).key)) {
+                    registrations.remove(i).close();
+                }
+            }
+            return answer;
+        }
+
+        @Override
+        public synchronized void close() {
+            registrations.forEach(Subscription::close);
+            registrations.clear();
+            sessions.close(id);
+        }
+    }
+
+    /**
+     * Opens a session for one consumer over {@code keys}.
+     *
+     * <p>⚠️ ONE SUBSCRIBER FOR EVERY KEY, which is what makes a session cheap:
+     * the hub groups by subscriber IDENTITY, so a session over K streams is one
+     * consumer to the serving path and takes the segment once (M5.40a, M5.62).
+     */
+    public Session openSession(Subscriber subscriber, Collection<RunKey> keys) {
+        Objects.requireNonNull(subscriber, "subscriber");
+        Objects.requireNonNull(keys, "keys");
+        // ⚠️ DEDUPED HERE, because the registry dedupes and this did not. A
+        // session opened over `[C, C]` subscribed C twice while the registry
+        // held one C, so the removal loop kept both registrations and
+        // `SegmentServingPath` put run C twice in the same consumer's push
+        // list -- a duplicate delivery, which is the exact half of criterion 11
+        // this task exists to make impossible.
+        List<RunKey> copy = List.copyOf(new java.util.LinkedHashSet<>(keys));
+        return new Session(sessions.open(subscriber, copy), subscriber, copy);
+    }
+
+    /**
+     * What a subscriber actually RECEIVED, recorded for its session if it has
+     * one. Called by the serving path after {@code complete}, never before.
+     */
+    void delivered(Subscriber subscriber, List<Push> pushes) {
+        sessions.delivered(subscriber, pushes);
     }
 
     /** Registers interest in one stream. */

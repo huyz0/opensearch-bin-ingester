@@ -340,6 +340,14 @@ final class SegmentServingPath {
             }
             try {
                 live.get(i).subscriber().complete(pushes.get(i), sink.delegate);
+                // ⚠️ AFTER `complete`, AND ONLY FOR A SINK THAT TOOK EVERY
+                // BYTE (M5.15b). A session's resume point is where the consumer
+                // must see the NEXT record, so recording a push the consumer
+                // did not receive whole moves that point past records it never
+                // got -- the SKIP half of SPEC criterion 11, and the half a
+                // consumer cannot detect. The `sink.failed` guard above is what
+                // makes this line reachable only for a whole segment.
+                hub.delivered(live.get(i).subscriber(), pushes.get(i));
             } catch (IOException | RuntimeException slowOrDeadSubscriber) {
                 continue;
             }
