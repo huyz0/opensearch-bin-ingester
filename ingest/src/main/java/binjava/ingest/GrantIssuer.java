@@ -99,6 +99,20 @@ public final class GrantIssuer {
     private final BinStore store;
     private final Duration ceiling;
 
+    /**
+     * How many grants this issuer has minted (M5.19, NFR-2).
+     *
+     * <p>⚠️ IT IS COUNTED HERE BECAUSE THE STORE METER CANNOT SEE IT. A grant
+     * is a signature, not a request -- {@code CountingBinStore.presign}
+     * delegates without recording, correctly, since signing an S3 URL issues
+     * no call -- but the GET the consumer then makes is real, off-meter and
+     * caused by this ingester. So "zero object-store requests attributable to
+     * idle consumers" is two numbers rather than one: the store's total, and
+     * this. M5's SPEC says exactly that, and criterion 8 asserts both.
+     */
+    private final java.util.concurrent.atomic.LongAdder issued =
+            new java.util.concurrent.atomic.LongAdder();
+
     /** With {@link #DEFAULT_CEILING}. */
     public GrantIssuer(BinStore store) {
         this(store, DEFAULT_CEILING);
@@ -201,7 +215,13 @@ public final class GrantIssuer {
         }
         Duration ttl = requested.compareTo(ceiling) > 0 ? ceiling : requested;
         try {
-            return store.presign(segmentKey, ttl);
+            SignedUrl url = store.presign(segmentKey, ttl);
+            // ⚠️ COUNTED AFTER THE SIGNATURE SUCCEEDS. A failed signing mints
+            // nothing and causes no consumer GET, so counting the attempt
+            // would put a number in front of an operator that no request
+            // matches.
+            issued.increment();
+            return url;
         } catch (IOException signingFailed) {
             throw new IOException("could not sign a grant for " + segmentKey, signingFailed);
         }
@@ -220,5 +240,16 @@ public final class GrantIssuer {
      */
     public SignedUrl grantFor(String segmentKey) throws IOException {
         return grantFor(segmentKey, ceiling);
+    }
+
+    /**
+     * Grants minted since this issuer was built.
+     *
+     * <p>⚠️ THE ONLY REQUEST AN IDLE CONSUMER COULD CAUSE, which is why it is
+     * exposed rather than left internal: the consumer-side GET a grant
+     * authorises is invisible to every meter in this process.
+     */
+    public long grantsIssued() {
+        return issued.sum();
     }
 }
