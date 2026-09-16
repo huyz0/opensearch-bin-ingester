@@ -26,6 +26,25 @@ import java.io.IOException;
  * needs to retain bytes copies what it needs, and pays for that copy itself --
  * which is where the cost belongs, because it is the sink's choice rather than
  * the serving path's.
+ *
+ * <p>⚠️ AND "THE DURATION OF THE CALL" IS NOT A PROMISE THE DEADLINE OVERLOAD
+ * CAN KEEP (M5.58a). {@code SegmentProxy.streamTo}'s three-argument form runs
+ * each {@code write} on its own virtual thread and DROPS a sink that overruns
+ * its deadline -- by interrupting it and walking away, which is the stall that
+ * form exists to remove. A dropped sink's task may therefore still be inside
+ * {@code write}, holding the shared buffer, when the next read refills it. So
+ * what such a sink sees is a range that is neither its own chunk nor a whole
+ * one: not a truncated prefix, which the caller can at least detect, but bytes
+ * from two different places in the segment spliced at an arbitrary offset.
+ *
+ * <p>⚠️ THE SINK CANNOT DEFEND AGAINST IT AND IS NOT ASKED TO. A sink that
+ * copies on entry still races the refill for the bytes it is copying. What
+ * bounds the damage is the CALLER: the three-argument form names the sinks it
+ * dropped, and a caller that completes only the ones it did not drop never
+ * presents those bytes as a segment. That is why the return shape names the
+ * drops rather than counting the survivors, and why nothing in this tree wires
+ * that form until its caller marks them ({@code SegmentServingPath.Tracking},
+ * M5.58b).
  */
 @FunctionalInterface
 public interface SegmentSink {

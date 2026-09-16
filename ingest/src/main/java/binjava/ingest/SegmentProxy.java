@@ -371,24 +371,36 @@ public final class SegmentProxy {
      * segment. Handing it a private copy would be per-consumer memory, which is
      * the thing this method must not spend.
      *
-     * ⚠️ BUT THE HUB CANNOT YET TELL A TIMED-OUT SINK FROM A SERVED ONE, and
-     * an earlier draft of this paragraph claimed it could. {@code
-     * SegmentServingPath.Tracking} marks a sink failed only from a CATCH, so a
-     * sink dropped for missing its deadline never throws, is never marked, and
-     * would be handed {@code complete(...)} — exactly the truncated prefix the
-     * failure chain above ends in. Nothing catches it: {@code deliver} ignores
-     * this method's return value, and a COUNT cannot say WHICH sink went.
+     * ⚠️ THE CALLER CAN NOW TELL A TIMED-OUT SINK FROM A SERVED ONE, which is
+     * what M5.58a changed and what the {@code @return} below is: this method
+     * used to return a COUNT, and a count cannot say WHICH sink went. Two
+     * earlier drafts of this paragraph have been wrong in opposite directions
+     * -- one claimed the hub could tell before it could, this one would claim
+     * the work is finished -- so what is left is stated narrowly.
      *
-     * ⚠️ SO THIS OVERLOAD IS NOT WIRED, and must not be until the caller can
-     * learn which sinks were dropped. The hub calls the two-argument method,
-     * where every drop is a throw the wrapper sees. Whoever wires a blocking
-     * sink owes that before using this one, and M5.58 owns it -- M5.13, M5.14
-     * and M5.41 are all done, so naming them would have left the obligation
-     * with nobody, which is the defect M5.44's row records.
+     * ⚠️ WHAT IS LEFT IS THE CALLER'S HALF, AND THIS OVERLOAD STAYS UNWIRED
+     * UNTIL IT LANDS. {@code SegmentServingPath.Tracking} marks a sink failed
+     * only from a CATCH, so a sink dropped for missing its deadline still
+     * arrives at {@code complete(...)} unmarked unless the caller crosses this
+     * list off against it -- and nothing in {@code SegmentServing}, in this
+     * class or in any config owns a per-chunk deadline to pass in the first
+     * place. The hub calls the two-argument method, where every drop is a throw
+     * the wrapper already sees. M5.58b owns both halves; M5.58, which this
+     * paragraph used to name, is split.
      *
      * @param perChunkDeadline how long a sink may take over ONE chunk before it
      *     is dropped; must be positive
-     * @return how many sinks took every chunk
+     * @return the sinks this call DROPPED, in the order they were supplied,
+     *     empty when every one took every chunk -- ⚠️ THE DROPS RATHER THAN
+     *     THE SURVIVORS, and rather than the count this method used to return
+     *     (M5.58a). A count cannot say WHICH, and which is the only thing a
+     *     caller can act on: completing a sink that was dropped hands it a
+     *     truncated prefix it cannot tell from a segment. The drops are the
+     *     exceptional set, so the list is empty on the happy path and is the
+     *     smaller of the two at every fan-out. ⚠️ BY IDENTITY, NOT BY VALUE:
+     *     the caller matches these against the sinks it passed in, and a
+     *     {@link SegmentSink} is caller-supplied and may implement
+     *     {@code equals} however it likes
      * @throws IOException if the STORE fails, or if this thread is interrupted
      *     while waiting on a hand-off -- the second is not a store failure, and
      *     the two-argument method cannot raise it. ⚠️ IT IS NOT THE ONLY
@@ -399,7 +411,7 @@ public final class SegmentProxy {
      * @throws IllegalArgumentException if {@code perChunkDeadline} is not
      *     positive, which would drop every consumer
      */
-    public int streamTo(String segmentKey, List<? extends SegmentSink> consumers,
+    public List<SegmentSink> streamTo(String segmentKey, List<? extends SegmentSink> consumers,
             java.time.Duration perChunkDeadline) throws IOException {
         Objects.requireNonNull(segmentKey, "segmentKey");
         Objects.requireNonNull(consumers, "consumers");
@@ -414,6 +426,14 @@ public final class SegmentProxy {
 
         byte[] buffer = new byte[chunkBytes];
         List<SegmentSink> live = new ArrayList<>(consumers);
+        // ⚠️ SUPPLY ORDER, NOT DROP ORDER. `handOff` removes backwards so that
+        // removal needs no copy per chunk, and a caller pairing this list
+        // against the one it passed in would otherwise read the drops of a
+        // single chunk in reverse. Built at the end from the supplied list
+        // rather than appended to as sinks go, which costs one pass over K and
+        // makes the order a property of the parameter instead of of the
+        // removal loop.
+        List<SegmentSink> supplied = List.copyOf(consumers);
         // ⚠️ NOT try-with-resources ON THE EXECUTOR, and this is the whole
         // point of the method. `ExecutorService.close()` is `shutdown()` plus
         // an UNBOUNDED `awaitTermination`, so closing it would wait for the
@@ -438,7 +458,30 @@ public final class SegmentProxy {
             // records.
             workers.shutdownNow();
         }
-        return live.size();
+        // ⚠️ IDENTITY, NOT `removeAll`. `List.removeAll` uses `equals`, and a
+        // sink is caller-supplied: two sinks that merely COMPARE EQUAL are
+        // still two consumers. MEASURED, and the direction is the bad one --
+        // `removeAll` strips from the drop list every element equal to a
+        // SURVIVOR, so the sink that actually went is removed by its healthy
+        // twin and the call reports NOBODY as dropped. That completes a sink
+        // handed spliced bytes, which is the silent failure this return shape
+        // exists to prevent. Same reason `SegmentServingPath.ByIdentity`
+        // exists; pinned by
+        // `SegmentProxyTest.aSinkIsDroppedByIDENTITYNotByEQUALS`.
+        List<SegmentSink> dropped = new ArrayList<>();
+        for (SegmentSink sink : supplied) {
+            boolean stillLive = false;
+            for (SegmentSink survivor : live) {
+                if (survivor == sink) {
+                    stillLive = true;
+                    break;
+                }
+            }
+            if (!stillLive) {
+                dropped.add(sink);
+            }
+        }
+        return List.copyOf(dropped);
     }
 
     /**

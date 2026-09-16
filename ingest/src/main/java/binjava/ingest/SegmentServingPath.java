@@ -254,7 +254,11 @@ final class SegmentServingPath {
      * M5.41 added a per-chunk deadline to {@code streamTo}'s three-argument
      * overload and this hub calls the two-argument one, because a sink dropped
      * for missing a deadline never throws and {@link Tracking} would not mark
-     * it. M5.58 owns closing that before the other overload is wired.
+     * it. M5.58b owns closing that before the other
+     * overload is wired -- and since M5.58a the three-argument form NAMES the
+     * sinks it dropped, so what is left there is this class crossing that list
+     * off against {@link Tracking}, plus a per-chunk deadline that nothing yet
+     * owns.
      */
     private void deliver(String segmentKey, List<Target> targets, FetchMode via, Source source) {
         deliver(segmentKey, targets, via, source, null);

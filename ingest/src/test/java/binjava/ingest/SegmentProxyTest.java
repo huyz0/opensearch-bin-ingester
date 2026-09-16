@@ -384,7 +384,7 @@ class SegmentProxyTest {
         RecordingSink first = new RecordingSink();
         RecordingSink second = new RecordingSink();
 
-        int served = proxy.streamTo(KEY, List.of(first, stalled, second),
+        List<SegmentSink> dropped = proxy.streamTo(KEY, List.of(first, stalled, second),
                 Duration.ofMillis(200));
 
         assertThat(stalled.writes())
@@ -392,9 +392,11 @@ class SegmentProxyTest {
                         + "this the count below would pass against a fan-out that never "
                         + "reached it")
                 .isPositive();
-        assertThat(served)
-                .as("the two live consumers are served and the stalled one is not counted")
-                .isEqualTo(2);
+        assertThat(dropped)
+                .as("the stalled consumer is NAMED as the one that went, which a count of "
+                        + "survivors cannot say -- identity against an equal-comparing twin is "
+                        + "a separate case, because `containsExactly` compares with `equals`")
+                .containsExactly(stalled);
         assertThat(first.received.toByteArray())
                 .as("a live consumer gets the WHOLE segment")
                 .isEqualTo(bytes);
@@ -430,7 +432,7 @@ class SegmentProxyTest {
         UninterruptibleSegmentSink deaf = new UninterruptibleSegmentSink();
         RecordingSink live = new RecordingSink();
 
-        int served = proxy.streamTo(KEY, List.of(deaf, live), Duration.ofMillis(200));
+        List<SegmentSink> dropped = proxy.streamTo(KEY, List.of(deaf, live), Duration.ofMillis(200));
 
         assertThat(deaf.everEntered())
                 .as("PREMISE: the serving path did hand this sink a chunk")
@@ -440,10 +442,107 @@ class SegmentProxyTest {
                         + "away rather than waiting -- false if the executor is closed with "
                         + "try-with-resources")
                 .isTrue();
-        assertThat(served).as("and only the live consumer is counted").isEqualTo(1);
+        assertThat(dropped).as("and the deaf sink is the one named as dropped")
+                .containsExactly(deaf);
         assertThat(live.received.toByteArray())
                 .as("which still received the whole segment")
                 .isEqualTo(bytes);
         deaf.release();
+    }
+
+    /**
+     * Two sinks dropped from one fan-out come back in SUPPLY order (M5.58a).
+     *
+     * <p>⚠️ THE ORDER IS A PROPERTY OF THE PARAMETER, NOT OF THE REMOVAL LOOP.
+     * {@code handOff} removes backwards so that removal needs no copy per
+     * chunk, so a list appended to as sinks go would hand a caller the drops of
+     * one chunk in reverse -- and a caller pairing this list against the one it
+     * passed in, which is what {@code SegmentServingPath.deliver} does by index
+     * on its own parallel lists, would pair the wrong ones. TWO stalled sinks
+     * either side of a live one is the smallest fixture that tells the two
+     * orders apart.
+     *
+     * <p>⚠️ AND THE LIVE SINK IN THE MIDDLE IS NOT DECORATION: with the drops
+     * adjacent, a reversal is invisible at this length.
+     */
+    @Test
+    void TWODroppedSinksComeBackInSUPPLYOrder() throws Exception {
+        byte[] bytes = segment();
+        SegmentProxy proxy = new SegmentProxy(storeHolding(bytes));
+        BlockingSegmentSink firstStalled = new BlockingSegmentSink();
+        RecordingSink live = new RecordingSink();
+        BlockingSegmentSink secondStalled = new BlockingSegmentSink();
+
+        List<SegmentSink> dropped = proxy.streamTo(KEY,
+                List.of(firstStalled, live, secondStalled), Duration.ofMillis(200));
+
+        assertThat(firstStalled.writes())
+                .as("PREMISE: the serving path really handed the first stalled sink a chunk")
+                .isPositive();
+        assertThat(dropped)
+                .as("both stalled sinks are named, in the order they were SUPPLIED -- "
+                        + "reversed if the list is built as `handOff` removes")
+                .containsExactly(firstStalled, secondStalled);
+        assertThat(live.received.toByteArray())
+                .as("and the consumer between them still received the whole segment")
+                .isEqualTo(bytes);
+        firstStalled.release();
+        secondStalled.release();
+    }
+
+    /**
+     * A sink is dropped by IDENTITY, not by {@code equals} (M5.58a).
+     *
+     * <p>⚠️ THE PROPERTY WAS CLAIMED IN FOUR PLACES AND PINNED IN NONE, which
+     * both reviewers measured independently: replacing the whole identity loop
+     * with {@code dropped.removeAll(live)} left every case in the module green,
+     * because no fixture in the tree overrode {@code equals} -- so
+     * {@code equals} WAS {@code ==} for every sink that existed and the two
+     * matchers could not disagree. A {@code SegmentSink} is caller-supplied and
+     * may implement {@code equals} however it likes, which is the whole reason
+     * the production loop does not use it.
+     *
+     * <p>⚠️ THE ASSERTION IS {@code isSameAs}, NOT {@code containsExactly}:
+     * AssertJ compares with {@code equals} too, so against this fixture the
+     * usual matcher cannot tell the right sink from its twin either.
+     *
+     * <p>⚠️ AND THE DIRECTION OF THE FAILURE IS THE POINT. Under
+     * {@code removeAll} the list comes back EMPTY, not holding both:
+     * {@code removeAll} strips from the drop list every element equal to a
+     * SURVIVOR, and the stalled sink compares equal to the survivor, so it
+     * removes the very sink that went. Under-reporting is the worse direction
+     * -- over-reporting loses a healthy subscriber, which recovers from the
+     * log, while under-reporting completes a sink that was handed spliced
+     * bytes, which is the silent error this row exists to prevent.
+     */
+    @Test
+    void aSinkIsDroppedByIDENTITYNotByEQUALS() throws Exception {
+        byte[] bytes = segment();
+        SegmentProxy proxy = new SegmentProxy(storeHolding(bytes));
+        EqualToEveryOtherSink stalled = new EqualToEveryOtherSink(true);
+        EqualToEveryOtherSink healthy = new EqualToEveryOtherSink(false);
+
+        List<SegmentSink> dropped = proxy.streamTo(KEY, List.of(stalled, healthy),
+                Duration.ofMillis(200));
+
+        assertThat(stalled.equals(healthy))
+                .as("PREMISE: these two sinks COMPARE EQUAL, or this case is the identity one "
+                        + "written twice")
+                .isTrue();
+        assertThat(stalled)
+                .as("PREMISE: and they are DISTINCT OBJECTS -- collapsing the two fixtures "
+                        + "leaves every assertion below green while the case stops separating "
+                        + "`==` from `equals` at all")
+                .isNotSameAs(healthy);
+        assertThat(stalled.writes())
+                .as("PREMISE: the serving path did hand the stalled sink a chunk")
+                .isPositive();
+        assertThat(dropped)
+                .as("ONE sink went, and it is the stalled one -- `removeAll` strips from the "
+                        + "drop list every element EQUAL to a SURVIVOR, so it reports NOBODY as "
+                        + "dropped and the list comes back empty")
+                .singleElement()
+                .isSameAs(stalled);
+        stalled.release();
     }
 }
