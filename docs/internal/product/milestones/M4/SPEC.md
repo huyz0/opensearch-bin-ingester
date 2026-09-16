@@ -178,7 +178,11 @@ says more, the extra clause is kept because it is the testable part.
   naming M8 and M9 in one sentence for the same dependency.
 - **The early-challenge path** (an EndpointSlice watch triggering a lease
   challenge before TTL expiry). It needs the same membership signal as the peer
-  mesh, so it goes with it in M5. ⚠️ Consequence, stated rather than hidden:
+  mesh. ⚠️ **M8's, corrected by M5.17** — this spec said M5's, and M5 ships
+  membership as STATIC configuration, where a list never removes a member and
+  a challenge therefore has no production trigger. M5.21 moved NFR-9 to M8
+  with the `EndpointSlice` watch; see M5's SPEC § *Requirements that move*.
+  ⚠️ Consequence, stated rather than hidden:
   **M4's failover is TTL-bound**, which ADR-0007 puts at ~10 s worst case — so
   NFR-9's < 5 s is *not* met by M4 alone. See acceptance criterion 8.
 - **Raising S above 1.** ADR-0007 fixes S = 1; the slot dimension stays in every
@@ -446,8 +450,11 @@ only a latency one.
    plus one commit batch interval**. ⚠️ **This is a MODELLED number, not a
    measurement** (performance.md rule 7 — "label models and say what would
    falsify them"), and it is **not** NFR-9's < 5 s: without the early-challenge
-   path (Out, M5) failover is TTL-bound, which ADR-0007 puts at ~10 s worst case.
-   **NFR-9 is met at M5, and this spec says so rather than claiming it here.**
+   path (Out, M8) failover is TTL-bound, which ADR-0007 puts at ~10 s worst case.
+   **NFR-9 is met at M8, and this spec says so rather than claiming it here.**
+   ⚠️ **This sentence said M5 until M5.17 corrected it**, and it is corrected in
+   place rather than annotated away: it is the sentence a reader of NFR-9
+   arrives at first.
    Falsified by a real-clock chaos run at M8.
 9. **Commit cost does not scale with pods or streams**: over a fixed window in
    which every batch is saturated, the number of commit-chain PUTs is

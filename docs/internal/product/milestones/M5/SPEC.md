@@ -56,8 +56,9 @@ can fail; neither needs the client to hold a store.
 ⚠️ **THREE REQUIREMENTS ARE EXPLICITLY NOT CLAIMED HERE, and one of them M4
 expected M5 to meet.**
 
-**NFR-9 (RTO < 5 s) moves to M8, with the EndpointSlice watch.** M4's SPEC says
-"NFR-9 is met at M5" and routes it through an early-challenge path defined as
+**NFR-9 (RTO < 5 s) moves to M8, with the EndpointSlice watch.** M4's SPEC said
+"NFR-9 is met at M5" — past tense since M5.17 corrected it there, along with
+three other sites that still named M5 — and routes it through an early-challenge path defined as
 "an EndpointSlice watch triggering a lease challenge before TTL expiry", which
 "needs the same membership signal as the peer mesh". M5 ships that membership as
 static configuration — and **a static list never removes a member**, so the
@@ -65,7 +66,10 @@ event the challenge fires on has no producer. Building the challenge here would
 give criterion 13 a fake to inject into and nothing in production to trigger it:
 NFR-9 would read as met while real failover stayed TTL-bound at ADR-0007's ~10 s.
 So the watch and the challenge travel together to M8, and **M4's claim is
-corrected rather than quietly inherited**.
+corrected rather than quietly inherited** — corrected in M4's own documents by
+M5.17, not only asserted here, because a correction that lives only in the
+spec of the milestone GIVING UP the requirement is invisible to whoever reads
+M4 next.
 
 **NFR-7 (p99 < 3× the flush window) and NFR-13 (outage tolerance = retention)** An earlier draft listed both with no scope item, no
 criterion and no task behind them — which is how a requirement gets lost between
