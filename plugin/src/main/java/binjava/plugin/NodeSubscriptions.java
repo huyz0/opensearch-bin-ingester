@@ -31,6 +31,22 @@ public final class NodeSubscriptions implements AutoCloseable {
     private final int queueCapacity;
 
     /**
+     * ⚠️ ONE SEGMENT SOURCE FOR THE WHOLE NODE (M5.45h), or none.
+     * {@code direct} hands every run of a segment its OWN delivery carrying
+     * the same grant, so a source owned per client fetches once per RUN --
+     * ~400 whole-object GETs for one 8 MiB segment on a catch-up node, which
+     * non-negotiable 6 forbids and which no meter in the ingester can see.
+     * Sharing the instance is what makes the fetch per (node, segment), and
+     * {@link NodeSegmentSource} is the wrapper that does the sharing.
+     *
+     * <p>⚠️ NULL IS THE DEPLOYMENT THAT DOES NOT ENABLE {@code direct}, which
+     * is every one that ships in M5 (ADR-0044 (a)). A `direct` delivery then
+     * reaches {@code ConsumerClient} with no source and throws where an
+     * operator sees it, rather than emptying a window quietly.
+     */
+    private final binjava.client.SegmentSource nodeSegmentSource;
+
+    /**
      * ⚠️ ONE SUBSCRIBER FOR THE WHOLE NODE (M5.62), and the identity is the
      * point. {@code SubscriptionHub} groups by {@code Subscriber} IDENTITY, so
      * a node registering one listener for every key it holds is handed a
@@ -85,7 +101,17 @@ public final class NodeSubscriptions implements AutoCloseable {
     }
 
     public NodeSubscriptions(SubscriptionTransport transport, int queueCapacity) {
+        this(transport, queueCapacity, null);
+    }
+
+    /**
+     * @param nodeSegmentSource the ONE source every client on this node
+     *     fetches through, or {@code null} where {@code direct} is not enabled
+     */
+    public NodeSubscriptions(SubscriptionTransport transport, int queueCapacity,
+            binjava.client.SegmentSource nodeSegmentSource) {
         Objects.requireNonNull(transport, "transport");
+        this.nodeSegmentSource = nodeSegmentSource;
         if (queueCapacity <= 0) {
             throw new IllegalArgumentException("queue capacity must be positive");
         }
@@ -132,7 +158,7 @@ public final class NodeSubscriptions implements AutoCloseable {
             // ⚠️ THE FED CONSTRUCTOR, holding no subscription of its own:
             // `nodeListener` is what this node is subscribed with, and a client
             // that closed a subscription would close every other run's with it.
-            ConsumerClient client = new ConsumerClient(k, queueCapacity, null);
+            ConsumerClient client = new ConsumerClient(k, queueCapacity, nodeSegmentSource);
             try {
                 subscription.add(k);
             } catch (RuntimeException failedToSubscribe) {
