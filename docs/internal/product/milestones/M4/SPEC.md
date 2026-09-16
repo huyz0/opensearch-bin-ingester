@@ -61,8 +61,13 @@ fetch"), and **no milestone currently owns it**.
   S = 1 every deployment has one sequencer; what a multi-node one lacks is the
   path from the other nodes to it).
 - The **remote implementation (commit forwarding as an RPC over the peer mesh)
-  is OUT of M4 and belongs with the peer mesh in M5**, which already builds the
-  mesh for directed push fan-out and intra-AZ segment fetch. Building a
+  is OUT of M4**. ⚠️ **AND IT IS NOT M5's EITHER, which this bullet said in as
+  many words** ("belongs with the peer mesh in M5, which already builds the
+  mesh"): M5 ships STATIC membership (ADR-0040) and no mesh, and it shipped the
+  forwarding PROTOCOL over a test transport. The production transport is
+  **M5.6e, owned by M8**, with ADR-0012's mesh. Corrected in place by M5.20's
+  sweep, because every other corrected site cites THIS bullet as the
+  authoritative assignment. Building a
   pod-to-pod transport in M4 would pull the `EndpointSlice` watch, placement and
   an RPC surface into the coordination milestone.
 - **Therefore, at the end of M4 a multi-pod deployment is not yet correct**, and
@@ -527,7 +532,7 @@ mutations are real, which is why criteria 1, 3 and 7 each demand a recorded red.
 | **The GC-pause seal race**: a leader paused by a long GC resumes several epochs later. The corpus says *"believed safe by I3; needs proof"* (`:282-283`) — the single most SPEC-worthy open item | A simulation seed that pauses a leader across ≥2 epoch changes and then lets its writes land. ⚠️ If it cannot be shown safe, that is an ADR, not a bug fix |
 | **I5 asserted vacuously** — today's `CommitLog` is strictly serial, so it satisfies I5 by accident | Criterion 7's required red against a naive pipelining implementation |
 | **The simulation proves the simulator** — a fault-injecting store that never injects the fault that matters | Criterion 1's requirement that each fault class have a seed where it changes the outcome |
-| **The multi-pod gap becomes invisible** — every test in the tree is single-pod, so a missing forwarding path stays green until M6/M8 | The deployment-constraint section above, the seam contract carrying `(podId, incarnationId, flushSeq)` from the start, and criterion 9's pod dimension |
+| **The multi-pod gap becomes invisible** — every test in the tree is single-pod, so a missing forwarding path stays green until M6/M8 — ⚠️ **and it did: M5 shipped the forwarding protocol over a TEST transport only, so the gap is M8's (M5.6e)** | The deployment-constraint section above, the seam contract carrying `(podId, incarnationId, flushSeq)` from the start, and criterion 9's pod dimension |
 | **Moving `CommitLog` from `ingest` to `sequencer`** crosses a gate-enforced module boundary | `check-module.sh` at `GATE_SCOPE=full`; done as its own commit (M4.2), not folded into a behaviour change |
 
 ## Tasks

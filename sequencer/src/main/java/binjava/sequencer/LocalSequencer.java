@@ -37,9 +37,13 @@ import java.util.Optional;
  * are what make it constant again. `LocalSequencerFailoverTest` pins both
  * slopes so the growth cannot get worse unnoticed.
  *
- * <p>⚠️ COMMIT FORWARDING IS M5's. A node that does not hold the lease gets an
- * empty {@link Optional} here and has no way to reach the node that does, so a
- * multi-node deployment is not correct until M5 — the M4 SPEC states that as a
+ * <p>⚠️ COMMIT FORWARDING IS M5's PROTOCOL AND M8's TRANSPORT. A node that does
+ * not hold the lease gets an empty {@link Optional} here and reaches the node
+ * that does through {@link RemoteSequencer} — over a TEST
+ * {@link SequencerTransport}, the only implementation in the tree. ⚠️ THIS
+ * PARAGRAPH SAID "not correct until M5", which now reads as "correct today"
+ * because M5 is complete; the production transport is M5.6e, owned by M8, so a
+ * multi-node deployment is still not correct. The M4 SPEC states that as a
  * deployment constraint rather than leaving it to be discovered.
  */
 public final class LocalSequencer implements Sequencer {

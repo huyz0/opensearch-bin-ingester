@@ -23,8 +23,9 @@ import org.junit.jupiter.api.Test;
  * and M5.23 replaced that clause; it is quoted here as the state this commit
  * was written against, not as a sentence to go and find.
  *
- * <p>⚠️ M5 WILL MAKE ONE REACH IT — but not yet, and this commit deliberately
- * stops short. {@code DefaultIngest} BUILT the {@code CommitRequest} inside the
+ * <p>⚠️ M5 MADE ONE REACH IT (M5.52a's `AmbiguousReplyResentTest`), and this
+ * sentence read "M5 WILL MAKE ONE REACH IT -- but not yet" until M5.20's
+ * sweep. THIS COMMIT deliberately stopped short. {@code DefaultIngest} BUILT the {@code CommitRequest} inside the
  * {@code sequencer.commit(...)} call, so the request could not be resent at
  * all. It is now a named local, which is the whole change.
  *

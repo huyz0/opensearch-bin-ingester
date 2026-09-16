@@ -181,9 +181,14 @@ import java.util.List;
  *
  * <p>⚠️ M4 ships one implementation — the node holding the lease commits
  * directly. Commit forwarding, the remote implementation by which a
- * non-leaseholder reaches that node, is M5's and rides on the peer mesh built
- * there. Until it exists a multi-node deployment is not correct, which the M4
- * SPEC states plainly rather than leaving to be discovered.
+ * non-leaseholder reaches that node, is M5's PROTOCOL — and M5 shipped it over
+ * a TEST {@link SequencerTransport} only. ⚠️ THIS PARAGRAPH SAID IT "rides on
+ * the peer mesh built there", which is false twice: M5's membership is STATIC
+ * configuration (ADR-0040) with no pod-to-pod transport under it, and no
+ * production {@link SequencerTransport} exists at all. The
+ * production one is M5.6e, owned by M8, so a multi-node deployment is STILL
+ * not correct — which the M4 SPEC states plainly rather than leaving to be
+ * discovered.
  */
 public interface Sequencer extends AutoCloseable {
 

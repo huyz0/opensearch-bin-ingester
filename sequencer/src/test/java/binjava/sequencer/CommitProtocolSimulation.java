@@ -62,7 +62,9 @@ public final class CommitProtocolSimulation {
      * How often a NON-leader pod commits by FORWARDING, in percent (M5.7).
      *
      * <p>⚠️ NOT 100. A fleet where every commit forwards never exercises the
-     * leaseholder's own path, and the deployment M5 makes correct has both:
+     * leaseholder's own path, and the fleet M5's forwarding protocol is FOR has
+     * both -- the protocol rather than a correct deployment, which is M5.6e's
+     * (M8) and which this sentence overstated until M5.20's sweep:
      * FR-12 mandates at least two ingester nodes per AZ, so the leaseholder is
      * one pod among many and it writes its own flushes too.
      *

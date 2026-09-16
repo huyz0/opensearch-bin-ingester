@@ -2,20 +2,34 @@
 
 The read side, and the one thing M4 deliberately left broken.
 
-⚠️ **THIS MILESTONE MAKES A MULTI-POD DEPLOYMENT CORRECT FOR THE FIRST TIME.**
-M4 introduced a lease so exactly one sequencer writes the chain, and shipped
-only the LOCAL implementation — so today every pod that is not the leaseholder
-has no way to get its commits to the one that is.
+⚠️ **THIS MILESTONE SHIPS THE COMMIT-FORWARDING PROTOCOL, AND DOES NOT MAKE A
+MULTI-POD DEPLOYMENT CORRECT.** This paragraph said it did, in those words, and
+M5.20's re-sweep caught it: the retraction sat hundreds of lines below, where a
+reader arriving at the top never gets to. M4 introduced a lease
+so exactly one sequencer writes the chain and shipped only the LOCAL
+implementation — so every pod that is not the leaseholder had no way to get its
+commits to the one that is. M5 builds that path and every test of it runs over
+a TEST `SequencerTransport`; the production one is **M5.6e, owned by M8**, and
+no row owns a production `main()` to assemble any of it. The retraction below and
+[VERIFIED.md](VERIFIED.md) § *What M5 does NOT close* say the same thing.
 [M4/SPEC.md](../M4/SPEC.md) § *Deployment constraint* states it twice on
-purpose and assigns the fix here. Everything else in this milestone is the read
-path; this one is a correctness hole, and it is task M5.6 for that reason -- M5.1 to M5.5 are what make it SAFE to close.
+purpose, and ⚠️ **it no longer assigns the fix here** -- this paragraph said it
+did, and the same sweep rewrote that bullet to name M5.6e and M8. Everything
+else in this milestone is the read path; this one is a correctness hole, and
+M5.6 is the task that builds the PROTOCOL for it -- M5.1 to M5.5 are what make
+that safe, and the hole does not close until a production transport exists.
 
 ## Completion condition
 
 The push channel carries a session and an epoch, **all three fetch modes** work
 (`inline`, `proxy`, `direct`), commits are prefetched, **zero object-store
 requests are issued by idle consumers at fan-out**, and a non-leaseholder pod
-can commit.
+can commit **through the forwarding protocol, over a TEST transport**.
+⚠️ **THAT LAST CLAUSE IS M5.20's CORRECTION**: this sentence ended at "can
+commit", and the roadmap now marks M5 complete against it while
+[VERIFIED.md](VERIFIED.md) § *What M5 does NOT close* says a multi-pod
+deployment is still not correct. Both are true only with the clause: the
+production `SequencerTransport` is M5.6e, owned by M8.
 
 ⚠️ **"Zero idle requests" is NOT re-proven here — it is proven here for the
 first time.** [roadmap.md](../../roadmap.md) and M1.16 both record that the M1
@@ -47,7 +61,7 @@ can fail; neither needs the client to hold a store.
 | FR-5 | Push tail notifications over a persistent same-AZ channel, with **session-based incremental subscription** | scope 7, criteria 11-12 |
 | FR-6 | Serve record bytes in three modes — `inline`, `proxy`, `direct` (signed URL) — **chosen by the ingester** | scope 5-6, criteria 4-7 |
 | FR-10 | Consumers keep working without the ingester, via a documented fallback ladder down to LIST recovery | scope 11, criterion 14 |
-| FR-11 | Sequencer leadership by CAS lease with epoch fencing — M5 supplies the *remote* implementation of the seam M4 defined | scope 1-4, criteria 1-3 |
+| FR-11 | Sequencer leadership by CAS lease with epoch fencing — M5 supplies the *remote* implementation of the seam M4 defined ⚠️ **over a TEST transport only**; the production `SequencerTransport` is M5.6e, owned by M8 | scope 1-4, criteria 1-3 |
 | NFR-2 | Idle cost: **zero** object-store requests from consumers | scope 8, criterion 8 |
 | NFR-3 | LIST on hot paths: zero, hard ceiling ~1/s sustained | scope 11, criterion 14 |
 | NFR-4 | Read request rate scales with segments, AZs and nodes — never with shards, partitions or indices | scope 8-9, criterion 9 |
@@ -405,11 +419,13 @@ here, not a constant. M4 applied the same discipline to the lease TTL.
 | T1 | commit-protocol simulation extended with forwarding pods | forwarding that bypasses the lease |
 | T1 | a retry across a TAKEOVER is answered, not appended | a process-local window |
 | T2 | end-to-end: a non-leaseholder pod's write is searchable | — |
-| T4 | the cluster tests still pass with forwarding wired | — |
+| T4 | the cluster tests still pass with forwarding wired ⚠️ **with the TEST transport; nothing wires a production one** (M5.6e, M8) | — |
 
 ⚠️ **The simulation is extended, not replaced.** M4's 1,000-seed sweep gains
 pods that forward rather than lead, so I1–I5 are asserted over a fleet where
-most pods do not hold the lease — which is the deployment M5 makes correct.
+most pods do not hold the lease — which is the fleet M5's forwarding protocol
+is for. ⚠️ NOT a deployment made correct: the production transport is M5.6e,
+owned by M8.
 
 Mutation expectations: 80% on changed classes, and the checkers M4.13k records
 as invisible to the gate remain so until `check-mutants.sh` is wired.
@@ -432,12 +448,20 @@ Forwarding could not be built safely until a retry was answerable, which at
 M5's start it was not — across a takeover or on the production path. M5.1 and
 M5.2 landed first, in that order, before M5.6. ⚠️ **THIS FILE STILL ANSWERS THE
 OTHER WAY IN PLACES THIS SENTENCE DOES NOT LIST.** It said FOUR, then FIVE, and
-review found further sites each time — four rounds running, including the FR-11
+review found further sites each time, round after round, including the FR-11
 requirements row above, which is the one `VERIFIED.md` walks. So neither a
 count nor an inventory is asserted here: **`M5.6e`** records the sites KNOWN to
 be false, explicitly as a starting point rather than a complete list, and
 **M5.20** re-sweeps before correcting rather than working that list as a
-worklist. Until then a reader of this file meets the false answer first.
+worklist. ⚠️ **M5.20 HAS RUN** and the sites it found are corrected in place, here and
+across the tree, so a reader of this file no longer meets the false answer
+first. ⚠️ NO COUNT IS GIVEN, deliberately: every count this sweep has written
+down was falsified by the next round, and a number that goes stale is worse
+than no number because it reads as an inventory. What is NOT
+claimed is completeness: a sweep whose every round found what the last missed is
+itself the evidence that recognising an unmarked assertion is the rung that
+keeps failing, and **M5.89** is the one
+half of it a predicate can carry.
 
 | ID | Task |
 |---|---|
@@ -447,7 +471,7 @@ worklist. Until then a reader of this file meets the false answer first.
 | M5.3 | `SequencerTransport` seam and its fake |
 | M5.4 | `RemoteSequencer`: read the lease, forward, return the delta |
 | M5.5 | Follow the lease when the target refuses or it moves |
-| M5.6 | Wire forwarding into `DefaultIngest` — **the correctness hole closes here** |
+| M5.6 | Wire forwarding into `DefaultIngest` — ⚠️ **the hole does NOT close here**, and this cell said it did until M5.20's sweep: the protocol lands, the production transport is M5.6e (M8) |
 | M5.7 | Extend the commit-protocol simulation with pods that forward rather than lead |
 | M5.8 | The membership seam, static implementation, and the AZ-scoped ring |
 | M5.9 | Cross-AZ peer fetch not addressable by construction |

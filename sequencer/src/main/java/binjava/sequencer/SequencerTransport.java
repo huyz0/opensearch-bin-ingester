@@ -11,7 +11,8 @@ import java.io.IOException;
  * only the LOCAL {@code Sequencer}, so today every pod that is not the
  * leaseholder has no way to commit at all — {@code M4/SPEC.md} states that
  * twice on purpose and calls it "the one deferral that changes what 'done'
- * means". The transport is what M5 adds under it, and every behaviour that
+ * means". The transport interface is what M5 adds under it -- ⚠️ THE INTERFACE
+ * AND A TEST IMPLEMENTATION, never a production one, which is M5.6e (M8) -- and every behaviour that
  * matters — following a moved lease, refusing a fenced holder, not duplicating
  * — is a property of the CALLER, not of the wire.
  *

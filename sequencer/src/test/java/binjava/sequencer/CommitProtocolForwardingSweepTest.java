@@ -16,8 +16,12 @@ import org.junit.jupiter.api.Timeout;
  * deterministic simulation seeds", and its sweep is the artefact that holds it;
  * turning forwarding on inside that loop would move every seed's draw sequence,
  * so the numbers M4 recorded could never be reproduced from this tree again.
- * The deployment M5 makes correct is a DIFFERENT fleet -- one where the
- * leaseholder is one pod among many -- so it gets its own 1,000 seeds.
+ * The fleet whose PROTOCOL M5 builds is a DIFFERENT one -- the leaseholder is
+ * one pod among many -- so it gets its own 1,000 seeds. ⚠️ THE PROTOCOL, NOT
+ * THE DEPLOYMENT, and this sentence said "the deployment M5 makes correct"
+ * until M5.20's sweep: every test of forwarding in this tree runs over a TEST
+ * `SequencerTransport`, the production one is M5.6e (owned by M8), so no
+ * deployment is made correct here.
  *
  * <p>⚠️ MEASURED ON THIS TREE, at 1,000 seeds, 120 rounds and 3 pods under
  * {@link CommitProtocolSweepTest#SWEEP_FAULTS}, against the same profile with
@@ -77,7 +81,8 @@ class CommitProtocolForwardingSweepTest {
         // rather than a constant beside it.
         assertThat(SEEDS)
                 .as("the same 1,000 seeds M4's completion condition names, over the fleet "
-                        + "M5 makes correct")
+                        + "whose forwarding protocol M5 builds -- no production transport "
+                        + "carries it yet (M5.6e, M8)")
                 .isEqualTo(1000);
         assertThat(ROUNDS).as("act-or-fail steps per seed").isEqualTo(120);
         assertThat(PODS).as("logical pods, of which at most one holds the lease").isEqualTo(3);

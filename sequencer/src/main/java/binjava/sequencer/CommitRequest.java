@@ -24,7 +24,11 @@ import java.util.Objects;
  * <p>⚠️ At the end of M4 a multi-node deployment is NOT yet correct, because the
  * transport does not exist. That is stated rather than hidden; the simulation
  * drives many logical nodes through this seam so the ordering and idempotency
- * arguments are proven at M4 and only the transport waits for M5.
+ * arguments are proven at M4. ⚠️ AND THE TRANSPORT DID NOT ARRIVE AT M5, which
+ * this sentence said it would ("only the transport waits for M5") until M5.20's
+ * sweep: M5 shipped the forwarding PROTOCOL and every test of it runs over a
+ * test {@link SequencerTransport}. The production one is M5.6e, owned by M8, so
+ * a multi-node deployment is still not correct.
  *
  * @param podId which node produced this commit. ⚠️ Refuses {@code -} and
  *     {@code /} so this is the SAME identity as {@code SegmentPublisher}'s

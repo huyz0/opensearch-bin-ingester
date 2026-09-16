@@ -13,7 +13,10 @@ milestone as specified and remain true now; neither is discovered here.
 
 - **A multi-pod deployment is not yet correct.** M4 ships the LOCAL `Sequencer`
   only. Commit forwarding — the RPC by which a non-leaseholder pod reaches the
-  one pod holding the lease — is M5's, with the peer mesh. The simulation
+  one pod holding the lease — is M5's, with the peer mesh. ⚠️ **AND M5 SHIPPED
+  THE PROTOCOL WITHOUT THE TRANSPORT** (M5.20's sweep): every test of it runs
+  over a test `SequencerTransport`, a production one is M5.6e owned by M8, so
+  this bullet is still true after M5 rather than discharged by it. The simulation
   compensates by driving many logical pods through the seam without a network,
   so multi-pod ordering, idempotency and fencing are proven; what is deferred is
   the transport, not the correctness argument. SPEC § *Deployment constraint*.
