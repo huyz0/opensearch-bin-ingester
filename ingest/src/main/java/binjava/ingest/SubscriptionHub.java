@@ -648,8 +648,8 @@ public final class SubscriptionHub {
      * claiming nothing below T4 could observe the order. That is false: sinks
      * that append their own identity to ONE SHARED ORDERED LOG separate the
      * two loops exactly, at this tier, which is what
-     * {@code AssembledServingPathFailureTest.everySinkGetsTheFIRSTChunkBefore
-     * AnyGetsTheSECOND} now does. The mutation dies.
+     * {@code AssembledServingPathFailureTest.everySinkGetsTheFIRSTChunkBeforeAnyGetsTheSECOND}
+     * now does. The mutation dies.
      */
     private void writeHeldBytesChunked(byte[] heldBytes, SegmentServing serving,
             List<SegmentSink> sinks) {

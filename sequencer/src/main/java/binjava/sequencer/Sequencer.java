@@ -125,8 +125,8 @@ import java.util.List;
  * {@code CheckpointWriter.newer} selects, which may be the dead one, so a replay from one since superseded is treated as fresh.
  * It needs a pod to restart between the original and its retry. Pinned in BOTH
  * directions by one fixture varying only which incarnation the slot names:
- * {@code DedupAcrossTakeoverTest.aSUPERSEDEDIncarnationsReplayIsAppliedTWICE_}
- * {@code AndTheSAMEFixtureAnswersITSOwn} (M5.52b). ⚠️ PINNED IS NOT CLOSED:
+ * {@code DedupAcrossTakeoverTest.aSUPERSEDEDIncarnationsReplayIsAppliedTWICE_AndTheSAMEFixtureAnswersITSOwn}
+ * (M5.52b). ⚠️ PINNED IS NOT CLOSED:
  * closing it is an ADR -- order incarnations, or give the window an
  * unanswerable-watermark tier.</li>
  * <li><b>A bare v0 slot.</b> {@code ChainReplay} skips a slot with no pointer,

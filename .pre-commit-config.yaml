@@ -82,6 +82,13 @@ repos:
         stages: [pre-commit]
         pass_filenames: false
         always_run: true
+      - id: check-javadoc-cites
+        name: "M5.56: test citations in src/main javadoc are resolved against the tree"
+        entry: scripts/check-javadoc-cites.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
 
       - id: check-links
         name: "every relative markdown link resolves"

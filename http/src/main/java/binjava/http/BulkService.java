@@ -36,7 +36,7 @@ public final class BulkService implements HttpService {
     /**
      * ⚠️ 256 MiB, headroom over criterion 8's 200 MB rather than a bare
      * minimum -- M1.7b let the ingest seam accept a stream, so a request no
-     * longer retains its whole body, and {@code MemoryFlatUnderTenXBodySizeIT}
+     * longer retains its whole body, and {@code MemoryFlatUnderTenXBodySizeTest}
      * (T12) proves 200 MB is safe under a 256 MB HEAP with this cap in place.
      * Raising this further than criterion 8 itself needs would outrun what has
      * actually been proven.
