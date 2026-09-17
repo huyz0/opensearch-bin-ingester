@@ -72,7 +72,7 @@ public final class RoutingPartitioner {
         Objects.requireNonNull(index, "index");
         Objects.requireNonNull(routing, "routing");
         if (index.routingPartitionSize() > 1) {
-            throw new IllegalArgumentException("index " + index.indexName()
+            throw new PlacementRefusedException("index " + index.indexName()
                     + " sets routing_partition_size=" + index.routingPartitionSize()
                     + ", whose shard depends on the document _id as well as the routing value "
                     + "-- the ingester cannot compute it and must not guess");

@@ -4,6 +4,8 @@ package binjava.http;
 import binjava.format.SegmentRecord;
 import binjava.ingest.AppendResult;
 import binjava.ingest.Ingest;
+import binjava.ingest.PlacementRefusedException;
+import binjava.ingest.RegistrationTimeoutException;
 import binjava.security.Principal;
 import io.helidon.http.Status;
 import io.helidon.webserver.http.HttpRules;
@@ -123,9 +125,9 @@ public final class BulkService implements HttpService {
 
     private void bulk(ServerRequest request, ServerResponse response) {
         String index = request.path().pathParameters().get("index");
-        int partition;
+        Placement placement;
         try {
-            partition = partitionOf(request);
+            placement = placementOf(request);
         } catch (BulkParseException e) {
             response.status(Status.BAD_REQUEST_400).send(e.getMessage());
             return;
@@ -168,7 +170,25 @@ public final class BulkService implements HttpService {
             // are durable (criterion 1); the 202 below means every chunk landed
             // durably, not that any one of them was merely accepted into a
             // buffer.
-            appendBulkBody(request.content().inputStream(), index, partition);
+            appendBulkBody(request.content().inputStream(), index, placement);
+        } catch (PlacementRefusedException e) {
+            // ⚠️ 400, AND ONLY FOR THIS TYPE. The comment above says why
+            // catching IllegalArgumentException wholesale is worse than a 500:
+            // the append path throws IAE for its own invariant failures, and
+            // telling a producer its batch is permanently bad makes it drop
+            // records over an implementation bug. This subtype names the one
+            // condition that IS the producer's and IS permanent -- a partition
+            // the index does not have -- which is FR-13's defining clause, and
+            // a 500 there is retried forever because 5xx reads as transient.
+            response.status(Status.BAD_REQUEST_400).send(e.getMessage());
+            return;
+        } catch (RegistrationTimeoutException e) {
+            // ⚠️ 503, NOT 400 AND NOT 500. The index's shape has not been
+            // pushed yet, which ends on its own: a producer told 400 drops the
+            // batch, and one told 503 retries into a registration that has by
+            // then usually arrived (ADR-0015's Consequences).
+            response.status(Status.SERVICE_UNAVAILABLE_503).send(e.getMessage());
+            return;
         } catch (BodyTooLargeException e) {
             response.status(Status.REQUEST_ENTITY_TOO_LARGE_413).send(e.getMessage());
             return;
@@ -212,7 +232,8 @@ public final class BulkService implements HttpService {
      *     offsets does not exist yet — {@link Ingest#append}'s contiguous-range
      *     contract does not extend across chunks, only within one
      */
-    AppendResult appendBulkBody(InputStream body, String index, int partition) throws IOException {
+    AppendResult appendBulkBody(InputStream body, String index, Placement placement)
+            throws IOException {
         List<SegmentRecord> chunk = new ArrayList<>(APPEND_CHUNK_RECORDS);
         int[] seen = {0};
         AppendResult[] last = {null};
@@ -224,7 +245,7 @@ public final class BulkService implements HttpService {
                 }
                 chunk.add(r);
                 if (chunk.size() >= APPEND_CHUNK_RECORDS) {
-                    last[0] = appendChunk(index, partition, chunk);
+                    last[0] = appendChunk(index, placement, chunk);
                     chunk.clear();
                 }
             });
@@ -237,7 +258,7 @@ public final class BulkService implements HttpService {
             // 500, found by BulkEndpointTest#theTwoOhTwoIsSentOnlyAfterAppendSucceeds
             // going 500 instead of 503.
             if (!chunk.isEmpty()) {
-                last[0] = appendChunk(index, partition, chunk);
+                last[0] = appendChunk(index, placement, chunk);
             }
         } catch (IOException e) {
             throw new BulkBodyReadException(e);
@@ -266,17 +287,75 @@ public final class BulkService implements HttpService {
      * {@code chunk::forEach} to completion before this method's caller reuses
      * {@code chunk} via {@code clear()} -- so no defensive copy is needed.
      */
-    private AppendResult appendChunk(String index, int partition, List<SegmentRecord> chunk) {
+    private AppendResult appendChunk(String index, Placement placement,
+            List<SegmentRecord> chunk) {
         try {
-            return ingest.append(principal, index, partition, chunk::forEach);
+            return placement.routing() == null
+                    ? ingest.append(principal, index, placement.partition(), chunk::forEach)
+                    : ingest.appendRouted(principal, index, placement.routing(),
+                            chunk::forEach);
         } catch (IOException e) {
             throw new ChunkAppendException(e);
         }
     }
 
-    private static int partitionOf(ServerRequest request) {
-        String raw = request.query().first("partition").orElseThrow(
-                () -> new BulkParseException("the 'partition' query parameter is required"));
+    /**
+     * How this request says where its records go: an explicit partition, or a
+     * routing value the INGESTER turns into one (M6.6, FR-13, FR-19).
+     *
+     * <p>⚠️ IT CARRIES THE CHOICE AND MAKES NEITHER. Which partition a routing
+     * value means needs the registered shard count, which lives in the
+     * ingester -- ADR-0019 and architecture.md rule 4 keep that decision out of
+     * this adapter, and an adapter that resolved it here would be a second
+     * implementation of the one thing M6 exists to get exactly right.
+     */
+    record Placement(Integer partition, String routing) {
+
+        /**
+         * ⚠️ EXACTLY ONE, ENFORCED BY THE TYPE. {@code placementOf} refuses
+         * neither and both with a 400, and this makes the same rule true of
+         * every construction: a {@code Placement(null, null)} reaching
+         * {@link #appendChunk} unboxes into an NPE and a 500, which reads to a
+         * producer as a server fault it should retry.
+         */
+        Placement {
+            if ((partition == null) == (routing == null)) {
+                throw new IllegalArgumentException("a placement is exactly one of a partition "
+                        + "and a routing value, never neither and never both");
+            }
+        }
+    }
+
+    /**
+     * ⚠️ EXACTLY ONE OF THE TWO, AND NEITHER HAS A DEFAULT. Defaulting the
+     * partition to 0 funnels every producer that forgot the parameter into one
+     * shard while returning 202; accepting both and preferring one silently
+     * makes a producer's stated intent depend on which the implementation
+     * happens to read first.
+     */
+    private static Placement placementOf(ServerRequest request) {
+        var rawPartition = request.query().first("partition");
+        var routing = request.query().first("routing");
+        if (rawPartition.isPresent() && routing.isPresent()) {
+            throw new BulkParseException("'partition' and 'routing' are alternatives: the "
+                    + "first says where these records go, the second asks the ingester to "
+                    + "work it out. Send one");
+        }
+        if (routing.isPresent()) {
+            if (routing.get().isEmpty()) {
+                // ⚠️ AN EMPTY ROUTING VALUE IS REFUSED HERE, not placed. It
+                // hashes to a partition like any other string, so accepting it
+                // would send every producer that built its query string wrong
+                // to one shard -- indistinguishable from a working deployment
+                // until the shard is hot.
+                throw new BulkParseException("'routing' is not empty");
+            }
+            return new Placement(null, routing.get());
+        }
+        String raw = rawPartition.orElseThrow(() -> new BulkParseException(
+                "one of the 'partition' or 'routing' query parameters is required: there is "
+                        + "no default, because defaulting to partition 0 funnels every "
+                        + "producer that forgot it into one shard while returning 202"));
         int partition;
         try {
             partition = Integer.parseInt(raw);
@@ -286,6 +365,6 @@ public final class BulkService implements HttpService {
         if (partition < 0) {
             throw new BulkParseException("'partition' is not negative");
         }
-        return partition;
+        return new Placement(partition, null);
     }
 }

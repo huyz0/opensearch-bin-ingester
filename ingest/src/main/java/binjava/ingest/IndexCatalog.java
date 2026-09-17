@@ -137,7 +137,7 @@ public final class IndexCatalog {
         Optional<IndexRegistration> found = resolve(indexOrAlias);
         found.ifPresent(registration -> {
             if (registration.routingPartitionSize() > 1) {
-                throw new IllegalArgumentException("index " + registration.indexName()
+                throw new PlacementRefusedException("index " + registration.indexName()
                         + " sets routing_partition_size=" + registration.routingPartitionSize()
                         + ", so its shard depends on the document _id as well as the routing "
                         + "value and the ingester cannot compute it -- write to this index "

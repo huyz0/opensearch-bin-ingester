@@ -81,6 +81,35 @@ public interface Ingest extends AutoCloseable {
     AppendResult append(Principal principal, String index, int partition,
             RecordSource records) throws IOException;
 
+    /**
+     * Appends records whose partition the INGESTER computes, from a routing
+     * value (M6.6, FR-19, ADR-0015 § 1).
+     *
+     * <p>⚠️ THE PRODUCER NEVER LEARNS THE SHARD COUNT, which is the whole point
+     * of the mode: it would otherwise need an endpoint on the plugin or
+     * OpenSearch credentials of its own, both of which ADR-0015 rejects. It
+     * sends a routing value; placement happens where the registered shape is
+     * known.
+     *
+     * <p>⚠️ {@code indexOrAlias} MAY BE AN ALIAS, resolved to the current
+     * concrete index by whoever holds the catalog -- never by the HTTP adapter,
+     * which owns no decision (ADR-0019).
+     *
+     * <p>⚠️ THE DEFAULT REFUSES, and says what is missing rather than placing
+     * the records somewhere. A deployment with no catalog has no shard count
+     * for any index, so every routed write is unplaceable; answering with
+     * partition 0 would funnel an index into one shard while returning 202.
+     *
+     * @throws IllegalStateException if this implementation cannot place by
+     *     routing value
+     */
+    default AppendResult appendRouted(Principal principal, String indexOrAlias, String routing,
+            RecordSource records) throws IOException {
+        throw new IllegalStateException("this ingester has no index catalog, so it cannot "
+                + "compute a partition from a routing value -- write with an explicit "
+                + "partition, or deploy the plugin that registers index shapes (FR-16)");
+    }
+
     /** Flushes anything buffered and releases resources. */
     @Override
     void close() throws IOException;

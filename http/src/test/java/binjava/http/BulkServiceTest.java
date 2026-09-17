@@ -68,7 +68,8 @@ class BulkServiceTest {
             }
         };
 
-        new BulkService(fake, PRINCIPAL).appendBulkBody(in, "logs", 0);
+        new BulkService(fake, PRINCIPAL)
+                .appendBulkBody(in, "logs", new BulkService.Placement(0, null));
 
         assertThat(seen[0]).isEqualTo(records);
         // ⚠️ The load-bearing assertion: the FIRST record reaches Ingest.append

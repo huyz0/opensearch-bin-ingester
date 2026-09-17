@@ -46,31 +46,129 @@ import java.util.concurrent.ConcurrentHashMap;
  * {@code System.currentTimeMillis} could only be tested by sleeping, and the
  * timeout is the one behaviour here that a test must drive rather than wait
  * for.
+ *
+ * <p>⚠️ THE UNIT IS A BATCH, NOT A RECORD, AND M6.6's ROUND-1 REVIEW IS WHY.
+ * The first version keyed everything on the index alone, so the first waiter to
+ * wake drained EVERY request's records for that index and wrote all of them at
+ * the one partition ITS OWN routing value named. Measured: producer A's records
+ * landed in producer B's partition while A got an exception for a write that
+ * had happened, and reversing the wake order made B return 202 having written
+ * nothing. A batch is one request's records with one routing value -- the
+ * thing that is placed together and reported together.
  */
 public final class PendingPool {
 
-    /** One record waiting to be placed, with what it will be placed BY. */
-    public record Pending(String index, String routing, SegmentRecord record,
-            long arrivedAtMillis) {
+    /**
+     * One request's records, waiting for its index's shape.
+     *
+     * <p>⚠️ IT IS THE OWNERSHIP BOUNDARY. Only the caller that opened a batch
+     * takes it, so two producers writing to the same unregistered index cannot
+     * take each other's records -- which is exactly what the index-keyed
+     * version did, placing one producer's records at the other's partition.
+     */
+    public final class Batch {
 
-        public Pending {
-            Objects.requireNonNull(index, "index");
-            Objects.requireNonNull(routing, "routing");
+        private final String index;
+        private final String routing;
+        private final List<SegmentRecord> records = new ArrayList<>();
+        private final long openedAtMillis = clock.millis();
+        private long bytes;
+        private boolean settled;
+        private boolean listed;
+
+        private Batch(String index, String routing) {
+            this.index = index;
+            this.routing = routing;
+        }
+
+        /** The index this batch was written to -- an alias, as the producer sent it. */
+        public String index() {
+            return index;
+        }
+
+        /** The routing value every record in this batch is placed by. */
+        public String routing() {
+            return routing;
+        }
+
+        /**
+         * Adds one record, if this index's pool has room.
+         *
+         * @return false when the index's pool is full, which the caller
+         *     answers with a refusal rather than by placing the record
+         *     somewhere
+         */
+        public boolean offer(SegmentRecord record) {
             Objects.requireNonNull(record, "record");
+            long cost = costOf(record, routing);
+            boolean[] accepted = {false};
+            // ⚠️ THE CHARGE AND THE ADD ARE ONE OPERATION under the map's own
+            // lock. Resolving the entry first and mutating it after is the
+            // window M6.5's round-1 review measured, where a record landed in
+            // an object nothing could reach.
+            byIndex.compute(index, (key, waiting) -> {
+                Waiting target = waiting == null ? new Waiting() : waiting;
+                if (settled || target.bytes + cost > maxBytesPerIndex) {
+                    return waiting;
+                }
+                records.add(record);
+                bytes += cost;
+                target.bytes += cost;
+                // ⚠️ LISTED ONCE, however many records it takes. Adding on
+                // every offer put a two-record batch in the list twice, so
+                // `expire` handed the same batch to the sweeper twice and
+                // `remove` dropped only the first copy -- a settled batch left
+                // in the index's list forever, which is the leak the bound
+                // exists to prevent arriving by another road.
+                if (!listed) {
+                    listed = true;
+                    target.batches.add(this);
+                }
+                accepted[0] = true;
+                return target;
+            });
+            return accepted[0];
         }
 
-        long bytes() {
-            // ⚠️ THE SAME ESTIMATE THE FLUSH TRIGGER USES, so a record's cost
-            // is one number across the whole write path rather than two that
-            // drift. The routing value is counted too: it is held here and
-            // nowhere else.
-            return Accumulator.estimatedFramedBytes(record)
-                    + routing.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+        /**
+         * This batch's records, removed from the pool.
+         *
+         * <p>⚠️ EMPTY MEANS SOMEBODY ELSE SETTLED IT -- the sweeper expired it
+         * while this caller was waiting. The caller refuses the write rather
+         * than appending nothing, because appending nothing would return a
+         * success for records that were dropped.
+         */
+        public List<SegmentRecord> take() {
+            List<SegmentRecord> taken = new ArrayList<>();
+            settle(taken);
+            return taken;
         }
+
+        /** Releases this batch without placing it, for a caller that is refusing. */
+        public void discard() {
+            settle(new ArrayList<>());
+        }
+
+        private void settle(List<SegmentRecord> into) {
+            byIndex.compute(index, (key, waiting) -> {
+                if (waiting == null || settled) {
+                    settled = true;
+                    return waiting;
+                }
+                settled = true;
+                into.addAll(records);
+                waiting.bytes -= bytes;
+                waiting.batches.remove(this);
+                records.clear();
+                bytes = 0;
+                return waiting.batches.isEmpty() ? null : waiting;
+            });
+        }
+
     }
 
     private static final class Waiting {
-        private final Deque<Pending> records = new ArrayDeque<>();
+        private final List<Batch> batches = new ArrayList<>();
         private long bytes;
     }
 
@@ -92,104 +190,67 @@ public final class PendingPool {
         this.maxBytesPerIndex = maxBytesPerIndex;
     }
 
-    /**
-     * Takes a record whose index is not yet registered.
-     *
-     * @return false when this index's pool is full, which the caller answers
-     *     with a refusal rather than by placing the record somewhere
-     */
-    public boolean offer(String index, String routing, SegmentRecord record) {
+    /** Opens a batch for one request: one index, one routing value. */
+    public Batch open(String index, String routing) {
         Objects.requireNonNull(index, "index");
-        Pending pending = new Pending(index, routing, record, clock.millis());
-        boolean[] accepted = {false};
-        // ⚠️ `compute`, NEVER `computeIfAbsent` FOLLOWED BY A MONITOR, and
-        // round-1 review MEASURED the difference: resolving the entry outside
-        // the map's own lock lets `take` unmap it between the lookup and the
-        // add, so the record lands in an object nothing can reach -- never
-        // taken, never expired, and the producer holding a 202. One offer
-        // thread against one consumer lost 3,510 of 200,000 records.
-        // ⚠️ SO EVERY MUTATION OF A `Waiting` HAPPENS INSIDE A `compute` on
-        // this map, which is what makes membership and content atomic
-        // together. There is no second lock and there must not be one.
-        byIndex.compute(index, (key, waiting) -> {
-            Waiting target = waiting == null ? new Waiting() : waiting;
-            if (target.bytes + pending.bytes() > maxBytesPerIndex) {
-                // ⚠️ REFUSED, NOT EVICTED. Dropping the OLDEST waiting record
-                // to make room would lose a write the producer was told
-                // nothing about; refusing the newest tells the one producer
-                // that can still do something about it.
-                return waiting;
-            }
-            target.records.addLast(pending);
-            target.bytes += pending.bytes();
-            accepted[0] = true;
-            return target;
-        });
-        return accepted[0];
+        Objects.requireNonNull(routing, "routing");
+        return new Batch(index, routing);
     }
 
     /**
-     * Everything waiting for {@code index}, removed, in arrival order.
-     *
-     * <p>⚠️ FIFO, because that is the order the producer sent them and the
-     * order their offsets will be assigned in. Nothing here re-orders, and a
-     * pool that did would make a replay produce a different log than the
-     * original run.
+     * ⚠️ THE SAME ESTIMATE THE FLUSH TRIGGER USES, so a record's cost is one
+     * number across the whole write path rather than two that drift. The
+     * routing value is counted once per RECORD because that is the granularity
+     * the bound is spent at, and it is held here and nowhere else.
      */
-    public List<Pending> take(String index) {
-        List<Pending> taken = new ArrayList<>();
-        // ⚠️ THE REMOVAL AND THE COPY ARE ONE OPERATION. Removing first and
-        // copying after is the window round-1 review measured: an `offer` that
-        // resolved the same entry a moment earlier adds to it afterwards and
-        // the record is unreachable.
-        byIndex.compute(index, (key, waiting) -> {
-            if (waiting != null) {
-                taken.addAll(waiting.records);
-            }
-            return null;
-        });
-        return taken;
+    private static long costOf(SegmentRecord record, String routing) {
+        return Accumulator.estimatedFramedBytes(record)
+                + routing.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
     }
 
     /**
-     * Everything that has waited longer than the timeout, removed.
+     * Every batch that has waited longer than the timeout, settled and removed.
      *
-     * <p>⚠️ THE CALLER REFUSES THEM; THIS ONLY HANDS THEM OVER. Which HTTP
-     * status a timed-out write gets, and what the producer is told, belongs
-     * with the adapter -- ADR-0019 and architecture.md rule 4 keep that
-     * decision out of here.
+     * <p>⚠️ THE RECORDS ARE DROPPED HERE; WHAT COMES BACK IS THE BATCH, EMPTY.
+     * A batch whose owner is still waiting learns it was expired by taking
+     * nothing, and refuses its write on that. The returned batches are what an
+     * eventual sweeper LOGS and METERS -- each names its index and its routing
+     * value -- and which HTTP status a timed-out write gets belongs with the
+     * adapter (ADR-0019, architecture.md rule 4), never here.
+     *
+     * <p>⚠️ NOTHING CALLS THIS IN PRODUCTION YET. Every routed write settles
+     * its own batch, in a finally, so the pool does not leak without a sweeper;
+     * what a sweeper adds is the bound on a wait that outlives its caller, and
+     * the row that starts one is M6.6's own follow-up.
      *
      * <p>⚠️ AND IT SWEEPS EVERY INDEX, not the one a caller happens to ask
      * about: an index nobody writes to again would otherwise hold its records
      * forever, which is the leak the bound exists to prevent arriving by
      * another road.
      */
-    public List<Pending> expire() {
+    public List<Batch> expire() {
         long now = clock.millis();
-        List<Pending> expired = new ArrayList<>();
-        // ⚠️ THE KEYS ARE SNAPSHOTTED AND EACH IS SWEPT UNDER `compute`, so an
-        // index that appears mid-sweep is simply swept next time -- its
-        // records cannot be older than the timeout yet. Iterating the entry
-        // set and mutating the values outside the map's lock is the window
-        // round-1 review measured on the previous version.
+        List<Batch> expired = new ArrayList<>();
         for (String index : List.copyOf(byIndex.keySet())) {
-            byIndex.compute(index, (key, waiting) -> {
-                if (waiting == null) {
-                    return null;
+            List<Batch> candidates = new ArrayList<>();
+            byIndex.computeIfPresent(index, (key, waiting) -> {
+                for (Batch batch : waiting.batches) {
+                    if (now - batch.openedAtMillis >= timeout.toMillis()) {
+                        candidates.add(batch);
+                    }
                 }
-                while (!waiting.records.isEmpty()
-                        && now - waiting.records.peekFirst().arrivedAtMillis()
-                                >= timeout.toMillis()) {
-                    Pending pending = waiting.records.removeFirst();
-                    waiting.bytes -= pending.bytes();
-                    expired.add(pending);
-                }
-                // ⚠️ RETURNING null REMOVES IT, and it is safe here for the
-                // reason it was NOT safe before: an `offer` for this key can
-                // only run before or after this whole function, never inside
-                // it.
-                return waiting.records.isEmpty() ? null : waiting;
+                return waiting;
             });
+            for (Batch batch : candidates) {
+                // ⚠️ SETTLED THROUGH THE BATCH ITSELF, so a batch its owner is
+                // taking at the same moment is settled exactly once -- the
+                // `settled` flag is read and written under the same map lock
+                // every other mutation takes.
+                List<SegmentRecord> dropped = batch.take();
+                if (!dropped.isEmpty()) {
+                    expired.add(batch);
+                }
+            }
         }
         return expired;
     }
@@ -207,8 +268,35 @@ public final class PendingPool {
         return held[0];
     }
 
+    /** How long a batch may wait here before a sweeper may hand it back. */
+    public Duration timeout() {
+        return timeout;
+    }
+
     /** How many indices currently have records waiting. */
     public int waitingIndices() {
         return byIndex.size();
+    }
+
+    /**
+     * How many BATCHES are waiting, across every index.
+     *
+     * <p>⚠️ BATCHES, NOT INDICES, because that is the number a test asserting
+     * two writes are genuinely IN FLIGHT at once needs: both requests to one
+     * index are one index and two batches, and the index count cannot tell
+     * them from a single request.
+     */
+    public int waitingBatches() {
+        // ⚠️ READ THROUGH `computeIfPresent`, which is the lock every mutation
+        // here takes -- reading `waiting.batches` from the value view would
+        // observe an ArrayList mid-add.
+        int[] total = {0};
+        for (String index : byIndex.keySet()) {
+            byIndex.computeIfPresent(index, (key, waiting) -> {
+                total[0] += waiting.batches.size();
+                return waiting;
+            });
+        }
+        return total[0];
     }
 }
