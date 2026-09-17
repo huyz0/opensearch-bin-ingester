@@ -11,8 +11,13 @@ dependencies {
     // constraint, not a test, is what keeps this an adapter rather than a
     // second implementation of the ingest path.
     implementation(libs.helidon.webserver)
-
-    testImplementation(libs.helidon.webclient)
+    // ⚠️ THE CLIENT IS A PRODUCTION DEPENDENCY SINCE M8.20, not a test one:
+    // `HttpSequencerTransport` is the pod-to-pod forwarding hop M5.6e has owed
+    // since M5, and it is a CLIENT. It stays in this module for the same reason
+    // the server does -- `check-module.sh` asserts no module below `http`
+    // resolves an HTTP dependency, and that classpath constraint is what keeps
+    // the ingest path free of one.
+    implementation(libs.helidon.webclient)
     // ⚠️ TEST ONLY. Criterion 1 is "202 only after durable", which a fake Ingest
     // cannot demonstrate -- it needs the real DefaultIngest over a real store.
     // Nothing here reaches the production classpath, and rule 4 still holds:
