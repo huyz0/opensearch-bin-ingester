@@ -25,8 +25,14 @@ import org.junit.jupiter.params.provider.CsvSource;
  */
 class ModulePlanTest {
 
-  private static final String EIGHT =
-      "binstore-spi binstore-backends format sequencer ingest http client plugin";
+  /**
+   * ⚠️ NINE SINCE M8.1, which added `server` -- the composition root, last
+   * because it depends on everything above it and nothing depends on it.
+   * The name is the count so that adding a module without updating this test
+   * is a compile-time rename rather than a silently-passing literal.
+   */
+  private static final String NINE =
+      "binstore-spi binstore-backends format sequencer ingest http client plugin server";
 
   private static String plan(String... args) throws Exception {
     Path repo = Path.of("..").toAbsolutePath().normalize();
@@ -104,15 +110,15 @@ class ModulePlanTest {
     assertThat(p.waitFor()).as(out).isZero();
 
     // ALL must come from settings.gradle.kts, not a literal restated in the gate.
-    assertThat(out).as(out).contains("ALL=" + EIGHT);
+    assertThat(out).as(out).contains("ALL=" + NINE);
     assertThat(out).as(out).contains("WHY=" + why.trim());
     // The gate must RUN the drift check, not merely define it.
-    assertThat(out).as(out).contains("DRIFT=ok checked=8");
+    assertThat(out).as(out).contains("DRIFT=ok checked=9");
     String want = expected == null ? "" : expected.trim();
     // Whole line, anchored. `contains("MODULES=")` is true of the unconditional
     // echo even when the selection is wrong, so the empty row asserted nothing.
     assertThat(out.lines().filter(l -> l.startsWith("MODULES=")).toList())
         .as(out)
-        .containsExactly("MODULES=" + ("ALL".equals(want) ? EIGHT : want));
+        .containsExactly("MODULES=" + ("ALL".equals(want) ? NINE : want));
   }
 }

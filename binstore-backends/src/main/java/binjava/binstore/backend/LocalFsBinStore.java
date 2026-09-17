@@ -22,6 +22,7 @@ import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -54,6 +55,26 @@ public final class LocalFsBinStore implements BinStore {
 
     private final Path root;
     private final AtomicLong versions = new AtomicLong();
+
+    /**
+     * The same store, rooted at a path given as TEXT (M8.1).
+     *
+     * <p>⚠️ **THIS EXISTS SO THE COMPOSITION ROOT NEVER NAMES
+     * {@code java.nio.file}.** `server` is the one module that turns a
+     * configured store NAME into a backend, and its configuration carries a
+     * root as the string an operator typed. Handing that string here keeps the
+     * filesystem type inside the adapter — the module whose job IS the I/O
+     * everything else takes as a seam — instead of widening
+     * `check-io-seam.sh`'s exempt list by a second module.
+     *
+     * <p>⚠️ M8's SPEC assumed that list would have to grow "by exactly one
+     * module, and that is the point of a composition root". It does not: a
+     * composition root chooses a backend, and choosing one need not name a
+     * {@link Path}. Not weakening a gate is worth one factory method.
+     */
+    public static LocalFsBinStore at(String root) throws IOException {
+        return new LocalFsBinStore(Path.of(Objects.requireNonNull(root, "root")));
+    }
 
     public LocalFsBinStore(Path root) throws IOException {
         this.root = root;

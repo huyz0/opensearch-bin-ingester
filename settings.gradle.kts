@@ -18,4 +18,8 @@ include(
     "http",
     "client",
     "plugin",
+    // ⚠️ LAST, because it depends on everything above it and nothing depends on
+    // it -- the composition root is a leaf, which is what keeps the dependency
+    // surface acyclic (M8.1, ADR-0052).
+    "server",
 )

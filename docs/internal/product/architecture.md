@@ -37,6 +37,7 @@ producers ──HTTP/streamed──▶ ingester nodes (≥2 per AZ, stateless)
 | `http` | thin Helidon adapter: parse `_bulk`, map errors, delegate to `ingest` | `ingest` |
 | `client` | the **consumer** (glossary.md's role name): subscription, fetch-mode dispatch, coalescing, decode. ⚠️ The module is `client` for its Gradle path; every type inside it is named for the role — `ConsumerClient`, not `ClientClient` | `format` |
 | `plugin` | `IngestionConsumerPlugin` implementation | `client` |
+| `server` | ⚠️ **the composition root and `main()`** (M8.1, [ADR-0052](decisions/0052-m8-owns-assembly-and-the-first-real-backend-because-its-evidence-is-unbuyable-without-them.md)): configuration in, object graph out. **The only module that may name a backend in `src/main`** — every other takes a `BinStore` | `ingest`, `sequencer`, `binstore-backends` |
 
 ⚠️ **The flush interval is adaptive, and it is the cost dial**
 ([ADR-0017](decisions/0017-every-pod-writes.md)). Each pod lengthens or shortens
