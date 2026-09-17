@@ -2,8 +2,6 @@
 package binjava.plugin;
 
 import binjava.format.RunKey;
-import java.nio.ByteBuffer;
-import java.util.Base64;
 import java.util.Objects;
 import java.util.UUID;
 import org.opensearch.cluster.metadata.IndexMetadata;
@@ -38,15 +36,16 @@ public final class BinStoreConsumerFactory
      * string: nVzgup36TLqWp7VBBREj1w" -- and no in-process test could catch it,
      * because they all build a RunKey directly from a java.util.UUID. Only a
      * booting node hands over a real one.
+     *
+     * <p>WARNING: the rule itself moved to {@link RunKey#ofIndexUuid} at M7.2,
+     * because the ingester now derives the same stream from the uuid a progress
+     * frame carries. Two implementations of this mapping would not throw when
+     * they disagreed -- they would produce two streams for one index, and a
+     * watermark that never moves is data that is never deleted or data that is
+     * deleted early, depending which way the disagreement falls.
      */
     static UUID indexUuidOf(String openSearchIndexUuid) {
-        byte[] raw = Base64.getUrlDecoder().decode(openSearchIndexUuid);
-        if (raw.length != 16) {
-            throw new IllegalArgumentException(
-                    "an index UUID decodes to 16 bytes, not " + raw.length);
-        }
-        ByteBuffer b = ByteBuffer.wrap(raw);
-        return new UUID(b.getLong(), b.getLong());
+        return RunKey.ofIndexUuid(openSearchIndexUuid, 0).indexId();
     }
 
     @Override
