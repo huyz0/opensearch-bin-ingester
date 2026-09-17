@@ -424,4 +424,126 @@ class IdleConsumerCostTest {
                         + "withdrawn for")
                 .isGreaterThanOrEqualTo(ROUNDS);
     }
+
+    /**
+     * NFR-2 RE-ASSERTED WITH THE REGISTRATION PATH LIVE (M6.11, criterion 13).
+     *
+     * <p>⚠️ RE-ASSERTED RATHER THAN INHERITED, and M5's own SPEC records why:
+     * "it held before" is not evidence about a path that did not exist then.
+     * M6 added two paths that could each have bought a request per idle
+     * interval -- the plugin's registration push and the pending pool's sweep
+     * -- and neither may.
+     *
+     * <p>⚠️ THE REGISTRATIONS ARRIVE DURING THE IDLE LOOP, not before it. A
+     * plugin re-pushes on every relevant cluster-state change, and a cluster
+     * publishes state while nothing is being written; a registration path that
+     * resolved an alias by READING the object store would cost a request per
+     * push, which is the plausible defect this case exists to kill. Registering
+     * once up front and then idling would not see it.
+     *
+     * <p>⚠️ AND THE POOL HOLDS BATCHES WHILE IT IS SWEPT. Sweeping an EMPTY
+     * pool measures nothing -- review measured {@code expire()} replaced by
+     * {@code return new ArrayList<>()} leaving this case green -- so a batch is
+     * opened every hundred intervals and left to time out, which makes the
+     * sweep do its actual work: settle batches, release their bytes, and drop
+     * the index entry.
+     *
+     * <p>⚠️ WHAT THIS CASE DIES UNDER IS NOT A REGISTRATION DEFECT, and saying
+     * so is the honest part: no class on the registration path holds a
+     * {@code BinStore}, so no mutation OF THAT PATH can make this meter move --
+     * which is precisely the by-construction shape this file's class javadoc
+     * says was M1's non-proof. Its recorded red is the polling flush (both of
+     * {@code isFlushDue}'s and {@code drain}'s empty guards), which proves the
+     * meter can see a request at all during this loop. The property about the
+     * registration path itself is held by
+     * {@code RegistrationPathStoreReachTest}, which reds the moment any of
+     * those types can reach a store.
+     */
+    @Test
+    @Timeout(60)
+    void theREGISTRATIONPathAndThePENDINGPoolCostZEROOfBothNumbersWhenIDLE()
+            throws Exception {
+        TestClock clock = new TestClock();
+        IngestConfig config = IngestConfig.defaults("cluster-a");
+        Accumulator accumulator = new Accumulator(config, clock);
+        CountingBinStore store = new CountingBinStore(new MemoryBinStore());
+        SegmentPublisher publisher = new SegmentPublisher(store, "bins/cluster-a", "pod1");
+        GrantIssuer grants = new GrantIssuer(new StoreFakes.CanPresign());
+        SubscriptionHub hub = new SubscriptionHub();
+        AtomicLong delivered = new AtomicLong();
+        List<AutoCloseable> handles = subscribeAll(hub, CONSUMERS, delivered);
+
+        IndexCatalog catalog = new IndexCatalog();
+        PendingPool pending = new PendingPool(clock, Duration.ofSeconds(30), 8L << 20);
+        // ⚠️ CLOSED IN A `finally`, or a failing assertion leaves 1,000
+        // subscriptions in the hub for every case that runs after this one.
+        try {
+        long before = store.counts().total();
+        int expired = 0;
+
+        for (int interval = 0; interval < INTERVALS; interval++) {
+            // ⚠️ ONE RE-PUSH EVERY TENTH INTERVAL, which is what a cluster
+            // doing ordinary work looks like to this path: 300 registrations
+            // across the run, none of which may cost a request.
+            if (interval % 10 == 0) {
+                catalog.register(registration("logs-" + (interval / 10 % 50)));
+            }
+            if (interval % 100 == 0) {
+                PendingPool.Batch batch = pending.open("logs-" + interval, "tenant-1");
+                batch.offer(new binjava.format.SegmentRecord("doc-" + interval,
+                        binjava.format.OpType.INDEX, java.util.OptionalLong.of(1),
+                        new byte[16]));
+            }
+            expired += pending.expire().size();
+            tick(accumulator, publisher, clock, config.intervalFloor());
+        }
+
+        assertThat(store.counts().total() - before)
+                .as("%d idle consumers, %d intervals and %d registrations cost ZERO "
+                        + "object-store requests. The registration path holds no store and "
+                        + "must not grow one: an alias resolved by reading the store would "
+                        + "cost a request per push, on every cluster-state change of every "
+                        + "cluster, forever", CONSUMERS, INTERVALS, INTERVALS / 10)
+                .isZero();
+        assertThat(grants.grantsIssued())
+                .as("and no grant: a registration is not a read, and nothing on this path "
+                        + "authorises one")
+                // ⚠️ BY CONSTRUCTION, like the identical zero in the criterion-8
+                // case above: the issuer is constructed and handed to nothing,
+                // so an issuer that minted per registration would still read
+                // zero here. `theGRANTCountIsFLATInTheCONSUMERCount` is what
+                // holds that property, with real traffic at both fan-outs.
+                .isZero();
+        assertThat(expired)
+                .as("PREMISE: the sweep really settled batches rather than walking an empty "
+                        + "pool -- review measured an `expire()` that returned an empty list "
+                        + "leaving this case green, which is the by-construction shape again")
+                .isGreaterThan(0);
+        assertThat(catalog.size())
+                .as("PREMISE: the catalog really was populated, or the loop above registered "
+                        + "nothing and the zeros are about an empty path")
+                .isEqualTo(50);
+        assertThat(delivered.get())
+                .as("PREMISE: and the consumers really were idle -- a delivery would mean "
+                        + "traffic, and traffic is allowed to cost requests")
+                .isZero();
+        } finally {
+            for (AutoCloseable handle : handles) {
+                handle.close();
+            }
+        }
+    }
+
+    /**
+     * ⚠️ A DISTINCT UUID PER INDEX, because the catalog is keyed by NAME and
+     * the UUID is what a stream is identified by: reusing one would make fifty
+     * indices look like one to anything downstream.
+     */
+    private static binjava.format.IndexRegistration registration(String index) {
+        String uuid = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(
+                java.nio.ByteBuffer.allocate(16)
+                        .putLong(index.hashCode()).putLong(index.length()).array());
+        return new binjava.format.IndexRegistration(uuid, index,
+                List.of(index + "-alias"), 4, 4, 1, 1);
+    }
 }
