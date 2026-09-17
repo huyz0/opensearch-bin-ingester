@@ -59,6 +59,31 @@ public interface SubscriptionTransport {
     }
 
     /**
+     * Tells the ingester where this node's shard copies have got to (M7.3,
+     * FR-9, ADR-0005, ADR-0049).
+     *
+     * <p>⚠️ IT TRAVELS ON THE SUBSCRIPTION THE NODE ALREADY HOLDS, for the
+     * same reason {@link #register} does: metadata-only, same-AZ, and no new
+     * endpoint, credential or unauthenticated surface. It costs zero
+     * object-store requests, which is what lets an idle node keep reporting
+     * forever (NFR-2).
+     *
+     * <p>⚠️ THE DEFAULT REFUSES RATHER THAN SWALLOWING. A transport that
+     * accepted progress silently would leave every watermark on the node
+     * frozen at nothing while the deployment looked healthy, and the first
+     * anyone would hear of it is data reaching {@code maxRetention} and its
+     * alarm — hours later, and reported as a retention incident rather than as
+     * a transport that cannot carry a frame.
+     */
+    default void report(binjava.format.ConsumerProgress progress) {
+        throw new UnsupportedOperationException("this transport cannot carry consumer "
+                + "progress, so the ingester would never learn where this node's "
+                + progress.entries().size() + " shard copies have got to, and GC would "
+                + "keep their streams until maxRetention (M5.6e is the production "
+                + "transport)");
+    }
+
+    /**
      * One listener's registration against a CHANGING set of streams, which is
      * what a node holds (M5.62).
      *
