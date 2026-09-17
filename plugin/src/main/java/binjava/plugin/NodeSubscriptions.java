@@ -106,6 +106,28 @@ public final class NodeSubscriptions implements AutoCloseable {
     }
 
     /**
+     * The same over a wired channel, which is how a real deployment builds
+     * this.
+     *
+     * <p>⚠️ **THE CHANNEL IS KEPT SO THE REGISTRAR REACHES THE NODE.** The
+     * plugin installs a listener from what this object holds; a deployment that
+     * handed only the transport would get a registrar built here, with no
+     * reconnect wired to it — which is precisely the two-milestone gap M6.15
+     * records.
+     */
+    public NodeSubscriptions(NodeChannel channel, int queueCapacity) {
+        this(Objects.requireNonNull(channel, "channel").transport(), queueCapacity, null);
+        this.channel = channel;
+    }
+
+    private NodeChannel channel;
+
+    /** The channel this was built over, or {@code null} for a bare transport. */
+    public NodeChannel channel() {
+        return channel;
+    }
+
+    /**
      * @param nodeSegmentSource the ONE source every client on this node
      *     fetches through, or {@code null} where {@code direct} is not enabled
      */

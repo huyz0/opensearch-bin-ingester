@@ -1,0 +1,361 @@
+// SPDX-License-Identifier: Apache-2.0
+package binjava.client;
+
+import binjava.format.ConsumerProgress;
+import binjava.format.IndexRegistration;
+import binjava.format.RunKey;
+import binjava.format.SubscriptionEvent;
+import io.helidon.http.Status;
+import io.helidon.webclient.api.HttpClientResponse;
+import io.helidon.webclient.api.WebClient;
+import java.io.IOException;
+import java.io.InputStream;
+import java.time.Duration;
+import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+
+/**
+ * The consumer's half of the subscription channel (M8.21, M5.6e, FR-16, FR-9).
+ *
+ * <p>⚠️ **THIS IS THE SEAM M6.15 HAS BEEN WAITING ON.**
+ * {@code IndexRegistrar.onReconnect()} exists, is tested, and is called by
+ * nothing, because no production transport existed to have a reconnect. A
+ * registration is state the INGESTER holds in memory, so when it restarts it
+ * knows no index's shape and every routed write to this node's indices is
+ * refused when its wait expires — with nothing naming the cause. The reconnect
+ * callback is what recovers that, and it fires here.
+ *
+ * <p>⚠️ **ONE VIRTUAL THREAD PER SUBSCRIPTION, LONG-POLLING FOR EVER.** A
+ * dropped connection is ordinary — a rolling deploy drops every one of them —
+ * so the loop backs off and comes back rather than reporting an error nobody
+ * can act on. What it must never do is stay silent: the first answer after a
+ * failure invokes {@code onReconnect}, because the ingester that answers it may
+ * be a different process with an empty catalog.
+ *
+ * <p>⚠️ **A POLL, NOT AN OPEN STREAM**, for the reason
+ * {@code SubscriptionService} records with its measurement: Helidon's client
+ * stream does not block across a chunk boundary, so a held-open response
+ * delivered heartbeats and then died on the first real frame.
+ *
+ * <p>⚠️ **BACKOFF IS BOUNDED AND JITTERED.** Every consumer on every node
+ * reconnects at the same instant after a deployment, and an unjittered retry
+ * turns that into a synchronised storm against a node that has just started —
+ * research 08 §7 step 2's thundering herd, arriving from the other direction.
+ */
+public final class HttpSubscriptionTransport implements SubscriptionTransport {
+
+    /**
+     * ⚠️ **THE PATHS LIVE HERE AND THE INGESTER READS THEM**, not the other way
+     * round: `client` may not depend on `http` (architecture.md — `http` is the
+     * ingester's adapter and this is the consumer), and two copies of a path
+     * are two things to get wrong.
+     */
+    public static final String SUBSCRIBE_PREFIX = "/sub/";
+
+    /** {@code POST} target for an index's shape (ADR-0047). */
+    public static final String REGISTER_PATH = "/ctl/register";
+
+    /** {@code POST} target for a node's consumer progress (ADR-0049). */
+    public static final String PROGRESS_PATH = "/ctl/progress";
+
+    private final WebClient client;
+    private final Runnable onReconnect;
+    private final Duration retryFloor;
+    private final Duration retryCeiling;
+    private final Duration pollWait;
+    /**
+     * ⚠️ 25 s, under the ingester's own 30 s ceiling so IT answers
+     * first: a client whose read timeout expires first tears down a connection
+     * the server was about to write to, and the push it was about to receive
+     * waits for the next poll.
+     */
+    static final Duration DEFAULT_POLL_WAIT = Duration.ofSeconds(25);
+
+    /**
+     * ⚠️ The ingester's own floor: the first poll of a connection asks for this
+     * so that "the ingester answered" is known in milliseconds rather than in
+     * half a minute.
+     */
+    static final Duration HANDSHAKE_WAIT = Duration.ofMillis(50);
+
+    /**
+     * ⚠️ 32 MiB. One answer drains everything queued, so it is legitimately
+     * several segments; anything beyond this is not an answer this deployment
+     * produces, and buffering it would be a peer choosing this node's heap.
+     */
+    public static final int MAX_ANSWER_BYTES = 32 << 20;
+
+    /**
+     * ⚠️ **INJECTABLE SO THE REFUSAL CAN BE ASSERTED WITHOUT A 32 MiB FIXTURE.**
+     * A case that has to produce the real cap asserts that the number was
+     * COMPARED; one that lowers the cap asserts that the answer was refused
+     * BEFORE it was buffered, which is the property that matters.
+     */
+    private final int maxAnswerBytes;
+
+    private final AtomicLong reconnects = new AtomicLong();
+    private final AtomicBoolean closed = new AtomicBoolean();
+
+    /**
+     * @param endpoint the ingester this node subscribes to
+     * @param onReconnect run after every re-establishment, including the first.
+     *     ⚠️ **INCLUDING THE FIRST**, because the ingester may have been
+     *     restarted before this node ever connected — there is no first
+     *     connection that can be assumed to find a populated catalog.
+     */
+    public HttpSubscriptionTransport(String endpoint, Runnable onReconnect,
+            Duration retryFloor, Duration retryCeiling, Duration timeout) {
+        this(endpoint, onReconnect, retryFloor, retryCeiling, timeout, DEFAULT_POLL_WAIT);
+    }
+
+    /**
+     * The same, with the poll wait given.
+     *
+     * <p>⚠️ **INJECTABLE SO IT CAN BE ASSERTED**: at the 25 s default a test
+     * sees one poll, so "this fires once per CONNECTION and not once per POLL"
+     * is unobservable — and review measured exactly that mutation surviving.
+     */
+    public HttpSubscriptionTransport(String endpoint, Runnable onReconnect,
+            Duration retryFloor, Duration retryCeiling, Duration timeout, Duration pollWait) {
+        this(endpoint, onReconnect, retryFloor, retryCeiling, timeout, pollWait, MAX_ANSWER_BYTES);
+    }
+
+    /**
+     * The same, with the answer cap given.
+     *
+     * <p>⚠️ **INJECTABLE FOR THE REFUSAL CASE.** With the cap fixed at 32 MiB a
+     * case can only assert that a 32 MiB answer is refused — which it would be
+     * by a check made AFTER buffering, the defect this parameter exists to let a
+     * test tell apart. Lowering it makes "refused before it was buffered"
+     * observable in a body a test can produce.
+     */
+    public HttpSubscriptionTransport(String endpoint, Runnable onReconnect,
+            Duration retryFloor, Duration retryCeiling, Duration timeout, Duration pollWait,
+            int maxAnswerBytes) {
+        Objects.requireNonNull(endpoint, "endpoint");
+        this.onReconnect = Objects.requireNonNull(onReconnect, "onReconnect");
+        this.retryFloor = Objects.requireNonNull(retryFloor, "retryFloor");
+        this.retryCeiling = Objects.requireNonNull(retryCeiling, "retryCeiling");
+        this.pollWait = Objects.requireNonNull(pollWait, "pollWait");
+        if (maxAnswerBytes <= 0) {
+            throw new IllegalArgumentException("the answer cap must be positive: " + maxAnswerBytes);
+        }
+        this.maxAnswerBytes = maxAnswerBytes;
+        Objects.requireNonNull(timeout, "timeout");
+        if (retryFloor.isNegative() || retryFloor.isZero() || retryCeiling.compareTo(retryFloor) < 0) {
+            throw new IllegalArgumentException("retry floor must be positive and at or below the "
+                    + "ceiling: " + retryFloor + " / " + retryCeiling);
+        }
+        this.client = WebClient.builder()
+                .baseUri(endpoint)
+                .connectTimeout(timeout)
+                // ⚠️ THE READ TIMEOUT MUST EXCEED THE POLL WAIT, or every idle
+                // subscription tears itself down on a schedule and every
+                // consumer on the node reconnects in a herd. The ingester
+                // answers within its own 30 s ceiling; this leaves headroom
+                // over that rather than over the 25 s asked for.
+                .readTimeout(pollWait.plusSeconds(20))
+                .build();
+    }
+
+    @Override
+    public AutoCloseable subscribe(RunKey key, Listener listener) {
+        Objects.requireNonNull(key, "key");
+        Objects.requireNonNull(listener, "listener");
+        AtomicBoolean stopped = new AtomicBoolean();
+        // ⚠️ ONE ID PER SUBSCRIPTION, STABLE ACROSS POLLS AND ACROSS
+        // RECONNECTS. It is what lets the ingester keep this consumer's queue
+        // between polls; without it a push published in the gap between two
+        // polls reaches nobody, with no gap and no error -- measured.
+        String id = java.util.UUID.randomUUID().toString();
+        Thread reader = Thread.ofVirtual()
+                .name("subscription-" + key.indexId() + "-" + key.partitionId())
+                .start(() -> readForever(key, id, listener, stopped));
+        return () -> {
+            stopped.set(true);
+            reader.interrupt();
+        };
+    }
+
+    private void readForever(RunKey key, String id, Listener listener, AtomicBoolean stopped) {
+        Duration backoff = retryFloor;
+        boolean connected = false;
+        while (!stopped.get() && !closed.get()) {
+            // ⚠️ THE FIRST POLL AFTER A FAILURE ASKS FOR ALMOST NO WAIT, and
+            // that is a handshake rather than an optimisation: with the long
+            // wait, a consumer cannot tell "the ingester is there and quiet"
+            // from "the ingester is gone" for thirty seconds -- and neither can
+            // `onReconnect`, which must fire before the node's registrations
+            // are missed for that long.
+            Duration wait = connected ? pollWait : HANDSHAKE_WAIT;
+            try (HttpClientResponse response = client.get(path(key))
+                    .queryParam("wait", String.valueOf(wait.toMillis()))
+                    .queryParam("sub", id)
+                    .request()) {
+                if (response.status().code() != Status.OK_200.code()) {
+                    throw new IOException("subscribe answered " + response.status());
+                }
+                if (!connected) {
+                    connected = true;
+                    reconnects.incrementAndGet();
+                    // ⚠️ AFTER THE FIRST ANSWER, NOT BEFORE IT: a registration
+                    // pushed at a node that has not answered yet is racing the
+                    // same window the registrar's own retry covers. ⚠️ AND ONCE
+                    // PER CONNECTION, NOT PER POLL -- a poll answers every 30 s
+                    // on an idle stream, and re-registering every index on the
+                    // node that often is a message storm for no new fact.
+                    onReconnect.run();
+                }
+                backoff = retryFloor;
+                deliver(response, listener, stopped);
+            } catch (IOException | RuntimeException dropped) {
+
+                // ⚠️ ORDINARY. A rolling deploy drops every subscription on the
+                // node; the answer is to come back, not to report. ⚠️ AND THE
+                // NEXT SUCCESS COUNTS AS A RECONNECT, because the ingester that
+                // answers it may be a different process with an empty catalog
+                // (M6.15) -- which is the whole reason `onReconnect` exists.
+                connected = false;
+                if (stopped.get() || closed.get()) {
+                    return;
+                }
+                backoff = sleepAndGrow(backoff);
+            }
+        }
+    }
+
+    private void deliver(HttpClientResponse response, Listener listener, AtomicBoolean stopped)
+            throws IOException {
+        // ⚠️ THROUGH THE STREAM, NOT `entity().as(byte[])`: an EMPTY 200 --
+        // which is every quiet poll, the common case -- makes `entity()` throw
+        // `IllegalStateException: No entity`, and the reader loop would treat
+        // an idle stream as a failure and reconnect for ever. MEASURED.
+        // ⚠️ BOUNDED WHILE READING, NOT AFTER. An earlier draft called
+        // `readAllBytes()` and compared the length afterwards, which is a cap
+        // that never runs: the allocation is what fails first, with an
+        // `OutOfMemoryError` that is an `Error` and so escapes this loop's
+        // `catch` -- the subscription's thread would die silently, in the
+        // OpenSearch node process, with no delivery and no reconnect.
+        byte[] body;
+        try (var in = response.inputStream()) {
+            body = StreamFraming.readBounded(in, maxAnswerBytes);
+        }
+        var in = new java.io.ByteArrayInputStream(body);
+        byte[] frame;
+        while ((frame = StreamFraming.readFrame(in)) != null) {
+            if (stopped.get() || closed.get()) {
+                return;
+            }
+            listener.onDelivery(deliveryFor(SubscriptionEvent.decode(frame)));
+        }
+    }
+
+    /** What one event looks like to a consumer. */
+    static Delivery deliveryFor(SubscriptionEvent event) {
+        return new Delivery(event.key(), event.segmentKey(), event.recordCount(),
+                event.firstOffset(), event.via(), event.inline(), event.grant(),
+                event.sequencerEpoch());
+    }
+
+    private Duration sleepAndGrow(Duration backoff) {
+        try {
+            Thread.sleep(jitteredMillis(backoff));
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            return backoff;
+        }
+        return grow(backoff, retryCeiling);
+    }
+
+    /**
+     * How long one retry waits.
+     *
+     * <p>⚠️ **JITTERED, AND THE JITTER IS THE POINT RATHER THAN THE DELAY**:
+     * every consumer on every node reconnects at the same instant after a
+     * deployment, and an unjittered retry turns that into a synchronised storm
+     * against a node that has just started (research 08 §7 step 2's thundering
+     * herd, arriving from the other direction). ⚠️ **PURE AND VISIBLE SO IT CAN
+     * BE ASSERTED**: with the sleep inline, review measured that removing every
+     * one of jitter, growth and ceiling left all twenty socket cases green.
+     *
+     * <p>⚠️ The spread is HALF the backoff either side of it, and the RESULT is
+     * floored at 1 ms — a retry that rounds to zero is a hot loop, and a
+     * sub-millisecond backoff rounds to zero for every draw.
+     */
+    static long jitteredMillis(Duration backoff) {
+        long millis = backoff.toMillis();
+        return Math.max(1, millis / 2 + (long) (Math.random() * millis));
+    }
+
+    /**
+     * The next backoff: doubled, and never past the ceiling.
+     *
+     * <p>⚠️ **BOUNDED.** Unbounded doubling reaches hours, and a consumer whose
+     * ingester came back an hour ago is a delivery gap nobody can see.
+     */
+    static Duration grow(Duration backoff, Duration ceiling) {
+        Duration grown = backoff.multipliedBy(2);
+        return grown.compareTo(ceiling) > 0 ? ceiling : grown;
+    }
+
+    private static String path(RunKey key) {
+        return SUBSCRIBE_PREFIX + key.indexId() + "/" + key.partitionId();
+    }
+
+    @Override
+    public void register(IndexRegistration registration) {
+        post(REGISTER_PATH, registration.encode(),
+                "registration for " + registration.indexName());
+    }
+
+    @Override
+    public void report(ConsumerProgress progress) {
+        post(PROGRESS_PATH, progress.encode(),
+                "progress for " + progress.entries().size() + " copies");
+    }
+
+    /**
+     * ⚠️ **THROWS RATHER THAN SWALLOWING, BECAUSE BOTH CALLERS RETRY.**
+     * {@code IndexRegistrar} attempts each push three times and carries a
+     * failure to the next cluster-state change; {@code ProgressReporter} counts
+     * a failure and lets the next interval carry more. A transport that
+     * accepted silently would leave the ingester never learning any index's
+     * shape while the deployment looked healthy.
+     */
+    private void post(String path, byte[] body, String what) {
+        if (closed.get()) {
+            throw new IllegalStateException("transport is closed, so " + what + " went nowhere");
+        }
+        try (HttpClientResponse response = client.post(path).submit(body)) {
+            if (response.status().code() != Status.NO_CONTENT_204.code()) {
+                throw new IllegalStateException(what + " was refused: " + response.status());
+            }
+        }
+    }
+
+    /**
+     * How many times a stream has been established, first connection included.
+     *
+     * <p>⚠️ **PUBLIC BECAUSE THE CASE THAT NEEDS IT IS IN ANOTHER MODULE** —
+     * the channel's own tests live beside the ingester's half in `http`, since a
+     * subscription needs both ends. It is the only handle on "the stream is
+     * open" that does not require guessing with a sleep.
+     */
+    public long reconnects() {
+        return reconnects.get();
+    }
+
+    /**
+     * Stops this transport; every subscription's reader loop exits at its next
+     * turn.
+     *
+     * <p>⚠️ **NOT an override**: {@code SubscriptionTransport} has no
+     * {@code close}, because a consumer's subscription handle is what it closes
+     * (that interface's {@code subscribe} returns one). This is the process's
+     * handle on the transport itself, for the root that built it.
+     */
+    public void close() {
+        closed.set(true);
+    }
+}

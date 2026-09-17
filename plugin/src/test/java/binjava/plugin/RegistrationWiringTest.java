@@ -221,6 +221,116 @@ class RegistrationWiringTest {
                 .containsExactly("logs");
     }
 
+    /**
+     * The reconnect is WIRED (M6.15, M8.21).
+     *
+     * <p>⚠️ MEASURED BEFORE THIS EXISTED: {@code onReconnect} was called by
+     * nothing in the whole tree except the two cases that call it directly.
+     * The transport and the registrar refer to each other, so neither can be
+     * constructed with the other in hand, and "the caller wires it" left it
+     * wired nowhere for two milestones.
+     */
+    @Test
+    void aRECONNECTReachesTheREGISTRARBecauseNodeChannelClosesTheCycle() {
+        RecordingTransport transport = new RecordingTransport();
+        List<Runnable> reconnects = new ArrayList<>();
+        NodeChannel channel = new NodeChannel(onReconnect -> {
+            reconnects.add(onReconnect);
+            return transport;
+        });
+
+        ClusterState state = state(List.of(index("logs", UUID_1, 1)), List.of(NODE));
+        channel.registrar(Runnable::run).clusterChanged(change(state, empty()));
+        assertThat(transport.names()).containsExactly("logs");
+
+        assertThat(reconnects).hasSize(1);
+        reconnects.get(0).run();
+
+        assertThat(transport.names())
+                .as("⚠️ PUSHED AGAIN. A registration is state the INGESTER holds in memory, "
+                        + "so a restarted ingester knows no index's shape and every routed "
+                        + "write to this node is refused when its wait expires -- with "
+                        + "nothing naming the cause. Without this wiring the node never "
+                        + "re-pushes, because a reconnect is not a cluster-state change")
+                .containsExactly("logs", "logs");
+    }
+
+    /**
+     * The listener the NODE holds is the wired one (M6.15, M8.21).
+     *
+     * <p>⚠️ MEASURED: a case that pins {@code NodeChannel}'s own cycle passes
+     * while the node's path builds its registrar from {@code transport()}
+     * instead — a registrar no reconnect reaches, installed by the only code
+     * that installs one. The class existed, the wiring did not.
+     */
+    @Test
+    void theListenerTheNODEInstallsIsTheONEAReconnectREACHES() {
+        RecordingTransport transport = new RecordingTransport();
+        List<Runnable> reconnects = new ArrayList<>();
+        NodeChannel channel = new NodeChannel(onReconnect -> {
+            reconnects.add(onReconnect);
+            return transport;
+        });
+        NodeSubscriptions subscriptions = new NodeSubscriptions(channel, 16);
+        List<org.opensearch.cluster.ClusterStateListener> listeners = new ArrayList<>();
+
+        BinStorePlugin.installRegistrar(subscriptions, listeners::add, Runnable::run);
+
+        assertThat(listeners).hasSize(1);
+        ClusterState state = state(List.of(index("logs", UUID_1, 1)), List.of(NODE));
+        listeners.get(0).clusterChanged(change(state, empty()));
+        assertThat(transport.names()).containsExactly("logs");
+
+        reconnects.get(0).run();
+        assertThat(transport.names())
+                .as("⚠️ THE INSTALLED LISTENER RE-PUSHES. A registrar built beside the "
+                        + "channel rather than from it satisfies every other case here and "
+                        + "is reached by no reconnect")
+                .containsExactly("logs", "logs");
+    }
+
+    @Test
+    void theCHANNELBuildsONERegistrarHoweverOftenItIsAsked() {
+        // ⚠️ A SECOND REGISTRAR OVER THE SAME TRANSPORT pushes every index's
+        // shape twice per cluster-state change -- and only one of the two is
+        // reached by a reconnect, so the node's memory of what the ingester
+        // accepted is split between them.
+        RecordingTransport transport = new RecordingTransport();
+        NodeChannel channel = new NodeChannel(onReconnect -> transport);
+
+        IndexRegistrar first = channel.registrar(Runnable::run);
+        assertThat(channel.registrar(Runnable::run)).isSameAs(first);
+
+        ClusterState state = state(List.of(index("logs", UUID_1, 1)), List.of(NODE));
+        channel.registrar(Runnable::run).clusterChanged(change(state, empty()));
+        assertThat(transport.names())
+                .as("⚠️ ONE COPY OF THE SHAPE, not one per registrar built")
+                .containsExactly("logs");
+    }
+
+    @Test
+    void aRECONNECTBeforeTheRegistrarExistsIsDROPPEDAndThatIsCORRECT() {
+        // ⚠️ THE TRANSPORT'S READER POLLS THE INSTANT IT IS BUILT, which is
+        // inside the channel's constructor -- so the callback can arrive before
+        // the registrar it is meant to reach. What `onReconnect` does is forget
+        // what the ingester was believed to have accepted, and a registrar that
+        // does not exist yet has been handed no cluster state and hosts no
+        // index. The requirement is that it does not THROW on the reader
+        // thread, which would kill that subscription for the life of the node.
+        RecordingTransport transport = new RecordingTransport();
+        NodeChannel channel = new NodeChannel(onReconnect -> {
+            onReconnect.run();
+            return transport;
+        });
+
+        assertThat(transport.names()).isEmpty();
+        ClusterState state = state(List.of(index("logs", UUID_1, 1)), List.of(NODE));
+        channel.registrar(Runnable::run).clusterChanged(change(state, empty()));
+        assertThat(transport.names())
+                .as("⚠️ AND THE CHANNEL IS STILL USABLE AFTERWARDS")
+                .containsExactly("logs");
+    }
+
     @Test
     void aDeploymentWithNOSubscriptionsRegistersNOTHING() {
         List<org.opensearch.cluster.ClusterStateListener> listeners = new ArrayList<>();

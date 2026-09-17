@@ -6,6 +6,10 @@ plugins { id("binjava.java-conventions") }
 
 dependencies {
     api(project(":ingest"))
+    // ⚠️ FOR THE SUBSCRIPTION PATHS AND THE FRAMING, which are the CONSUMER's
+    // (M8.21): one definition of each, in the module that owns the consumer
+    // side, read by the service here. `client` may never depend on `http`.
+    api(project(":client"))
     // ⚠️ Helidon lives HERE and nowhere below. check-module.sh asserts no module
     // below `http` resolves an HTTP dependency (SPEC T6c) -- that classpath
     // constraint, not a test, is what keeps this an adapter rather than a

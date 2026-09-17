@@ -214,7 +214,15 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
         if (subscriptions == null) {
             return;
         }
-        sink.accept(new IndexRegistrar(subscriptions.transport(), pusher));
+        // ⚠️ THE CHANNEL'S REGISTRAR WHERE THERE IS ONE, and a bare one only
+        // where the deployment handed a bare transport. Review MEASURED the
+        // difference: a registrar built here from `transport()` is reached by
+        // no reconnect, so the node never re-pushes after the ingester
+        // restarts -- the whole of M6.15, surviving a class that wires the
+        // cycle but that nothing on this path used.
+        NodeChannel channel = subscriptions.channel();
+        sink.accept(channel != null ? channel.registrar(pusher)
+                : new IndexRegistrar(subscriptions.transport(), pusher));
     }
 
     /**
