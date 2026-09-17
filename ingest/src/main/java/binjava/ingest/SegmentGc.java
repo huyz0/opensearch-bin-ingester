@@ -53,7 +53,12 @@ public final class SegmentGc {
      * NOT BOOKKEEPING. A ceiling delete is data a consumer had not read; folding
      * the two together reports a healthy-looking number for an incident.
      */
-    public record Result(int deleted, int kept, int ceilingDeleted, int unreadable) {
+    public record Result(int deleted, int kept, int ceilingDeleted, int unreadable,
+            List<String> deletedKeys) {
+
+        public Result {
+            deletedKeys = List.copyOf(Objects.requireNonNull(deletedKeys, "deletedKeys"));
+        }
     }
 
     private final BinStore store;
@@ -127,12 +132,18 @@ public final class SegmentGc {
 
         int deleted = 0;
         int ceiling = 0;
+        // ⚠️ THE KEYS, NOT JUST THE COUNT. What was DELETED is what moves
+        // `oldestRetainedOffset` (M7.10), and a Result carrying only a number
+        // leaves that boundary at 0 forever -- so the refusal a consumer below
+        // it is owed has no boundary to be below.
+        List<String> gone = new ArrayList<>();
         for (int from = 0; from < doomed.size(); from += deleteBatchSize) {
             List<String> batch = doomed.subList(from,
                     Math.min(from + deleteBatchSize, doomed.size()));
             try {
                 store.delete(batch);
                 deleted += batch.size();
+                gone.addAll(batch);
                 // ⚠️ COUNTED AFTER THE DELETE SUCCEEDS, NOT WHEN THE VERDICT IS
                 // TAKEN. A ceiling count is an incident number -- data a
                 // consumer had not read is now gone -- and a failed batch
@@ -149,6 +160,6 @@ public final class SegmentGc {
                         + "again: " + failed);
             }
         }
-        return new Result(deleted, kept, ceiling, unreadable);
+        return new Result(deleted, kept, ceiling, unreadable, gone);
     }
 }

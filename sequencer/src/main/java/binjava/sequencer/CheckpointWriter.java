@@ -87,6 +87,17 @@ final class CheckpointWriter implements AutoCloseable {
     private final Thread tickerThread;
     private long pendingSequence;
     private Map<RunKey, StreamOffsets> pendingStreams = Map.of();
+    /**
+     * The oldest offset GC says is still readable, per stream.
+     *
+     * <p>⚠️ IT ONLY EVER RISES. A stream absent from it reads as 0, which is
+     * also what "everything is retained" means — the two are the same answer
+     * here on purpose, because a stream nobody has reported on and one nothing
+     * has been collected from are indistinguishable to a consumer, and both
+     * must be readable from the beginning.
+     */
+    private final Map<RunKey, Long> retainedFloor = new LinkedHashMap<>();
+
     private long deltasSinceCheckpoint;
     private boolean dirty;
     private volatile boolean closed;
@@ -106,6 +117,56 @@ final class CheckpointWriter implements AutoCloseable {
         this.everyDeltas = everyDeltas;
         this.tickerThread = Thread.ofVirtual().name("ckpt-tick").unstarted(() -> tickForever(ticker));
         this.tickerThread.start();
+    }
+
+    /**
+     * What a GC pass reports it has actually deleted, per stream (M7.10).
+     *
+     * <p>⚠️ UNTIL THIS EXISTED THE WRITER WROTE A LITERAL 0, which was truthful
+     * only while nothing deleted anything. A checkpoint that keeps saying 0
+     * after GC has run tells every consumer that the whole stream is still
+     * readable, so one seeking into collected records meets a 404 instead of
+     * the refusal it is owed.
+     *
+     * <p>⚠️ WHAT IS REPORTED IS WHAT WAS DELETED, NOT WHAT WAS CONDEMNED. A
+     * failed batch leaves its objects readable, and moving the boundary over
+     * them refuses a consumer for records that are still there.
+     *
+     * <p>⚠️ A STREAM NOT NAMED HERE KEEPS 0. A boundary invented for a stream
+     * no pass has reported on is the same defect one step earlier.
+     *
+     * <p>⚠️ AND NOTHING IN HERE MAY THROW ON THE COMMIT THREAD. A value past
+     * {@code nextOffset} would make {@code StreamOffsets} refuse — taking the
+     * sequencer down over a GC report that arrived late — so it is CLAMPED to
+     * {@code nextOffset}, which says the stream is EMPTY — the strongest
+     * boundary there is, refusing every consumer of that stream until it
+     * commits again. That is deliberate rather than conservative: a report that
+     * arrived after the stream was truncated is still a report that those
+     * records are gone. A negative one is ignored and logged.
+     */
+    public synchronized void observeRetained(Map<RunKey, Long> oldestRetained) {
+        Objects.requireNonNull(oldestRetained, "oldestRetained");
+        for (Map.Entry<RunKey, Long> reported : oldestRetained.entrySet()) {
+            if (reported.getKey() == null || reported.getValue() == null) {
+                continue;
+            }
+            if (reported.getValue() < 0) {
+                // ⚠️ LOGGED, NOT SWALLOWED. A negative boundary is a defect
+                // upstream, and the commit thread is not where it should be
+                // discovered -- but a silent `continue` makes it undiscoverable
+                // anywhere.
+                LOG.log(System.Logger.Level.WARNING, () -> "a GC pass reported a negative "
+                        + "oldest-retained offset for " + reported.getKey() + ": "
+                        + reported.getValue() + " -- ignored, and the boundary for that "
+                        + "stream stays where it was");
+                continue;
+            }
+            // ⚠️ MERGED WITH max, SO RETENTION ONLY MOVES FORWARD. Two passes
+            // can report out of order -- the second is not necessarily the
+            // later one once a retry is involved -- and a boundary that walked
+            // BACKWARDS would say deleted records are readable again.
+            retainedFloor.merge(reported.getKey(), reported.getValue(), Math::max);
+        }
     }
 
     /**
@@ -159,10 +220,15 @@ final class CheckpointWriter implements AutoCloseable {
         // skew this capture exists to prevent, waiting for the next tick.
         Map<RunKey, StreamOffsets> streams = new LinkedHashMap<>();
         for (Map.Entry<RunKey, Long> stream : log.offsets().entrySet()) {
-            // ⚠️ 0 is the TRUTHFUL oldestRetainedOffset until M7 gives retention
-            // something to move it to; carried now because adding a field later
-            // is a format change (ADR-0033).
-            streams.put(stream.getKey(), new StreamOffsets(stream.getValue(), 0));
+            // ⚠️ 0 MEANS "NOTHING HAS BEEN COLLECTED FROM THIS STREAM", and
+            // stays the answer until a GC pass says otherwise (M7.10) -- a
+            // deployment with no GC role must not have its consumers refused.
+            // ⚠️ CLAMPED, NEVER REFUSED: `StreamOffsets` throws when the
+            // boundary is past `nextOffset`, and this runs on the commit
+            // thread.
+            long next = stream.getValue();
+            long retained = Math.min(retainedFloor.getOrDefault(stream.getKey(), 0L), next);
+            streams.put(stream.getKey(), new StreamOffsets(next, retained));
         }
         pendingStreams = streams;
         pendingSequence = log.nextSequence();
