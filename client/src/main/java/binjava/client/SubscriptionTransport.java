@@ -28,6 +28,37 @@ public interface SubscriptionTransport {
     AutoCloseable subscribe(RunKey key, Listener listener);
 
     /**
+     * Tells the ingester the SHAPE of an index this node ingests (M6.7,
+     * FR-16, ADR-0015 § 2, ADR-0047).
+     *
+     * <p>⚠️ IT TRAVELS ON THE SUBSCRIPTION THE NODE ALREADY HOLDS, which is
+     * the whole reason it is on this seam rather than on one of its own: a
+     * second channel is a second endpoint, a second credential and a second
+     * unauthenticated surface, for one message per index per cluster-state
+     * change.
+     *
+     * <p>⚠️ THE DEFAULT REFUSES RATHER THAN ACCEPTING SILENTLY. A no-op
+     * default would make a transport that cannot carry registrations look
+     * exactly like one that can: the plugin would count its pushes as
+     * delivered, the ingester would never learn any index's shape, and every
+     * routed write would be refused at {@code pendingTimeout} with nothing
+     * naming the cause. No production transport exists yet -- M5.6e, owned by
+     * M8 -- so this is the honest state rather than a gap being papered over.
+     *
+     * <p>⚠️ IT MAY THROW, AND THE CALLER RETRIES. {@code IndexRegistrar}
+     * attempts each push three times and carries a failure to the next
+     * cluster-state change, because a registration lost to one dropped message
+     * turns into a sustained stream of refused writes for every index on that
+     * node.
+     */
+    default void register(binjava.format.IndexRegistration registration) {
+        throw new UnsupportedOperationException("this transport cannot carry index "
+                + "registrations, so the ingester would never learn " + registration.indexName()
+                + "'s shard count and every routed write to it would be refused when its wait "
+                + "expired (M5.6e is the production transport)");
+    }
+
+    /**
      * One listener's registration against a CHANGING set of streams, which is
      * what a node holds (M5.62).
      *

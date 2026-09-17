@@ -85,6 +85,73 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
         return Map.of(TYPE, new BinStoreConsumerFactory(subscriptions));
     }
 
+    /**
+     * Starts the registration push for this node (M6.7, FR-16).
+     *
+     * <p>⚠️ HERE AND NOT IN {@code createShardConsumer}, which runs once per
+     * SHARD: a listener built there pushes one copy of an index's shape per
+     * shard of it this node holds, and every other M6 criterion stays green
+     * while it does. {@code RegistrationPushTest} counts at K = 1 and K = 8.
+     *
+     * <p>⚠️ NOTHING IS RETURNED TO THE NODE. The registrar has no lifecycle of
+     * its own -- it holds no clock, no socket and no thread, and pushes only
+     * when the cluster tells it something changed -- so registering it as a
+     * listener is the whole of its installation.
+     *
+     * <p>⚠️ IT IS HANDED NO NODE ID. {@code clusterService.localNode()} is not
+     * answerable here -- this runs while the node is being built, before it has
+     * joined anything -- and every cluster-state event carries the local node's
+     * id anyway.
+     *
+     * <p>⚠️ THE PUSHES RUN ON THE GENERIC POOL, NOT ON THE APPLIER THREAD that
+     * delivers the event. They are network calls with up to three attempts
+     * each, and the applier thread applies every cluster-state update on this
+     * node -- allocation, mappings, the ack to the cluster manager.
+     */
+    @Override
+    public java.util.Collection<Object> createComponents(
+            org.opensearch.transport.client.Client client,
+            org.opensearch.cluster.service.ClusterService clusterService,
+            org.opensearch.threadpool.ThreadPool threadPool,
+            org.opensearch.watcher.ResourceWatcherService resourceWatcherService,
+            org.opensearch.script.ScriptService scriptService,
+            org.opensearch.core.xcontent.NamedXContentRegistry xContentRegistry,
+            org.opensearch.env.Environment environment,
+            org.opensearch.env.NodeEnvironment nodeEnvironment,
+            org.opensearch.core.common.io.stream.NamedWriteableRegistry namedWriteableRegistry,
+            org.opensearch.cluster.metadata.IndexNameExpressionResolver indexNameExpressionResolver,
+            java.util.function.Supplier<org.opensearch.repositories.RepositoriesService> repositories) {
+        installRegistrar(subscriptions, clusterService::addListener,
+                threadPool.generic());
+        return java.util.List.of();
+    }
+
+    /**
+     * Registers this node's {@link IndexRegistrar}, or does nothing when this
+     * deployment installed no subscriptions.
+     *
+     * <p>⚠️ PACKAGE-PRIVATE AND TAKING THE SINK RATHER THAN THE
+     * {@code ClusterService}, so a T0 case can assert that a listener really is
+     * added. Review MEASURED the alternative: deleting the body of
+     * {@code createComponents} left `:plugin:test` green, because every case
+     * built an {@code IndexRegistrar} by hand and nothing named the wiring --
+     * so the whole of FR-16 could have shipped unregistered with the suite
+     * green.
+     *
+     * <p>⚠️ A NODE WITH NO INSTALLED SUBSCRIPTIONS PUSHES NOTHING, and that is
+     * the deployment that has not configured this plugin. Building a registrar
+     * with no transport would refuse on the first cluster-state change of every
+     * such node.
+     */
+    static void installRegistrar(NodeSubscriptions subscriptions,
+            java.util.function.Consumer<org.opensearch.cluster.ClusterStateListener> sink,
+            java.util.concurrent.Executor pusher) {
+        if (subscriptions == null) {
+            return;
+        }
+        sink.accept(new IndexRegistrar(subscriptions.transport(), pusher));
+    }
+
     @Override
     public String getType() {
         return TYPE;

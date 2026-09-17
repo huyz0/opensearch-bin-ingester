@@ -29,6 +29,7 @@ public final class NodeSubscriptions implements AutoCloseable {
     private final Map<RunKey, Entry> clients = new ConcurrentHashMap<>();
     private final AtomicInteger clientsCreated = new AtomicInteger();
     private final int queueCapacity;
+    private final SubscriptionTransport transport;
 
     /**
      * ⚠️ ONE SEGMENT SOURCE FOR THE WHOLE NODE (M5.45h), or none.
@@ -110,7 +111,7 @@ public final class NodeSubscriptions implements AutoCloseable {
      */
     public NodeSubscriptions(SubscriptionTransport transport, int queueCapacity,
             binjava.client.SegmentSource nodeSegmentSource) {
-        Objects.requireNonNull(transport, "transport");
+        this.transport = Objects.requireNonNull(transport, "transport");
         this.nodeSegmentSource = nodeSegmentSource;
         if (queueCapacity <= 0) {
             throw new IllegalArgumentException("queue capacity must be positive");
@@ -217,6 +218,19 @@ public final class NodeSubscriptions implements AutoCloseable {
             entry.client.close();
             return null;
         });
+    }
+
+    /**
+     * The transport this node's subscriptions travel on, so the registration
+     * push travels on it too (M6.7, ADR-0015 § 2).
+     *
+     * <p>⚠️ EXPOSED RATHER THAN DUPLICATED. Handing {@link IndexRegistrar} its
+     * own transport would be a second connection and a second credential per
+     * node, for one message per index per cluster-state change -- the second
+     * endpoint ADR-0015 exists to avoid.
+     */
+    public SubscriptionTransport transport() {
+        return transport;
     }
 
     /** How many clients were actually constructed -- criterion 6's counter. */
