@@ -164,6 +164,13 @@ Add `consumerWatermark` per stream to the **existing checkpoint object**
 ([metadata-and-cas §9](03-metadata-and-cas.md)) — no new object, no new CAS, and it already carries
 `nextOffset` and `oldestRetainedOffset` per stream.
 
+⚠️ **The shape this became is [ADR-0050](../../internal/product/decisions/0050-the-consumer-watermark-rides-in-the-checkpoint-as-a-per-stream-option.md)**
+(`Checkpoint` v2, `StreamOffsets.consumerWatermark` as an `OptionalLong` behind a
+per-stream flag). It settles what this section leaves open: **absent is not
+zero** — nobody has reported is a different fact from nobody has read — and the
+watermark may sit BELOW `oldestRetainedOffset`, because that state is data loss
+and has to be recordable for the ceiling alarm to be provable.
+
 On sequencer failover, watermarks are simply relearned from the next round of reports. GC is a
 periodic background job and can require *fresh* reports before deleting anything, so a failover
 means "GC pauses briefly", which is the correct failure direction.

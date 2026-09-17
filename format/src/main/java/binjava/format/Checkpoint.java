@@ -106,8 +106,48 @@ public record Checkpoint(long sequence,
      */
     public static final int VERSION_ATTRIBUTED = 1;
 
-    /** Where a stream stands: the next offset to assign, and the oldest still kept. */
-    public record StreamOffsets(long nextOffset, long oldestRetainedOffset) {
+    /**
+     * A checkpoint whose streams carry a CONSUMER WATERMARK (M7.4, research 09
+     * §8). ⚠️ A SUPERSET OF {@link #VERSION_ATTRIBUTED} rather than an
+     * alternative to it: a v2 object carries the pod pointers ADR-0036 put in
+     * v1 as well, and a build that dropped them while adding the watermark
+     * would make every detected replay unanswerable.
+     *
+     * <p>⚠️ THE VERSION IS CHOSEN BY CONTENT. A checkpoint carrying no
+     * watermark encodes byte-for-byte as it did before this commit, so peers
+     * still running the previous release keep reading what this one writes
+     * through a rolling deploy.
+     */
+    public static final int VERSION_WATERMARKED = 2;
+
+    /**
+     * Where a stream stands: the next offset to assign, the oldest still kept,
+     * and how far the slowest consumer copy has got.
+     *
+     * <p>⚠️ {@code consumerWatermark} IS ABSENT, NOT ZERO, WHEN NOBODY HAS
+     * REPORTED. Nobody has reported is not the same fact as nobody has read,
+     * and a zero in this slot is indistinguishable from a real zero to the next
+     * build that reads it. The wire carries the difference as a per-stream
+     * flag.
+     *
+     * <p>⚠️ IT MAY SIT BELOW {@code oldestRetainedOffset}, AND THAT STATE IS
+     * DATA LOSS — a copy whose records have been deleted, which is the
+     * {@code maxRetention} ceiling and alarms. A format that refused the state
+     * would make the incident unrecordable and the alarm unprovable.
+     *
+     * <p>⚠️ IT MAY EQUAL {@code nextOffset}, because the position is EXCLUSIVE
+     * (ADR-0049): a copy that has read everything committed reports exactly
+     * {@code nextOffset}, which is the normal state of a healthy cluster rather
+     * than an edge case.
+     */
+    public record StreamOffsets(long nextOffset, long oldestRetainedOffset,
+            java.util.OptionalLong consumerWatermark) {
+
+        /** A stream no consumer has reported on. */
+        public StreamOffsets(long nextOffset, long oldestRetainedOffset) {
+            this(nextOffset, oldestRetainedOffset, java.util.OptionalLong.empty());
+        }
+
         public StreamOffsets {
             if (nextOffset < 0) {
                 throw new IllegalArgumentException("nextOffset is never negative: " + nextOffset);
@@ -119,6 +159,23 @@ public record Checkpoint(long sequence,
             if (oldestRetainedOffset > nextOffset) {
                 throw new IllegalArgumentException("oldestRetainedOffset " + oldestRetainedOffset
                         + " is past nextOffset " + nextOffset);
+            }
+            Objects.requireNonNull(consumerWatermark, "consumerWatermark");
+            if (consumerWatermark.isPresent()) {
+                long mark = consumerWatermark.getAsLong();
+                if (mark < 0) {
+                    throw new IllegalArgumentException(
+                            "consumerWatermark is never negative: " + mark);
+                }
+                if (mark > nextOffset) {
+                    // ⚠️ GREATER, NOT GREATER-OR-EQUAL: equality is the
+                    // fully-caught-up consumer, because the position is
+                    // exclusive. A copy cannot have consumed PAST the offsets
+                    // that exist, and one claiming to would delete every
+                    // segment of the stream on the next pass.
+                    throw new IllegalArgumentException("consumerWatermark " + mark
+                            + " is past nextOffset " + nextOffset);
+                }
             }
         }
     }
@@ -170,9 +227,17 @@ public record Checkpoint(long sequence,
         // pods carry no incarnation encodes byte-for-byte as it did before
         // ADR-0036, which is what keeps `checkpoint-v0.bin` and every written
         // checkpoint readable.
-        boolean attributed = pods.values().stream().anyMatch(PodState::hasPointer);
+        boolean watermarked = streams.values().stream()
+                .anyMatch(o -> o.consumerWatermark().isPresent());
+        // ⚠️ V2 IMPLIES THE V1 POD LAYOUT, so a watermarked checkpoint writes
+        // the per-slot attribution flag even when no pod carries a pointer --
+        // otherwise a reader could not tell which of two pod layouts follows a
+        // v2 header.
+        boolean attributed = watermarked
+                || pods.values().stream().anyMatch(PodState::hasPointer);
         head.putInt(MAGIC);
-        head.putInt(attributed ? VERSION_ATTRIBUTED : VERSION);
+        head.putInt(watermarked ? VERSION_WATERMARKED
+                : attributed ? VERSION_ATTRIBUTED : VERSION);
         out.writeBytes(head.array());
         SegmentWriter.putUvarint(out, sequence);
 
@@ -188,6 +253,16 @@ public record Checkpoint(long sequence,
             StreamOffsets o = streams.get(k);
             SegmentWriter.putUvarint(out, o.nextOffset());
             SegmentWriter.putUvarint(out, o.oldestRetainedOffset());
+            if (watermarked) {
+                // ⚠️ A PER-STREAM FLAG, because MIXED IS THE NORMAL STATE: a
+                // stream whose consumers have reported sits beside one whose
+                // have not, and a version-wide flag would force the writer to
+                // invent a watermark for the second.
+                SegmentWriter.putUvarint(out, o.consumerWatermark().isPresent() ? 1 : 0);
+                if (o.consumerWatermark().isPresent()) {
+                    SegmentWriter.putUvarint(out, o.consumerWatermark().getAsLong());
+                }
+            }
         }
 
         List<String> podIds = new ArrayList<>(pods.keySet());
@@ -227,7 +302,8 @@ public record Checkpoint(long sequence,
             throw new IOException("not a checkpoint: bad magic");
         }
         int version = b.getInt(4);
-        if (version != VERSION && version != VERSION_ATTRIBUTED) {
+        if (version != VERSION && version != VERSION_ATTRIBUTED
+                && version != VERSION_WATERMARKED) {
             throw new IOException("unsupported checkpoint version: " + version);
         }
         Cursor c = new Cursor(bytes, 8, "checkpoint");
@@ -263,10 +339,16 @@ public record Checkpoint(long sequence,
      * object — and `!= 0` survived the whole build. The archive row's word for
      * this format is "enumerated", and this is the field it has to be true of.
      */
-    private static boolean attributedSlot(Cursor c) throws IOException {
+    private static boolean presenceFlag(Cursor c, String what) throws IOException {
         long flag = c.uvarint();
         if (flag != 0 && flag != 1) {
-            throw new IOException("a checkpoint pod slot claims presence flag " + flag);
+            // ⚠️ IT NAMES WHICH FIELD. One helper reads both the pod slot's
+            // flag and the stream's watermark flag -- they are the same
+            // enumerated 0/1 uvarint, and a second copy is how one of them
+            // loses the enumeration -- but a message that says "pod slot" for a
+            // corrupt STREAM flag sends the operator to the wrong half of the
+            // object.
+            throw new IOException("a checkpoint " + what + " claims presence flag " + flag);
         }
         return flag == 1;
     }
@@ -306,7 +388,12 @@ public record Checkpoint(long sequence,
             // to whichever copy came last -- measured, an offset going BACKWARDS
             // from 900 to 5 with the trailing-bytes check still green.
             // `CommitDelta` refuses the identical shape for segment keys.
-            if (streams.put(key, new StreamOffsets(next, c.uvarint())) != null) {
+            long oldest = c.uvarint();
+            java.util.OptionalLong mark = java.util.OptionalLong.empty();
+            if (version == VERSION_WATERMARKED && presenceFlag(c, "stream watermark")) {
+                mark = java.util.OptionalLong.of(c.uvarint());
+            }
+            if (streams.put(key, new StreamOffsets(next, oldest, mark)) != null) {
                 throw new IOException("a checkpoint repeats stream " + key);
             }
         }
@@ -330,7 +417,7 @@ public record Checkpoint(long sequence,
             String pod = new String(c.bytes((int) podLen), StandardCharsets.UTF_8);
             long watermark = c.uvarint();
             PodState state = PodState.bare(watermark);
-            if (version == VERSION_ATTRIBUTED && attributedSlot(c)) {
+            if (version >= VERSION_ATTRIBUTED && presenceFlag(c, "pod slot")) {
                 long incLen = c.uvarint();
                 if (incLen < 0 || incLen > c.remaining()) {
                     throw new IOException("a checkpoint claims a " + incLen
