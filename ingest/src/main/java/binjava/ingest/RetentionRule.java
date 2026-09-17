@@ -53,6 +53,38 @@ import java.util.Objects;
 public final class RetentionRule {
 
     /**
+     * The margin the watermark must clear before a segment is collected
+     * (measurement M5, M7.14).
+     *
+     * <p>⚠️ IT IS IN OFFSETS WHILE RESEARCH 09 §6.1 SIZES IT IN TIME. The
+     * corpus says "above the observed Lucene commit interval"; the rule adds it
+     * to an offset. The conversion is the number of records a stream can commit
+     * within that interval — so the probe measures both, and this constant is
+     * chosen above the WORST records-per-advance it observed.
+     *
+     * <p>⚠️ AND MEASUREMENT M6 CHANGED WHAT IT HAS TO COVER.
+     * <a href="../../../../../../docs/internal/product/decisions/0051-the-plugin-can-read-the-committed-pointer-and-the-error-moves-to-the-safe-side.md">ADR-0051</a>:
+     * the plugin CAN read the committed pointer out of the shard's last Lucene
+     * commit (measured: {@code 0} at shard creation, {@code 59} after sixty
+     * records). Reporting THAT rather than the in-memory pointer does not make
+     * the margin's job smaller by much — the probe saw no advance at all within
+     * three ten-second observations, because a commit follows the translog
+     * flush policy rather than ingestion — but it moves the error to the SAFE
+     * side: a pointer BEHIND what the shard indexed makes GC keep too long,
+     * where one AHEAD makes it delete what a restart re-reads.
+     *
+     * <p>⚠️ 10,000 IS AN UPPER BOUND ON A MEASUREMENT, NOT THE MEASUREMENT.
+     * {@code CommitIntervalProbeIT} runs one shard on one node with a
+     * deliberately small workload, so what it observes is a floor rather than a
+     * production figure; a stream committing at Scenario A's rate through a
+     * multi-second translog flush would advance by far more. The honest reading
+     * is that this default is safe for the workload that has been measured and
+     * that a deployment at real scale must raise it — which is why the probe
+     * reports the number rather than asserting a particular one.
+     */
+    public static final long DEFAULT_SAFETY_MARGIN = 10_000;
+
+    /**
      * Where a segment's records end, per stream it bundles.
      *
      * <p>⚠️ THE END OFFSET IS INCLUSIVE — the last offset this segment carries

@@ -45,5 +45,14 @@ shard copies while treating silence as frozen progress rather than as absence.
   `lastCommittedBatchStartPointer` survives a crash, and OpenSearch does not
   expose it. Hence the extend-only rule and a `safetyMargin` sized above the
   observed Lucene commit interval.
+  ⚠️ **AMENDED BY [ADR-0051](0051-the-plugin-can-read-the-committed-pointer-and-the-error-moves-to-the-safe-side.md)
+  (measurement M6, M7.14): "OpenSearch does not expose it" is true of the
+  ingestion-state API and FALSE in-process.** A plugin reads `batch_start` out
+  of the shard's last Lucene commit user data — measured at `0` on creation and
+  `59` after sixty records — so the reporter can send a position a crash cannot
+  walk back. That does not remove the staleness (the same probe saw no commit at
+  all within three ten-second observations, because a commit follows the
+  translog flush policy rather than ingestion); it moves the error to the side
+  where being wrong costs storage rather than records.
 - A paused shard would pin retention forever, so a `maxRetention` ceiling exists
   and must **alarm** rather than delete quietly.

@@ -159,8 +159,8 @@ where it will be settled.
 | M2 | Block size and compression codec | M9, benchmark B3 |
 | M3 | The fan-out threshold for `direct` mode, given real S3 TTFB variance (the §1 table in fetch-modes is **modelled, not measured**) | M9, tier-2 harness |
 | M4 | Compaction trigger threshold (Q17) | after M9, from the metric collected from M4 |
-| M5 | `safetyMargin` for the GC watermark — sized above the observed Lucene commit interval | M7 |
-| M6 | Whether the plugin can observe the *committed* pointer rather than the in-memory one, shrinking M5 | M7 |
+| M5 | `safetyMargin` for the GC watermark — sized above the observed Lucene commit interval | M7 — ⚠️ **MEASURED AS A FLOOR ONLY** (M7.14, `CommitIntervalProbeIT`): one shard, sixty records, the pointer advancing 0 → 59 across the only two commits observed, and **no advance at all within three ten-second waits** because a commit follows the translog flush policy rather than ingestion. `RetentionRule.DEFAULT_SAFETY_MARGIN = 10_000` is an upper bound on a guess, and a deployment at Scenario A's rate must size its own |
+| M6 | Whether the plugin can observe the *committed* pointer rather than the in-memory one, shrinking M5 | M7 — ⚠️ **ANSWERED: YES**, and it is [ADR-0051](../internal/product/decisions/0051-the-plugin-can-read-the-committed-pointer-and-the-error-moves-to-the-safe-side.md). `batch_start` is in the shard's last Lucene commit user data and a plugin inside the node reads it. ⚠️ **BUT IT SHRINKS M5 LESS THAN THIS ROW ASSUMED**: the flush window is still in the staleness. What it buys is the error's DIRECTION — behind-durable rather than ahead — so being wrong costs storage instead of records |
 
 ⚠️ **Do not let a measurement constant become a design excuse.** If a task is
 blocked on one of these, the answer is to build the thing that measures it, not
