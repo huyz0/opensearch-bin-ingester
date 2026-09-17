@@ -33,7 +33,7 @@ producers ──HTTP/streamed──▶ ingester nodes (≥2 per AZ, stateless)
 | `binstore-backends` | S3, GCS, Azure, local-FS, in-memory | `binstore-spi` |
 | `format` | segment layout, key grammar, membership filters, commit-log records | nothing (pure) |
 | `sequencer` | leases, epoch fencing, write-once commit log, checkpoints | `binstore-spi`, `format` |
-| `ingest` | **the library**: accumulators, flush, writer, reader, subscription fan-out, GC. **No HTTP dependency** | `binstore-spi`, `format`, `sequencer` |
+| `ingest` | **the library**: accumulators, flush, writer, reader, subscription fan-out, GC -- ⚠️ **the SEGMENT half of GC only, since M7.7**: chain GC lives in `sequencer`, because the keys are `LogKeys` and the collectability rules are ADR-0033's and ADR-0036's, both of which that module owns. A reader who took this row literally would look for it here. **No HTTP dependency** | `binstore-spi`, `format`, `sequencer` |
 | `http` | thin Helidon adapter: parse `_bulk`, map errors, delegate to `ingest` | `ingest` |
 | `client` | the **consumer** (glossary.md's role name): subscription, fetch-mode dispatch, coalescing, decode. ⚠️ The module is `client` for its Gradle path; every type inside it is named for the role — `ConsumerClient`, not `ClientClient` | `format` |
 | `plugin` | `IngestionConsumerPlugin` implementation | `client` |
