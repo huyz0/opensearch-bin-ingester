@@ -36,7 +36,7 @@ import org.opensearch.test.OpenSearchSingleNodeTestCase;
 public class MapperRefusalIT extends OpenSearchSingleNodeTestCase {
 
     static {
-        BinStorePlugin.install(new NodeSubscriptions(new NoopTransport(), 16));
+        BinStorePlugin.install(node -> new NodeSubscriptions(new NoopTransport(), 16));
     }
 
     private static final class NoopTransport implements binjava.client.SubscriptionTransport {

@@ -59,7 +59,7 @@ public class ErrorStrategyIT extends OpenSearchSingleNodeTestCase {
             new Principal("cluster-a", "producer-1", Set.of("dropping", "blocking"));
 
     static {
-        BinStorePlugin.install(new NodeSubscriptions(new HubTransport(), 64));
+        BinStorePlugin.install(node -> new NodeSubscriptions(new HubTransport(), 64));
     }
 
     private static final class HubTransport implements SubscriptionTransport {

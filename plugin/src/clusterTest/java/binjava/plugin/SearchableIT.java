@@ -63,7 +63,7 @@ public class SearchableIT extends OpenSearchSingleNodeTestCase {
     static {
         // ⚠️ Installed before the node starts: the node builds the plugin during
         // setUp(), so a @Before would be too late.
-        BinStorePlugin.install(new NodeSubscriptions(new HubTransport(), 1024));
+        BinStorePlugin.install(node -> new NodeSubscriptions(new HubTransport(), 1024));
     }
 
     /** Bridges the ingester's hub to the consumer's transport seam. */

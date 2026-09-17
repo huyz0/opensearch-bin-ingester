@@ -265,9 +265,9 @@ class RegistrationWiringTest {
                     }
                 };
         try {
-            BinStorePlugin.install(subscriptions);
-            new BinStorePlugin().createComponents(null, clusterService, threadPool, null, null,
-                    null, null, null, null, null, null);
+            BinStorePlugin.install(node -> subscriptions);
+            new BinStorePlugin(settings).createComponents(null, clusterService, threadPool,
+                    null, null, null, null, null, null, null, null);
 
             assertThat(listeners)
                     .as("the node's own entry point is what must do it: a plugin whose "
@@ -276,7 +276,7 @@ class RegistrationWiringTest {
                             + "while it does")
                     .hasSize(1);
         } finally {
-            BinStorePlugin.install(null);
+            BinStorePlugin.uninstall();
             org.opensearch.threadpool.ThreadPool.terminate(threadPool, 10,
                     java.util.concurrent.TimeUnit.SECONDS);
         }

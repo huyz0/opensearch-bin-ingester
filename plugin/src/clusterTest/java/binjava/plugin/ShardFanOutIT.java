@@ -62,7 +62,7 @@ public class ShardFanOutIT extends OpenSearchSingleNodeTestCase {
 
     static {
         // ⚠️ Before the node starts: it builds the plugin during setUp().
-        BinStorePlugin.install(new NodeSubscriptions(new HubTransport(), 64));
+        BinStorePlugin.install(node -> new NodeSubscriptions(new HubTransport(), 64));
     }
 
     private static final class HubTransport implements SubscriptionTransport {

@@ -31,7 +31,7 @@ public class SingleNodeBootIT extends OpenSearchSingleNodeTestCase {
         // boots the node in setUp(), and the node constructs the plugin
         // reflectively during that -- so anything the plugin needs must already
         // be in place. A @Before would be too late.
-        BinStorePlugin.install(new NodeSubscriptions(new NoopTransport(), 16));
+        BinStorePlugin.install(node -> new NodeSubscriptions(new NoopTransport(), 16));
     }
 
     @Override
@@ -51,10 +51,25 @@ public class SingleNodeBootIT extends OpenSearchSingleNodeTestCase {
     }
 
     public void testThePluginRegistersItsIngestionConsumerFactory() {
-        // ⚠️ Constructed the way the NODE constructs it -- no arguments -- so
-        // this exercises the path a real cluster takes rather than a test-only
-        // one.
-        BinStorePlugin plugin = new BinStorePlugin();
+        // ⚠️ Constructed the way the NODE constructs it -- reflectively, from
+        // this node's own settings -- so this exercises the path a real cluster
+        // takes rather than a test-only one. `PluginsService` looks for one
+        // public constructor taking (Settings, Path), then (Settings), then
+        // none; the state has to be keyed by something the node supplies
+        // (M6.13), and `node.name` is what it supplies.
+        BinStorePlugin plugin = new BinStorePlugin(
+                getInstanceFromNode(org.opensearch.cluster.service.ClusterService.class)
+                        .getSettings());
+        // ⚠️ THE BOOT IS WHAT PROVES THIS, NOT THE LINE BELOW, and review
+        // measured the difference: reading `node.nodename` instead of
+        // `node.name` fails BOTH cases in this class during setUp, with an NPE
+        // inside `BinStoreConsumerFactory`, before this assertion is ever
+        // reached. The line is a statement of the fact for a reader -- a real
+        // node's settings carry `node.name`, which every T0 case takes on
+        // faith because it builds the settings itself -- and the node
+        // starting at all is the check.
+        assertNotNull("the node's own settings key this plugin's state (ADR-0048)",
+                plugin.subscriptions());
         Map<String, ?> factories = plugin.getIngestionConsumerFactories();
         assertEquals("BINSTORE", plugin.getType());
         assertTrue("the factory must be registered under getType()",

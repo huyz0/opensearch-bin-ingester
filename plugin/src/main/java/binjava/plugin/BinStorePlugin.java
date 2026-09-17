@@ -26,24 +26,62 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
     public static final String TYPE = "BINSTORE";
 
     /**
-     * WARNING: a NODE INSTANTIATES THIS REFLECTIVELY, so it must have a no-arg
-     * constructor. An earlier version took NodeSubscriptions directly, which
-     * made the class test-friendly and UNLOADABLE by a real OpenSearch node --
-     * a gap that only a booting node reveals, because every in-process test
-     * constructs the plugin by hand.
+     * How a deployment says what a node's subscriptions ARE, keyed by the node
+     * that asks (M6.13).
      *
-     * <p>WARNING: the node-level state is therefore installed rather than
-     * injected. In a real node {@code createComponents} builds it; in a test the
-     * harness installs one before the node starts. It stays a per-node singleton
-     * either way, which is what criterion 6 requires.
+     * <p>⚠️ A FACTORY RATHER THAN AN INSTANCE, and that is the whole of this
+     * task. The field it replaces was one {@code NodeSubscriptions} per JVM,
+     * which is correct in production -- a JVM is a node -- and WRONG wherever
+     * two nodes share a process: {@code InternalTestCluster} runs every node of
+     * a cluster in one, so "each node holds ONE subscription" reads as 1
+     * however many nodes there are, and M6.9's multi-node criterion becomes
+     * unmeasurable rather than merely unmeasured. Handing out instances in
+     * INSTALL ORDER would pass every deterministic boot and hand node B node
+     * A's subscription the moment two start at once.
+     *
+     * <p>⚠️ IT IS STILL STATIC, because a node constructs this plugin
+     * REFLECTIVELY and nothing can be passed in. What changed is that the
+     * static is now a factory and a map keyed by the node's own name, so the
+     * STATE is per node even though the entry point cannot be.
      */
-    private static volatile NodeSubscriptions installed;
+    private static volatile java.util.function.Function<String, NodeSubscriptions> factory;
+
+    /**
+     * ⚠️ KEYED BY {@code node.name}, WHICH THE NODE SUPPLIES. OpenSearch puts
+     * it in the settings it hands the plugin's constructor, so the key is
+     * something the node says rather than something a fixture assumed -- and
+     * {@code computeIfAbsent} means one node asking twice, as it does across a
+     * restart, gets the same subscription rather than a second subscriber the
+     * first one's deliveries still reach.
+     */
+    private static final java.util.Map<String, NodeSubscriptions> PER_NODE =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
     private final NodeSubscriptions subscriptions;
 
-    /** The only public constructor: the node calls this one reflectively. */
-    public BinStorePlugin() {
-        this.subscriptions = installed;
+    /**
+     * The only public constructor: the node calls this one reflectively.
+     *
+     * <p>WARNING: it takes {@code Settings} rather than nothing, and
+     * {@code PluginsService} supports exactly this -- it looks for a single
+     * public constructor taking {@code (Settings, Path)}, then {@code
+     * (Settings)}, then none. A plugin with TWO public constructors is refused
+     * outright ("no unique public constructor"), which is why the test-only one
+     * below is package-private.
+     *
+     * <p>⚠️ AND THE SETTINGS ARE WHAT MAKE THE STATE PER NODE. With a no-arg
+     * constructor the plugin has nothing to key by, and the only thing left is
+     * call order -- see {@link #factory}.
+     */
+    public BinStorePlugin(org.opensearch.common.settings.Settings settings) {
+        java.util.function.Function<String, NodeSubscriptions> installed = factory;
+        String nodeName = settings == null ? "" : settings.get("node.name", "");
+        // ⚠️ A NODE WITH NO NAME GETS NOTHING rather than a shared default:
+        // keying two unnamed nodes together is the static this task removes,
+        // wearing a default's clothes. Every real node has one.
+        this.subscriptions = installed == null || nodeName.isEmpty()
+                ? null
+                : PER_NODE.computeIfAbsent(nodeName, installed);
     }
 
     /**
@@ -59,17 +97,44 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
         this.subscriptions = subscriptions;
     }
 
+    /** What this node's plugin instance holds, or null where none was installed. */
+    NodeSubscriptions subscriptions() {
+        return subscriptions;
+    }
+
     /**
-     * Installs the node-level subscriptions a reflectively-constructed plugin
-     * will pick up.
+     * Installs the factory a reflectively-constructed plugin will ask for its
+     * node's subscriptions.
      *
-     * <p>WARNING: static, and that is a real cost. A node hosts ONE of these, so
-     * it is correct per JVM in production and a shared fixture in tests. It is
-     * the price of a plugin the node constructs itself, and it is recorded here
-     * rather than hidden.
+     * <p>⚠️ CALLED ONCE PER DEPLOYMENT, BEFORE ITS NODES START, and asked once
+     * per NODE. In production a JVM is one node and the distinction costs
+     * nothing; in a test cluster it is the difference between measuring
+     * per-node behaviour and measuring one shared object eight times.
+     *
+     * <p>⚠️ AND IT FORGETS THE PREVIOUS INSTALLATION'S NODES, because "once per
+     * process" is exactly what a test JVM does NOT do: eight IT classes install
+     * from static initialisers in one JVM, nothing forks per class, and
+     * {@code OpenSearchSingleNodeTestCase} reuses the node name -- so without
+     * the clear the second class's node is handed the first class's transport.
+     * MEASURED: deleting it leaves {@code :plugin:test} green and fails
+     * {@code :plugin:clusterTest}.
      */
-    public static void install(NodeSubscriptions subscriptions) {
-        installed = subscriptions;
+    public static void install(java.util.function.Function<String, NodeSubscriptions> factory) {
+        BinStorePlugin.factory = factory;
+        PER_NODE.clear();
+    }
+
+    /**
+     * Forgets the factory and every node's state -- for a test that owns both.
+     *
+     * <p>⚠️ PACKAGE-PRIVATE, like the test-only constructor and for the same
+     * reason: nothing outside {@code binjava.plugin} has any business tearing a
+     * running node's subscriptions out from under it, and both test source sets
+     * are in this package.
+     */
+    static void uninstall() {
+        factory = null;
+        PER_NODE.clear();
     }
 
     /**
