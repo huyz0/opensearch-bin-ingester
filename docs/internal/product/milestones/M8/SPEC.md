@@ -542,6 +542,8 @@ rows uncited.
 | M8.0 | This spec, ADR-0052 and the decomposition | — (planning) |
 | M8.26 | Config parsing and its refusals: a bad key fails the process at startup, non-zero | FR-1 |
 | M8.1 | The `server` module and the composition root: config in, object graph out, nothing wired to a socket yet | NFR-3, NFR-2 (the seam the budgets are asserted at) |
+| M8.33 | `CommitRequestFrame` in `format`, ADR-0053 and its golden files — a forwarded commit is a format type, not a JSON body | FR-11, FR-12 |
+| M8.34 | `check-wire-parity`: `CommitRequest` and `CommitRequestFrame` hold the same fields and nothing keeps them in step | FR-12 |
 | M8.20 | **The production `SequencerTransport`** (M5.6e): the pod-to-pod forwarding hop outside a test, and commit forwarding asserted across the fleet | FR-11, FR-12 |
 | M8.21 | **The production `SubscriptionTransport`**, and `IndexRegistrar.onReconnect()` wired to its reconnect (M6.15) | FR-16, FR-13 |
 | M8.2 | The S3-compatible backend against MinIO: PUT, GET, conditional write, LIST, DELETE | NFR-8 |
