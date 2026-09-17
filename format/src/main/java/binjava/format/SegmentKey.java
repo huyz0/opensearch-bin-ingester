@@ -206,6 +206,39 @@ public record SegmentKey(
     private static final Pattern HEADER_LEN_MARKER = Pattern.compile("-[0-9a-f]{16}-h(\\d+)-");
 
     /**
+     * The millisecond timestamp a key carries, so GC can judge a segment's age
+     * without reading the object or asking the store for its metadata (M7.6).
+     *
+     * <p>⚠️ THE KEY IS THE ONLY CHEAP SOURCE. A {@code stat} per segment costs
+     * a request per object collected, which is what makes commit-log-driven GC
+     * free in the first place (research 06 §4), and the store's own
+     * last-modified time is not the write time anyway once an object has been
+     * copied by a lifecycle rule or a restore.
+     *
+     * <p>⚠️ IT READS THE TAIL, after the last {@code /}, for the same reason
+     * {@link #headerLenOf} does: {@code prefix} is caller-supplied and the date
+     * path in front of it is digits too. The timestamp is the tail's leading
+     * 19-digit field, fixed-width by {@code render}.
+     *
+     * @throws IllegalArgumentException if this is not a segment key — ⚠️ never
+     *     a guess, because a guess of "now" makes an unjudgeable object
+     *     immortal and a guess of zero deletes it on the next pass
+     */
+    public static long timestampOf(String key) {
+        Objects.requireNonNull(key, "key");
+        int tailStart = key.lastIndexOf('/') + 1;
+        int dash = key.indexOf('-', tailStart);
+        if (dash < 0 || dash - tailStart != 19) {
+            throw new IllegalArgumentException("not a segment key: " + key);
+        }
+        // ⚠️ `parseLong` IS THE DIGIT CHECK. `NumberFormatException` is an
+        // `IllegalArgumentException`, so a hand-rolled loop in front of it
+        // changes the message and nothing else -- and a check that constrains
+        // nothing reads like one that does.
+        return Long.parseLong(key.substring(tailStart, dash));
+    }
+
+    /**
      * The header length a reader can extract from a key without reading the
      * object, so its first GET covers preamble and directory exactly.
      */
