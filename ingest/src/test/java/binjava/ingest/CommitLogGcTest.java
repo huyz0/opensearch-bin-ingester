@@ -35,75 +35,6 @@ import org.junit.jupiter.api.Test;
  */
 class CommitLogGcTest {
 
-    /** Everything the delegate does, so a case can override one verb. */
-    private static class ForwardingStore implements BinStore {
-        private final BinStore delegate;
-
-        ForwardingStore(BinStore delegate) {
-            this.delegate = delegate;
-        }
-
-        @Override
-        public java.io.InputStream get(String key) throws java.io.IOException {
-            return delegate.get(key);
-        }
-
-        @Override
-        public java.io.InputStream getRange(String key, long start, long endIncl)
-                throws java.io.IOException {
-            return delegate.getRange(key, start, endIncl);
-        }
-
-        @Override
-        public java.util.Optional<binjava.binstore.ObjectStat> stat(String key)
-                throws java.io.IOException {
-            return delegate.stat(key);
-        }
-
-        @Override
-        public binjava.binstore.Version put(String key, Body body) throws java.io.IOException {
-            return delegate.put(key, body);
-        }
-
-        @Override
-        public java.util.Optional<binjava.binstore.Version> putIfAbsent(String key, Body body)
-                throws java.io.IOException {
-            return delegate.putIfAbsent(key, body);
-        }
-
-        @Override
-        public java.util.Optional<binjava.binstore.Version> putIfMatch(String key, Body body,
-                binjava.binstore.Version expected) throws java.io.IOException {
-            return delegate.putIfMatch(key, body, expected);
-        }
-
-        @Override
-        public binjava.binstore.MultipartWriter multipart(String key) throws java.io.IOException {
-            return delegate.multipart(key);
-        }
-
-        @Override
-        public binjava.binstore.ListPage list(String prefix, String startAfter, int maxKeys)
-                throws java.io.IOException {
-            return delegate.list(prefix, startAfter, maxKeys);
-        }
-
-        @Override
-        public void delete(List<String> keys) throws java.io.IOException {
-            delegate.delete(keys);
-        }
-
-        @Override
-        public binjava.binstore.Capabilities capabilities() {
-            return delegate.capabilities();
-        }
-
-        @Override
-        public void close() throws java.io.IOException {
-            delegate.close();
-        }
-    }
-
     private static final UUID INDEX = new UUID(0x1111_2222_3333_4444L, 1);
     private static final RunKey STREAM = new RunKey(INDEX, 0);
     private static final RunKey OTHER = new RunKey(INDEX, 1);
@@ -322,7 +253,7 @@ class CommitLogGcTest {
     @Test
     void aFAILEDDeleteIsNOTCountedAndTheObjectSTAYS() throws Exception {
         String key = segmentWritten(Duration.ofHours(7), 1);
-        BinStore refusing = new ForwardingStore(backing) {
+        BinStore refusing = new ForwardingIngestStore(backing) {
             @Override
             public void delete(List<String> keys) throws java.io.IOException {
                 throw new java.io.IOException("the store is unreachable");
@@ -345,7 +276,7 @@ class CommitLogGcTest {
         for (int i = 0; i < 1500; i++) {
             commits.add(commit(segmentWritten(Duration.ofHours(7), i), STREAM, i * 10L, 5));
         }
-        BinStore firstBatchFails = new ForwardingStore(backing) {
+        BinStore firstBatchFails = new ForwardingIngestStore(backing) {
             private int calls;
 
             @Override
@@ -368,7 +299,7 @@ class CommitLogGcTest {
     @Test
     void aFAILEDCeilingDeleteIsNOTCountedAsDataLost() throws Exception {
         String key = segmentWritten(Duration.ofHours(25), 1);
-        BinStore refusing = new ForwardingStore(backing) {
+        BinStore refusing = new ForwardingIngestStore(backing) {
             @Override
             public void delete(List<String> keys) throws java.io.IOException {
                 throw new java.io.IOException("the store is unreachable");
