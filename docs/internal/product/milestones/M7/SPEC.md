@@ -223,7 +223,7 @@ and `DeleteObjects` batches 1,000 keys.
 |---|---|
 | **R8** (retention is a cost dial; past ~3 h storage exceeds API cost) | **This milestone is R8's implementation.** At Scenario A's 8.64 TB/day, 6 h retention is ~$50/month of storage against ~$8 at 1 h and ~$199 at 24 h (research 06 §3). The default stays **6 h**, configurable per index |
 | **R2** (never LIST on a hot path) | Held. GC reads the commit log it already replays; LIST appears only in the orphan sweep, off any hot path |
-| **R15** (LIST ceiling ~1/s sustained) | The sweep is bounded to one LIST per 1,000 keys over one hour-prefix at a time — **44** LIST for a 43,200-object hour (`ceil(43200/1000)`, not 43: research 06 §4 rounds down and an assertion written to the literal 43 reds a CORRECT sweep), ≈ $0.0002 — and asserted under the ceiling by `CountingBinStore` |
+| **R15** (LIST ceiling ~1/s sustained) | ⚠️ **AS DELIVERED, THE 44 IS ARITHMETIC AND NOT AN ASSERTION** — M7.22, found by the milestone review; the case that landed puts 2,500 keys and asserts 3 LIST. The rest of this cell is as specified: the sweep is bounded to one LIST per 1,000 keys over one hour-prefix at a time — **44** LIST for a 43,200-object hour (`ceil(43200/1000)`, not 43: research 06 §4 rounds down and an assertion written to the literal 43 reds a CORRECT sweep), ≈ $0.0002 — and asserted under the ceiling by `CountingBinStore` |
 | **R6** (commit/metadata write rate independent of index count) | Unchanged. `consumerWatermark` adds one varint per stream to an object that is already written on the same schedule: no new object, no new CAS, no new request |
 | **R3 / NFR-2** (idle consumers issue zero requests) | The progress frame rides the open subscription: metadata-only, same AZ, **zero object-store requests**. Re-asserted rather than assumed — criterion 13 |
 | **DELETE** | Free, batched 1,000 keys per call. Budget: **≤ 1 DELETE call per 1,000 keys deleted**, asserted |
@@ -318,7 +318,7 @@ does not accept without a number.
     holds.** A segment PUT but never committed is **kept** while it is younger
     than `orphanGrace` and **deleted** once older; a segment the log references
     is never a candidate whatever its age; one pass covers **one** hour-prefix
-    and issues **≤1 LIST per 1,000 keys** — **44** LIST over a 43,200-key hour (`ceil`, not the corpus's rounded 43),
+    and issues **≤1 LIST per 1,000 keys** — **44** LIST over a 43,200-key hour (`ceil`, not the corpus's rounded 43; ⚠️ **NOT ASSERTED AS DELIVERED** — M7.22, and [VERIFIED.md](VERIFIED.md)'s criterion 14 line says so),
     asserted by `CountingBinStore`, with the period named so the rate is under
     R15's ~1/s ceiling. ⚠️ The within-grace *keep* is the case that matters;
     the past-grace delete is the easy half.

@@ -73,7 +73,7 @@ public final class RetentionRule {
      * side: a pointer BEHIND what the shard indexed makes GC keep too long,
      * where one AHEAD makes it delete what a restart re-reads.
      *
-     * <p>⚠️ 10,000 IS AN UPPER BOUND ON A MEASUREMENT, NOT THE MEASUREMENT.
+     * <p>⚠️ 10,000 IS AN UPPER BOUND ON A GUESS, NOT A MEASUREMENT.
      * {@code CommitIntervalProbeIT} runs one shard on one node with a
      * deliberately small workload, so what it observes is a floor rather than a
      * production figure; a stream committing at Scenario A's rate through a
