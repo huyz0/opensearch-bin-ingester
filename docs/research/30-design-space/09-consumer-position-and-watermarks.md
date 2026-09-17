@@ -95,6 +95,13 @@ metadata-only channel:
 Send it every few seconds, or on change, batched across all partitions on the node. Cost:
 negligible bytes, zero object-store requests.
 
+⚠️ **The binary shape this became is [ADR-0049](../../internal/product/decisions/0049-consumer-progress-is-a-format-type-on-the-subscription-channel.md)**
+(`ConsumerProgress` in `format`, magic `BPCG`, version 1), and it settles two
+things this sketch leaves open: `consumedUpTo` is **exclusive** — the offset the
+copy would resume FROM, which is what `StreamPoller.BATCH_START` means — and an
+**empty** frame is refused rather than treated as a heartbeat, because §6.3
+already gives silence a meaning.
+
 **Alternative considered and rejected:** having the ingester poll OpenSearch's
 `GetIngestionStateAction` (`ShardIngestionState` exposes `batchStartPointer`, `isPrimary`,
 `nodeName` per shard). It would require the ingester to hold OpenSearch credentials and know the
