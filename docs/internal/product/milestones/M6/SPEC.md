@@ -72,7 +72,7 @@ delivery the consumer could not take is **reported rather than skipped**.
 - **Fast mode (FR-17), priority lanes (FR-18), per-index admission limits
   (FR-15).** Each has its own ADR and none is a plugin concern.
 - **A production `SequencerTransport` and the pod-to-pod mesh** — M5.6e, M8.
-- **A production `main()`** — still unowned; M5.91 records it.
+- **A production `main()`** — ⚠️ **owned by M8.1 and M8.4 since ADR-0052**; it was still unowned when M6 was specified, and M5.91a records it.
 - **Compaction (FR-14)** — proposed, unscheduled.
 - **The ingester's own multi-AZ deployment (FR-12's fleet half)** — M8.
 - **Changing the shard count of an ingesting index.** ADR-0015 §4: resize needs

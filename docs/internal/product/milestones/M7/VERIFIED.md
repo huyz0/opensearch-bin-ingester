@@ -282,11 +282,17 @@ a test, never that the test asserts what the line says.
   `batch_start`), so the row is specified rather than open — and the
   `GatedCloseable` it returns pins segment files, which a leaking reporter would
   turn into silent node-disk growth.
-- **M7.18** — `RetentionPass` is not wired into a running ingester; it is
-  exercised by tests and by `RetentionIdleCostTest`'s loop, not by a deployed
-  loop.
-- **M7.19** — the GC lease has no production role registration; `LeasedGc` is
-  driven by fixtures.
+- **M7.21n** — ⚠️ **AND THESE TWO CARRIED THE WRONG IDs WHEN THIS DOCUMENT WAS
+  WRITTEN**, which M8.0's spec review found: `RetentionPass` is not wired into a
+  running ingester (it is exercised by tests and by `RetentionIdleCostTest`'s
+  loop, not by a deployed loop) and the GC lease has no production role
+  registration (`LeasedGc` is driven by fixtures). This document called them
+  **M7.18** and **M7.19**; M7.18 is the retained-floor frame and M7.19 is a
+  flaky `RoutedIngestTest` deadline that names no mechanism at all. Both
+  mechanisms, with `RetentionObservable`, now have a row of their own — M7.21n —
+  and M8's SPEC § *The unwired set* is the single list.
+- **M7.18** — the retained floor does not travel from GC to the consumer; the
+  two halves are asserted separately in two modules.
 - **M7.20** — `check-metric-cardinality.sh` does not see a label map, above.
 - **M7.24** — `ChainGc` is wired to nothing and is constructed only by its own
   test; the retained-segment set it judges against is a test literal.

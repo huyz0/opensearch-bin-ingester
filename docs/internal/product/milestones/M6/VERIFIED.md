@@ -81,7 +81,7 @@ distrust.
    in tests only; the sole production `Ingest` is `DefaultIngest`, which does not
    override `appendRouted`. In an assembled server the out-of-range partition
    would still be accepted and `?routing=` would answer 500. Nothing can reach
-   either today — no production `main()` exists (M5.91) — and **M6.19** is the
+   either today — no production `main()` existed when this was written (M5.91a; ⚠️ **M8.1 and M8.4 own it since ADR-0052**) — and **M6.19** is the
    row. Found by M6's milestone review, not by any gate.
 6. **An alias resolves to the current concrete index, and a rollover moves new records without moving old ones** — `AliasRolloverIT#testARolloverMovesNewRecordsAndLeavesOldOnesWhereTheyAre`,
    which holds the plugin's push to make ADR-0046's window deterministic:
@@ -161,7 +161,7 @@ tests. `BulkService` calls `Ingest.appendRouted`, whose default throws
 `IllegalStateException`, which `BulkService` does not catch — so an assembled
 server answers **500** to every `?routing=` write, which a producer retries
 forever. It is a latent trap rather than a live defect because no production
-`main()` exists at all (M5.91, unowned), and it is **M6.19**. This is the
+`main()` existed at all when this was written (M5.91a, then unowned; ⚠️ **owned by M8.1 and M8.4 since ADR-0052**, and M6.19's own routed path by M8.32), and it is **M6.19**. This is the
 milestone's one substantive delivery gap and the milestone review is what found
 it.
 

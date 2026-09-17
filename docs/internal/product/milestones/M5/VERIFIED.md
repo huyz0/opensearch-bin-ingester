@@ -125,7 +125,7 @@ the durability broadcast is M8's (M5.6e).
 Open rows carried forward, each with its own backlog entry: M5.6e, M5.6g,
 M5.6h, M5.6i, M5.6j (⚠️ **not M5.6f, which is done** -- an earlier draft wrote
 `M5.6e-M5.6j` inside the very sentence claiming to enumerate),
-M5.17 (M8), M5.42 (M9), M5.58b, M5.63, M5.64, M5.66, M5.67, M5.68, M5.71-M5.85,
+M5.17 (M8), M5.42 (⚠️ **M8 SINCE [ADR-0052](../../decisions/0052-m8-owns-assembly-and-the-first-real-backend-because-its-evidence-is-unbuyable-without-them.md)**, which gave the first real backend to M8; this said M9 while the backend itself had no milestone), M5.58b, M5.63, M5.64, M5.66, M5.67, M5.68, M5.71-M5.85,
 M5.88 and M5.89. ⚠️ Enumerated from the file rather than as a range: M5.86 and M5.87
 have no rows, and an earlier draft of this line invented them by writing
 "M5.71-M5.88".
