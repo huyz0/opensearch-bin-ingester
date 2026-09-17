@@ -152,6 +152,33 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
         sink.accept(new IndexRegistrar(subscriptions.transport(), pusher));
     }
 
+    /**
+     * Refuses an index configured for a mapper shape this plugin's records are
+     * not in, AT CREATION (M6.8, FR-7).
+     *
+     * <p>⚠️ THE FACTORY'S OWN REFUSAL IS NOT ENOUGH, and a booting node is what
+     * showed it. {@code DefaultStreamPoller} CATCHES whatever
+     * {@code createShardConsumer} throws, logs "Failed to create consumer for
+     * shard 0" at WARN, and retries -- forever. MEASURED on this tree before
+     * this validator existed: the index went GREEN, the shard reported started,
+     * the WARN repeated every poll, and nothing was ever indexed. That is
+     * ADR-0020's "zero documents indexed and nothing in the log" arriving one
+     * level up from where ADR-0020 found it.
+     *
+     * <p>⚠️ SO THE REFUSAL IS MOVED TO WHERE A HUMAN IS LOOKING: the create
+     * request itself fails, with the setting and the value in the response.
+     * The factory keeps its own check -- an index can be created before this
+     * plugin is installed, or restored from a snapshot into a cluster that has
+     * it -- but the one an operator meets is this one. (Not a settings update:
+     * `mapper_type` is `Property.Final`.)
+     */
+    @Override
+    public java.util.Collection<org.opensearch.index.IndexCreationValidator>
+            getIndexCreationValidators() {
+        return java.util.List.of((mapperService, indexSettings) ->
+                BinStoreConsumerFactory.refuseUnservedMapper(indexSettings.getIndexMetadata()));
+    }
+
     @Override
     public String getType() {
         return TYPE;
