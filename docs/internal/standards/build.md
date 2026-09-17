@@ -54,7 +54,19 @@ below the ceiling.
 1. **The default task starts no container.** A developer, or an agent running
    `/milestone`, gets a fast light loop; the heavy tiers are explicit.
 2. **Never run `clusterTest` and `integrationTest` concurrently** locally. CI may.
-3. **Every container declares `--memory`.** A container without one can take the
+   ⚠️ **AND `./gradlew build` DOES NOT RUN `clusterTest`**, which is the point of
+   the split and also a trap: a property only a booting node can show is green
+   everywhere a reviewer looks. M6's mapper refusal, both error strategies, the
+   rollover and the multi-node routed search are all in that tier.
+3. **A MULTI-NODE cluster is available in `clusterTest` and needs no build
+   change** — measured in M6.9: `OpenSearchIntegTestCase` with
+   `@ClusterScope(numDataNodes = 2)` boots two data nodes plus a cluster manager
+   under the existing task, agent and all. ⚠️ An older note in `RestartResumeIT`
+   calls this "a build-and-fixture cost on the scale of the six fixes
+   `clusterTest` itself needed"; that is false, and M6.17 owns correcting it. It
+   also makes `internalCluster().restartNode(...)` — a real node PROCESS restart
+   — reachable.
+4. **Every container declares `--memory`.** A container without one can take the
    session down with it.
 
 ## Scale-test cheap, integrate expensive

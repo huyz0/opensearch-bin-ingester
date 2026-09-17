@@ -125,6 +125,18 @@ a GET, $2,070/month if it is a LIST**, for a number nobody reads. Serve it from 
   `readNext(pointer, includeStart=true, …)`. Our consumer must support **cheap re-reads from an
   arbitrary recent pointer** — keep a small ring buffer of recently delivered records per partition
   so a retry does not become an object-store fetch.
+- ⚠️ **AND A REFUSAL FROM `createShardConsumer` IS SWALLOWED — MEASURED (M6.8,
+  2026-09-17).** `DefaultStreamPoller.initializeConsumer` CATCHES whatever the
+  factory throws, logs `Failed to create consumer for shard {}` at WARN, sleeps
+  and retries — forever. Observed on a booting node: the index GREEN, the shard
+  reporting started, the warning once per poll, and **zero documents indexed**.
+  That is this corpus's own "zero documents indexed and nothing in the log"
+  failure mode arriving one level above where ADR-0020 found it.
+  **So a plugin's fail-fast paths must live in
+  `Plugin.getIndexCreationValidators`**, where the refusal fails the CREATE
+  request and an operator reads it in the response. `createShardConsumer`'s own
+  check is still worth keeping for an index created before the plugin was
+  installed or restored from a snapshot — it is simply not the one anybody sees.
 - `PartitionedBlockingQueueContainer` + `internal_queue_size` already provide backpressure into
   the engine. Our own queue should be small (hundreds of records), with the real buffering left to
   the object store — do not build a second deep queue.

@@ -176,6 +176,21 @@ Consequences for our design:
 3. Producers must be able to compute the partition. Either they send an explicit partition, or they
    send a routing key and the ingester applies `Math.floorMod(murmur3(routingKey), numPartitions)` —
    which must match OpenSearch's own routing if documents are to land on the shard that owns them.
+   ⚠️ **REVISION (M6.4, 2026-09-17): THAT EXPRESSION IS WRONG TWICE, AND BOTH WERE
+   MEASURED.** The real one is
+   `Math.floorMod(murmur3(routing), routingNumShards) / routingFactor` — omitting
+   `/ routingFactor` misplaces every record of a SPLIT index, where
+   `routingNumShards ≠ numShards`. And `Murmur3HashFunction.hash(String)` hashes
+   the string's **UTF-16 chars as two bytes each, low byte first** — NOT its UTF-8
+   bytes. M6.4 had the formula, the constants and the arithmetic right and every
+   routing value, including pure ASCII, hashed to a different number; only a
+   parity test against `OperationRouting.generateShardId` and
+   `StringHelper.murmurhash3_x86_32` found it, and nothing else in the tree could
+   have. ⚠️ **AND `generateShardId` HAS TWO BRANCHES THE SIMPLE FORM DOES NOT
+   COVER**: `index.number_of_virtual_shards` resolves through a virtual-shard
+   mapping, and a mid-split index goes through
+   `getSplitShardsMetadata().getShardIdOfHash`. The formula above is conditional
+   on neither being set; M6.14 owns refusing what it cannot place.
    ✅ **Answered — [ADR-0006](../../internal/product/decisions/0006-partition-assignment-and-the-routing-invariant.md).**
    The partition function is **ours to choose**: OpenSearch's own ingestion path
    already breaks the routing invariant, because `RawPayloadIngestionMessageMapper`
