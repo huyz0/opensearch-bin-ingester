@@ -74,11 +74,6 @@ import software.amazon.awssdk.services.s3.model.S3Object;
  */
 public final class S3BinStore implements BinStore {
 
-    /**
-     * ⚠️ 1,024 bytes, S3's documented key limit. Longer keys are refused by the
-     * service, and this is what {@code Capabilities} tells a caller in advance.
-     */
-    private static final long MAX_KEY_BYTES = 1024;
 
     /** ⚠️ 5 MiB: S3's own minimum for every part but the last. */
     private static final long MIN_PART_SIZE = 5L * 1024 * 1024;
@@ -86,8 +81,38 @@ public final class S3BinStore implements BinStore {
     /** ⚠️ 1,000 keys, the maximum one {@code DeleteObjects} request accepts. */
     static final int MAX_DELETE_BATCH = 1000;
 
+    /**
+     * ⚠️ **THE TWO CONDITIONAL WRITES DO NOT RETRY, AND EVERYTHING ELSE DOES.**
+     * A retried conditional write is a correctness hazard rather than a slow
+     * path: a {@code putIfAbsent} whose first attempt SUCCEEDED and whose
+     * response was lost answers 412 on the retry, which this class reports as
+     * "someone else got there" — a writer that won the race being told it lost,
+     * in the one place the commit log cannot tell the difference (ADR-0002).
+     * The retry that belongs there is the one that re-reads the chain.
+     *
+     * <p>⚠️ **PER REQUEST, NOT ON THE CLIENT.** An earlier draft set this on the
+     * builder, which also disabled retries for {@code get}, {@code getRange},
+     * {@code stat}, {@code list}, {@code delete} and every multipart part — all
+     * of them idempotent, all of them worth retrying, and the endpoint dropping
+     * connections is a thing this very commit measures. A plugin is how the SDK
+     * scopes configuration to one call.
+     */
+    private static final software.amazon.awssdk.core.SdkPlugin NO_RETRY = config ->
+            config.overrideConfiguration(config.overrideConfiguration().toBuilder()
+                    .retryStrategy(software.amazon.awssdk.retries.DefaultRetryStrategy.doNotRetry())
+                    .build());
+
     private final S3Client client;
     private final String bucket;
+
+    /**
+     * ⚠️ **THE ENDPOINT'S LIMIT, NOT S3's, AND M8.22 IS WHY.** Running the
+     * shared conformance suite against MinIO refused a 1,024-byte key that the
+     * capability had advertised as acceptable: MinIO's limit is 255 BYTES per
+     * path component. A capability is a promise a deployment checks at startup,
+     * so it has to describe the endpoint in front of it.
+     */
+    private final long maxKeyBytes;
 
     /**
      * ⚠️ **THE PROVIDER THIS STORE BUILT, OR NULL WHERE THE CALLER SUPPLIED
@@ -111,7 +136,8 @@ public final class S3BinStore implements BinStore {
     public static S3BinStore open(S3Settings settings) {
         DefaultCredentialsProvider credentials = DefaultCredentialsProvider.builder().build();
         try {
-            return new S3BinStore(build(settings, credentials), settings.bucket(), credentials);
+            return new S3BinStore(build(settings, credentials), settings.bucket(), credentials,
+                    settings.maxKeyBytes());
         } catch (RuntimeException failed) {
             credentials.close();
             throw failed;
@@ -127,7 +153,8 @@ public final class S3BinStore implements BinStore {
      * static pair, and naming it in the signature is what keeps that visible.
      */
     public static S3BinStore open(S3Settings settings, AwsCredentialsProvider credentials) {
-        return new S3BinStore(build(settings, credentials), settings.bucket(), null);
+        return new S3BinStore(build(settings, credentials), settings.bucket(), null,
+                settings.maxKeyBytes());
     }
 
     private static S3Client build(S3Settings settings, AwsCredentialsProvider credentials) {
@@ -156,7 +183,7 @@ public final class S3BinStore implements BinStore {
     }
 
     S3BinStore(S3Client client, String bucket) {
-        this(client, bucket, null);
+        this(client, bucket, null, S3Settings.S3_MAX_KEY_BYTES);
     }
 
     /**
@@ -165,10 +192,11 @@ public final class S3BinStore implements BinStore {
      * the whole close path removable with both suites green — and a case needs
      * to hand in a closeable it can watch.
      */
-    S3BinStore(S3Client client, String bucket, AutoCloseable ownedCredentials) {
+    S3BinStore(S3Client client, String bucket, AutoCloseable ownedCredentials, long maxKeyBytes) {
         this.client = Objects.requireNonNull(client, "client");
         this.bucket = Objects.requireNonNull(bucket, "bucket");
         this.ownedCredentials = ownedCredentials;
+        this.maxKeyBytes = maxKeyBytes;
     }
 
     @Override
@@ -180,7 +208,11 @@ public final class S3BinStore implements BinStore {
     @Override
     public InputStream getRange(String key, long start, long endIncl) throws IOException {
         if (start < 0 || endIncl < start) {
-            throw new IllegalArgumentException("not a range: [" + start + ", " + endIncl + "]");
+            // ⚠️ AN `IOException`, NOT AN `IllegalArgumentException`. The shared
+            // conformance suite asserts this type for every backend, and M8.22
+            // measured this backend answering the other one -- a caller
+            // catching what the SPI declares would have been unwound instead.
+            throw new IOException("not a range: [" + start + ", " + endIncl + "]");
         }
         // ⚠️ HTTP's RANGE IS INCLUSIVE AT BOTH ENDS AND SO IS THE SPI's, which
         // is the only reason this is a straight copy rather than a conversion.
@@ -227,6 +259,9 @@ public final class S3BinStore implements BinStore {
 
     @Override
     public Optional<Version> putIfAbsent(String key, Body body) throws IOException {
+        if (refusedBeforeAnyRequest(key, body, null)) {
+            return Optional.empty();
+        }
         try {
             PutObjectResponse written = client.putObject(PutObjectRequest.builder()
                     .bucket(bucket).key(key)
@@ -236,7 +271,8 @@ public final class S3BinStore implements BinStore {
                     // which `Capabilities.requireConditionalWrites()` refuses at
                     // startup rather than at the first contended commit.
                     .ifNoneMatch("*")
-                    .build(), requestBody(body));
+                    .overrideConfiguration(o -> o.addPlugin(NO_RETRY))
+                    .build(), validatedBody(body));
             return Optional.of(new Version(written.eTag()));
         } catch (S3Exception lost) {
             if (isPreconditionFailed(lost)) {
@@ -247,7 +283,7 @@ public final class S3BinStore implements BinStore {
                 return Optional.empty();
             }
             throw asIoException("putIfAbsent " + key, lost);
-        } catch (SdkException failed) {
+        } catch (SdkException | java.io.UncheckedIOException failed) {
             throw asIoException("putIfAbsent " + key, failed);
         }
     }
@@ -256,11 +292,15 @@ public final class S3BinStore implements BinStore {
     public Optional<Version> putIfMatch(String key, Body body, Version expected)
             throws IOException {
         Objects.requireNonNull(expected, "expected");
+        if (refusedBeforeAnyRequest(key, body, expected)) {
+            return Optional.empty();
+        }
         try {
             PutObjectResponse written = client.putObject(PutObjectRequest.builder()
                     .bucket(bucket).key(key)
                     .ifMatch(expected.token())
-                    .build(), requestBody(body));
+                    .overrideConfiguration(o -> o.addPlugin(NO_RETRY))
+                    .build(), validatedBody(body));
             return Optional.of(new Version(written.eTag()));
         } catch (S3Exception lost) {
             if (isNotFound(lost)) {
@@ -283,7 +323,7 @@ public final class S3BinStore implements BinStore {
                 return Optional.empty();
             }
             throw asIoException("putIfMatch " + key, lost);
-        } catch (SdkException failed) {
+        } catch (SdkException | java.io.UncheckedIOException failed) {
             throw asIoException("putIfMatch " + key, failed);
         }
     }
@@ -381,7 +421,7 @@ public final class S3BinStore implements BinStore {
         // discovering at the first fetch that the grant it handed out is not
         // one. ⚠️ THE COST TABLE IS `free()` BECAUSE NO PRICE IS CONFIGURED
         // YET -- M9 owns the numbers, and a made-up price is worse than none.
-        return new Capabilities(true, true, false, MAX_KEY_BYTES, MIN_PART_SIZE,
+        return new Capabilities(true, true, false, maxKeyBytes, MIN_PART_SIZE,
                 CostTable.free());
     }
 
@@ -398,6 +438,98 @@ public final class S3BinStore implements BinStore {
                 }
             }
         }
+    }
+
+    /**
+     * Refuses a body that disagrees with itself BEFORE any request — answering
+     * true where the write had already lost anyway.
+     *
+     * <p>⚠️ **THE CONTRACT RANKS TWO FAILURES AND THIS IS THE RANK.** The SPI
+     * says a stale version yields EMPTY "even when the body is bad", and the
+     * shared conformance suite has a case for exactly that combination —
+     * M2.0's review found the in-memory backend ranking them the other way
+     * round.
+     *
+     * <p>⚠️ **BEFORE THE REQUEST, WHICH IS WHAT MAKES THE ANSWER SAFE.** Two
+     * earlier drafts ranked AFTER a failed attempt and both were wrong. The
+     * first buffered the body in heap to do it, which is what
+     * {@code Body.readFully}'s own javadoc forbids a streaming backend from
+     * doing. The second ranked any transport failure, and review MEASURED the
+     * hole with a client whose write LANDS and whose response is lost: the
+     * object a {@code stat} then finds is OUR OWN, and the writer that won was
+     * told it lost — the chain then carries the same batch twice. Validating
+     * first removes the ambiguity rather than guessing at it: nothing has been
+     * sent, so nothing can have landed.
+     *
+     * <p>⚠️ **IT READS THE BODY AND KEEPS NONE OF IT.** The stream is drained
+     * to {@code nullOutputStream()}, so this is CPU and a second pass over the
+     * caller's source, never heap — and everything this system writes
+     * conditionally is a commit-log entry, a lease or an ordinal registry
+     * (ADR-0002, ADR-0008).
+     *
+     * <p>⚠️ **IT OPENS THE BODY TWICE, AND THAT IS A PRECONDITION THIS PATH
+     * ADDS.** {@code Body} promises each {@code open()} a fresh stream at
+     * position zero; it does not promise the same BYTES twice, and this method
+     * validates one stream while {@link #validatedBody} sends another. Every
+     * conditional caller in the tree hands {@code Body.ofBytes} or a
+     * deterministic encode, so nothing is broken today — but it is stated here
+     * rather than assumed, because the failure would be a write that passed a
+     * length check and sent something else. ⚠️ **AND THE SDK's OWN RETRIES DO
+     * NOT ALREADY REQUIRE THIS on this path**: these two verbs carry
+     * {@link #NO_RETRY} and get exactly one attempt, which this milestone
+     * measures.
+     *
+     * <p>⚠️ **AND ONE {@code stat}, ON A DEFECT PATH ONLY**: it is issued when
+     * a caller has handed a body that disagrees with itself, never on the
+     * ordinary path, so cost rule R1 is untouched.
+     *
+     * @return true if the body was bad AND this write had already lost, in
+     *     which case the caller answers empty
+     * @throws IOException if the body was bad and the write had NOT already
+     *     lost — a writer whose body is broken must never be told it lost a
+     *     race nobody else was in, or its record is simply missing
+     */
+    private boolean refusedBeforeAnyRequest(String key, Body body, Version expected)
+            throws IOException {
+        Objects.requireNonNull(body, "body");
+        try (InputStream in = body.checkedStream()) {
+            in.transferTo(java.io.OutputStream.nullOutputStream());
+            return false;
+        } catch (IOException badBody) {
+            Optional<ObjectStat> current;
+            try {
+                current = stat(key);
+            } catch (IOException unreadable) {
+                // ⚠️ THE ORIGINAL FAILURE IS WHAT THE CALLER NEEDS, and this
+                // one is the reason it could not be ranked.
+                unreadable.addSuppressed(badBody);
+                throw unreadable;
+            }
+            boolean lost = expected == null
+                    ? current.isPresent()
+                    : current.isPresent() && !current.get().version().equals(expected);
+            if (lost) {
+                return true;
+            }
+            throw badBody;
+        }
+    }
+
+    /**
+     * The body of a conditional write, whose length {@link
+     * #refusedBeforeAnyRequest} has already checked.
+     *
+     * <p>⚠️ **THE RAW STREAM, NOT {@code checkedStream}, AND ONLY BECAUSE THE
+     * CHECK ALREADY RAN.** {@code checkedStream} verifies ON CLOSE, and the SDK
+     * closes an abandoned body when a request fails for reasons of its own — so
+     * a CONNECT FAILURE arrived at the caller as "body declared 1 bytes but
+     * yielded 0", naming the wrong fault entirely. MEASURED against a closed
+     * port. The unconditional {@link #put} keeps {@code checkedStream}, because
+     * there the close-time verification is the only enforcement there is.
+     */
+    private static RequestBody validatedBody(Body body) {
+        return RequestBody.fromContentProvider(body.open()::get, body.length(),
+                "application/octet-stream");
     }
 
     private static RequestBody requestBody(Body body) {
@@ -430,6 +562,15 @@ public final class S3BinStore implements BinStore {
     private static <T> T translating(String what, Call<T> call) throws IOException {
         try {
             return call.run();
+        } catch (java.io.UncheckedIOException unwrapped) {
+            // ⚠️ THE SPI DECLARES `IOException` AND THIS IS WHERE THE SDK HIDES
+            // ONE. A body refused by `checkedStream` is raised from inside the
+            // SDK's own machinery, which wraps it -- so a caller catching what
+            // the SPI promises was unwound by an unchecked throw. MEASURED:
+            // `java.io.UncheckedIOException: java.io.IOException: body declared
+            // 1 bytes but yielded 0`.
+            throw new IOException(what + " failed: " + unwrapped.getCause().getMessage(),
+                    unwrapped.getCause());
         } catch (SdkException failed) {
             throw asIoException(what, failed);
         }
@@ -442,7 +583,7 @@ public final class S3BinStore implements BinStore {
      * what a reader needs, and the cause is kept so a retry decision upstream
      * can still inspect it.
      */
-    private static IOException asIoException(String what, SdkException failed) {
+    private static IOException asIoException(String what, Exception failed) {
         return new IOException(what + " failed: " + failed.getMessage(), failed);
     }
 }

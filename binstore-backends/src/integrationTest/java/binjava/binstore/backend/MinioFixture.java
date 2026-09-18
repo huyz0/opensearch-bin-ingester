@@ -32,10 +32,10 @@ import java.util.concurrent.TimeUnit;
  * class costs seconds each time and buys nothing: every case makes its own
  * bucket.
  */
-final class MinioFixture {
+public final class MinioFixture {
 
-    static final String ACCESS_KEY = "minioadmin";
-    static final String SECRET_KEY = "minioadmin";
+    public static final String ACCESS_KEY = "minioadmin";
+    public static final String SECRET_KEY = "minioadmin";
 
     private static final Object LOCK = new Object();
     private static String endpoint;
@@ -44,7 +44,7 @@ final class MinioFixture {
     }
 
     /** Whether a Docker daemon is reachable at all. */
-    static boolean dockerAvailable() {
+    public static boolean dockerAvailable() {
         try {
             return run(List.of("docker", "info"), 20).exitCode() == 0;
         } catch (RuntimeException unreachable) {
@@ -59,7 +59,7 @@ final class MinioFixture {
      * it serves, so a case that connected on the port alone failed its first
      * request roughly one run in five — a flake that reads as our bug.
      */
-    static String endpoint() {
+    public static String endpoint() {
         synchronized (LOCK) {
             if (endpoint == null) {
                 endpoint = start();

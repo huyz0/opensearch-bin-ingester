@@ -158,6 +158,39 @@ class S3BinStoreIntegrationTest {
     }
 
     @Test
+    void aPUTIFABSENTOnATAKENKeyIsEMPTYEvenWhenTheBODYIsBAD() throws Exception {
+        // ⚠️ THE CONTRACT RANKS THE TWO FAILURES, and the conformance suite has
+        // the `putIfMatch` half of this but not the `putIfAbsent` half -- review
+        // MEASURED this arm removable with the whole suite green. Unranked, a
+        // truncated commit record written at a key that was already taken is
+        // reported as an ERROR rather than as a lost race, and the commit log's
+        // retry loop (ADR-0002) unwinds where it should have re-read.
+        assertThat(store.putIfAbsent("chain/000002", bytes("first"))).isPresent();
+        Body lying = new Body(999, () -> new java.io.ByteArrayInputStream(
+                "short".getBytes(StandardCharsets.UTF_8)));
+
+        assertThat(store.putIfAbsent("chain/000002", lying))
+                .as("⚠️ ALREADY EXISTS OUTRANKS A BAD BODY, and it is an ordinary empty")
+                .isEmpty();
+        try (var in = store.get("chain/000002")) {
+            assertThat(new String(in.readAllBytes(), StandardCharsets.UTF_8)).isEqualTo("first");
+        }
+    }
+
+    @Test
+    void aPUTIFABSENTWithABADBodyOnAFREEKeyTHROWSRatherThanReportingALoss() {
+        // ⚠️ THE OTHER SIDE OF THE RANK, and without it the fix above is
+        // "answer empty whenever anything goes wrong": a writer whose body was
+        // broken would be told it lost a race nobody else was in, and its record
+        // would be missing from the chain with no error anywhere.
+        Body lying = new Body(999, () -> new java.io.ByteArrayInputStream(
+                "short".getBytes(StandardCharsets.UTF_8)));
+
+        assertThatThrownBy(() -> store.putIfAbsent("chain/never-written", lying))
+                .isInstanceOf(IOException.class);
+    }
+
+    @Test
     void aPUTIFMATCHAgainstAMOVEDVersionIsEMPTYAndDoesNotWrite() throws Exception {
         Version first = store.put("lease/term", bytes("pod-a"));
         store.put("lease/term", bytes("pod-b"));

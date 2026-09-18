@@ -27,8 +27,25 @@ import java.util.Objects;
  *     hostname. ⚠️ **TRUE FOR EVERY NON-AWS ENDPOINT THIS PROJECT HAS MET**:
  *     virtual-host addressing needs a wildcard DNS entry per bucket, which a
  *     MinIO reached at `localhost` does not have.
+ * @param maxKeyBytes the longest key this endpoint accepts. ⚠️ **AN ENDPOINT
+ *     PROPERTY, NOT A PROTOCOL ONE, AND MEASURED RATHER THAN ASSUMED**: S3
+ *     documents 1,024 bytes, and MinIO refuses at 256 bytes per path component
+ *     with "Object name contains unsupported characters" — measured at 255
+ *     accepted and 256 refused, and at 254 bytes of two-byte characters accepted
+ *     against 256 refused, so it is a BYTE limit rather than a character one.
+ *     A backend that advertised 1,024 against such an endpoint would pass a
+ *     startup check and fail at the first long key.
  */
-public record S3Settings(String endpoint, String region, String bucket, boolean pathStyle) {
+public record S3Settings(String endpoint, String region, String bucket, boolean pathStyle,
+        long maxKeyBytes) {
+
+    /** ⚠️ S3's own documented limit, which is what an unqualified endpoint gets. */
+    public static final long S3_MAX_KEY_BYTES = 1024;
+
+    /** The same, at S3's key limit. */
+    public S3Settings(String endpoint, String region, String bucket, boolean pathStyle) {
+        this(endpoint, region, bucket, pathStyle, S3_MAX_KEY_BYTES);
+    }
 
     public S3Settings {
         Objects.requireNonNull(region, "region");
@@ -39,6 +56,9 @@ public record S3Settings(String endpoint, String region, String bucket, boolean 
         }
         if (bucket.isBlank()) {
             throw new IllegalArgumentException("a bucket is required");
+        }
+        if (maxKeyBytes <= 0) {
+            throw new IllegalArgumentException("a key limit is positive: " + maxKeyBytes);
         }
     }
 }

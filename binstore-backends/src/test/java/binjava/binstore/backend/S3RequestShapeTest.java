@@ -9,7 +9,16 @@ import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import software.amazon.awssdk.services.s3.S3Client;
+import binjava.binstore.Body;
+import binjava.binstore.Version;
+import java.nio.charset.StandardCharsets;
+import software.amazon.awssdk.core.exception.SdkClientException;
+import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.model.DeleteObjectsRequest;
+import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
+import software.amazon.awssdk.services.s3.model.HeadObjectResponse;
+import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.services.s3.model.PutObjectResponse;
 import software.amazon.awssdk.services.s3.model.DeleteObjectsResponse;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Response;
@@ -63,6 +72,53 @@ class S3RequestShapeTest {
 
         @Override
         public void close() {
+        }
+    }
+
+    /**
+     * A client whose write LANDS and whose response is lost on the way back,
+     * with a {@code stat} that then finds the object THIS write left.
+     */
+    private static final class LostResponseClient implements S3Client {
+        @Override
+        public PutObjectResponse putObject(PutObjectRequest request, RequestBody body) {
+            throw SdkClientException.create("Unable to execute HTTP request: connection reset");
+        }
+
+        @Override
+        public HeadObjectResponse headObject(HeadObjectRequest request) {
+            return HeadObjectResponse.builder().contentLength(5L).eTag("\"ours\"").build();
+        }
+
+        @Override
+        public String serviceName() {
+            return "s3";
+        }
+
+        @Override
+        public void close() {
+        }
+    }
+
+    @Test
+    void aCONDITIONALWriteWhoseRESPONSEWasLostIsNOTReportedAsALostRace() throws Exception {
+        // ⚠️ THE WRITE LANDED AND THE CONNECTION DROPPED. A `stat` then finds
+        // the object -- OUR OWN -- and a store that read that as "someone else
+        // got there" would tell a writer that WON that it lost. The commit log
+        // cannot tell the difference (ADR-0002): the writer re-reads, sees a
+        // record at N it believes is another pod's, and appends its batch again
+        // at N+1. Review MEASURED this arriving from the broader rank, which
+        // answered empty for both verbs here.
+        byte[] raw = "hello".getBytes(StandardCharsets.UTF_8);
+        Body good = new Body(raw.length, () -> new java.io.ByteArrayInputStream(raw));
+
+        try (var store = new S3BinStore(new LostResponseClient(), "bucket")) {
+            assertThatThrownBy(() -> store.putIfAbsent("chain/000001", good))
+                    .as("⚠️ AN ERROR, NOT AN EMPTY. The caller must decide, and this store "
+                            + "cannot: only a body THIS PROJECT refused is provably uncommitted")
+                    .isInstanceOf(IOException.class);
+            assertThatThrownBy(() -> store.putIfMatch("lease/term", good, new Version("\"old\"")))
+                    .isInstanceOf(IOException.class);
         }
     }
 
@@ -146,7 +202,7 @@ class S3RequestShapeTest {
         // Review measured the whole close path removable with both suites green.
         var closed = new java.util.concurrent.atomic.AtomicInteger();
         var store = new S3BinStore(new RecordingClient(List.of()), "bucket",
-                closed::incrementAndGet);
+                closed::incrementAndGet, S3Settings.S3_MAX_KEY_BYTES);
 
         store.close();
 
