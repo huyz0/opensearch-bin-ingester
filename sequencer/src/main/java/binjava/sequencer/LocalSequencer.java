@@ -419,6 +419,18 @@ public final class LocalSequencer implements Sequencer {
         return log.epoch();
     }
 
+    /**
+     * The chain this term has written, in memory (M8.3, M7.25).
+     *
+     * <p>⚠️ **THE ONLY PRODUCER OF THE {@code List<CommitDelta>} A RETENTION
+     * PASS TAKES.** Reaching for {@code recover()} instead would cost one LIST
+     * per 1,000 deltas plus one GET per delta, on every pass, for ever —
+     * ADR-0052 § 3 is why this exists before any GC loop does.
+     */
+    public ChainMemory chain() {
+        return log.chain();
+    }
+
     @Override
     public CommitDelta commitAll(List<CommitRequest> requests) throws IOException {
         if (fenced) {

@@ -157,6 +157,27 @@ public final class FleetSequencer implements Sequencer {
     }
 
     /**
+     * The chain this pod's own term has written, or empty where it does not
+     * lead (M8.3).
+     *
+     * <p>⚠️ **EMPTY IS THE ANSWER FOR A FOLLOWER, AND IT IS NOT AN ERROR.** A
+     * follower writes no chain and runs no retention pass: GC is the
+     * leaseholder's work (M7.10's {@code LeasedGc}), and a follower that
+     * produced a chain here would be handing a pass the deltas of a term it
+     * does not hold — condemning segments it cannot fence.
+     *
+     * <p>⚠️ **IT DOES NOT ELECT.** Asking {@code Leadership.sequencer()} would
+     * take a TERM to answer a question about the current one, which is the same
+     * reason {@link #epoch()} reads the held term first.
+     */
+    public java.util.Optional<ChainMemory> chain() {
+        Sequencer mine = leadership.heldWithoutElecting();
+        return mine instanceof LocalSequencer local
+                ? java.util.Optional.of(local.chain())
+                : java.util.Optional.empty();
+    }
+
+    /**
      * The epoch this pod's commits land under, whichever way they travel
      * (M5.15d).
      *

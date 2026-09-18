@@ -56,7 +56,32 @@ final class ChainReplay {
 
     /** What a replay learned: offsets, this chain's next free slot, its seal. */
     record Result(Map<RunKey, Long> offsets, long nextSequence, Seal seal,
-            Map<RunKey, Long> indexEntries, Map<String, Checkpoint.PodState> pods) {
+            Map<RunKey, Long> indexEntries, Map<String, Checkpoint.PodState> pods,
+            List<EpochDelta> deltas) {
+
+        /**
+         * ⚠️ `deltas` IS WHAT M7.25 RECORDED AS MISSING: this walk read every
+         * one of them and threw them away, so a `List<CommitDelta>` -- the
+         * argument `RetentionPass`, `SegmentGc` and `RetainedOffsets` all take
+         * -- could not be produced by any `src/main` method at any price.
+         * Carried here for the reason `indexEntries` and `pods` are: a replay
+         * is the only walk that already visits every entry, and rebuilding the
+         * list any other way costs one GET per delta, per pass, for ever
+         * (M8.3, ADR-0052 § 3).
+         *
+         * <p>⚠️ IT IS SCOPED TO WHAT THE REPLAY READ, which after a checkpoint
+         * is the deltas since that checkpoint rather than all of history --
+         * the same scoping `indexEntries` documents, and the right one: a
+         * checkpoint is precisely the thing that collapses what came before it.
+         */
+        Result {
+            deltas = List.copyOf(deltas);
+        }
+
+        Result(Map<RunKey, Long> offsets, long nextSequence, Seal seal,
+                Map<RunKey, Long> indexEntries, Map<String, Checkpoint.PodState> pods) {
+            this(offsets, nextSequence, seal, indexEntries, pods, List.of());
+        }
 
         /**
          * ⚠️ `pods` IS THE IDEMPOTENCY WINDOW, REBUILT FROM THE CHAIN (M5.1).
@@ -104,6 +129,13 @@ final class ChainReplay {
     private final Map<RunKey, Long> indexEntries = new HashMap<>();
     private final Map<String, Checkpoint.PodState> pods = new HashMap<>();
 
+    /**
+     * ⚠️ IN THE ORDER THE WALK READ THEM, which is ascending sequence within a
+     * chain and oldest ancestor first across a crossing -- the order a GC pass
+     * folds.
+     */
+    private final List<EpochDelta> deltas = new java.util.ArrayList<>();
+
     /** One idempotency slot: a pod AND the incarnation of it that wrote. */
     private static String slot(String podId, String incarnationId) {
         return podId + "\0" + incarnationId;
@@ -122,7 +154,7 @@ final class ChainReplay {
         ChainReplay r = new ChainReplay(store, prefix, epoch);
         r.replayAncestry(epoch, Long.MAX_VALUE, true);
         return new Result(r.offsets, r.nextSequence, r.seal, Map.copyOf(r.indexEntries),
-                Map.copyOf(r.pods));
+                Map.copyOf(r.pods), r.deltas);
     }
 
     /**
@@ -154,8 +186,13 @@ final class ChainReplay {
         if (prevEpoch >= 1) {
             r.replayAncestry(prevEpoch, prevSeq, false);
         }
+        // ⚠️ THE INHERITED WALK CARRIES ITS DELTAS TOO, and it matters more
+        // here than on the ordinary path: a successor's OWN chain is empty at
+        // this moment, so this is the only walk that has ever seen the
+        // predecessor's segments -- and those are exactly the objects its first
+        // GC pass must be able to condemn.
         return new Result(Map.copyOf(r.offsets), r.nextSequence, r.seal,
-                Map.copyOf(r.indexEntries), Map.copyOf(r.pods));
+                Map.copyOf(r.indexEntries), Map.copyOf(r.pods), r.deltas);
     }
 
     /**
@@ -538,6 +575,13 @@ final class ChainReplay {
         // entry, so counting here costs nothing; a second pass would cost one
         // GET per delta on the recovery path, whose whole purpose is speed.
         if (entry instanceof CommitDelta delta) {
+            // ⚠️ WITH ITS EPOCH, BECAUSE A SEQUENCE ALONE IS NOT AN IDENTITY.
+            // "OFFSETS CROSS, SEQUENCE NUMBERS DO NOT" -- each chain numbers
+            // from its own start -- and a crossing replay reads the ANCESTOR
+            // first, so a consumer that deduplicated on the sequence alone
+            // would discard this term's own deltas as repeats of the
+            // predecessor's. Review MEASURED exactly that.
+            deltas.add(new EpochDelta(chainEpoch, delta));
             for (binjava.format.RunCommit run : delta.allRuns()) {
                 indexEntries.merge(run.key(), 1L, Long::sum);
             }

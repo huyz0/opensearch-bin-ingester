@@ -55,6 +55,19 @@ public final class CommitLog {
      * event carries a bounded number of them, which is rule 2.
      */
     private final CompactionObservable compaction = new CompactionObservable(10);
+
+    /**
+     * The chain a GC pass reads (M8.3, M7.25).
+     *
+     * <p>⚠️ **FED FROM {@link #apply}, NOT FROM {@code commit}, AND THAT IS THE
+     * WHOLE POINT** — the same argument the compaction histogram above records.
+     * {@code apply} runs on a live commit AND on every entry a recovery
+     * replays, so a restarted leader's chain is the one the LOG describes.
+     * Filling it in {@code commit} instead would give a leader that has just
+     * taken over an EMPTY chain, and its GC would condemn nothing for as long
+     * as the term lasted.
+     */
+    private final ChainMemory chain;
     private Map<String, binjava.format.Checkpoint.PodState> recoveredPods = Map.of();
     private long nextSequence;
     /**
@@ -97,6 +110,17 @@ public final class CommitLog {
      * not the value itself.
      */
     public CommitLog(BinStore store, String prefix, long epoch) {
+        this(store, prefix, epoch, ChainMemory.DEFAULT_MAX_DELTAS);
+    }
+
+    /**
+     * The same, with the in-memory chain's cap given.
+     *
+     * <p>⚠️ **INJECTABLE SO THE BOUND CAN BE ASSERTED**: at 100,000 deltas a
+     * case could only watch a chain NOT be truncated, which is the shape review
+     * has measured passing with the bound deleted.
+     */
+    public CommitLog(BinStore store, String prefix, long epoch, int maxChainDeltas) {
         this.store = Objects.requireNonNull(store, "store");
         this.prefix = Objects.requireNonNull(prefix, "prefix");
         if (epoch < 0) {
@@ -106,6 +130,7 @@ public final class CommitLog {
         }
         this.epoch = epoch;
         this.logKeys = new LogKeys(prefix, epoch);
+        this.chain = new ChainMemory(maxChainDeltas);
     }
 
     /**
@@ -139,7 +164,20 @@ public final class CommitLog {
      * startup, never on a hot path.
      */
     public void recover() throws IOException {
+        // ⚠️ CLEARED BEFORE THE REPLAY REFILLS IT, exactly as `nextOffsets` is:
+        // `recover` replays from the beginning and is called more than once on
+        // a takeover path, and a chain that appended each time would hand a GC
+        // pass the same delta twice -- one DELETE per copy, the second against
+        // a key that is already gone.
+        chain.reset();
         ChainReplay.Result r = ChainReplay.replay(store, prefix, epoch);
+        // ⚠️ THE DELTAS THE WALK ALREADY READ, rather than a second pass over
+        // the same objects. This is M7.25's gap closed: before it, the only
+        // in-tree way to materialise a chain was this walk, and it discarded
+        // what it had decoded.
+        for (EpochDelta held : r.deltas()) {
+            chain.record(held.epoch(), held.delta());
+        }
         nextOffsets.clear();
         nextOffsets.putAll(r.offsets());
         nextSequence = r.nextSequence();
@@ -210,6 +248,10 @@ public final class CommitLog {
         switch (entry) {
             case CommitDelta delta -> {
                 ChainReplay.fold(delta, nextOffsets);
+                // ⚠️ THE ONLY PRODUCER OF THE `List<CommitDelta>` THREE CLASSES
+                // CONSUME (M7.25). Here rather than in `commit` for the reason
+                // the histogram below records: a replay must fill it too.
+                chain.record(epoch, delta);
                 // ⚠️ FED FROM `apply`, NOT FROM `commit`, AND THAT IS THE WHOLE
                 // POINT. `apply` runs on a live commit AND on every entry
                 // replayed during recovery, so the distribution is rebuilt FROM
@@ -234,6 +276,16 @@ public final class CommitLog {
         ChainReplay.Result inherited =
                 ChainReplay.inheritedWithPods(store, prefix, prevEpoch, prevSeq);
         inherited.offsets().forEach((key, next) -> nextOffsets.merge(key, next, Math::max));
+        // ⚠️ THE PREDECESSOR'S DELTAS CROSS TOO, AND THIS IS THE ONLY WALK THAT
+        // READS THEM. A successor's own chain is EMPTY at this moment, so
+        // without this its first retention pass sees nothing and condemns
+        // nothing -- while every segment the predecessor wrote stays billed for
+        // the life of the new term. Review MEASURED the version that dropped
+        // them: after the `recover`-then-`open` order `LocalSequencer.start`
+        // uses, the chain was empty and reported itself COMPLETE.
+        for (EpochDelta held : inherited.deltas()) {
+            chain.record(held.epoch(), held.delta());
+        }
         // ⚠️ THE WINDOW CROSSES WITH THE OFFSETS (M5.1). A successor's own
         // chain is empty, so everything its predecessor applied reaches it
         // here and nowhere else.
@@ -258,6 +310,11 @@ public final class CommitLog {
     /** Commit-log index entries per stream, as this log currently holds them. */
     public CompactionObservable compaction() {
         return compaction;
+    }
+
+    /** The deltas this chain holds, without reading the store (M8.3, M7.25). */
+    public ChainMemory chain() {
+        return chain;
     }
 
     /** The offset the next record of this stream will get. */
