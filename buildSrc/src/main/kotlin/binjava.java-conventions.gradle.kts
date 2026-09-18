@@ -154,6 +154,18 @@ testing {
                 implementation(project())
                 implementation(testFixtures(project()))
             }
+            targets.configureEach {
+                testTask.configure {
+                    // ⚠️ THE REPOSITORY ROOT, BECAUSE THE CONTAINER IS DESCRIBED
+                    // THERE. A T3 case starts `docker-compose.test.yml`, which is
+                    // the root's file and not the module's, and a test JVM's
+                    // working directory is the module. Resolved at configuration
+                    // time from the root project rather than walked for at
+                    // runtime, so a case cannot go looking up the tree and find a
+                    // sibling checkout's copy.
+                    systemProperty("binjava.repoRoot", rootDir.absolutePath)
+                }
+            }
         }
         register<JvmTestSuite>("clusterTest") {
             dependencies {

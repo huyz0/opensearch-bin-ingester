@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+import binjava.AwsSdkHttp
 import binjava.DependencyLicensesTask
 import binjava.UpdateShasTask
 
@@ -32,6 +33,12 @@ description = "Bundled object-store ingestion for OpenSearch pull-based ingest"
 val licenseCheck = configurations.create("licenseCheck") {
     isCanBeConsumed = false
     isCanBeResolved = true
+    // ⚠️ THE SAME EXCLUSIONS THE MODULE DECLARES, from the same list. Without
+    // them this gate demands a pinned sha and a committed licence for Netty,
+    // Apache HttpClient 5 and their transitives -- sixteen jars that no module
+    // puts on any classpath. A gate that over-reports is not unsafe, but it
+    // makes accepting a real dependency a diff nobody reads.
+    AwsSdkHttp.EXCLUDED_CLIENTS.forEach { exclude(group = AwsSdkHttp.GROUP, module = it) }
 }
 
 val libs = extensions.getByType<VersionCatalogsExtension>().named("libs")
@@ -64,6 +71,44 @@ val licenceMappings = mapOf(
     // same Apache-2.0 licence from the same project, so a per-jar licence file
     // would be 36 identical copies -- and 36 places for one of them to drift.
     "^helidon.*" to "helidon",
+    // ⚠️ THE AWS SDK v2 IS 29 ARTIFACTS UNDER ONE APACHE-2.0 LICENCE, from one
+    // project, so they share one licence file the way Helidon's 36 do. ⚠️ BUT
+    // THEY ARE ENUMERATED AND ANCHORED RATHER THAN MATCHED BY A PREFIX, because
+    // their artifactIds are GENERIC -- `annotations`, `auth`, `utils`, `regions`,
+    // `profiles`, `checksums`. A pattern loose enough to catch them all would
+    // silently relabel the next dependency that happens to publish an artifact
+    // called `annotations` as Amazon's, and the SPDX id is the claim this gate
+    // matches on. `eventstream` is NOT here: it is a separate project
+    // (software.amazon.eventstream) and carries its own entry.
+    "^annotations$" to "awssdk",
+    "^arns$" to "awssdk",
+    "^auth$" to "awssdk",
+    "^aws-core$" to "awssdk",
+    "^aws-query-protocol$" to "awssdk",
+    "^aws-xml-protocol$" to "awssdk",
+    "^checksums$" to "awssdk",
+    "^checksums-spi$" to "awssdk",
+    "^crt-core$" to "awssdk",
+    "^endpoints-spi$" to "awssdk",
+    "^http-auth$" to "awssdk",
+    "^http-auth-aws$" to "awssdk",
+    "^http-auth-aws-eventstream$" to "awssdk",
+    "^http-auth-spi$" to "awssdk",
+    "^http-client-spi$" to "awssdk",
+    "^identity-spi$" to "awssdk",
+    "^json-utils$" to "awssdk",
+    "^metrics-spi$" to "awssdk",
+    "^profiles$" to "awssdk",
+    "^protocol-core$" to "awssdk",
+    "^regions$" to "awssdk",
+    "^retries$" to "awssdk",
+    "^retries-spi$" to "awssdk",
+    "^s3$" to "awssdk",
+    "^sdk-core$" to "awssdk",
+    "^third-party-jackson-core$" to "awssdk",
+    "^url-connection-client$" to "awssdk",
+    "^utils$" to "awssdk",
+    "^utils-lite$" to "awssdk",
 )
 
 tasks.register<DependencyLicensesTask>("dependencyLicenses") {

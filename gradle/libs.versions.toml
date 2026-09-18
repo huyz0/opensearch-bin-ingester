@@ -8,6 +8,10 @@ opensearch = "3.8.0"
 helidon = "4.3.0"
 junit = "5.14.0"
 assertj = "3.27.3"
+# ⚠️ The AWS SDK v2 SYNCHRONOUS client, which research 40-01 §1 settles: JEP 491
+# removed virtual-thread pinning on `synchronized`, so a blocking library IS the
+# concurrent API here and no dependency has to be audited for it.
+awssdk = "2.55.0"
 
 [libraries]
 opensearch = { module = "org.opensearch:opensearch", version.ref = "opensearch" }
@@ -22,3 +26,9 @@ junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
 junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
 assertj-core = { module = "org.assertj:assertj-core", version.ref = "assertj" }
+awssdk-s3 = { module = "software.amazon.awssdk:s3", version.ref = "awssdk" }
+# ⚠️ `url-connection-client`, NOT the default Netty or Apache client: it is the
+# JDK's own `HttpURLConnection`, so the SDK arrives with no HTTP stack of its own
+# and no reactive runtime. Every call this project makes is blocking on a virtual
+# thread, which is what makes the smallest client the right one.
+awssdk-url-connection-client = { module = "software.amazon.awssdk:url-connection-client", version.ref = "awssdk" }

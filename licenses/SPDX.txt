@@ -99,3 +99,5 @@ spatial4j                    Apache-2.0
 t-digest                     Apache-2.0
 telemetry                    Apache-2.0
 zstd-jni-1.5.6               BSD-2-Clause
+awssdk                       Apache-2.0   # the AWS SDK for Java v2, 29 artifacts; text from the s3 jar's META-INF
+eventstream                  Apache-2.0   # software.amazon.eventstream, a separate project the SDK depends on
