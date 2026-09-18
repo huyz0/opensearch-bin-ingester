@@ -28,6 +28,26 @@
 # clock and the subprocess are a HAND-NAMED list, exactly as complete as its
 # enumeration and no more.
 #
+# ⚠️ ONE MODULE AND TWO FILES ARE EXEMPT, ALL THREE NAMED RATHER THAN DERIVED.
+#
+# The two files are the composition root's edge: `server/.../Main.java` reaches
+# for the real clock and `server/.../ConfigFile.java` reads the settings file.
+# That is what a composition root IS -- the I/O and the clock become real in
+# exactly ONE place -- and it is the reason eight milestones of tests can move
+# time at all.
+#
+# ⚠️ FILES AND NOT THE WHOLE `server` MODULE, which is what M8's SPEC design
+# section proposed ("the exemption list grows by exactly one module"). Naming
+# two files is STRICTLY NARROWER: `Assembly`, `StoreFactory`, `FrontDoor`,
+# `IngesterNode`, `ServerConfig`, `ServerProperties` and `StoreConfig` stay
+# under this gate, and they are where the graph is actually built. A module-wide
+# exemption would have let any of them open a socket or read a clock, which is
+# precisely the drift a composition root is supposed to make visible.
+#
+# ⚠️ AND IT IS AN EXACT PATH MATCH, anchored at both ends. A prefix match on
+# `server/` would exempt the module after all; a bare basename would exempt any
+# `Main.java` a future module grows.
+#
 # ⚠️ ONE MODULE IS EXEMPT, NAMED RATHER THAN DERIVED FROM `implements`. The
 # obvious derivation -- a file implementing one of the five seams may do I/O --
 # is wrong, and MEASURED: ELEVEN `src/main` files match `implements
@@ -56,6 +76,8 @@ hdr "check-io-seam"
 # scanner had run perfectly and found nothing to read.
 FOUND=$(scoped_files '*/src/main/java/binjava/*.java' \
   | { grep -v '^binstore-backends/' || true; } \
+  | { grep -vxF -e 'server/src/main/java/binjava/server/Main.java' \
+                -e 'server/src/main/java/binjava/server/ConfigFile.java' || true; } \
   | python3 scripts/io_seam_scan.py)
 RC=$?
 [ "$RC" -eq 0 ] || { fail "the scanner failed"; echo "$FOUND"; finish; }

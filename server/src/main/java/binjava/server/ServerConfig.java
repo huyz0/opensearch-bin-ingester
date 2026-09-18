@@ -2,8 +2,10 @@
 package binjava.server;
 
 import binjava.ingest.IngestConfig;
+import binjava.security.Principal;
 import java.time.Duration;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * Everything one ingester node needs to be built (M8.1).
@@ -31,9 +33,36 @@ import java.util.Objects;
  *     they are a configured guess and the SPEC says so
  * @param endpoint where peers reach this pod's sequencer
  * @param ingest the write path's own tunables, which have their own defaults
+ * @param httpPort the port the front door listens on, ⚠️ **0 meaning "ask the
+ *     kernel"** — which is what a test wants and what a deployment must not
+ *     have, since a peer reaching {@link #endpoint()} would be dialling a port
+ *     nobody can predict. It is configuration rather than a constant for the
+ *     same reason the endpoint is
+ * @param producerSubject who an unauthenticated producer is taken to be until
+ *     authentication lands. ⚠️ **A SKELETON, AND VISIBLE AS ONE**: M1.7's
+ *     {@code BulkService} resolves no credential, so this is the identity
+ *     stamped on every write this node accepts
+ * @param allowedIndices which indices that producer may write to. ⚠️ **EMPTY
+ *     PERMITS NOTHING** ({@code Principal}, ADR-0021), and this record does NOT
+ *     widen that: a composition root that defaulted the allow-list to "all"
+ *     would turn the one security property the write path actually has into a
+ *     comment
  */
 public record ServerConfig(String podId, String trustDomain, String prefix, StoreConfig store,
-        Duration leaseTtl, Duration leaseRenewInterval, String endpoint, IngestConfig ingest) {
+        Duration leaseTtl, Duration leaseRenewInterval, String endpoint, IngestConfig ingest,
+        int httpPort, String producerSubject, Set<String> allowedIndices) {
+
+    /**
+     * The identity every write this node accepts is attributed to.
+     *
+     * <p>⚠️ **BUILT HERE SO THERE IS ONE OF IT.** The trust domain a producer
+     * is checked against and the one an operator configured are the same
+     * string by this record's own constructor guard; a second {@code Principal}
+     * assembled at a call site is how the two start to differ.
+     */
+    public Principal principal() {
+        return new Principal(trustDomain, producerSubject, allowedIndices);
+    }
 
     public ServerConfig {
         Objects.requireNonNull(podId, "podId");
@@ -44,7 +73,17 @@ public record ServerConfig(String podId, String trustDomain, String prefix, Stor
         Objects.requireNonNull(leaseRenewInterval, "leaseRenewInterval");
         Objects.requireNonNull(endpoint, "endpoint");
         Objects.requireNonNull(ingest, "ingest");
+        Objects.requireNonNull(producerSubject, "producerSubject");
+        // ⚠️ COPIED, then the record hands it on to `Principal`, which copies
+        // again. Belt and braces on purpose: an allow-list a caller can still
+        // `add()` to is a privilege escalation with no code change at the call
+        // site, and this record outlives every construction site.
+        allowedIndices = Set.copyOf(Objects.requireNonNull(allowedIndices, "allowedIndices"));
         requireNotBlank(podId, "podId");
+        requireNotBlank(producerSubject, "producerSubject");
+        if (httpPort < 0 || httpPort > 65535) {
+            throw new IllegalArgumentException("httpPort is not a port: " + httpPort);
+        }
         requireNotBlank(trustDomain, "trustDomain");
         requireNotBlank(prefix, "prefix");
         requireNotBlank(endpoint, "endpoint");

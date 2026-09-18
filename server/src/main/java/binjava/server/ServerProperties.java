@@ -46,6 +46,20 @@ public final class ServerProperties {
     public static final String STORE_KIND = "store.kind";
     /** Required for a filesystem-backed store, refused for any other. */
     public static final String STORE_ROOT = "store.root";
+    /** Optional for {@code s3}, refused for any other: absent means AWS itself. */
+    public static final String STORE_ENDPOINT = "store.endpoint";
+    /** Required for {@code s3}, refused for any other — SigV4 signs over it. */
+    public static final String STORE_REGION = "store.region";
+    /** Required for {@code s3}, refused for any other. */
+    public static final String STORE_BUCKET = "store.bucket";
+    /** Optional for {@code s3}: true for every non-AWS endpoint met so far. */
+    public static final String STORE_PATH_STYLE = "store.path-style";
+    /** Required: the port the front door listens on. */
+    public static final String HTTP_PORT = "http.port";
+    /** Required: who an unauthenticated producer is taken to be (M8.4). */
+    public static final String PRODUCER_SUBJECT = "producer.subject";
+    /** Required: the comma-separated indices that producer may write to. */
+    public static final String PRODUCER_ALLOWED_INDICES = "producer.allowed-indices";
     /** Required: where peers reach this node's sequencer. */
     public static final String ENDPOINT = "endpoint";
     /** Optional: how long a lease outlives its holder's last renewal. */
@@ -69,8 +83,9 @@ public final class ServerProperties {
     static final Duration DEFAULT_LEASE_RENEW = Duration.ofSeconds(3);
 
     private static final Set<String> KNOWN = Set.of(POD_ID, TRUST_DOMAIN, PREFIX, STORE_KIND,
-            STORE_ROOT, ENDPOINT, LEASE_TTL, LEASE_RENEW, INTERVAL_FLOOR, MAX_SEGMENT_BYTES,
-            DIRECT_ENABLED);
+            STORE_ROOT, STORE_ENDPOINT, STORE_REGION, STORE_BUCKET, STORE_PATH_STYLE,
+            ENDPOINT, HTTP_PORT, PRODUCER_SUBJECT, PRODUCER_ALLOWED_INDICES,
+            LEASE_TTL, LEASE_RENEW, INTERVAL_FLOOR, MAX_SEGMENT_BYTES, DIRECT_ENABLED);
 
     private ServerProperties() {
     }
@@ -114,13 +129,20 @@ public final class ServerProperties {
                     bool(settings, DIRECT_ENABLED, false));
 
             StoreConfig store = new StoreConfig(required(settings, STORE_KIND),
-                    optionalText(settings, STORE_ROOT));
+                    optionalText(settings, STORE_ROOT),
+                    optionalText(settings, STORE_ENDPOINT),
+                    optionalText(settings, STORE_REGION),
+                    optionalText(settings, STORE_BUCKET),
+                    bool(settings, STORE_PATH_STYLE, false));
 
             return new ServerConfig(required(settings, POD_ID), trustDomain,
                     required(settings, PREFIX), store,
                     duration(settings, LEASE_TTL, DEFAULT_LEASE_TTL),
                     duration(settings, LEASE_RENEW, DEFAULT_LEASE_RENEW),
-                    required(settings, ENDPOINT), ingest);
+                    required(settings, ENDPOINT), ingest,
+                    port(settings, HTTP_PORT),
+                    required(settings, PRODUCER_SUBJECT),
+                    indices(settings, PRODUCER_ALLOWED_INDICES));
         } catch (IllegalArgumentException refused) {
             // ⚠️ `ConfigurationException` IS AN `IllegalArgumentException`, so
             // one already carrying a key's name lands here too and is returned
@@ -237,6 +259,57 @@ public final class ServerProperties {
         }
         if (parsed <= 0) {
             throw new ConfigurationException(key + " must be positive: " + value);
+        }
+        return parsed;
+    }
+
+    /**
+     * A TCP port.
+     *
+     * <p>⚠️ **REQUIRED, AND 0 IS LEGAL.** 0 asks the kernel for a free port,
+     * which is what a test wants; it is not a default, because a deployment
+     * whose port was chosen by the kernel publishes an {@code endpoint} no peer
+     * can reach and every forwarded commit fails with a connection refused.
+     * Making an operator write it is one line of config against a failure that
+     * only appears once a second pod exists.
+     */
+    private static int port(Map<String, String> settings, String key) {
+        String value = required(settings, key);
+        int parsed;
+        try {
+            parsed = Integer.parseInt(value);
+        } catch (NumberFormatException notANumber) {
+            throw new ConfigurationException(key + " is not a port number: " + value, notANumber);
+        }
+        if (parsed < 0 || parsed > 65535) {
+            throw new ConfigurationException(key + " is not in 0..65535: " + value);
+        }
+        return parsed;
+    }
+
+    /**
+     * A comma-separated allow-list.
+     *
+     * <p>⚠️ **AN EMPTY LIST IS REFUSED RATHER THAN PARSED.** {@code Principal}
+     * makes an empty allow-list permit NOTHING, so a node configured with one
+     * starts, listens, and answers 403 to every write — which reads to an
+     * operator as a broken cluster rather than as the config line they left
+     * blank. ⚠️ And the opposite default is worse: this parser must never turn
+     * "unset" into "all indices".
+     */
+    private static Set<String> indices(Map<String, String> settings, String key) {
+        Set<String> parsed = new LinkedHashSet<>();
+        for (String each : required(settings, key).split(",", -1)) {
+            String name = each.trim();
+            if (name.isEmpty()) {
+                throw new ConfigurationException(key + " has an empty entry: "
+                        + settings.get(key) + " (a trailing or doubled comma)");
+            }
+            if (!parsed.add(name)) {
+                // ⚠️ A REPEAT IS A TYPO WORTH NAMING. `Set` would swallow it,
+                // and the commonest cause is a second line pasted over a first.
+                throw new ConfigurationException(key + " names " + name + " twice");
+            }
         }
         return parsed;
     }

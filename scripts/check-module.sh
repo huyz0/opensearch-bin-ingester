@@ -231,6 +231,10 @@ ALL="$PLAN_ALL"
 # httpcomponents transitively, and failing that module would tell its author the
 # decision "belongs in ingest", pressuring them to widen this list or delete a
 # group. A gate whose only escape is to weaken it is a gate that gets weakened.
+# ⚠️ THE COMPOSITION ROOT, BY NAME. It is the one module exempt from rule 4's
+# first half and the subject of its second (ADR-0055).
+ROOT_MODULE="server"
+
 NO_HTTP="format binstore-spi sequencer ingest"
 # architecture.md rule 2: no cloud SDK in the OpenSearch JVM.
 NO_CLOUD="client plugin"
@@ -277,6 +281,7 @@ CLOUD_GROUPS='software\.amazon\.awssdk|com\.amazonaws|com\.google\.cloud|com\.az
 # printing the strong value; that job belongs to the rule counts taken inside
 # the loop.
 if [ "${1:-}" = "--print-rules" ]; then
+  echo "ROOT_MODULE=$ROOT_MODULE"
   echo "NO_HTTP=$NO_HTTP"
   echo "NO_CLOUD=$NO_CLOUD"
   exit 0
@@ -365,11 +370,39 @@ $one"
   # file as a compile-time fact and never asserted -- `client` with
   # api(project(":http")) passed green, because `http` has no external
   # dependencies today and the group greps therefore saw nothing.
-  if [ "$m" != "http" ] && printf '%s\n' "$deps" | grep -qE "project '?:http'?"; then
-    fail "$m depends on http (architecture.md rule 4)"
-    echo "         Nothing depends on \`http\`: it is a front door, and a front door"
-    echo "         something else depends on has stopped being one. Via \`client\` or"
+  #
+  # ⚠️ ONE EXEMPTION SINCE ADR-0055: the COMPOSITION ROOT. `main()` has to start
+  # a listener and the three services it carries -- `_bulk`, the forwarded
+  # commit, the consumer's long poll -- live in `http`. What rule 4 protects is
+  # named in the message below: via `client` or `plugin`, a dependency on `http`
+  # puts Helidon in the OpenSearch JVM. `server` is a LEAF nothing can reach, so
+  # it does not.
+  #
+  # ⚠️ AND THE LEAF HALF IS ASSERTED BELOW RATHER THAN PROMISED. Without it this
+  # is a relaxation on trust: a later module depending on `server` "to reuse the
+  # wiring" would recreate exactly the cycle rule 4 was written against, through
+  # a module that names `http`. The exemption and the check are one change.
+  if [ "$m" != "http" ] && [ "$m" != "$ROOT_MODULE" ] \
+     && printf '%s\n' "$deps" | grep -qE "project '?:http'?"; then
+    fail "$m depends on http (architecture.md rule 4, ADR-0055)"
+    echo "         Nothing depends on \`http\` but the composition root"
+    echo "         (\`$ROOT_MODULE\`): it is a front door, and a front door something"
+    echo "         else depends on has stopped being one. Via \`client\` or"
     echo "         \`plugin\` this puts Helidon in the OpenSearch JVM."
+  fi
+
+  # architecture.md rule 4, second half (ADR-0055): NOTHING depends on the
+  # composition root. This is what the `http` exemption above is paid for with,
+  # and it is checked from the DEPENDER's side -- every module's own resolved
+  # graph -- so it holds however the dependency was declared.
+  if [ "$m" != "$ROOT_MODULE" ] \
+     && printf '%s\n' "$deps" | grep -qE "project '?:$ROOT_MODULE'?"; then
+    fail "$m depends on $ROOT_MODULE (architecture.md rule 4, ADR-0055)"
+    echo "         The composition root is a LEAF. It may name \`http\` and a"
+    echo "         backend precisely because nothing can reach it; a module that"
+    echo "         depends on it inherits both, and \`plugin\` inheriting either"
+    echo "         is what rule 2 and rule 4 exist to prevent."
+    echo "         Wiring worth sharing belongs in the module that owns it."
   fi
 
   # architecture.md rule 2, as written: `plugin` depends on `client`, never on

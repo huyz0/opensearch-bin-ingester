@@ -84,10 +84,21 @@ class RuleListTest {
     assertThat(value("NO_CLOUD"))
         .as("architecture.md rule 2: no cloud SDK in the OpenSearch JVM")
         .containsExactlyInAnyOrder("client", "plugin");
+    // ⚠️ AND THE COMPOSITION ROOT, EXACTLY (ADR-0055). It is the ONE module
+    // exempt from rule 4's first half and the subject of its second, so a
+    // second name here would re-admit the dependency rule 4 exists to forbid --
+    // and an EMPTY value is worse than wrong: `ROOT_MODULE=""` turns the leaf
+    // check's regex into `project ':'`, which matches every project dependency
+    // and fails loudly, but turns the `http` exemption into one that excuses
+    // NOTHING while the rule still reads as relaxed.
+    assertThat(value("ROOT_MODULE"))
+        .as("architecture.md rule 4, ADR-0055: exactly one composition root")
+        .containsExactly("server");
     // ...and every one of them must still BE a module, which is the half that
     // catches a rename rather than a deliberate edit.
     assertThat(value("NO_HTTP")).isSubsetOf(all);
     assertThat(value("NO_CLOUD")).isSubsetOf(all);
+    assertThat(value("ROOT_MODULE")).isSubsetOf(all);
   }
 
   /** The lists must also stay disjoint — a module in both is a contradiction. */

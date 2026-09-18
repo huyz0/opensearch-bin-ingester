@@ -157,6 +157,24 @@ public final class FleetSequencer implements Sequencer {
     }
 
     /**
+     * The term this pod holds, or {@code null} where it holds none (M8.4).
+     *
+     * <p>⚠️ **THIS AND NOT {@code this} IS WHAT ANSWERS A FORWARDED COMMIT.**
+     * A peer forwards because it is not the leaseholder; a service that applied
+     * the request through the enclosing {@link FleetSequencer} would consult
+     * the lease again and forward it onward — two pods bouncing one commit
+     * between them, and if the lease moved mid-flight, back to where it came
+     * from. The receiving side must commit LOCALLY or refuse, which is the 409
+     * {@code SequencerTransport} defines.
+     *
+     * <p>⚠️ **IT DOES NOT ELECT**, for {@link #chain()}'s reason: answering a
+     * question about the current term must not take one.
+     */
+    public Sequencer heldTerm() {
+        return leadership.heldWithoutElecting();
+    }
+
+    /**
      * The chain this pod's own term has written, or empty where it does not
      * lead (M8.3).
      *

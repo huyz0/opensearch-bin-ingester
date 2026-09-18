@@ -34,7 +34,7 @@ written, the cell is wrong and is fixed HERE.
 | Entry | What is unwired | What `check-wired.sh` accepts as wired |
 |---|---|---|
 | M5.6e | the production `SequencerTransport` — `InProcessTransport` in `testFixtures` is the only implementation | a non-test `src/main` CONSTRUCTION of a `SequencerTransport` implementation |
-| M5.91a | no production `main()` | a `public static void main` in `src/main` |
+| M5.91a | no production `main()` (closed by M8.4) | a `public static void main` in `src/main` |
 | M5.91b | `SegmentPrefetcher`, `NodeSegmentSource`, `NodeSubscriptions` — built only by tests (closed by M8.31) | a non-test `src/main` construction of each of the three |
 | M5.91c | `FallbackLadder` — built only by tests, and never EXECUTED (closed by M8.28, criterion 20) | a non-test `src/main` construction, AND a non-test call of its tier-advancing method |
 | M6.15 | `IndexRegistrar.onReconnect()`, called by nothing because no production `SubscriptionTransport` exists | a non-test `src/main` CALL of `onReconnect` |

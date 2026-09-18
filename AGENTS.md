@@ -171,7 +171,15 @@ containing a procedure rather than a pointer is a fork waiting to drift.
    because their packages hold `Clock`, `Instant`, `List` and `Runtime` and
    cannot be forbidden -- taking a `Clock` parameter is the shape this rule
    REQUIRES, and `LocalDate.now(clock)` is how you read it.
-   `binstore-backends` is exempt: it is the adapter.
+   `binstore-backends` is exempt: it is the adapter. ⚠️ And since M8.4 TWO
+   FILES are exempt by name -- `server/.../Main.java`, which reaches for the
+   real clock, and `server/.../ConfigFile.java`, which reads the settings file.
+   That is what a composition root IS: the I/O and the clock become real in
+   exactly one place. ⚠️ FILES rather than the whole `server` module, so
+   `Assembly`, `StoreFactory`, `FrontDoor` and `IngesterNode` stay under the
+   gate -- and the exemption is itself pinned by a case that runs the scanner
+   over exactly those two and fails if either STOPS reaching past a seam, so it
+   cannot outlive its reason.
    ⚠️ **NEITHER HALF IS CLOSED.** The package half must name every package a
    reach can live in, and the construct half is a hand-named list; each is
    exactly as complete as its enumeration. It does not close this rule. It reads source text: reflection reaches any banned construct, a

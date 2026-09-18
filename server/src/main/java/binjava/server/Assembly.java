@@ -8,13 +8,16 @@ import binjava.ingest.DefaultIngest;
 import binjava.ingest.IndexCatalog;
 import binjava.ingest.Ingest;
 import binjava.ingest.SubscriptionHub;
+import binjava.ingest.WatermarkTable;
 import binjava.sequencer.FleetSequencer;
 import binjava.sequencer.LeaseConfig;
 import binjava.sequencer.LeaseManager;
 import binjava.sequencer.LocalSequencer;
 import binjava.sequencer.SequencerTransport;
+import binjava.sequencer.Sequencer;
 import java.io.IOException;
 import java.time.Clock;
+import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.Objects;
@@ -48,6 +51,7 @@ public final class Assembly implements AutoCloseable {
     private final BinStore store;
     private final SubscriptionHub hub;
     private final IndexCatalog catalog;
+    private final WatermarkTable watermarks;
     private final FleetSequencer sequencer;
     private final DefaultIngest ingest;
     private final Deque<AutoCloseable> toClose = new ArrayDeque<>();
@@ -100,6 +104,8 @@ public final class Assembly implements AutoCloseable {
         }
         this.hub = new SubscriptionHub();
         this.catalog = new IndexCatalog();
+        this.watermarks = new WatermarkTable(clock, WATERMARK_REPORT_TIMEOUT,
+                WATERMARK_COPY_EXPIRY, MIN_RETENTION);
 
         LeaseConfig leases = new LeaseConfig(config.prefix(), config.podId(), config.endpoint(),
                 config.leaseTtl(), config.leaseRenewInterval());
@@ -137,6 +143,24 @@ public final class Assembly implements AutoCloseable {
         }
         toClose.push(this.ingest);
     }
+
+    /**
+     * ⚠️ **THREE CONSTANTS THAT M8.5 TURNS INTO CONFIGURATION**, and they are
+     * here rather than in {@link ServerConfig} deliberately: the retention rule
+     * that reads them is not wired yet, and a settings key an operator can
+     * write which nothing consults is worse than no key at all. What needs them
+     * TODAY is {@code SubscriptionService}, which takes the same
+     * {@link WatermarkTable} the retention loop will — one table, so the
+     * positions consumers report are the positions GC reads (M7.21n). ⚠️ The
+     * ORDER matters and the table enforces it: the copy expiry must outlive
+     * both the report timeout and the retention floor, or a shard copy is
+     * retired while its data is still inside the outage budget.
+     */
+    static final Duration WATERMARK_REPORT_TIMEOUT = Duration.ofMinutes(1);
+
+    static final Duration WATERMARK_COPY_EXPIRY = Duration.ofHours(2);
+
+    static final Duration MIN_RETENTION = Duration.ofHours(1);
 
     /**
      * ⚠️ 8, the value every construction site in the tree passes — it bounds
@@ -186,6 +210,30 @@ public final class Assembly implements AutoCloseable {
 
     public IndexCatalog catalog() {
         return catalog;
+    }
+
+    /**
+     * The one table consumer positions are reported into and read out of.
+     *
+     * <p>⚠️ **ONE, SHARED.** The subscription service writes it and M8.5's
+     * retention rule reads it; two tables is a GC pass that sees no consumer
+     * has reported and either deletes what is still being read or never
+     * deletes anything, depending on which way the rule defaults.
+     */
+    public WatermarkTable watermarks() {
+        return watermarks;
+    }
+
+    /**
+     * The term this pod holds, or {@code null} where it holds none — what
+     * answers a commit a peer FORWARDED here (M8.4).
+     *
+     * <p>⚠️ **NOT {@link #ingest()}'s sequencer.** See
+     * {@code FleetSequencer.heldTerm()}: applying a forwarded commit through
+     * the fleet sequencer consults the lease and forwards it onward again.
+     */
+    public Sequencer heldTerm() {
+        return sequencer.heldTerm();
     }
 
     public Ingest ingest() {

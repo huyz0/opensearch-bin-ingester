@@ -24,7 +24,8 @@ class ServerConfigTest {
             String endpoint, IngestConfig ingest) {
         return new ServerConfig(podId, trustDomain, prefix,
                 new StoreConfig("memory", Optional.empty()),
-                Duration.ofSeconds(10), Duration.ofSeconds(3), endpoint, ingest);
+                Duration.ofSeconds(10), Duration.ofSeconds(3), endpoint, ingest,
+                0, "producer-1", java.util.Set.of("logs"));
     }
 
     private static ServerConfig valid() {
@@ -100,15 +101,17 @@ class ServerConfigTest {
                 .isInstanceOf(NullPointerException.class).hasMessageContaining("ingest");
         assertThatThrownBy(() -> new ServerConfig("pod1", "cluster-a", "bins/c", null,
                 Duration.ofSeconds(10), Duration.ofSeconds(3), "http://p:1",
-                IngestConfig.defaults("cluster-a")))
+                IngestConfig.defaults("cluster-a"), 0, "producer-1", java.util.Set.of("logs")))
                 .isInstanceOf(NullPointerException.class).hasMessageContaining("store");
         assertThatThrownBy(() -> new ServerConfig("pod1", "cluster-a", "bins/c",
                 new StoreConfig("memory", Optional.empty()), null, Duration.ofSeconds(3),
-                "http://p:1", IngestConfig.defaults("cluster-a")))
+                "http://p:1", IngestConfig.defaults("cluster-a"), 0, "producer-1",
+                java.util.Set.of("logs")))
                 .isInstanceOf(NullPointerException.class).hasMessageContaining("leaseTtl");
         assertThatThrownBy(() -> new ServerConfig("pod1", "cluster-a", "bins/c",
                 new StoreConfig("memory", Optional.empty()), Duration.ofSeconds(10), null,
-                "http://p:1", IngestConfig.defaults("cluster-a")))
+                "http://p:1", IngestConfig.defaults("cluster-a"), 0, "producer-1",
+                java.util.Set.of("logs")))
                 .isInstanceOf(NullPointerException.class).hasMessageContaining("leaseRenewInterval");
     }
 }

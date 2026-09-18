@@ -55,7 +55,7 @@ class AssemblyTest {
                 new StoreConfig("memory", Optional.empty()),
                 Duration.ofSeconds(10), Duration.ofSeconds(3),
                 "http://" + podId + ":8080",
-                IngestConfig.defaults("cluster-a"));
+                IngestConfig.defaults("cluster-a"), 0, "producer-1", java.util.Set.of("logs"));
     }
 
     /**
@@ -281,7 +281,8 @@ class AssemblyTest {
                 java.time.Duration.ofMinutes(2), java.time.Duration.ofMinutes(2), true);
         ServerConfig refuses = new ServerConfig("pod1", "cluster-a", "bins/cluster-a",
                 new StoreConfig("memory", Optional.empty()), Duration.ofSeconds(10),
-                Duration.ofSeconds(3), "http://pod1:8080", direct);
+                Duration.ofSeconds(3), "http://pod1:8080", direct, 0, "producer-1",
+                java.util.Set.of("logs"));
 
         try (BinStore shared = StoreFactory.open(new StoreConfig("memory", Optional.empty()))) {
             assertThatThrownBy(() -> Assembly.open(refuses, shared, noPeers(), Clock.systemUTC()))

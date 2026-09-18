@@ -118,6 +118,99 @@ class ModuleGateTest {
   }
 
   /**
+   * ⚠️ **THE TWO HALVES OF architecture.md RULE 4, RUN RATHER THAN READ**
+   * (ADR-0055). Review MEASURED the gap this closes: with
+   * {@code ROOT_MODULE="client"} AND the leaf-check block deleted, the whole
+   * harness suite was green. Mutation (a) re-admits {@code client} →
+   * {@code http}, which the gate's own comment records as having once passed
+   * green for real; mutation (b) deletes the assertion ADR-0055 sells as the
+   * PRICE of that relaxation. A relaxation whose price is unasserted is just a
+   * relaxation.
+   *
+   * <p>⚠️ **IN THE SCRATCH REPO, AND AN EARLIER DRAFT DID IT IN THE REAL ONE.**
+   * That draft wrote a {@code project(":server")} dependency into the tracked
+   * {@code plugin/build.gradle.kts} and restored it in a {@code finally} —
+   * which leaves a rule-violating line in the working tree on any abnormal
+   * exit, on a hook that runs at EVERY commit, where the next
+   * {@code git add -A} stages it. It also nested three real Gradle builds on
+   * the repository root from inside a Gradle test JVM. The stub
+   * {@code gradlew} here prints the dependency line the rule greps for, which
+   * is all the rule reads.
+   */
+  @Test
+  void aModuleDependingOnTheCompositionRootIsRefused(@TempDir Path dir) throws Exception {
+    scratch(dir);
+    withCompositionRoot();
+    dependencyStub("+--- project :server");
+
+    String out = gate("git add -A", "full");
+
+    assertThat(out)
+        .as("a module that depends on the composition root inherits `http` AND a backend, "
+            + "which is what rules 2 and 4 exist to prevent%n%s", out)
+        .contains("alpha depends on server");
+    assertThat(out.lines().findFirst().orElseThrow())
+        .as("and the gate must FAIL, not merely say so%n%s", out)
+        .isNotEqualTo("0");
+  }
+
+  /**
+   * ⚠️ **THE EXEMPTION IS ONE MODULE, AND IT IS EXERCISED FROM BOTH SIDES.**
+   * A check that only ever saw a refusal would be satisfied by a rule that
+   * refuses everything, which would make the composition root unbuildable —
+   * and that failure appears only when someone tries to add `main()`, which is
+   * once.
+   */
+  @Test
+  void onlyTheCompositionRootMayDependOnHttp(@TempDir Path dir) throws Exception {
+    scratch(dir);
+    withCompositionRoot();
+    dependencyStub("+--- project :http");
+
+    String out = gate("git add -A", "full");
+
+    assertThat(out)
+        .as("every other module is still refused%n%s", out)
+        .contains("alpha depends on http")
+        .contains("beta depends on http");
+    assertThat(out)
+        .as("⚠️ AND THE ROOT IS NOT. `main()` has to start a listener, and the three "
+            + "services it carries live in `http`%n%s", out)
+        .doesNotContain("server depends on http");
+  }
+
+  /**
+   * Adds a {@code server} module to the scratch repo.
+   *
+   * <p>⚠️ **HERE RATHER THAN IN {@link #scratch}, AND THE REASON IS A
+   * MEASUREMENT**: adding it to the shared fixture broke five cases that count
+   * modules, which is the fixture doing its job. Rule 4's exemption is only
+   * reachable with the root present, and only these two cases need it.
+   */
+  private void withCompositionRoot() throws Exception {
+    Files.writeString(repo.resolve("settings.gradle.kts"),
+        "include(\n  \"alpha\",\n  \"beta\",\n  \"server\",\n)\n");
+    Files.createDirectories(repo.resolve("server"));
+    Files.writeString(repo.resolve("server").resolve("build.gradle.kts"), "// stub\n");
+  }
+
+  /**
+   * Replaces the stub's dependency output.
+   *
+   * <p>⚠️ The rule is a grep over {@code ./gradlew :m:dependencies}, so this
+   * line is the entire input it reads — which is why a synthetic graph works
+   * here and a real build is not needed.
+   */
+  private void dependencyStub(String line) throws Exception {
+    Files.writeString(
+        repo.resolve("gradlew"),
+        "#!/usr/bin/env bash\n"
+            + "echo \"$@\" >> \"$(dirname \"$0\")/gradlew-invocations\"\n"
+            + "echo '" + line + "'\n");
+    repo.resolve("gradlew").toFile().setExecutable(true);
+  }
+
+  /**
    * ⚠️ The gate has THREE selection modes and every scenario above enters only
    * the delta path. {@code elif [ "$GATE_SCOPE" = "full" ]; then} → {@code elif
    * false; then} survived all 55 tests: with nothing staged, CI would print

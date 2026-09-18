@@ -27,6 +27,9 @@ class ServerPropertiesTest {
         settings.put(ServerProperties.PREFIX, "bins/cluster-a");
         settings.put(ServerProperties.STORE_KIND, "memory");
         settings.put(ServerProperties.ENDPOINT, "http://pod1:8080");
+        settings.put(ServerProperties.HTTP_PORT, "8080");
+        settings.put(ServerProperties.PRODUCER_SUBJECT, "producer-1");
+        settings.put(ServerProperties.PRODUCER_ALLOWED_INDICES, "logs");
         return settings;
     }
 
@@ -211,7 +214,10 @@ class ServerPropertiesTest {
                 ServerProperties.PREFIX, "bins/cluster-a",
                 ServerProperties.STORE_KIND, "local-fs",
                 ServerProperties.STORE_ROOT, "/var/lib/binjava",
-                ServerProperties.ENDPOINT, "http://pod1:8080")));
+                ServerProperties.ENDPOINT, "http://pod1:8080",
+                ServerProperties.HTTP_PORT, "8080",
+                ServerProperties.PRODUCER_SUBJECT, "producer-1",
+                ServerProperties.PRODUCER_ALLOWED_INDICES, "logs")));
 
         assertThat(config.store().root()).contains("/var/lib/binjava");
     }
@@ -307,6 +313,6 @@ class ServerPropertiesTest {
         assertThat(ServerProperties.knownKeys())
                 .contains(ServerProperties.POD_ID, ServerProperties.ENDPOINT,
                         ServerProperties.STORE_KIND)
-                .hasSize(11);
+                .hasSize(18);
     }
 }

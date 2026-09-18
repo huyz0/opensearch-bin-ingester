@@ -3,9 +3,11 @@ package binjava;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -125,6 +127,21 @@ class IoSeamGateTest {
    * also cannot see {@code .tmp/}, which holds a reference clone and is the
    * scenario lib.sh says {@code workspace_files} exists to make unreachable.
    */
+  /**
+   * The composition root's two edge files, exempted BY NAME since M8.4.
+   *
+   * <p>⚠️ THE ORACLE HAS TO KNOW ABOUT THEM OR IT COUNTS A DIFFERENT SET than
+   * the gate does, and the case below would red for a correct gate.
+   *
+   * <p>⚠️ AND THE LIST IS PINNED BY {@link #theEXEMPTFilesGENUINELYReachPastASeam},
+   * so it cannot outlive its reason: if a future change removes the clock or
+   * the file read from one of these, that case goes red and the entry must be
+   * deleted rather than kept as a standing licence.
+   */
+  private static final List<String> EXEMPT_FILES = List.of(
+      "server/src/main/java/binjava/server/Main.java",
+      "server/src/main/java/binjava/server/ConfigFile.java");
+
   @Test
   void thisRepositoryPassesAndTheGateSaysHowManyFilesItRead() throws Exception {
     Run r = run(ROOT, GATE, "--full");
@@ -134,12 +151,43 @@ class IoSeamGateTest {
     long files = listed.out().lines()
         .filter(f -> !f.isBlank())
         .filter(f -> !f.startsWith("binstore-backends/"))
+        .filter(f -> !EXEMPT_FILES.contains(f))
         .count();
     assertThat(files).as("the oracle must find something to count").isPositive();
     assertThat(r.out())
         .as("the gate must report the work it did -- a counter stuck at 0 prints a clean "
             + "line over a tree it never read%n%s", r.out())
         .contains(files + " business-logic file(s)");
+  }
+
+  /**
+   * ⚠️ **AN EXEMPTION NOBODY CAN FALSIFY IS A HOLE.** Two files are excused
+   * from this gate, and nothing so far says they still need to be. This runs
+   * the scanner over exactly those two and asserts that each is reported — so
+   * the excuse is measured on every commit, and the day a refactor moves the
+   * clock or the file read out of one of them, this case goes red and the entry
+   * has to be DELETED rather than carried forward as a standing licence.
+   *
+   * <p>⚠️ IT IS ALSO THE EVIDENCE THAT THE EXEMPTION IS LOAD-BEARING AT ALL.
+   * Without it, "the gate passes" would be equally true of an exemption list
+   * naming two files that never reached past a seam in the first place.
+   */
+  @Test
+  void theEXEMPTFilesGENUINELYReachPastASeam() throws Exception {
+    for (String file : EXEMPT_FILES) {
+      assertThat(ROOT.resolve(file)).as("the exempt list names a file that exists").exists();
+      ProcessBuilder pb = new ProcessBuilder("python3", SCANNER).directory(ROOT.toFile());
+      pb.redirectErrorStream(true);
+      Process p = pb.start();
+      p.getOutputStream().write((file + "\n").getBytes(StandardCharsets.UTF_8));
+      p.getOutputStream().close();
+      String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+      p.waitFor();
+      assertThat(out)
+          .as("%s is exempt from check-io-seam; if the scanner no longer reports it, the "
+              + "exemption has outlived its reason and must be removed%n%s", file, out)
+          .contains(file);
+    }
   }
 
   /**
