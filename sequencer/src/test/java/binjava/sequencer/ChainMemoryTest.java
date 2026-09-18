@@ -296,6 +296,53 @@ class ChainMemoryTest {
                 .containsExactly("seg-new");
     }
 
+    /** One delta naming TWO segments, as a batched commit does. */
+    private static CommitDelta twoSegments(long sequence, String first, String second) {
+        return new CommitDelta(sequence, List.of(
+                new binjava.format.SegmentCommit(first,
+                        List.of(new binjava.format.RunCommit(new RunKey(A, 0), 1, 0)),
+                        new binjava.format.SegmentCommit.Attribution("poda", "i1", 1)),
+                new binjava.format.SegmentCommit(second,
+                        List.of(new binjava.format.RunCommit(new RunKey(A, 1), 1, 0)),
+                        new binjava.format.SegmentCommit.Attribution("podb", "i2", 1))));
+    }
+
+    @org.junit.jupiter.api.Test
+    void aDELTAWithOneKEPTSegmentIsNotForgottenThoughItsOTHERWasDeleted() {
+        // ⚠️ EVERY SEGMENT, NOT ANY. Review MEASURED "any" surviving every
+        // suite, because every delta in the tree had exactly one segment. A
+        // batched commit names several; forgetting it because ONE was deleted
+        // drops the kept one out of the orphan sweep's keep list, which fails
+        // open -- and a committed segment is deleted as an orphan.
+        ChainMemory chain = new ChainMemory(100);
+        chain.record(1, twoSegments(1, "bins/data/gone", "bins/data/kept"));
+
+        int dropped = chain.forgetCollected(java.util.Set.of("bins/data/gone"));
+
+        org.assertj.core.api.Assertions.assertThat(dropped).isZero();
+        org.assertj.core.api.Assertions.assertThat(chain.snapshot().deltas())
+                .as("⚠️ STILL HELD: one of its segments is still in the bucket")
+                .hasSize(1);
+    }
+
+    @org.junit.jupiter.api.Test
+    void aFULLYCollectedChainSaysWhereItRESUMESRatherThanZero() {
+        // ⚠️ THE EMPTY-CHAIN BOUNDARY, written when a collection empties the
+        // chain. Left at (0, 0) it says "nothing has ever been collected" about
+        // a chain that has been -- M8.38's defect arriving by a second door.
+        ChainMemory chain = new ChainMemory(100);
+        chain.record(3, delta(7, "bins/data/a"));
+        chain.record(3, delta(8, "bins/data/b"));
+
+        chain.forgetCollected(java.util.Set.of("bins/data/a", "bins/data/b"));
+
+        ChainMemory.Snapshot empty = chain.snapshot();
+        org.assertj.core.api.Assertions.assertThat(empty.deltas()).isEmpty();
+        org.assertj.core.api.Assertions.assertThat(empty.firstEpoch()).isEqualTo(3);
+        org.assertj.core.api.Assertions.assertThat(empty.firstSequence())
+                .as("the next delta this chain will hold, not 0").isEqualTo(9);
+    }
+
     private static CommitDelta delta(long sequence, String segmentKey) {
         return new CommitDelta(sequence, List.of(new binjava.format.SegmentCommit(segmentKey,
                 List.of(new binjava.format.RunCommit(new RunKey(A, 0), 1, 0)),

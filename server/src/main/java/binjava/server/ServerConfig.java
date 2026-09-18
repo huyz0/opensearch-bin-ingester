@@ -47,10 +47,26 @@ import java.util.Set;
  *     widen that: a composition root that defaulted the allow-list to "all"
  *     would turn the one security property the write path actually has into a
  *     comment
+ * @param retention the floor, the ceiling and the loop's interval (M8.5)
  */
 public record ServerConfig(String podId, String trustDomain, String prefix, StoreConfig store,
         Duration leaseTtl, Duration leaseRenewInterval, String endpoint, IngestConfig ingest,
-        int httpPort, String producerSubject, Set<String> allowedIndices) {
+        int httpPort, String producerSubject, Set<String> allowedIndices,
+        RetentionConfig retention) {
+
+    /**
+     * The same, with retention at its defaults.
+     *
+     * <p>⚠️ **FOR CALLERS THAT DO NOT CONFIGURE RETENTION**, which is every
+     * construction site that predates M8.5. {@link ServerProperties} never uses
+     * it: a parsed configuration always carries the retention it parsed.
+     */
+    public ServerConfig(String podId, String trustDomain, String prefix, StoreConfig store,
+            Duration leaseTtl, Duration leaseRenewInterval, String endpoint, IngestConfig ingest,
+            int httpPort, String producerSubject, Set<String> allowedIndices) {
+        this(podId, trustDomain, prefix, store, leaseTtl, leaseRenewInterval, endpoint, ingest,
+                httpPort, producerSubject, allowedIndices, RetentionConfig.defaults());
+    }
 
     /**
      * The identity every write this node accepts is attributed to.
@@ -74,6 +90,7 @@ public record ServerConfig(String podId, String trustDomain, String prefix, Stor
         Objects.requireNonNull(endpoint, "endpoint");
         Objects.requireNonNull(ingest, "ingest");
         Objects.requireNonNull(producerSubject, "producerSubject");
+        Objects.requireNonNull(retention, "retention");
         // ⚠️ COPIED, then the record hands it on to `Principal`, which copies
         // again. Belt and braces on purpose: an allow-list a caller can still
         // `add()` to is a privilege escalation with no code change at the call

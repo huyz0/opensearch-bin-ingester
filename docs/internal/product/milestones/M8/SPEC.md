@@ -41,8 +41,8 @@ written, the cell is wrong and is fixed HERE.
 | M6.19 | `RoutedIngest` — the routed path, in no deployable server | a non-test `src/main` construction |
 | M7.17 | `ProgressReporter.Positions` — no production source | a non-test `src/main` implementation of `Positions` |
 | M7.18 | the retained-floor frame from GC to the consumer | a non-test `src/main` call of `ConsumerClient.retainedFrom` |
-| M7.21n | `RetentionPass`, `LeasedGc`, `RetentionObservable` — constructed only by their own tests | a non-test `src/main` construction of each |
-| M7.24 | `ChainGc`, constructed only by its own test | a non-test `src/main` construction |
+| M7.21n | `RetentionPass`, `LeasedGc`, `RetentionObservable` — constructed only by their own tests (closed by M8.5) | a non-test `src/main` construction of each |
+| M7.24 | `ChainGc`, constructed only by its own test (M8.39; split out of M8.5 because every checkpoint source is a read per pass) | a non-test `src/main` construction |
 | M7.25 | the commit chain — **no `src/main` method produces a `List<CommitDelta>`** | a non-test `src/main` method whose return type is `List<CommitDelta>` |
 | M7.26 | the delete batch size — no named default in the tree | a `DEFAULT_DELETE_BATCH` constant in `src/main`, referenced by the root |
 
@@ -550,7 +550,7 @@ rows uncited.
 | M8.22 | That backend through the store conformance suite, including the branches only a real one reaches | NFR-8 |
 | M8.3 | The commit chain's in-memory source, so a GC pass costs no GET (M7.25) | NFR-3 |
 | M8.4 | `main()`: the process starts, serves `_bulk`, and a consumer reads back from the real store | FR-1, FR-13 |
-| M8.5 | The retention loop, the GC lease, the orphan sweep and the alarms wired (M7.21n, M7.24, M7.26), with their cost budgets asserted in-process | NFR-3, NFR-2, FR-9 |
+| M8.5 | The retention loop, the GC lease, the orphan sweep and the alarms wired (M7.21n, M7.26), with their cost budgets asserted in-process. ⚠️ M7.24 (`ChainGc`) split to M8.39 and criterion 3 to M8.40 | NFR-3, NFR-2, FR-9 |
 | M8.6 | `ProgressReporter`'s production position source (M7.17) and the retained-floor frame (M7.18) — ⚠️ **M7.18 IS THIS ROW's, NOT M8.5's**, which an earlier draft had claiming it too | FR-9, NFR-13 |
 | M8.7 | Graceful shutdown in §7's order, with the grace budget measured | NFR-9 |
 | M8.8 | The chaos harness: start a real process, kill it, stop it, assert at the store | NFR-8 |

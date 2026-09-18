@@ -72,6 +72,16 @@ public final class ServerProperties {
     public static final String MAX_SEGMENT_BYTES = "ingest.max-segment-bytes";
     /** Optional: whether consumers may fetch with signed URLs. */
     public static final String DIRECT_ENABLED = "ingest.direct-enabled";
+    /** Optional: the retention floor -- NFR-13's consumer outage budget. */
+    public static final String RETENTION_MIN = "retention.min";
+    /** Optional: the retention ceiling, past which data is deleted unread. */
+    public static final String RETENTION_MAX = "retention.max";
+    /** Optional: how long a silent shard copy is still trusted. */
+    public static final String RETENTION_REPORT_TIMEOUT = "retention.report-timeout";
+    /** Optional: how long a silent shard copy is remembered at all. */
+    public static final String RETENTION_COPY_EXPIRY = "retention.copy-expiry";
+    /** Optional: how often the retention loop looks for work. */
+    public static final String RETENTION_PASS_INTERVAL = "retention.pass-interval";
 
     /**
      * ⚠️ 10 s and 3 s are a CONFIGURED GUESS, not a measurement — measurement
@@ -85,7 +95,9 @@ public final class ServerProperties {
     private static final Set<String> KNOWN = Set.of(POD_ID, TRUST_DOMAIN, PREFIX, STORE_KIND,
             STORE_ROOT, STORE_ENDPOINT, STORE_REGION, STORE_BUCKET, STORE_PATH_STYLE,
             ENDPOINT, HTTP_PORT, PRODUCER_SUBJECT, PRODUCER_ALLOWED_INDICES,
-            LEASE_TTL, LEASE_RENEW, INTERVAL_FLOOR, MAX_SEGMENT_BYTES, DIRECT_ENABLED);
+            LEASE_TTL, LEASE_RENEW, INTERVAL_FLOOR, MAX_SEGMENT_BYTES, DIRECT_ENABLED,
+            RETENTION_MIN, RETENTION_MAX, RETENTION_REPORT_TIMEOUT, RETENTION_COPY_EXPIRY,
+            RETENTION_PASS_INTERVAL);
 
     private ServerProperties() {
     }
@@ -142,7 +154,18 @@ public final class ServerProperties {
                     required(settings, ENDPOINT), ingest,
                     port(settings, HTTP_PORT),
                     required(settings, PRODUCER_SUBJECT),
-                    indices(settings, PRODUCER_ALLOWED_INDICES));
+                    indices(settings, PRODUCER_ALLOWED_INDICES),
+                    new RetentionConfig(
+                            duration(settings, RETENTION_MIN,
+                                    RetentionConfig.DEFAULT_MIN_RETENTION),
+                            duration(settings, RETENTION_MAX,
+                                    RetentionConfig.DEFAULT_MAX_RETENTION),
+                            duration(settings, RETENTION_REPORT_TIMEOUT,
+                                    RetentionConfig.DEFAULT_REPORT_TIMEOUT),
+                            duration(settings, RETENTION_COPY_EXPIRY,
+                                    RetentionConfig.DEFAULT_COPY_EXPIRY),
+                            duration(settings, RETENTION_PASS_INTERVAL,
+                                    binjava.ingest.RetentionLoop.DEFAULT_PASS_INTERVAL)));
         } catch (IllegalArgumentException refused) {
             // ⚠️ `ConfigurationException` IS AN `IllegalArgumentException`, so
             // one already carrying a key's name lands here too and is returned

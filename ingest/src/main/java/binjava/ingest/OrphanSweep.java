@@ -55,6 +55,13 @@ public final class OrphanSweep {
     private static final int MAX_PAGE = 1000;
 
     /**
+     * The largest page a store returns, and therefore the one a production
+     * sweep asks for (M8.5) -- a smaller page is the same objects in more
+     * LIST calls.
+     */
+    public static final int MAX_PAGE_SIZE = MAX_PAGE;
+
+    /**
      * How long an uncommitted segment is left alone (research 06 §4).
      *
      * <p>⚠️ NAMED HERE RATHER THAN LEFT TO EACH CALLER, because a caller

@@ -311,6 +311,45 @@ class LocalSequencerRenewTest {
     }
 
     @Test
+    void aTermWhoseRenewsKEEPFailingStopsSERVINGAtItsTTLThoughItWasNeverFenced()
+            throws Exception {
+        // ⚠️ FOUND BY M8.5's REVIEW, AND IT DELETES A SUCCESSOR's DATA. A renew
+        // that throws leaves the term untouched -- correctly, since a store
+        // blip must not become a failover -- so `fenced` stays false for as
+        // long as the store stays away. The rest of the cluster watches the
+        // lease EXPIRE and takes over; this node goes on holding a term whose
+        // chain froze at the takeover, and GC reads that chain as the orphan
+        // sweep's keep list. `serving()` is what GC asks, and it must say no
+        // once the TTL has passed, whatever the flags say.
+        MemoryBinStore backing = new MemoryBinStore();
+        String leaseKey = new LeaseConfig(PREFIX, "pod1", "", TTL, RENEW).leaseKey();
+        FailPutIfMatchStore store = new FailPutIfMatchStore(backing, leaseKey);
+        TestClock clock = new TestClock();
+        ManualTicker ticker = new ManualTicker();
+        LocalSequencer seq = LocalSequencer.start(
+                store, PREFIX, manager(store, "pod1", clock), 8, ticker).orElseThrow();
+        assertThat(seq.serving()).as("a freshly elected term serves").isTrue();
+
+        store.startFailing();
+        clock.millis += RENEW.toMillis();
+        ticker.tickAndAwaitProcessed();
+        assertThat(seq.serving())
+                .as("⚠️ ONE FAILED RENEW IS NOT DEPOSITION: inside the TTL the term is still "
+                        + "this node's, and a GC that stood down here would stop on every "
+                        + "store hiccup")
+                .isTrue();
+
+        clock.millis += TTL.toMillis();
+        assertThat(seq.serving())
+                .as("⚠️ PAST THE TTL IT IS NOT, though nothing ever set `fenced` -- a "
+                        + "successor may hold the term now")
+                .isFalse();
+        // the store comes back so the release in `close()` can be written
+        store.stopFailing();
+        seq.close();
+    }
+
+    @Test
     void theSHIPPINGTickerWaitsTheCONFIGUREDRenewIntervalNotSomeOtherOne() throws Exception {
         // ⚠️ THE SHIPPING TICKER RAN IN NO TEST, which is verbatim the defect
         // the sibling seam already had and fixed. Every test here injects its

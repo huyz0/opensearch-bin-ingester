@@ -431,6 +431,64 @@ public final class LocalSequencer implements Sequencer {
         return log.chain();
     }
 
+    /**
+     * Whether this term may still act as the chain's writer -- neither fenced
+     * nor closed (M8.5).
+     *
+     * <p>⚠️ **HELD IS NOT THE SAME AS SERVING, AND GC IS WHERE THE DIFFERENCE
+     * DELETES DATA.** {@code FleetSequencer.heldTerm()} keeps returning a term
+     * after its renewer has fenced it: the term is retired only when a COMMIT
+     * through it throws, so a node that receives no writes keeps a dead term
+     * indefinitely. Its chain is then frozen at the takeover while the
+     * successor keeps committing. A retention loop that read that chain as the
+     * orphan sweep's keep list would list the successor's hours, find its
+     * committed segments in no delta, and delete them -- with the GC lease
+     * genuinely held, so the fence in {@code LeasedGc} lets every batch
+     * through. Found by M8.5's review.
+     *
+     * <p>⚠️ **THREE CONDITIONS, BECAUSE A TERM LAPSES THREE WAYS** -- and
+     * review found the first version checking only the flags. {@code fenced}
+     * is set ONLY when a renew comes back empty. A renew that throws
+     * {@code IOException} leaves the term untouched however many times it
+     * fails, and a renewer that dies returns without setting anything; its own
+     * log says the term "will lapse at its TTL and the cluster will fail over".
+     * In both the node goes on HOLDING a term a successor now has, with the
+     * flags saying all is well. So the term must also be unexpired by its own
+     * clock ({@link LeaseManager#heldUnexpired()}), which bounds every path at
+     * the TTL whatever the renewer did or failed to do.
+     *
+     * <p>⚠️ **NO REQUEST**: two flags and a clock comparison. The sweep cannot
+     * reach a successor's hours for at least an hour plus a grace after a
+     * takeover, and a successor cannot take over before this term's TTL, so a
+     * TTL-bounded answer is ample.
+     */
+    public boolean serving() {
+        return !fenced && !closed && leases.heldUnexpired();
+    }
+
+    /**
+     * Records where each stream's retained data now starts, so the next
+     * checkpoint carries it (M8.5, M7.10).
+     *
+     * <p>⚠️ **THE RETENTION LOOP's SINK, AND ITS ONLY WAY IN.** The checkpoint
+     * writer is package-private and belongs to this term; a pass that reported
+     * its boundary anywhere else would leave the checkpoint saying 0 for ever,
+     * which is the literal M7's SPEC called the mutation that survives every
+     * other case -- a consumer's refusal would have no boundary to be below.
+     *
+     * <p>⚠️ **A TERM WITHOUT A WRITER DROPS IT**, and that is not a loss:
+     * {@code observeRetained} merges with {@code max}, so the next pass
+     * reports a boundary at least as far along, and a boundary reported late
+     * refuses a consumer LESS, never for records still in the bucket.
+     */
+    public void observeRetained(Map<binjava.format.RunKey, Long> oldestRetained) {
+        Objects.requireNonNull(oldestRetained, "oldestRetained");
+        CheckpointWriter writer = checkpoints;
+        if (writer != null) {
+            writer.observeRetained(oldestRetained);
+        }
+    }
+
     @Override
     public CommitDelta commitAll(List<CommitRequest> requests) throws IOException {
         if (fenced) {

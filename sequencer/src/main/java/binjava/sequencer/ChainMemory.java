@@ -224,6 +224,59 @@ public final class ChainMemory {
     }
 
     /**
+     * Drops the longest PREFIX whose every segment has been deleted, and
+     * nothing after it (M8.5).
+     *
+     * <p>⚠️ **A PREFIX, AND ONLY OF WHAT WAS ACTUALLY DELETED.** The tempting
+     * call is {@link #forgetThrough} with the snapshot's LAST position, "because
+     * the pass has seen all of it". That forgets every delta whose segments the
+     * pass KEPT -- the young ones, and the ones a slow consumer is still behind
+     * -- and they are then never judged again: a storage leak on the retention
+     * side, and on the orphan side something worse. The orphan sweep's keep
+     * list is this chain's segment keys and it FAILS OPEN, so a committed
+     * segment whose delta was forgotten here would be LISTED, found in no
+     * delta, and deleted as an orphan. Forgetting only what is gone is what
+     * keeps the keep list equal to "every committed segment still in the
+     * bucket".
+     *
+     * <p>⚠️ **STOPS AT THE FIRST DELTA WITH A SURVIVING SEGMENT**, even if
+     * later ones are fully deleted: the chain is a deque and its identity is
+     * its order, so it cannot hold holes. A later pass that collects the
+     * blocker forgets the whole run at once; the only cost is re-issuing
+     * DELETEs for keys already gone, which a store answers as success and a
+     * batch carries a thousand of.
+     *
+     * @return how many deltas were dropped
+     */
+    public synchronized int forgetCollected(java.util.Set<String> deletedKeys) {
+        Objects.requireNonNull(deletedKeys, "deletedKeys");
+        int dropped = 0;
+        EpochDelta last = null;
+        while (!deltas.isEmpty() && everySegmentIn(deltas.peekFirst(), deletedKeys)) {
+            last = deltas.removeFirst();
+            dropped++;
+        }
+        if (last != null && deltas.isEmpty()) {
+            // ⚠️ THE SAME BOUNDARY `forgetThrough` WOULD HAVE LEFT, so a
+            // snapshot of a fully-collected chain says where it resumes rather
+            // than falling back to (0, 0) -- which is M8.38's defect arriving
+            // through a second door.
+            emptyEpoch = last.epoch();
+            emptySequence = last.delta().sequence() + 1;
+        }
+        return dropped;
+    }
+
+    private static boolean everySegmentIn(EpochDelta held, java.util.Set<String> deletedKeys) {
+        for (binjava.format.SegmentCommit segment : held.delta().segments()) {
+            if (!deletedKeys.contains(segment.segmentKey())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
      * ⚠️ **(EPOCH, SEQUENCE) IN THAT ORDER**, because a chain held across a
      * takeover holds two numbering spaces at once: every delta of an older
      * epoch is before every delta of a newer one, whatever the sequences say.

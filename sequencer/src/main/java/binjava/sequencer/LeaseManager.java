@@ -163,6 +163,25 @@ public final class LeaseManager {
         return b == null || !b.verified() ? Optional.empty() : Optional.of(b.lease());
     }
 
+    /**
+     * Whether this instance holds a lease that has not expired by its own
+     * clock (M8.5).
+     *
+     * <p>⚠️ **{@link #held()} ALONE IS NOT THIS.** A belief survives every
+     * failed renew -- an {@code IOException} leaves it untouched, and a renewer
+     * that died leaves it frozen -- so a node whose store went away, or whose
+     * renewer crashed, goes on "holding" a lease the rest of the cluster has
+     * already watched expire and taken over. The expiry is the only bound that
+     * holds whatever the renewer did: after it, a successor MAY hold the term.
+     *
+     * <p>⚠️ **NO REQUEST.** It compares the believed expiry to the clock, so it
+     * can be asked on every tick of a loop that must cost nothing when idle.
+     */
+    public boolean heldUnexpired() {
+        Optional<Lease> mine = held();
+        return mine.isPresent() && !mine.get().isExpiredAt(clock.millis());
+    }
+
     /** How often the holder should renew — configuration, see the class javadoc. */
     public Duration renewInterval() {
         return renewInterval;

@@ -61,6 +61,17 @@ public final class SegmentGc {
         }
     }
 
+    /**
+     * ⚠️ **1,000 KEYS PER DELETE, NAMED IN THE TREE RATHER THAN IN EACH
+     * CALLER'S HEAD** (M7.26). {@code DeleteObjects} takes 1,000 keys, and the
+     * budget M7 asserted -- one DELETE per 1,000 keys -- was a TEST ARGUMENT:
+     * every cost case passed {@code 1000} from its own body and no production
+     * call site existed. ⚠️ A WIRING THAT PASSED 1 IS A 1,000x DELETE-COST
+     * REGRESSION THAT COMPILES AND PASSES EVERY TEST, which is why the
+     * retention loop takes this constant and a case asserts it did.
+     */
+    public static final int DEFAULT_DELETE_BATCH = 1000;
+
     private final BinStore store;
     private final RetentionRule rule;
     private final int deleteBatchSize;

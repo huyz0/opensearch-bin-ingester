@@ -8,6 +8,13 @@ import binjava.ingest.DefaultIngest;
 import binjava.ingest.IndexCatalog;
 import binjava.ingest.Ingest;
 import binjava.ingest.SubscriptionHub;
+import binjava.ingest.LeasedGc;
+import binjava.ingest.RetentionLoop;
+import binjava.ingest.RetentionObservable;
+import binjava.ingest.RetentionRule;
+import binjava.ingest.SegmentGc;
+import binjava.ingest.OrphanSweep;
+import binjava.ingest.StoreGcLease;
 import binjava.ingest.WatermarkTable;
 import binjava.sequencer.FleetSequencer;
 import binjava.sequencer.LeaseConfig;
@@ -23,6 +30,9 @@ import java.util.Deque;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 /**
  * The composition root: configuration in, object graph out (M8.1,
@@ -34,10 +44,11 @@ import java.util.UUID;
  * and the sequencer another, or exposes a hub nothing publishes to, compiles,
  * starts, and loses data in a way no unit test of any single component can see.
  *
- * <p>⚠️ **NOTHING HERE LISTENS ON A SOCKET.** The HTTP front door, the
- * retention loop, the GC lease and the progress reporter are wired in later
- * tasks (M8.4, M8.5, M8.6), each one commit, because a root that arrives last
- * discovers every composition failure at once.
+ * <p>⚠️ **NOTHING HERE LISTENS ON A SOCKET.** The HTTP front door is
+ * {@code FrontDoor}'s (M8.4). The retention loop and the GC lease are built
+ * here (M8.5) and run on this graph's own scheduler; the progress reporter is
+ * M8.6's. Each lands as one commit, because a root that arrives last discovers
+ * every composition failure at once.
  *
  * <p>⚠️ **THE TRANSPORT IS A PARAMETER AND NOT BUILT HERE**, because no
  * production {@link SequencerTransport} exists yet — M5.6e, owed since M5 and
@@ -52,6 +63,7 @@ public final class Assembly implements AutoCloseable {
     private final SubscriptionHub hub;
     private final IndexCatalog catalog;
     private final WatermarkTable watermarks;
+    private final RetentionLoop retention;
     private final FleetSequencer sequencer;
     private final DefaultIngest ingest;
     private final Deque<AutoCloseable> toClose = new ArrayDeque<>();
@@ -104,8 +116,9 @@ public final class Assembly implements AutoCloseable {
         }
         this.hub = new SubscriptionHub();
         this.catalog = new IndexCatalog();
-        this.watermarks = new WatermarkTable(clock, WATERMARK_REPORT_TIMEOUT,
-                WATERMARK_COPY_EXPIRY, MIN_RETENTION);
+        RetentionConfig kept = config.retention();
+        this.watermarks = new WatermarkTable(clock, kept.reportTimeout(), kept.copyExpiry(),
+                kept.minRetention());
 
         LeaseConfig leases = new LeaseConfig(config.prefix(), config.podId(), config.endpoint(),
                 config.leaseTtl(), config.leaseRenewInterval());
@@ -142,25 +155,89 @@ public final class Assembly implements AutoCloseable {
             throw failed;
         }
         toClose.push(this.ingest);
+
+        this.retention = retentionLoop(config, store, clock);
+        // ⚠️ PUSHED LAST, SO IT IS CLOSED FIRST. `toClose` is a stack, and a
+        // retention tick that ran while the writer was closing would read a
+        // chain whose term is being released under it -- and take the GC lease
+        // on the way, which the shutdown then has to wait out.
+        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(
+                Thread.ofVirtual().name("retention").factory());
+        long every = kept.passInterval().toNanos();
+        // ⚠️ FIXED DELAY, NOT FIXED RATE, AND THE FIRST TICK IS ONE INTERVAL
+        // IN. A slow pass must not queue a burst of catch-up passes behind it,
+        // and a node that has just started owns nothing old enough to collect.
+        scheduler.scheduleWithFixedDelay(this::tickQuietly, every, every, TimeUnit.NANOSECONDS);
+        toClose.push(() -> {
+            scheduler.shutdownNow();
+            // ⚠️ BOUNDED. A pass blocked on a store call is interrupted by
+            // `shutdownNow`; one that is not answers within the bound or is
+            // abandoned, because a shutdown that hung on GC would hold the
+            // SEQUENCER term too -- and that is the lease whose release this
+            // whole sequence exists to reach.
+            scheduler.awaitTermination(5, TimeUnit.SECONDS);
+        });
     }
 
     /**
-     * ⚠️ **THREE CONSTANTS THAT M8.5 TURNS INTO CONFIGURATION**, and they are
-     * here rather than in {@link ServerConfig} deliberately: the retention rule
-     * that reads them is not wired yet, and a settings key an operator can
-     * write which nothing consults is worse than no key at all. What needs them
-     * TODAY is {@code SubscriptionService}, which takes the same
-     * {@link WatermarkTable} the retention loop will — one table, so the
-     * positions consumers report are the positions GC reads (M7.21n). ⚠️ The
-     * ORDER matters and the table enforces it: the copy expiry must outlive
-     * both the report timeout and the retention floor, or a shard copy is
-     * retired while its data is still inside the outage budget.
+     * The loop that collects expired segments and orphans on this node (M8.5).
+     *
+     * <p>⚠️ **THE GC LEASE IS ITS OWN OBJECT**, under {@code <prefix>/gc}:
+     * sharing the sequencer's lease would make every pass contend with the
+     * commit path, and releasing it at the end of a pass would hand the
+     * SEQUENCER term to whoever asked next. See {@link StoreGcLease}.
+     *
+     * <p>⚠️ **THE SOURCE IS THE TERM THIS NODE HOLDS AND STILL SERVES, OR
+     * NOTHING.** Held is not enough -- see {@code LocalSequencer.serving()}. A follower
+     * writes no chain; a pass over a term it does not hold would condemn
+     * segments it cannot fence. {@code heldTerm()} does not elect, so asking
+     * costs nothing on the five pods in six that hold no term.
      */
-    static final Duration WATERMARK_REPORT_TIMEOUT = Duration.ofMinutes(1);
+    private RetentionLoop retentionLoop(ServerConfig config, BinStore store, Clock clock) {
+        RetentionConfig kept = config.retention();
+        LeaseConfig gcLease = new LeaseConfig(config.prefix() + "/gc", config.podId(),
+                config.endpoint(), config.leaseTtl(), config.leaseRenewInterval());
+        LeasedGc leased = new LeasedGc(
+                new StoreGcLease(new LeaseManager(store, gcLease, clock), clock), store);
+        RetentionRule rule = new RetentionRule(clock, kept.minRetention(), kept.maxRetention(),
+                RetentionRule.DEFAULT_SAFETY_MARGIN,
+                (segmentKey, age) -> LOG.log(System.Logger.Level.ERROR, () -> "a segment "
+                        + segmentKey + " was deleted at the retention ceiling, " + age
+                        + " old: a consumer had not read it and has lost data"),
+                watermarks::of);
+        RetentionObservable observable = new RetentionObservable(clock, kept.minRetention(),
+                kept.maxRetention(), kept.reportTimeout(),
+                alarm -> LOG.log(System.Logger.Level.WARNING, () -> "retention alarm "
+                        + alarm.kind() + " on " + alarm.stream() + ": " + alarm.detail()));
+        return new RetentionLoop(() -> {
+            Sequencer held = sequencer.heldTerm();
+            // ⚠️ `serving()`, NOT MERELY `instanceof`: a term this node still
+            // HOLDS may already have been fenced by a takeover, and its frozen
+            // chain as a keep list deletes the successor's committed segments.
+            return held instanceof LocalSequencer local && local.serving()
+                    ? Optional.of(new RetentionLoop.Term(local.chain(), local::observeRetained,
+                            local::serving))
+                    : Optional.empty();
+        }, leased, rule, observable, clock, config.prefix(), kept.minRetention(),
+                OrphanSweep.DEFAULT_GRACE, SegmentGc.DEFAULT_DELETE_BATCH);
+    }
 
-    static final Duration WATERMARK_COPY_EXPIRY = Duration.ofHours(2);
+    /**
+     * ⚠️ **A THROW OUT OF A SCHEDULED TASK CANCELS EVERY LATER RUN OF IT**, with
+     * nothing logged and nothing to notice: GC would stop on this node for good
+     * and storage would grow until someone looked at a bill. The loop already
+     * contains its own failures; this is the belt to that brace.
+     */
+    private void tickQuietly() {
+        try {
+            retention.tick();
+        } catch (RuntimeException failed) {
+            LOG.log(System.Logger.Level.WARNING, () -> "a retention tick failed; the next one "
+                    + "runs on schedule: " + failed);
+        }
+    }
 
-    static final Duration MIN_RETENTION = Duration.ofHours(1);
+    private static final System.Logger LOG = System.getLogger(Assembly.class.getName());
 
     /**
      * ⚠️ 8, the value every construction site in the tree passes — it bounds
@@ -215,13 +292,19 @@ public final class Assembly implements AutoCloseable {
     /**
      * The one table consumer positions are reported into and read out of.
      *
-     * <p>⚠️ **ONE, SHARED.** The subscription service writes it and M8.5's
-     * retention rule reads it; two tables is a GC pass that sees no consumer
+     * <p>⚠️ **ONE, SHARED.** The subscription service writes it and the
+     * retention rule built in this class reads it; two tables is a GC pass
+     * that sees no consumer
      * has reported and either deletes what is still being read or never
      * deletes anything, depending on which way the rule defaults.
      */
     public WatermarkTable watermarks() {
         return watermarks;
+    }
+
+    /** The retention loop, for a test that ticks it by hand. */
+    public RetentionLoop retention() {
+        return retention;
     }
 
     /**
