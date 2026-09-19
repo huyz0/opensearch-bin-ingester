@@ -372,16 +372,21 @@ ADR-0052 § Alternatives, with its number.
 17. **The inbox path's write rate is bounded, and it returns to normal when the
     partition heals.** During the partition of criterion 11, the commit-intent
     writes are counted at the store and are **≤1 PUT per pod per SLOT per
-    flush** — not per record and not per index — over a fixture of **≥3 indices,
-    ≥2 slots and ≥2 pods**, and after the heal the rate returns to the
+    flush** — not per record and not per index — over a fixture of **≥3 indices
+    and ≥2 pods** (⚠️ amended by ADR-0058, the user's decision of 2026-09-20: the
+    product ships ONE slot, so "per slot" is per pod per flush and the ≥2-slot
+    fixture has nothing to exercise), and after the heal the rate returns to the
     unpartitioned one. ⚠️ **A DEGRADED PATH THAT COSTS PER INDEX IS HOW A
     PARTITION BECOMES A BILL**, and cost.md rule 6 — the commit rate is
     independent of the index count — is the rule it would break. ⚠️ **THE ONE-
     INDEX FIXTURE EVERY OTHER TEST USES CANNOT SEE IT**, which is why the counts
     are named here. ⚠️ **AND THE DRAIN IS THE OTHER HALF**: the leaseholder
-    reading the inbox back must not LIST it per slot per interval — the drain's
-    LIST rate is counted and held under R15's ~1/s, or the degraded path breaks
-    the ceiling that the normal path was designed around.
+    reading the inbox back must not LIST it per slot per interval — ⚠️ amended by
+    ADR-0058: the drain has no timer at all. It runs when a deferring pod reaches
+    the leaseholder and once per takeover, serialised per term, so its LISTs are
+    one per asking pod at a heal plus one per takeover (cost.md rule 2); that is
+    pinned in-process (`InboxDrainTest`, `InboxDrainRaceTest`) rather than
+    counted at MinIO, where a node's own requests are not observable.
 18. **Killing an OpenSearch node mid-backlog resumes from `batch_start`, and the
     catch-up does not starve the live tail.** With a consumer behind by ≥1 hour
     of segments, a node is killed and its shards reallocate; the resumed shard
@@ -495,13 +500,13 @@ to catch:
 | 8 | `KillSequencerMidCommitIT` | a seal that reassigns an offset |
 | 9 | `StoppedSequencerIT` | a resumed process that commits under its old epoch |
 | 10 | `EarlyChallengeIT` | the watch not wired, so the number is the TTL |
-| 11 | `AzPartitionIT` | an inbox entry applied twice, or an epoch's writes neither sealed nor applied |
+| 11 | `AzPartitionIT` (also criterion 17's per-index half) | an inbox entry applied twice, or an epoch's writes neither sealed nor applied |
 | 12 | `StorePartitionIT` | buffering and continuing to ack |
 | 13 | `RollingRestartIT` | unstaggered reconnects — red by the >20%-in-one-100 ms-window threshold, which a count-only assertion cannot see |
 | 14 | `ClockSkewIT` | a lease comparison by wall clock rather than by epoch |
 | 15 | `S3ConformanceIT`, `PresignFailureMessageTest` | a signing failure whose message includes the URL; and, for conformance, a conditional write that reports success on a PRECONDITION FAILURE — the `If-None-Match` shape ADR-0011's CAS turns on, which both backends in the tree today answer by never failing |
 | 16 | `check-wired.sh` + `VERIFIED.md` enumeration | an evidence line for EVERY row of § *The unwired set*, each naming a real test, while some of those mechanisms are still constructed only by tests — the gate checks that a line EXISTS, never what it claims (M7.31, measured). ⚠️ **NO COUNT IS WRITTEN HERE**: an earlier draft said "nine lines, three mechanisms" against the table, which is the third inconsistent count of one set in this commit and the reason the set is now defined once |
-| 17 | `InboxWriteRateIT` (≥3 indices, ≥2 slots, ≥2 pods) | a commit-intent write per INDEX rather than per pod per slot per flush — invisible at the one-index fixture every other test uses — and a drain that LISTs per slot per interval, which breaks R15 while every correctness assertion stays green |
+| 17 | `AzPartitionIT` + `InboxTest` (≥3 indices, ≥2 pods, S = 1 by ADR-0058) | a commit-intent write per INDEX rather than per pod per slot per flush — invisible at the one-index fixture every other test uses — and a drain that LISTs per slot per interval, which breaks R15 while every correctness assertion stays green |
 | 18 | `OpenSearchNodeKillIT` | catch-up served ahead of the live tail: the backlog assertion passes and a record written after the kill waits for the whole backlog |
 | 19 | `LeaseTtlMeasurementIT` | a takeover that fires on a pause SHORTER than the TTL (liveness lost for a healthy leader) or none on a pause longer than it (safety resting on nothing) |
 | 20 | `LadderExecutionTest` (T1, re-scoped by ADR-0057) | a ladder whose tiers are constructed and never invoked — today's state, and green on any assertion about recovery alone if the consumer also has a direct path |
