@@ -28,11 +28,11 @@ import java.util.Objects;
  * {@link SubscriptionTransport}. What this answers is WHICH tier a consumer is
  * in and what one interval of it costs per node.
  *
- * <p>⚠️ NOTHING CALLS IT YET, stated rather than implied. Tier 1 needs a
- * reconnecting transport and tiers 2-4 need a consumer-side reader, and
- * ADR-0044 (a) keeps both out of M5: no backend in the tree can presign and
- * there is nothing to fetch from. So this ships the ladder and its cost
- * property, not its execution — the same shape as the prefetch in M5.16.
+ * <p>⚠️ TIERS 0 AND 1 EXECUTE SINCE M8.28: {@code HttpSubscriptionTransport}
+ * asks {@link #tierFor} at every transition it observes and counts the tiers
+ * it enters. Tiers 2 and 3 read the store, which a plugin holding no cloud SDK
+ * cannot yet do, and re-reading a gap needs a catch-up read path that does not
+ * exist -- both are M9's, by ADR-0057.
  */
 public final class FallbackLadder {
 
@@ -107,8 +107,8 @@ public final class FallbackLadder {
          * in the cheap direction for the GET question: doc 04 section 3 prices
          * tier 3 at "tens of GETs, once", so a reader adding up a fleet's
          * recovery would have been told a thirtieth of it. What falsifies the
-         * number is a real replay counting its own GETs, which is M8's chaos
-         * matrix.
+         * number is a real replay counting its own GETs, which ADR-0057 moved
+         * to M9 with the catch-up read path it needs.
          *
          * <p>⚠️ ONCE, NOT PER INTERVAL, and the accessor's name overstates
          * this one tier. The burst is bounded by the replay rather than by the

@@ -129,6 +129,72 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport {
     private final AtomicLong reconnects = new AtomicLong();
 
     /**
+     * ⚠️ **THE LADDER, EXECUTED, PER SUBSCRIPTION** (M8.28, ADR-0057).
+     * {@link FallbackLadder} shipped in M5 as a policy nothing called; each
+     * subscription's reader now asks it for its tier at every transition it
+     * observes -- a first answer, a lost one -- and counts what it entered.
+     *
+     * <p>⚠️ **ONE PER READER, NOT ONE PER TRANSPORT**: a node shares one
+     * transport across every subscription it holds (review MEASURED it), so a
+     * transport-wide field let one subscription's reconnect report the node as
+     * pushing while another was still down, and counted one outage twice. A
+     * reader is one thread, so its ladder needs no lock.
+     */
+    private static final class Ladder {
+        private volatile FallbackLadder.AutomaticTier tier =
+                FallbackLadder.tierFor(FallbackLadder.Health.CONNECTION_LOST);
+    }
+
+    private final java.util.Map<String, Ladder> ladders =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    private final java.util.Map<FallbackLadder.AutomaticTier, AtomicLong> entered =
+            new java.util.EnumMap<>(FallbackLadder.AutomaticTier.class);
+
+    {
+        for (FallbackLadder.AutomaticTier each : FallbackLadder.AutomaticTier.values()) {
+            entered.put(each, new AtomicLong());
+        }
+    }
+
+    /**
+     * The WORST tier any live subscription is in -- so a node reads as pushing
+     * only when every stream it holds is -- or RECONNECT where none has
+     * answered yet.
+     */
+    public FallbackLadder.AutomaticTier tier() {
+        FallbackLadder.AutomaticTier worst = null;
+        for (Ladder ladder : ladders.values()) {
+            FallbackLadder.AutomaticTier each = ladder.tier;
+            if (worst == null || each.ordinal() > worst.ordinal()) {
+                worst = each;
+            }
+        }
+        return worst != null ? worst
+                : FallbackLadder.tierFor(FallbackLadder.Health.CONNECTION_LOST);
+    }
+
+    /**
+     * How many times any subscription on this transport has ENTERED {@code tier}.
+     *
+     * <p>⚠️ **ENTRIES, NOT POLLS**: a stream down for a minute is one
+     * RECONNECT, whatever its backoff retried, so the count says how often a
+     * consumer fell down the ladder rather than how long it stayed.
+     */
+    public long tierEntries(FallbackLadder.AutomaticTier tier) {
+        return entered.get(tier).get();
+    }
+
+    private void enter(Ladder ladder, FallbackLadder.Health health) {
+        FallbackLadder.AutomaticTier next = FallbackLadder.tierFor(health);
+        if (next != ladder.tier) {
+            ladder.tier = next;
+            entered.get(next).incrementAndGet();
+        }
+    }
+
+
+    /**
      * Why a poll did not deliver, one class per outcome (M8.37, NFR-11).
      *
      * <p>⚠️ **CLASSES, NEVER A STATUS OR AN INDEX**: observability.md rule 1
@@ -249,6 +315,17 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport {
     }
 
     private void readForever(RunKey key, String id, Listener listener, AtomicBoolean stopped) {
+        Ladder ladder = new Ladder();
+        ladders.put(id, ladder);
+        try {
+            readForever(key, id, listener, stopped, ladder);
+        } finally {
+            ladders.remove(id);
+        }
+    }
+
+    private void readForever(RunKey key, String id, Listener listener, AtomicBoolean stopped,
+            Ladder ladder) {
 
         Duration backoff = retryFloor;
         boolean connected = false;
@@ -280,6 +357,7 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport {
                 if (!connected) {
                     connected = true;
                     reconnects.incrementAndGet();
+                    enter(ladder, FallbackLadder.Health.PUSHING);
                     // ⚠️ AFTER THE FIRST ANSWER, NOT BEFORE IT: a registration
                     // pushed at a node that has not answered yet is racing the
                     // same window the registrar's own retry covers. ⚠️ AND ONCE
@@ -305,6 +383,7 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport {
                 if (stopped.get() || closed.get()) {
                     return;
                 }
+                enter(ladder, FallbackLadder.Health.CONNECTION_LOST);
                 backoff = sleepAndGrow(backoff);
             }
         }

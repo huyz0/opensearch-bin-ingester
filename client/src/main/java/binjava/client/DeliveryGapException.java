@@ -22,8 +22,9 @@ import java.io.IOException;
  * side of the channel, and raising the queue would do nothing.
  *
  * <p>⚠️ IT DOES NOT RECOVER, and M6 does not pretend to. Re-reading the missing
- * window is the fallback ladder's tier 2 or 3, which M5.18 shipped as a policy
- * nothing executes and M8 owns executing. What this type buys is that the loss
+ * window is the fallback ladder's tier 2 or 3, which read the store; M8 executes
+ * tiers 0 and 1 and ADR-0057 leaves 2, 3 and the re-read to M9, with the
+ * catch-up read path they need. What this type buys is that the loss
  * is VISIBLE at the moment it happens rather than inferred weeks later from a
  * document count.
  */

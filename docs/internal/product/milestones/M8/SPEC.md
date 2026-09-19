@@ -40,7 +40,7 @@ written, the cell is wrong and is fixed HERE.
 | M5.6e | the production `SequencerTransport` — `InProcessTransport` in `testFixtures` is the only implementation | `new-impl SequencerTransport` (a construction of an implementation) | — |
 | M5.91a | no production `main()` (closed by M8.4) | `main` | — |
 | M5.91b | `SegmentPrefetcher`, `NodeSegmentSource`, `NodeSubscriptions` — built only by tests (closed by M8.31 for the last two, and by M8.56 for `SegmentPrefetcher`) | `new SegmentPrefetcher`; `new NodeSegmentSource`; `new NodeSubscriptions` | M8.56 |
-| M5.91c | `FallbackLadder` — built only by tests, and never EXECUTED (closed by M8.28, criterion 20) | `new FallbackLadder`; `call tierFor` (constructed AND run) | M8.28 |
+| M5.91c | `FallbackLadder` — built only by tests, and never EXECUTED (closed by M8.28, criterion 20) | `call tierFor` (a static policy: RUN, since there is nothing to construct) | — |
 | M6.15 | `IndexRegistrar.onReconnect()`, called by nothing because no production `SubscriptionTransport` exists | `call onReconnect` | — |
 | M6.19 | `RoutedIngest` — the routed path, in no deployable server | `new RoutedIngest` | — |
 | M7.17 | `ProgressReporter.Positions` — no production source (M8.43, split out of M8.6) | `implements Positions` | — |
@@ -406,11 +406,14 @@ ADR-0052 § Alternatives, with its number.
     THE MEASUREMENT SHOWS THE DEFAULT TTL IS WRONG, CHANGING IT IS THE POINT OF
     THE MEASUREMENT** and not a weakened threshold; the change lands with the
     number that caused it.
-20. **The fallback ladder EXECUTES when a consumer meets a gap.** During a chaos
-    row that produces a real `DeliveryGapException`, the ladder's tiers are
-    observed to run in order and the consumer recovers — and the GETs each tier
-    costs are COUNTED, so `FallbackLadder`'s modelled `TENS_OF_GETS` is either
-    confirmed or corrected with the measured number. ⚠️ **A POLICY NOTHING
+20. **The fallback ladder EXECUTES** — ⚠️ RE-SCOPED BY
+    [ADR-0057](../../decisions/0057-the-store-reading-fallback-tiers-and-gap-re-reads-wait-for-m9.md):
+    on a real connection loss the consumer's transport runs tiers 0 and 1 in
+    order (PUSH, RECONNECT, PUSH) and never descends to the store tiers, at zero
+    GETs by construction. Tiers 2 and 3, re-reading a gap's missing window, and
+    measuring `TENS_OF_GETS` are M9's, with the catch-up read path M8.24
+    needs. The original text asked for a gap to be recovered and each tier's
+    GETs counted. ⚠️ **A POLICY NOTHING
     EXECUTES IS A POLICY THAT HAS NEVER BEEN WRONG**, and M6's SPEC assigned
     executing it here.
 21. **Configuration is parsed once, and a bad configuration fails the process at
@@ -501,7 +504,7 @@ to catch:
 | 17 | `InboxWriteRateIT` (≥3 indices, ≥2 slots, ≥2 pods) | a commit-intent write per INDEX rather than per pod per slot per flush — invisible at the one-index fixture every other test uses — and a drain that LISTs per slot per interval, which breaks R15 while every correctness assertion stays green |
 | 18 | `OpenSearchNodeKillIT` | catch-up served ahead of the live tail: the backlog assertion passes and a record written after the kill waits for the whole backlog |
 | 19 | `LeaseTtlMeasurementIT` | a takeover that fires on a pause SHORTER than the TTL (liveness lost for a healthy leader) or none on a pause longer than it (safety resting on nothing) |
-| 20 | `FallbackLadderExecutionIT` | a ladder whose tiers are constructed and never invoked — today's state, and green on any assertion about recovery alone if the consumer also has a direct path |
+| 20 | `LadderExecutionTest` (T1, re-scoped by ADR-0057) | a ladder whose tiers are constructed and never invoked — today's state, and green on any assertion about recovery alone if the consumer also has a direct path |
 | 21 | `ConfigRefusalTest` (T0, the MESSAGE) **and `ConfigExitCodeIT` (T3, the non-zero EXIT)** | a missing store endpoint defaulted to a local path: the process starts, writes nowhere anyone expects, and every in-process test passes |
 | 22 | `RetentionRefusalTest` (T1: the join needs no container) | the floor reported by GC never reaching the consumer: both halves stay green in their own modules, which is exactly the state M7 shipped |
 | 23 | `ProductionFetchPathTest` (≥8 shards, ≥2 indices, ≥4 shared segments, counts doubled; GETs counted at an HTTP server, since a presigned GET bypasses every `CountingBinStore`) | a per-subscription `NodeSegmentSource` cache: one GET per shard per segment — correct, fast, green on every read-back assertion in this plan, and the exact shape non-negotiable 6 forbids |
