@@ -578,6 +578,7 @@ rows uncited.
 | M8.32 | The routed path through the assembled server (M6.19): `os_routing` placement and FR-13's refusal | FR-13 |
 | M8.31 | Wire the consumer-side fetch path: `NodeSegmentSource`, `NodeSubscriptions` and the first production `SegmentSource` (M5.91b) | FR-10, NFR-4 |
 | M8.56 | Wire `SegmentPrefetcher` into the assembled ingester (split from M8.31) | FR-10, NFR-4 |
+| M8.57 | The watch cuts a forward to a holder it reports gone, so a paused leader costs the probe window (found by M8.55) | FR-11, NFR-9 |
 | M8.30 | Join GC's deletions to the consumer's refusal over the production transport (M7.23) | FR-9, FR-10 |
 | M8.29 | Extend `check-module.sh`: only the root may depend on `binstore-backends` in `src/main` | — (gate) |
 | M8.25 | `scripts/check-wired.sh`: the fixed list of unwired mechanisms, each either constructed in `src/main` or naming an existing backlog row | — (gate) |
