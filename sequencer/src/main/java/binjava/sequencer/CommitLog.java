@@ -178,6 +178,9 @@ public final class CommitLog {
         for (EpochDelta held : r.deltas()) {
             chain.record(held.epoch(), held.delta());
         }
+        if (r.startedAtCheckpoint()) {
+            chain.startsAt(r.checkpointEpoch(), r.checkpointSequence());
+        }
         nextOffsets.clear();
         nextOffsets.putAll(r.offsets());
         nextSequence = r.nextSequence();
@@ -285,6 +288,9 @@ public final class CommitLog {
         // uses, the chain was empty and reported itself COMPLETE.
         for (EpochDelta held : inherited.deltas()) {
             chain.record(held.epoch(), held.delta());
+        }
+        if (inherited.startedAtCheckpoint()) {
+            chain.startsAt(inherited.checkpointEpoch(), inherited.checkpointSequence());
         }
         // ⚠️ THE WINDOW CROSSES WITH THE OFFSETS (M5.1). A successor's own
         // chain is empty, so everything its predecessor applied reaches it

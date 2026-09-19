@@ -54,10 +54,28 @@ final class ChainReplay {
     private record Hop(long epoch, long from, long upTo) {
     }
 
+    /** {@link Result#checkpointEpoch} when the walk began at an origin, not a checkpoint. */
+    static final long NO_CHECKPOINT = -1;
+
     /** What a replay learned: offsets, this chain's next free slot, its seal. */
     record Result(Map<RunKey, Long> offsets, long nextSequence, Seal seal,
             Map<RunKey, Long> indexEntries, Map<String, Checkpoint.PodState> pods,
-            List<EpochDelta> deltas) {
+            List<EpochDelta> deltas, long checkpointEpoch, long checkpointSequence) {
+
+        /** A result whose walk did not start at a checkpoint. */
+        Result(Map<RunKey, Long> offsets, long nextSequence, Seal seal,
+                Map<RunKey, Long> indexEntries, Map<String, Checkpoint.PodState> pods,
+                List<EpochDelta> deltas) {
+            this(offsets, nextSequence, seal, indexEntries, pods, deltas, NO_CHECKPOINT, 0);
+        }
+
+        /**
+         * Whether the walk started at a checkpoint, at ({@link #checkpointEpoch},
+         * {@link #checkpointSequence}) -- where the chain it read BEGINS (M8.38).
+         */
+        boolean startedAtCheckpoint() {
+            return checkpointEpoch != NO_CHECKPOINT;
+        }
 
         /**
          * ⚠️ `deltas` IS WHAT M7.25 RECORDED AS MISSING: this walk read every
@@ -143,6 +161,10 @@ final class ChainReplay {
     private long nextSequence;
     private Seal seal;
 
+    /** Where the walk began, if a checkpoint began it; the walk stops at the first. */
+    private long checkpointEpoch = NO_CHECKPOINT;
+    private long checkpointSequence;
+
     private ChainReplay(BinStore store, String prefix, long ownEpoch) {
         this.store = store;
         this.prefix = prefix;
@@ -154,7 +176,7 @@ final class ChainReplay {
         ChainReplay r = new ChainReplay(store, prefix, epoch);
         r.replayAncestry(epoch, Long.MAX_VALUE, true);
         return new Result(r.offsets, r.nextSequence, r.seal, Map.copyOf(r.indexEntries),
-                Map.copyOf(r.pods), r.deltas);
+                Map.copyOf(r.pods), r.deltas, r.checkpointEpoch, r.checkpointSequence);
     }
 
     /**
@@ -192,7 +214,8 @@ final class ChainReplay {
         // predecessor's segments -- and those are exactly the objects its first
         // GC pass must be able to condemn.
         return new Result(Map.copyOf(r.offsets), r.nextSequence, r.seal,
-                Map.copyOf(r.indexEntries), Map.copyOf(r.pods), r.deltas);
+                Map.copyOf(r.indexEntries), Map.copyOf(r.pods), r.deltas, r.checkpointEpoch,
+                r.checkpointSequence);
     }
 
     /**
@@ -400,6 +423,8 @@ final class ChainReplay {
             nextSequence = Math.max(nextSequence, checkpoint.sequence());
         }
         hops.add(new Hop(chainEpoch, checkpoint.sequence(), upTo));
+        checkpointEpoch = chainEpoch;
+        checkpointSequence = checkpoint.sequence();
         return true;
     }
 

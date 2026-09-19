@@ -182,6 +182,21 @@ public final class ChainMemory {
         lastSequence = -1;
     }
 
+    /**
+     * Where an EMPTY chain begins, when a replay began at a checkpoint (M8.38).
+     *
+     * <p>⚠️ **ONLY WHILE EMPTY**, like every use of the empty boundary: a chain
+     * holding deltas reports its boundary off the deque. A checkpoint that
+     * collapsed the whole chain leaves nothing to read, and (0, 0) would say
+     * nothing had ever been collected.
+     */
+    synchronized void startsAt(long epoch, long sequence) {
+        if (deltas.isEmpty()) {
+            emptyEpoch = epoch;
+            emptySequence = sequence;
+        }
+    }
+
     /** What a pass reads, copied so the writer can keep committing. */
     public synchronized Snapshot snapshot() {
         List<CommitDelta> copy = new ArrayList<>(deltas.size());
