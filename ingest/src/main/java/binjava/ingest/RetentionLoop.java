@@ -126,12 +126,25 @@ public final class RetentionLoop {
      *     segments for orphans. See {@code LocalSequencer.serving()}
      */
     public record Term(ChainMemory chain, RetentionPass.RetainedSink sink,
-            java.util.function.BooleanSupplier live) {
+            java.util.function.BooleanSupplier live,
+            java.util.function.Consumer<binjava.binstore.BinStore> chainGc) {
 
+        /**
+         * @param chainGc collects the chain's own objects through the FENCED
+         *     store, after the segment pass (M8.39); run only when that pass
+         *     ran, so an idle leader issues nothing for it
+         */
         public Term {
             Objects.requireNonNull(chain, "chain");
             Objects.requireNonNull(sink, "sink");
             Objects.requireNonNull(live, "live");
+            Objects.requireNonNull(chainGc, "chainGc");
+        }
+
+        /** A term whose chain objects are not collected here. */
+        public Term(ChainMemory chain, RetentionPass.RetainedSink sink,
+                java.util.function.BooleanSupplier live) {
+            this(chain, sink, live, fenced -> { });
         }
     }
 
@@ -269,6 +282,9 @@ public final class RetentionLoop {
                 SegmentGc.Result result = new RetentionPass(gc, term.sink())
                         .run(snapshot.deltas(), nextOffsetsOf(snapshot.deltas()));
                 term.chain().forgetCollected(Set.copyOf(result.deletedKeys()));
+                if (term.live().getAsBoolean()) {
+                    term.chainGc().accept(fenced);
+                }
             }
             if (!sweepHours.isEmpty()) {
                 // ⚠️ THE KEEP LIST IS TAKEN FROM THE SAME SNAPSHOT THE HOURS WERE

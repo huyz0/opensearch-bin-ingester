@@ -74,7 +74,7 @@ class PointedDeltaPinnedTest {
     @Test
     void aDeltaWhoseSegmentsAreGONEAndNothingPointsAtIsDELETED() throws Exception {
         ChainGc.DeltaAt delta = writeDelta(1, "bucket/data/seg-1");
-        ChainGc.Result result = gc().collect(checkpointAt(9, PodState.bare(42)), 9,
+        ChainGc.Result result = gc().collect(checkpointAt(9, PodState.bare(42)), ckpt(9),
                 List.of(delta), Set.of(), List.of());
         assertThat(result.deltasDeleted()).isEqualTo(1);
         assertThat(backing.stat(keys.keyFor(1))).isEmpty();
@@ -84,7 +84,7 @@ class PointedDeltaPinnedTest {
     void aDeltaAPodSlotPOINTSAtIsKEPTEvenWhenEVERYTHINGElseSaysCollect() throws Exception {
         ChainGc.DeltaAt pointed = writeDelta(1, "bucket/data/seg-1");
         Checkpoint newest = checkpointAt(9, new PodState("i1", 42, EPOCH, 1));
-        ChainGc.Result result = gc().collect(newest, 9, List.of(pointed), Set.of(), List.of());
+        ChainGc.Result result = gc().collect(newest, ckpt(9), List.of(pointed), Set.of(), List.of());
         assertThat(result.deltasDeleted()).isZero();
         assertThat(result.pinnedByPointer()).isEqualTo(1);
         assertThat(backing.stat(keys.keyFor(1)))
@@ -102,7 +102,7 @@ class PointedDeltaPinnedTest {
             writeDelta(s, "bucket/data/seg-" + s);
         }
         Checkpoint newest = checkpointAt(50, new PodState("i1", 42, EPOCH, 1));
-        ChainGc.Result result = gc().collect(newest, 50, List.of(ancient), Set.of(), List.of());
+        ChainGc.Result result = gc().collect(newest, ckpt(50), List.of(ancient), Set.of(), List.of());
         assertThat(result.deltasDeleted())
                 .as("⚠️ PINNING BY AGE PASSES ON A YOUNG CHAIN AND DELETES THE POINTER'S "
                         + "TARGET ON A REAL ONE. Since M5.55 inherited pointers ride in "
@@ -116,7 +116,7 @@ class PointedDeltaPinnedTest {
     @Test
     void aDeltaWhoseSegmentIsSTILLRetainedIsKEPT() throws Exception {
         ChainGc.DeltaAt delta = writeDelta(1, "bucket/data/seg-1");
-        ChainGc.Result result = gc().collect(checkpointAt(9, PodState.bare(42)), 9,
+        ChainGc.Result result = gc().collect(checkpointAt(9, PodState.bare(42)), ckpt(9),
                 List.of(delta), Set.of("bucket/data/seg-1"), List.of());
         assertThat(result.deltasDeleted())
                 .as("⚠️ THE DELTA IS THE ONLY OBJECT THAT SAYS WHICH SEGMENT HOLDS AN "
@@ -141,7 +141,7 @@ class PointedDeltaPinnedTest {
                 new SegmentCommit("bucket/data/seg-b", List.of(new RunCommit(STREAM, 5, 5)),
                         new SegmentCommit.Attribution("poda", "i1", 2))));
         backing.put(keys.keyFor(1), Body.ofBytes(many.encode()));
-        ChainGc.Result result = gc().collect(checkpointAt(9, PodState.bare(42)), 9,
+        ChainGc.Result result = gc().collect(checkpointAt(9, PodState.bare(42)), ckpt(9),
                 List.of(new ChainGc.DeltaAt(EPOCH, 1, many)), Set.of("bucket/data/seg-b"),
                 List.of());
         assertThat(result.deltasDeleted())
@@ -154,7 +154,7 @@ class PointedDeltaPinnedTest {
     void aDeltaATOrABOVETheNewestCheckpointIsKEPT() throws Exception {
         ChainGc.DeltaAt atCheckpoint = writeDelta(9, "bucket/data/seg-9");
         ChainGc.DeltaAt above = writeDelta(10, "bucket/data/seg-10");
-        ChainGc.Result result = gc().collect(checkpointAt(9, PodState.bare(42)), 9,
+        ChainGc.Result result = gc().collect(checkpointAt(9, PodState.bare(42)), ckpt(9),
                 List.of(atCheckpoint, above), Set.of(), List.of());
         assertThat(result.deltasDeleted())
                 .as("⚠️ THE CHECKPOINT'S SEQUENCE IS EXCLUSIVE -- the next slot NOT covered "
@@ -172,7 +172,9 @@ class PointedDeltaPinnedTest {
         LogKeys otherEpoch = new LogKeys(PREFIX, EPOCH + 1);
         backing.put(otherEpoch.keyFor(1), Body.ofBytes(delta.encode()));
         Checkpoint newest = checkpointAt(9, new PodState("i1", 42, EPOCH, 1));
-        ChainGc.Result result = gc().collect(newest, 9,
+        // ⚠️ THE CHECKPOINT IS IN THE DELTA's EPOCH (M8.39): a newer epoch's
+        // delta is AFTER an older epoch's checkpoint, and not covered by it.
+        ChainGc.Result result = gc().collect(newest, new ChainGc.CheckpointAt(EPOCH + 1, 9),
                 List.of(new ChainGc.DeltaAt(EPOCH + 1, 1, delta)), Set.of(), List.of());
         assertThat(result.deltasDeleted())
                 .as("a pointer is (epoch, sequence), and matching on the sequence alone "
@@ -191,7 +193,7 @@ class PointedDeltaPinnedTest {
     @Test
     void theNEWESTCheckpointIsNEVERDeleted() throws Exception {
         writeCheckpoint(9, checkpointAt(9, PodState.bare(42)));
-        gc().collect(checkpointAt(9, PodState.bare(42)), 9, List.of(), Set.of(), List.of(new ChainGc.CheckpointAt(EPOCH, 9)));
+        gc().collect(checkpointAt(9, PodState.bare(42)), ckpt(9), List.of(), Set.of(), List.of(new ChainGc.CheckpointAt(EPOCH, 9)));
         assertThat(backing.stat(keys.checkpointKeyFor(9)))
                 .as("it is what `LATEST` points at and what bounds every recovery walk; "
                         + "deleting it makes recovery unbounded at best and impossible at "
@@ -204,7 +206,7 @@ class PointedDeltaPinnedTest {
         for (long s : new long[] {1, 4, 7, 9}) {
             writeCheckpoint(s, checkpointAt(s, PodState.bare(42)));
         }
-        ChainGc.Result result = gc().collect(checkpointAt(9, PodState.bare(42)), 9, List.of(),
+        ChainGc.Result result = gc().collect(checkpointAt(9, PodState.bare(42)), ckpt(9), List.of(),
                 Set.of(), List.of(ckpt(1), ckpt(4), ckpt(7), ckpt(9)));
         assertThat(result.checkpointsDeleted())
                 .as("keepNewest = 2, so 9 and 7 stay and 4 and 1 go")
@@ -225,7 +227,7 @@ class PointedDeltaPinnedTest {
         for (long s : new long[] {1, 4, 7, 9}) {
             writeCheckpoint(s, checkpointAt(s, PodState.bare(42)));
         }
-        gc().collect(checkpointAt(9, PodState.bare(42)), 9, List.of(), Set.of(),
+        gc().collect(checkpointAt(9, PodState.bare(42)), ckpt(9), List.of(), Set.of(),
                 List.of(ckpt(9), ckpt(7), ckpt(4), ckpt(1)));
         assertThat(backing.stat(keys.checkpointKeyFor(9)))
                 .as("⚠️ DESCENDING IS THE CALLER'S NATURAL ORDER -- a walk BACK from "
@@ -246,7 +248,7 @@ class PointedDeltaPinnedTest {
         for (long s : new long[] {7, 9}) {
             writeCheckpoint(s, checkpointAt(s, PodState.bare(42)));
         }
-        ChainGc.Result result = gc().collect(checkpointAt(9, PodState.bare(42)), 9, List.of(),
+        ChainGc.Result result = gc().collect(checkpointAt(9, PodState.bare(42)), ckpt(9), List.of(),
                 Set.of(), List.of(new ChainGc.CheckpointAt(EPOCH - 1, 2), ckpt(7), ckpt(9)));
         assertThat(result.checkpointsDeleted()).isEqualTo(1);
         assertThat(backing.stat(older.checkpointKeyFor(2)))
@@ -276,7 +278,7 @@ class PointedDeltaPinnedTest {
             }
         };
         ChainGc.Result result = new ChainGc(firstCallFails, PREFIX, 1, 2)
-                .collect(checkpointAt(9, PodState.bare(42)), 9, List.of(one, two), Set.of(),
+                .collect(checkpointAt(9, PodState.bare(42)), ckpt(9), List.of(one, two), Set.of(),
                         List.of(ckpt(3), ckpt(4), ckpt(7), ckpt(9)));
         assertThat(result.deltasDeleted())
                 .as("⚠️ A PARTIAL FAILURE LANDS WHEREVER THE STORE PUT IT, so deriving one "
@@ -310,7 +312,7 @@ class PointedDeltaPinnedTest {
 
     @Test
     void aPassOverNOTHINGCostsNOTHING() {
-        ChainGc.Result result = gc().collect(checkpointAt(9, PodState.bare(42)), 9, List.of(),
+        ChainGc.Result result = gc().collect(checkpointAt(9, PodState.bare(42)), ckpt(9), List.of(),
                 Set.of(), List.of());
         assertThat(result.deltasDeleted()).isZero();
         assertThat(store.counts().total())
@@ -326,7 +328,7 @@ class PointedDeltaPinnedTest {
             chain.add(writeDelta(s, "bucket/data/seg-" + s));
         }
         long putsBefore = store.counts().puts();
-        ChainGc.Result result = gc().collect(checkpointAt(3000, PodState.bare(42)), 3000,
+        ChainGc.Result result = gc().collect(checkpointAt(3000, PodState.bare(42)), ckpt(3000),
                 chain, Set.of(), List.of());
         assertThat(result.deltasDeleted()).isEqualTo(2500);
         assertThat(store.counts().lists()).isZero();
@@ -342,7 +344,7 @@ class PointedDeltaPinnedTest {
     void aFAILEDBatchLeavesTheObjectsAndIsNotCounted() throws Exception {
         ChainGc.DeltaAt delta = writeDelta(1, "bucket/data/seg-1");
         ChainGc refusing = new ChainGc(new FailingDeleteStore(backing), PREFIX, 1000, 2);
-        ChainGc.Result result = refusing.collect(checkpointAt(9, PodState.bare(42)), 9,
+        ChainGc.Result result = refusing.collect(checkpointAt(9, PodState.bare(42)), ckpt(9),
                 List.of(delta), Set.of(), List.of());
         assertThat(result.deltasDeleted()).isZero();
         assertThat(backing.stat(keys.keyFor(1))).isNotEmpty();

@@ -117,6 +117,21 @@ public final class ChainMemory {
     private long lastEpoch = -1;
     private long lastSequence = -1;
 
+    /**
+     * Deltas forgotten because their segments are gone, whose OWN objects
+     * chain GC has not yet collected (M8.39).
+     *
+     * <p>⚠️ **SEPARATE FROM THE CHAIN, AND THAT IS THE COST ARGUMENT.** Kept in
+     * the chain, a delta chain GC must keep -- pinned by a pod's pointer, or
+     * newer than the newest checkpoint -- would be handed to the segment pass
+     * on every tick, whose DELETEs for segments already gone would then run on
+     * an idle leader for ever. Here they cost nothing until chain GC runs.
+     * ⚠️ BOUNDED BY {@code maxDeltas} like the chain: past it the oldest is
+     * dropped, and its object stays in the bucket, which is storage and the
+     * safe direction.
+     */
+    private final Deque<ChainGc.DeltaAt> awaitingChainGc = new ArrayDeque<>();
+
     public ChainMemory(int maxDeltas) {
         if (maxDeltas <= 0) {
             // ⚠️ A CAP OF ZERO IS A CHAIN THAT IS ALWAYS EMPTY AND ALWAYS SAYS
@@ -270,6 +285,11 @@ public final class ChainMemory {
         while (!deltas.isEmpty() && everySegmentIn(deltas.peekFirst(), deletedKeys)) {
             last = deltas.removeFirst();
             dropped++;
+            awaitingChainGc.addLast(new ChainGc.DeltaAt(last.epoch(), last.delta().sequence(),
+                    last.delta()));
+            if (awaitingChainGc.size() > maxDeltas) {
+                awaitingChainGc.removeFirst();
+            }
         }
         if (last != null && deltas.isEmpty()) {
             // ⚠️ THE SAME BOUNDARY `forgetThrough` WOULD HAVE LEFT, so a
@@ -280,6 +300,16 @@ public final class ChainMemory {
             emptySequence = last.delta().sequence() + 1;
         }
         return dropped;
+    }
+
+    /** What chain GC may judge: deltas forgotten here whose objects are still there. */
+    public synchronized List<ChainGc.DeltaAt> awaitingChainGc() {
+        return List.copyOf(awaitingChainGc);
+    }
+
+    /** Forgets what chain GC collected. */
+    public synchronized void chainCollected(java.util.Collection<ChainGc.DeltaAt> gone) {
+        awaitingChainGc.removeAll(gone);
     }
 
     private static boolean everySegmentIn(EpochDelta held, java.util.Set<String> deletedKeys) {

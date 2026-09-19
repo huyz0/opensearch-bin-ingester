@@ -10,6 +10,7 @@ import binjava.format.RunKey;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -100,6 +101,21 @@ final class CheckpointWriter implements AutoCloseable {
 
     private long deltasSinceCheckpoint;
     private boolean dirty;
+
+    /**
+     * What this writer has written and not yet seen collected, oldest first,
+     * and the newest of them (M8.39).
+     *
+     * <p>⚠️ **HELD SO CHAIN GC NEEDS NO READ.** Every other source of "the
+     * newest checkpoint and every checkpoint of the chain" is a GET and a LIST,
+     * which wired into the retention loop is a request per pass on an idle
+     * leader. What a predecessor wrote is not here: it stays in the bucket.
+     */
+    private final List<ChainGc.CheckpointAt> written = new ArrayList<>();
+
+    /** A week of checkpoints at the shipped one-minute interval. */
+    static final int MAX_WRITTEN = 10_080;
+    private Checkpoint newestWritten;
     private volatile boolean closed;
 
     CheckpointWriter(BinStore store, CommitLog log, String prefix, long everyDeltas,
@@ -530,6 +546,14 @@ final class CheckpointWriter implements AutoCloseable {
             store.put(keys.latestCheckpointKey(),
                     new Body(body.length, () -> new ByteArrayInputStream(body)));
             written = true;
+            this.written.add(new ChainGc.CheckpointAt(log.epoch(), sequence));
+            if (this.written.size() > MAX_WRITTEN) {
+                // ⚠️ A NODE THAT NEVER HOLDS THE GC LEASE never collects, and
+                // this would grow a checkpoint per interval for the term's
+                // life. Past the cap the oldest stays in the bucket unjudged.
+                this.written.remove(0);
+            }
+            newestWritten = checkpoint;
         } catch (IOException retryAtTheNextTrigger) {
             // ⚠️ THE DIRTY FLAG IS LEFT SET so a later trigger retries; clearing
             // it would wedge the writer until the next commit and, on a quiet
@@ -576,6 +600,21 @@ final class CheckpointWriter implements AutoCloseable {
         if (everyInterval == null || everyInterval.isZero() || everyInterval.isNegative()) {
             throw new IllegalArgumentException("everyInterval is positive: " + everyInterval);
         }
+    }
+
+    /** The newest checkpoint this writer wrote, or empty if it has written none. */
+    synchronized java.util.Optional<Checkpoint> newestWritten() {
+        return java.util.Optional.ofNullable(newestWritten);
+    }
+
+    /** Every checkpoint this writer wrote and chain GC has not collected, oldest first. */
+    synchronized List<ChainGc.CheckpointAt> written() {
+        return List.copyOf(written);
+    }
+
+    /** Forgets what chain GC deleted. */
+    synchronized void collected(List<ChainGc.CheckpointAt> gone) {
+        written.removeAll(gone);
     }
 
     /** How many T ticks the writer has finished PROCESSING, for a test to rendezvous on. */

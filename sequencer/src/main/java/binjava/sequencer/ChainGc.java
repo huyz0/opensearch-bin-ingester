@@ -107,7 +107,23 @@ public final class ChainGc {
      * simply retention doing its job.
      */
     public record Result(int deltasDeleted, int pinnedByPointer, int holdingRetainedSegments,
-            int checkpointsDeleted) {
+            int checkpointsDeleted, List<DeltaAt> collected,
+            List<CheckpointAt> collectedCheckpoints) {
+
+        /**
+         * ⚠️ {@code collected} AND {@code collectedCheckpoints} ARE WHAT LANDED
+         * (M8.39), so a caller holding them in memory forgets exactly those: a
+         * failed batch is still in the bucket, and is judged again.
+         */
+        public Result {
+            collected = List.copyOf(collected);
+            collectedCheckpoints = List.copyOf(collectedCheckpoints);
+        }
+
+        /** A pass that deleted nothing. */
+        static Result none() {
+            return new Result(0, 0, 0, 0, List.of(), List.of());
+        }
     }
 
     private final BinStore store;
@@ -144,17 +160,22 @@ public final class ChainGc {
      * One pass over a chain the caller has already replayed.
      *
      * @param newest the newest checkpoint, whose pod slots pin deltas
-     * @param newestSequence the sequence that checkpoint covers up to,
-     *     EXCLUSIVE
+     * @param newestAt where that checkpoint is: its chain, and the sequence it
+     *     covers up to, EXCLUSIVE. ⚠️ BOTH, since M8.39: a chain held across a
+     *     takeover holds two numbering spaces, and a sequence alone kept a
+     *     predecessor's deltas for ever -- their sequences run past a young
+     *     successor's checkpoint -- while collecting a NEWER epoch's delta that
+     *     no checkpoint covers
      * @param retainedSegments segment keys that still exist — a delta naming
      *     any of them is kept
      * @param checkpoints every checkpoint of this chain, in ANY order — they
      *     are sorted here rather than trusted, because the caller's natural
      *     order is a walk back from {@code LATEST}, which is descending
      */
-    public Result collect(Checkpoint newest, long newestSequence, List<DeltaAt> chain,
+    public Result collect(Checkpoint newest, CheckpointAt newestAt, List<DeltaAt> chain,
             Set<String> retainedSegments, List<CheckpointAt> checkpoints) {
         Objects.requireNonNull(newest, "newest");
+        Objects.requireNonNull(newestAt, "newestAt");
         Objects.requireNonNull(chain, "chain");
         Objects.requireNonNull(retainedSegments, "retainedSegments");
         Objects.requireNonNull(checkpoints, "checkpoints");
@@ -166,11 +187,11 @@ public final class ChainGc {
             }
         }
 
-        List<String> doomed = new ArrayList<>();
+        List<DeltaAt> doomed = new ArrayList<>();
         int pinned = 0;
         int retaining = 0;
         for (DeltaAt at : chain) {
-            if (at.sequence() >= newestSequence) {
+            if (!coveredBy(at, newestAt)) {
                 continue;
             }
             if (pointers.contains(address(at.epoch(), at.sequence()))) {
@@ -181,7 +202,7 @@ public final class ChainGc {
                 retaining++;
                 continue;
             }
-            doomed.add(new LogKeys(prefix, at.epoch()).keyFor(at.sequence()));
+            doomed.add(at);
         }
 
         // ⚠️ SORTED HERE RATHER THAN TRUSTED. The caller's natural order is a
@@ -190,11 +211,9 @@ public final class ChainGc {
         // deletes the newest, the one object recovery cannot lose.
         List<CheckpointAt> ordered = new ArrayList<>(checkpoints);
         java.util.Collections.sort(ordered);
-        List<String> doomedCheckpoints = new ArrayList<>();
+        List<CheckpointAt> doomedCheckpoints = new ArrayList<>();
         for (int i = 0; i < ordered.size() - keepNewest; i++) {
-            CheckpointAt at = ordered.get(i);
-            doomedCheckpoints.add(
-                    new LogKeys(prefix, at.epoch()).checkpointKeyFor(at.sequence()));
+            doomedCheckpoints.add(ordered.get(i));
         }
 
         // ⚠️ TWO PASSES, NOT ONE LIST. A partial failure lands wherever the
@@ -203,9 +222,18 @@ public final class ChainGc {
         // reporting two deltas deleted and no checkpoints, while one delta was
         // still in the bucket and a checkpoint had gone. The cost is at most
         // one extra DELETE call per pass, at the boundary between the two.
-        int deltasDeleted = deleteInBatches(doomed);
-        int checkpointsDeleted = deleteInBatches(doomedCheckpoints);
-        return new Result(deltasDeleted, pinned, retaining, checkpointsDeleted);
+        List<DeltaAt> collected = deleteInBatches(doomed,
+                at -> new LogKeys(prefix, at.epoch()).keyFor(at.sequence()));
+        List<CheckpointAt> collectedCheckpoints = deleteInBatches(doomedCheckpoints,
+                at -> new LogKeys(prefix, at.epoch()).checkpointKeyFor(at.sequence()));
+        return new Result(collected.size(), pinned, retaining, collectedCheckpoints.size(),
+                collected, collectedCheckpoints);
+    }
+
+    /** Whether {@code at} is before {@code checkpoint}, in (epoch, sequence) order. */
+    private static boolean coveredBy(DeltaAt at, CheckpointAt checkpoint) {
+        return at.epoch() < checkpoint.epoch()
+                || (at.epoch() == checkpoint.epoch() && at.sequence() < checkpoint.sequence());
     }
 
     private static boolean namesARetainedSegment(CommitDelta delta, Set<String> retained) {
@@ -221,13 +249,15 @@ public final class ChainGc {
         return epoch + "/" + sequence;
     }
 
-    private int deleteInBatches(List<String> keys) {
-        int deleted = 0;
-        for (int from = 0; from < keys.size(); from += deleteBatchSize) {
-            List<String> batch = keys.subList(from, Math.min(from + deleteBatchSize, keys.size()));
+    /** Deletes {@code items} by key a batch at a time, and returns those whose batch landed. */
+    private <T> List<T> deleteInBatches(List<T> items,
+            java.util.function.Function<T, String> keyOf) {
+        List<T> deleted = new ArrayList<>();
+        for (int from = 0; from < items.size(); from += deleteBatchSize) {
+            List<T> batch = items.subList(from, Math.min(from + deleteBatchSize, items.size()));
             try {
-                store.delete(batch);
-                deleted += batch.size();
+                store.delete(batch.stream().map(keyOf).toList());
+                deleted.addAll(batch);
             } catch (IOException failed) {
                 // ⚠️ NOT COUNTED, AND THE PASS CONTINUES. The objects are still
                 // there and the next pass judges them again from the same

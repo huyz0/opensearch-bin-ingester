@@ -83,7 +83,7 @@ public final class LocalSequencer implements Sequencer {
      * shutdown happened when a takeover did.
      */
     private volatile boolean fenced;
-    private volatile CheckpointWriter checkpoints;
+    volatile CheckpointWriter checkpoints;
 
     /**
      * What each pod incarnation has already had applied (M4.10d).
@@ -103,7 +103,7 @@ public final class LocalSequencer implements Sequencer {
      * one pays nothing at all (the writer is dirty-flagged). M4.9 measures what
      * they should be; these are what it measures against.
      */
-    static final long CHECKPOINT_EVERY_DELTAS = 1000;
+    public static final long CHECKPOINT_EVERY_DELTAS = 1000;
 
     static final java.time.Duration CHECKPOINT_INTERVAL = java.time.Duration.ofSeconds(60);
 

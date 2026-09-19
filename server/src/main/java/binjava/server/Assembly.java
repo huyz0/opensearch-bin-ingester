@@ -20,6 +20,7 @@ import binjava.ingest.StoreGcLease;
 import binjava.ingest.WatermarkTable;
 import binjava.sequencer.Checkpoints;
 import binjava.sequencer.BatchingSequencer;
+import binjava.sequencer.ChainCollector;
 import binjava.sequencer.FleetSequencer;
 import binjava.sequencer.LeaseConfig;
 import binjava.sequencer.LeaseChallenge;
@@ -252,16 +253,24 @@ public final class Assembly implements AutoCloseable {
                 kept.maxRetention(), kept.reportTimeout(),
                 alarm -> LOG.log(System.Logger.Level.WARNING, () -> "retention alarm "
                         + alarm.kind() + " on " + alarm.stream() + ": " + alarm.detail()));
-        return new RetentionLoop(() -> {
-            Sequencer held = sequencer.heldTerm();
-            // ⚠️ `serving()`, NOT MERELY `instanceof`: a term this node still
-            // HOLDS may already have been fenced by a takeover, and its frozen
-            // chain as a keep list deletes the successor's committed segments.
-            return LocalSequencer.underneath(held).filter(LocalSequencer::serving)
-                    .map(local -> new RetentionLoop.Term(local.chain(), local::observeRetained,
-                            local::serving));
-        }, leased, rule, observable, clock, config.prefix(), kept.minRetention(),
-                OrphanSweep.DEFAULT_GRACE, SegmentGc.DEFAULT_DELETE_BATCH);
+        return new RetentionLoop(this::retentionTerm, leased, rule, observable, clock,
+                config.prefix(), kept.minRetention(), OrphanSweep.DEFAULT_GRACE,
+                SegmentGc.DEFAULT_DELETE_BATCH);
+    }
+
+    /**
+     * The term the retention loop works on, if this node serves one.
+     *
+     * <p>⚠️ {@code serving()}, NOT MERELY {@code instanceof}: a term this node
+     * still HOLDS may already have been fenced by a takeover, and its frozen
+     * chain as a keep list deletes the successor's committed segments. Package-
+     * private so a case can drive the chain GC this wires (M8.39).
+     */
+    Optional<RetentionLoop.Term> retentionTerm() {
+        return LocalSequencer.underneath(sequencer.heldTerm()).filter(LocalSequencer::serving)
+                .map(local -> new RetentionLoop.Term(local.chain(), local::observeRetained,
+                        local::serving, fenced -> new ChainCollector(local, config.prefix())
+                                .collect(fenced, SegmentGc.DEFAULT_DELETE_BATCH)));
     }
 
     /**
