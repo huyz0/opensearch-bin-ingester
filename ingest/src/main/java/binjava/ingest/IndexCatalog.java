@@ -42,14 +42,19 @@ import java.util.concurrent.ConcurrentHashMap;
  * named here because this class's rules are otherwise complete and a reader
  * would reasonably assume this one was covered.
  *
- * <p>⚠️ NOTHING PUSHES INTO IT YET. M6.7 is the plugin-side listener and M6.6
- * is the write path that reads it. Stated rather than implied, as M5.16 and
- * M5.18 state the same thing.
+ * <p>⚠️ WHO WRITES IT IS NOT WHO WAITS ON IT. The subscription endpoint
+ * registers here directly, and {@code RoutedIngest} holds writes until an
+ * index appears -- so a registration has to wake those writes whichever door
+ * it came in by, which is what {@link #whenRegistered} is for (M8.32).
  */
 public final class IndexCatalog {
 
     /** By concrete index NAME, which is what a producer writes to. */
     private final Map<String, IndexRegistration> byName = new ConcurrentHashMap<>();
+
+    /** Run after every registration, outside this catalog's monitor. */
+    private final java.util.List<Runnable> listeners =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
 
     /** Alias to the concrete index name it currently resolves to. */
     private final Map<String, String> aliasTargets = new ConcurrentHashMap<>();
@@ -63,8 +68,28 @@ public final class IndexCatalog {
      * would place records by a shard count that no longer applies. The write
      * path only READS, and reads stay lock-free.
      */
-    public synchronized void register(IndexRegistration registration) {
+    public void register(IndexRegistration registration) {
         Objects.requireNonNull(registration, "registration");
+        synchronized (this) {
+            update(registration);
+        }
+        // ⚠️ AFTER THE UPDATE AND OUTSIDE THE MONITOR: a listener that
+        // re-checks must find the new entry, and one that takes its own lock
+        // must not do it while holding this one.
+        listeners.forEach(Runnable::run);
+    }
+
+    /**
+     * Runs {@code listener} after every future registration.
+     *
+     * <p>⚠️ A LISTENER RE-READS THIS CATALOG; it is told only that something
+     * changed, so it cannot act on a registration that has since been replaced.
+     */
+    public void whenRegistered(Runnable listener) {
+        listeners.add(Objects.requireNonNull(listener, "listener"));
+    }
+
+    private void update(IndexRegistration registration) {
         IndexRegistration previous = byName.put(registration.indexName(), registration);
         if (previous != null) {
             for (String alias : previous.aliases()) {

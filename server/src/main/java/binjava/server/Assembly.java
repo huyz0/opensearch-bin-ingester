@@ -8,6 +8,9 @@ import binjava.format.RunKey;
 import binjava.ingest.DefaultIngest;
 import binjava.ingest.IndexCatalog;
 import binjava.ingest.Ingest;
+import binjava.ingest.IngestConfig;
+import binjava.ingest.PendingPool;
+import binjava.ingest.RoutedIngest;
 import binjava.ingest.SubscriptionHub;
 import binjava.ingest.LeasedGc;
 import binjava.ingest.RetainedFloors;
@@ -75,6 +78,7 @@ public final class Assembly implements AutoCloseable {
     private final RetainedFloors floors;
     private final FleetSequencer sequencer;
     private final DefaultIngest ingest;
+    private final RoutedIngest routed;
     private final Deque<AutoCloseable> toClose = new ArrayDeque<>();
     private volatile boolean closed;
 
@@ -191,6 +195,12 @@ public final class Assembly implements AutoCloseable {
             throw failed;
         }
         toClose.push(this.ingest);
+        // ⚠️ THE ROUTED PATH IS WHAT THE FRONT DOOR IS HANDED (M8.32, FR-13).
+        // Plain `DefaultIngest` has no catalog: it refuses every routed write,
+        // and accepts an explicit partition the index does not have.
+        this.routed = new RoutedIngest(ingest, catalog,
+                new PendingPool(clock, PENDING_TIMEOUT, PENDING_BYTES_PER_INDEX),
+                PENDING_TIMEOUT, clock);
 
         this.retention = retentionLoop(config, store, clock);
         // ⚠️ THE FLOOR A CONSUMER IS TOLD, READ ON DEMAND (ADR-0056). The epoch
@@ -307,6 +317,16 @@ public final class Assembly implements AutoCloseable {
      */
     static final Duration COMMIT_WINDOW = Duration.ofMillis(5);
 
+    /** How long a routed write waits for its index's registration: ADR-0015's default. */
+    static final Duration PENDING_TIMEOUT = Duration.ofSeconds(5);
+
+    /**
+     * ⚠️ THE BOUND ON WHAT ONE UNREGISTERED INDEX MAY HOLD (ADR-0015): one
+     * default segment's worth, so a producer racing the plugin is absorbed and
+     * one writing to an index nobody registers is refused rather than grown.
+     */
+    static final long PENDING_BYTES_PER_INDEX = IngestConfig.DEFAULT_MAX_SEGMENT_BYTES;
+
     /**
      * The stream an index name resolves to.
      *
@@ -409,7 +429,7 @@ public final class Assembly implements AutoCloseable {
     }
 
     public Ingest ingest() {
-        return ingest;
+        return routed;
     }
 
     /**

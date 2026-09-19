@@ -74,6 +74,11 @@ public final class RoutedIngest implements Ingest {
                     + " and the pending pool's own timeout of " + pending.timeout()
                     + " are the two halves of one bound and must agree");
         }
+        // ⚠️ SUBSCRIBED TO THE CATALOG, NOT ONLY TO {@link #register}: the
+        // assembled server's subscription endpoint registers into the catalog
+        // directly, and a write waiting here would sleep out its timeout for an
+        // index that had arrived (M8.32).
+        catalog.whenRegistered(this::wakeWaiters);
     }
 
     /** How many requests are currently waiting for a registration. */
@@ -93,10 +98,14 @@ public final class RoutedIngest implements Ingest {
      * <p>⚠️ THE WAITERS ARE WOKEN AFTER THE CATALOG IS UPDATED, never before: a
      * waiter that re-checked between the signal and the update would find the
      * index still unknown and go back to sleep until its timeout, which is the
-     * refusal this whole path exists to avoid.
+     * refusal this whole path exists to avoid. The catalog's own listener does
+     * the waking, so a registration that bypasses this method wakes them too.
      */
     public void register(IndexRegistration registration) {
         catalog.register(registration);
+    }
+
+    private void wakeWaiters() {
         lock.lock();
         try {
             registered.signalAll();

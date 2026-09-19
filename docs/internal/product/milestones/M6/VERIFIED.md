@@ -154,7 +154,8 @@ distrust.
 
 ## What M6 does NOT close
 
-⚠️ **THE ROUTED PATH IS NOT WIRED INTO ANY DEPLOYABLE SERVER.** `RoutedIngest`
+⚠️ **THE ROUTED PATH WAS NOT WIRED INTO ANY DEPLOYABLE SERVER** when this was
+written; M8.32 wired it, with `RoutedWriteTest` as the evidence. `RoutedIngest`
 holds the routing, the catalog lookup, the pending pool and FR-13's
 out-of-range refusal, and it is constructed by six call sites, all of them
 tests. `BulkService` calls `Ingest.appendRouted`, whose default throws

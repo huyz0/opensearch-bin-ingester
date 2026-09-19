@@ -96,16 +96,18 @@ public interface Ingest extends AutoCloseable {
      * which owns no decision (ADR-0019).
      *
      * <p>⚠️ THE DEFAULT REFUSES, and says what is missing rather than placing
-     * the records somewhere. A deployment with no catalog has no shard count
+     * the records somewhere. ⚠️ AS A PLACEMENT REFUSAL, which the HTTP layer
+     * answers with 400: anything else is a 500, which reads as transient and is
+     * retried for ever by a deployment that can never place it (M6.19). A deployment with no catalog has no shard count
      * for any index, so every routed write is unplaceable; answering with
      * partition 0 would funnel an index into one shard while returning 202.
      *
-     * @throws IllegalStateException if this implementation cannot place by
+     * @throws PlacementRefusedException if this implementation cannot place by
      *     routing value
      */
     default AppendResult appendRouted(Principal principal, String indexOrAlias, String routing,
             RecordSource records) throws IOException {
-        throw new IllegalStateException("this ingester has no index catalog, so it cannot "
+        throw new PlacementRefusedException("this ingester has no index catalog, so it cannot "
                 + "compute a partition from a routing value -- write with an explicit "
                 + "partition, or deploy the plugin that registers index shapes (FR-16)");
     }

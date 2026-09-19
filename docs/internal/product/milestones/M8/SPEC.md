@@ -443,10 +443,13 @@ ADR-0052 § Alternatives, with its number.
     non-negotiable 6 forbids. ⚠️ **AND M9 WOULD PUBLISH THE MUTANT's CURVE**,
     because the cost numbers M9 measures are of whatever M8 assembles.
 24. **The routed path serves a write through the assembled server (M6.19,
-    FR-13).** `POST /{index}/_bulk` with `os_routing` on an index whose
-    `routing_partition_size` > 1 lands in the partition OpenSearch's own
-    placement would choose, and a write naming a partition outside the index's
-    range is REFUSED with FR-13's status rather than placed. ⚠️ **`RoutedIngest`
+    FR-13).** `POST /{index}/_bulk` with `os_routing` on a SPLIT index (a
+    routing factor above 1) lands in the partition OpenSearch's own placement
+    would choose, a write naming a partition outside the index's range is
+    REFUSED with FR-13's status rather than placed, and a routed write to an
+    index whose `routing_partition_size` > 1 is refused, because ADR-0006 puts
+    that shard out of the ingester's reach (corrected by M8.32: an earlier
+    draft asked for that mode to LAND). ⚠️ **`RoutedIngest`
     HOLDS ALL OF THAT AND ITS SIX CONSTRUCTION SITES ARE ALL TESTS** (M6.19), so
     without this criterion the spec would claim FR-13 with nothing behind it —
     the defect it refuses NFR-14 for. ⚠️ **AND CONSTRUCTING IT IS NOT CALLING
@@ -498,7 +501,7 @@ to catch:
 | 21 | `ConfigRefusalTest` (T0, the MESSAGE) **and `ConfigExitCodeIT` (T3, the non-zero EXIT)** | a missing store endpoint defaulted to a local path: the process starts, writes nowhere anyone expects, and every in-process test passes |
 | 22 | `RetentionRefusalIT` | the floor reported by GC never reaching the consumer: both halves stay green in their own modules, which is exactly the state M7 shipped |
 | 23 | `FetchRateIT` (≥8 shards, ≥2 indices, ≥4 shared segments, counts doubled) | a per-subscription `NodeSegmentSource` cache: one GET per shard per segment — correct, fast, green on every read-back assertion in this plan, and the exact shape non-negotiable 6 forbids |
-| 24 | `RoutedWriteIT` | the assembled server constructing plain `DefaultIngest`: every un-routed write passes and `os_routing` is silently ignored. ⚠️ Also reds `new RoutedIngest(...)` constructed and never called, which criterion 16's predicate alone accepts |
+| 24 | `RoutedWriteTest` | the assembled server constructing plain `DefaultIngest`: every un-routed write passes and `os_routing` is silently ignored. ⚠️ Also reds `new RoutedIngest(...)` constructed and never called, which criterion 16's predicate alone accepts |
 | 25 | `CommitForwardingIT` | a pod that takes the commit itself instead of forwarding — green on the ack, and it is two leaders writing one slot |
 | — | `PeerTransportIT` (M8.20, M8.21) — its mutation: a transport that loops back in-process, which satisfies every "the transport works" assertion and no fleet one — red by criteria 11, 16, 17 and 25, which need two pods; ⚠️ **criteria 1 and 20 CANNOT red it** and an earlier draft listed them | ⚠️ **NOT A CRITERION OF ITS OWN AND THAT IS DELIBERATE**: the production transport is load-bearing for criteria 1, 11, 13, 16, 17 and 20, and a criterion asserting "the transport works" would be satisfied by a loopback. It is asserted by the fleet criteria that cannot pass without it |
 

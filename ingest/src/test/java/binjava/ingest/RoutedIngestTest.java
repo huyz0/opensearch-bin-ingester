@@ -349,8 +349,10 @@ class RoutedIngestTest {
                 plain.appendRouted(PRINCIPAL, "logs", "tenant-a", source("doc-1")))
                 .as("a deployment with no catalog has no shard count for any index, so every "
                         + "routed write is unplaceable -- and answering with partition 0 is "
-                        + "the fold ADR-0006 forbids")
-                .isInstanceOf(IllegalStateException.class)
+                        + "the fold ADR-0006 forbids -- AND AS A PLACEMENT REFUSAL, which the "
+                        + "HTTP layer answers with 400; `IllegalStateException` was a 500, "
+                        + "retried for ever (M6.19, closed by M8.32)")
+                .isInstanceOf(PlacementRefusedException.class)
                 .hasMessageContaining("explicit partition");
     }
 
