@@ -549,9 +549,8 @@ class PeerCommitTest {
                 HttpSequencerTransport.frameOf(original));
         assertThat(round)
                 .as("⚠️ `CommitRequest` AND `CommitRequestFrame` ARE TWO RECORDS WITH THE "
-                        + "SAME FIELDS AND NOTHING KEEPS THEM IN STEP (M8.34): if a field "
-                        + "is added to one and not the other the compiler is silent, and a "
-                        + "forwarded commit silently drops whatever it carried")
+                        + "SAME FIELDS, which `CommitWireParityTest` keeps in step (M8.34); "
+                        + "this is the other half, that the conversion drops none of them")
                 .isEqualTo(original);
     }
 
