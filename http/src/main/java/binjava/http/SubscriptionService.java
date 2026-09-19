@@ -399,10 +399,10 @@ public final class SubscriptionService implements HttpService {
             // earlier version sent it only on the answer that CREATED the
             // session, and review found the hole: that answer can be lost on
             // the network, the retry carries the same `sub` id, and the
-            // session never hears its floor. The consumer asks until one
-            // arrives and then stops, so the cost is a cache lookup per poll
-            // only while the floor is unknown to it -- and the cache, not the
-            // poll, is what reads the store.
+            // session never hears its floor. A consumer asks only on a resume,
+            // for at most `ConsumerClient.MAX_FLOOR_ASKS` polls, so the cost is
+            // a cache lookup on those polls -- and the cache, not the poll, is
+            // what reads the store.
             if (request.query().first(FLOOR_PARAM).map("1"::equals).orElse(false)) {
                 java.util.OptionalLong floor = floors.floorOf(key);
                 if (floor.isPresent()) {

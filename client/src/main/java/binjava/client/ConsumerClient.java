@@ -334,9 +334,10 @@ public final class ConsumerClient implements AutoCloseable {
      *
      * <p>⚠️ **SO A CALLER CAN TELL "NOT TOLD YET" FROM "FINE".** The floor
      * arrives on the subscription, asynchronously, and may land after the
-     * first read of a resumed shard; a caller that checked once and moved on
-     * would refuse nothing for the whole session. {@code BinStoreShardConsumer}
-     * keeps asking until this is present.
+     * first read of a resumed shard. {@code BinStoreShardConsumer} does not
+     * wait for it: it re-checks a resume against whatever is held until a
+     * report newer than the resume arrives ({@link #checkResume}), and the
+     * asks for one are bounded by {@link #MAX_FLOOR_ASKS}.
      */
     public java.util.OptionalLong retainedFloor() {
         long floor = retainedFloor.get();

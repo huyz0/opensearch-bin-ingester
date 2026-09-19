@@ -125,7 +125,7 @@ class SubscriptionFloorTest {
         // ⚠️ AN EARLIER VERSION SENT IT ONLY ON THE ANSWER THAT CREATED THE
         // SESSION, and review found the hole: that answer can be lost on the
         // network, the retry reuses the same `sub` id, and the session never
-        // hears its floor. The consumer asks until it has one instead.
+        // hears its floor. The consumer asks again, a bounded number of times.
         String base = start(knowing(500));
         poll(base, "s-1", true);
 
