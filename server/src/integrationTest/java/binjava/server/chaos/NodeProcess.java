@@ -35,11 +35,46 @@ public final class NodeProcess implements AutoCloseable {
     private final Process process;
     private volatile boolean paused;
 
-    private NodeProcess(String podId, int port, Path log, Process process) {
+    private final ChaosProxy peers;
+
+    private NodeProcess(String podId, int port, Path log, Process process, ChaosProxy peers) {
         this.podId = podId;
         this.port = port;
         this.log = log;
         this.process = process;
+        this.peers = peers;
+    }
+
+    /**
+     * The proxy peers reach this node through, to cut and heal.
+     *
+     * @throws IllegalStateException if the node was started without one
+     */
+    public ChaosProxy peers() {
+        if (peers == null) {
+            throw new IllegalStateException(podId + " was started without a peer proxy");
+        }
+        return peers;
+    }
+
+    /**
+     * A jar holding only a manifest that names {@link SkewAgent}.
+     *
+     * <p>⚠️ **THE AGENT'S CLASS IS ALREADY ON THE CHILD'S CLASSPATH**, which is
+     * this JVM's, so the jar needs nothing but the {@code Premain-Class} line.
+     */
+    static Path agentJar(Path dir) throws IOException {
+        Path jar = dir.resolve("skew-agent.jar");
+        if (!Files.exists(jar)) {
+            java.util.jar.Manifest manifest = new java.util.jar.Manifest();
+            manifest.getMainAttributes().put(java.util.jar.Attributes.Name.MANIFEST_VERSION, "1.0");
+            manifest.getMainAttributes().putValue("Premain-Class", SkewAgent.class.getName());
+            try (var out = new java.util.jar.JarOutputStream(Files.newOutputStream(jar),
+                    manifest)) {
+                out.flush();
+            }
+        }
+        return jar;
     }
 
     /**
@@ -51,6 +86,25 @@ public final class NodeProcess implements AutoCloseable {
      */
     public static NodeProcess start(Path dir, String podId, Map<String, String> settings)
             throws Exception {
+        return start(dir, podId, settings, Options.NONE);
+    }
+
+    /**
+     * What the network and the clock do to one node (M8.23).
+     *
+     * @param skew how far ahead of true time this process's wall clock runs
+     *     ({@link SkewAgent}); negative runs behind, zero leaves it alone
+     * @param peerProxy whether peers reach this node through a {@link ChaosProxy}
+     *     the test can cut, which isolates it from its peers inbound
+     */
+    public record Options(java.time.Duration skew, boolean peerProxy) {
+
+        public static final Options NONE = new Options(java.time.Duration.ZERO, false);
+    }
+
+    /** The same, with the network and the clock under the test's control. */
+    public static NodeProcess start(Path dir, String podId, Map<String, String> settings,
+            Options options) throws Exception {
         int port;
         // ⚠️ BOUND AND RELEASED, so another process could take it in the
         // window between -- the shape ConfigExitCodeIT uses and says so. The
@@ -58,10 +112,13 @@ public final class NodeProcess implements AutoCloseable {
         try (var probe = new java.net.ServerSocket(0)) {
             port = probe.getLocalPort();
         }
+        ChaosProxy peers = options.peerProxy() ? new ChaosProxy("localhost", port) : null;
         Map<String, String> all = new LinkedHashMap<>();
         all.put("pod.id", podId);
         all.put("trust.domain", "cluster-a");
-        all.put("endpoint", "http://localhost:" + port);
+        // ⚠️ THE ADVERTISED ENDPOINT IS THE PROXY when there is one: it is
+        // what the lease names, so it is what every peer dials.
+        all.put("endpoint", "http://localhost:" + (peers == null ? port : peers.port()));
         all.put("http.port", String.valueOf(port));
         all.put("producer.subject", "producer-1");
         all.put("producer.allowed-indices", "logs");
@@ -75,15 +132,18 @@ public final class NodeProcess implements AutoCloseable {
         // then blocks on a log line -- which is a stall this harness would
         // report as a finding.
         Path log = dir.resolve(podId + ".log");
-        ProcessBuilder builder = new ProcessBuilder(List.of(
-                Path.of(System.getProperty("java.home"), "bin", "java").toString(),
-                "-Xmx256m",
-                "-cp", System.getProperty("java.class.path"),
-                "binjava.server.Main", file.toString()))
+        List<String> command = new java.util.ArrayList<>(List.of(
+                Path.of(System.getProperty("java.home"), "bin", "java").toString(), "-Xmx256m"));
+        if (!options.skew().isZero()) {
+            command.add("-javaagent:" + agentJar(dir) + "=" + options.skew());
+        }
+        command.addAll(List.of("-cp", System.getProperty("java.class.path"),
+                "binjava.server.Main", file.toString()));
+        ProcessBuilder builder = new ProcessBuilder(command)
                 .redirectErrorStream(true)
                 .redirectOutput(log.toFile());
         builder.environment().putAll(ChaosBucket.credentials());
-        NodeProcess node = new NodeProcess(podId, port, log, builder.start());
+        NodeProcess node = new NodeProcess(podId, port, log, builder.start(), peers);
         try {
             node.awaitServing();
         } catch (Exception | Error failed) {
@@ -289,5 +349,8 @@ public final class NodeProcess implements AutoCloseable {
     public void close() {
         resumeIfPaused();
         process.destroyForcibly();
+        if (peers != null) {
+            peers.close();
+        }
     }
 }
