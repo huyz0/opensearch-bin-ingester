@@ -160,7 +160,7 @@ public final class ServerProperties {
                     optionalText(settings, STORE_BUCKET),
                     bool(settings, STORE_PATH_STYLE, false));
 
-            return new ServerConfig(required(settings, POD_ID), trustDomain,
+            return new ServerConfig(podId(settings), trustDomain,
                     required(settings, PREFIX), store,
                     duration(settings, LEASE_TTL, DEFAULT_LEASE_TTL),
                     duration(settings, LEASE_RENEW, DEFAULT_LEASE_RENEW),
@@ -224,6 +224,23 @@ public final class ServerProperties {
             throw new ConfigurationException("unknown setting(s): " + unknown
                     + " (known: " + new TreeSet<>(KNOWN) + ")");
         }
+    }
+
+    /**
+     * The pod id, refused here if the writer cannot use it (M8.47).
+     *
+     * <p>⚠️ **{@code -} AND {@code /} ARE THE SEGMENT KEY's SEPARATORS**, so
+     * the publisher refuses them -- and it did so from inside the assembly, as
+     * an uncaught exception out of {@code main}. A StatefulSet's own names
+     * contain a dash, which makes this the likeliest id to be refused.
+     */
+    private static String podId(Map<String, String> settings) {
+        String podId = required(settings, POD_ID);
+        if (podId.indexOf('-') >= 0 || podId.indexOf('/') >= 0) {
+            throw new ConfigurationException(POD_ID + " may not contain '-' or '/', which "
+                    + "separate the fields of a segment key: " + podId);
+        }
+        return podId;
     }
 
     private static String required(Map<String, String> settings, String key) {
