@@ -3,6 +3,11 @@
 
 ## Completion condition
 
+⚠️ **AS AMENDED ON 2026-09-20** by ADR-0057 and ADR-0058 (the user's
+decisions): the chaos matrix is research 08 §9's rows LESS the ninth
+(criterion 18, deferred to M9), and the inbox acks on a durable intent. What
+follows is the condition as first written.
+
 From [roadmap.md](../../roadmap.md): *"Chaos matrix passes, including `SIGSTOP`
 gray failure and AZ partition; RPO 0 demonstrated"*, plus the `EndpointSlice`
 watch, the early-challenge path and therefore **NFR-9**, and the degraded
@@ -123,7 +128,10 @@ absolute numbers are REPORTED rather than asserted.
    says "gets more of the value than any failover code".
 6. **The `EndpointSlice` watch and the early-challenge path** (NFR-9).
 7. **The degraded `ctl/inbox/` commit-intent path** under AZ partition.
-8. **The chaos harness and ALL NINE of research 08 §9's rows.** ⚠️ An earlier
+8. **The chaos harness and research 08 §9's rows** — ⚠️ EIGHT of the nine,
+   by [ADR-0057](../../decisions/0057-the-store-reading-fallback-tiers-and-gap-re-reads-wait-for-m9.md):
+   the ninth (kill an OpenSearch node mid-backlog, criterion 18) needs a
+   catch-up read path that does not exist and is M9's. ⚠️ An earlier
    draft of this spec decomposed eight and silently dropped *"kill an OpenSearch
    node mid-backlog"* — the only row that exercises the CONSUMER resume path,
    and therefore the only one that could catch a catch-up burst starving the
@@ -387,8 +395,12 @@ ADR-0052 § Alternatives, with its number.
     one per asking pod at a heal plus one per takeover (cost.md rule 2); that is
     pinned in-process (`InboxDrainTest`, `InboxDrainRaceTest`) rather than
     counted at MinIO, where a node's own requests are not observable.
-18. **Killing an OpenSearch node mid-backlog resumes from `batch_start`, and the
-    catch-up does not starve the live tail.** With a consumer behind by ≥1 hour
+18. ⚠️ **DEFERRED TO M9 BY [ADR-0057](../../decisions/0057-the-store-reading-fallback-tiers-and-gap-re-reads-wait-for-m9.md)**
+    (the user's decision of 2026-09-20): a subscription is a live tail with no
+    replay from an offset, so there is no catch-up to starve the tail with.
+    Carried as M8.24. The criterion as written: **Killing an OpenSearch node
+    mid-backlog resumes from `batch_start`, and the catch-up does not starve
+    the live tail.** With a consumer behind by ≥1 hour
     of segments, a node is killed and its shards reallocate; the resumed shard
     reads from its committed pointer with no gap, and ⚠️ **a live record written
     AFTER the kill becomes visible within the same flush-window bound as it
