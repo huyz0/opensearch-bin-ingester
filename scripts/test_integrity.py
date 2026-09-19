@@ -43,7 +43,7 @@ STRENGTH = [
     (3, r'\.(isZero|isOne|isNotZero|isPositive|isNegative|isNotPositive|isNotNegative)\s*\(?'),
     (3, r'\b(assertZero)\s*\('),
 ]
-TEST_PATH = re.compile(r'/src/(?:test|integrationTest|clusterTest)/java/')
+TEST_PATH = re.compile(r'/src/(?:test|integrationTest|clusterTest|soakTest)/java/')
 MAIN_PATH = re.compile(r'/src/main/java/')
 
 

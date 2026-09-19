@@ -54,7 +54,7 @@ one line, and it is invisible to every other gate.
 fi
 
 case "$paths" in
-  *src/test/*|*src/integrationTest/*|*src/clusterTest/*|*Test.java*|*testFixtures*)
+  *src/test/*|*src/integrationTest/*|*src/clusterTest/*|*src/soakTest/*|*Test.java*|*testFixtures*)
     lens "would this test fail if the code were wrong" \
 "Mentally mutate the production code each test covers: flip a boundary, negate a
 condition, return a constant, drop a side effect. If the test still passes, name

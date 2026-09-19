@@ -68,4 +68,10 @@ dependencies {
         }
     }
     "integrationTestImplementation"(libs.awssdk.url.connection.client)
+
+    "soakTestImplementation"(project(":binstore-backends"))
+    "soakTestImplementation"(project(":http"))
+    "soakTestImplementation"(project(":client"))
+    "soakTestImplementation"(project(":sequencer"))
+    "soakTestImplementation"(project(":ingest"))
 }

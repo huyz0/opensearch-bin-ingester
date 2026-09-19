@@ -27,7 +27,7 @@ def git(*a):
 # A test source is anything under a source set named for a test tier. The old
 # gate matched only *Test.java / *Tests.java, a convention no standard states,
 # so a class named anything else was silently exempt.
-TEST_PATH = re.compile(r'/src/(?:test|integrationTest|clusterTest)/java/')
+TEST_PATH = re.compile(r'/src/(?:test|integrationTest|clusterTest|soakTest)/java/')
 
 
 def check(base):
@@ -100,7 +100,7 @@ def check(base):
 
 
 SOURCE_SET_TASK = {'test': 'test', 'integrationTest': 'integrationTest',
-                   'clusterTest': 'clusterTest'}
+                   'clusterTest': 'clusterTest', 'soakTest': 'soakTest'}
 
 
 def source_of(fq_id):

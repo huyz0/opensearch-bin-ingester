@@ -111,6 +111,8 @@ tasks.withType<JavaCompile>().configureEach {
 //   ./gradlew test             T0-T2, no container      every commit
 //   ./gradlew integrationTest  T3,    MinIO             on demand + CI
 //   ./gradlew clusterTest      T4,    OpenSearch        on demand + CI
+//   ./gradlew soakTest         wall clock, minutes      before a milestone
+//                                                       is declared complete
 //
 // The default task starting no container is the point. A developer, or an agent
 // running /milestone, gets a fast light loop; the heavy tiers are explicit.
@@ -173,6 +175,20 @@ testing {
                 implementation(testFixtures(project()))
             }
         }
+        // ⚠️ WALL CLOCK IS THE ASSERTION HERE (M8.40): an idle pod's cost over
+        // minutes, which no fake clock can stand in for because the timers
+        // under test are the real ones. Its budget is build.md's L2S row.
+        register<JvmTestSuite>("soakTest") {
+            dependencies {
+                implementation(project())
+                implementation(testFixtures(project()))
+            }
+            targets.configureEach {
+                testTask.configure {
+                    timeout.set(Duration.ofMinutes(15))
+                }
+            }
+        }
     }
 }
 
@@ -180,7 +196,7 @@ testing {
 // otherwise broken integration- or cluster-test code commits green and is not
 // discovered until CI runs a tier nobody triggered.
 tasks.named("check") {
-    dependsOn("compileIntegrationTestJava", "compileClusterTestJava")
+    dependsOn("compileIntegrationTestJava", "compileClusterTestJava", "compileSoakTestJava")
 }
 
 // testing.md rule 9: mutation score is the metric that measures whether tests

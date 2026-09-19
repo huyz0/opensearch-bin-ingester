@@ -6,10 +6,10 @@
 source "$(dirname "$0")/lib.sh"
 cd "$ROOT"
 LAYER="${1:-}"; SECS="${2:-}"
-[ -n "$LAYER" ] && [ -n "$SECS" ] || { echo "usage: check-suite-time.sh <L0|L1|L2|L3> <seconds>" >&2; exit 2; }
+[ -n "$LAYER" ] && [ -n "$SECS" ] || { echo "usage: check-suite-time.sh <L0|L1|L2|L2S|L3> <seconds>" >&2; exit 2; }
 hdr "check-suite-time $LAYER"
 case "$LAYER" in
-  L0) BUDGET=90  ;; L1) BUDGET=300 ;; L2) BUDGET=600 ;; L3) BUDGET=900 ;;
+  L0) BUDGET=90  ;; L1) BUDGET=300 ;; L2) BUDGET=600 ;; L2S) BUDGET=600 ;; L3) BUDGET=900 ;;
   *)  echo "unknown layer $LAYER" >&2; exit 2 ;;
 esac
 mkdir -p .harness/timing

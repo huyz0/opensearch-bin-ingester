@@ -72,6 +72,14 @@ class TddPlanScopeTest {
         .containsExactly(":ingest:integrationTest", ":plugin:clusterTest");
   }
 
+  @Test
+  void aSOAKTestIdNamesTheSoakTask() throws Exception {
+    // ⚠️ M8.40 added the soak suite, and check-tdd demands a red for it too:
+    // an id the recorder cannot route is a test nobody can commit.
+    assertThat(taskFor("server/src/soakTest/java/binjava/server/IdlePodCostSoakTest.java"))
+        .containsExactly(":server:soakTest");
+  }
+
   /**
    * ⚠️ The SHIPPED path. The three tests above exercise {@code task_for} through
    * the {@code task-for} CLI seam, but {@code tdd-red.sh} shells
