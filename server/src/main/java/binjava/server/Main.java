@@ -3,6 +3,7 @@ package binjava.server;
 
 import java.io.IOException;
 import java.time.Clock;
+import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 
 /**
@@ -139,6 +140,24 @@ public final class Main {
      */
     public static IngesterNode run(String configPath) throws IOException {
         ServerConfig config = ServerProperties.parse(ConfigFile.read(configPath));
-        return IngesterNode.start(config, Clock.systemUTC());
+        // ⚠️ THE TOKEN IS READ HERE, ON EVERY CONNECTION, because this file is
+        // one of the two the I/O seam exempts, and a projected service-account
+        // token rotates under a running pod.
+        Optional<String> tokenFile = config.membership().flatMap(MembershipConfig::tokenFile);
+        return IngesterNode.start(config, Clock.systemUTC(), () -> tokenFile.map(Main::readToken));
+    }
+
+    /**
+     * ⚠️ **AN UNREADABLE TOKEN IS AN UNCHECKED FAILURE OF THAT CONNECTION**, and
+     * the watch retries it: a token file mid-rotation is briefly absent, and
+     * that must cost a reconnect, not the node.
+     */
+    private static String readToken(String path) {
+        try {
+            return java.nio.file.Files.readString(java.nio.file.Path.of(path)).strip();
+        } catch (IOException unreadable) {
+            throw new java.io.UncheckedIOException("the Kubernetes service-account token at " + path
+                    + " could not be read", unreadable);
+        }
     }
 }

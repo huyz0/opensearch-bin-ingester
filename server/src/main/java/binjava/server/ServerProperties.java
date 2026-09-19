@@ -83,6 +83,18 @@ public final class ServerProperties {
     /** Optional: how often the retention loop looks for work. */
     public static final String RETENTION_PASS_INTERVAL = "retention.pass-interval";
 
+    /** Optional: the Kubernetes API server the EndpointSlice watch reads (M8.13). */
+    public static final String MEMBERSHIP_API = "membership.kube-api";
+
+    /** Required with {@link #MEMBERSHIP_API}: the ingester Service's namespace. */
+    public static final String MEMBERSHIP_NAMESPACE = "membership.namespace";
+
+    /** Required with {@link #MEMBERSHIP_API}: the ingester Service's name. */
+    public static final String MEMBERSHIP_SERVICE = "membership.service";
+
+    /** Optional: the Kubernetes service-account token file the watch authenticates with. */
+    public static final String MEMBERSHIP_TOKEN_FILE = "membership.token-file";
+
     /**
      * ⚠️ 10 s and 3 s are a CONFIGURED GUESS, not a measurement — measurement
      * M1 (M8.27) is what sizes them against a realistic pause, and until it
@@ -97,7 +109,8 @@ public final class ServerProperties {
             ENDPOINT, HTTP_PORT, PRODUCER_SUBJECT, PRODUCER_ALLOWED_INDICES,
             LEASE_TTL, LEASE_RENEW, INTERVAL_FLOOR, MAX_SEGMENT_BYTES, DIRECT_ENABLED,
             RETENTION_MIN, RETENTION_MAX, RETENTION_REPORT_TIMEOUT, RETENTION_COPY_EXPIRY,
-            RETENTION_PASS_INTERVAL);
+            RETENTION_PASS_INTERVAL, MEMBERSHIP_API, MEMBERSHIP_NAMESPACE, MEMBERSHIP_SERVICE,
+            MEMBERSHIP_TOKEN_FILE);
 
     private ServerProperties() {
     }
@@ -165,7 +178,8 @@ public final class ServerProperties {
                             duration(settings, RETENTION_COPY_EXPIRY,
                                     RetentionConfig.DEFAULT_COPY_EXPIRY),
                             duration(settings, RETENTION_PASS_INTERVAL,
-                                    binjava.ingest.RetentionLoop.DEFAULT_PASS_INTERVAL)));
+                                    binjava.ingest.RetentionLoop.DEFAULT_PASS_INTERVAL)),
+                    membership(settings));
         } catch (IllegalArgumentException refused) {
             // ⚠️ `ConfigurationException` IS AN `IllegalArgumentException`, so
             // one already carrying a key's name lands here too and is returned
@@ -243,6 +257,32 @@ public final class ServerProperties {
                     + "a value; a blank is almost always an unset variable");
         }
         return Optional.of(value.trim());
+    }
+
+    /**
+     * The EndpointSlice watch's settings, or empty when no API server is named.
+     *
+     * <p>⚠️ **A NAMESPACE OR SERVICE WITHOUT AN API SERVER IS REFUSED**, not
+     * ignored: an operator who wrote half of it meant to turn the watch on, and
+     * a node that silently ran without it would fail over at the TTL while
+     * the manifest said otherwise.
+     */
+    private static java.util.Optional<MembershipConfig> membership(Map<String, String> settings) {
+        java.util.Optional<String> api = optionalText(settings, MEMBERSHIP_API);
+        if (api.isEmpty()) {
+            for (String dependent : java.util.List.of(MEMBERSHIP_NAMESPACE, MEMBERSHIP_SERVICE,
+                    MEMBERSHIP_TOKEN_FILE)) {
+                if (optionalText(settings, dependent).isPresent()) {
+                    throw new ConfigurationException(dependent + " is set but "
+                            + MEMBERSHIP_API + " is not, so the EndpointSlice watch it "
+                            + "configures would never run");
+                }
+            }
+            return java.util.Optional.empty();
+        }
+        return java.util.Optional.of(new MembershipConfig(api.get(),
+                required(settings, MEMBERSHIP_NAMESPACE), required(settings, MEMBERSHIP_SERVICE),
+                optionalText(settings, MEMBERSHIP_TOKEN_FILE)));
     }
 
     private static Duration duration(Map<String, String> settings, String key, Duration fallback) {

@@ -53,6 +53,11 @@ dependencies {
     "integrationTestImplementation"(project(":http"))
     "integrationTestImplementation"(project(":client"))
     "integrationTestImplementation"(libs.helidon.webclient)
+    // ⚠️ A SERVER IN THE TEST, and only to play the Kubernetes API for the
+    // EndpointSlice watch (M8.13): `FakeKubeApi` streams the watch events a
+    // cluster's endpoints controller would. The node's own server is the one
+    // on the production classpath already.
+    "integrationTestImplementation"(libs.helidon.webserver)
     // ⚠️ THE SDK IN THE TEST ONLY, and only to MAKE A BUCKET and to build the
     // second client that looks at it. The node under test never sees these
     // types: `binstore-backends` takes the SDK as `implementation`, so the

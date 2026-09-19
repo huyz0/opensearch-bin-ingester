@@ -313,6 +313,6 @@ class ServerPropertiesTest {
         assertThat(ServerProperties.knownKeys())
                 .contains(ServerProperties.POD_ID, ServerProperties.ENDPOINT,
                         ServerProperties.STORE_KIND)
-                .hasSize(23);
+                .hasSize(27);
     }
 }

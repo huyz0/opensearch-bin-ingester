@@ -48,11 +48,27 @@ import java.util.Set;
  *     would turn the one security property the write path actually has into a
  *     comment
  * @param retention the floor, the ceiling and the loop's interval (M8.5)
+ * @param membership where to watch the ingester Service's endpoints for the
+ *     early lease challenge, or empty for none (M8.13)
  */
 public record ServerConfig(String podId, String trustDomain, String prefix, StoreConfig store,
         Duration leaseTtl, Duration leaseRenewInterval, String endpoint, IngestConfig ingest,
         int httpPort, String producerSubject, Set<String> allowedIndices,
-        RetentionConfig retention) {
+        RetentionConfig retention, java.util.Optional<MembershipConfig> membership) {
+
+    /**
+     * The same, with no {@code EndpointSlice} watch (M8.13).
+     *
+     * <p>⚠️ **FOR CALLERS THAT PREDATE M8.13**; a parsed configuration always
+     * carries the membership it parsed, present or not.
+     */
+    public ServerConfig(String podId, String trustDomain, String prefix, StoreConfig store,
+            Duration leaseTtl, Duration leaseRenewInterval, String endpoint, IngestConfig ingest,
+            int httpPort, String producerSubject, Set<String> allowedIndices,
+            RetentionConfig retention) {
+        this(podId, trustDomain, prefix, store, leaseTtl, leaseRenewInterval, endpoint, ingest,
+                httpPort, producerSubject, allowedIndices, retention, java.util.Optional.empty());
+    }
 
     /**
      * The same, with retention at its defaults.
@@ -91,6 +107,7 @@ public record ServerConfig(String podId, String trustDomain, String prefix, Stor
         Objects.requireNonNull(ingest, "ingest");
         Objects.requireNonNull(producerSubject, "producerSubject");
         Objects.requireNonNull(retention, "retention");
+        Objects.requireNonNull(membership, "membership");
         // ⚠️ COPIED, then the record hands it on to `Principal`, which copies
         // again. Belt and braces on purpose: an allow-list a caller can still
         // `add()` to is a privilege escalation with no code change at the call

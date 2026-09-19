@@ -7,7 +7,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * A strict, minimal JSON reader for {@code _bulk} ACTION lines only.
+ * A strict, minimal JSON reader for {@code _bulk} ACTION lines, and for the
+ * Kubernetes watch events {@link EndpointSliceView} reads (M8.13).
  *
  * <p>⚠️ Deliberately NOT used on the document body. The ingester never parses a
  * document (ADR-0020): the payload is copied through byte for byte, so this

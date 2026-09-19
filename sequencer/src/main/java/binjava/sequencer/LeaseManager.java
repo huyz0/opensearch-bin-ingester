@@ -123,6 +123,7 @@ public final class LeaseManager {
     private final Duration ttl;
     private final Duration renewInterval;
     private final Clock clock;
+    private final LeaseChallenge challenge;
 
     /** ⚠️ VOLATILE, so {@link #held()} can read it without taking the lock. */
     private volatile Belief belief;
@@ -130,6 +131,16 @@ public final class LeaseManager {
     private final BoundedLock lock = new BoundedLock();
 
     public LeaseManager(BinStore store, LeaseConfig config, Clock clock) {
+        this(store, config, clock, LeaseChallenge.NEVER);
+    }
+
+    /**
+     * The same, taking an unexpired lease when {@code challenge} has evidence
+     * that its holder is gone (M8.13, NFR-9).
+     */
+    public LeaseManager(BinStore store, LeaseConfig config, Clock clock,
+            LeaseChallenge challenge) {
+        this.challenge = Objects.requireNonNull(challenge, "challenge");
         this.store = Objects.requireNonNull(store, "store");
         Objects.requireNonNull(config, "config");
         this.clock = Objects.requireNonNull(clock, "clock");
@@ -256,7 +267,12 @@ public final class LeaseManager {
         // treated as unheld. Taking over bytes nobody can parse is how two
         // nodes end up sequencing at once.
         Lease current = read();
-        if (!current.isExpiredAt(clock.millis())) {
+        // ⚠️ AN UNEXPIRED LEASE IS TAKEN ONLY ON EVIDENCE THE HOLDER IS GONE
+        // (M8.13), and never from this pod itself: a pod does not challenge
+        // its own term, whatever the platform says about its endpoint.
+        boolean challenged = !current.holderPodId().equals(podId)
+                && challenge.holderGone(current);
+        if (!current.isExpiredAt(clock.millis()) && !challenged) {
             // ⚠️ CONDITIONAL, never blanket (M4.3e). Every other path clears
             // the belief when it learns it is fenced, and `adopt`'s comment
             // says why: leaving a superseded lease in `held` would make

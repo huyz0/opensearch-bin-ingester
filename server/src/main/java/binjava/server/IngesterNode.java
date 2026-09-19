@@ -2,12 +2,17 @@
 package binjava.server;
 
 import binjava.http.DrainGate;
+import binjava.http.EndpointSliceView;
+import binjava.http.EndpointSliceWatch;
 import binjava.http.HttpSequencerTransport;
+import binjava.sequencer.LeaseChallenge;
 import binjava.sequencer.SequencerTransport;
 import java.io.IOException;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.function.Supplier;
 
 /**
  * One running ingester node: the object graph plus the door it is served
@@ -73,6 +78,7 @@ public final class IngesterNode implements AutoCloseable {
     private final Clock clock;
     private final java.util.List<String> journal;
     private volatile ShutdownSequence.Report lastShutdown;
+    private volatile EndpointSliceWatch watch;
     private final java.util.concurrent.atomic.AtomicBoolean closing =
             new java.util.concurrent.atomic.AtomicBoolean();
 
@@ -97,15 +103,47 @@ public final class IngesterNode implements AutoCloseable {
      *     taken
      */
     public static IngesterNode start(ServerConfig config, Clock clock) throws IOException {
+        return start(config, clock, Optional::empty);
+    }
+
+    /**
+     * The same, with the bearer token the {@code EndpointSlice} watch sends
+     * (M8.13).
+     *
+     * @param token read afresh for every watch connection; {@link Main} reads
+     *     it from {@link MembershipConfig#tokenFile()}, because a file read is
+     *     I/O and that file is exempt from {@code check-io-seam.sh}
+     */
+    public static IngesterNode start(ServerConfig config, Clock clock,
+            Supplier<Optional<String>> token) throws IOException {
         Objects.requireNonNull(config, "config");
         Objects.requireNonNull(clock, "clock");
+        Objects.requireNonNull(token, "token");
         SequencerTransport transport = new HttpSequencerTransport(peerCommitTimeout(config));
-        Assembly assembly = Assembly.open(config, transport, clock);
+        // ⚠️ THE VIEW IS THE CHALLENGE, and it exists only when a watch will
+        // feed it. Without one the challenge is NEVER, which is exactly the
+        // behaviour before M8.13: failover bounded by the TTL alone.
+        EndpointSliceView view = config.membership().isPresent() ? new EndpointSliceView() : null;
+        Assembly assembly = Assembly.open(config, transport, clock,
+                view == null ? LeaseChallenge.NEVER : view);
         java.util.List<String> journal = new java.util.concurrent.CopyOnWriteArrayList<>();
         assembly.journal(journal::add);
         try {
-            return new IngesterNode(assembly, FrontDoor.start(assembly, clock, journal::add),
-                    transport, clock, journal);
+            // ⚠️ BUILT BEFORE THE DOOR, STARTED AFTER IT: a malformed API URL
+            // throws here, where the unwind below closes the graph and there is
+            // no listener yet to leave bound.
+            EndpointSliceWatch watch = null;
+            if (view != null) {
+                MembershipConfig membership = config.membership().get();
+                watch = new EndpointSliceWatch(membership.apiBase(), membership.namespace(),
+                        membership.service(), token, view);
+            }
+            IngesterNode node = new IngesterNode(assembly,
+                    FrontDoor.start(assembly, clock, journal::add), transport, clock, journal);
+            if (watch != null) {
+                node.watch = watch.start();
+            }
+            return node;
         } catch (RuntimeException failed) {
             // ⚠️ A `RuntimeException` IS THE ONLY THING `FrontDoor.start` CAN
             // THROW -- Helidon reports a port already in use as one -- so this
@@ -193,7 +231,14 @@ public final class IngesterNode implements AutoCloseable {
                 try {
                     assembly.close();
                 } finally {
-                    transport.close();
+                    try {
+                        transport.close();
+                    } finally {
+                        EndpointSliceWatch running = watch;
+                        if (running != null) {
+                            running.close();
+                        }
+                    }
                 }
             }
         }, clock);

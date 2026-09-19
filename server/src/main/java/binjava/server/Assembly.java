@@ -20,6 +20,7 @@ import binjava.ingest.WatermarkTable;
 import binjava.sequencer.Checkpoints;
 import binjava.sequencer.FleetSequencer;
 import binjava.sequencer.LeaseConfig;
+import binjava.sequencer.LeaseChallenge;
 import binjava.sequencer.LeaseManager;
 import binjava.sequencer.LocalSequencer;
 import binjava.sequencer.SequencerTransport;
@@ -80,10 +81,24 @@ public final class Assembly implements AutoCloseable {
      */
     public static Assembly open(ServerConfig config, SequencerTransport transport, Clock clock)
             throws IOException {
+        return open(config, transport, clock, LeaseChallenge.NEVER);
+    }
+
+    /**
+     * The same, taking the sequencer term early on {@code challenge}'s evidence
+     * that its holder is gone (M8.13, NFR-9).
+     *
+     * <p>⚠️ **THE SEQUENCER'S LEASE ONLY.** The GC lease keeps waiting out its
+     * TTL: a GC pass a few seconds late costs nothing, and a second holder of
+     * it would be fenced anyway.
+     */
+    public static Assembly open(ServerConfig config, SequencerTransport transport, Clock clock,
+            LeaseChallenge challenge) throws IOException {
         Objects.requireNonNull(config, "config");
+        Objects.requireNonNull(challenge, "challenge");
         BinStore store = StoreFactory.open(config.store());
         try {
-            return new Assembly(config, store, true, transport, clock);
+            return new Assembly(config, store, true, transport, clock, challenge);
         } catch (RuntimeException | IOException failed) {
             // ⚠️ THE STORE IS OURS AND THE CONSTRUCTOR THREW, so nobody else
             // holds a reference that could close it. Without this, a failure
@@ -105,11 +120,12 @@ public final class Assembly implements AutoCloseable {
     public static Assembly open(ServerConfig config, BinStore store,
             SequencerTransport transport, Clock clock) throws IOException {
         return new Assembly(config, Objects.requireNonNull(store, "store"), false,
-                transport, clock);
+                transport, clock, LeaseChallenge.NEVER);
     }
 
     private Assembly(ServerConfig config, BinStore store, boolean ownsStore,
-            SequencerTransport transport, Clock clock) throws IOException {
+            SequencerTransport transport, Clock clock, LeaseChallenge challenge)
+            throws IOException {
         this.config = Objects.requireNonNull(config, "config");
         Objects.requireNonNull(transport, "transport");
         Objects.requireNonNull(clock, "clock");
@@ -125,7 +141,7 @@ public final class Assembly implements AutoCloseable {
 
         LeaseConfig leases = new LeaseConfig(config.prefix(), config.podId(), config.endpoint(),
                 config.leaseTtl(), config.leaseRenewInterval());
-        LeaseManager manager = new LeaseManager(store, leases, clock);
+        LeaseManager manager = new LeaseManager(store, leases, clock, challenge);
         this.sequencer = new FleetSequencer(store, leases, transport,
                 () -> LocalSequencer.start(store, config.prefix(), manager, SEAL_REDRIVE_BUDGET));
         // ⚠️ NOT PUSHED ONTO `toClose`, AND THAT IS NOT AN OMISSION.
