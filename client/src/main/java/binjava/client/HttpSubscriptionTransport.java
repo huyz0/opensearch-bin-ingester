@@ -127,6 +127,44 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport {
     private final int maxAnswerBytes;
 
     private final AtomicLong reconnects = new AtomicLong();
+
+    /**
+     * Why a poll did not deliver, one class per outcome (M8.37, NFR-11).
+     *
+     * <p>⚠️ **CLASSES, NEVER A STATUS OR AN INDEX**: observability.md rule 1
+     * keeps labels to a closed set, and a consumer wedged against a full or a
+     * misconfigured ingester only has to be told apart from an idle one.
+     */
+    public enum PollFailure {
+        /** 503: the ingester is draining or at its session cap. */
+        UNAVAILABLE,
+        /** Any 4xx, a missing route included: this consumer asked for something wrong. */
+        REFUSED,
+        /** Any other status that is not 200. */
+        SERVER_ERROR,
+        /** No answer at all: refused, reset or timed out. */
+        UNREACHABLE,
+        /** A 200 whose body could not be read. */
+        MALFORMED
+    }
+
+    private final java.util.Map<PollFailure, AtomicLong> pollFailures = failureCounters();
+
+    private static java.util.Map<PollFailure, AtomicLong> failureCounters() {
+        java.util.EnumMap<PollFailure, AtomicLong> counters = new java.util.EnumMap<>(
+                PollFailure.class);
+        for (PollFailure kind : PollFailure.values()) {
+            counters.put(kind, new AtomicLong());
+        }
+        return java.util.Collections.unmodifiableMap(counters);
+    }
+
+    /** An answer that was not 200, already counted by its class. */
+    private static final class NotOk extends IOException {
+        NotOk(String message) {
+            super(message);
+        }
+    }
     private final AtomicBoolean closed = new AtomicBoolean();
 
     /**
@@ -215,6 +253,7 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport {
         Duration backoff = retryFloor;
         boolean connected = false;
         while (!stopped.get() && !closed.get()) {
+            boolean answered = false;
             // ⚠️ THE FIRST POLL AFTER A FAILURE ASKS FOR ALMOST NO WAIT, and
             // that is a handshake rather than an optimisation: with the long
             // wait, a consumer cannot tell "the ingester is there and quiet"
@@ -229,9 +268,15 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport {
                     // a resume waits on a fresh floor (ADR-0056).
                     .queryParam(FLOOR_PARAM, listener.wantsRetainedFloor(key) ? "1" : "0")
                     .request()) {
-                if (response.status().code() != Status.OK_200.code()) {
-                    throw new IOException("subscribe answered " + response.status());
+                int code = response.status().code();
+                if (code != Status.OK_200.code()) {
+                    pollFailures.get(code == Status.SERVICE_UNAVAILABLE_503.code()
+                            ? PollFailure.UNAVAILABLE
+                            : code >= 400 && code < 500 ? PollFailure.REFUSED
+                            : PollFailure.SERVER_ERROR).incrementAndGet();
+                    throw new NotOk("subscribe answered " + response.status());
                 }
+                answered = true;
                 if (!connected) {
                     connected = true;
                     reconnects.incrementAndGet();
@@ -246,9 +291,13 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport {
                 backoff = retryFloor;
                 deliver(response, listener, stopped);
             } catch (IOException | RuntimeException dropped) {
+                if (!(dropped instanceof NotOk) && !stopped.get() && !closed.get()) {
+                    pollFailures.get(answered ? PollFailure.MALFORMED : PollFailure.UNREACHABLE)
+                            .incrementAndGet();
+                }
 
                 // ⚠️ ORDINARY. A rolling deploy drops every subscription on the
-                // node; the answer is to come back, not to report. ⚠️ AND THE
+                // node; the answer is to come back, counted above, not logged. ⚠️ AND THE
                 // NEXT SUCCESS COUNTS AS A RECONNECT, because the ingester that
                 // answers it may be a different process with an empty catalog
                 // (M6.15) -- which is the whole reason `onReconnect` exists.
@@ -388,6 +437,11 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport {
      */
     public long reconnects() {
         return reconnects.get();
+    }
+
+    /** How many polls failed with {@code kind}, across every subscription (M8.37). */
+    public long pollFailures(PollFailure kind) {
+        return pollFailures.get(kind).get();
     }
 
     /**
