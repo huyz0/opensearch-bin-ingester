@@ -411,6 +411,11 @@ public final class BatchingSequencer implements Sequencer {
         }
     }
 
+    /** The sequencer this batches for, so a caller can reach the term underneath. */
+    Sequencer delegate() {
+        return delegate;
+    }
+
     /** ⚠️ Straight through: a decorator writes no chain of its own. */
     @Override
     public long epoch() {

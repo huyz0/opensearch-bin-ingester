@@ -406,6 +406,20 @@ public final class LocalSequencer implements Sequencer {
     }
 
     /**
+     * The term underneath {@code sequencer}, looking through a
+     * {@link BatchingSequencer}, or empty if it is not one this node holds.
+     *
+     * <p>⚠️ M8.50: the elected term is BATCHED, so an {@code instanceof
+     * LocalSequencer} on it is false, and retention reading that as "no term"
+     * would silently stop GC. Every caller that needs the chain asks here.
+     */
+    public static Optional<LocalSequencer> underneath(Sequencer sequencer) {
+        Sequencer inner = sequencer instanceof BatchingSequencer batched
+                ? batched.delegate() : sequencer;
+        return inner instanceof LocalSequencer local ? Optional.of(local) : Optional.empty();
+    }
+
+    /**
      * The epoch this instance sequences at.
      *
      * <p>⚠️ IT IS ALSO {@link Sequencer#epoch()} SINCE M5.15d, which the push

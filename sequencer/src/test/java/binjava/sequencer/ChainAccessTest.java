@@ -68,6 +68,31 @@ class ChainAccessTest {
     }
 
     @Test
+    void aBATCHEDTermStillHandsOutItsChain() throws Exception {
+        // ⚠️ M8.50: the elected term is wrapped in a BatchingSequencer, so
+        // `instanceof LocalSequencer` on it is false. A chain() that did not
+        // look through the wrapper answers EMPTY on the leader, and every
+        // retention pass then does nothing, for ever, with no error anywhere.
+        try (MemoryBinStore store = new MemoryBinStore()) {
+            LeaseManager leases = new LeaseManager(store, config("poda", "pod-a:9000"),
+                    Clock.systemUTC());
+            FleetSequencer fleet = new FleetSequencer(store, config("poda", "pod-a:9000"),
+                    new InProcessTransport(), () -> LocalSequencer.start(store, PREFIX, leases, 8)
+                            .map(term -> new BatchingSequencer(term, Duration.ofMillis(1))));
+            try {
+                fleet.commitAll(List.of(flush("seg-1")));
+
+                assertThat(fleet.chain().orElseThrow().snapshot().deltas().stream()
+                        .flatMap(d -> d.segments().stream())
+                        .map(SegmentCommit::segmentKey))
+                        .as("the chain UNDER the batcher").containsExactly("seg-1");
+            } finally {
+                fleet.close();
+            }
+        }
+    }
+
+    @Test
     void aFOLLOWERHasNOChainAndASKINGDoesNOTTakeATerm() throws Exception {
         try (MemoryBinStore store = new MemoryBinStore()) {
             LeaseManager held = new LeaseManager(store, config("podc", "pod-c:9000"),

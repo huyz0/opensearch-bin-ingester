@@ -19,6 +19,7 @@ import binjava.ingest.OrphanSweep;
 import binjava.ingest.StoreGcLease;
 import binjava.ingest.WatermarkTable;
 import binjava.sequencer.Checkpoints;
+import binjava.sequencer.BatchingSequencer;
 import binjava.sequencer.FleetSequencer;
 import binjava.sequencer.LeaseConfig;
 import binjava.sequencer.LeaseChallenge;
@@ -157,7 +158,8 @@ public final class Assembly implements AutoCloseable {
                 config.leaseTtl(), config.leaseRenewInterval());
         LeaseManager manager = new LeaseManager(store, leases, clock, challenge);
         this.sequencer = new FleetSequencer(store, leases, transport,
-                () -> LocalSequencer.start(store, config.prefix(), manager, SEAL_REDRIVE_BUDGET));
+                () -> LocalSequencer.start(store, config.prefix(), manager, SEAL_REDRIVE_BUDGET)
+                        .map(term -> new BatchingSequencer(term, COMMIT_WINDOW)));
         // ⚠️ NOT PUSHED ONTO `toClose`, AND THAT IS NOT AN OMISSION.
         // `DefaultIngest.close()` closes the sequencer it was given and says so
         // in its own javadoc, and `FleetSequencer.close()` has no idempotence
@@ -255,10 +257,9 @@ public final class Assembly implements AutoCloseable {
             // ⚠️ `serving()`, NOT MERELY `instanceof`: a term this node still
             // HOLDS may already have been fenced by a takeover, and its frozen
             // chain as a keep list deletes the successor's committed segments.
-            return held instanceof LocalSequencer local && local.serving()
-                    ? Optional.of(new RetentionLoop.Term(local.chain(), local::observeRetained,
-                            local::serving))
-                    : Optional.empty();
+            return LocalSequencer.underneath(held).filter(LocalSequencer::serving)
+                    .map(local -> new RetentionLoop.Term(local.chain(), local::observeRetained,
+                            local::serving));
         }, leased, rule, observable, clock, config.prefix(), kept.minRetention(),
                 OrphanSweep.DEFAULT_GRACE, SegmentGc.DEFAULT_DELETE_BATCH);
     }
@@ -285,6 +286,17 @@ public final class Assembly implements AutoCloseable {
      * how many ancestor seals one takeover will redrive before giving up.
      */
     private static final int SEAL_REDRIVE_BUDGET = 8;
+
+    /**
+     * How long the leader's commit window stays open once a commit arrives
+     * (M8.50).
+     *
+     * <p>⚠️ **SHORT, BECAUSE THE BATCH COMES FROM THE PUT, NOT THE WAIT.** While
+     * one delta is in the store, every commit that arrives queues, and the next
+     * window takes them all: that is where one PUT per window comes from under
+     * load. The window itself only adds latency to a commit that arrives alone.
+     */
+    static final Duration COMMIT_WINDOW = Duration.ofMillis(5);
 
     /**
      * The stream an index name resolves to.

@@ -189,10 +189,8 @@ public final class FleetSequencer implements Sequencer {
      * reason {@link #epoch()} reads the held term first.
      */
     public java.util.Optional<ChainMemory> chain() {
-        Sequencer mine = leadership.heldWithoutElecting();
-        return mine instanceof LocalSequencer local
-                ? java.util.Optional.of(local.chain())
-                : java.util.Optional.empty();
+        return LocalSequencer.underneath(leadership.heldWithoutElecting())
+                .map(LocalSequencer::chain);
     }
 
     /**

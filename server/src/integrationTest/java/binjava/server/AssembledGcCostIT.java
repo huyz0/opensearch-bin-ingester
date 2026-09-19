@@ -115,17 +115,24 @@ class AssembledGcCostIT {
 
                 // ⚠️ THE PREMISE, OR THE ZERO BELOW IS ABOUT NOTHING: this node
                 // leads, and the chain the loop reads holds the commit.
-                assertThat(assembly.heldTerm())
+                // ⚠️ UNDER THE BATCHER (M8.50): the held term is wrapped.
+                assertThat(LocalSequencer.underneath(assembly.heldTerm()))
                         .as("the write elected a term on this node")
-                        .isInstanceOf(LocalSequencer.class);
-                assertThat(((LocalSequencer) assembly.heldTerm()).chain().snapshot().deltas())
+                        .isPresent();
+                assertThat(LocalSequencer.underneath(assembly.heldTerm()).orElseThrow()
+                        .chain().snapshot().deltas())
                         .as("and its in-memory chain holds the commit the loop will read")
                         .isNotEmpty();
 
                 long from = assembly.retention().ticks();
                 long readFrom = assembly.retention().termTicks();
                 StoreCounts before = store.counts();
-                awaitTicks(assembly, from + 10);
+                // ⚠️ AN ELEVENTH TICK STARTED, so the tenth FINISHED: `ticks`
+                // counts a tick as it starts and `termTicks` part-way through,
+                // and ticks run one at a time (`scheduleWithFixedDelay`).
+                // Awaiting the tenth alone raced its own term read -- measured
+                // 9 of 10 in two runs of four.
+                awaitTicks(assembly, from + 11);
                 StoreCounts after = store.counts();
 
                 assertThat(assembly.retention().termTicks() - readFrom)
@@ -184,7 +191,7 @@ class AssembledGcCostIT {
             assembly.ingest().append(PRODUCER, INDEX, 0, sink -> sink.accept(
                     new SegmentRecord("doc-1", OpType.INDEX, OptionalLong.of(1),
                             "{}".getBytes(StandardCharsets.UTF_8))));
-            LocalSequencer term = (LocalSequencer) assembly.heldTerm();
+            LocalSequencer term = LocalSequencer.underneath(assembly.heldTerm()).orElseThrow();
             assembly.retention().tick();
             assertThat(assembly.retention().termTicks())
                     .as("the premise: a serving term IS read").isEqualTo(1);
@@ -193,7 +200,8 @@ class AssembledGcCostIT {
             // a test cannot stage a second node's takeover in-process. The
             // node still holds the object -- which is the whole point.
             term.close();
-            assertThat(assembly.heldTerm()).as("still HELD").isSameAs(term);
+            assertThat(LocalSequencer.underneath(assembly.heldTerm())).as("still HELD")
+                    .containsSame(term);
             assembly.retention().tick();
 
             assertThat(assembly.retention().termTicks())
