@@ -59,9 +59,12 @@ import java.util.concurrent.TimeUnit;
  * server bounds it.
  *
  * <p>⚠️ **A SLOW CONSUMER LOSES ITS QUEUED PUSHES, NEVER THE INGESTER'S
- * MEMORY.** The queue between the hub's publishing thread and this poll is
- * fixed and the hub offers rather than blocks; a consumer that stopped polling
- * simply finds nothing waiting and resumes from its own committed position
+ * MEMORY** -- and while it holds the byte budget, other consumers' new pushes
+ * too ({@link #MAX_QUEUED_BYTES}). The queue between the hub's publishing thread and this poll is
+ * fixed, in pushes per session and in bytes across all of them
+ * ({@link #MAX_QUEUED_BYTES}), and the hub offers rather than blocks; a consumer
+ * that stopped polling simply finds nothing waiting and resumes from its own
+ * committed position
  * (ADR-0005). Buffering instead would make one wedged node's backlog the
  * ingester's memory problem, which is the shape NFR-6 forbids on the write
  * path.
@@ -89,6 +92,22 @@ public final class SubscriptionService implements HttpService {
      * than holding megabytes of another node's problem.
      */
     static final int QUEUE_DEPTH = 64;
+
+    /**
+     * ⚠️ 64 MiB of queued segment bytes, ACROSS EVERY SESSION (M8.36, NFR-6).
+     * The depth above is in pushes and an {@code INLINE} push carries a whole
+     * segment, each session its own copy, so the depth alone bounded memory at
+     * sessions x 64 segments. The same figure as the write path's
+     * {@code IngestConfig.DEFAULT_MAX_QUEUED_PUSH_BYTES}, a quarter of the
+     * heap criterion 8 budgets.
+     *
+     * <p>⚠️ **SHARED, SO ONE WEDGED CONSUMER CAN SPEND IT FOR ALL.** Until the
+     * idle sweep reclaims it, a session that stopped polling may hold the whole
+     * budget, and then every session's new pushes are dropped. Each consumer
+     * resumes from its own committed position, so it is a stall and never a
+     * loss, and it is the price of a bound in bytes rather than in sessions.
+     */
+    static final long MAX_QUEUED_BYTES = 64L << 20;
 
     /** ⚠️ The same 1 MiB cap the commit route uses, for the same reason. */
     static final long MAX_FRAME_BYTES = 1L << 20;
@@ -169,6 +188,18 @@ public final class SubscriptionService implements HttpService {
     public SubscriptionService(SubscriptionHub hub, IndexCatalog catalog,
             WatermarkTable watermarks, Duration idleExpiry, Clock clock, int maxSessions,
             binjava.ingest.RetainedFloors floors, DrainGate gate) {
+        this(hub, catalog, watermarks, idleExpiry, clock, maxSessions, floors, gate,
+                MAX_QUEUED_BYTES);
+    }
+
+    /** The same, with the byte budget given, so a test can reach it (M8.36). */
+    SubscriptionService(SubscriptionHub hub, IndexCatalog catalog,
+            WatermarkTable watermarks, Duration idleExpiry, Clock clock, int maxSessions,
+            binjava.ingest.RetainedFloors floors, DrainGate gate, long maxQueuedBytes) {
+        if (maxQueuedBytes <= 0) {
+            throw new IllegalArgumentException("the byte budget is positive: " + maxQueuedBytes);
+        }
+        this.maxQueuedBytes = maxQueuedBytes;
         this.gate = Objects.requireNonNull(gate, "gate");
         this.floors = Objects.requireNonNull(floors, "floors");
         this.hub = Objects.requireNonNull(hub, "hub");
@@ -187,6 +218,11 @@ public final class SubscriptionService implements HttpService {
     }
 
     private final DrainGate gate;
+    private final long maxQueuedBytes;
+
+    /** Segment bytes queued in every session together, against {@link #maxQueuedBytes}. */
+    private final java.util.concurrent.atomic.AtomicLong queuedBytes =
+            new java.util.concurrent.atomic.AtomicLong();
     private final long idleExpiryMillis;
     private final int maxSessions;
     private final binjava.ingest.RetainedFloors floors;
@@ -227,11 +263,14 @@ public final class SubscriptionService implements HttpService {
      * no error, just records it would never be delivered. A consumer's position
      * is its own (ADR-0005), so nothing downstream would have noticed either.
      */
-    private static final class Session {
+    final class Session {
         private final BlockingQueue<SubscriptionHub.Push> queue =
                 new ArrayBlockingQueue<>(QUEUE_DEPTH);
         private final AutoCloseable subscription;
         private volatile long lastPolledMillis;
+
+        /** Guarded by this session's monitor, with {@link #offer} and {@link #release}. */
+        private boolean released;
 
         Session(SubscriptionHub hub, RunKey key, long nowMillis) {
             // ⚠️ `offer`, NOT `put`: `put` BLOCKS THE HUB'S PUBLISHING THREAD,
@@ -239,8 +278,40 @@ public final class SubscriptionService implements HttpService {
             // consumer that stopped polling would stop deliveries to all of
             // them. A full queue drops, and the consumer resumes from its own
             // committed position.
-            this.subscription = hub.subscribe(key, SubscriptionHub.assembling(queue::offer));
+            this.subscription = hub.subscribe(key, SubscriptionHub.assembling(this::offer));
             this.lastPolledMillis = nowMillis;
+        }
+
+        /**
+         * ⚠️ DROPPED WHEN THE BUDGET IS SPENT, exactly as when the queue is
+         * full: the consumer resumes from its own committed position.
+         *
+         * <p>⚠️ **AND REFUSED ONCE RELEASED, UNDER THE SAME MONITOR.** Closing
+         * the hub subscription does not wait for a delivery already in flight,
+         * so a publish that listed this session before the sweep released it
+         * can arrive after the drain. Counted then, its bytes would never come
+         * back, and the budget would leak shut one relocation at a time.
+         */
+        synchronized void offer(SubscriptionHub.Push push) {
+            if (released) {
+                return;
+            }
+            long bytes = push.segment().length;
+            if (queuedBytes.addAndGet(bytes) > maxQueuedBytes || !queue.offer(push)) {
+                queuedBytes.addAndGet(-bytes);
+            }
+        }
+
+        /** The next queued push, its bytes given back, or null. */
+        private SubscriptionHub.Push take(long waitMillis) throws InterruptedException {
+            return given(queue.poll(waitMillis, TimeUnit.MILLISECONDS));
+        }
+
+        private SubscriptionHub.Push given(SubscriptionHub.Push push) {
+            if (push != null) {
+                queuedBytes.addAndGet(-push.segment().length);
+            }
+            return push;
         }
 
         /**
@@ -250,7 +321,16 @@ public final class SubscriptionService implements HttpService {
          * a session outlives every poll, which is its whole point.
          */
         void release() throws Exception {
-            subscription.close();
+            try {
+                subscription.close();
+            } finally {
+                synchronized (this) {
+                    released = true;
+                    while (given(queue.poll()) != null) {
+                        // every byte this session held goes back to the budget
+                    }
+                }
+            }
         }
     }
 
@@ -312,9 +392,7 @@ public final class SubscriptionService implements HttpService {
                     .send("this ingester holds " + maxSessions + " subscriptions already");
             return;
         }
-        Session session = sessions.computeIfAbsent(sessionKey,
-                unused -> new Session(hub, key, clock.millis()));
-        session.lastPolledMillis = clock.millis();
+        Session session = sessionFor(sessionKey, key);
         try {
             java.io.ByteArrayOutputStream body = new java.io.ByteArrayOutputStream();
             // ⚠️ THE FLOOR GOES FIRST, TO ANY POLL THAT ASKS (ADR-0056). An
@@ -332,16 +410,15 @@ public final class SubscriptionService implements HttpService {
                             .encode());
                 }
             }
-            SubscriptionHub.Push first = session.queue.poll(waitFor(request).toMillis(),
-                    TimeUnit.MILLISECONDS);
+            SubscriptionHub.Push first = session.take(waitFor(request).toMillis());
             if (first != null) {
                 writeFrame(body, eventFor(first, id).encode());
                 // ⚠️ EVERYTHING ELSE ALREADY QUEUED GOES IN THE SAME ANSWER.
                 // One poll per push would make a busy stream cost a request per
                 // segment; draining makes it cost a request per ROUND TRIP,
                 // which is what long-polling is for.
-                for (SubscriptionHub.Push more = session.queue.poll(); more != null;
-                        more = session.queue.poll()) {
+                for (SubscriptionHub.Push more = session.take(0); more != null;
+                        more = session.take(0)) {
                     writeFrame(body, eventFor(more, id).encode());
                 }
             }
@@ -371,6 +448,14 @@ public final class SubscriptionService implements HttpService {
         }
     }
 
+    /** The standing session under {@code sessionKey}, opened if new, marked polled now. */
+    Session sessionFor(String sessionKey, RunKey key) {
+        Session session = sessions.computeIfAbsent(sessionKey,
+                unused -> new Session(hub, key, clock.millis()));
+        session.lastPolledMillis = clock.millis();
+        return session;
+    }
+
     /**
      * Drops sessions nobody has polled.
      *
@@ -379,7 +464,7 @@ public final class SubscriptionService implements HttpService {
      * every time. Swept opportunistically on each poll rather than on a timer,
      * because a timer here is a thread and a clock seam for a map walk.
      */
-    private void sweepIdle() {
+    void sweepIdle() {
         long deadline = clock.millis() - idleExpiryMillis;
         sessions.entrySet().removeIf(entry -> {
             if (entry.getValue().lastPolledMillis > deadline) {
@@ -401,6 +486,11 @@ public final class SubscriptionService implements HttpService {
      * within a couple of minutes rather than at the next restart.
      */
     static final Duration IDLE_EXPIRY = Duration.ofSeconds(90);
+
+    /** Segment bytes queued across every session, for the budget's assertion. */
+    long queuedBytes() {
+        return queuedBytes.get();
+    }
 
     /** How many standing subscriptions this service holds. */
     int sessionCount() {
