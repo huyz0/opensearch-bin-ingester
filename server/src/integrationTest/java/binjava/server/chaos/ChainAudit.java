@@ -98,8 +98,44 @@ public final class ChainAudit {
         byte[] get(String key) throws IOException;
     }
 
+    /**
+     * One epoch's chain, one line per entry: what each delta committed, for
+     * whom, and at which offsets. Printed by a row whose audit failed, so a
+     * chaos failure arrives with its evidence.
+     */
+    public String describe(long epoch) {
+        EpochChain chain = epochs.get(epoch);
+        if (chain == null) {
+            return "epoch " + epoch + ": no chain";
+        }
+        StringBuilder out = new StringBuilder("epoch ").append(epoch).append(":\n");
+        for (ChainEntry entry : chain.entries()) {
+            out.append("  ").append(entry.sequence()).append(' ');
+            if (entry instanceof CommitDelta delta) {
+                for (SegmentCommit segment : delta.segments()) {
+                    out.append(segment.segmentKey()).append(' ').append(segment.attribution())
+                            .append(' ');
+                    for (RunCommit run : segment.runs()) {
+                        out.append('[').append(run.firstOffset()).append(',')
+                                .append(run.firstOffset() + run.recordCount()).append(") ");
+                    }
+                }
+            } else {
+                out.append(entry);
+            }
+            out.append('\n');
+        }
+        return out.toString();
+    }
+
     public List<String> violations() {
         return List.copyOf(violations);
+    }
+
+    /** One epoch's entries, SEAL and CONTINUE included, in slot order. */
+    public List<ChainEntry> entries(long epoch) {
+        EpochChain chain = epochs.get(epoch);
+        return chain == null ? List.of() : chain.entries();
     }
 
     /** Every epoch that has a chain. */

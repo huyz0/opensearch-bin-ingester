@@ -133,9 +133,19 @@ public final class NodeProcess implements AutoCloseable {
         return process.isAlive();
     }
 
-    /** A client onto this node's front door. */
+    /**
+     * A client onto this node's front door.
+     *
+     * <p>⚠️ **WITH A 2 s TIMEOUT, AS A REAL PRODUCER HAS.** MEASURED (M8.12):
+     * without one, a request to a SIGSTOPped node waited out the client's 30 s
+     * default. Within seconds every round-robin producer was parked on the
+     * frozen node, nothing reached a live one, and "visibility resumed" took
+     * 30 s for a reason that had nothing to do with the sequencer.
+     */
     public WebClient client() {
-        return WebClient.builder().baseUri("http://localhost:" + port).build();
+        return WebClient.builder().baseUri("http://localhost:" + port)
+                .connectTimeout(java.time.Duration.ofSeconds(2))
+                .readTimeout(java.time.Duration.ofSeconds(2)).build();
     }
 
     /**

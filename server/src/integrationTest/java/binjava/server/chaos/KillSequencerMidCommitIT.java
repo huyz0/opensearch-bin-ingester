@@ -156,7 +156,7 @@ class KillSequencerMidCommitIT {
      * it, across whichever nodes are alive. At-least-once, as a real producer
      * is.
      */
-    private static void produce(int producer, List<NodeProcess> nodes, Set<String> acked,
+    static void produce(int producer, List<NodeProcess> nodes, Set<String> acked,
             AtomicBoolean stop) {
         for (int seq = 0; !stop.get(); seq++) {
             List<String> ids = new ArrayList<>();
@@ -184,7 +184,7 @@ class KillSequencerMidCommitIT {
         }
     }
 
-    private static void awaitAcks(Set<String> acked, int target) throws InterruptedException {
+    static void awaitAcks(Set<String> acked, int target) throws InterruptedException {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120);
         while (acked.size() < target) {
             assertThat(System.nanoTime()).as("acks stalled at %d", acked.size())
@@ -194,7 +194,7 @@ class KillSequencerMidCommitIT {
     }
 
     /** Every id in every committed segment, with how often it appears. */
-    private static Map<String, Integer> committedIds(ChaosBucket bucket, Set<String> segments)
+    static Map<String, Integer> committedIds(ChaosBucket bucket, Set<String> segments)
             throws Exception {
         Map<String, Integer> found = new HashMap<>();
         for (String key : segments) {

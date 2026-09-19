@@ -30,16 +30,24 @@ import java.util.Objects;
 public final class IngesterNode implements AutoCloseable {
 
     /**
-     * ⚠️ **HOW LONG A FORWARDED COMMIT WAITS BEFORE IT IS AMBIGUOUS.** 10 s,
-     * and it is a constant rather than a key because the number that should
-     * drive it is the lease TTL, which measurement M1 (M8.27) has not sized
-     * yet — a settings key written against an unmeasured constant is a value an
-     * operator will tune away from the one relationship that matters. ⚠️ A
-     * timeout here yields an {@code IOException} and must never become a 409:
-     * that conversion turns an outcome nobody knows into a licence to resend
-     * elsewhere, which is how one batch gets two ranges of offsets.
+     * ⚠️ **HOW LONG A FORWARDED COMMIT WAITS BEFORE IT IS AMBIGUOUS: THE LEASE
+     * TTL.** Waiting longer only delays the follower. A leader that stopped
+     * renewing has lost its term by then, and the follower must go and take
+     * it. MEASURED (M8.12): a fixed 10 s here, under a 4 s TTL, kept every
+     * follower forwarding to a SIGSTOPped leader for 10 s, and visibility
+     * resumed in 10.6 s, past criterion 9's bound of the TTL plus 5 s.
+     * ⚠️ **WHAT IT COSTS IS LIVENESS, NEVER SAFETY.** A leader can still be
+     * renewing while a commit waits in its batch or on a slow delta PUT, so an
+     * operator who sets a TTL shorter than the store's commit latency tail
+     * turns ordinary commits ambiguous: the producer is told nothing and
+     * retries, which costs duplicates. Nothing sets a floor under the TTL.
+     * ⚠️ A timeout here yields an {@code IOException} and must never become a
+     * 409: that conversion turns an outcome nobody knows into a licence to
+     * resend elsewhere, which is how one batch gets two ranges of offsets.
      */
-    static final Duration PEER_COMMIT_TIMEOUT = Duration.ofSeconds(10);
+    static Duration peerCommitTimeout(ServerConfig config) {
+        return config.leaseTtl();
+    }
 
     /**
      * ⚠️ **HOW LONG SUBSCRIBERS ARE GIVEN TO LEAVE (§7 step 2, "wait
@@ -91,7 +99,7 @@ public final class IngesterNode implements AutoCloseable {
     public static IngesterNode start(ServerConfig config, Clock clock) throws IOException {
         Objects.requireNonNull(config, "config");
         Objects.requireNonNull(clock, "clock");
-        SequencerTransport transport = new HttpSequencerTransport(PEER_COMMIT_TIMEOUT);
+        SequencerTransport transport = new HttpSequencerTransport(peerCommitTimeout(config));
         Assembly assembly = Assembly.open(config, transport, clock);
         java.util.List<String> journal = new java.util.concurrent.CopyOnWriteArrayList<>();
         assembly.journal(journal::add);
