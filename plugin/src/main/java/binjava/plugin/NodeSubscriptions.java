@@ -160,6 +160,42 @@ public final class NodeSubscriptions implements AutoCloseable {
 
     private NodeChannel channel;
 
+    /**
+     * ⚠️ EIGHT DEFAULT SEGMENTS (8 MiB each): enough that a node catching up
+     * on several indices at once does not evict a segment before its other
+     * runs have read it, and a fixed number an operator can size a heap
+     * against (NodeSegmentSource's own bound).
+     */
+    public static final long DEFAULT_SEGMENT_HOLD_BYTES = 64L << 20;
+
+    /** How long one segment GET may take before it is a failure. */
+    public static final java.time.Duration SEGMENT_FETCH_TIMEOUT =
+            java.time.Duration.ofSeconds(30);
+
+    /**
+     * What a real node builds (M8.31): a channel, and ONE fetch path every
+     * client on the node shares.
+     *
+     * <p>⚠️ **THE FETCHER IS WRAPPED ONCE, HERE, AND HANDED TO EVERY CLIENT.**
+     * A fetcher per client is one GET per run per segment -- correct, green on
+     * every read-back, and the request-rate shape non-negotiable 6 forbids by
+     * name.
+     */
+    public static NodeSubscriptions fetching(NodeChannel channel, int queueCapacity,
+            long holdBytes) {
+        NodeSubscriptions built = new NodeSubscriptions(
+                Objects.requireNonNull(channel, "channel").transport(), queueCapacity,
+                new NodeSegmentSource(new binjava.client.HttpSegmentSource(SEGMENT_FETCH_TIMEOUT),
+                        holdBytes));
+        built.channel = channel;
+        return built;
+    }
+
+    /** Whether a {@code direct} delivery has something on this node to fetch it with. */
+    public boolean fetches() {
+        return nodeSegmentSource != null;
+    }
+
     /** The channel this was built over, or {@code null} for a bare transport. */
     public NodeChannel channel() {
         return channel;

@@ -39,12 +39,25 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
                     org.opensearch.common.unit.TimeValue.timeValueMillis(100),
                     org.opensearch.common.settings.Setting.Property.NodeScope);
 
+    /**
+     * The ingester this node subscribes to (M8.31).
+     *
+     * <p>⚠️ **IT IS HOW A REAL NODE GETS SUBSCRIPTIONS AT ALL.** Only tests
+     * call {@link #install}; a node loads this plugin reflectively, and before
+     * this setting it held nothing -- no transport, no registrar, no fetcher.
+     * Unset, the node still holds nothing, which is the plugin loaded on a
+     * node that ingests from no ingester.
+     */
+    public static final org.opensearch.common.settings.Setting<String> INGESTER_ENDPOINT =
+            org.opensearch.common.settings.Setting.simpleString("binstore.ingester.endpoint",
+                    org.opensearch.common.settings.Setting.Property.NodeScope);
+
     /** This node's shards of this plugin's indices, for the progress reporter. */
     private final ShardPositions positions = new ShardPositions();
 
     @Override
     public java.util.List<org.opensearch.common.settings.Setting<?>> getSettings() {
-        return java.util.List.of(PROGRESS_INTERVAL);
+        return java.util.List.of(PROGRESS_INTERVAL, INGESTER_ENDPOINT);
     }
 
     /**
@@ -79,6 +92,9 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
      */
     private static volatile java.util.function.Function<String, NodeSubscriptions> factory;
 
+    /** Deliveries one stream may queue before it drops and reports a gap. */
+    static final int QUEUE_CAPACITY = 1024;
+
     /**
      * ⚠️ KEYED BY {@code node.name}, WHICH THE NODE SUPPLIES. OpenSearch puts
      * it in the settings it hands the plugin's constructor, so the key is
@@ -112,6 +128,18 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
         // ⚠️ A NODE WITH NO NAME GETS NOTHING rather than a shared default:
         // keying two unnamed nodes together is the static this task removes,
         // wearing a default's clothes. Every real node has one.
+        String endpoint = settings == null ? "" : INGESTER_ENDPOINT.get(settings);
+        if (installed == null && !endpoint.isEmpty()) {
+            // ⚠️ AN INSTALLED FACTORY WINS: a test cluster installs one because
+            // its nodes share a JVM and a transport, and a setting it also
+            // carried must not replace it.
+            installed = name -> NodeSubscriptions.fetching(
+                    NodeChannel.open(endpoint,
+                            binjava.client.HttpSubscriptionTransport.DEFAULT_RETRY_FLOOR,
+                            binjava.client.HttpSubscriptionTransport.DEFAULT_RETRY_CEILING,
+                            NodeSubscriptions.SEGMENT_FETCH_TIMEOUT),
+                    QUEUE_CAPACITY, NodeSubscriptions.DEFAULT_SEGMENT_HOLD_BYTES);
+        }
         this.subscriptions = installed == null || nodeName.isEmpty()
                 ? null
                 : PER_NODE.computeIfAbsent(nodeName, installed);

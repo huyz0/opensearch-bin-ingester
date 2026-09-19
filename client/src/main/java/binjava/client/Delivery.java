@@ -29,8 +29,9 @@ import java.util.Objects;
  * for one 8 MiB segment on a catch-up node, shards-per-node, which
  * non-negotiable 6 forbids by name and which nothing in the tree can measure,
  * since consumer-side GETs are invisible to the ingester's
- * {@code CountingBinStore}. **M5.45h** owns the merge, and **no production
- * {@link SegmentSource} ships until it lands** (M5.45g criterion 6, ADR-0044).
+ * {@code CountingBinStore}. **M5.45h** owns the merge, and the production
+ * {@link SegmentSource} (M8.31) is only ever handed out behind it (M5.45g
+ * criterion 6, ADR-0044).
  * A reader looking for the coalescing point should look at
  * {@code ConsumerClient.decodeInto}, not at the hub.
  *

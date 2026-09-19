@@ -26,10 +26,10 @@ import java.io.IOException;
  * header alone, and a bounded read is two requests; that is **M5.66**, which
  * also owns whether the event's coordinates stay on the wire at all.
  *
- * <p>⚠️ NO PRODUCTION IMPLEMENTATION SHIPS IN M5 — ADR-0044 (a). Fetching a
- * presigned URL means HTTP, and there is nothing to fetch from: no backend in
- * the tree can presign. The implementation that would be wired here is also
- * gated on **M5.45h**, because one {@code Delivery} per RUN means one fetch per
+ * <p>⚠️ THE PRODUCTION IMPLEMENTATION IS {@code HttpSegmentSource} (M8.31),
+ * and it is only ever handed out wrapped in the plugin's per-node cache. None
+ * shipped in M5 (ADR-0044 (a)): no backend could presign until M8.18. It was
+ * also gated on **M5.45h**, because one {@code Delivery} per RUN means one fetch per
  * run however well an implementation merges internally, and a catch-up node
  * holding ~400 runs of one segment would issue ~400 whole-object GETs —
  * shards-per-node, which non-negotiable 6 forbids by name and which nothing in

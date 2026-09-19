@@ -39,8 +39,9 @@ import java.util.Objects;
  * DIFFERENT segments too. That is a real cost and it is taken deliberately:
  * the alternative is a per-key single-flight whose only observable behaviour
  * is under concurrency, and nothing here could assert it without a barrier
- * that outlives the case. It is revisitable the day a production fetcher
- * exists -- ADR-0044 (a) says none ships in M5.
+ * that outlives the case. ⚠️ A production fetcher exists since M8.31
+ * ({@code HttpSegmentSource}), so a slow GET now holds this lock for a real
+ * network round trip; revisiting it is a measurement, not a guess.
  */
 public final class NodeSegmentSource implements SegmentSource {
 

@@ -35,7 +35,7 @@ written, the cell is wrong and is fixed HERE.
 |---|---|---|
 | M5.6e | the production `SequencerTransport` — `InProcessTransport` in `testFixtures` is the only implementation | a non-test `src/main` CONSTRUCTION of a `SequencerTransport` implementation |
 | M5.91a | no production `main()` (closed by M8.4) | a `public static void main` in `src/main` |
-| M5.91b | `SegmentPrefetcher`, `NodeSegmentSource`, `NodeSubscriptions` — built only by tests (closed by M8.31) | a non-test `src/main` construction of each of the three |
+| M5.91b | `SegmentPrefetcher`, `NodeSegmentSource`, `NodeSubscriptions` — built only by tests (closed by M8.31 for the last two, and by M8.56 for `SegmentPrefetcher`) | a non-test `src/main` construction of each of the three |
 | M5.91c | `FallbackLadder` — built only by tests, and never EXECUTED (closed by M8.28, criterion 20) | a non-test `src/main` construction, AND a non-test call of its tier-advancing method |
 | M6.15 | `IndexRegistrar.onReconnect()`, called by nothing because no production `SubscriptionTransport` exists | a non-test `src/main` CALL of `onReconnect` |
 | M6.19 | `RoutedIngest` — the routed path, in no deployable server | a non-test `src/main` construction |
@@ -500,7 +500,7 @@ to catch:
 | 20 | `FallbackLadderExecutionIT` | a ladder whose tiers are constructed and never invoked — today's state, and green on any assertion about recovery alone if the consumer also has a direct path |
 | 21 | `ConfigRefusalTest` (T0, the MESSAGE) **and `ConfigExitCodeIT` (T3, the non-zero EXIT)** | a missing store endpoint defaulted to a local path: the process starts, writes nowhere anyone expects, and every in-process test passes |
 | 22 | `RetentionRefusalIT` | the floor reported by GC never reaching the consumer: both halves stay green in their own modules, which is exactly the state M7 shipped |
-| 23 | `FetchRateIT` (≥8 shards, ≥2 indices, ≥4 shared segments, counts doubled) | a per-subscription `NodeSegmentSource` cache: one GET per shard per segment — correct, fast, green on every read-back assertion in this plan, and the exact shape non-negotiable 6 forbids |
+| 23 | `ProductionFetchPathTest` (≥8 shards, ≥2 indices, ≥4 shared segments, counts doubled; GETs counted at an HTTP server, since a presigned GET bypasses every `CountingBinStore`) | a per-subscription `NodeSegmentSource` cache: one GET per shard per segment — correct, fast, green on every read-back assertion in this plan, and the exact shape non-negotiable 6 forbids |
 | 24 | `RoutedWriteTest` | the assembled server constructing plain `DefaultIngest`: every un-routed write passes and `os_routing` is silently ignored. ⚠️ Also reds `new RoutedIngest(...)` constructed and never called, which criterion 16's predicate alone accepts |
 | 25 | `CommitForwardingIT` | a pod that takes the commit itself instead of forwarding — green on the ack, and it is two leaders writing one slot |
 | — | `PeerTransportIT` (M8.20, M8.21) — its mutation: a transport that loops back in-process, which satisfies every "the transport works" assertion and no fleet one — red by criteria 11, 16, 17 and 25, which need two pods; ⚠️ **criteria 1 and 20 CANNOT red it** and an earlier draft listed them | ⚠️ **NOT A CRITERION OF ITS OWN AND THAT IS DELIBERATE**: the production transport is load-bearing for criteria 1, 11, 13, 16, 17 and 20, and a criterion asserting "the transport works" would be satisfied by a loopback. It is asserted by the fleet criteria that cannot pass without it |
@@ -572,7 +572,8 @@ rows uncited.
 | M8.27 | Measurement M1: the lease TTL and challenge policy under `SIGSTOP` pauses, reported as numbers | FR-11 |
 | M8.28 | The fallback ladder EXECUTES on a real gap, and its GET cost is counted rather than modelled | FR-10 |
 | M8.32 | The routed path through the assembled server (M6.19): `os_routing` placement and FR-13's refusal | FR-13 |
-| M8.31 | Wire the consumer-side fetch path: `SegmentPrefetcher`, `NodeSegmentSource`, `NodeSubscriptions` (M5.91b) | FR-10, NFR-4 |
+| M8.31 | Wire the consumer-side fetch path: `NodeSegmentSource`, `NodeSubscriptions` and the first production `SegmentSource` (M5.91b) | FR-10, NFR-4 |
+| M8.56 | Wire `SegmentPrefetcher` into the assembled ingester (split from M8.31) | FR-10, NFR-4 |
 | M8.30 | Join GC's deletions to the consumer's refusal over the production transport (M7.23) | FR-9, FR-10 |
 | M8.29 | Extend `check-module.sh`: only the root may depend on `binstore-backends` in `src/main` | — (gate) |
 | M8.25 | `scripts/check-wired.sh`: the fixed list of unwired mechanisms, each either constructed in `src/main` or naming an existing backlog row | — (gate) |
