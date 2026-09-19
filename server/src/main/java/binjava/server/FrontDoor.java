@@ -3,6 +3,8 @@ package binjava.server;
 
 import binjava.http.BulkService;
 import binjava.http.CommitService;
+import binjava.http.DrainGate;
+import binjava.http.HealthService;
 import binjava.http.SubscriptionService;
 import io.helidon.webserver.WebServer;
 import io.helidon.webserver.http.HttpRouting;
@@ -39,10 +41,17 @@ import java.util.Objects;
  */
 public final class FrontDoor implements AutoCloseable {
 
-    private final WebServer server;
+    static final String LISTENER_STOPPED = "listener stopped";
 
-    private FrontDoor(WebServer server) {
+    private final WebServer server;
+    private final DrainGate gate;
+    private final java.util.function.Consumer<String> journal;
+
+    private FrontDoor(WebServer server, DrainGate gate,
+            java.util.function.Consumer<String> journal) {
         this.server = server;
+        this.gate = gate;
+        this.journal = journal;
     }
 
     /**
@@ -58,10 +67,21 @@ public final class FrontDoor implements AutoCloseable {
      *     which is why it is a parameter and not {@code Clock.systemUTC()}
      */
     public static FrontDoor start(Assembly assembly, Clock clock) {
+        return start(assembly, clock, event -> { });
+    }
+
+    /**
+     * The same, telling {@code journal} when the gate's switches move and
+     * when the listener stops (M8.7).
+     */
+    public static FrontDoor start(Assembly assembly, Clock clock,
+            java.util.function.Consumer<String> journal) {
         Objects.requireNonNull(assembly, "assembly");
+        Objects.requireNonNull(journal, "journal");
         Objects.requireNonNull(clock, "clock");
         ServerConfig config = assembly.config();
-        WebServer server = build(config, assembly, clock);
+        DrainGate gate = new DrainGate(journal);
+        WebServer server = build(config, assembly, clock, gate);
         try {
             server.start();
         } catch (RuntimeException notBound) {
@@ -100,7 +120,7 @@ public final class FrontDoor implements AutoCloseable {
             throw new IllegalStateException("the front door did not bind port "
                     + config.httpPort() + " -- it is already in use");
         }
-        return new FrontDoor(server);
+        return new FrontDoor(server, gate, journal);
     }
 
     /**
@@ -116,14 +136,25 @@ public final class FrontDoor implements AutoCloseable {
         }
     }
 
-    private static WebServer build(ServerConfig config, Assembly assembly, Clock clock) {
+    private static WebServer build(ServerConfig config, Assembly assembly, Clock clock,
+            DrainGate gate) {
         return WebServer.builder()
+                // ⚠️ HELIDON'S OWN SHUTDOWN HOOK IS OFF. Left on, a `SIGTERM`
+                // runs it alongside `Main`'s, and it stops the listener while
+                // the drain is still at step 2. MEASURED (M8.7): a poll during
+                // the drain was then refused a connection instead of being
+                // answered 503, and `/ready` cannot answer at all. The node's
+                // own sequence stops the listener, after the drain. ⚠️ NOT
+                // PINNED: the two hooks race, and a test that saw it once
+                // passed the next run.
+                .shutdownHook(false)
                 .port(config.httpPort())
                 .routing(HttpRouting.builder()
-                        .register(new BulkService(assembly.ingest(), config.principal()))
+                        .register(new HealthService(gate))
+                        .register(new BulkService(assembly.ingest(), config.principal(), gate))
                         .register(new CommitService(assembly::heldTerm))
                         .register(new SubscriptionService(assembly.hub(), assembly.catalog(),
-                                assembly.watermarks(), clock, assembly.floors())))
+                                assembly.watermarks(), clock, assembly.floors(), gate)))
                 .build();
     }
 
@@ -139,17 +170,23 @@ public final class FrontDoor implements AutoCloseable {
     }
 
     /**
+     * What this door admits, which {@link IngesterNode} drains on shutdown
+     * (M8.7).
+     */
+    public DrainGate gate() {
+        return gate;
+    }
+
+    /**
      * Stops listening.
      *
-     * <p>⚠️ **THIS IS NOT THE GRACEFUL SHUTDOWN.** M8.7 owns the ORDER —
-     * telling subscribers, draining, flushing, then releasing the lease — and
-     * the 30 s budget research 08 §7 measures. What this does is stop the
-     * listener; a node closed through {@link Main} closes this first so that no
-     * new write arrives while the writer is draining, and that ordering is the
-     * only part of §7 this task claims.
+     * <p>⚠️ **THIS IS NOT THE GRACEFUL SHUTDOWN.** {@link ShutdownSequence}
+     * is, and it calls this once the {@link #gate() gate} has been drained, so
+     * no request is still inside when the listener goes.
      */
     @Override
     public void close() {
         server.stop();
+        journal.accept(LISTENER_STOPPED);
     }
 }

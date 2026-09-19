@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package binjava.server;
 
+import binjava.http.DrainGate;
 import binjava.http.HttpSequencerTransport;
 import binjava.sequencer.SequencerTransport;
 import java.io.IOException;
@@ -40,14 +41,40 @@ public final class IngesterNode implements AutoCloseable {
      */
     static final Duration PEER_COMMIT_TIMEOUT = Duration.ofSeconds(10);
 
+    /**
+     * ⚠️ **HOW LONG SUBSCRIBERS ARE GIVEN TO LEAVE (§7 step 2, "wait
+     * briefly").** A woken poll answers at once, so this bounds only a poll
+     * that was between its admission and its wait.
+     */
+    static final Duration SUBSCRIBER_GRACE = Duration.ofSeconds(2);
+
+    /**
+     * ⚠️ **HOW LONG THE REQUESTS INSIDE THE DOOR ARE GIVEN (§7 step 3).** Each
+     * one waits for the flush that makes it durable, and the drain forces one
+     * flush per {@link #IN_FLIGHT_SLICE}, so a request inside normally
+     * finishes in one slice. The bound is for a flush that is slow, and it
+     * keeps the whole sequence inside §7's 30 s budget.
+     */
+    static final Duration IN_FLIGHT_BOUND = Duration.ofSeconds(20);
+
+    static final Duration IN_FLIGHT_SLICE = Duration.ofMillis(100);
+
     private final Assembly assembly;
     private final FrontDoor door;
     private final SequencerTransport transport;
+    private final Clock clock;
+    private final java.util.List<String> journal;
+    private volatile ShutdownSequence.Report lastShutdown;
+    private final java.util.concurrent.atomic.AtomicBoolean closing =
+            new java.util.concurrent.atomic.AtomicBoolean();
 
-    private IngesterNode(Assembly assembly, FrontDoor door, SequencerTransport transport) {
+    private IngesterNode(Assembly assembly, FrontDoor door, SequencerTransport transport,
+            Clock clock, java.util.List<String> journal) {
         this.assembly = assembly;
         this.door = door;
         this.transport = transport;
+        this.clock = clock;
+        this.journal = journal;
     }
 
     /**
@@ -66,8 +93,11 @@ public final class IngesterNode implements AutoCloseable {
         Objects.requireNonNull(clock, "clock");
         SequencerTransport transport = new HttpSequencerTransport(PEER_COMMIT_TIMEOUT);
         Assembly assembly = Assembly.open(config, transport, clock);
+        java.util.List<String> journal = new java.util.concurrent.CopyOnWriteArrayList<>();
+        assembly.journal(journal::add);
         try {
-            return new IngesterNode(assembly, FrontDoor.start(assembly, clock), transport);
+            return new IngesterNode(assembly, FrontDoor.start(assembly, clock, journal::add),
+                    transport, clock, journal);
         } catch (RuntimeException failed) {
             // ⚠️ A `RuntimeException` IS THE ONLY THING `FrontDoor.start` CAN
             // THROW -- Helidon reports a port already in use as one -- so this
@@ -93,36 +123,101 @@ public final class IngesterNode implements AutoCloseable {
     }
 
     /**
-     * Stops the node.
+     * Stops the node, in research 08 §7's order ({@link ShutdownSequence}).
      *
-     * <p>⚠️ **THE DOOR FIRST, THEN THE GRAPH, THEN THE TRANSPORT'S POOL.**
-     * Closing the graph first would leave a listener answering out of an
-     * ingester that is closing under it. ⚠️ **AND THE GRAPH IS CLOSED EVEN IF
-     * THE DOOR THROWS**: the graph's close is what RELEASES THE LEASE, and a
-     * term left held turns every deploy into a TTL-long visibility stall
-     * (research 08 §7 step 5).
+     * <p>⚠️ **THE DOOR IS DRAINED BEFORE IT IS CLOSED, AND THE GRAPH IS CLOSED
+     * EVEN IF EVERYTHING BEFORE IT THREW.** The graph's close is what RELEASES
+     * THE LEASE, and a term left held turns every deploy into a TTL-long
+     * visibility stall (§7 step 5).
+     *
+     * <p>⚠️ **IDEMPOTENT**, like {@link Assembly#close()}: the shutdown hook
+     * and a caller's try-with-resources can both reach it.
      */
     @Override
     public void close() throws IOException {
-        IOException first = null;
-        try {
-            door.close();
-        } catch (RuntimeException doorFailed) {
-            first = new IOException("the front door did not stop cleanly", doorFailed);
+        if (!closing.compareAndSet(false, true)) {
+            return;
         }
-        try {
-            assembly.close();
-        } catch (IOException graphFailed) {
-            first = first != null ? first : graphFailed;
-        }
-        try {
-            transport.close();
-        } catch (RuntimeException | IOException poolFailed) {
-            first = first != null ? first : asIoException(poolFailed);
-        }
-        if (first != null) {
+        DrainGate gate = door.gate();
+        ShutdownSequence.Report report = ShutdownSequence.run(new ShutdownSequence.Steps() {
+            @Override
+            public void failReadiness() {
+                gate.failReadiness();
+            }
+
+            @Override
+            public void releaseSubscribers() throws InterruptedException {
+                gate.releasePollers();
+                gate.awaitNoPollers(SUBSCRIBER_GRACE);
+            }
+
+            @Override
+            public void finishInFlight() throws Exception {
+                gate.refuseBulk();
+                try {
+                    // ⚠️ A FLUSH PER SLICE, because a request inside the door
+                    // is waiting for one: its 202 is sent once its records
+                    // are durable. Left to the flusher's own interval it would
+                    // finish too, only later.
+                    long slices = IN_FLIGHT_BOUND.toNanos() / IN_FLIGHT_SLICE.toNanos();
+                    for (long i = 0; i < slices && gate.bulkInFlight() > 0; i++) {
+                        assembly.flush();
+                        gate.awaitNoBulk(IN_FLIGHT_SLICE);
+                    }
+                } finally {
+                    // ⚠️ AND ONLY THEN THE LISTENER, which is §7's order: a
+                    // request that arrives during the drain is answered 503
+                    // rather than refused a connection. ⚠️ NOT PINNED, and
+                    // said so: MEASURED, Helidon's `stop()` did not cut a
+                    // request already inside, so moving this first leaves
+                    // every test here green.
+                    door.close();
+                }
+            }
+
+            @Override
+            public void flushAndCommit() throws IOException {
+                assembly.flush();
+            }
+
+            @Override
+            public void releaseLeases() throws IOException {
+                try {
+                    assembly.close();
+                } finally {
+                    transport.close();
+                }
+            }
+        }, clock);
+        lastShutdown = report;
+        if (!report.failures().isEmpty()) {
+            IOException first = asIoException(report.failures().get(0));
+            report.failures().stream().skip(1).forEach(first::addSuppressed);
             throw first;
         }
+    }
+
+    /** The gate the door admits through, for a test that must know a request is inside. */
+    DrainGate gate() {
+        return door.gate();
+    }
+
+    /**
+     * What the drain's switches, the flushes, the listener and the graph said
+     * as they happened, in order (M8.7).
+     *
+     * <p>⚠️ **THIS, NOT {@link #lastShutdown()}, IS THE OBSERVED ORDER.** The
+     * report lists the sequence's steps as the sequence ran them; this is
+     * written by the things the steps act on, so a step that did the wrong
+     * thing, or did it at the wrong time, shows here.
+     */
+    public java.util.List<String> shutdownJournal() {
+        return java.util.List.copyOf(journal);
+    }
+
+    /** What the last shutdown measured, or {@code null} if it has not run. */
+    public ShutdownSequence.Report lastShutdown() {
+        return lastShutdown;
     }
 
     private static IOException asIoException(Exception failed) {

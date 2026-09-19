@@ -148,6 +148,28 @@ public final class SubscriptionService implements HttpService {
     public SubscriptionService(SubscriptionHub hub, IndexCatalog catalog,
             WatermarkTable watermarks, Duration idleExpiry, Clock clock, int maxSessions,
             binjava.ingest.RetainedFloors floors) {
+        this(hub, catalog, watermarks, idleExpiry, clock, maxSessions, floors, new DrainGate());
+    }
+
+    /**
+     * The production shape, with the gate the node drains on shutdown (M8.7).
+     */
+    public SubscriptionService(SubscriptionHub hub, IndexCatalog catalog,
+            WatermarkTable watermarks, Clock clock, binjava.ingest.RetainedFloors floors,
+            DrainGate gate) {
+        this(hub, catalog, watermarks, IDLE_EXPIRY, clock, MAX_SESSIONS, floors, gate);
+    }
+
+    /**
+     * Everything given.
+     *
+     * <p>⚠️ **EVERY OTHER CONSTRUCTOR GETS A GATE NOBODY DRAINS**, which is
+     * the behaviour before M8.7.
+     */
+    public SubscriptionService(SubscriptionHub hub, IndexCatalog catalog,
+            WatermarkTable watermarks, Duration idleExpiry, Clock clock, int maxSessions,
+            binjava.ingest.RetainedFloors floors, DrainGate gate) {
+        this.gate = Objects.requireNonNull(gate, "gate");
         this.floors = Objects.requireNonNull(floors, "floors");
         this.hub = Objects.requireNonNull(hub, "hub");
         this.catalog = Objects.requireNonNull(catalog, "catalog");
@@ -164,6 +186,7 @@ public final class SubscriptionService implements HttpService {
         this.maxSessions = maxSessions;
     }
 
+    private final DrainGate gate;
     private final long idleExpiryMillis;
     private final int maxSessions;
     private final binjava.ingest.RetainedFloors floors;
@@ -253,6 +276,27 @@ public final class SubscriptionService implements HttpService {
             return;
         }
 
+        if (!gate.enterPoll()) {
+            response.status(Status.SERVICE_UNAVAILABLE_503).send(DRAINING);
+            return;
+        }
+        try {
+            admitted(request, response, key, id);
+        } finally {
+            gate.exitPoll();
+        }
+    }
+
+    /**
+     * ⚠️ **WHAT A DRAINING NODE SAYS TO A POLL (research 08 §7 step 2).** The
+     * consumer's transport reads a 503 as a failed poll and reconnects with
+     * jittered backoff, through the cluster address, to a pod that is still
+     * ready.
+     */
+    static final String DRAINING = "this ingester is draining; reconnect";
+
+    private void admitted(ServerRequest request, ServerResponse response, RunKey key,
+            String id) {
         polls.incrementAndGet();
         sweepIdle();
         String sessionKey = id + "@" + key;
@@ -308,6 +352,14 @@ public final class SubscriptionService implements HttpService {
             // to treat differently.
             response.status(Status.OK_200).send(body.toByteArray());
         } catch (InterruptedException interrupted) {
+            if (gate.pollsRefused()) {
+                // ⚠️ WOKEN BY THE DRAIN, SO TOLD TO GO rather than handed an
+                // empty 200, which the consumer would answer by polling this
+                // pod again. The interrupt was the gate's, and the gate clears
+                // it when the poll exits.
+                response.status(Status.SERVICE_UNAVAILABLE_503).send(DRAINING);
+                return;
+            }
             Thread.currentThread().interrupt();
             response.status(Status.OK_200).send(new byte[0]);
         } catch (IOException impossible) {

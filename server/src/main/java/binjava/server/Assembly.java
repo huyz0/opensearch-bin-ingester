@@ -345,6 +345,34 @@ public final class Assembly implements AutoCloseable {
         return ingest;
     }
 
+    /**
+     * PUTs and commits whatever is buffered now, and answers every append
+     * waiting on it (M8.7, research 08 §7 steps 3 and 4).
+     *
+     * <p>⚠️ **IT DOES NOT RELEASE THE LEASE.** {@link #close()} does, after
+     * its own last flush, and the two are separate so the shutdown can finish
+     * the requests inside the door before it lets the term go.
+     */
+    public void flush() throws IOException {
+        ingest.flushNow();
+        journal.accept(FLUSHED);
+    }
+
+    static final String FLUSHED = "flushed";
+    static final String GRAPH_CLOSED = "graph closed, lease released";
+
+    private volatile java.util.function.Consumer<String> journal = event -> { };
+
+    /**
+     * Where {@link #flush()} and {@link #close()} say they happened (M8.7).
+     *
+     * <p>⚠️ **WRITTEN HERE, AT THE EFFECT**, so a shutdown that closed the
+     * graph early shows it, whatever the sequence's own report says.
+     */
+    void journal(java.util.function.Consumer<String> sink) {
+        this.journal = Objects.requireNonNull(sink, "sink");
+    }
+
     /** Whether this pod currently holds a sequencer term. */
     public boolean leading() {
         return sequencer.leading();
@@ -379,6 +407,7 @@ public final class Assembly implements AutoCloseable {
                 first = first != null ? first : asIoException(failed);
             }
         }
+        journal.accept(GRAPH_CLOSED);
         if (first != null) {
             throw first;
         }

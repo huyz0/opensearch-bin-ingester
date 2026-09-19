@@ -360,7 +360,7 @@ public final class DefaultIngest implements Ingest {
     }
 
     /** Flushes whatever is buffered, whether or not the trigger says it is due. */
-    void flushNow() throws IOException {
+    public void flushNow() throws IOException {
         lock.lock();
         try {
             flushLocked();

@@ -92,8 +92,9 @@ public final class Main {
         // step 5 measures that as the difference between a sub-second
         // visibility gap and a TTL-long one on a ROLLOUT. Most real-world "AZ
         // resilience" incidents are rollouts.
-        // ⚠️ M8.7 owns the full §7 ORDER and its 30 s budget. What is here is
-        // that the hook exists and that `close()` is reached.
+        // ⚠️ `close()` RUNS research 08 §7's ORDER (`ShutdownSequence`), and
+        // what it measured is printed here for an operator to set
+        // `terminationGracePeriodSeconds` from.
         CountDownLatch stopped = new CountDownLatch(1);
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             try {
@@ -104,6 +105,12 @@ public final class Main {
                 // seen is if it is printed here.
                 failed.printStackTrace();
             } finally {
+                ShutdownSequence.Report report = node.lastShutdown();
+                node.shutdownJournal().forEach(event ->
+                        System.err.println("shutdown event: " + event));
+                if (report != null) {
+                    report.lines().forEach(System.err::println);
+                }
                 stopped.countDown();
             }
         }, "ingester-shutdown"));

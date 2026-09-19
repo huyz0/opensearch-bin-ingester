@@ -114,9 +114,24 @@ public final class BulkService implements HttpService {
      */
     // SKELETON: replaced by M1.7c
     public BulkService(Ingest ingest, Principal principal) {
+        this(ingest, principal, new DrainGate());
+    }
+
+    /**
+     * The same, admitting requests through a gate the node drains on
+     * shutdown (M8.7).
+     *
+     * <p>⚠️ **THE CONSTRUCTOR ABOVE GETS A GATE NOBODY DRAINS**, which is the
+     * behaviour before M8.7. Only the composition root passes one it will
+     * close.
+     */
+    public BulkService(Ingest ingest, Principal principal, DrainGate gate) {
         this.ingest = Objects.requireNonNull(ingest, "ingest");
         this.principal = Objects.requireNonNull(principal, "principal");
+        this.gate = Objects.requireNonNull(gate, "gate");
     }
+
+    private final DrainGate gate;
 
     @Override
     public void routing(HttpRules rules) {
@@ -124,6 +139,22 @@ public final class BulkService implements HttpService {
     }
 
     private void bulk(ServerRequest request, ServerResponse response) {
+        if (!gate.enterBulk()) {
+            // ⚠️ 503, WHICH A PRODUCER ALREADY RETRIES. Nothing was appended,
+            // so the retry through the cluster address, to a pod that is
+            // still ready, is safe.
+            response.status(Status.SERVICE_UNAVAILABLE_503)
+                    .send("this ingester is draining; retry");
+            return;
+        }
+        try {
+            admitted(request, response);
+        } finally {
+            gate.exitBulk();
+        }
+    }
+
+    private void admitted(ServerRequest request, ServerResponse response) {
         String index = request.path().pathParameters().get("index");
         Placement placement;
         try {
