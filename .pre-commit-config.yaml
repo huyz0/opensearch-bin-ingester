@@ -181,6 +181,25 @@ repos:
         stages: [pre-commit]
         pass_filenames: false
         always_run: true
+      # ⚠️ `manual`, NOT `pre-commit`, and the reason is cost rather than
+      # importance. MEASURED: `./gradlew :format:mutationTestDiff` over a
+      # two-line change is 42 s wall on the smallest module, against build.md's
+      # 90 s L0 budget for the WHOLE pre-commit set. So it is declared here --
+      # one file defines this project's gates -- and fired by name:
+      #     pre-commit run --hook-stage manual check-mutants
+      # from the `tdd` skill before a commit goes to review -- which is the
+      # ONLY thing that fires it today. CI does NOT: the L1 job is M0.27, an
+      # open row. CHECK_RANGE is honoured so that row is a wiring change.
+      # A 40-second-per-module gate on every commit is how a gate gets switched
+      # off, and a gate nobody can afford to run enforces nothing.
+      - id: check-mutants
+        name: "M0.14 / testing.md rule 8: 80% of the mutants on the changed lines killed"
+        entry: scripts/check-mutants.sh
+        language: system
+        stages: [manual]
+        pass_filenames: false
+        always_run: true
+
       # Last of the pre-commit stage: it is the gate a fresh clone is most
       # likely to trip, and its message is the longest.
       - id: check-reviewed

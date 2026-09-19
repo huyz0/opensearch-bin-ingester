@@ -236,6 +236,7 @@ runs is exactly the list that goes stale:
 | `check-file-size.sh` | pre-commit | code-structure.md rule 1: no source file over 700 lines |
 | `check-io-seam.sh` | pre-commit | non-negotiable 7: business logic takes a seam for every clock, socket and store |
 | `check-tdd.sh` | pre-commit | testing.md rule 2: every new test was observed to fail before the code existed |
+| `check-mutants.sh` | manual | M0.14 / testing.md rule 8: 80% of the mutants on the changed lines killed |
 | `check-reviewed.sh` | pre-commit | non-negotiable 5: the staged bytes carry both review verdicts |
 | `check-commit-msg.sh` | commit-msg | non-negotiable 1: the commit subject names a real backlog task |
 | `check-test-integrity.sh` | commit-msg | testing.md rules 4-5: no assertion weakened alongside a production change |
@@ -243,9 +244,22 @@ runs is exactly the list that goes stale:
 Present in `scripts/` but **not** wired into `.pre-commit-config.yaml` — invoke by hand, from a skill, or from CI: `check-coverage.sh`, `check-milestone-verified.sh`, `check-suite-time.sh`.
 <!-- index:gates:end -->
 
-Not yet existing, and named by skills and standards that say so:
-**`check-mutants.sh` (80% killed on changed code)**, the cost meter
-(`cost-budget`), and the benchmark gates. **When a skill tells you to run one of
+⚠️ **`check-mutants.sh` exists and is wired at the `manual` stage** (M0.14),
+which means an ordinary `git commit` does **not** run it. That is a cost
+decision, measured rather than assumed: `./gradlew :format:mutationTestDiff`
+over a two-line change is 42 s wall on the smallest module, against build.md's
+90 s L0 budget for the whole pre-commit set. Run it by name before offering a
+commit for review — `pre-commit run --hook-stage manual check-mutants`, or
+`scripts/check-mutants.sh`. ⚠️ **CI DOES NOT RUN IT**: the L1 test job is
+M0.27, an open row, so today the ONE thing that fires this gate is a sentence
+in the `tdd` skill -- rung 7 of `gate-design`, an instruction in a prompt,
+which differs per run and dies with the session. `CHECK_RANGE` is honoured so
+that M0.27 is a wiring change rather than a rewrite. A gate nobody can afford
+to run enforces nothing, so it is declared where every other gate is declared
+and fired where it fits.
+
+Not yet existing, and named by skills and standards that say so: the cost meter
+(`cost-budget`) and the benchmark gates. **When a skill tells you to run one of
 these and it is absent, say the gate did not run.** Do not proceed as though it
 passed.
 

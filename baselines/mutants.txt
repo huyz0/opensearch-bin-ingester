@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+# Recorded surviving mutants. One line per mutant:
+#
+#   <jzap mutant key>   <reason: what unblocks this entry>
+#
+# The key is exactly as jzap writes it in jzap-result.json:
+#   binjava.format.RunCommit::lastOffset()J::33::MATH#0
+#
+# ⚠️ A bare key with no reason is REFUSED, and an entry whose mutant is killed
+# again FAILS the gate as stale -- see the header of scripts/check-mutants.sh.
+# ⚠️ This file is a ratchet, not a parking space (testing.md rule 7).
+#
+# Empty today: no survivor has been accepted yet.
