@@ -25,7 +25,6 @@ import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
-import org.junit.jupiter.api.io.TempDir;
 
 /**
  * A rolling restart of every pod: no visibility gap over 1 s, and no
@@ -52,8 +51,13 @@ class RollingRestartIT {
     private static final double HERD_BUDGET = 0.20;
     private static final Duration GAP_BUDGET = Duration.ofSeconds(1);
 
-    @TempDir
-    Path dir;
+    /**
+     * ⚠️ **KEPT, NOT A {@code @TempDir}** (M8.54): a stall this case saw once
+     * could not be explained because the pods' logs were deleted with the run.
+     * Under the build directory, so {@code ./gradlew clean} still removes them.
+     */
+    private final Path dir = Path.of(System.getProperty("binjava.repoRoot", "."),
+            "server/build/chaos-logs/RollingRestartIT", UUID.randomUUID().toString());
 
     @BeforeAll
     static void container() {
@@ -96,6 +100,8 @@ class RollingRestartIT {
         List<AutoCloseable> subscriptions = new ArrayList<>();
         List<HttpSubscriptionTransport> transports = new ArrayList<>();
         List<NodeProcess> nodes = new ArrayList<>();
+        // ⚠️ PRINTED FIRST, so a run that fails or times out says where its logs are
+        System.out.println("M8.16 pod logs in " + dir);
         try (ChaosBucket bucket = ChaosBucket.create(); ServiceLb lb = new ServiceLb()) {
             for (int i = 0; i < PODS; i++) {
                 nodes.add(start(bucket, lb, "pod" + i, index));
