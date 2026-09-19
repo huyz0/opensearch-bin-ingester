@@ -191,4 +191,74 @@ class ClockSkewIT {
             nodes.forEach(NodeProcess::close);
         }
     }
+
+    @Test
+    void aLIVEFastPodTakesTheTermONCEAndHoldsItAndNOTHINGIsLost() throws Exception {
+        // ⚠️ THE PREDICTION, measured rather than assumed (M8.53): a pod 5 min
+        // fast judges a healthy leader's expiry already past, so its first
+        // commit takes the term. It then writes expiries 5 min further out than
+        // a true clock would, so nobody takes it BACK: one takeover, not one
+        // per renew interval. The liveness cost is the dead-fast-leader case
+        // above, not churn. Safety, as ever, is the SEAL.
+        UUID index = UUID.randomUUID();
+        List<NodeProcess> nodes = new CopyOnWriteArrayList<>();
+        Set<String> acked = ConcurrentHashMap.newKeySet();
+        AtomicBoolean stop = new AtomicBoolean();
+        List<Thread> producers = new ArrayList<>();
+        try (ChaosBucket bucket = ChaosBucket.create()) {
+            NodeProcess honest = NodeProcess.start(Files.createDirectories(dir.resolve("h")),
+                    "pod0", settings(bucket));
+            nodes.add(honest);
+            honest.registerLogs(index);
+            assertThat(honest.write("honest-first", 1)).isEqualTo(202);
+            Lease first = bucket.lease().orElseThrow();
+            assertThat(first.holderPodId()).as("the premise: the honest pod leads")
+                    .isEqualTo("pod0");
+
+            NodeProcess fast = NodeProcess.start(Files.createDirectories(dir.resolve("f")),
+                    "pod1", settings(bucket), new NodeProcess.Options(SKEW, false));
+            nodes.add(fast);
+            fast.registerLogs(index);
+            for (int p = 0; p < 4; p++) {
+                int producer = p;
+                producers.add(Thread.ofVirtual().start(() ->
+                        KillSequencerMidCommitIT.produce(producer, nodes, acked, stop)));
+            }
+            // ⚠️ SEVERAL RENEW INTERVALS, so churn would show as epochs
+            long until = System.nanoTime() + LEASE_TTL.multipliedBy(3).toNanos();
+            while (System.nanoTime() < until) {
+                Thread.sleep(200);
+            }
+            Lease after = bucket.lease().orElseThrow();
+            stop.set(true);
+            for (Thread producer : producers) {
+                producer.join(TimeUnit.SECONDS.toMillis(30));
+            }
+            for (NodeProcess node : nodes) {
+                node.terminate();
+            }
+            ChainAudit audit = ChainAudit.of(bucket);
+            Set<String> committed = KillSequencerMidCommitIT
+                    .committedIds(bucket, audit.committedSegments()).keySet();
+            Set<String> lost = new HashSet<>(acked);
+            lost.removeAll(committed);
+
+            System.out.println("M8.53 live fast pod: epochs " + audit.epochs() + ", term now "
+                    + after.holderPodId() + "@" + after.epoch() + " (started "
+                    + first.holderPodId() + "@" + first.epoch() + "), acked " + acked.size()
+                    + ", lost " + lost.size());
+            assertThat(after.holderPodId())
+                    .as("⚠️ LIVENESS, AS PREDICTED: THE FAST POD TOOK THE TERM").isEqualTo("pod1");
+            assertThat(after.epoch() - first.epoch())
+                    .as("⚠️ ONCE, NOT ONCE PER RENEW INTERVAL: its expiries look valid to "
+                            + "everyone else for the skew and more")
+                    .isEqualTo(1);
+            assertThat(audit.violations()).as("⚠️ SAFETY BY EPOCH").isEmpty();
+            assertThat(lost).as("⚠️ AND NOTHING ACKED WAS LOST").isEmpty();
+            assertThat(acked).as("the premise: it was under load").hasSizeGreaterThan(20);
+        } finally {
+            stop.set(true);
+            nodes.forEach(NodeProcess::close);
+        }
+    }
 }
