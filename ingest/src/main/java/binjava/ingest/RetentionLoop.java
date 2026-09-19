@@ -181,6 +181,9 @@ public final class RetentionLoop {
         this.prefix = Objects.requireNonNull(prefix, "prefix");
         this.minRetention = Objects.requireNonNull(minRetention, "minRetention");
         this.orphanGrace = Objects.requireNonNull(orphanGrace, "orphanGrace");
+        // ⚠️ CHECKED HERE: the sweep is built inside a tick, hours from now,
+        // where a refusal would be a log line on a scheduled task (M8.52).
+        OrphanSweep.checkGrace(orphanGrace);
         if (deleteBatch <= 0) {
             throw new IllegalArgumentException("deleteBatch is never " + deleteBatch);
         }

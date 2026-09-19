@@ -75,6 +75,46 @@ public final class OrphanSweep {
     public static final Duration DEFAULT_GRACE = Duration.ofHours(1);
 
     /**
+     * The clock skew this sweep is sized against: M8's criterion 14, which
+     * {@code ClockSkewIT} runs at (M8.52).
+     */
+    public static final Duration MAX_CLOCK_SKEW = Duration.ofMinutes(5);
+
+    /**
+     * The longest a PUT segment's commit is taken to be in flight (M8.52).
+     *
+     * <p>⚠️ A STATED GUESS, NOT A MEASUREMENT, and generous: a forwarded commit
+     * times out at the lease TTL (seconds), and the degraded {@code ctl/inbox/}
+     * path, the slow one, does not exist yet to be measured. Shortening it is
+     * how acknowledged data is deleted.
+     */
+    public static final Duration MAX_COMMIT_DELAY = Duration.ofMinutes(5);
+
+    /**
+     * The shortest grace this sweep accepts: a slow writer and a fast sweeper
+     * each shift a segment's age by the skew, so twice it, plus the commit
+     * delay (M8.52).
+     */
+    public static final Duration MIN_GRACE = MAX_CLOCK_SKEW.multipliedBy(2).plus(MAX_COMMIT_DELAY);
+
+    /**
+     * Refuses a grace shorter than {@link #MIN_GRACE}, saying why.
+     *
+     * <p>⚠️ PUBLIC SO A CALLER THAT BUILDS ITS SWEEP LATE -- the retention loop,
+     * inside a tick -- can refuse at startup instead.
+     */
+    public static void checkGrace(Duration grace) {
+        Objects.requireNonNull(grace, "grace");
+        if (grace.compareTo(MIN_GRACE) < 0) {
+            throw new IllegalArgumentException("grace " + grace + " is under " + MIN_GRACE
+                    + ": a segment's age is its writer's clock against this sweep's, so a "
+                    + MAX_CLOCK_SKEW + " clock skew each way eats twice that, and a commit may "
+                    + "still be in flight for " + MAX_COMMIT_DELAY + " -- a shorter grace "
+                    + "deletes a segment whose commit has not landed yet");
+        }
+    }
+
+    /**
      * How often one hour-prefix is swept (research 06 §4).
      *
      * <p>⚠️ THE R15 CLAIM IS ABOUT THIS NUMBER. One pass costs one LIST per
@@ -105,12 +145,7 @@ public final class OrphanSweep {
             int deleteBatchSize) {
         this.store = Objects.requireNonNull(store, "store");
         this.clock = Objects.requireNonNull(clock, "clock");
-        Objects.requireNonNull(grace, "grace");
-        if (grace.isZero() || grace.isNegative()) {
-            throw new IllegalArgumentException("grace is never " + grace
-                    + " -- a zero grace deletes a segment whose commit is one millisecond "
-                    + "behind its PUT, which is every segment at some point");
-        }
+        checkGrace(grace);
         if (pageSize <= 0 || pageSize > MAX_PAGE) {
             // ⚠️ ASKING FOR MORE THAN A STORE RETURNS IS NOT A BIGGER PAGE, it
             // is the same page with a budget asserted against the number asked
