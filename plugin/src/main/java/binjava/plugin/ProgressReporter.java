@@ -60,14 +60,11 @@ public final class ProgressReporter {
     /**
      * Where this node's shard copies have got to, read AFRESH each interval.
      *
-     * <p>⚠️ A SEAM RATHER THAN A DIRECT REACH INTO THE NODE, and not only for
-     * testability: what the plugin can observe is OpenSearch's IN-MEMORY
-     * pointer, never the committed one (ADR-0005), and the shape of that
-     * observation is still open — {@code readNext(pointer, ...)} carries the
-     * engine's pointer but is called only on a forced or reset pointer
-     * (research 20/02 §2), so the steady-state source has to come from the
-     * node's own ingestion state. ⚠️ NO PRODUCTION IMPLEMENTATION EXISTS YET:
-     * M7.17 is the row, and until it lands nothing on a real node reports.
+     * <p>⚠️ A SEAM RATHER THAN A DIRECT REACH INTO THE NODE. The production
+     * source is {@link ShardPositions}, which reads each copy's COMMITTED
+     * {@code batch_start} (ADR-0051, M8.43); {@code readNext(pointer, ...)}
+     * carries the engine's pointer only on a forced or reset pointer (research
+     * 20/02 §2), and what the consumer delivered is ahead of the commit.
      */
     @FunctionalInterface
     public interface Positions {

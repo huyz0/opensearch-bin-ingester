@@ -26,6 +26,39 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
     public static final String TYPE = "BINSTORE";
 
     /**
+     * How often this node reports its shard copies' committed positions
+     * (M8.43).
+     *
+     * <p>⚠️ A THIRD OF THE INGESTER's DEFAULT REPORT TIMEOUT (one minute), so
+     * one lost report does not freeze a copy's watermark.
+     */
+    public static final org.opensearch.common.settings.Setting<
+            org.opensearch.common.unit.TimeValue> PROGRESS_INTERVAL =
+            org.opensearch.common.settings.Setting.timeSetting("binstore.progress.interval",
+                    org.opensearch.common.unit.TimeValue.timeValueSeconds(20),
+                    org.opensearch.common.unit.TimeValue.timeValueMillis(100),
+                    org.opensearch.common.settings.Setting.Property.NodeScope);
+
+    /** This node's shards of this plugin's indices, for the progress reporter. */
+    private final ShardPositions positions = new ShardPositions();
+
+    @Override
+    public java.util.List<org.opensearch.common.settings.Setting<?>> getSettings() {
+        return java.util.List.of(PROGRESS_INTERVAL);
+    }
+
+    /**
+     * ⚠️ ONLY THIS PLUGIN's INDICES are watched: a node's other shards commit
+     * no {@code batch_start} of ours.
+     */
+    @Override
+    public void onIndexModule(org.opensearch.index.IndexModule module) {
+        if (TYPE.equalsIgnoreCase(module.getSettings().get("index.ingestion_source.type"))) {
+            module.addIndexEventListener(positions);
+        }
+    }
+
+    /**
      * How a deployment says what a node's subscriptions ARE, keyed by the node
      * that asks (M6.13).
      *
@@ -82,7 +115,12 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
         this.subscriptions = installed == null || nodeName.isEmpty()
                 ? null
                 : PER_NODE.computeIfAbsent(nodeName, installed);
+        this.progressInterval = PROGRESS_INTERVAL.get(
+                settings == null ? org.opensearch.common.settings.Settings.EMPTY : settings);
     }
+
+    /** {@link #PROGRESS_INTERVAL} as this node was configured with it. */
+    private final org.opensearch.common.unit.TimeValue progressInterval;
 
     /**
      * Used by in-process tests that own the lifetime themselves.
@@ -95,6 +133,8 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
      */
     BinStorePlugin(NodeSubscriptions subscriptions) {
         this.subscriptions = subscriptions;
+        this.progressInterval = PROGRESS_INTERVAL.getDefault(
+                org.opensearch.common.settings.Settings.EMPTY);
     }
 
     /** What this node's plugin instance holds, or null where none was installed. */
@@ -188,6 +228,15 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
             java.util.function.Supplier<org.opensearch.repositories.RepositoriesService> repositories) {
         installRegistrar(subscriptions, clusterService::addListener,
                 threadPool.generic());
+        if (subscriptions != null) {
+            // ⚠️ ON THE GENERIC POOL: a report is a network call, and
+            // `ProgressReporter.report` contains its own failures, so a bad
+            // interval cannot cancel the schedule (M8.43).
+            ProgressReporter reporter = new ProgressReporter(subscriptions.transport(),
+                    positions);
+            threadPool.scheduleWithFixedDelay(reporter::report, progressInterval,
+                    org.opensearch.threadpool.ThreadPool.Names.GENERIC);
+        }
         return java.util.List.of();
     }
 
