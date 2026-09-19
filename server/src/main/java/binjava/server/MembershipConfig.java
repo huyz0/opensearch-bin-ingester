@@ -20,13 +20,20 @@ import java.util.Optional;
  *     connection because a projected token rotates; empty sends none
  */
 public record MembershipConfig(String apiBase, String namespace, String service,
-        Optional<String> tokenFile) {
+        Optional<String> tokenFile, Optional<String> caFile) {
+
+    /** Settings with no CA file: the JVM's default trust store judges the API server. */
+    public MembershipConfig(String apiBase, String namespace, String service,
+            Optional<String> tokenFile) {
+        this(apiBase, namespace, service, tokenFile, Optional.empty());
+    }
 
     public MembershipConfig {
         Objects.requireNonNull(apiBase, "apiBase");
         Objects.requireNonNull(namespace, "namespace");
         Objects.requireNonNull(service, "service");
         Objects.requireNonNull(tokenFile, "tokenFile");
+        Objects.requireNonNull(caFile, "caFile");
         if (apiBase.isBlank() || namespace.isBlank() || service.isBlank()) {
             throw new IllegalArgumentException("the EndpointSlice watch needs an API server, "
                     + "a namespace and a service; got '" + apiBase + "', '" + namespace

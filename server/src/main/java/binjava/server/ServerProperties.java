@@ -96,6 +96,12 @@ public final class ServerProperties {
     public static final String MEMBERSHIP_TOKEN_FILE = "membership.token-file";
 
     /**
+     * Optional: the cluster CA the API server's certificate is signed by, as
+     * PEM -- in a pod, its service account's {@code ca.crt} (M8.51).
+     */
+    public static final String MEMBERSHIP_CA_FILE = "membership.ca-file";
+
+    /**
      * ⚠️ 10 s and 3 s are a CONFIGURED GUESS, not a measurement — measurement
      * M1 (M8.27) is what sizes them against a realistic pause, and until it
      * runs these defaults are what M4 chose deliberately rather than hardcode.
@@ -110,7 +116,7 @@ public final class ServerProperties {
             LEASE_TTL, LEASE_RENEW, INTERVAL_FLOOR, MAX_SEGMENT_BYTES, DIRECT_ENABLED,
             RETENTION_MIN, RETENTION_MAX, RETENTION_REPORT_TIMEOUT, RETENTION_COPY_EXPIRY,
             RETENTION_PASS_INTERVAL, MEMBERSHIP_API, MEMBERSHIP_NAMESPACE, MEMBERSHIP_SERVICE,
-            MEMBERSHIP_TOKEN_FILE);
+            MEMBERSHIP_TOKEN_FILE, MEMBERSHIP_CA_FILE);
 
     private ServerProperties() {
     }
@@ -288,7 +294,7 @@ public final class ServerProperties {
         java.util.Optional<String> api = optionalText(settings, MEMBERSHIP_API);
         if (api.isEmpty()) {
             for (String dependent : java.util.List.of(MEMBERSHIP_NAMESPACE, MEMBERSHIP_SERVICE,
-                    MEMBERSHIP_TOKEN_FILE)) {
+                    MEMBERSHIP_TOKEN_FILE, MEMBERSHIP_CA_FILE)) {
                 if (optionalText(settings, dependent).isPresent()) {
                     throw new ConfigurationException(dependent + " is set but "
                             + MEMBERSHIP_API + " is not, so the EndpointSlice watch it "
@@ -299,7 +305,8 @@ public final class ServerProperties {
         }
         return java.util.Optional.of(new MembershipConfig(api.get(),
                 required(settings, MEMBERSHIP_NAMESPACE), required(settings, MEMBERSHIP_SERVICE),
-                optionalText(settings, MEMBERSHIP_TOKEN_FILE)));
+                optionalText(settings, MEMBERSHIP_TOKEN_FILE),
+                optionalText(settings, MEMBERSHIP_CA_FILE)));
     }
 
     private static Duration duration(Map<String, String> settings, String key, Duration fallback) {

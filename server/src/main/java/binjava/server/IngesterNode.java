@@ -79,6 +79,12 @@ public final class IngesterNode implements AutoCloseable {
     private final java.util.List<String> journal;
     private volatile ShutdownSequence.Report lastShutdown;
     private volatile EndpointSliceWatch watch;
+
+    /** How many streams this node's EndpointSlice watch has opened, or 0 with none. */
+    int watchConnections() {
+        EndpointSliceWatch running = watch;
+        return running == null ? 0 : running.connections();
+    }
     private final java.util.concurrent.atomic.AtomicBoolean closing =
             new java.util.concurrent.atomic.AtomicBoolean();
 
@@ -116,7 +122,18 @@ public final class IngesterNode implements AutoCloseable {
      */
     public static IngesterNode start(ServerConfig config, Clock clock,
             Supplier<Optional<String>> token) throws IOException {
+        return start(config, clock, token, java.util.List.of());
+    }
+
+    /**
+     * The same, with the cluster CA the watch trusts for the API server
+     * (M8.51); empty keeps the JVM's default trust store.
+     */
+    public static IngesterNode start(ServerConfig config, Clock clock,
+            Supplier<Optional<String>> token,
+            java.util.List<java.security.cert.X509Certificate> trust) throws IOException {
         Objects.requireNonNull(config, "config");
+        Objects.requireNonNull(trust, "trust");
         Objects.requireNonNull(clock, "clock");
         Objects.requireNonNull(token, "token");
         SequencerTransport transport = new HttpSequencerTransport(peerCommitTimeout(config));
@@ -136,7 +153,7 @@ public final class IngesterNode implements AutoCloseable {
             if (view != null) {
                 MembershipConfig membership = config.membership().get();
                 watch = new EndpointSliceWatch(membership.apiBase(), membership.namespace(),
-                        membership.service(), token, view);
+                        membership.service(), token, view, trust);
             }
             IngesterNode node = new IngesterNode(assembly,
                     FrontDoor.start(assembly, clock, journal::add), transport, clock, journal);

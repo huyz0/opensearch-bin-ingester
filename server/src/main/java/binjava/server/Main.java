@@ -144,7 +144,40 @@ public final class Main {
         // one of the two the I/O seam exempts, and a projected service-account
         // token rotates under a running pod.
         Optional<String> tokenFile = config.membership().flatMap(MembershipConfig::tokenFile);
-        return IngesterNode.start(config, Clock.systemUTC(), () -> tokenFile.map(Main::readToken));
+        // ⚠️ THE CA IS READ ONCE, AT STARTUP, and a bad one refuses the node:
+        // unlike the token it does not rotate under a running pod, and a watch
+        // that could never trust its API server would fail over at the TTL
+        // while the manifest said otherwise (M8.51).
+        java.util.List<java.security.cert.X509Certificate> trust = config.membership()
+                .flatMap(MembershipConfig::caFile).map(Main::certificatesIn)
+                .orElse(java.util.List.of());
+        return IngesterNode.start(config, Clock.systemUTC(), () -> tokenFile.map(Main::readToken),
+                trust);
+    }
+
+    /**
+     * The PEM certificates in {@code path}, the cluster CA the watch trusts.
+     *
+     * @throws ConfigurationException naming the key and the path, if the file
+     *     cannot be read or holds no certificate
+     */
+    static java.util.List<java.security.cert.X509Certificate> certificatesIn(String path) {
+        try (java.io.InputStream in = java.nio.file.Files.newInputStream(
+                java.nio.file.Path.of(path))) {
+            java.util.List<java.security.cert.X509Certificate> certificates =
+                    java.security.cert.CertificateFactory.getInstance("X.509")
+                            .generateCertificates(in).stream()
+                            .map(c -> (java.security.cert.X509Certificate) c).toList();
+            if (certificates.isEmpty()) {
+                throw new ConfigurationException(ServerProperties.MEMBERSHIP_CA_FILE + " at "
+                        + path + " holds no certificate");
+            }
+            return certificates;
+        } catch (IOException | java.security.cert.CertificateException unreadable) {
+            throw new ConfigurationException(ServerProperties.MEMBERSHIP_CA_FILE + " at " + path
+                    + " could not be read as PEM certificates: " + unreadable.getMessage(),
+                    unreadable);
+        }
     }
 
     /**

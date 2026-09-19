@@ -57,21 +57,52 @@ public final class EndpointSliceWatch implements AutoCloseable {
      */
     public EndpointSliceWatch(String apiBase, String namespace, String service,
             Supplier<Optional<String>> token, EndpointSliceView view) {
+        this(apiBase, namespace, service, token, view, java.util.List.of());
+    }
+
+    /**
+     * The same, trusting {@code trust} for the API server's certificate
+     * (M8.51).
+     *
+     * @param trust the cluster CA's certificates -- a service account's
+     *     {@code ca.crt} -- which an in-cluster API server's certificate is
+     *     signed by and the JVM's default trust store does not hold. ⚠️ GIVEN,
+     *     THEY ARE THE ONLY TRUST: the watch talks to one server, and that
+     *     server's CA is known. Empty keeps the JVM's default.
+     */
+    public EndpointSliceWatch(String apiBase, String namespace, String service,
+            Supplier<Optional<String>> token, EndpointSliceView view,
+            java.util.List<java.security.cert.X509Certificate> trust) {
         Objects.requireNonNull(apiBase, "apiBase");
+        Objects.requireNonNull(trust, "trust");
         this.path = "/apis/discovery.k8s.io/v1/namespaces/"
                 + Objects.requireNonNull(namespace, "namespace") + "/endpointslices";
         this.service = Objects.requireNonNull(service, "service");
         this.token = Objects.requireNonNull(token, "token");
         this.view = Objects.requireNonNull(view, "view");
-        this.client = WebClient.builder().baseUri(apiBase)
+        var builder = WebClient.builder().baseUri(apiBase)
                 .connectTimeout(Duration.ofSeconds(5))
-                .readTimeout(READ_TIMEOUT).build();
+                .readTimeout(READ_TIMEOUT);
+        if (!trust.isEmpty()) {
+            builder.tls(io.helidon.common.tls.Tls.builder().trust(trust).build());
+        }
+        this.client = builder.build();
     }
 
     /** Starts watching on a thread of its own. */
     public EndpointSliceWatch start() {
         loop = Thread.ofVirtual().name("endpointslice-watch").start(this::run);
         return this;
+    }
+
+    private volatile int failures;
+
+    /**
+     * How many connects or streams have failed, a refused TLS handshake among
+     * them: the one sign an operator has that the watch produces no evidence.
+     */
+    public int failures() {
+        return failures;
     }
 
     /** How many watch connections have been opened, for a reconnect assertion. */
@@ -87,8 +118,9 @@ public final class EndpointSliceWatch implements AutoCloseable {
                     backoff = MIN_BACKOFF;
                 }
             } catch (RuntimeException | java.io.IOException failed) {
-                // ⚠️ SWALLOWED AND RETRIED: the view keeps its last state, and
+                // ⚠️ COUNTED AND RETRIED: the view keeps its last state, and
                 // the challenge falls back to the TTL until the next event.
+                failures++;
             }
             if (closed) {
                 return;
