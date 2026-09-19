@@ -170,4 +170,63 @@ class LocalSequencerCheckpointTest {
                 .isGreaterThan(Duration.ZERO)
                 .isLessThanOrEqualTo(Duration.ofMinutes(5));
     }
+
+    @Test
+    void aGRACEFULReleaseCheckpointsSoTheSuccessorReplaysNOTHING() throws Exception {
+        // ⚠️ M8.16: a rolling restart hands the term over once per pod, and the
+        // successor replays every delta since the newest checkpoint before its
+        // first commit. With K in the thousands that replay IS the visibility
+        // gap. A leader that is closing knows its tail and writes it down.
+        RecordingBinStore store = new RecordingBinStore(new MemoryBinStore());
+        CheckpointWriter.Ticker frozen = () -> new CountDownLatch(1).await();
+        LocalSequencer leader = LocalSequencer.start(store, PREFIX, manager(store, "poda"), 8,
+                LocalSequencer.sleepFor(RENEW), 1_000, frozen).orElseThrow();
+        leader.commit(new CommitRequest("poda", "i1", 0, "seg/0", counts(3)));
+        leader.commit(new CommitRequest("poda", "i1", 1, "seg/1", counts(4)));
+        assertThat(store.checkpointKeys()).as("the premise: K is not crossed").isEmpty();
+
+        leader.close();
+
+        assertThat(store.checkpointKeys())
+                .as("⚠️ THE CLOSE WROTE THE TAIL DOWN").hasSize(1);
+        Checkpoint written = Checkpoint.decode(store.lastCheckpointBody().orElseThrow());
+        assertThat(written.streams().get(RA).nextOffset())
+                .as("and it covers every delta the leader committed").isEqualTo(7);
+    }
+
+    @Test
+    void aCheckpointThatTHROWSOnReleaseStillHandsTheTermBACK() throws Exception {
+        // ⚠️ THE CHECKPOINT IS NEW WORK INSIDE close(), so it is new ways for
+        // close() to stop early. An unchecked throw from the store escaping it
+        // would skip the release, and the successor would wait out a TTL:
+        // exactly the gap the checkpoint exists to remove.
+        MemoryBinStore backing = new MemoryBinStore();
+        BinStore throwing = new ForwardingBinStore(backing) {
+            @Override
+            public java.util.Optional<binjava.binstore.Version> putIfAbsent(String key,
+                    binjava.binstore.Body body) throws IOException {
+                if (key.contains("/ckpt/")) {
+                    throw new IllegalStateException("the store threw an unchecked error");
+                }
+                return super.putIfAbsent(key, body);
+            }
+        };
+        CheckpointWriter.Ticker frozen = () -> new CountDownLatch(1).await();
+        LocalSequencer leader = LocalSequencer.start(throwing, PREFIX,
+                manager(throwing, "poda"), 8, LocalSequencer.sleepFor(RENEW), 1_000, frozen)
+                .orElseThrow();
+        leader.commit(new CommitRequest("poda", "i1", 0, "seg/0", counts(3)));
+
+        try {
+            leader.close();
+        } catch (RuntimeException reported) {
+            // reported or not, what matters is the lease below
+        }
+
+        LocalSequencer next = LocalSequencer.start(backing, PREFIX, manager(backing, "podb"), 8,
+                LocalSequencer.sleepFor(RENEW), 1_000, frozen)
+                .orElseThrow(() -> new AssertionError(
+                        "⚠️ THE TERM WAS STRANDED: the successor found the lease still held"));
+        next.close();
+    }
 }

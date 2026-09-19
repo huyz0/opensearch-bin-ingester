@@ -583,6 +583,23 @@ final class CheckpointWriter implements AutoCloseable {
         return ticksProcessed.get();
     }
 
+    /**
+     * Writes the uncheckpointed tail, then closes (M8.16).
+     *
+     * <p>⚠️ FOR A GRACEFUL RELEASE ONLY: the successor's recovery replays every
+     * delta since the newest checkpoint before it commits anything, so a leader
+     * that knows it is leaving writes that tail down while it still holds the
+     * lease. A failed write, checked or not, does not stop the close: the
+     * successor then replays, as after a crash.
+     */
+    synchronized void checkpointAndClose() {
+        try {
+            writeIfDirty();
+        } finally {
+            close();
+        }
+    }
+
     @Override
     public void close() {
         closed = true;

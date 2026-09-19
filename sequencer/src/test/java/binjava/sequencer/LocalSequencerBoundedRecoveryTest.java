@@ -9,6 +9,7 @@ import static binjava.sequencer.BoundedRecoveryFixture.request;
 import static binjava.sequencer.BoundedRecoveryFixture.streamOfTerm;
 import static org.assertj.core.api.Assertions.assertThat;
 
+import binjava.binstore.BinStore;
 import binjava.binstore.CountingBinStore;
 import binjava.binstore.StoreCounts;
 import binjava.binstore.backend.MemoryBinStore;
@@ -133,8 +134,11 @@ class LocalSequencerBoundedRecoveryTest {
             s.close();
         }
         // The last prior term is too short to reach K, so it has NO checkpoint.
-        LocalSequencer shortTerm = LocalSequencer.start(backing, PREFIX,
-                manager(backing, "podshort"), 8, noRenew(), 1_000_000, frozen()).orElseThrow();
+        // ⚠️ AND IT ENDS AS A CRASH DOES: since M8.16 a graceful close would
+        // checkpoint its tail.
+        BinStore crashes = new NoCheckpointStore(backing);
+        LocalSequencer shortTerm = LocalSequencer.start(crashes, PREFIX,
+                manager(crashes, "podshort"), 8, noRenew(), 1_000_000, frozen()).orElseThrow();
         shortTerm.commit(request("podshort", 0, "seg/short", streamOfTerm(99)));
         shortTerm.close();
 

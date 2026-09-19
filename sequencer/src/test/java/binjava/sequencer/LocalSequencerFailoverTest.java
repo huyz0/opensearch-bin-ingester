@@ -81,7 +81,9 @@ class LocalSequencerFailoverTest {
     private static StoreCounts takeoverCost(int terms, int entries) throws Exception {
         MemoryBinStore backing = new MemoryBinStore();
         for (int t = 0; t < terms; t++) {
-            LocalSequencer s = start(backing, "pod" + t);
+            // ⚠️ UNCHECKPOINTED BY CONSTRUCTION, and since M8.16 a graceful
+            // close would checkpoint the tail: each term ends as a crash does.
+            LocalSequencer s = start(new NoCheckpointStore(backing), "pod" + t);
             for (int i = 0; i < entries; i++) {
                 s.commit(request("pod" + t, i, "seg/" + t + "/" + i, 1));
             }

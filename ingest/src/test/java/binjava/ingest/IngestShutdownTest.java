@@ -73,7 +73,13 @@ class IngestShutdownTest {
         // ⚠️ It is off the hot path by construction -- shutdown, not append --
         // so it changes no per-record or per-segment rate and touches no rule in
         // cost.md's R1-R11.
-        assertThat(store.counts().total() - base).isEqualTo(5);
+        // ⚠️ AND SINCE M8.16 TWO MORE, stated for the same reason: the released
+        // term CHECKPOINTS ITS TAIL first (the checkpoint and its LATEST
+        // pointer), so the successor replays nothing. Also once per pod
+        // lifetime, and it is a trade rather than a cost: the successor's
+        // replay was one GET per delta since the last checkpoint, up to
+        // K = 1000, and that replay was the rolling restart's visibility gap.
+        assertThat(store.counts().total() - base).isEqualTo(7);
         assertThat(seen).hasSize(1);
         sub.close();
     }

@@ -85,6 +85,26 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport {
     static final Duration DEFAULT_POLL_WAIT = Duration.ofSeconds(25);
 
     /**
+     * The first retry's backoff, for a deployment that sets none (M8.16).
+     *
+     * <p>⚠️ **ITS JOB IS TO SPREAD A HERD, AND ONE SECOND IS WHAT SPREADS IT.** A
+     * draining ingester answers every waiting poll at once (research 08 §7 step
+     * 2), so every consumer on it retries at the same instant, each after
+     * {@link #jitteredMillis}: anywhere in [0.5, 1.5] times this. One second
+     * spreads the reconnects over a full second -- ten 100 ms windows, and
+     * criterion 13 allows no window more than 20% of them. 100 ms would put them
+     * all in one or two.
+     */
+    public static final Duration DEFAULT_RETRY_FLOOR = Duration.ofSeconds(1);
+
+    /**
+     * How far the backoff may grow, for a deployment that sets none: long
+     * enough not to hammer an ingester that is down, short enough that one
+     * that came back is found within half a minute.
+     */
+    public static final Duration DEFAULT_RETRY_CEILING = Duration.ofSeconds(30);
+
+    /**
      * ⚠️ The ingester's own floor: the first poll of a connection asks for this
      * so that "the ingester answered" is known in milliseconds rather than in
      * half a minute.

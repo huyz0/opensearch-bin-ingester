@@ -406,12 +406,9 @@ public final class LocalSequencer implements Sequencer {
     }
 
     /**
-     * The term underneath {@code sequencer}, looking through a
-     * {@link BatchingSequencer}, or empty if it is not one this node holds.
-     *
-     * <p>⚠️ M8.50: the elected term is BATCHED, so an {@code instanceof
-     * LocalSequencer} on it is false, and retention reading that as "no term"
-     * would silently stop GC. Every caller that needs the chain asks here.
+     * The term under {@code sequencer}, through a {@link BatchingSequencer}.
+     * ⚠️ M8.50: the elected term is BATCHED, so {@code instanceof} on it is
+     * false, and retention reading that as "no term" would silently stop GC.
      */
     public static Optional<LocalSequencer> underneath(Sequencer sequencer) {
         Sequencer inner = sequencer instanceof BatchingSequencer batched
@@ -690,9 +687,14 @@ public final class LocalSequencer implements Sequencer {
         // -- each masks the other, so only removing BOTH fails it.
         renewer.interrupt();
         CheckpointWriter writer = checkpoints;
-        if (writer != null) {
-            writer.close();
+        // ⚠️ CHECKPOINT BEFORE THE RELEASE, while the term is still held (M8.16),
+        // and release whatever it did: a throw would strand the term for a TTL.
+        try {
+            if (writer != null) {
+                writer.checkpointAndClose();
+            }
+        } finally {
+            leases.release();
         }
-        leases.release();
     }
 }
