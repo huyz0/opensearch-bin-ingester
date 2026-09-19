@@ -38,11 +38,11 @@ import org.junit.jupiter.api.io.TempDir;
  * {@link FakeKubeApi} plays the controller, removing the endpoint after a
  * notional probe window, so what is measured is the ingester's reaction.
  *
- * <p>⚠️ **MEASURED: IT DOES NOT, TODAY.** The takeover lands at about the TTL
- * even with the watch fed, because the follower's flush is parked in a forward
- * to the frozen leader until the peer-commit timeout, and the evidence is read
- * only by the election that follows it. The number is printed; M8.57 owns
- * making the removal cut the forward short, and asserting it.
+ * <p>⚠️ **M8.55 MEASURED THAT IT DID NOT**: the takeover landed at about the
+ * TTL even with the watch fed, because the follower's flush was parked in a
+ * forward to the frozen leader until the peer-commit timeout, and the evidence
+ * was read only by the election that followed it. M8.57 made the forward read
+ * the evidence while it waits, and the pause is now asserted under NFR-9's 5 s.
  *
  * <p>⚠️ **{@code EarlyChallengeIT} KILLS ITS LEADER; THIS ONE COMES BACK.** A
  * resumed leader's renewer and commit path wake mid-flight with a term they
@@ -146,13 +146,15 @@ class ChallengeResumeIT {
                     + "absorbed a pause of " + absorbed.toMillis() + " ms (TTL "
                     + TTL.toMillis() + " ms); epoch " + before.epoch() + " -> "
                     + after.epoch());
-            // ⚠️ THE ABSORBED PAUSE IS PRINTED, NOT ASSERTED, AND M8.57 OWNS IT.
-            // MEASURED here at ~TTL + 0.3 s with the watch fed: a follower's
-            // flush sits in a forward to the frozen leader until the
+            // ⚠️ NFR-9, AND M8.57's BOUND. M8.55 MEASURED ~TTL + 0.3 s here: the
+            // follower's flush sat in a forward to the frozen leader until the
             // peer-commit timeout, which IS the TTL, and the watch's evidence
-            // is consulted only at the next election -- after that forward
-            // fails. So in a cluster a GC-paused leader still costs one TTL,
-            // not the probe window this row assumed.
+            // was read only by the election after it. The forward now reads it
+            // while it waits.
+            assertThat(absorbed)
+                    .as("⚠️ NFR-9: THE PROBE WINDOW PLUS A CHALLENGE, UNDER 5 s -- not the "
+                            + "%s TTL", TTL)
+                    .isLessThan(Duration.ofSeconds(5));
             assertThat(after.epoch())
                     .as("EXACTLY ONE takeover").isEqualTo(before.epoch() + 1);
             assertThat(deltasUnder(bucket, before.epoch()))

@@ -50,9 +50,93 @@ public final class RemoteSequencer implements Sequencer {
 
     public RemoteSequencer(BinStore store, LeaseConfig leaseConfig,
             SequencerTransport transport) {
+        this(store, leaseConfig, transport, LeaseChallenge.NEVER);
+    }
+
+    /**
+     * The same, cutting a forward short when {@code challenge} reports the
+     * holder it was sent to gone (M8.57).
+     *
+     * <p>⚠️ **M8.55 MEASURED WHY**: a frozen holder accepts the connection and
+     * says nothing, so the forward waited out the peer-commit timeout -- which
+     * IS the TTL -- and the {@code EndpointSlice} evidence was read only by the
+     * election after it. A GC-paused leader cost a TTL even with the watch fed.
+     */
+    public RemoteSequencer(BinStore store, LeaseConfig leaseConfig,
+            SequencerTransport transport, LeaseChallenge challenge) {
         this.store = Objects.requireNonNull(store, "store");
         this.leaseConfig = Objects.requireNonNull(leaseConfig, "leaseConfig");
         this.transport = Objects.requireNonNull(transport, "transport");
+        this.challenge = Objects.requireNonNull(challenge, "challenge");
+    }
+
+    /**
+     * How often a waiting forward re-reads the evidence.
+     *
+     * <p>⚠️ **NO REQUEST**: the evidence is the watch's in-memory view, asked
+     * about the lease already in hand, so this adds nothing to any rate.
+     */
+    static final long EVIDENCE_POLL_MILLIS = 100;
+
+    private final LeaseChallenge challenge;
+
+    /**
+     * Sends, and gives up early if the watch reports {@code lease}'s holder gone.
+     *
+     * <p>⚠️ **THE CUT IS THE FAILURE THE TIMEOUT ALREADY GIVES**: a plain
+     * {@code IOException}, which {@code Sequencer.commit} defines as "may have
+     * landed" and which is reconciled exactly as a timeout is (M5.23, M5.25).
+     * It is never a {@code NotTheLeaseholderException}: nothing says the holder
+     * refused, and a caller that re-sent on that belief could double-commit.
+     *
+     * <p>⚠️ **THE SENDER IS INTERRUPTED, NOT AWAITED**: a transport that ignores
+     * the interrupt keeps one virtual thread until its own timeout, which is the
+     * bound that applied before this method existed.
+     */
+    private CommitDelta sendWatching(Lease lease, CommitRequest request) throws IOException {
+        if (challenge == LeaseChallenge.NEVER) {
+            return transport.send(lease.holderEndpoint(), request);
+        }
+        java.util.concurrent.CompletableFuture<CommitDelta> answer =
+                new java.util.concurrent.CompletableFuture<>();
+        Thread sender = Thread.ofVirtual().name("forward-" + lease.holderPodId()).start(() -> {
+            try {
+                answer.complete(transport.send(lease.holderEndpoint(), request));
+            } catch (Throwable failed) {
+                answer.completeExceptionally(failed);
+            }
+        });
+        while (true) {
+            try {
+                return answer.get(EVIDENCE_POLL_MILLIS,
+                        java.util.concurrent.TimeUnit.MILLISECONDS);
+            } catch (java.util.concurrent.TimeoutException stillWaiting) {
+                if (challenge.holderGone(lease)) {
+                    sender.interrupt();
+                    throw new IOException("the watch reports the lease holder "
+                            + lease.holderPodId() + " (epoch " + lease.epoch() + ") gone while"
+                            + " a commit forwarded to it was in flight; the commit may have"
+                            + " landed, and the next attempt elects on that evidence");
+                }
+            } catch (java.util.concurrent.ExecutionException failed) {
+                Throwable cause = failed.getCause();
+                if (cause instanceof IOException io) {
+                    throw io;
+                }
+                if (cause instanceof RuntimeException runtime) {
+                    throw runtime;
+                }
+                if (cause instanceof Error error) {
+                    throw error;
+                }
+                throw new IOException(cause);
+            } catch (InterruptedException interrupted) {
+                sender.interrupt();
+                Thread.currentThread().interrupt();
+                throw new IOException("interrupted while forwarding to "
+                        + lease.holderPodId() + "; the commit may have landed", interrupted);
+            }
+        }
     }
 
     /**
@@ -82,7 +166,7 @@ public final class RemoteSequencer implements Sequencer {
         Lease lease = currentLease();
         refuseSelfAddress(lease, null);
         try {
-            return transport.send(lease.holderEndpoint(), requests.size() == 1
+            return sendWatching(lease, requests.size() == 1
                     ? requests.get(0) : batched(requests));
         } catch (SequencerTransport.NotTheLeaseholderException refused) {
             // ⚠️ FOLLOW THE LEASE, AND ONLY ON A REFUSAL (M5.5). A refusal says
@@ -116,7 +200,7 @@ public final class RemoteSequencer implements Sequencer {
                         + ") refused the commit and the lease has not moved", refused);
             }
             refuseSelfAddress(moved, refused);
-            return transport.send(moved.holderEndpoint(), requests.size() == 1
+            return sendWatching(moved, requests.size() == 1
                     ? requests.get(0) : batched(requests));
         }
     }

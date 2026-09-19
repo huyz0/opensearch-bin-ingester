@@ -164,7 +164,7 @@ public final class Assembly implements AutoCloseable {
         LeaseManager manager = new LeaseManager(store, leases, clock, challenge);
         this.sequencer = new FleetSequencer(store, leases, transport,
                 () -> LocalSequencer.start(store, config.prefix(), manager, SEAL_REDRIVE_BUDGET)
-                        .map(term -> new BatchingSequencer(term, COMMIT_WINDOW)));
+                        .map(term -> new BatchingSequencer(term, COMMIT_WINDOW)), challenge);
         // ⚠️ NOT PUSHED ONTO `toClose`, AND THAT IS NOT AN OMISSION.
         // `DefaultIngest.close()` closes the sequencer it was given and says so
         // in its own javadoc, and `FleetSequencer.close()` has no idempotence

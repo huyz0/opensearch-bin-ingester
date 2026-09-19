@@ -70,6 +70,17 @@ public final class FleetSequencer implements Sequencer {
 
     public FleetSequencer(BinStore store, LeaseConfig config,
             SequencerTransport transport, Leadership.Election election) {
+        this(store, config, transport, election, LeaseChallenge.NEVER);
+    }
+
+    /**
+     * ⚠️ THE FORWARD READS THE SAME EVIDENCE THE ELECTION DOES (M8.57), so a
+     * holder the watch reports gone costs the probe window rather than the
+     * peer-commit timeout a frozen holder would otherwise hold a flush for.
+     */
+    public FleetSequencer(BinStore store, LeaseConfig config,
+            SequencerTransport transport, Leadership.Election election,
+            LeaseChallenge challenge) {
         // ⚠️ EVERY ARGUMENT IS CHECKED BEFORE A TERM IS TAKEN, and the order is
         // the whole point. `new Leadership(...)` ELECTS in its constructor: it
         // acquires the lease, starts a renewer, seals the ancestor and replays
@@ -84,7 +95,8 @@ public final class FleetSequencer implements Sequencer {
         Objects.requireNonNull(store, "store");
         Objects.requireNonNull(config, "config");
         Objects.requireNonNull(transport, "transport");
-        this.remote = new RemoteSequencer(store, config, transport);
+        Objects.requireNonNull(challenge, "challenge");
+        this.remote = new RemoteSequencer(store, config, transport, challenge);
         this.leadership = new Leadership(election);
     }
 
