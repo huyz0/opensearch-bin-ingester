@@ -33,7 +33,7 @@ import software.amazon.awssdk.services.s3.model.CreateBucketRequest;
  * (ADR-0052 § Alternatives): a rename on a local disk is not a conditional
  * PUT, so a row about a lease race would be testing a different store.
  */
-public final class ChaosBucket implements AutoCloseable {
+public final class ChaosBucket implements AutoCloseable, ChainAudit.ChainBucketReader {
 
     /** The prefix every node in a chaos row writes under. */
     public static final String PREFIX = "bins/cluster-a";
@@ -98,6 +98,7 @@ public final class ChaosBucket implements AutoCloseable {
     }
 
     /** Every key under {@code prefix}, following every page. */
+    @Override
     public List<String> keys(String prefix) throws java.io.IOException {
         List<String> keys = new ArrayList<>();
         String after = null;
@@ -111,6 +112,23 @@ public final class ChaosBucket implements AutoCloseable {
             }
             after = page.nextStartAfter().get();
         }
+    }
+
+    /** One object's bytes. */
+    @Override
+    public byte[] get(String key) throws java.io.IOException {
+        try (var in = observer.get(key)) {
+            return in.readAllBytes();
+        }
+    }
+
+    /** The lease object, decoded: who holds the term, and until when. */
+    public java.util.Optional<binjava.format.Lease> lease() throws java.io.IOException {
+        List<String> lease = keys(PREFIX + "/ctl/lease/");
+        if (lease.isEmpty()) {
+            return java.util.Optional.empty();
+        }
+        return java.util.Optional.of(binjava.format.Lease.decode(get(lease.get(0))));
     }
 
     /** The segments written so far. */
