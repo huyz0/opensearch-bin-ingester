@@ -405,14 +405,19 @@ $one"
     echo "         Wiring worth sharing belongs in the module that owns it."
   fi
 
-  # architecture.md rule 2, as written: `plugin` depends on `client`, never on
-  # `binstore-backends`. The cloud-SDK grep below does NOT cover it -- the
-  # backend has no external dependencies yet, so a direct project dependency
-  # passed clean and would only start failing once someone added an SDK to it.
-  if [ "$m" = "plugin" ] && printf '%s\n' "$deps" | grep -qE "project '?:binstore-backends'?"; then
-    fail "plugin depends on binstore-backends (architecture.md rule 2)"
-    echo "         The plugin's dependency surface is deliberately minimal: no cloud"
-    echo "         SDK in the OpenSearch JVM. Route through \`client\` and \`format\`."
+  # ONLY THE COMPOSITION ROOT DEPENDS ON `binstore-backends` in `src/main`
+  # (M8.29). architecture.md rule 2 names `plugin`, and this once asked it of
+  # `plugin` alone -- so a backend added to `ingest` passed GREEN, which is a
+  # store reached past the seam inside business logic. The cloud-SDK grep
+  # below does not cover it either: a direct project dependency passes clean
+  # until someone adds an SDK to the backend. Only main classpaths are read, so
+  # a module's TESTS may still build over a real backend.
+  if [ "$m" != "$ROOT_MODULE" ] && [ "$m" != "binstore-backends" ] \
+     && printf '%s\n' "$deps" | grep -qE "project '?:binstore-backends'?"; then
+    fail "$m depends on binstore-backends (architecture.md rule 2, M8.29)"
+    echo "         Only the composition root (\`$ROOT_MODULE\`) chooses a backend."
+    echo "         Everything else takes a \`BinStore\`; in \`plugin\` a backend is"
+    echo "         a cloud SDK in the OpenSearch JVM."
   fi
 
   case " $NO_CLOUD " in *" $m "*)

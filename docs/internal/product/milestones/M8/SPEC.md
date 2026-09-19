@@ -201,11 +201,11 @@ ADR-0052 § Alternatives, with its number.
    a factory method fails the gate. ⚠️ **THE GRAPH ASSERTION AN EARLIER DRAFT
    PROPOSED IS WEAKER THAN THE GREP IT REPLACED** — a backend built inside
    `ingest` is never in the root's graph, so walking the root's graph cannot see
-   it. ⚠️ **AND THE GATE DOES NOT ENFORCE THIS TODAY**: `check-module.sh` guards
-   that rule with `[ "$m" = "plugin" ]` and `NO_CLOUD="client plugin"`, so
-   `ingest` is excluded — a second draft of this criterion asserted the rule in
-   the present tense and called it "does not compile", which is rung 3 sold as
-   rung 1. It is rung 3, it is worth having, and extending the script is a task.
+   it. ⚠️ **ENFORCED SINCE M8.29, AND AT RUNG 3**: before it, `check-module.sh`
+   guarded the rule with `[ "$m" = "plugin" ]`, so `ingest` was excluded — a
+   second draft of this criterion asserted the rule in the present tense and
+   called it "does not compile", which is rung 3 sold as rung 1. Evidence:
+   `ModuleGateTest.onlyTheCompositionRootMayDependOnABackend`.
    `check-io-seam.sh` then passes with exactly one module exempt beyond
    `binstore-backends`.
 3. **An idle assembled pod issues, over ≥5 minutes of WALL CLOCK, EXACTLY the

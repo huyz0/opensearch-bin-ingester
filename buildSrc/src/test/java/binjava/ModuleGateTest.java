@@ -180,6 +180,34 @@ class ModuleGateTest {
   }
 
   /**
+   * ⚠️ **ONLY THE COMPOSITION ROOT MAY DEPEND ON {@code binstore-backends}**
+   * (M8.29, architecture.md rules 2 and 7). The gate used to ask it of
+   * {@code plugin} alone, so a backend added to {@code ingest} passed green —
+   * and a backend inside business logic is a store reached past the seam,
+   * never in the root's graph. Exercised from both sides, like the
+   * {@code http} exemption above.
+   */
+  @Test
+  void onlyTheCompositionRootMayDependOnABackend(@TempDir Path dir) throws Exception {
+    scratch(dir);
+    withCompositionRoot();
+    dependencyStub("+--- project :binstore-backends");
+
+    String out = gate("git add -A", "full");
+
+    assertThat(out)
+        .as("every module but the root is refused, not only `plugin`%n%s", out)
+        .contains("alpha depends on binstore-backends")
+        .contains("beta depends on binstore-backends");
+    assertThat(out)
+        .as("⚠️ AND THE ROOT IS NOT: it is where the backend is chosen%n%s", out)
+        .doesNotContain("server depends on binstore-backends");
+    assertThat(out.lines().findFirst().orElseThrow())
+        .as("and the gate must FAIL, not merely say so%n%s", out)
+        .isNotEqualTo("0");
+  }
+
+  /**
    * Adds a {@code server} module to the scratch repo.
    *
    * <p>⚠️ **HERE RATHER THAN IN {@link #scratch}, AND THE REASON IS A

@@ -72,7 +72,8 @@ A new seam is an ADR. Every seam has a fake, kept in step in the same commit.
 ## Dependency rules
 
 1. `format` depends on nothing and is pure — it is where T0 tests live.
-2. `plugin` depends on `client`, never on `binstore-backends`. The plugin's
+2. `plugin` depends on `client`, never on `binstore-backends` — and since
+   M8.29 no module but the composition root may, in `src/main`. The plugin's
    dependency surface is deliberately minimal: no cloud SDK in the OpenSearch JVM.
 3. The ingester and the plugin share **formats and the SPI**, never runtime choices.
 4. Nothing depends on `http` **except the composition root**, and **nothing
