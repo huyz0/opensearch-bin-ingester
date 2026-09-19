@@ -184,8 +184,8 @@ public final class Assembly implements AutoCloseable {
             // renew interval, for ever, from a node that is not running.
             // ⚠️ AND THE TRIGGER IS CONFIGURED RATHER THAN HYPOTHETICAL:
             // `DefaultIngest` refuses at startup when `direct` is enabled over
-            // a backend that cannot sign (M5.43), which is both of the backends
-            // that ship today.
+            // a backend that cannot sign (M5.43), as the memory and
+            // local-filesystem backends cannot.
             closeQuietly(this.sequencer, failed);
             throw failed;
         }

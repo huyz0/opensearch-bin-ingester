@@ -53,7 +53,7 @@ public enum FetchMode {
      *
      * <p>⚠️ THE ESCAPE HATCH, not a default: catch-up replay at fan-out 1, or
      * a pod shedding load. It needs {@code Capabilities.presignedUrls}
-     * (ADR-0041), and neither shipping backend has it -- so a policy that
+     * (ADR-0041), which only the S3 backend has (M8.18) -- so a policy that
      * chose this against a backend that cannot sign would hand out a mode
      * nothing can serve. M5.13 owns the grant and the startup refusal.
      */

@@ -67,8 +67,9 @@ class DirectEnablementTest {
      * And the same pod starts normally when it has not asked for {@code direct}.
      *
      * <p>⚠️ WITHOUT THIS THE REFUSAL COULD BE UNCONDITIONAL and look correct.
-     * Both shipping backends report {@code presignedUrls=false}, so a check
-     * that ignored the setting would stop every deployment in existence.
+     * The memory and local-filesystem backends report
+     * {@code presignedUrls=false}, so a check that ignored the setting would
+     * stop every deployment on them.
      */
     @Test
     void aPodThatDidNotAskForDIRECTStartsOnTheSameBackend() throws Exception {

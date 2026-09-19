@@ -12,8 +12,8 @@ import org.junit.jupiter.api.Test;
  * What EVERY backend owes the {@code direct} fetch mode (M5.10, ADR-0041).
  *
  * <p>⚠️ IT PINS BOTH ANSWERS, not just the capable one. A backend may honestly
- * lack presigning -- neither shipping backend has it -- and the contract is
- * then that {@link Capabilities#presignedUrls()} says so and
+ * lack presigning -- the memory and local-filesystem backends do -- and the
+ * contract is then that {@link Capabilities#presignedUrls()} says so and
  * {@link BinStore#presign} refuses. The failure this catches is the pair
  * DISAGREEING: a backend advertising the capability and throwing anyway would
  * pass a startup check and fail at first use, which is the whole thing
@@ -26,10 +26,9 @@ import org.junit.jupiter.api.Test;
  * trip inside its own implementation -- is invisible from outside: review
  * MEASURED a stand-in doing {@code stat(key)} before signing surviving both
  * this suite and a {@code CountingBinStore} wrapped around it, because a meter
- * ABOVE a backend cannot see the backend's internal traffic. That half rests on
- * {@link BinStore#presign}'s javadoc being read, and on nothing else -- M5.37
- * closed having established that no test ABOVE a backend can buy it, rather
- * than having bought it.
+ * ABOVE a backend cannot see the backend's internal traffic. So it is bought
+ * INSIDE each backend or not at all: {@code S3PresignTest} signs over a client
+ * that refuses every call (M8.18), and a new capable backend owes the same.
  *
  * <p>⚠️ SITS IN THE CHAIN so every backend runs it without opting in.
  * {@code MultipartConformance -> ConditionalWriteConformance -> this ->

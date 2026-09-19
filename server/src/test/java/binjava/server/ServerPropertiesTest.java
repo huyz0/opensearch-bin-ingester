@@ -68,7 +68,8 @@ class ServerPropertiesTest {
                 .isEqualTo(binjava.ingest.IngestConfig.DEFAULT_INTERVAL_FLOOR);
         assertThat(config.ingest().directEnabled())
                 .as("⚠️ OFF IS THE ONLY SAFE DEFAULT: on, a node REFUSES TO START against a "
-                        + "backend that cannot sign (M5.43), and neither shipping backend can")
+                        + "backend that cannot sign (M5.43), as the memory and local-filesystem "
+                        + "backends cannot")
                 .isFalse();
     }
 

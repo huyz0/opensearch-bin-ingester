@@ -24,8 +24,7 @@ class GrantIssuerTest {
     private static final String SEGMENT = "seg/2026/09/11/abc";
 
     /**
-     * A stand-in for the first backend that can sign, which neither shipping
-     * one can.
+     * A stand-in for a backend that can sign, so this suite needs no network.
      *
      * <p>⚠️ IT RECORDS WHAT IT WAS ASKED, because a grant issued for the wrong
      * key or the wrong duration looks identical from outside — {@code
@@ -114,8 +113,9 @@ class GrantIssuerTest {
      * blaming a backend that was honest about what it cannot do.
      *
      * <p>⚠️ AND {@code MemoryBinStore} IS THE REAL CASE, not a contrivance:
-     * both shipping backends answer {@code presignedUrls=false} (ADR-0041), so
-     * this is what every deployment enabling `direct` gets today.
+     * the memory and local-filesystem backends answer
+     * {@code presignedUrls=false} (ADR-0041), so this is what a deployment
+     * enabling `direct` over either of them gets.
      */
     @Test
     void aBackendThatCannotPresignREFUSESToConstructTheIssuer() {

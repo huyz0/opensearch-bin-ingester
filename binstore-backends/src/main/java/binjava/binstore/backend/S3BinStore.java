@@ -8,10 +8,12 @@ import binjava.binstore.CostTable;
 import binjava.binstore.ListPage;
 import binjava.binstore.MultipartWriter;
 import binjava.binstore.ObjectStat;
+import binjava.binstore.SignedUrl;
 import binjava.binstore.Version;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -23,6 +25,10 @@ import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.http.urlconnection.UrlConnectionHttpClient;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.S3Configuration;
+import software.amazon.awssdk.services.s3.presigner.S3Presigner;
+import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest;
+import software.amazon.awssdk.services.s3.presigner.model.PresignedGetObjectRequest;
 import software.amazon.awssdk.services.s3.model.Delete;
 import software.amazon.awssdk.services.s3.model.DeleteObjectsRequest;
 import software.amazon.awssdk.services.s3.model.DeleteObjectsResponse;
@@ -126,6 +132,14 @@ public final class S3BinStore implements BinStore {
     private final AutoCloseable ownedCredentials;
 
     /**
+     * ⚠️ **SIGNS LOCALLY, FROM THE SAME CREDENTIAL AS THE CLIENT** (M8.18). SigV4
+     * is an HMAC over the request, so a grant costs no request; or NULL, where
+     * a test built the store around a client of its own, and then this store
+     * says it cannot presign rather than signing with something else.
+     */
+    private final S3Presigner presigner;
+
+    /**
      * Opens a store over the endpoint's default credential chain.
      *
      * <p>⚠️ **`builder().build()`, NOT THE DEPRECATED `create()`.** They differ
@@ -137,7 +151,7 @@ public final class S3BinStore implements BinStore {
         DefaultCredentialsProvider credentials = DefaultCredentialsProvider.builder().build();
         try {
             return new S3BinStore(build(settings, credentials), settings.bucket(), credentials,
-                    settings.maxKeyBytes());
+                    settings.maxKeyBytes(), presigner(settings, credentials));
         } catch (RuntimeException failed) {
             credentials.close();
             throw failed;
@@ -154,7 +168,20 @@ public final class S3BinStore implements BinStore {
      */
     public static S3BinStore open(S3Settings settings, AwsCredentialsProvider credentials) {
         return new S3BinStore(build(settings, credentials), settings.bucket(), null,
-                settings.maxKeyBytes());
+                settings.maxKeyBytes(), presigner(settings, credentials));
+    }
+
+    /** A presigner for the same endpoint, region, path style and credential as the client. */
+    static S3Presigner presigner(S3Settings settings, AwsCredentialsProvider credentials) {
+        var builder = S3Presigner.builder()
+                .region(Region.of(settings.region()))
+                .credentialsProvider(credentials)
+                .serviceConfiguration(S3Configuration.builder()
+                        .pathStyleAccessEnabled(settings.pathStyle()).build());
+        if (settings.endpoint() != null && !settings.endpoint().isBlank()) {
+            builder.endpointOverride(URI.create(settings.endpoint()));
+        }
+        return builder.build();
     }
 
     private static S3Client build(S3Settings settings, AwsCredentialsProvider credentials) {
@@ -193,10 +220,16 @@ public final class S3BinStore implements BinStore {
      * to hand in a closeable it can watch.
      */
     S3BinStore(S3Client client, String bucket, AutoCloseable ownedCredentials, long maxKeyBytes) {
+        this(client, bucket, ownedCredentials, maxKeyBytes, null);
+    }
+
+    S3BinStore(S3Client client, String bucket, AutoCloseable ownedCredentials, long maxKeyBytes,
+            S3Presigner presigner) {
         this.client = Objects.requireNonNull(client, "client");
         this.bucket = Objects.requireNonNull(bucket, "bucket");
         this.ownedCredentials = ownedCredentials;
         this.maxKeyBytes = maxKeyBytes;
+        this.presigner = presigner;
     }
 
     @Override
@@ -413,15 +446,46 @@ public final class S3BinStore implements BinStore {
         }
     }
 
+    /**
+     * A GET grant on one key, signed locally (M8.18, ADR-0041).
+     *
+     * <p>⚠️ **A FAILURE CARRIES NEITHER ITS MESSAGE NOR ITS CAUSE** (security.md
+     * rule 4, M5.42). The SDK's own text for a credential failure can name the
+     * key, the source it was fetched from, or a partly-built URL, and a cause
+     * travels with every printed trace. Only the failure's TYPE is kept.
+     */
+    @Override
+    public SignedUrl presign(String key, Duration ttl) throws IOException {
+        if (presigner == null) {
+            return BinStore.super.presign(key, ttl);
+        }
+        Objects.requireNonNull(key, "key");
+        if (ttl == null || ttl.isZero() || ttl.isNegative()) {
+            throw new IllegalArgumentException("a grant's TTL is positive: " + ttl);
+        }
+        PresignedGetObjectRequest signed;
+        try {
+            signed = presigner.presignGetObject(GetObjectPresignRequest.builder()
+                    .signatureDuration(ttl)
+                    .getObjectRequest(GetObjectRequest.builder().bucket(bucket).key(key).build())
+                    .build());
+        } catch (RuntimeException failed) {
+            throw new IOException("presigning " + key + " failed ("
+                    + failed.getClass().getSimpleName() + "); the detail is withheld because it "
+                    + "can carry a credential");
+        }
+        return new SignedUrl(signed.url().toString(), signed.expiration());
+    }
+
     @Override
     public Capabilities capabilities() {
-        // ⚠️ `presignedUrls` IS FALSE UNTIL M8.18 IMPLEMENTS IT, and saying so
-        // here is the whole mechanism: a deployment that wants `direct` calls
+        // ⚠️ `presignedUrls` IS WHETHER THIS STORE HAS A PRESIGNER, and saying so
+        // is the whole mechanism: a deployment that wants `direct` calls
         // `requirePresignedUrls()` at startup and is refused, rather than
         // discovering at the first fetch that the grant it handed out is not
         // one. ⚠️ THE COST TABLE IS `free()` BECAUSE NO PRICE IS CONFIGURED
         // YET -- M9 owns the numbers, and a made-up price is worse than none.
-        return new Capabilities(true, true, false, maxKeyBytes, MIN_PART_SIZE,
+        return new Capabilities(true, true, presigner != null, maxKeyBytes, MIN_PART_SIZE,
                 CostTable.free());
     }
 
@@ -429,6 +493,9 @@ public final class S3BinStore implements BinStore {
     public void close() throws IOException {
         try {
             client.close();
+            if (presigner != null) {
+                presigner.close();
+            }
         } finally {
             if (ownedCredentials != null) {
                 try {

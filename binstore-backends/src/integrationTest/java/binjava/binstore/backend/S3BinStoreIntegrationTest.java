@@ -407,14 +407,47 @@ class S3BinStoreIntegrationTest {
                 .isTrue();
         assertThat(capabilities.batchDelete()).isTrue();
         assertThat(capabilities.presignedUrls())
-                .as("⚠️ FALSE FOR NOW, AND HONESTLY SO: presigning is M8.18, with M5.42's "
-                        + "obligation that a signing failure's own message carries neither a "
-                        + "URL nor a credential. Advertising it before it is implemented is "
-                        + "how `direct` gets enabled against a backend that cannot sign")
-                .isFalse();
+                .as("⚠️ TRUE SINCE M8.18, and measured by the grant cases below rather than "
+                        + "claimed: advertising it without it is how `direct` gets enabled "
+                        + "against a backend that cannot sign")
+                .isTrue();
         assertThat(capabilities.minPartSize())
                 .as("⚠️ 5 MiB, S3's own minimum for a non-final part")
                 .isEqualTo(5L * 1024 * 1024);
+    }
+
+    @Test
+    void aSIGNEDGrantFETCHESTheObjectWithNoCredentialOfItsOwn() throws Exception {
+        // ⚠️ THE BEHAVIOUR, which the conformance suite cannot buy: it checks
+        // the grant's shape and expiry. Here a plain HTTP client, holding no
+        // credential at all, is served the bytes.
+        store.put("seg/granted", bytes("signed bytes"));
+        var signed = store.presign("seg/granted", java.time.Duration.ofSeconds(30));
+
+        var response = java.net.http.HttpClient.newHttpClient().send(
+                java.net.http.HttpRequest.newBuilder(URI.create(signed.url())).GET().build(),
+                java.net.http.HttpResponse.BodyHandlers.ofString());
+
+        assertThat(response.statusCode()).as("the grant is honoured").isEqualTo(200);
+        assertThat(response.body()).isEqualTo("signed bytes");
+    }
+
+    @Test
+    void aGrantPASTItsTTLIsREFUSED() throws Exception {
+        // ⚠️ SHORT-LIVED IS THE POINT OF A GRANT (ADR-0010): one the endpoint
+        // honoured after its TTL would be a credential that never expires.
+        store.put("seg/expiring", bytes("x"));
+        var signed = store.presign("seg/expiring", java.time.Duration.ofSeconds(1));
+        long deadline = signed.expiresAt().toEpochMilli() + 1_500;
+        while (System.currentTimeMillis() < deadline) {
+            Thread.onSpinWait();
+        }
+
+        var response = java.net.http.HttpClient.newHttpClient().send(
+                java.net.http.HttpRequest.newBuilder(URI.create(signed.url())).GET().build(),
+                java.net.http.HttpResponse.BodyHandlers.discarding());
+
+        assertThat(response.statusCode()).as("expired, so refused").isEqualTo(403);
     }
 
     private static Body bytes(String text) {

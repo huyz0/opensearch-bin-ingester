@@ -185,8 +185,8 @@ class GrantNeverLoggedTest {
                                 // trace prints whatever the backend wrote. That
                                 // residual is the BACKEND's rule-4 defect and is
                                 // stated in `BinStore.presign`'s javadoc, where a
-                                // backend author reads it; M5.42 owns checking
-                                // it once a capable backend exists.
+                                // backend author reads it; `S3PresignTest`
+                                // checks it for the S3 backend (M8.18).
                                 assertThat(e.getMessage()).doesNotContain(SIGNATURE);
                                 System.err.println(e.getMessage());
                             }));

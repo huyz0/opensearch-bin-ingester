@@ -245,7 +245,7 @@ public final class DefaultIngest implements Ingest {
                 // would put the TTL ceiling's configuration in a loop rather
                 // than at one site. ⚠️ AND NULL WHEN `direct` IS OFF, because
                 // the constructor REFUSES a backend that cannot presign -- so
-                // on either shipping backend there is no issuer to hold, which
+                // over a backend that cannot sign there is no issuer to hold, which
                 // is the same refusal the line above already made.
                 config.directEnabled() ? new GrantIssuer(store) : null);
         // ⚠️ WRAPPED HERE, ONCE, so no flush path can reach the bare seam and

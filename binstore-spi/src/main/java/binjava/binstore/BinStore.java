@@ -164,10 +164,9 @@ public interface BinStore extends Closeable {
      * printed and pasted into a ticket by a caller that cannot inspect it --
      * so the message must carry NEITHER a signed URL NOR a credential. A
      * signing failure is the likeliest place in the whole system for a
-     * credential to surface in text. ⚠️ NOTHING MECHANICALLY CHECKS THIS:
-     * {@code PresignConformance}'s capable half runs only against a stand-in
-     * (M5.37), so the check would be testing the fixture. M5.42 owns closing
-     * it when the first capable backend lands.
+     * credential to surface in text. ⚠️ CHECKED PER BACKEND, not by the
+     * shared suite: {@code S3PresignTest} checks it for S3 (M8.18), and a new
+     * capable backend owes the same case.
      *
      * <p>⚠️ THE DEFAULT REFUSES, so a backend that has not implemented this
      * cannot silently return something unusable. It is paired with
