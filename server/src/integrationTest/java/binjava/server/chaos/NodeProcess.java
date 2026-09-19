@@ -27,6 +27,8 @@ import java.util.concurrent.TimeUnit;
  */
 public final class NodeProcess implements AutoCloseable {
 
+    private static final String PAD = "x".repeat(2048);
+
     private final String podId;
     private final int port;
     private final Path log;
@@ -169,6 +171,35 @@ public final class NodeProcess implements AutoCloseable {
         }
         return client().post("/logs/_bulk").queryParam("partition", "0")
                 .submit(body.toString()).status().code();
+    }
+
+    /**
+     * Writes one bulk with exactly these document ids to partition 0 of
+     * {@code logs}.
+     *
+     * @return the status, which is 202 once the records are durable
+     */
+    public int write(List<String> ids) {
+        StringBuilder body = new StringBuilder();
+        for (String id : ids) {
+            // ⚠️ 2 KB OF PAYLOAD PER RECORD, so a segment is large enough that
+            // its PUT takes measurable time -- which is the window an ack
+            // that ran ahead of its PUT would be caught in.
+            body.append("{\"index\":{\"_id\":\"").append(id)
+                    .append("\",\"_version\":1}}\n{\"pad\":\"").append(PAD).append("\"}\n");
+        }
+        return client().post("/logs/_bulk").queryParam("partition", "0")
+                .submit(body.toString()).status().code();
+    }
+
+    /**
+     * {@code SIGKILL}, sent and not waited for (M8.9).
+     *
+     * <p>⚠️ **FOR A KILL SYNCHRONISED TO AN EVENT**, where the caller's next
+     * act must follow the signal and not the process's exit.
+     */
+    public void killNow() {
+        process.destroyForcibly();
     }
 
     /** Everything the node has printed so far. */

@@ -143,7 +143,7 @@ public final class ChaosBucket implements AutoCloseable {
     }
 
     @Override
-    public void close() throws Exception {
+    public void close() throws java.io.IOException {
         observer.close();
     }
 }
