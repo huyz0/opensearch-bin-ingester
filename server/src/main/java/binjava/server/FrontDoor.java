@@ -150,7 +150,11 @@ public final class FrontDoor implements AutoCloseable {
                 .shutdownHook(false)
                 .port(config.httpPort())
                 .routing(HttpRouting.builder()
-                        .register(new HealthService(gate))
+                        // ⚠️ READY ONLY WHILE NOT DRAINING AND THE STORE ANSWERS
+                        // (M8.15): a node partitioned from the store can only
+                        // make a producer wait, so it asks not to be sent any.
+                        .register(new HealthService(
+                                () -> gate.ready() && assembly.storeHealthy()))
                         .register(new BulkService(assembly.ingest(), config.principal(), gate))
                         .register(new CommitService(assembly::heldTerm))
                         .register(new SubscriptionService(assembly.hub(), assembly.catalog(),

@@ -22,10 +22,18 @@ public final class HealthService implements HttpService {
     public static final String READY_PATH = "/ready";
     public static final String LIVE_PATH = "/live";
 
-    private final DrainGate gate;
+    private final java.util.function.BooleanSupplier ready;
 
     public HealthService(DrainGate gate) {
-        this.gate = Objects.requireNonNull(gate, "gate");
+        this(Objects.requireNonNull(gate, "gate")::ready);
+    }
+
+    /**
+     * Readiness from any source, such as the drain gate AND the store's health
+     * (M8.15).
+     */
+    public HealthService(java.util.function.BooleanSupplier ready) {
+        this.ready = Objects.requireNonNull(ready, "ready");
     }
 
     @Override
@@ -34,9 +42,9 @@ public final class HealthService implements HttpService {
     }
 
     private void ready(ServerRequest request, ServerResponse response) {
-        boolean ready = gate.ready();
+        boolean ready = this.ready.getAsBoolean();
         response.status(ready ? Status.OK_200 : Status.SERVICE_UNAVAILABLE_503)
-                .send(ready ? "ready" : "draining");
+                .send(ready ? "ready" : "not ready");
     }
 
     private void live(ServerRequest request, ServerResponse response) {

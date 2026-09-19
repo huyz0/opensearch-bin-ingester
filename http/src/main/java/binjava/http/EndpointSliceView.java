@@ -31,8 +31,10 @@ import java.util.Set;
  * graceful shutdown, which ends by RELEASING the lease, and a failover
  * sub-second anyway. Challenging it would fence its last flush and fail the
  * requests the drain exists to finish. What IS evidence: the endpoint has left
- * every slice, or it is not ready and not terminating, which is what a
- * crashed container looks like while the kubelet restarts it.
+ * every slice, or it is not ready and not terminating. That is what a crashed
+ * container looks like while the kubelet restarts it, and, since M8.15, a pod
+ * whose store calls have stalled or keep failing: a leader in that state
+ * cannot commit, so its term going early to a follower that can is intended.
  */
 public final class EndpointSliceView implements LeaseChallenge {
 

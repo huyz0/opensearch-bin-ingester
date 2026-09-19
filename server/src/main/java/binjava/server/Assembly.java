@@ -2,6 +2,7 @@
 package binjava.server;
 
 import binjava.binstore.BinStore;
+import binjava.binstore.HealthTrackingBinStore;
 import binjava.format.IndexRegistration;
 import binjava.format.RunKey;
 import binjava.ingest.DefaultIngest;
@@ -63,6 +64,8 @@ public final class Assembly implements AutoCloseable {
 
     private final ServerConfig config;
     private final BinStore store;
+    private final HealthTrackingBinStore health;
+    private final BinStore backend;
     private final SubscriptionHub hub;
     private final IndexCatalog catalog;
     private final WatermarkTable watermarks;
@@ -123,15 +126,26 @@ public final class Assembly implements AutoCloseable {
                 transport, clock, LeaseChallenge.NEVER);
     }
 
-    private Assembly(ServerConfig config, BinStore store, boolean ownsStore,
+    private Assembly(ServerConfig config, BinStore raw, boolean ownsStore,
             SequencerTransport transport, Clock clock, LeaseChallenge challenge)
             throws IOException {
         this.config = Objects.requireNonNull(config, "config");
         Objects.requireNonNull(transport, "transport");
         Objects.requireNonNull(clock, "clock");
-        this.store = store;
+        // ⚠️ EVERY STORE CALL THIS NODE MAKES GOES THROUGH THE HEALTH TRACKER
+        // (M8.15), so readiness reflects the store without a request of its
+        // own. The RAW store is what is closed: the tracker holds nothing.
+        this.backend = raw;
+        this.health = new HealthTrackingBinStore(raw, clock,
+                HealthTrackingBinStore.DEFAULT_STALL, HealthTrackingBinStore.DEFAULT_FAILURES);
+        this.store = health;
+        // ⚠️ `raw` IS NAMED SO THAT NOTHING BELOW CAN USE IT BY ACCIDENT: an
+        // earlier draft kept the parameter called `store`, which shadowed the
+        // field, and every consumer below was handed the UNTRACKED store --
+        // readiness never saw a call. MEASURED by StorePartitionIT.
+        BinStore store = this.store;
         if (ownsStore) {
-            toClose.push(store);
+            toClose.push(raw);
         }
         this.hub = new SubscriptionHub();
         this.catalog = new IndexCatalog();
@@ -304,8 +318,24 @@ public final class Assembly implements AutoCloseable {
         return config;
     }
 
+    /**
+     * Whether the store is answering the calls this node makes (M8.15). The
+     * readiness probe fails when it is not, so the load balancer stops sending
+     * writes that could only wait.
+     */
+    public boolean storeHealthy() {
+        return health.healthy();
+    }
+
+    /**
+     * The backend the root chose, UNTRACKED (criterion 2).
+     *
+     * <p>⚠️ **NOT THE STORE THE GRAPH USES**, which is this wrapped in the
+     * health tracker (M8.15). A caller reading through this one is outside the
+     * node's own call path, and its calls say nothing about the node's health.
+     */
     public BinStore store() {
-        return store;
+        return backend;
     }
 
     public SubscriptionHub hub() {
