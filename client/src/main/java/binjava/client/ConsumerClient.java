@@ -247,7 +247,14 @@ public final class ConsumerClient implements AutoCloseable {
         // asked and answered -- the held floor, not the report, is what is
         // checked against.
         floorAsksLeft.set(0);
+        // ⚠️ THE FLOOR RISES BEFORE THE COUNT DOES (M8.44), so a reader that
+        // sees the count move sees a floor at least that new -- see
+        // `checkResume`, which reads them in the opposite order.
+        raise(oldestRetainedOffset);
         floorReports.incrementAndGet();
+    }
+
+    private void raise(long oldestRetainedOffset) {
         long floor = retainedFloor.get();
         if (floor == FLOOR_UNKNOWN
                 && retainedFloor.compareAndSet(FLOOR_UNKNOWN, oldestRetainedOffset)) {
@@ -379,6 +386,27 @@ public final class ConsumerClient implements AutoCloseable {
         }
         refusals.increment();
         throw new PositionCollectedException(key, fromOffset, floor);
+    }
+
+    /**
+     * Checks a resume, and says whether a floor reported after
+     * {@code freshAfter} has now cleared it (M8.44).
+     *
+     * <p>⚠️ **THE COUNT IS READ BEFORE THE CHECK**, and {@link #retainedFrom}
+     * raises the floor before it moves the count: a count that says a fresh
+     * report arrived therefore comes with a floor at least that fresh. Read the
+     * other way round, a report landing between the two cleared a resume its
+     * floor was never checked against. The fallback was the old 404, not data
+     * loss, but it is the defect this check exists to replace.
+     *
+     * @return true if a report newer than {@code freshAfter} was checked and passed
+     * @throws PositionCollectedException if {@code fromOffset} is below the floor
+     */
+    public boolean checkResume(long fromOffset, long freshAfter)
+            throws PositionCollectedException {
+        long reports = floorReports.get();
+        refuseIfCollected(fromOffset);
+        return reports > freshAfter;
     }
 
     /** How many positions this client has refused — one per attempt, not one per stream. */

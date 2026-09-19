@@ -130,8 +130,9 @@ public final class BinStoreShardConsumer
         if (resume < 0) {
             return;
         }
+        boolean cleared;
         try {
-            client.refuseIfCollected(resume);
+            cleared = client.checkResume(resume, freshAfter);
         } catch (binjava.client.PositionCollectedException collected) {
             throw new java.io.UncheckedIOException("shard " + shardId + " cannot resume: "
                     + collected.getMessage(), collected);
@@ -142,7 +143,8 @@ public final class BinStoreShardConsumer
         // floor learned hours earlier passing a reset to a position GC had
         // since collected. Until a fresh one arrives the check simply repeats,
         // which is a read of one field per poll.
-        if (client.floorReports() > freshAfter) {
+        // ⚠️ ONE CALL, count read first (M8.44): see `checkResume`.
+        if (cleared) {
             pendingResume = -1;
         }
     }
