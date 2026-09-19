@@ -144,7 +144,9 @@ class DeadPeerTest {
     void aPeerThatANSWERSNOTHINGIsNotAPeerThatREFUSES() throws Exception {
         MemoryBinStore store = new MemoryBinStore();
         MovableClock clock = new MovableClock();
-        InProcessTransport transport = new InProcessTransport();
+        // ⚠️ WITH THE INBOX (M8.14a): the dead-peer flush now defers, and the
+        // peer put back must drain it before this pod forwards again.
+        InProcessTransport transport = new InProcessTransport().withInbox(store, PREFIX);
         try (FleetSequencer leader = pod(store, "poda", A, transport, clock);
                 FleetSequencer follower = pod(store, "podb", B, transport, clock)) {
             assertThat(leader.leading()).isTrue();
@@ -164,7 +166,11 @@ class DeadPeerTest {
                     // with the fixture's unreachable branch disabled this test
                     // passed on the type assertions alone, because `gone()`
                     // empties the peer and the refusal was merely wrapped.
-                    .hasMessageContaining("not reachable")
+                    // ⚠️ SINCE M8.14a THE COMMIT DEFERS TO THE INBOX, and the
+                    // ambiguous failure is what it deferred ON: the cause.
+                    .isInstanceOf(CommitDeferredException.class)
+                    .satisfies(deferred -> assertThat(deferred.getCause())
+                            .hasMessageContaining("not reachable"))
                     .isNotInstanceOf(SequencerTransport.NotTheLeaseholderException.class)
                     .isNotInstanceOf(FencedException.class);
 

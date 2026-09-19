@@ -272,6 +272,13 @@ public final class RemoteSequencer implements Sequencer {
                 + "(M4.7), not to the pod forwarding to it");
     }
 
+    /** Asks the leaseholder the lease names to drain the inbox (M8.14a). */
+    public void drain() throws IOException {
+        Lease lease = currentLease();
+        refuseSelfAddress(lease, null);
+        transport.drain(lease.holderEndpoint(), leaseConfig.podId());
+    }
+
     /**
      * The epoch of the lease this pod last forwarded to (M5.15d).
      *

@@ -10,7 +10,7 @@ IDs are stable and cited by specs, tasks, and ADRs. Status is `agreed`,
 | FR-1 | Accept record writes over HTTP for many indices and partitions on one connection, streamed, without materialising the body | agreed |
 | FR-2 | Bundle records from many indices and partitions into one segment per pod per flush | agreed |
 | FR-3 | Assign a stable, monotonic `long` offset per `(index, partition)`, immutable once visible | agreed |
-| FR-4 | Acknowledge a write only after the segment is durable **and** the offset is committed | agreed |
+| FR-4 | Acknowledge a write only after the segment is durable **and** the offset is committed -- or, when no sequencer is reachable, the segment and its commit intent are durable ([ADR-0058](decisions/0058-a-partitioned-pod-acks-on-a-durable-commit-intent.md)) | agreed |
 | FR-5 | Push tail notifications to subscribers over a persistent same-AZ channel, with session-based incremental subscription | agreed |
 | FR-6 | Serve record bytes in three modes — `inline`, `proxy`, `direct` (signed URL) — chosen by the ingester | agreed |
 | FR-7 | An OpenSearch plugin implementing `IngestionConsumerPlugin` for OpenSearch 3.8.0+ | agreed |

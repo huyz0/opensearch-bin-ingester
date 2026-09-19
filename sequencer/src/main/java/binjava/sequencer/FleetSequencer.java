@@ -59,6 +59,9 @@ public final class FleetSequencer implements Sequencer {
 
     private final Leadership leadership;
     private final RemoteSequencer remote;
+    private final BinStore store;
+    private final String prefix;
+    private final String podId;
 
     /**
      * ⚠️ VOLATILE, because {@link #close} and a commit reach it from different
@@ -97,6 +100,9 @@ public final class FleetSequencer implements Sequencer {
         Objects.requireNonNull(transport, "transport");
         Objects.requireNonNull(challenge, "challenge");
         this.remote = new RemoteSequencer(store, config, transport, challenge);
+        this.store = store;
+        this.prefix = config.prefix();
+        this.podId = config.podId();
         this.leadership = new Leadership(election);
     }
 
@@ -119,6 +125,13 @@ public final class FleetSequencer implements Sequencer {
         Sequencer mine = leadership.sequencer();
         FencedException fence = null;
         if (mine != null) {
+            if (deferring) {
+                // ⚠️ THIS POD's OWN INTENTS FIRST: committing past them here
+                // would raise its high mark over them, and the drain would then
+                // refuse each as a replay -- acked writes lost (M8.14a).
+                InboxDrain.drain(store, prefix, mine, podId);
+                deferring = false;
+            }
             try {
                 return mine.commitAll(requests);
             } catch (FencedException fenced) {
@@ -137,9 +150,36 @@ public final class FleetSequencer implements Sequencer {
             throw new IOException("this pod's sequencer was closed while this commit was in"
                     + " flight, and must not forward it");
         }
+        if (deferring) {
+            // ⚠️ STILL DEFERRING: this pod has intents in the inbox, so it may
+            // not forward until the leaseholder has applied them -- the drain
+            // it asks for here IS the heal (M8.14a). Cut off still, it defers.
+            try {
+                remote.drain();
+                deferring = false;
+            } catch (IOException stillCutOff) {
+                throw defer(requests, stillCutOff, fence);
+            }
+        }
         try {
             return remote.commitAll(requests);
+        } catch (SequencerTransport.NotTheLeaseholderException refused) {
+            // ⚠️ A DEFINITE "NOT APPLIED" IS NOT A PARTITION: it is answered,
+            // not deferred, and the caller retries where the lease now is.
+            if (fence != null) {
+                refused.addSuppressed(fence);
+            }
+            throw refused;
         } catch (IOException forwardFailed) {
+            // ⚠️ A REFUSAL REWRAPPED IS STILL A REFUSAL: `RemoteSequencer`
+            // reports "refused, and the lease has not moved" as a plain
+            // IOException over the refusal. Nothing was applied, so it is
+            // answered, not deferred.
+            boolean refused = forwardFailed.getCause()
+                    instanceof SequencerTransport.NotTheLeaseholderException;
+            if (requests.size() == 1 && !refused) {
+                throw defer(requests, forwardFailed, fence);
+            }
             if (fence != null) {
                 // ⚠️ THE FENCE SURVIVES THE FORWARD'S FAILURE. Forwarding starts
                 // with a lease GET, so a store hiccup here reports a plain
@@ -162,6 +202,36 @@ public final class FleetSequencer implements Sequencer {
             throw forwardFailed;
         }
     }
+
+    /**
+     * Makes the one request's intent durable and returns the deferral to throw
+     * (M8.14a, ADR-0058) -- or, if the store refuses the intent, the original
+     * failure: ⚠️ nothing durable to ack on, so criterion 12's acks stop.
+     */
+    private IOException defer(List<CommitRequest> requests, IOException cause,
+            FencedException fence) {
+        if (fence != null) {
+            cause.addSuppressed(fence);
+        }
+        if (requests.size() != 1) {
+            return cause;
+        }
+        try {
+            String key = Inbox.write(store, prefix, requests.get(0));
+            deferring = true;
+            return new CommitDeferredException(key, cause);
+        } catch (IOException intentFailed) {
+            cause.addSuppressed(intentFailed);
+            return cause;
+        }
+    }
+
+    /**
+     * ⚠️ WHETHER THIS POD HAS INTENTS THE LEASEHOLDER HAS NOT CONFIRMED
+     * APPLYING. While true it forwards nothing: its next flush asks for a drain
+     * first. Volatile because a close and a flush reach it from two threads.
+     */
+    private volatile boolean deferring;
 
     /** Whether this pod is currently the one writing the chain. */
     public boolean leading() {

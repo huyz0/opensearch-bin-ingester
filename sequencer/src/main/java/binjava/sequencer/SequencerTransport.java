@@ -56,6 +56,17 @@ public interface SequencerTransport extends AutoCloseable {
      */
     CommitDelta send(String endpoint, CommitRequest request) throws IOException;
 
+    /**
+     * Asks the leaseholder at {@code endpoint} to drain the inbox (M8.14a,
+     * ADR-0058), returning once it has applied every intent it could.
+     *
+     * <p>⚠️ **THE DEFAULT REFUSES**, and refusing is safe: the pod that asked
+     * stays deferring, writing intents, rather than forwarding past its own.
+     */
+    default void drain(String endpoint, String requester) throws IOException {
+        throw new IOException("this transport cannot ask a peer to drain the inbox");
+    }
+
     @Override
     void close() throws IOException;
 

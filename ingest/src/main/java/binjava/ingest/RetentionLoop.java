@@ -315,7 +315,20 @@ public final class RetentionLoop {
                 // forgot named segments it deleted, which a LIST no longer
                 // returns, so a snapshot taken now would be no safer and would
                 // cost a second copy of the chain.
-                Set<String> committed = committedKeys(snapshot.deltas());
+                Set<String> committed = new java.util.HashSet<>(committedKeys(snapshot.deltas()));
+                try {
+                    // ⚠️ M8.14a: A SEGMENT AN INBOX INTENT NAMES IS ACKED DATA whose
+                    // delta has not been written yet -- kept, never an orphan.
+                    committed.addAll(binjava.sequencer.Inbox.segmentsNamed(fenced, prefix));
+                } catch (java.io.IOException unread) {
+                    return; // the inbox unread: no hour is safe to sweep this tick
+                }
+                // ⚠️ AND THE CHAIN AGAIN, AFTER THE INBOX (review R1): a drain
+                // between the tick's snapshot and the inbox read commits an
+                // intent and deletes it, leaving its segment in NEITHER set. A
+                // drain writes the delta before it deletes the intent, so one of
+                // these two reads always holds it.
+                committed.addAll(committedKeys(term.chain().snapshot().deltas()));
                 OrphanSweep sweep = new OrphanSweep(fenced, clock, orphanGrace,
                         OrphanSweep.MAX_PAGE_SIZE, deleteBatch);
                 for (long hour : sweepHours) {

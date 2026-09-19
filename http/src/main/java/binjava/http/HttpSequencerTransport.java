@@ -59,6 +59,9 @@ public final class HttpSequencerTransport implements SequencerTransport {
     /** {@code POST} here to forward a commit. */
     public static final String PATH = "/ctl/commit";
 
+    /** Where a pod that deferred asks the leaseholder to drain the inbox (M8.14a). */
+    public static final String DRAIN_PATH = "/ctl/drain";
+
     /**
      * ⚠️ 409 CONFLICT for "not the leaseholder", chosen because it is the one
      * 4xx that says the request was well-formed and the SERVER's state refused
@@ -82,6 +85,33 @@ public final class HttpSequencerTransport implements SequencerTransport {
         this.timeout = Objects.requireNonNull(timeout, "timeout");
         if (timeout.isZero() || timeout.isNegative()) {
             throw new IllegalArgumentException("timeout must be positive: " + timeout);
+        }
+    }
+
+    /**
+     * Asks the leaseholder at {@code endpoint} to drain the inbox (M8.14a,
+     * ADR-0058).
+     *
+     * <p>⚠️ **ANYTHING BUT 200 LEAVES THE CALLER DEFERRING**, which is the safe
+     * side: it keeps writing intents rather than forwarding past its own.
+     */
+    @Override
+    public void drain(String endpoint, String requester) throws IOException {
+        Objects.requireNonNull(endpoint, "endpoint");
+        if (closed) {
+            throw new IOException("transport is closed");
+        }
+        try (HttpClientResponse response = clientFor(endpoint).post(DRAIN_PATH)
+                .queryParam("pod", requester).request()) {
+            if (response.status().code() == NOT_THE_LEASEHOLDER.code()) {
+                throw new NotTheLeaseholderException(endpoint + " does not hold the lease");
+            }
+            if (response.status().code() != Status.OK_200.code()) {
+                throw new IOException("the drain at " + endpoint + " answered "
+                        + response.status() + ": " + read(response));
+            }
+        } catch (RuntimeException unreachable) {
+            throw new IOException("the drain at " + endpoint + " was not reachable", unreachable);
         }
     }
 

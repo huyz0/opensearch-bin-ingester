@@ -44,12 +44,53 @@ public final class CommitService implements HttpService {
      *     node does not lead. ⚠️ **CALLED PER REQUEST**, not once.
      */
     public CommitService(Supplier<Sequencer> sequencer) {
+        this(sequencer, (term, requester) -> {
+            throw new IOException("this node was built without an inbox drain");
+        });
+    }
+
+    /** Drains the inbox through the held term; see {@link #drain}. */
+    @FunctionalInterface
+    public interface Drainer {
+        int drain(Sequencer term, String requester) throws IOException;
+    }
+
+    private final Drainer drainer;
+
+    /** ⚠️ With the drain a deferring pod asks for when it can reach us again (M8.14a). */
+    public CommitService(Supplier<Sequencer> sequencer, Drainer drainer) {
         this.sequencer = Objects.requireNonNull(sequencer, "sequencer");
+        this.drainer = Objects.requireNonNull(drainer, "drainer");
     }
 
     @Override
     public void routing(HttpRules rules) {
         rules.post(HttpSequencerTransport.PATH, this::commit);
+        rules.post(HttpSequencerTransport.DRAIN_PATH, this::drain);
+    }
+
+    /**
+     * ⚠️ **200 ONLY WHEN EVERY INTENT WAS APPLIED**, so the pod that asked stops
+     * deferring only once its own are in the chain; 409 where this node holds
+     * no term, as for a commit.
+     */
+    private void drain(ServerRequest request, ServerResponse response) {
+        Sequencer local = sequencer.get();
+        if (local == null) {
+            response.status(HttpSequencerTransport.NOT_THE_LEASEHOLDER)
+                    .send("this node does not hold the lease");
+            return;
+        }
+        try {
+            String requester = request.query().first("pod").orElse(null);
+            response.status(Status.OK_200)
+                    .send(String.valueOf(drainer.drain(local, requester)));
+        } catch (FencedException fenced) {
+            response.status(HttpSequencerTransport.NOT_THE_LEASEHOLDER).send(fenced.getMessage());
+        } catch (IOException failed) {
+            response.status(Status.INTERNAL_SERVER_ERROR_500)
+                    .send(String.valueOf(failed.getMessage()));
+        }
     }
 
     /**

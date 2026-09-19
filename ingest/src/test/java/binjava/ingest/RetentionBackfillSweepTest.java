@@ -188,8 +188,10 @@ class RetentionBackfillSweepTest {
 
         assertThat(store.counts().lists() - before)
                 .as("⚠️ A DAY OF HOURS IN ONE TICK IS A LIST BURST (cost.md rule 2): at most "
-                        + "%d hours a tick", RetentionLoop.MAX_SWEEP_HOURS_PER_TICK)
-                .isBetween(1L, (long) RetentionLoop.MAX_SWEEP_HOURS_PER_TICK);
+                        + "%d hours a tick, plus ONE LIST of the inbox, whose intents' "
+                        + "segments the sweep must keep (M8.14a)",
+                        RetentionLoop.MAX_SWEEP_HOURS_PER_TICK)
+                .isBetween(2L, (long) RetentionLoop.MAX_SWEEP_HOURS_PER_TICK + 1);
     }
 
     @Test

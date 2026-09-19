@@ -90,6 +90,37 @@ public final class InProcessTransport implements SequencerTransport {
         }
     }
 
+    private volatile binjava.binstore.BinStore inboxStore;
+    private volatile String inboxPrefix;
+
+    /**
+     * Lets a peer drain the inbox in {@code store} under {@code prefix}, as the
+     * real route does (M8.14a). ⚠️ Without it a drain is refused, the seam's
+     * safe default, and a pod that deferred keeps deferring.
+     */
+    public InProcessTransport withInbox(binjava.binstore.BinStore store, String prefix) {
+        this.inboxStore = store;
+        this.inboxPrefix = prefix;
+        return this;
+    }
+
+    @Override
+    public void drain(String endpoint, String requester) throws IOException {
+        if (unreachable.contains(endpoint)) {
+            throw new IOException("no answer from " + endpoint + "; the pod is not reachable");
+        }
+        Sequencer peer = peers.get(endpoint);
+        if (peer == null) {
+            throw new NotTheLeaseholderException(
+                    "no sequencer at " + endpoint + " -- it does not hold the lease");
+        }
+        if (inboxStore == null) {
+            SequencerTransport.super.drain(endpoint, requester);
+            return;
+        }
+        InboxDrain.drain(inboxStore, inboxPrefix, peer, requester);
+    }
+
     @Override
     public CommitDelta send(String endpoint, CommitRequest request) throws IOException {
         synchronized (sentTo) {

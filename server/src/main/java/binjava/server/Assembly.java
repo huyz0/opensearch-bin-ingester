@@ -24,6 +24,7 @@ import binjava.ingest.WatermarkTable;
 import binjava.sequencer.Checkpoints;
 import binjava.sequencer.BatchingSequencer;
 import binjava.sequencer.ChainBackfill;
+import binjava.sequencer.InboxDrain;
 import binjava.sequencer.ChainCollector;
 import binjava.sequencer.FleetSequencer;
 import binjava.sequencer.LeaseConfig;
@@ -171,6 +172,9 @@ public final class Assembly implements AutoCloseable {
                             // `LocalSequencer.start`, which M4.9 bounds to a
                             // small constant and tests to the request.
                             ChainBackfill.inBackground(store, config.prefix(), term.chain());
+                            // ⚠️ M8.14a: the intents of pods that died deferring
+                            // have nobody else to ask for a drain.
+                            InboxDrain.inBackground(store, config.prefix(), term);
                             return new BatchingSequencer(term, COMMIT_WINDOW);
                         }), challenge);
         // ⚠️ NOT PUSHED ONTO `toClose`, AND THAT IS NOT AN OMISSION.

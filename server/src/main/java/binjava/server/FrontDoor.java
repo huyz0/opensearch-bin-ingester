@@ -156,7 +156,9 @@ public final class FrontDoor implements AutoCloseable {
                         .register(new HealthService(
                                 () -> gate.ready() && assembly.storeHealthy()))
                         .register(new BulkService(assembly.ingest(), config.principal(), gate))
-                        .register(new CommitService(assembly::heldTerm))
+                        .register(new CommitService(assembly::heldTerm,
+                                (term, pod) -> binjava.sequencer.InboxDrain.drain(
+                                        assembly.store(), config.prefix(), term, pod)))
                         .register(new SubscriptionService(assembly.hub(), assembly.catalog(),
                                 assembly.watermarks(), clock, assembly.floors(), gate)))
                 .build();
