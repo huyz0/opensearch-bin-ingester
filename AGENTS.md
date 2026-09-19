@@ -221,6 +221,7 @@ runs is exactly the list that goes stale:
 | `check-gate-scope.sh` | pre-commit | every gate judges this repository only, never .tmp/ or a sibling checkout |
 | `check-harness-tests.sh` | pre-commit | the harness's own tests run -- buildSrc tests are NOT run by ./gradlew build |
 | `check-module.sh` | pre-commit | architecture.md rules 2/4/5: each module stays inside its dependency surface |
+| `check-override.sh` | pre-commit | M8.41: an override entry's round count and finding ids match the recorded verdicts |
 | `check-adr-refs.sh` | pre-commit | AGENTS.md: every ADR-<n> cited in the tree has a file behind it |
 | `check-javadoc-cites.sh` | pre-commit | M5.56: test citations in src/main javadoc are resolved against the tree |
 | `check-links.sh` | pre-commit | every relative markdown link resolves |
@@ -258,6 +259,7 @@ than the claim:
 | `check-commit-msg`, `check-test-integrity` | ⚠️ **needs explicit invocation** | `pre-commit run --all-files` runs the pre-commit stage only and never fires commit-msg hooks |
 | `check-module` | ✅ **only with `GATE_SCOPE=full`** | its default delta path selects modules from the *staged* diff, which is empty in a fresh checkout, so it would report "no module changed" having built nothing. CI sets `GATE_SCOPE=full` to build all eight |
 | `check-reviewed` | ❌ **cannot** | its evidence lives in `.harness/review/`, gitignored and local to the machine that ran the review. ⚠️ It is a *pre-commit-stage* hook, so `--all-files` **does** invoke it — and with nothing staged it prints `ok nothing staged` and **passes vacuously**. It does not fail, which is worse: a green line that means nothing. CI runs `SKIP=check-reviewed` so the skip is visible in the log instead |
+| `check-override` | ❌ **cannot** | it judges override entries against `.harness/review/`, the same local, gitignored store; with nothing staged it prints `ok` having judged nothing, and a task with no local verdict is reported `UNJUDGED` rather than passed |
 
 ⚠️ **Gates run in `delta` mode by default** — only the files a change touches —
 and print which mode they used. `GATE_SCOPE=full` examines the whole tree and is
