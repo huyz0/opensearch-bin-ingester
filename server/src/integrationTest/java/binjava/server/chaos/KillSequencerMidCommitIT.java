@@ -92,6 +92,10 @@ class KillSequencerMidCommitIT {
 
             for (int round = 0; round < ROUNDS; round++) {
                 awaitAcks(acked, acked.size() + 500);
+                // ⚠️ ACKS NO LONGER MEAN A LIVE TERM (ADR-0058): followers ack on
+                // intents while a killed leader's lease runs out. So the round
+                // waits for the lease to name a running node.
+                awaitLiveTerm(bucket, nodes);
                 Lease lease = bucket.lease().orElseThrow();
                 assertThat(lease.expiresAtMillis())
                         .as("the premise: a live term before round %d", round)
@@ -119,6 +123,17 @@ class KillSequencerMidCommitIT {
                 nodes.add(replacement);
             }
             awaitAcks(acked, acked.size() + 500);
+            // ⚠️ AND THE LAST KILL's SUCCESSOR, AND ITS DRAIN, BEFORE THE AUDIT: the
+            // acks above may all be deferred intents (ADR-0058), which only a
+            // live term's seal and drain turn into committed records.
+            awaitLiveTerm(bucket, nodes);
+            long drainDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(60);
+            while (bucket.keys(ChaosBucket.PREFIX + "/ctl/inbox/0/").stream()
+                    .anyMatch(k -> k.endsWith(".intent"))) {
+                assertThat(System.nanoTime()).as("the inbox never drained")
+                        .isLessThan(drainDeadline);
+                Thread.sleep(100);
+            }
             stop.set(true);
             for (Thread producer : producers) {
                 producer.join(TimeUnit.SECONDS.toMillis(60));
@@ -189,6 +204,21 @@ class KillSequencerMidCommitIT {
         while (acked.size() < target) {
             assertThat(System.nanoTime()).as("acks stalled at %d", acked.size())
                     .isLessThan(deadline);
+            Thread.sleep(100);
+        }
+    }
+
+    /** Waits until the lease is unexpired and names a running node. */
+    private static void awaitLiveTerm(ChaosBucket bucket, List<NodeProcess> nodes)
+            throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(60);
+        while (true) {
+            Lease current = bucket.lease().orElseThrow();
+            if (current.expiresAtMillis() > System.currentTimeMillis()
+                    && nodes.stream().anyMatch(n -> n.podId().equals(current.holderPodId()))) {
+                return;
+            }
+            assertThat(System.nanoTime()).as("no live term").isLessThan(deadline);
             Thread.sleep(100);
         }
     }

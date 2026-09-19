@@ -171,7 +171,13 @@ public final class Assembly implements AutoCloseable {
                             // takeover and off the election's path. HERE, not in
                             // `LocalSequencer.start`, which M4.9 bounds to a
                             // small constant and tests to the request.
-                            ChainBackfill.inBackground(store, config.prefix(), term.chain());
+                            // ⚠️ ONLY A TAKEOVER HAS A CHAIN BELOW IT: the first term
+                            // of a cluster (epoch 1) would otherwise widen its sweep
+                            // over a retention window of empty hours, a LIST each.
+                            if (term.epoch() > 1) {
+                                ChainBackfill.inBackground(store, config.prefix(),
+                                        term.chain());
+                            }
                             // ⚠️ M8.14a: the intents of pods that died deferring
                             // have nobody else to ask for a drain.
                             InboxDrain.inBackground(store, config.prefix(), term);

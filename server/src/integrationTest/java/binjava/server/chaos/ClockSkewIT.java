@@ -130,12 +130,13 @@ class ClockSkewIT {
     }
 
     @Test
-    void aFASTLeaderWhoDIESHoldsTheTermPASTItsTTLAndNothingIsAckedMeanwhile()
+    void aFASTLeaderWhoDIESHoldsTheTermPASTItsTTLAndEveryAckMeanwhileIsANDURABLEIntent()
             throws Exception {
         // ⚠️ THE PREDICTION: a pod 5 min fast writes expiries 5 min further
         // out than a true clock would, so when it dies the others wait for
         // that expiry rather than its TTL. Liveness: failover is delayed by the
-        // skew. Safety: no write is acked while no one can commit. The wait
+        // skew. Safety (ADR-0058): a write acked while no one can commit is acked on a
+        // durable intent, which a leaseholder's drain applies. The wait
         // is NOT sat out -- 20 s past the TTL is the assertion.
         UUID index = UUID.randomUUID();
         List<NodeProcess> nodes = new CopyOnWriteArrayList<>();
@@ -157,10 +158,13 @@ class ClockSkewIT {
             fast.kill();
             long killed = System.nanoTime();
             int acksWhileStuck = 0;
+            Set<String> stuckAcked = new java.util.HashSet<>();
             while (System.nanoTime() - killed < LEASE_TTL.plusSeconds(20).toNanos()) {
                 try {
-                    if (follower.write("stuck-" + System.nanoTime(), 1) == 202) {
+                    String tag = "stuck-" + System.nanoTime();
+                    if (follower.write(tag, 1) == 202) {
                         acksWhileStuck++;
+                        stuckAcked.add(tag + "-0");
                     }
                 } catch (RuntimeException noAnswer) {
                     // expected while nobody can commit
@@ -181,8 +185,22 @@ class ClockSkewIT {
                     .as("⚠️ LIVENESS, AS PREDICTED: NO TAKEOVER WITHIN THE TTL + 20 s, because "
                             + "the dead pod's expiry is its fast clock's")
                     .isEqualTo(fastTerm.epoch());
-            assertThat(acksWhileStuck)
-                    .as("⚠️ SAFETY: NOTHING WAS ACKED WHILE NO ONE COULD COMMIT").isZero();
+            // ⚠️ SINCE ADR-0058 AN ACK WHILE NO ONE CAN COMMIT IS ALLOWED -- on a
+            // DURABLE INTENT, applied when a leaseholder drains. So the safety
+            // claim is that every such ack is named by an intent in the store.
+            Set<String> inIntents = new java.util.HashSet<>();
+            for (String key : bucket.keys(ChaosBucket.PREFIX + "/ctl/inbox/0/")) {
+                if (key.endsWith(".intent")) {
+                    String segment = binjava.format.CommitRequestFrame.decode(bucket.get(key))
+                            .segmentKey();
+                    inIntents.addAll(KillSequencerMidCommitIT
+                            .committedIds(bucket, Set.of(segment)).keySet());
+                }
+            }
+            assertThat(inIntents)
+                    .as("⚠️ SAFETY: EVERY ACK WHILE NO ONE COULD COMMIT IS BACKED BY A DURABLE "
+                            + "INTENT (ADR-0058), so a leaseholder's drain will apply it")
+                    .containsAll(stuckAcked);
             assertThat(audit.violations()).as("⚠️ SAFETY BY EPOCH: I1, I2, I5, THE LINK")
                     .isEmpty();
             assertThat(committed).as("⚠️ AND WHAT WAS ACKED BEFORE THE DEATH SURVIVES IT")
