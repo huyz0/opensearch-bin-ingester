@@ -88,10 +88,11 @@ public final class LocalSequencer implements Sequencer {
     /**
      * What each pod incarnation has already had applied (M4.10d).
      *
-     * <p>⚠️ CONFINED TO THE COMMIT PATH. Every read and write happens inside
-     * {@link #commitAll}, which the lease makes single-writer per epoch, so a
-     * plain map needs no lock -- unlike {@link #checkpoints}, which the renewer
-     * thread also touches and which is therefore {@code volatile}.
+     * <p>⚠️ CONFINED TO THE COMMIT PATH, AND GUARDED BY ITS LOCK. Every read and
+     * write happens inside {@link #commitAll}, which is {@code synchronized}
+     * because a leader has two commit paths at once (M8.49) -- the lease makes
+     * ONE NODE the writer, not one thread. Unlike {@link #checkpoints}, which
+     * the renewer thread also touches and which is therefore {@code volatile}.
      */
     private final IdempotencyWindow window;
 
@@ -489,8 +490,23 @@ public final class LocalSequencer implements Sequencer {
         }
     }
 
+    /**
+     * Commits, one caller at a time.
+     *
+     * <p>⚠️ **SYNCHRONIZED, BECAUSE A LEADER HAS TWO COMMIT PATHS AT ONCE**
+     * (M8.49). Its own flush commits through {@code FleetSequencer}, and every
+     * follower's forwarded commit arrives on a {@code CommitService} handler
+     * thread that calls this directly. {@link CommitLog} is single-writer by
+     * construction: a plain map of offsets and a plain slot counter.
+     * Unserialised, two commits can build their deltas from the same offset
+     * base, which is I2. MEASURED: M8.12's review found slot 8 reassigning
+     * [450,500) after slot 7 had assigned up to 550, inside one epoch. {@code BatchingSequencer} was built to be the
+     * single committer and was never wired. Wiring it also batches, and that
+     * is a cost change with its own row. This is the correctness fix alone,
+     * and it costs nothing a HEAD node had.
+     */
     @Override
-    public CommitDelta commitAll(List<CommitRequest> requests) throws IOException {
+    public synchronized CommitDelta commitAll(List<CommitRequest> requests) throws IOException {
         if (fenced) {
             // ⚠️ REFUSED HERE, BEFORE THE STORE. `CommitLog` would also refuse,
             // because a successor sealed this chain -- but only after a round
@@ -552,9 +568,9 @@ public final class LocalSequencer implements Sequencer {
     /**
      * The append this instance made and never learned the outcome of (M5.23).
      *
-     * <p>⚠️ CONFINED TO THE COMMIT PATH, like {@link #window} and for the same
-     * reason: it is written where an append is made and read where the next one
-     * is classified, both inside {@link #commitAll}.
+     * <p>⚠️ GUARDED BY {@link #commitAll}'s LOCK, like {@link #window}: it is
+     * written where an append is made and read where the next one is
+     * classified, both inside that method.
      */
     private AmbiguousAppendException ambiguousAppend;
 
