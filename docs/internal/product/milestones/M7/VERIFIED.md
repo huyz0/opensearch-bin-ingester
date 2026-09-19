@@ -309,6 +309,7 @@ a test, never that the test asserts what the line says.
   every test and has no named default in the tree, so a wiring that passes 1 is
   a 1,000x DELETE-cost regression that compiles and passes everything.
 - **The T4 `RetentionRefusalIT` the test plan names does not exist** (M7.23).
+  ⚠️ Written by M8.30 as `RetentionRefusalTest`, at T1 in `server`.
   `CeilingAlarmOnGcTest`, also named, is genuinely covered on the real GC path
   by `ConsumerOutageToleranceTest#PASTTheCeilingTheDataGoesAndTheAlarmFIRES` —
   a substitution, recorded here rather than left silent.
