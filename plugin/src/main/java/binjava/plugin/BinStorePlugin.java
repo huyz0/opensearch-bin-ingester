@@ -221,6 +221,15 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
         // restarts -- the whole of M6.15, surviving a class that wires the
         // cycle but that nothing on this path used.
         NodeChannel channel = subscriptions.channel();
+        if (channel == null) {
+            // ⚠️ NAMED, because it is M6.15's failure with nothing else naming it
+            // (M8.35): correct for a bare transport, and a node that never
+            // re-pushes after the ingester restarts.
+            System.getLogger(BinStorePlugin.class.getName()).log(System.Logger.Level.INFO,
+                    "index registrations will not be re-pushed after an ingester restart: "
+                            + "this node's subscriptions are a bare transport, which no "
+                            + "reconnect reaches; install them through a NodeChannel");
+        }
         sink.accept(channel != null ? channel.registrar(pusher)
                 : new IndexRegistrar(subscriptions.transport(), pusher));
     }
