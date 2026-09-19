@@ -39,8 +39,8 @@ written, the cell is wrong and is fixed HERE.
 | M5.91c | `FallbackLadder` — built only by tests, and never EXECUTED (closed by M8.28, criterion 20) | a non-test `src/main` construction, AND a non-test call of its tier-advancing method |
 | M6.15 | `IndexRegistrar.onReconnect()`, called by nothing because no production `SubscriptionTransport` exists | a non-test `src/main` CALL of `onReconnect` |
 | M6.19 | `RoutedIngest` — the routed path, in no deployable server | a non-test `src/main` construction |
-| M7.17 | `ProgressReporter.Positions` — no production source | a non-test `src/main` implementation of `Positions` |
-| M7.18 | the retained-floor frame from GC to the consumer | a non-test `src/main` call of `ConsumerClient.retainedFrom` |
+| M7.17 | `ProgressReporter.Positions` — no production source (M8.43, split out of M8.6) | a non-test `src/main` implementation of `Positions` |
+| M7.18 | the retained-floor frame from GC to the consumer (closed by M8.6, ADR-0056) | a non-test `src/main` call of `ConsumerClient.retainedFrom` |
 | M7.21n | `RetentionPass`, `LeasedGc`, `RetentionObservable` — constructed only by their own tests (closed by M8.5) | a non-test `src/main` construction of each |
 | M7.24 | `ChainGc`, constructed only by its own test (M8.39; split out of M8.5 because every checkpoint source is a read per pass) | a non-test `src/main` construction |
 | M7.25 | the commit chain — **no `src/main` method produces a `List<CommitDelta>`** | a non-test `src/main` method whose return type is `List<CommitDelta>` |

@@ -22,6 +22,38 @@ public interface SubscriptionTransport {
     @FunctionalInterface
     interface Listener {
         void onDelivery(Delivery delivery);
+
+        /**
+         * Told the lowest offset of {@code key} still retained (ADR-0056).
+         *
+         * <p>⚠️ **A NO-OP BY DEFAULT, AND THAT IS CORRECT RATHER THAN A HIDDEN
+         * GAP**: a listener that ignores the floor refuses nothing, which is
+         * the behaviour every consumer had before the floor could travel. What
+         * must not be silent is a listener that OWNS a {@code ConsumerClient}
+         * and drops it -- the consumer then never refuses a collected position
+         * -- and both of those in the tree override this.
+         *
+         * <p>⚠️ **KEYED**, so a router holding many streams on one subscription
+         * can hand it to the right client, exactly as it routes deliveries.
+         */
+        default void onRetainedFloor(RunKey key, long oldestRetainedOffset) {
+        }
+
+        /**
+         * Whether the next poll for {@code key} should ask for the floor
+         * (ADR-0056).
+         *
+         * <p>⚠️ **FALSE BY DEFAULT, AND ASKED PER POLL.** A listener asks only
+         * while a resume is waiting on a fresh floor, so a subscription whose
+         * shards are all tailing never asks and the serving pod never reads
+         * the store on its behalf. An earlier version asked until a floor
+         * arrived and then never again, and review found both halves wrong: a
+         * stream with no floor to give asked for ever, and a stream that had
+         * one never refreshed it for a later resume.
+         */
+        default boolean wantsRetainedFloor(RunKey key) {
+            return false;
+        }
     }
 
     /** Registers interest; closing the handle unsubscribes. */

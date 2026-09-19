@@ -38,6 +38,25 @@ public final class BinStoreShardConsumer
     private volatile long tailOffset = -1;
 
     /**
+     * The position a RESUME asked for, until the retained floor is known and
+     * has been checked against it; -1 when there is nothing left to check.
+     *
+     * <p>⚠️ **KEPT, NOT CHECKED ONCE** (M8.6). The floor arrives on the
+     * subscription, asynchronously, and can land after the resume's first
+     * read. `DefaultStreamPoller` calls the pointer overload only on a forced
+     * or reset pointer and the plain one after that, so a check made only in
+     * the pointer overload, before the floor arrived, would refuse nothing for
+     * the rest of the session.
+     */
+    private volatile long pendingResume = -1;
+
+    /**
+     * The client's floor-report count when the pending resume asked; only a
+     * report past it may clear the resume (ADR-0056).
+     */
+    private volatile long freshAfter;
+
+    /**
      * A consumer over a client it OWNS exclusively: closing this consumer
      * closes the client, because nothing else could be sharing it.
      */
@@ -62,6 +81,12 @@ public final class BinStoreShardConsumer
     @Override
     public List<ReadResult<BinStoreOffset, BinStoreMessage>> readNext(
             BinStoreOffset pointer, boolean includeStart, long maxMessages, int timeoutMillis) {
+        pendingResume = includeStart ? pointer.offset() : pointer.offset() + 1;
+        // ⚠️ A FRESH FLOOR, NOT THE ONE HELD. The client may have learned one
+        // hours ago -- a node running since morning resets a shard in the
+        // afternoon -- and GC has moved since. See `refuseIfCollected`.
+        freshAfter = client.requestFreshFloor();
+        refuseIfCollected();
         List<ReadResult<BinStoreOffset, BinStoreMessage>> out = new ArrayList<>();
         drain(out, maxMessages, timeoutMillis,
                 r -> includeStart ? r.offset() >= pointer.offset() : r.offset() > pointer.offset());
@@ -71,9 +96,55 @@ public final class BinStoreShardConsumer
     @Override
     public List<ReadResult<BinStoreOffset, BinStoreMessage>> readNext(
             long maxMessages, int timeoutMillis) {
+        refuseIfCollected();
         List<ReadResult<BinStoreOffset, BinStoreMessage>> out = new ArrayList<>();
         drain(out, maxMessages, timeoutMillis, r -> true);
         return out;
+    }
+
+    /**
+     * Refuses a resumed position below the retained floor (M7.16, M7.18, M8.6).
+     *
+     * <p>⚠️ **THROWN OUT OF {@code readNext}, WHICH PAUSES THE SHARD, AND THAT
+     * IS THE POINT.** Research 02 §6: an exception from the poll path pauses
+     * that shard until an operator intervenes, readable in
+     * {@code _ingestion/_state}. That is exactly wrong for a gap -- whose
+     * records may still arrive -- and exactly right here, because records below
+     * the floor never will. Raised from consumer CONSTRUCTION instead it would
+     * be swallowed: M6.8 measured {@code DefaultStreamPoller} catching whatever
+     * {@code createShardConsumer} throws, logging at WARN and retrying for ever,
+     * index green and nothing indexed.
+     *
+     * <p>⚠️ **UNCHECKED, CARRYING THE CHECKED ONE.** The SPI's {@code readNext}
+     * declares nothing, so {@link PositionCollectedException} travels as the
+     * cause, with the lost range in its message for the operator who reads it.
+     *
+     * <p>⚠️ **CLEARED ONLY ONCE A FLOOR REPORTED AFTER THE RESUME HAS BEEN
+     * CHECKED AND PASSED.** An ingester that predates ADR-0056 never sends a
+     * floor, so a shard resumed against one keeps CHECKING -- one field per
+     * poll, no request -- while its client's bounded asks run out, and refuses
+     * nothing, which is the behaviour before the floor existed.
+     */
+    private void refuseIfCollected() {
+        long resume = pendingResume;
+        if (resume < 0) {
+            return;
+        }
+        try {
+            client.refuseIfCollected(resume);
+        } catch (binjava.client.PositionCollectedException collected) {
+            throw new java.io.UncheckedIOException("shard " + shardId + " cannot resume: "
+                    + collected.getMessage(), collected);
+        }
+        // ⚠️ CLEARED ONLY BY A FLOOR REPORTED AFTER THE RESUME ASKED. A held
+        // floor may REFUSE -- floors only rise, so it is a true lower bound and
+        // the check above uses it -- but it may not CLEAR: review found a
+        // floor learned hours earlier passing a reset to a position GC had
+        // since collected. Until a fresh one arrives the check simply repeats,
+        // which is a read of one field per poll.
+        if (client.floorReports() > freshAfter) {
+            pendingResume = -1;
+        }
     }
 
     private void drain(List<ReadResult<BinStoreOffset, BinStoreMessage>> out, long maxMessages,

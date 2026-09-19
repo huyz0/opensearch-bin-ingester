@@ -123,7 +123,7 @@ public final class FrontDoor implements AutoCloseable {
                         .register(new BulkService(assembly.ingest(), config.principal()))
                         .register(new CommitService(assembly::heldTerm))
                         .register(new SubscriptionService(assembly.hub(), assembly.catalog(),
-                                assembly.watermarks(), clock)))
+                                assembly.watermarks(), clock, assembly.floors())))
                 .build();
     }
 

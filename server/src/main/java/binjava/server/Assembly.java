@@ -9,6 +9,7 @@ import binjava.ingest.IndexCatalog;
 import binjava.ingest.Ingest;
 import binjava.ingest.SubscriptionHub;
 import binjava.ingest.LeasedGc;
+import binjava.ingest.RetainedFloors;
 import binjava.ingest.RetentionLoop;
 import binjava.ingest.RetentionObservable;
 import binjava.ingest.RetentionRule;
@@ -16,6 +17,7 @@ import binjava.ingest.SegmentGc;
 import binjava.ingest.OrphanSweep;
 import binjava.ingest.StoreGcLease;
 import binjava.ingest.WatermarkTable;
+import binjava.sequencer.Checkpoints;
 import binjava.sequencer.FleetSequencer;
 import binjava.sequencer.LeaseConfig;
 import binjava.sequencer.LeaseManager;
@@ -64,6 +66,7 @@ public final class Assembly implements AutoCloseable {
     private final IndexCatalog catalog;
     private final WatermarkTable watermarks;
     private final RetentionLoop retention;
+    private final RetainedFloors floors;
     private final FleetSequencer sequencer;
     private final DefaultIngest ingest;
     private final Deque<AutoCloseable> toClose = new ArrayDeque<>();
@@ -157,6 +160,14 @@ public final class Assembly implements AutoCloseable {
         toClose.push(this.ingest);
 
         this.retention = retentionLoop(config, store, clock);
+        // ⚠️ THE FLOOR A CONSUMER IS TOLD, READ ON DEMAND (ADR-0056). The epoch
+        // is the one this pod last committed under, known without a request;
+        // below 1 there has been no lease and there is no chain to read.
+        this.floors = new RetainedFloors(() -> {
+            long epoch = sequencer.epoch();
+            return epoch < 1 ? Optional.empty()
+                    : Checkpoints.newest(store, config.prefix(), epoch);
+        }, clock, RetainedFloors.DEFAULT_REFRESH);
         // ⚠️ PUSHED LAST, SO IT IS CLOSED FIRST. `toClose` is a stack, and a
         // retention tick that ran while the writer was closing would read a
         // chain whose term is being released under it -- and take the GC lease
@@ -300,6 +311,17 @@ public final class Assembly implements AutoCloseable {
      */
     public WatermarkTable watermarks() {
         return watermarks;
+    }
+
+    /**
+     * The retained floors this node serves to a consumer that resumes (M8.6).
+     *
+     * <p>⚠️ **ONE PER NODE**, so its refresh bound is per node: a second
+     * instance per service would double the checkpoint reads a reconnect burst
+     * costs.
+     */
+    public RetainedFloors floors() {
+        return floors;
     }
 
     /** The retention loop, for a test that ticks it by hand. */

@@ -27,6 +27,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 public final class NodeSubscriptions implements AutoCloseable {
 
     private final Map<RunKey, Entry> clients = new ConcurrentHashMap<>();
+
     private final AtomicInteger clientsCreated = new AtomicInteger();
     private final int queueCapacity;
     private final SubscriptionTransport transport;
@@ -63,12 +64,49 @@ public final class NodeSubscriptions implements AutoCloseable {
      * running, and the alternative -- resurrecting the entry -- would create a
      * client nobody holds.
      */
-    private final SubscriptionTransport.Listener nodeListener = delivery -> {
-        Entry entry = clients.get(delivery.key());
-        if (entry != null) {
-            entry.client.deliver(delivery);
-        }
-    };
+    private final SubscriptionTransport.Listener nodeListener =
+            new SubscriptionTransport.Listener() {
+                @Override
+                public void onDelivery(binjava.client.Delivery delivery) {
+                    Entry entry = clients.get(delivery.key());
+                    if (entry != null) {
+                        entry.client.deliver(delivery);
+                    }
+                }
+
+                /**
+                 * ⚠️ ROUTED BY KEY, EXACTLY AS DELIVERIES ARE (ADR-0056). A
+                 * lambda here -- which is what this field was before the floor
+                 * could travel -- implements only {@code onDelivery}, so the
+                 * floor would be dropped by the default and no shard on this
+                 * node would ever refuse a collected position.
+                 */
+                @Override
+                public void onRetainedFloor(binjava.format.RunKey key, long oldestRetainedOffset) {
+                    // ⚠️ A CLIENT IS NEVER CREATED HERE, for a delivery's
+                    // reason: it would be one nobody holds. And nothing needs
+                    // remembering for a client that does not exist yet -- a
+                    // floor is sent only to a poll that ASKED, and a poll asks
+                    // only because the client for that key wanted one, so the
+                    // client exists before its floor can arrive.
+                    Entry entry = clients.get(key);
+                    if (entry != null) {
+                        entry.client.retainedFrom(oldestRetainedOffset);
+                    }
+                }
+
+                /**
+                 * ⚠️ FORWARDED BY KEY, like everything else on this router.
+                 * The default answers false, so a router that did not forward
+                 * it would never ask -- and a resumed shard on this node would
+                 * wait on a floor nobody requested, refusing nothing.
+                 */
+                @Override
+                public boolean wantsRetainedFloor(binjava.format.RunKey key) {
+                    Entry entry = clients.get(key);
+                    return entry != null && entry.client.takeFloorAsk();
+                }
+            };
 
     /**
      * ⚠️ ONE REGISTRATION FOR THE NODE, EXTENDED A KEY AT A TIME. It is built

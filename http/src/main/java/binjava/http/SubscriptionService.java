@@ -104,6 +104,15 @@ public final class SubscriptionService implements HttpService {
     }
 
     /**
+     * The production shape: default expiry and session cap, and the floors
+     * this node serves (M8.6).
+     */
+    public SubscriptionService(SubscriptionHub hub, IndexCatalog catalog,
+            WatermarkTable watermarks, Clock clock, binjava.ingest.RetainedFloors floors) {
+        this(hub, catalog, watermarks, IDLE_EXPIRY, clock, MAX_SESSIONS, floors);
+    }
+
+    /**
      * The same, with the idle expiry given.
      *
      * <p>⚠️ **INJECTABLE SO THE SWEEP CAN BE ASSERTED**: at ninety seconds a
@@ -124,6 +133,22 @@ public final class SubscriptionService implements HttpService {
      */
     public SubscriptionService(SubscriptionHub hub, IndexCatalog catalog,
             WatermarkTable watermarks, Duration idleExpiry, Clock clock, int maxSessions) {
+        this(hub, catalog, watermarks, idleExpiry, clock, maxSessions,
+                binjava.ingest.RetainedFloors.unknown());
+    }
+
+    /**
+     * The same, with the retained floors this node serves (M8.6, ADR-0056).
+     *
+     * <p>⚠️ **EVERY OTHER CONSTRUCTOR SERVES FLOORS THAT ARE NEVER KNOWN**,
+     * which is exactly the behaviour before ADR-0056: a floor frame is then
+     * never written, and a consumer's floor stays unknown and refuses nothing.
+     * Only the composition root passes a real one.
+     */
+    public SubscriptionService(SubscriptionHub hub, IndexCatalog catalog,
+            WatermarkTable watermarks, Duration idleExpiry, Clock clock, int maxSessions,
+            binjava.ingest.RetainedFloors floors) {
+        this.floors = Objects.requireNonNull(floors, "floors");
         this.hub = Objects.requireNonNull(hub, "hub");
         this.catalog = Objects.requireNonNull(catalog, "catalog");
         this.watermarks = Objects.requireNonNull(watermarks, "watermarks");
@@ -141,6 +166,18 @@ public final class SubscriptionService implements HttpService {
 
     private final long idleExpiryMillis;
     private final int maxSessions;
+    private final binjava.ingest.RetainedFloors floors;
+
+    /**
+     * The query parameter a consumer sets to be sent its stream's retained
+     * floor (ADR-0056).
+     *
+     * <p>⚠️ **ASKED FOR, NEVER VOLUNTEERED.** Every decoder in {@code format}
+     * refuses a magic it does not know, so an OLD consumer handed a floor
+     * frame would refuse the whole answer it arrived in -- a rolling upgrade of
+     * the ingester would stop every plugin that had not been upgraded first.
+     */
+    public static final String FLOOR_PARAM = HttpSubscriptionTransport.FLOOR_PARAM;
 
     /** How many polls this service has answered, for a request-count assertion. */
     private final java.util.concurrent.atomic.AtomicLong polls =
@@ -236,6 +273,21 @@ public final class SubscriptionService implements HttpService {
         session.lastPolledMillis = clock.millis();
         try {
             java.io.ByteArrayOutputStream body = new java.io.ByteArrayOutputStream();
+            // ⚠️ THE FLOOR GOES FIRST, TO ANY POLL THAT ASKS (ADR-0056). An
+            // earlier version sent it only on the answer that CREATED the
+            // session, and review found the hole: that answer can be lost on
+            // the network, the retry carries the same `sub` id, and the
+            // session never hears its floor. The consumer asks until one
+            // arrives and then stops, so the cost is a cache lookup per poll
+            // only while the floor is unknown to it -- and the cache, not the
+            // poll, is what reads the store.
+            if (request.query().first(FLOOR_PARAM).map("1"::equals).orElse(false)) {
+                java.util.OptionalLong floor = floors.floorOf(key);
+                if (floor.isPresent()) {
+                    writeFrame(body, new binjava.format.RetainedFloor(key, floor.getAsLong())
+                            .encode());
+                }
+            }
             SubscriptionHub.Push first = session.queue.poll(waitFor(request).toMillis(),
                     TimeUnit.MILLISECONDS);
             if (first != null) {

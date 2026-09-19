@@ -122,7 +122,7 @@ public final class ConsumerClient implements AutoCloseable {
             SegmentSource segmentSource) {
         this(key, queueCapacity, segmentSource,
                 client -> Objects.requireNonNull(transport, "transport")
-                        .subscribe(key, client::deliver));
+                        .subscribe(key, client.listener()));
     }
 
     /**
@@ -158,6 +158,39 @@ public final class ConsumerClient implements AutoCloseable {
     }
 
     /**
+     * This client as a subscription listener: deliveries queued, and the
+     * retained floor applied (ADR-0056).
+     *
+     * <p>⚠️ **NOT {@code this::deliver}**, which is what subscribed before the
+     * floor could travel -- a method reference implements only the one
+     * abstract method, so the floor would be dropped by the default and this
+     * client would never refuse a collected position.
+     */
+    private SubscriptionTransport.Listener listener() {
+        return new SubscriptionTransport.Listener() {
+            @Override
+            public void onDelivery(Delivery delivery) {
+                deliver(delivery);
+            }
+
+            @Override
+            public void onRetainedFloor(RunKey floorKey, long oldestRetainedOffset) {
+                // ⚠️ A FLOOR FOR ANOTHER STREAM IS IGNORED, not applied: this
+                // client's refusal is about ITS stream, and applying another's
+                // floor would refuse positions that are fine.
+                if (key.equals(floorKey)) {
+                    retainedFrom(oldestRetainedOffset);
+                }
+            }
+
+            @Override
+            public boolean wantsRetainedFloor(RunKey floorKey) {
+                return key.equals(floorKey) && takeFloorAsk();
+            }
+        };
+    }
+
+    /**
      * Queues one delivery for this stream.
      *
      * <p>⚠️ OFFER, NOT PUT. A full queue must not block the ingester's commit
@@ -172,6 +205,7 @@ public final class ConsumerClient implements AutoCloseable {
      * {@code decodeInto} looks up THIS client's key in the segment and throws
      * if the segment carries no run for it.
      */
+
     public void deliver(Delivery delivery) {
         if (!deliveries.offer(Objects.requireNonNull(delivery, "delivery"))) {
             // ⚠️ COUNTED, NOT LOGGED AND NOT THROWN. This runs on the
@@ -207,6 +241,13 @@ public final class ConsumerClient implements AutoCloseable {
             floorReportsIgnored.increment();
             return;
         }
+        // ⚠️ A REPORT IS AN ANSWER, WHATEVER ITS VALUE. A resume waits for a
+        // floor that arrived AFTER it asked (see `requestFreshFloor`), and a
+        // report lower than what is held is still news that the ingester was
+        // asked and answered -- the held floor, not the report, is what is
+        // checked against.
+        floorAsksLeft.set(0);
+        floorReports.incrementAndGet();
         long floor = retainedFloor.get();
         if (floor == FLOOR_UNKNOWN
                 && retainedFloor.compareAndSet(FLOOR_UNKNOWN, oldestRetainedOffset)) {
@@ -224,6 +265,76 @@ public final class ConsumerClient implements AutoCloseable {
         // this line -- every non-first report -- is deterministic and is pinned
         // by `aHIGHERReportADVANCESTheFloor`.
         retainedFloor.accumulateAndGet(oldestRetainedOffset, Math::max);
+    }
+
+    /**
+     * ⚠️ **HOW MANY POLLS A RESUME MAY SPEND ASKING FOR A FLOOR** (ADR-0056).
+     * Bounded, because asking for one the ingester does not have -- a stream
+     * missing from the newest checkpoint, a term that has not checkpointed yet
+     * -- would otherwise ask for ever, and each ask can cost the serving pod a
+     * store read once per refresh interval: a timer on an idle pod by another
+     * name, which review found in the round that asked until a floor arrived.
+     * At the default poll wait this is a few minutes; past it the shard keeps
+     * checking against whatever it holds, and refuses nothing it cannot prove.
+     */
+    public static final int MAX_FLOOR_ASKS = 8;
+
+    private final java.util.concurrent.atomic.AtomicInteger floorAsksLeft =
+            new java.util.concurrent.atomic.AtomicInteger();
+
+    private final AtomicLong floorReports = new AtomicLong();
+
+    /**
+     * Asks the subscription for a fresh floor, and returns the report count to
+     * wait past (M8.6, ADR-0056).
+     *
+     * <p>⚠️ **CALLED ON A RESUME, AND ONLY THERE.** A floor matters when a
+     * shard asks for a stored position; a shard tailing the stream sits at the
+     * head, far above any floor, and asks for nothing. So a node whose shards
+     * are all tailing asks for no floor and costs no read.
+     *
+     * <p>⚠️ **FRESH, BECAUSE A HELD FLOOR CAN BE HOURS OLD.** One learned at
+     * 09:00 and checked against a reset at 15:00 passes positions GC has since
+     * collected -- and the shard then meets the unnamed 404 this whole change
+     * exists to replace. A held floor may still REFUSE (floors only rise, so it
+     * is a true lower bound), but only one reported after this call may CLEAR
+     * a resume.
+     */
+    public long requestFreshFloor() {
+        long seen = floorReports.get();
+        floorAsksLeft.set(MAX_FLOOR_ASKS);
+        return seen;
+    }
+
+    /** How many floor reports this client has received. */
+    public long floorReports() {
+        return floorReports.get();
+    }
+
+    /**
+     * Whether the next poll should ask for the floor, spending one ask if so.
+     *
+     * <p>⚠️ **SPENT HERE, BY THE POLL THAT ASKS**, so the bound is counted in
+     * polls the ingester actually receives rather than in time this module
+     * cannot read without a clock.
+     */
+    public boolean takeFloorAsk() {
+        return floorAsksLeft.getAndUpdate(n -> n > 0 ? n - 1 : 0) > 0;
+    }
+
+    /**
+     * The retained floor this client has been told, or empty if none yet.
+     *
+     * <p>⚠️ **SO A CALLER CAN TELL "NOT TOLD YET" FROM "FINE".** The floor
+     * arrives on the subscription, asynchronously, and may land after the
+     * first read of a resumed shard; a caller that checked once and moved on
+     * would refuse nothing for the whole session. {@code BinStoreShardConsumer}
+     * keeps asking until this is present.
+     */
+    public java.util.OptionalLong retainedFloor() {
+        long floor = retainedFloor.get();
+        return floor == FLOOR_UNKNOWN ? java.util.OptionalLong.empty()
+                : java.util.OptionalLong.of(floor);
     }
 
     /**

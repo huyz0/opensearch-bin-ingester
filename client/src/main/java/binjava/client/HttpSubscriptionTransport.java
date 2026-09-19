@@ -56,6 +56,18 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport {
     /** {@code POST} target for an index's shape (ADR-0047). */
     public static final String REGISTER_PATH = "/ctl/register";
 
+    /**
+     * Set to {@code 1} on a poll to be sent the stream's retained floor
+     * (ADR-0056).
+     *
+     * <p>⚠️ **THIS TRANSPORT ASKS WHEN ITS LISTENER WANTS ONE**, which is
+     * while a resume waits on a fresh floor, for a bounded number of polls.
+     * An ingester that predates ADR-0056 ignores the parameter and sends none;
+     * the asks run out and the floor stays unknown -- the behaviour before it
+     * existed.
+     */
+    public static final String FLOOR_PARAM = "floor";
+
     /** {@code POST} target for a node's consumer progress (ADR-0049). */
     public static final String PROGRESS_PATH = "/ctl/progress";
 
@@ -179,6 +191,7 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport {
     }
 
     private void readForever(RunKey key, String id, Listener listener, AtomicBoolean stopped) {
+
         Duration backoff = retryFloor;
         boolean connected = false;
         while (!stopped.get() && !closed.get()) {
@@ -192,6 +205,9 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport {
             try (HttpClientResponse response = client.get(path(key))
                     .queryParam("wait", String.valueOf(wait.toMillis()))
                     .queryParam("sub", id)
+                    // ⚠️ ASKED PER POLL OF THE LISTENER, which asks only while
+                    // a resume waits on a fresh floor (ADR-0056).
+                    .queryParam(FLOOR_PARAM, listener.wantsRetainedFloor(key) ? "1" : "0")
                     .request()) {
                 if (response.status().code() != Status.OK_200.code()) {
                     throw new IOException("subscribe answered " + response.status());
@@ -246,6 +262,14 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport {
         while ((frame = StreamFraming.readFrame(in)) != null) {
             if (stopped.get() || closed.get()) {
                 return;
+            }
+            // ⚠️ DISPATCHED BY MAGIC, NOT BY TRYING ONE DECODER AND CATCHING
+            // THE OTHER's REFUSAL: the answer is mixed since ADR-0056, and a
+            // torn EVENT read as "not a floor, move on" would drop records.
+            if (binjava.format.RetainedFloor.isRetainedFloor(frame)) {
+                binjava.format.RetainedFloor floor = binjava.format.RetainedFloor.decode(frame);
+                listener.onRetainedFloor(floor.key(), floor.oldestRetainedOffset());
+                continue;
             }
             listener.onDelivery(deliveryFor(SubscriptionEvent.decode(frame)));
         }
