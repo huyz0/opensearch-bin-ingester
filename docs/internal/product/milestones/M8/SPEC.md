@@ -26,25 +26,29 @@ counted, because every count this project has written for a set like this has
 been short.
 
 ⚠️ **THE THIRD COLUMN IS `check-wired.sh`'s INPUT, NOT A DESCRIPTION OF IT.**
+Its grammar is in `scripts/wired_scan.py`'s docstring (M8.25): each backticked
+span is one predicate and every one must hold, so a cell carries no other
+backticks. The fourth column names the open row that owns an entry still
+unwired; a `done` owner, or none, fails the gate.
 The script READS this table and turns each cell into its search; it does not
 carry its own copy, because a copy in a file no spec reviewer opens is where
 this set has already gone stale three times. If a cell cannot be mechanised as
 written, the cell is wrong and is fixed HERE.
 
-| Entry | What is unwired | What `check-wired.sh` accepts as wired |
-|---|---|---|
-| M5.6e | the production `SequencerTransport` — `InProcessTransport` in `testFixtures` is the only implementation | a non-test `src/main` CONSTRUCTION of a `SequencerTransport` implementation |
-| M5.91a | no production `main()` (closed by M8.4) | a `public static void main` in `src/main` |
-| M5.91b | `SegmentPrefetcher`, `NodeSegmentSource`, `NodeSubscriptions` — built only by tests (closed by M8.31 for the last two, and by M8.56 for `SegmentPrefetcher`) | a non-test `src/main` construction of each of the three |
-| M5.91c | `FallbackLadder` — built only by tests, and never EXECUTED (closed by M8.28, criterion 20) | a non-test `src/main` construction, AND a non-test call of its tier-advancing method |
-| M6.15 | `IndexRegistrar.onReconnect()`, called by nothing because no production `SubscriptionTransport` exists | a non-test `src/main` CALL of `onReconnect` |
-| M6.19 | `RoutedIngest` — the routed path, in no deployable server | a non-test `src/main` construction |
-| M7.17 | `ProgressReporter.Positions` — no production source (M8.43, split out of M8.6) | a non-test `src/main` implementation of `Positions` |
-| M7.18 | the retained-floor frame from GC to the consumer (closed by M8.6, ADR-0056) | a non-test `src/main` call of `ConsumerClient.retainedFrom` |
-| M7.21n | `RetentionPass`, `LeasedGc`, `RetentionObservable` — constructed only by their own tests (closed by M8.5) | a non-test `src/main` construction of each |
-| M7.24 | `ChainGc`, constructed only by its own test (M8.39; split out of M8.5 because every checkpoint source is a read per pass) | a non-test `src/main` construction |
-| M7.25 | the commit chain — **no `src/main` method produces a `List<CommitDelta>`** | a non-test `src/main` method whose return type is `List<CommitDelta>` |
-| M7.26 | the delete batch size — no named default in the tree | a `DEFAULT_DELETE_BATCH` constant in `src/main`, referenced by the root |
+| Entry | What is unwired | What `check-wired.sh` accepts as wired | Else owned by |
+|---|---|---|---|
+| M5.6e | the production `SequencerTransport` — `InProcessTransport` in `testFixtures` is the only implementation | `new-impl SequencerTransport` (a construction of an implementation) | — |
+| M5.91a | no production `main()` (closed by M8.4) | `main` | — |
+| M5.91b | `SegmentPrefetcher`, `NodeSegmentSource`, `NodeSubscriptions` — built only by tests (closed by M8.31 for the last two, and by M8.56 for `SegmentPrefetcher`) | `new SegmentPrefetcher`; `new NodeSegmentSource`; `new NodeSubscriptions` | M8.56 |
+| M5.91c | `FallbackLadder` — built only by tests, and never EXECUTED (closed by M8.28, criterion 20) | `new FallbackLadder`; `call tierFor` (constructed AND run) | M8.28 |
+| M6.15 | `IndexRegistrar.onReconnect()`, called by nothing because no production `SubscriptionTransport` exists | `call onReconnect` | — |
+| M6.19 | `RoutedIngest` — the routed path, in no deployable server | `new RoutedIngest` | — |
+| M7.17 | `ProgressReporter.Positions` — no production source (M8.43, split out of M8.6) | `implements Positions` | — |
+| M7.18 | the retained-floor frame from GC to the consumer (closed by M8.6, ADR-0056) | `call retainedFrom` | — |
+| M7.21n | `RetentionPass`, `LeasedGc`, `RetentionObservable` — constructed only by their own tests (closed by M8.5) | `new RetentionPass`; `new LeasedGc`; `new RetentionObservable` | — |
+| M7.24 | `ChainGc`, constructed only by its own test (M8.39; split out of M8.5 because every checkpoint source is a read per pass) | `new ChainGc` | — |
+| M7.25 | the commit chain — **no `src/main` method produces a `List<CommitDelta>`** | `new ChainMemory` (closed by M8.3: the chain is a Snapshot record component, which a method-return predicate could not see) | — |
+| M7.26 | the delete batch size — no named default in the tree | `constant DEFAULT_DELETE_BATCH in server` (named, and read by the root) | — |
 
 ⚠️ **EACH ENTRY CARRIES ITS OWN PREDICATE, BECAUSE A SINGLE ONE DOES NOT FIT.**
 Round 2 tightened the predicate from "referenced" to "constructed" — correctly,

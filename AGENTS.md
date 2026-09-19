@@ -222,6 +222,7 @@ runs is exactly the list that goes stale:
 | `check-harness-tests.sh` | pre-commit | the harness's own tests run -- buildSrc tests are NOT run by ./gradlew build |
 | `check-module.sh` | pre-commit | architecture.md rules 2/4/5: each module stays inside its dependency surface |
 | `check-override.sh` | pre-commit | M8.41: an override entry's round count and finding ids match the recorded verdicts |
+| `check-wired.sh` | pre-commit | M8.25: every entry of M8's unwired set is wired or owned by an open row |
 | `check-adr-refs.sh` | pre-commit | AGENTS.md: every ADR-<n> cited in the tree has a file behind it |
 | `check-javadoc-cites.sh` | pre-commit | M5.56: test citations in src/main javadoc are resolved against the tree |
 | `check-links.sh` | pre-commit | every relative markdown link resolves |

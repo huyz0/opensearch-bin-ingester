@@ -82,6 +82,13 @@ repos:
         stages: [pre-commit]
         pass_filenames: false
         always_run: true
+      - id: check-wired
+        name: "M8.25: every entry of M8's unwired set is wired or owned by an open row"
+        entry: scripts/check-wired.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
       - id: check-adr-refs
         name: "AGENTS.md: every ADR-<n> cited in the tree has a file behind it"
         entry: scripts/check-adr-refs.sh
