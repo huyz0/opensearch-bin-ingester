@@ -65,9 +65,9 @@ public record LeaseConfig(String prefix, String podId, String endpoint,
             // it. ⚠️ This bound is NECESSARY, not sufficient: at ttl=10s,
             // renewInterval=9s is accepted and there a single missed renew is
             // still terminal. The corpus's TTL/3 is what makes one miss
-            // survivable, but the RATIO is measurement M1's to settle at M8 --
-            // so this refuses the incoherent case and leaves the policy to the
-            // milestone that has the data.
+            // survivable. Measurement M1 (M8.27) measured ONE ratio, the
+            // shipped 10 s / 3 s; others are unmeasured, so this refuses only
+            // the incoherent case.
             throw new IllegalArgumentException(
                     "renewInterval must be shorter than ttl: " + renewInterval + " >= " + ttl);
         }

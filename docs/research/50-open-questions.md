@@ -155,7 +155,7 @@ where it will be settled.
 
 | # | Constant | Settled by |
 |---|---|---|
-| M1 | Lease TTL and challenge policy under realistic GC pauses | M8 chaos suite |
+| M1 | Lease TTL and challenge policy under realistic GC pauses | M8 chaos suite — ⚠️ **MEASURED at the shipped 10 s TTL / 3 s renew** (M8.27, `LeaseTtlMeasurementIT`): `SIGSTOP` pauses of 2, 4, 6, 8 and 9 s caused no takeover; 11, 12 and 20 s caused exactly one, 10.28–10.33 s after the stop over two runs; nothing acked was lost. The absorbed pause is the TTL itself, whatever the renew phase, because a follower elects only when a forwarded commit times out and that timeout is the TTL (M8.12). The defaults stand. ⚠️ **The challenge half is NOT measured, and M8.55 owns it**: an early challenge needs `EndpointSlice` evidence (M8.13), which nothing in this measurement produces; in a cluster, a pause longer than the readiness probe's failure window would be taken over BEFORE the TTL |
 | M2 | Block size and compression codec | M9, benchmark B3 |
 | M3 | The fan-out threshold for `direct` mode, given real S3 TTFB variance (the §1 table in fetch-modes is **modelled, not measured**) | M9, tier-2 harness |
 | M4 | Compaction trigger threshold (Q17) | after M9, from the metric collected from M4 |

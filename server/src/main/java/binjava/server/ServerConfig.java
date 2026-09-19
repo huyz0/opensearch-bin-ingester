@@ -29,8 +29,8 @@ import java.util.Set;
  * @param store which backend, by name
  * @param leaseTtl how long a lease outlives its holder's last renewal
  * @param leaseRenewInterval how often the holder renews. ⚠️ Measurement M1
- *     (M8.27) is what sizes these two against a realistic pause; until then
- *     they are a configured guess and the SPEC says so
+ *     (M8.27) sized the defaults of these two against pauses of 2-20 s; see
+ *     {@code ServerProperties.DEFAULT_LEASE_TTL}
  * @param endpoint where peers reach this pod's sequencer
  * @param ingest the write path's own tunables, which have their own defaults
  * @param httpPort the port the front door listens on, ⚠️ **0 meaning "ask the

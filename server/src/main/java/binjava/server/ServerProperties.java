@@ -102,9 +102,13 @@ public final class ServerProperties {
     public static final String MEMBERSHIP_CA_FILE = "membership.ca-file";
 
     /**
-     * ⚠️ 10 s and 3 s are a CONFIGURED GUESS, not a measurement — measurement
-     * M1 (M8.27) is what sizes them against a realistic pause, and until it
-     * runs these defaults are what M4 chose deliberately rather than hardcode.
+     * ⚠️ 10 s and 3 s are MEASURED (M1, M8.27): a SIGSTOP of 2 to 9 s caused
+     * no takeover, and one of 11, 12 or 20 s exactly one, 10.28-10.33 s (two runs) after
+     * the stop. The absorbed pause is the TTL whatever the renew phase, because
+     * a follower elects only when a forwarded commit times out, and that
+     * timeout IS the TTL (M8.12). ⚠️ THESE NUMBERS ARE OF THESE VALUES: a change
+     * to either default is a re-run of {@code LeaseTtlMeasurementIT}, and this
+     * comment changes with it.
      */
     static final Duration DEFAULT_LEASE_TTL = Duration.ofSeconds(10);
 
