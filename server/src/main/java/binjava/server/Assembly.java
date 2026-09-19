@@ -23,6 +23,7 @@ import binjava.ingest.StoreGcLease;
 import binjava.ingest.WatermarkTable;
 import binjava.sequencer.Checkpoints;
 import binjava.sequencer.BatchingSequencer;
+import binjava.sequencer.ChainBackfill;
 import binjava.sequencer.ChainCollector;
 import binjava.sequencer.FleetSequencer;
 import binjava.sequencer.LeaseConfig;
@@ -164,7 +165,14 @@ public final class Assembly implements AutoCloseable {
         LeaseManager manager = new LeaseManager(store, leases, clock, challenge);
         this.sequencer = new FleetSequencer(store, leases, transport,
                 () -> LocalSequencer.start(store, config.prefix(), manager, SEAL_REDRIVE_BUDGET)
-                        .map(term -> new BatchingSequencer(term, COMMIT_WINDOW)), challenge);
+                        .map(term -> {
+                            // ⚠️ M8.42: THE CHAIN BELOW THE REPLAY, read once per
+                            // takeover and off the election's path. HERE, not in
+                            // `LocalSequencer.start`, which M4.9 bounds to a
+                            // small constant and tests to the request.
+                            ChainBackfill.inBackground(store, config.prefix(), term.chain());
+                            return new BatchingSequencer(term, COMMIT_WINDOW);
+                        }), challenge);
         // ⚠️ NOT PUSHED ONTO `toClose`, AND THAT IS NOT AN OMISSION.
         // `DefaultIngest.close()` closes the sequencer it was given and says so
         // in its own javadoc, and `FleetSequencer.close()` has no idempotence

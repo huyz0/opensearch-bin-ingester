@@ -28,6 +28,12 @@ request rate may NEVER scale with: records, shards, partitions, indices, documen
    is quoting the rejected operating point.
 2. **Never `LIST` on a hot path.** A LIST costs the same as a PUT — 12.5 GETs.
    Recovery and GC only.
+2b. **A takeover reads the chain below its replay ONCE** (M8.42,
+   `ChainBackfill`): one LIST per 1,000 chain keys plus one GET per surviving
+   chain entry, off the election's path. It scales with the deltas a retention
+   window holds, and is paid per TAKEOVER, never per pass -- a pass reads the
+   chain from memory. The orphan sweep it unlocks is paced to
+   `RetentionLoop.MAX_SWEEP_HOURS_PER_TICK` hour LISTs a tick.
 3. **Idle consumers issue zero requests.** At 120,000 shards a naive poll costs
    $1.2M/month as GETs, $15.5M as LISTs, doing nothing.
 4. **Always coalesce adjacent reads.** Same-region bytes are free; requests are not.

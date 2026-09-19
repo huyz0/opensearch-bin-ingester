@@ -164,6 +164,12 @@ public final class RetentionLoop {
     /** The first hour the sweep may enter for {@link #seen}, as epoch millis. */
     private long nextSweepHourMillis;
 
+    /** {@link #SKEW_MARGIN} after {@link #seen} was first seen: the bound without the floor. */
+    private long marginHourMillis;
+
+    /** Whether {@link #seen}'s sweep has been opened back to the retention window. */
+    private boolean widened;
+
     /**
      * @param prefix the key prefix segments live under -- the same one the
      *     writer uses, or the sweep lists a directory nothing writes to
@@ -264,12 +270,26 @@ public final class RetentionLoop {
         termTicks.incrementAndGet();
         if (term.chain() != seen) {
             seen = term.chain();
-            nextSweepHourMillis = hourCeiling(clock.millis() + SKEW_MARGIN.toMillis());
+            marginHourMillis = hourCeiling(clock.millis() + SKEW_MARGIN.toMillis());
+            nextSweepHourMillis = marginHourMillis;
+            widened = false;
         }
 
         ChainMemory.Snapshot snapshot = term.chain().snapshot();
+        if (snapshot.fromFloor() && !widened) {
+            // ⚠️ THE KEEP LIST NOW REACHES THE FLOOR (M8.42), so the hours before
+            // this term are safe to enter: every committed segment is named.
+            // Bounded by the maximum retention -- older hours were a previous
+            // term's to sweep, and listing back to the start of time is a LIST
+            // per hour the cluster has ever had.
+            nextSweepHourMillis = Math.min(nextSweepHourMillis,
+                    hourCeiling(clock.millis() - rule.maxRetention().toMillis()));
+            widened = true;
+        }
         boolean retentionDue = anyPastTheFloor(snapshot.deltas());
-        List<Long> sweepHours = snapshot.complete() ? dueHours() : List.of();
+        List<Long> sweepHours = snapshot.complete()
+                ? dueHours(snapshot.fromFloor() ? Long.MIN_VALUE : marginHourMillis)
+                : List.of();
         if (!retentionDue && sweepHours.isEmpty()) {
             // ⚠️ THE IDLE PATH: no lease request, no LIST, no GET -- when
             // nothing is past the floor. See the class javadoc for what the
@@ -319,16 +339,33 @@ public final class RetentionLoop {
 
     private static final long HOUR_MILLIS = Duration.ofHours(1).toMillis();
 
+    /**
+     * ⚠️ **A TAKEOVER's CATCH-UP IS PACED** (M8.42): a chain that reaches the
+     * floor opens up to a retention window of hours at once, and listing them
+     * all in one tick is a burst of LISTs, which cost.md rule 2 allows to
+     * recovery and GC only and never in bulk on one tick.
+     */
+    public static final int MAX_SWEEP_HOURS_PER_TICK = 4;
+
     private static long hourCeiling(long millis) {
         return Math.ceilDiv(millis, HOUR_MILLIS) * HOUR_MILLIS;
     }
 
-    /** Hours this term may sweep that are now wholly a grace in the past. */
-    private List<Long> dueHours() {
+    /**
+     * Hours this term may sweep that are now wholly a grace in the past, at
+     * most {@link #MAX_SWEEP_HOURS_PER_TICK} of them.
+     *
+     * @param notBefore the earliest hour the keep list is safe for: the margin,
+     *     unless the chain reaches the floor -- ⚠️ re-applied every tick, so a
+     *     cap that evicts a backfilled delta closes the hours it opened
+     */
+    private List<Long> dueHours(long notBefore) {
         long now = clock.millis();
         List<Long> hours = new ArrayList<>();
-        for (long hour = nextSweepHourMillis;
-                hour + HOUR_MILLIS + orphanGrace.toMillis() <= now; hour += HOUR_MILLIS) {
+        for (long hour = Math.max(nextSweepHourMillis, notBefore);
+                hour + HOUR_MILLIS + orphanGrace.toMillis() <= now
+                        && hours.size() < MAX_SWEEP_HOURS_PER_TICK;
+                hour += HOUR_MILLIS) {
             hours.add(hour);
         }
         return hours;

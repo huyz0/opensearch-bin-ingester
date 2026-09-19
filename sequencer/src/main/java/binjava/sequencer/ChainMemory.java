@@ -73,9 +73,12 @@ public final class ChainMemory {
      *     re-condemns this term's segments on every later pass. ⚠️ Both are 0
      *     on an empty snapshot, which a caller must not forget through: there
      *     is nothing to forget, and {@code deltas.isEmpty()} is the check.
+     * @param fromFloor whether this chain holds every surviving delta back to
+     *     the retention floor (M8.42) -- the one condition under which a keep
+     *     list taken from it is safe for hours before this term began
      */
     public record Snapshot(List<CommitDelta> deltas, boolean complete, long firstEpoch,
-            long firstSequence, long lastEpoch, long lastSequence) {
+            long firstSequence, long lastEpoch, long lastSequence, boolean fromFloor) {
 
         public Snapshot {
             deltas = List.copyOf(Objects.requireNonNull(deltas, "deltas"));
@@ -102,6 +105,9 @@ public final class ChainMemory {
     private final int maxDeltas;
     private final Deque<EpochDelta> deltas = new ArrayDeque<>();
     private boolean complete = true;
+
+    /** Whether a backfill has reached the retention floor (M8.42); see {@link #backfill}. */
+    private boolean fromFloor;
 
     /**
      * ⚠️ **ONLY MEANINGFUL WHILE THE DEQUE IS EMPTY.** Where it holds anything,
@@ -191,6 +197,7 @@ public final class ChainMemory {
     synchronized void reset() {
         deltas.clear();
         complete = true;
+        fromFloor = false;
         emptyEpoch = 0;
         emptySequence = 0;
         lastEpoch = -1;
@@ -220,11 +227,11 @@ public final class ChainMemory {
         }
         if (deltas.isEmpty()) {
             return new Snapshot(copy, complete, emptyEpoch, emptySequence, emptyEpoch,
-                    emptySequence);
+                    emptySequence, fromFloor && complete);
         }
         return new Snapshot(copy, complete, deltas.peekFirst().epoch(),
                 deltas.peekFirst().delta().sequence(), deltas.peekLast().epoch(),
-                deltas.peekLast().delta().sequence());
+                deltas.peekLast().delta().sequence(), fromFloor && complete);
     }
 
     /**
@@ -300,6 +307,39 @@ public final class ChainMemory {
             emptySequence = last.delta().sequence() + 1;
         }
         return dropped;
+    }
+
+    /**
+     * Prepends what a takeover read BELOW its replay, and marks the chain as
+     * reaching the retention floor (M8.42).
+     *
+     * <p>⚠️ **ONLY WHAT IS OLDER THAN THE FIRST HELD DELTA IS TAKEN**, so a
+     * backfill racing a commit cannot duplicate or reorder anything; the
+     * caller's boundary and this one agree by construction.
+     *
+     * <p>⚠️ **{@link Snapshot#fromFloor} IS WHAT LETS THE SWEEP ENTER HOURS
+     * BEFORE THIS TERM**, and it is only true while nothing has been dropped:
+     * the cap evicting a backfilled delta takes the claim with it.
+     */
+    public synchronized void backfill(List<ChainGc.DeltaAt> older) {
+        Objects.requireNonNull(older, "older");
+        EpochDelta first = deltas.peekFirst();
+        List<ChainGc.DeltaAt> taken = new ArrayList<>();
+        for (ChainGc.DeltaAt at : older) {
+            if (first == null || at.epoch() < first.epoch()
+                    || (at.epoch() == first.epoch()
+                            && at.sequence() < first.delta().sequence())) {
+                taken.add(at);
+            }
+        }
+        for (int i = taken.size() - 1; i >= 0; i--) {
+            deltas.addFirst(new EpochDelta(taken.get(i).epoch(), taken.get(i).delta()));
+        }
+        while (deltas.size() > maxDeltas) {
+            deltas.removeFirst();
+            complete = false;
+        }
+        fromFloor = true;
     }
 
     /** What chain GC may judge: deltas forgotten here whose objects are still there. */

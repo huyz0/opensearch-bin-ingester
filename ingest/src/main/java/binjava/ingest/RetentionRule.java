@@ -153,6 +153,11 @@ public final class RetentionRule {
     private final Alarm alarm;
     private final Watermarks watermarks;
 
+    /** The ceiling past which a segment is deleted whatever any consumer read. */
+    public Duration maxRetention() {
+        return maxRetention;
+    }
+
     public RetentionRule(Clock clock, Duration minRetention, Duration maxRetention,
             long safetyMargin, Alarm alarm, Watermarks watermarks) {
         this.clock = Objects.requireNonNull(clock, "clock");
