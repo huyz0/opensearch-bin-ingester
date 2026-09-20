@@ -23,6 +23,7 @@ class ServerPropertiesTest {
     private static Map<String, String> minimal() {
         Map<String, String> settings = new HashMap<>();
         settings.put(ServerProperties.POD_ID, "pod1");
+        settings.put(ServerProperties.POD_AZ, "az-a");
         settings.put(ServerProperties.TRUST_DOMAIN, "cluster-a");
         settings.put(ServerProperties.PREFIX, "bins/cluster-a");
         settings.put(ServerProperties.STORE_KIND, "memory");
@@ -81,8 +82,9 @@ class ServerPropertiesTest {
 
     @Test
     void aMISSINGRequiredSettingIsREFUSEDAndTheMessageNamesTheKEY() {
-        for (String key : new String[] {ServerProperties.POD_ID, ServerProperties.TRUST_DOMAIN,
-                ServerProperties.PREFIX, ServerProperties.STORE_KIND, ServerProperties.ENDPOINT}) {
+        for (String key : new String[] {ServerProperties.POD_ID, ServerProperties.POD_AZ,
+                ServerProperties.TRUST_DOMAIN, ServerProperties.PREFIX,
+                ServerProperties.STORE_KIND, ServerProperties.ENDPOINT}) {
             Map<String, String> settings = minimal();
             settings.remove(key);
             assertThatThrownBy(() -> ServerProperties.parse(settings))
@@ -211,6 +213,7 @@ class ServerPropertiesTest {
     void aSTOREROOTIsCARRIEDThroughToTheStoreConfig() {
         ServerConfig config = ServerProperties.parse(new HashMap<>(Map.of(
                 ServerProperties.POD_ID, "pod1",
+                ServerProperties.POD_AZ, "az-a",
                 ServerProperties.TRUST_DOMAIN, "cluster-a",
                 ServerProperties.PREFIX, "bins/cluster-a",
                 ServerProperties.STORE_KIND, "local-fs",
@@ -314,6 +317,6 @@ class ServerPropertiesTest {
         assertThat(ServerProperties.knownKeys())
                 .contains(ServerProperties.POD_ID, ServerProperties.ENDPOINT,
                         ServerProperties.STORE_KIND)
-                .hasSize(28);
+                .hasSize(29);
     }
 }

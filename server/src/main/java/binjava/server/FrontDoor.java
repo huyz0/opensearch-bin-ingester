@@ -76,12 +76,28 @@ public final class FrontDoor implements AutoCloseable {
      */
     public static FrontDoor start(Assembly assembly, Clock clock,
             java.util.function.Consumer<String> journal) {
+        return start(assembly, clock, journal, binjava.binstore.CrossAzBytes.untracked());
+    }
+
+    /**
+     * The same, counting the bytes this node serves to a consumer in another
+     * zone (M9.2, NFR-5).
+     *
+     * <p>⚠️ **THE COUNTER IS THE NODE'S, NOT THE DOOR'S**, and it is passed in
+     * rather than built here because the peer transport counts into the same
+     * one: NFR-5 is one ratio per pod, and two counters would be two partial
+     * answers with nothing saying so.
+     */
+    public static FrontDoor start(Assembly assembly, Clock clock,
+            java.util.function.Consumer<String> journal,
+            binjava.binstore.CrossAzBytes crossAz) {
+        Objects.requireNonNull(crossAz, "crossAz");
         Objects.requireNonNull(assembly, "assembly");
         Objects.requireNonNull(journal, "journal");
         Objects.requireNonNull(clock, "clock");
         ServerConfig config = assembly.config();
         DrainGate gate = new DrainGate(journal);
-        WebServer server = build(config, assembly, clock, gate);
+        WebServer server = build(config, assembly, clock, gate, crossAz);
         try {
             server.start();
         } catch (RuntimeException notBound) {
@@ -137,7 +153,7 @@ public final class FrontDoor implements AutoCloseable {
     }
 
     private static WebServer build(ServerConfig config, Assembly assembly, Clock clock,
-            DrainGate gate) {
+            DrainGate gate, binjava.binstore.CrossAzBytes crossAz) {
         return WebServer.builder()
                 // ⚠️ HELIDON'S OWN SHUTDOWN HOOK IS OFF. Left on, a `SIGTERM`
                 // runs it alongside `Main`'s, and it stops the listener while
@@ -160,7 +176,7 @@ public final class FrontDoor implements AutoCloseable {
                                 (term, pod) -> binjava.sequencer.InboxDrain.drain(
                                         assembly.store(), config.prefix(), term, pod)))
                         .register(new SubscriptionService(assembly.hub(), assembly.catalog(),
-                                assembly.watermarks(), clock, assembly.floors(), gate)))
+                                assembly.watermarks(), clock, assembly.floors(), gate, crossAz)))
                 .build();
     }
 

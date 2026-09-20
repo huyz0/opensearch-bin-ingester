@@ -39,7 +39,7 @@ class AssemblyBatchingTest {
     private static final int COMMITS = 8;
 
     private static ServerConfig config() {
-        return new ServerConfig("pod1", "cluster-a", "bins/cluster-a",
+        return new ServerConfig("pod1", "az-a", "cluster-a", "bins/cluster-a",
                 new StoreConfig("memory", Optional.empty()),
                 Duration.ofSeconds(10), Duration.ofSeconds(3), "http://pod1:8080",
                 IngestConfig.defaults("cluster-a"), 0, "producer-1", java.util.Set.of("logs"));

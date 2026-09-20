@@ -32,6 +32,7 @@ class ProcessSettingsTest {
     private static Map<String, String> minimal() {
         Map<String, String> settings = new HashMap<>();
         settings.put(ServerProperties.POD_ID, "pod1");
+        settings.put(ServerProperties.POD_AZ, "az-a");
         settings.put(ServerProperties.TRUST_DOMAIN, "cluster-a");
         settings.put(ServerProperties.PREFIX, "bins/cluster-a");
         settings.put(ServerProperties.STORE_KIND, "memory");

@@ -35,7 +35,7 @@ class AssemblyBackfillTest {
     private static final String PREFIX = "bins/cluster-a";
 
     private static ServerConfig config(String pod) {
-        return new ServerConfig(pod, "cluster-a", PREFIX,
+        return new ServerConfig(pod, "az-a", "cluster-a", PREFIX,
                 new StoreConfig("memory", Optional.empty()),
                 Duration.ofSeconds(10), Duration.ofSeconds(3), "http://" + pod + ":8080",
                 IngestConfig.defaults("cluster-a"), 0, "producer-1", Set.of("logs"));

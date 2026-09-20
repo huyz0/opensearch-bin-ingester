@@ -97,6 +97,7 @@ class IdlePodCostSoakTest {
         Pod(String podId, int subscribers) throws Exception {
             Map<String, String> settings = new HashMap<>();
             settings.put(ServerProperties.POD_ID, podId);
+            settings.put(ServerProperties.POD_AZ, "az-a");
             settings.put(ServerProperties.TRUST_DOMAIN, "cluster-a");
             settings.put(ServerProperties.PREFIX, "bins/" + podId);
             settings.put(ServerProperties.STORE_KIND, "memory");

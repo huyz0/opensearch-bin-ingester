@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package binjava.http;
 
+import binjava.binstore.CrossAzBytes;
 import binjava.client.HttpSubscriptionTransport;
 import binjava.format.ConsumerProgress;
 import binjava.format.FetchMode;
@@ -112,7 +113,32 @@ public final class SubscriptionService implements HttpService {
     /** ⚠️ The same 1 MiB cap the commit route uses, for the same reason. */
     static final long MAX_FRAME_BYTES = 1L << 20;
 
+    /**
+     * Where a poll declares the zone its consumer is in (M9.2, NFR-5).
+     *
+     * <p>⚠️ **OPTIONAL, AND ITS ABSENCE IS NOT SILENT.** A consumer that sends
+     * no zone -- every consumer built before M9.2 -- has its bytes counted as
+     * CROSS-AZ and reported as unattributed ({@link CrossAzBytes}), because a
+     * cost report that quietly zeroed them would read as a fleet in one zone.
+     * An ingester that predates this parameter ignores it, which is the
+     * behaviour before it existed.
+     *
+     * <p>⚠️ **IT IS AN UNVALIDATED SELF-REPORT, AND IT IS ACCOUNTING-ONLY.**
+     * Nothing here checks it against the peer's address, its lease or the
+     * fleet, because nothing can: this route is unauthenticated (see
+     * {@link #MAX_SESSIONS}) and no zone crosses it any other way. So a
+     * consumer that claims THIS ingester's zone moves its bytes out of NFR-5's
+     * numerator — a mislabelled pod understates the measurement, and a
+     * malicious one can zero it. That is tolerable for exactly one reason: the
+     * value reaches a COUNTER and nothing else. It routes no request, gates no
+     * fetch, authorises nothing, and is never compared for a placement
+     * decision. ⚠️ If a zone ever decides where bytes GO, this parameter is not
+     * the source it may come from -- membership is (ADR-0012, ADR-0040).
+     */
+    public static final String AZ_PARAM = HttpSubscriptionTransport.AZ_PARAM;
+
     private final SubscriptionHub hub;
+    private final CrossAzBytes crossAz;
     private final IndexCatalog catalog;
     private final WatermarkTable watermarks;
     private final Clock clock;
@@ -192,10 +218,34 @@ public final class SubscriptionService implements HttpService {
                 MAX_QUEUED_BYTES);
     }
 
+    /**
+     * The production shape, counting the bytes this node serves to a consumer
+     * in another zone (M9.2, NFR-5, M9 criterion 6).
+     *
+     * <p>⚠️ **EVERY OTHER CONSTRUCTOR COUNTS NOTHING**, the behaviour before
+     * M9.2: only the composition root knows this pod's {@code pod.az}.
+     */
+    public SubscriptionService(SubscriptionHub hub, IndexCatalog catalog,
+            WatermarkTable watermarks, Clock clock, binjava.ingest.RetainedFloors floors,
+            DrainGate gate, CrossAzBytes crossAz) {
+        this(hub, catalog, watermarks, IDLE_EXPIRY, clock, MAX_SESSIONS, floors, gate,
+                MAX_QUEUED_BYTES, crossAz);
+    }
+
     /** The same, with the byte budget given, so a test can reach it (M8.36). */
     SubscriptionService(SubscriptionHub hub, IndexCatalog catalog,
             WatermarkTable watermarks, Duration idleExpiry, Clock clock, int maxSessions,
             binjava.ingest.RetainedFloors floors, DrainGate gate, long maxQueuedBytes) {
+        this(hub, catalog, watermarks, idleExpiry, clock, maxSessions, floors, gate,
+                maxQueuedBytes, CrossAzBytes.untracked());
+    }
+
+    /** The same, with the cross-AZ counter given (M9.2). */
+    SubscriptionService(SubscriptionHub hub, IndexCatalog catalog,
+            WatermarkTable watermarks, Duration idleExpiry, Clock clock, int maxSessions,
+            binjava.ingest.RetainedFloors floors, DrainGate gate, long maxQueuedBytes,
+            CrossAzBytes crossAz) {
+        this.crossAz = Objects.requireNonNull(crossAz, "crossAz");
         if (maxQueuedBytes <= 0) {
             throw new IllegalArgumentException("the byte budget is positive: " + maxQueuedBytes);
         }
@@ -403,26 +453,52 @@ public final class SubscriptionService implements HttpService {
             // for at most `ConsumerClient.MAX_FLOOR_ASKS` polls, so the cost is
             // a cache lookup on those polls -- and the cache, not the poll, is
             // what reads the store.
+            // ⚠️ THE CONSUMER'S OWN WORD FOR ITS ZONE, unverified and used for
+            // accounting only -- see AZ_PARAM. Absent is counted as cross-AZ
+            // and reported as unattributed rather than dropped.
+            String consumerAz = request.query().first(AZ_PARAM).orElse(null);
             if (request.query().first(FLOOR_PARAM).map("1"::equals).orElse(false)) {
                 java.util.OptionalLong floor = floors.floorOf(key);
                 if (floor.isPresent()) {
-                    writeFrame(body, new binjava.format.RetainedFloor(key, floor.getAsLong())
-                            .encode());
+                    PollAnswer.writeFrame(body, new binjava.format.RetainedFloor(key,
+                            floor.getAsLong()).encode());
                 }
             }
+            // ⚠️ THE FLOOR FRAME AND THE FRAMING ARE THE POLL'S OWN BYTES,
+            // attributed to the socket rather than to a push that did not send
+            // them -- so the per-transport split stays addition, never
+            // estimation.
+            long overhead = body.size();
+            java.util.List<PollAnswer.AnswerFrame> frames = new java.util.ArrayList<>();
             SubscriptionHub.Push first = session.take(waitFor(request).toMillis());
             if (first != null) {
-                writeFrame(body, eventFor(first, id).encode());
+                frames.add(new PollAnswer.AnswerFrame(first.via(),
+                        PollAnswer.writeFrame(body, eventFor(first, id).encode())));
                 // ⚠️ EVERYTHING ELSE ALREADY QUEUED GOES IN THE SAME ANSWER.
                 // One poll per push would make a busy stream cost a request per
                 // segment; draining makes it cost a request per ROUND TRIP,
                 // which is what long-polling is for.
                 for (SubscriptionHub.Push more = session.take(0); more != null;
                         more = session.take(0)) {
-                    writeFrame(body, eventFor(more, id).encode());
+                    frames.add(new PollAnswer.AnswerFrame(more.via(),
+                            PollAnswer.writeFrame(body, eventFor(more, id).encode())));
                 }
             }
             session.lastPolledMillis = clock.millis();
+            // ⚠️ COUNTED WHERE THE ANSWER IS SENT, AND ONLY HERE. The two arms
+            // below send a 503 or an empty 200 and THROW THIS BODY AWAY: bytes
+            // built and never written are not bytes on a wire, and counting
+            // them would put a drain's worth of phantom cross-AZ traffic into
+            // NFR-5's numerator every time a node is asked to shut down. Same
+            // rule as the forwarding hop, pointed the other way -- there the
+            // bytes ARE sent before the outcome is known, so they count
+            // whatever the peer answers.
+            // ⚠️ SO THE 503 BODIES THEMSELVES GO UNCOUNTED: a draining node's
+            // refusal really does cross the zone, and it is about forty bytes
+            // once per polling consumer. Named rather than implied, and in the
+            // undercounting direction -- the same direction, and the same
+            // reason, as drainAskBytes.
+            PollAnswer.countAnswer(crossAz, consumerAz, overhead, frames);
             // ⚠️ AN EMPTY 200 IS THE QUIET-STREAM ANSWER, not a 204: the
             // consumer re-polls either way, and one status for "nothing yet"
             // and another for "here is something" is one more thing for a proxy
@@ -567,11 +643,6 @@ public final class SubscriptionService implements HttpService {
         long epoch = Math.max(0, push.sequencerEpoch());
         return new SubscriptionEvent(session, epoch, 1L, push.key(),
                 push.segmentKey(), push.firstOffset(), push.recordCount(), push.via(), inline);
-    }
-
-    private static void writeFrame(OutputStream out, byte[] frame) throws IOException {
-        out.write(ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(frame.length).array());
-        out.write(frame);
     }
 
     private void register(ServerRequest request, ServerResponse response) {

@@ -33,7 +33,7 @@ class AssemblyChainGcTest {
     private static final String PREFIX = "bins/cluster-a";
 
     private static ServerConfig config() {
-        return new ServerConfig("pod1", "cluster-a", PREFIX,
+        return new ServerConfig("pod1", "az-a", "cluster-a", PREFIX,
                 new StoreConfig("memory", Optional.empty()),
                 Duration.ofSeconds(10), Duration.ofSeconds(3), "http://pod1:8080",
                 IngestConfig.defaults("cluster-a"), 0, "producer-1", Set.of("logs"));

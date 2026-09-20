@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package binjava.server;
 
+import binjava.binstore.CrossAzBytes;
 import binjava.http.DrainGate;
 import binjava.http.EndpointSliceView;
 import binjava.http.EndpointSliceWatch;
@@ -73,6 +74,7 @@ public final class IngesterNode implements AutoCloseable {
     static final Duration IN_FLIGHT_SLICE = Duration.ofMillis(100);
 
     private final Assembly assembly;
+    private final CrossAzBytes crossAz;
     private final FrontDoor door;
     private final SequencerTransport transport;
     private final Clock clock;
@@ -89,7 +91,8 @@ public final class IngesterNode implements AutoCloseable {
             new java.util.concurrent.atomic.AtomicBoolean();
 
     private IngesterNode(Assembly assembly, FrontDoor door, SequencerTransport transport,
-            Clock clock, java.util.List<String> journal) {
+            Clock clock, java.util.List<String> journal, CrossAzBytes crossAz) {
+        this.crossAz = crossAz;
         this.assembly = assembly;
         this.door = door;
         this.transport = transport;
@@ -136,7 +139,15 @@ public final class IngesterNode implements AutoCloseable {
         Objects.requireNonNull(trust, "trust");
         Objects.requireNonNull(clock, "clock");
         Objects.requireNonNull(token, "token");
-        SequencerTransport transport = new HttpSequencerTransport(peerCommitTimeout(config));
+        // ⚠️ ONE COUNTER PER NODE, BUILT HERE. NFR-5 is one ratio per pod, so
+        // the peer transport and the front door count into the SAME instance;
+        // a second one would be a second partial answer with nothing saying
+        // which half a report was quoting. ⚠️ AND THE LABEL COMES FROM
+        // `pod.az`, which `ServerProperties` refuses to default: a pod that
+        // does not know its zone reports a cross-AZ total about nothing.
+        CrossAzBytes crossAz = new CrossAzBytes(config.az());
+        SequencerTransport transport =
+                new HttpSequencerTransport(peerCommitTimeout(config), crossAz);
         // ⚠️ THE VIEW IS THE CHALLENGE, and it exists only when a watch will
         // feed it. Without one the challenge is NEVER, which is exactly the
         // behaviour before M8.13: failover bounded by the TTL alone.
@@ -156,7 +167,8 @@ public final class IngesterNode implements AutoCloseable {
                         membership.service(), token, view, trust);
             }
             IngesterNode node = new IngesterNode(assembly,
-                    FrontDoor.start(assembly, clock, journal::add), transport, clock, journal);
+                    FrontDoor.start(assembly, clock, journal::add, crossAz), transport, clock,
+                    journal, crossAz);
             if (watch != null) {
                 node.watch = watch.start();
             }
@@ -173,6 +185,18 @@ public final class IngesterNode implements AutoCloseable {
             closeQuietly(assembly, failed);
             throw failed;
         }
+    }
+
+    /**
+     * The bytes this node has sent to a peer in another zone (M9.2, NFR-5).
+     *
+     * <p>⚠️ **ONE PER NODE, COVERING EVERY PEER SOCKET IT OWNS** -- the
+     * forwarded commit, the inbox drain, and what the front door serves to a
+     * consumer. NFR-5's denominator, producer bytes accepted, is the write
+     * path's and is not held here.
+     */
+    public CrossAzBytes crossAzBytes() {
+        return crossAz;
     }
 
     /** The graph, for a test that wants to look inside a running node. */

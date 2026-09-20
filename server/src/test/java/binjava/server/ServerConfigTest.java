@@ -22,7 +22,7 @@ class ServerConfigTest {
 
     private static ServerConfig config(String podId, String trustDomain, String prefix,
             String endpoint, IngestConfig ingest) {
-        return new ServerConfig(podId, trustDomain, prefix,
+        return new ServerConfig(podId, "az-a", trustDomain, prefix,
                 new StoreConfig("memory", Optional.empty()),
                 Duration.ofSeconds(10), Duration.ofSeconds(3), endpoint, ingest,
                 0, "producer-1", java.util.Set.of("logs"));
@@ -31,6 +31,28 @@ class ServerConfigTest {
     private static ServerConfig valid() {
         return config("pod1", "cluster-a", "bins/cluster-a", "http://pod1:8080",
                 IngestConfig.defaults("cluster-a"));
+    }
+
+    @Test
+    void theZONEIsPARTOfAConfigsIDENTITYAndOfWhatItPRINTS() {
+        // ⚠️ TWO PODS' CONFIGURATIONS THAT DIFFER ONLY BY ZONE ARE DIFFERENT
+        // CONFIGURATIONS (M9.2). A record whose identity ignored the zone
+        // would make a fleet spread over three of them compare as one, and
+        // the zone is the thing every peer transport compares against.
+        ServerConfig here = valid();
+        ServerConfig there = new ServerConfig("pod1", "az-b", "cluster-a", "bins/cluster-a",
+                new StoreConfig("memory", Optional.empty()),
+                Duration.ofSeconds(10), Duration.ofSeconds(3), "http://pod1:8080",
+                IngestConfig.defaults("cluster-a"), 0, "producer-1", java.util.Set.of("logs"));
+
+        assertThat(here).isEqualTo(valid()).hasSameHashCodeAs(valid());
+        assertThat(here).isNotEqualTo(there);
+        assertThat(here.hashCode()).isNotEqualTo(there.hashCode());
+        assertThat(here.toString())
+                .as("⚠️ AN OPERATOR READING A CONFIG IN A LOG SEES THE ZONE, or cannot "
+                        + "tell which pod's numbers they are looking at")
+                .contains("az-a")
+                .contains("pod1");
     }
 
     @Test
@@ -99,16 +121,16 @@ class ServerConfigTest {
                 .isInstanceOf(NullPointerException.class).hasMessageContaining("endpoint");
         assertThatThrownBy(() -> config("pod1", "cluster-a", "bins/c", "http://p:1", null))
                 .isInstanceOf(NullPointerException.class).hasMessageContaining("ingest");
-        assertThatThrownBy(() -> new ServerConfig("pod1", "cluster-a", "bins/c", null,
+        assertThatThrownBy(() -> new ServerConfig("pod1", "az-a", "cluster-a", "bins/c", null,
                 Duration.ofSeconds(10), Duration.ofSeconds(3), "http://p:1",
                 IngestConfig.defaults("cluster-a"), 0, "producer-1", java.util.Set.of("logs")))
                 .isInstanceOf(NullPointerException.class).hasMessageContaining("store");
-        assertThatThrownBy(() -> new ServerConfig("pod1", "cluster-a", "bins/c",
+        assertThatThrownBy(() -> new ServerConfig("pod1", "az-a", "cluster-a", "bins/c",
                 new StoreConfig("memory", Optional.empty()), null, Duration.ofSeconds(3),
                 "http://p:1", IngestConfig.defaults("cluster-a"), 0, "producer-1",
                 java.util.Set.of("logs")))
                 .isInstanceOf(NullPointerException.class).hasMessageContaining("leaseTtl");
-        assertThatThrownBy(() -> new ServerConfig("pod1", "cluster-a", "bins/c",
+        assertThatThrownBy(() -> new ServerConfig("pod1", "az-a", "cluster-a", "bins/c",
                 new StoreConfig("memory", Optional.empty()), Duration.ofSeconds(10), null,
                 "http://p:1", IngestConfig.defaults("cluster-a"), 0, "producer-1",
                 java.util.Set.of("logs")))

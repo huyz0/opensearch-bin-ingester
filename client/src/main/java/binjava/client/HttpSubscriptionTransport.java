@@ -68,10 +68,23 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport {
      */
     public static final String FLOOR_PARAM = "floor";
 
+    /**
+     * Set on a poll to the zone this consumer runs in (M9.2, NFR-5).
+     *
+     * <p>⚠️ **IT IS WHAT MAKES A CROSS-AZ SERVE COUNTABLE AT ALL.** The
+     * ingester holds an address for this node and no zone, so without this
+     * parameter every byte it serves is unattributed -- counted against NFR-5
+     * as cross-AZ, which is the safe side and a number nobody can act on.
+     * ⚠️ An ingester that predates the parameter ignores it, exactly as one
+     * that predates {@link #FLOOR_PARAM} ignores that.
+     */
+    public static final String AZ_PARAM = "az";
+
     /** {@code POST} target for a node's consumer progress (ADR-0049). */
     public static final String PROGRESS_PATH = "/ctl/progress";
 
     private final WebClient client;
+    private final String az;
     private final Runnable onReconnect;
     private final Duration retryFloor;
     private final Duration retryCeiling;
@@ -269,6 +282,22 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport {
     public HttpSubscriptionTransport(String endpoint, Runnable onReconnect,
             Duration retryFloor, Duration retryCeiling, Duration timeout, Duration pollWait,
             int maxAnswerBytes) {
+        this(endpoint, onReconnect, retryFloor, retryCeiling, timeout, pollWait, maxAnswerBytes,
+                "");
+    }
+
+    /**
+     * The same, declaring the zone this consumer runs in (M9.2, NFR-5).
+     *
+     * <p>⚠️ **EVERY OTHER CONSTRUCTOR DECLARES NONE**, and an undeclared zone
+     * is counted by the ingester as cross-AZ rather than dropped -- see
+     * {@link #AZ_PARAM}. A blank is sent as nothing at all, so a consumer
+     * cannot accidentally claim the zone named by an empty variable.
+     */
+    public HttpSubscriptionTransport(String endpoint, Runnable onReconnect,
+            Duration retryFloor, Duration retryCeiling, Duration timeout, Duration pollWait,
+            int maxAnswerBytes, String az) {
+        this.az = Objects.requireNonNull(az, "az").trim();
         Objects.requireNonNull(endpoint, "endpoint");
         this.onReconnect = Objects.requireNonNull(onReconnect, "onReconnect");
         this.retryFloor = Objects.requireNonNull(retryFloor, "retryFloor");
@@ -293,6 +322,21 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport {
                 // over that rather than over the 25 s asked for.
                 .readTimeout(pollWait.plusSeconds(20))
                 .build();
+    }
+
+    /**
+     * The values {@link #AZ_PARAM} is sent with: none at all when this
+     * consumer was told no zone.
+     *
+     * <p>⚠️ **EXTRACTED SO THE CHOICE IS ASSERTABLE WITHOUT A SOCKET**, the
+     * same reason {@code SubscriptionService.waitFor(String)} is. Sending
+     * {@code az=} instead of nothing tells the ingester a zone whose NAME is
+     * the empty string; it compares that against its own and counts a
+     * mismatch, which reads in a cost report as a consumer in another zone
+     * rather than as one that never said.
+     */
+    static String[] azParam(String az) {
+        return az == null || az.isBlank() ? new String[0] : new String[] {az.trim()};
     }
 
     @Override
@@ -344,6 +388,12 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport {
                     // ⚠️ ASKED PER POLL OF THE LISTENER, which asks only while
                     // a resume waits on a fresh floor (ADR-0056).
                     .queryParam(FLOOR_PARAM, listener.wantsRetainedFloor(key) ? "1" : "0")
+                    // ⚠️ SENT ONLY WHEN KNOWN. An empty `az=` would tell the
+                    // ingester a zone whose name is the empty string, which it
+                    // would then compare against its own and count as a
+                    // MISMATCH -- the same answer as absent, arrived at by a
+                    // claim rather than by its absence.
+                    .queryParam(AZ_PARAM, azParam(az))
                     .request()) {
                 int code = response.status().code();
                 if (code != Status.OK_200.code()) {

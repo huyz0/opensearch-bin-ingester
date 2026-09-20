@@ -115,6 +115,7 @@ public final class NodeProcess implements AutoCloseable {
         ChaosProxy peers = options.peerProxy() ? new ChaosProxy("localhost", port) : null;
         Map<String, String> all = new LinkedHashMap<>();
         all.put("pod.id", podId);
+        all.put("pod.az", "az-a");
         all.put("trust.domain", "cluster-a");
         // ⚠️ THE ADVERTISED ENDPOINT IS THE PROXY when there is one: it is
         // what the lease names, so it is what every peer dials.

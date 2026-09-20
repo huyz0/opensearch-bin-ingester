@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package binjava.http;
 
+import binjava.binstore.CrossAzBytes;
 import binjava.format.CommitDelta;
 import binjava.format.CommitRequestFrame;
 import binjava.sequencer.CommitRequest;
@@ -73,6 +74,7 @@ public final class HttpSequencerTransport implements SequencerTransport {
 
     private final Map<String, WebClient> clients = new ConcurrentHashMap<>();
     private final Duration timeout;
+    private final CrossAzBytes crossAz;
     private volatile boolean closed;
 
     /**
@@ -82,6 +84,24 @@ public final class HttpSequencerTransport implements SequencerTransport {
      *     sooner, and the caller still may not resend elsewhere.
      */
     public HttpSequencerTransport(Duration timeout) {
+        this(timeout, CrossAzBytes.untracked());
+    }
+
+    /**
+     * The same, counting the bytes this hop sends to a peer in another zone
+     * (M9.2, NFR-5).
+     *
+     * <p>⚠️ **EVERY OTHER CONSTRUCTOR COUNTS NOTHING**, which is the behaviour
+     * before M9.2: only the composition root, which is the one place that
+     * knows this pod's {@code pod.az}, passes a real counter.
+     *
+     * <p>⚠️ **WHAT IS COUNTED IS WHAT THIS POD SENDS**, not what it receives:
+     * NFR-5 bounds the bytes a pod puts on a cross-zone wire, and counting the
+     * reply as well would count the same segment's commit twice across the
+     * fleet -- once as the forwarder's egress and once as the leaseholder's.
+     */
+    public HttpSequencerTransport(Duration timeout, CrossAzBytes crossAz) {
+        this.crossAz = Objects.requireNonNull(crossAz, "crossAz");
         this.timeout = Objects.requireNonNull(timeout, "timeout");
         if (timeout.isZero() || timeout.isNegative()) {
             throw new IllegalArgumentException("timeout must be positive: " + timeout);
@@ -101,6 +121,11 @@ public final class HttpSequencerTransport implements SequencerTransport {
         if (closed) {
             throw new IOException("transport is closed");
         }
+        // ⚠️ COUNTED BEFORE THE ANSWER, because the bytes left this pod
+        // whatever the peer says. A drain asked of a leaseholder in another
+        // zone is a cross-AZ request per deferral, and ADR-0058's inbox is
+        // exactly the path a partition puts traffic on.
+        crossAz.sentTo(CrossAzBytes.Transport.INBOX_DRAIN, endpoint, drainAskBytes(requester));
         try (HttpClientResponse response = clientFor(endpoint).post(DRAIN_PATH)
                 .queryParam("pod", requester).request()) {
             if (response.status().code() == NOT_THE_LEASEHOLDER.code()) {
@@ -127,6 +152,11 @@ public final class HttpSequencerTransport implements SequencerTransport {
             throw new IOException("transport is closed");
         }
         byte[] body = frameOf(request).encode();
+        // ⚠️ COUNTED BEFORE THE SEND, AND NOT RETRACTED ON FAILURE. A commit
+        // whose answer was lost still spent the bytes, and an unsent one is the
+        // rarer case; a counter that only counted successes would under-report
+        // exactly when a zone is misbehaving.
+        crossAz.sentTo(CrossAzBytes.Transport.COMMIT_FORWARD, endpoint, body.length);
         try (HttpClientResponse response = clientFor(endpoint).post(PATH).submit(body)) {
             // ⚠️ COMPARED BY CODE, NEVER BY `Status.equals`. Helidon's
             // `Status.equals` compares the REASON PHRASE as well as the code --
@@ -186,6 +216,40 @@ public final class HttpSequencerTransport implements SequencerTransport {
             throw ambiguous(endpoint, failed);
         }
     }
+
+    /**
+     * A FLOOR on the bytes a drain ask puts on the wire, and ⚠️ **it is a
+     * floor rather than the wire cost, which matters when it is read**: it is
+     * the request target's own characters -- the path, {@code ?pod=} and the
+     * requester's id, about 25 of them -- counted as one byte each. It does
+     * NOT include the request line's method and version, ANY header (a
+     * {@code Host} alone is larger than everything counted here), the TLS
+     * record or TCP framing, or percent-encoding, which would lengthen a
+     * requester id containing anything outside the unreserved set. A real
+     * drain ask on the wire is a few hundred bytes; this reports tens.
+     *
+     * <p>⚠️ **COUNTED ANYWAY, AND THE UNDERCOUNT IS SAFE IN THE DIRECTION
+     * NFR-5 CARES ABOUT ONLY BECAUSE IT IS TINY.** A drain carries no body, so
+     * a counter that ignored the transport entirely would report zero for the
+     * one path ADR-0058 adds -- and "this transport spends nothing" is a claim
+     * someone would have to make rather than an omission nobody notices. If a
+     * measurement ever turns on this term, it is headers that have to be
+     * counted, not this arithmetic that has to be tuned.
+     */
+    static long drainAskBytes(String requester) {
+        return DRAIN_PATH.length() + POD_PARAM.length()
+                + (requester == null ? 0 : requester.length());
+    }
+
+    /**
+     * The counted form of the drain ask's one query parameter. ⚠️ **THE SEND
+     * SITE DOES NOT USE IT**: Helidon takes the key and the value separately
+     * ({@code .queryParam("pod", requester)}), so this constant is a second
+     * spelling of the same key and renaming one does not rename the other --
+     * the counter would then keep counting the old name. The undercount is
+     * bounded either way; see {@link #drainAskBytes}.
+     */
+    static final String POD_PARAM = "?pod=";
 
     /**
      * The one outcome a caller must NOT act on: the commit may have been

@@ -273,7 +273,22 @@ the digest-pinned container in `docker-compose.test.yml`.
    uninstrumented build would pass it, so the criterion requires a run with
    consumers deliberately served from another AZ, reported beside the
    steady-state run. Holds on a real cloud to the extent the label matches the
-   pod's real zone, which is a deployment fact. (M9.2, M9.10)
+   pod's real zone, which is a deployment fact.
+   ⚠️ **THE LARGEST TERM IS NOT COUNTABLE YET, AND THE NUMBER MUST SAY SO.**
+   M9.2 instrumented the sockets that exist: the consumer's poll answer (its
+   `inline` payloads, its `direct` grants and the answer's own framing), the
+   commit forward and the inbox drain. **A segment served in `proxy` mode does
+   not travel over any wired route today** — a `proxy` push carries no inline
+   bytes and no ingester endpoint serves the segment to a consumer — so the
+   `PROXY_READ` column counts the EVENT FRAME that names the segment, not the
+   segment. The instrumentation is in place on the socket that will carry
+   those bytes, and the moment that route lands they are counted by the same
+   call. ⚠️ **Until then a measured "cross-AZ bytes < 0.1%" is a statement
+   about a build in which the largest term cannot occur**, not about the
+   design, and M9.10's report and `VERIFIED.md` say that in the same sentence
+   as the ratio. A number that omits the term cost.md rules 10–11 call the
+   largest one, quoted without that clause, is the failure mode this
+   paragraph exists to prevent. (M9.2, M9.10)
 7. **NFR-7 on the rig.** p99 from producer 202 to consumer delivery is **< 3×
    the interval ceiling** at ceilings of 250 ms, 1 s and 5 s, each over
    ≥10,000 records at a steady rate. ⚠️ **MinIO on loopback, NOT S3**: S3's PUT

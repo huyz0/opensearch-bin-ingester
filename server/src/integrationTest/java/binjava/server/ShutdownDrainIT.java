@@ -58,6 +58,7 @@ class ShutdownDrainIT {
         Path file = dir.resolve("node.properties");
         Files.write(file, String.join("\n",
                 "pod.id=pod1",
+                "pod.az=az-a",
                 "trust.domain=cluster-a",
                 "store.prefix=bins/cluster-a",
                 "store.kind=local-fs",

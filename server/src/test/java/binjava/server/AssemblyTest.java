@@ -51,7 +51,7 @@ class AssemblyTest {
     }
 
     private static ServerConfig config(String podId) {
-        return new ServerConfig(podId, "cluster-a", "bins/cluster-a",
+        return new ServerConfig(podId, "az-a", "cluster-a", "bins/cluster-a",
                 new StoreConfig("memory", Optional.empty()),
                 Duration.ofSeconds(10), Duration.ofSeconds(3),
                 "http://" + podId + ":8080",
@@ -279,7 +279,7 @@ class AssemblyTest {
                 java.time.Duration.ofMillis(250), 8L << 20, "cluster-a",
                 64L << 20, java.time.Duration.ofSeconds(5), 0.25, 0.75,
                 java.time.Duration.ofMinutes(2), java.time.Duration.ofMinutes(2), true);
-        ServerConfig refuses = new ServerConfig("pod1", "cluster-a", "bins/cluster-a",
+        ServerConfig refuses = new ServerConfig("pod1", "az-a", "cluster-a", "bins/cluster-a",
                 new StoreConfig("memory", Optional.empty()), Duration.ofSeconds(10),
                 Duration.ofSeconds(3), "http://pod1:8080", direct, 0, "producer-1",
                 java.util.Set.of("logs"));

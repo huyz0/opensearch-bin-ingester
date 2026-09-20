@@ -22,6 +22,10 @@ import java.util.Set;
  * @param podId this node's identity in the lease, and ⚠️ the thing a takeover is
  *     attributed to — a duplicate across two pods is two leaders that each
  *     believe they hold one lease
+ * @param az this pod's availability zone, as a LABEL (M9.2, NFR-5). ⚠️ **IT IS
+ *     WHAT MAKES A CROSS-AZ BYTE COUNTABLE**: every peer transport compares a
+ *     peer's label with this one, so a pod whose zone is wrong reports a
+ *     plausible NFR-5 number for a fleet it is not in
  * @param trustDomain the cluster a producer's {@code Principal} must match
  * @param prefix the key prefix everything this pod writes lives under, ⚠️ shared
  *     by the writer and the commit log: two prefixes is a commit log nothing
@@ -51,8 +55,8 @@ import java.util.Set;
  * @param membership where to watch the ingester Service's endpoints for the
  *     early lease challenge, or empty for none (M8.13)
  */
-public record ServerConfig(String podId, String trustDomain, String prefix, StoreConfig store,
-        Duration leaseTtl, Duration leaseRenewInterval, String endpoint, IngestConfig ingest,
+public record ServerConfig(String podId, String az, String trustDomain, String prefix,
+        StoreConfig store, Duration leaseTtl, Duration leaseRenewInterval, String endpoint, IngestConfig ingest,
         int httpPort, String producerSubject, Set<String> allowedIndices,
         RetentionConfig retention, java.util.Optional<MembershipConfig> membership) {
 
@@ -62,11 +66,12 @@ public record ServerConfig(String podId, String trustDomain, String prefix, Stor
      * <p>⚠️ **FOR CALLERS THAT PREDATE M8.13**; a parsed configuration always
      * carries the membership it parsed, present or not.
      */
-    public ServerConfig(String podId, String trustDomain, String prefix, StoreConfig store,
+    public ServerConfig(String podId, String az, String trustDomain, String prefix,
+            StoreConfig store,
             Duration leaseTtl, Duration leaseRenewInterval, String endpoint, IngestConfig ingest,
             int httpPort, String producerSubject, Set<String> allowedIndices,
             RetentionConfig retention) {
-        this(podId, trustDomain, prefix, store, leaseTtl, leaseRenewInterval, endpoint, ingest,
+        this(podId, az, trustDomain, prefix, store, leaseTtl, leaseRenewInterval, endpoint, ingest,
                 httpPort, producerSubject, allowedIndices, retention, java.util.Optional.empty());
     }
 
@@ -77,10 +82,11 @@ public record ServerConfig(String podId, String trustDomain, String prefix, Stor
      * construction site that predates M8.5. {@link ServerProperties} never uses
      * it: a parsed configuration always carries the retention it parsed.
      */
-    public ServerConfig(String podId, String trustDomain, String prefix, StoreConfig store,
+    public ServerConfig(String podId, String az, String trustDomain, String prefix,
+            StoreConfig store,
             Duration leaseTtl, Duration leaseRenewInterval, String endpoint, IngestConfig ingest,
             int httpPort, String producerSubject, Set<String> allowedIndices) {
-        this(podId, trustDomain, prefix, store, leaseTtl, leaseRenewInterval, endpoint, ingest,
+        this(podId, az, trustDomain, prefix, store, leaseTtl, leaseRenewInterval, endpoint, ingest,
                 httpPort, producerSubject, allowedIndices, RetentionConfig.defaults());
     }
 
@@ -98,6 +104,7 @@ public record ServerConfig(String podId, String trustDomain, String prefix, Stor
 
     public ServerConfig {
         Objects.requireNonNull(podId, "podId");
+        Objects.requireNonNull(az, "az");
         Objects.requireNonNull(trustDomain, "trustDomain");
         Objects.requireNonNull(prefix, "prefix");
         Objects.requireNonNull(store, "store");
@@ -114,6 +121,10 @@ public record ServerConfig(String podId, String trustDomain, String prefix, Stor
         // site, and this record outlives every construction site.
         allowedIndices = Set.copyOf(Objects.requireNonNull(allowedIndices, "allowedIndices"));
         requireNotBlank(podId, "podId");
+        // ⚠️ BLANK IS REFUSED HERE TOO, not only at the parser: a zone of
+        // spaces makes every peer cross-AZ and every measurement of NFR-5 a
+        // number about nothing.
+        requireNotBlank(az, "az");
         requireNotBlank(producerSubject, "producerSubject");
         if (httpPort < 0 || httpPort > 65535) {
             throw new IllegalArgumentException("httpPort is not a port: " + httpPort);

@@ -38,6 +38,17 @@ public final class ServerProperties {
 
     /** Required: this node's identity in the lease. */
     public static final String POD_ID = "pod.id";
+    /**
+     * Required: this pod's availability zone, as a LABEL (M9.2, NFR-5).
+     *
+     * <p>⚠️ **REQUIRED, AND NOT DERIVED FROM ANYTHING.** Nothing else this
+     * process reads carries a zone -- the lease carries an endpoint, the
+     * {@code EndpointSlice} watch reads addresses -- so a pod that is not told
+     * its zone cannot tell a cross-AZ byte from a same-AZ one, and NFR-5 would
+     * be measured as zero on a fleet spread over three of them. In a pod it is
+     * {@code topology.kubernetes.io/zone} off the node, passed in the manifest.
+     */
+    public static final String POD_AZ = "pod.az";
     /** Required: the cluster a producer's principal must match. */
     public static final String TRUST_DOMAIN = "trust.domain";
     /** Required: the key prefix everything this node writes lives under. */
@@ -114,7 +125,7 @@ public final class ServerProperties {
 
     static final Duration DEFAULT_LEASE_RENEW = Duration.ofSeconds(3);
 
-    private static final Set<String> KNOWN = Set.of(POD_ID, TRUST_DOMAIN, PREFIX, STORE_KIND,
+    private static final Set<String> KNOWN = Set.of(POD_ID, POD_AZ, TRUST_DOMAIN, PREFIX, STORE_KIND,
             STORE_ROOT, STORE_ENDPOINT, STORE_REGION, STORE_BUCKET, STORE_PATH_STYLE,
             ENDPOINT, HTTP_PORT, PRODUCER_SUBJECT, PRODUCER_ALLOWED_INDICES,
             LEASE_TTL, LEASE_RENEW, INTERVAL_FLOOR, MAX_SEGMENT_BYTES, DIRECT_ENABLED,
@@ -170,7 +181,7 @@ public final class ServerProperties {
                     optionalText(settings, STORE_BUCKET),
                     bool(settings, STORE_PATH_STYLE, false));
 
-            return new ServerConfig(podId(settings), trustDomain,
+            return new ServerConfig(podId(settings), required(settings, POD_AZ), trustDomain,
                     required(settings, PREFIX), store,
                     duration(settings, LEASE_TTL, DEFAULT_LEASE_TTL),
                     duration(settings, LEASE_RENEW, DEFAULT_LEASE_RENEW),

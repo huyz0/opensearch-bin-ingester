@@ -55,7 +55,7 @@ class ChallengeResumeIT {
 
     /** The TTL that ships, read from the configuration a node parses: not restated. */
     private static final Duration TTL = binjava.server.ServerProperties.parse(Map.of(
-            "pod.id", "pod0", "trust.domain", "cluster-a", "store.prefix", "p",
+            "pod.id", "pod0", "pod.az", "az-a", "trust.domain", "cluster-a", "store.prefix", "p",
             "store.kind", "memory", "endpoint", "http://localhost:0", "http.port", "0",
             "producer.subject", "producer-1", "producer.allowed-indices", "logs")).leaseTtl();
 

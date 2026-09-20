@@ -70,6 +70,7 @@ class ConfigFileTest {
         Path file = dir.resolve("node.properties");
         Files.write(file, String.join("\n",
                 "pod.id=pod7",
+                "pod.az=az-a",
                 "trust.domain=cluster-a",
                 "store.prefix=bins/cluster-a",
                 "store.kind=s3",
@@ -86,6 +87,7 @@ class ConfigFileTest {
         ServerConfig config = ServerProperties.parse(ConfigFile.read(file.toString()));
 
         assertThat(config.podId()).isEqualTo("pod7");
+        assertThat(config.az()).isEqualTo("az-a");
         assertThat(config.httpPort()).isEqualTo(8080);
         assertThat(config.endpoint()).isEqualTo("http://pod-7:8080");
         assertThat(config.producerSubject()).isEqualTo("producer-1");
