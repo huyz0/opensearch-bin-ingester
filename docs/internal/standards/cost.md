@@ -53,13 +53,25 @@ request rate may NEVER scale with: records, shards, partitions, indices, documen
 
 ⚠️ **No script enforces these yet** — the counting harness lands with the store
 SPI. Until it does, a cost claim is a claim, and the honest response is to say
-the budget was not measured. The three assertions to write first:
+the budget was not measured. The arithmetic is `CostMeter` in `binstore-spi`,
+over a `CountingBinStore`'s `StoreCounts`, and the three assertions to write
+first are:
 
 ```java
-assertThat(stats.requestsPerMiBWritten()).isLessThan(0.30);
-assertThat(stats.listRequests()).isZero();
-assertThat(runIdle(minutes(5), /*shards=*/1600).totalRequests()).isZero();
+CostMeter meter = new CostMeter(store.counts(), CostTable.awsS3Standard());
+assertThat(meter.requestsPerMiBWritten(bytesWritten).orElseThrow()).isLessThan(0.30);
+assertThat(store.counts().lists()).isZero();
+assertThat(runIdle(minutes(5), /*shards=*/1600).counts().total()).isZero();
 ```
+
+⚠️ **`requestsPerMiBWritten` TAKES THE BYTES AND RETURNS AN `OptionalDouble`,
+AND NEITHER IS DECORATION.** The meter reads no clock and holds no store, so
+the byte total is the caller's to supply; and when nothing was written the
+reading is **absent** rather than `0.0` or `NaN` — a silent zero passes
+`< 0.30` having divided by nothing, which is exactly how an idle or broken run
+reports itself as the cheapest build ever measured. ⚠️ So **never
+`.orElse(0.0)`** here: `orElseThrow` in a test, and a rendered "undefined" in a
+report.
 
 The third is the most valuable test in the project: it is the one failure
 invisible to every functional test and catastrophic in production.

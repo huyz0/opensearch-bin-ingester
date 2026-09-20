@@ -15,6 +15,24 @@ package binjava.binstore;
  */
 public record CostTable(long putPerThousand, long getPerThousand, long listPerThousand) {
 
+    /**
+     * Research 02 §1's AWS us-east-1 S3 Standard prices, the DEFAULT the cost
+     * meter models with when a deployment names none.
+     *
+     * <p>⚠️ A DEFAULT, NOT A CONSTANT THE CODE IS BUILT ON. Every provider has
+     * this shape with different numbers, and research 02 §1 says not to
+     * hard-code AWS ratios; this factory exists so the prices are written down
+     * once, with their source, rather than appearing as literals wherever a
+     * bill is modelled.
+     *
+     * <p>⚠️ A LIST COSTS WHAT A PUT COSTS — 12.5 GETs. That is the single most
+     * consequential ratio in the cost model (cost rules 2 and 15), and it is
+     * why the two are separate components rather than one "write" price.
+     */
+    public static CostTable awsS3Standard() {
+        return new CostTable(5_000L, 400L, 5_000L);
+    }
+
     /** No provider, no bill — the local-FS and in-memory backends. */
     public static CostTable free() {
         return new CostTable(0, 0, 0);

@@ -19,6 +19,21 @@ class CostTableTest {
         assertThat(free.listPerThousand()).isZero();
     }
 
+    /**
+     * ⚠️ THE NUMBERS ARE RESEARCH 02 §1's, IN MICRO-DOLLARS PER 1,000: a
+     * PUT/COPY/POST or a LIST at $0.005 per 1,000 is 5,000, and a GET at
+     * $0.0004 per 1,000 is 400. It is a DEFAULT the caller may replace, not a
+     * constant the code is built on — every other provider has the same shape
+     * with different constants.
+     */
+    @Test
+    void awsS3StandardIsResearchZeroTwoSectionOnesPrices() {
+        CostTable aws = CostTable.awsS3Standard();
+        assertThat(aws.putPerThousand()).isEqualTo(5_000L);
+        assertThat(aws.getPerThousand()).isEqualTo(400L);
+        assertThat(aws.listPerThousand()).isEqualTo(5_000L);
+    }
+
     @Test
     void carriesTheRatesItWasGiven() {
         CostTable t = new CostTable(5000, 400, 5000);
