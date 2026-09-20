@@ -48,9 +48,25 @@ done
 # signature per task. ⚠️ AND IT IS A CAP ON ROUNDS, NOT A BUDGET TO SPEND: rule
 # 11 forbids spending one on a `minor`, so a task that needs three has found two
 # rounds of blocking or major defects and is a task worth splitting next time.
-ROUNDS=$(python3 scripts/review_rounds.py "$SHA" 2>/dev/null || echo 0)
-if [ "${ROUNDS:-0}" -gt 3 ]; then
-  fail "review round $ROUNDS exceeds review.md rule 12's cap of 3"
+if ! ROUNDS=$(python3 scripts/review_rounds.py "$SHA" 2>/dev/null); then
+  fail "could not determine review rounds for staged bytes"
+  finish
+fi
+BUDGET="${REVIEW_ROUND_BUDGET:-3}"
+case "$BUDGET" in
+  ''|*[!0-9]*)
+    fail "REVIEW_ROUND_BUDGET must be a non-negative integer: $BUDGET"
+    finish
+    ;;
+esac
+case "$ROUNDS" in
+  ''|*[!0-9]*)
+    fail "review round counter returned a non-negative integer: $ROUNDS"
+    finish
+    ;;
+esac
+if [ "$ROUNDS" -gt "$BUDGET" ]; then
+  fail "review round $ROUNDS exceeds review.md rule 12's cap of $BUDGET"
   echo "         Round one finds, round two fixes, round three verifies. A fourth"
   echo "         means the commit is too big: SPLIT it, or argue the finding with"
   echo "         a staged baselines/review.txt entry. ⚠️ Only 'blocking' and"
@@ -88,5 +104,5 @@ PY
 done
 # ⚠️ NAMES the roles. "reviewed by both" printed over a one-role run is the same
 # false line this gate exists to prevent.
-[ "$FAILED" -eq 0 ] && ok "staged bytes reviewed by $(echo $REQUIRED_ROLES | tr '\n' ' ')(round $ROUNDS of 3) ($SHA)"
+[ "$FAILED" -eq 0 ] && ok "staged bytes reviewed by $(echo $REQUIRED_ROLES | tr '\n' ' ')(round $ROUNDS of $BUDGET) ($SHA)"
 finish

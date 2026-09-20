@@ -23,6 +23,34 @@ OUT=".harness/review"; mkdir -p "$OUT"
 case "$CMD" in
   context)
     [ -n "$TASK" ] || { echo "--task required" >&2; exit 2; }
+    # Count completed verdicts before emitting any packet content or running any
+    # gate. The reviewer's scarce work must not be paid for before the cap can
+    # refuse the next round.
+    if ! ROUND_N=$(python3 scripts/review_rounds.py --for-task "$TASK" 2>/dev/null); then
+      echo "!!! Could not determine completed review rounds for $TASK; refusing to open a packet." >&2
+      exit 2
+    fi
+    case "$ROUND_N" in
+      ''|*[!0-9]*)
+        echo "!!! Round counter returned a non-negative integer: $ROUND_N; refusing to open a packet." >&2
+        exit 2
+        ;;
+    esac
+    ROUND=$((ROUND_N + 1))
+    BUDGET="${REVIEW_ROUND_BUDGET:-3}"
+    case "$BUDGET" in
+      ''|*[!0-9]*)
+        echo "!!! REVIEW_ROUND_BUDGET must be a non-negative integer: $BUDGET" >&2
+        exit 2
+        ;;
+    esac
+    if [ "$ROUND" -gt "$BUDGET" ]; then
+      echo "!!! Round $ROUND for $TASK exceeds the budget of $BUDGET."
+      echo "!!! Rule 12's remedy is SPLIT, not another round. If it genuinely"
+      echo "!!! cannot be split, use an explicit REVIEW_ROUND_BUDGET override."
+      echo "!!! Deliberate override: REVIEW_ROUND_BUDGET=$ROUND $0 context --task $TASK"
+      exit 1
+    fi
     echo "=== TASK $TASK ==="
     grep -F "$TASK" docs/internal/product/backlog.md 2>/dev/null || echo "(not found in backlog)"
     echo
@@ -39,8 +67,7 @@ case "$CMD" in
     # arrives many turns later saying only "minor". A rule an agent has to
     # RECALL at the deciding moment is the weakest rung on non-negotiable 9's
     # ladder; this is the same rule as a line the reader cannot miss.
-    ROUND_N=$(python3 scripts/review_rounds.py "$DIFF_SHA" 2>/dev/null || echo 0)
-    echo "This is round $((ROUND_N + 1)) of 3 for $TASK."
+    echo "This is round $ROUND of $BUDGET for $TASK."
     echo "review.md rule 12: round one finds, round two fixes and finds in the"
     echo "fix, round three verifies. A blocking finding in round THREE means"
     echo "the commit is TOO BIG -- it is split, not reviewed a fourth time."

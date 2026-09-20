@@ -41,6 +41,24 @@ def rounds_for(sha, review_dir='.harness/review'):
     return len(seen), task
 
 
+def rounds_of_task(task, review_dir='.harness/review'):
+    seen = set()
+    for f in glob.glob('%s/*.json' % review_dir):
+        try:
+            d = json.load(open(f))
+        except (OSError, ValueError):
+            continue
+        if d.get('task') == task and d.get('diff_sha256'):
+            seen.add(d['diff_sha256'])
+    return len(seen)
+
+
 if __name__ == '__main__':
+    if '--for-task' in sys.argv:
+        i = sys.argv.index('--for-task')
+        task = sys.argv[i + 1]
+        review_dir = sys.argv[i + 2] if len(sys.argv) > i + 2 else '.harness/review'
+        print(rounds_of_task(task, review_dir))
+        raise SystemExit(0)
     n, task = rounds_for(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else '.harness/review')
     print(n)
