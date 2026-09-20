@@ -7,9 +7,10 @@ description: Choose what to work on next and confirm it is genuinely ready. Use 
 
 ## Choose
 
-1. Read `docs/internal/product/backlog.md`. Only the current milestone is
-   decomposed; if it is not, decompose it before writing code
-   ([`spec`](../spec/SKILL.md)).
+1. Run `scripts/current-milestone.sh`; it prints only the current milestone's
+   open rows. Do not load the historical `docs/internal/product/backlog.md`
+   wholesale. Only the current milestone is decomposed; if it is not,
+   decompose it before writing code ([`spec`](../spec/SKILL.md)).
 2. Take the **top unblocked task** — top, not the most interesting one. Order is
    dependency order and was chosen deliberately.
 3. A task is **blocked** if it depends on an unfinished task or on a decision
