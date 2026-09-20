@@ -28,6 +28,7 @@ declare -A ALLOWED=(
   [harness_failures.py]="names the failing testcases in buildSrc/build/test-results, the same untracked build output check-harness-tests.sh counts -- and for the same reason: the suite runs under --console=plain -q, so its LOG holds no test names and only the XML can answer. ⚠️ The glob is anchored to that one directory and cannot reach a sibling checkout"
   [review_rounds.py]="reads .harness/review, which is gitignored BY DESIGN -- a verdict is machine-local evidence, so workspace_files cannot see it. ⚠️ The glob is anchored to that one directory and cannot reach a sibling checkout"
   [review_delta.py]="same: .harness/review is gitignored, and the prior round's findings live nowhere else"
+  [review.sh]="reads ignored .harness/tdd and .harness/review evidence to invalidate its gate cache; both paths are anchored inside this repository"
   [override_check.py]="same: .harness/review is gitignored, and an override entry is judged against nothing else (M8.41). ⚠️ The glob is anchored to the verdict directory it is given"
   [coverage.py]="reads */build/classes and */build/reports/jacoco -- build output git cannot enumerate. ⚠️ The MODULE list is git-derived; only the search INSIDE a known module directory touches the filesystem, so it cannot wander into a sibling checkout"
 )

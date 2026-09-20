@@ -18,6 +18,10 @@ while [ $# -gt 0 ]; do
   esac
 done
 DIFF_SHA=$(git diff --cached | sha256sum | cut -d' ' -f1)
+if ! STAGED_TREE=$(git write-tree 2>/dev/null); then
+  echo "!!! Could not create a tree for the staged bytes; refusing to build a packet." >&2
+  exit 2
+fi
 OUT=".harness/review"; mkdir -p "$OUT"
 
 case "$CMD" in
@@ -95,29 +99,136 @@ case "$CMD" in
     # non-negotiable 4 exists to forbid, made by the script that serves the
     # reviewer.
     echo "=== GATES THAT ALREADY PASSED (do not re-check these) ==="
-    gate_failed=0
-    for g in $(grep -oE 'scripts/check-[a-z-]+\.sh' .pre-commit-config.yaml | sort -u) \
-             "scripts/build-index.sh --check"; do
-      case "$g" in
-        */check-commit-msg.sh|*/check-test-integrity.sh) continue ;;  # need the message file
-        # check-reviewed is the gate this packet exists to satisfy. Running it
-        # here would fail by construction, every time.
-        */check-reviewed.sh) continue ;;
+    # A review packet must not pay for a manual-stage gate. The mutation gate is
+    # deliberately manual because it costs tens of seconds per module; treating
+    # every entry in the config as a pre-commit gate made each reviewer packet
+    # pay that cost again. Parse hook blocks so this stays correct if another
+    # manual gate is added.
+    gate_scripts=$(awk '
+      function emit() { if (entry != "" && precommit) print entry }
+      function reset() { entry=""; manual=0; precommit=1; in_stages=0 }
+      BEGIN { reset() }
+      /- id:/ { emit(); reset(); next }
+      /entry:/ {
+        entry=$0
+        sub(/^[^:]*:[[:space:]]*/, "", entry)
+        next
+      }
+      /stages:/ {
+        manual=($0 ~ /manual/)
+        precommit=($0 ~ /pre-commit/)
+        in_stages=1
+        next
+      }
+      in_stages && /^[[:space:]]+-[[:space:]]/ {
+        if ($0 ~ /manual/) manual=1
+        if ($0 ~ /pre-commit/) precommit=1
+        next
+      }
+      in_stages && !/^[[:space:]]/ { in_stages=0 }
+      END { emit() }
+    ' .pre-commit-config.yaml \
+      | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//" \
+      | sort -u)
+    if printf '%s\n' "$gate_scripts" | grep -Fxq 'scripts/build-index.sh --check'; then
+      gate_commands="$gate_scripts"
+    else
+      gate_commands="$gate_scripts"$'\n'"scripts/build-index.sh --check"
+    fi
+    GATE_INPUTS="$STAGED_TREE GATE_SCOPE=${GATE_SCOPE:-delta} CHECK_RANGE=${CHECK_RANGE:-}"
+    EXPECTED_CACHE=""
+    while IFS= read -r g; do
+      [ -n "$g" ] || continue
+      gate_path="${g%% *}"
+      case "$gate_path" in
+        scripts/check-*.sh|scripts/build-index.sh) ;;
+        *)
+          echo "!!! Unsupported pre-commit entry: $g" >&2
+          exit 2
+          ;;
       esac
-      if out=$(eval "$g" 2>&1); then
-        echo "  PASSED  $(basename "$g")"
-      else
-        echo "  FAILED  $(basename "$g")"
-        echo "$out" | sed 's/^/          /'
-        gate_failed=1
-      fi
+      case "$gate_path" in
+        */check-commit-msg.sh|*/check-test-integrity.sh|*/check-reviewed.sh) continue ;;
+      esac
+      EXPECTED_CACHE="$EXPECTED_CACHE  PASSED  $(basename "$gate_path")"$'\n'
+    done <<< "$gate_commands"
+    EXPECTED_CACHE="${EXPECTED_CACHE%$'\n'}"
+    while IFS= read -r -d '' input; do
+      input_sha=$(sha256sum "$input" | cut -d' ' -f1) || { echo "!!! Could not hash worktree gate input: $input" >&2; exit 2; }
+      input_mode=$(stat -c '%a' "$input") || { echo "!!! Could not stat worktree gate input: $input" >&2; exit 2; }
+      GATE_INPUTS="$GATE_INPUTS worktree:$input:$input_mode:$input_sha"
+    done < <(git ls-files -co --exclude-standard -z | sort -z)
+    while IFS= read -r -d '' input; do
+      input_sha=$(sha256sum "$input" | cut -d' ' -f1) || { echo "!!! Could not hash ignored source gate input: $input" >&2; exit 2; }
+      input_mode=$(stat -c '%a' "$input") || { echo "!!! Could not stat ignored source gate input: $input" >&2; exit 2; }
+      GATE_INPUTS="$GATE_INPUTS ignored-source:$input:$input_mode:$input_sha"
+    done < <(git ls-files --others --ignored --exclude-standard -z -- 'src/*.kt' 'src/*.java' 'src/*.kts' '*/src/*.kt' '*/src/*.java' '*/src/*.kts' | sort -z)
+    for input in .pre-commit-config.yaml; do
+      [ -f "$input" ] || { echo "!!! Gate input is missing: $input" >&2; exit 2; }
+      input_sha=$(sha256sum "$input" | cut -d' ' -f1) || { echo "!!! Could not hash gate input: $input" >&2; exit 2; }
+      input_mode=$(stat -c '%a' "$input") || { echo "!!! Could not stat gate input: $input" >&2; exit 2; }
+      GATE_INPUTS="$GATE_INPUTS $input:$input_mode:$input_sha"
     done
-    if [ "$gate_failed" -ne 0 ]; then
-      echo
-      echo "!!! A deterministic gate is failing. Fix it before spending a review:"
-      echo "!!! the reviewer's attention is the scarce thing, and a script already"
-      echo "!!! knows the answer to whatever it would find."
-      exit 1
+    while IFS= read -r input; do
+      [ -n "$input" ] || continue
+      input_sha=$(sha256sum "$input" | cut -d' ' -f1) || { echo "!!! Could not hash gate input: $input" >&2; exit 2; }
+      GATE_INPUTS="$GATE_INPUTS $input:$input_sha"
+    done < <(find scripts -type f -print | sort)
+    if [ -d .harness/tdd ]; then
+      while IFS= read -r input; do
+        [ -n "$input" ] || continue
+        input_sha=$(sha256sum "$input" | cut -d' ' -f1) || { echo "!!! Could not hash TDD evidence: $input" >&2; exit 2; }
+        input_mode=$(stat -c '%a' "$input") || { echo "!!! Could not stat TDD evidence: $input" >&2; exit 2; }
+        GATE_INPUTS="$GATE_INPUTS tdd:$input:$input_mode:$input_sha"
+      done < <(find .harness/tdd -type f -print | sort)
+    fi
+    if [ -d .harness/review ]; then
+      while IFS= read -r input; do
+        [ -n "$input" ] || continue
+        input_sha=$(sha256sum "$input" | cut -d' ' -f1) || { echo "!!! Could not hash review evidence: $input" >&2; exit 2; }
+        input_mode=$(stat -c '%a' "$input") || { echo "!!! Could not stat review evidence: $input" >&2; exit 2; }
+        GATE_INPUTS="$GATE_INPUTS review:$input:$input_mode:$input_sha"
+      done < <(find .harness/review -type f ! -name '*.gates' ! -name '*.lock' ! -name '*.tmp.*' -print | sort)
+    fi
+    GATE_KEY=$(printf '%s' "$GATE_INPUTS" | sha256sum | cut -d' ' -f1)
+    GATE_CACHE="$OUT/$STAGED_TREE.$GATE_KEY.gates"
+    GATE_LOCK="$OUT/$STAGED_TREE.gates.lock"
+    GATE_TMP=""
+    LOCK_TIMEOUT="${REVIEW_GATE_LOCK_TIMEOUT:-120}"
+    case "$LOCK_TIMEOUT" in ''|*[!0-9]*) echo "!!! REVIEW_GATE_LOCK_TIMEOUT must be a non-negative integer: $LOCK_TIMEOUT" >&2; exit 2;; esac
+    exec 9>"$GATE_LOCK"
+    if ! flock -w "$LOCK_TIMEOUT" 9; then echo "!!! Timed out waiting for the gate run for staged tree $STAGED_TREE." >&2; exit 1; fi
+    trap 'if [ -n "$GATE_TMP" ]; then rm -f "$GATE_TMP"; fi; flock -u 9; exec 9>&-' EXIT
+    if [ -s "$GATE_CACHE" ]; then
+      CACHED_GATES=$(cat "$GATE_CACHE" 2>/dev/null) || { echo "!!! Could not read the gate cache; refusing to use stale evidence." >&2; exit 1; }
+      [ "$CACHED_GATES" = "$EXPECTED_CACHE" ] || { echo "!!! Gate cache is incomplete or stale; refusing to use it." >&2; exit 1; }
+      printf '%s\n' "$CACHED_GATES"
+      echo "  (cached: run once against these exact staged bytes, sha $DIFF_SHA)"
+      gate_failed=0
+    else
+      gate_failed=0
+      gate_lines=""
+      while IFS= read -r g; do
+        [ -n "$g" ] || continue
+        gate_path="${g%% *}"
+        case "$gate_path" in scripts/check-*.sh|scripts/build-index.sh) ;; *) echo "!!! Unsupported pre-commit entry: $g" >&2; exit 2;; esac
+        case "$gate_path" in */check-commit-msg.sh|*/check-test-integrity.sh|*/check-reviewed.sh) continue;; esac
+        if out=$(eval "$g" 2>&1); then
+          gate_lines="$gate_lines  PASSED  $(basename "$gate_path")"$'\n'
+        else
+          echo "  FAILED  $(basename "$gate_path")"
+          echo "$out" | sed 's/^/          /'
+          gate_failed=1
+        fi
+      done <<< "$gate_commands"
+      if [ "$gate_failed" -ne 0 ]; then
+        echo; echo "!!! A deterministic gate is failing. Fix it before spending a review:"; echo "!!! the reviewer's attention is the scarce thing, and a script already"; echo "!!! knows the answer to whatever it would find."; exit 1
+      fi
+      GATE_TMP=$(mktemp "$GATE_CACHE.tmp.XXXXXX")
+      if ! printf '%s' "$gate_lines" > "$GATE_TMP"; then echo "!!! Could not write the gate cache; refusing to use partial evidence." >&2; exit 1; fi
+      if ! mv -f "$GATE_TMP" "$GATE_CACHE"; then echo "!!! Could not publish the gate cache; refusing to use partial evidence." >&2; exit 1; fi
+      GATE_TMP=""
+      printf '%s' "$gate_lines"
     fi
     echo
     # Deletions and renames first, because they are what a mis-staged index looks
