@@ -64,7 +64,7 @@ class RuleListTest {
    * ⚠️ The rules must be APPLIED, not merely declared. The gate reports how many
    * modules each rule was tested against, counted inside the loop from the same
    * expansion the rule uses. Shadowing {@code NO_HTTP=""} anywhere above that
-   * loop drops the count to zero while "8 module(s) checked" stays true — which
+   * loop drops the count to zero while "10 module(s) checked" stays true — which
    * is what made the earlier text-reading and print-above-the-loop versions of
    * this test pass over inert rules.
    */
@@ -94,11 +94,15 @@ class RuleListTest {
     assertThat(value("ROOT_MODULE"))
         .as("architecture.md rule 4, ADR-0055: exactly one composition root")
         .containsExactly("server");
+    assertThat(value("LEAF_MODULES"))
+        .as("architecture.md module leaves: nothing may depend on these modules")
+        .containsExactlyInAnyOrder("server", "bench");
     // ...and every one of them must still BE a module, which is the half that
     // catches a rename rather than a deliberate edit.
     assertThat(value("NO_HTTP")).isSubsetOf(all);
     assertThat(value("NO_CLOUD")).isSubsetOf(all);
     assertThat(value("ROOT_MODULE")).isSubsetOf(all);
+    assertThat(value("LEAF_MODULES")).isSubsetOf(all);
   }
 
   /** The lists must also stay disjoint — a module in both is a contradiction. */

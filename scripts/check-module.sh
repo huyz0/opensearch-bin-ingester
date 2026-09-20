@@ -4,7 +4,7 @@
 # dependency surface.
 #
 #   scripts/check-module.sh              modules this change touches
-#   GATE_SCOPE=full scripts/check-module.sh   all eight
+#   GATE_SCOPE=full scripts/check-module.sh   all ten
 #   scripts/check-module.sh format       one module, named
 #
 # ⚠️ The default is `delta` and may check NOTHING when a change touches no module
@@ -204,7 +204,7 @@ hdr "check-module"
 # of the module list, a module added to the build but not to this line was
 # silently skipped by the delta path -- which fails loudly for the same name
 # given on the command line -- so the first module added after this landed would
-# have gone unchecked while the gate printed "8 module(s) checked".
+# have gone unchecked while the gate printed "10 module(s) checked".
 # ⚠️ Every quoted string inside the include(...) block, not a line pattern.
 # Two line-based regexes shipped before this and each silently dropped a module:
 # one required a trailing comma, the next anchored to end-of-line so an inline
@@ -212,7 +212,7 @@ hdr "check-module"
 # indistinguishable from compliance -- the gate printed "ok 7 module(s) checked"
 # over a real Helidon dependency in the missing one.
 ALL=$(derive_modules settings.gradle.kts | tr '\n' ' ' | sed 's/ $//')
-[ -n "${ALL// /}" ] || { fail "no modules found in settings.gradle.kts -- a broken parser is not eight broken modules"; finish; }
+[ -n "${ALL// /}" ] || { fail "no modules found in settings.gradle.kts -- a broken parser is not ten broken modules"; finish; }
 
 # ⚠️ This is the PRODUCTION door, and for two rounds nothing entered it: every
 # suite came in through a test-only flag, so mutations confined to these lines
@@ -234,6 +234,7 @@ ALL="$PLAN_ALL"
 # ⚠️ THE COMPOSITION ROOT, BY NAME. It is the one module exempt from rule 4's
 # first half and the subject of its second (ADR-0055).
 ROOT_MODULE="server"
+LEAF_MODULES="server bench"
 
 NO_HTTP="format binstore-spi sequencer ingest"
 # architecture.md rule 2: no cloud SDK in the OpenSearch JVM.
@@ -282,6 +283,7 @@ CLOUD_GROUPS='software\.amazon\.awssdk|com\.amazonaws|com\.google\.cloud|com\.az
 # the loop.
 if [ "${1:-}" = "--print-rules" ]; then
   echo "ROOT_MODULE=$ROOT_MODULE"
+  echo "LEAF_MODULES=$LEAF_MODULES"
   echo "NO_HTTP=$NO_HTTP"
   echo "NO_CLOUD=$NO_CLOUD"
   exit 0
@@ -294,7 +296,7 @@ elif [ "$GATE_SCOPE" = "full" ]; then
 else
   # ⚠️ A change to the shared build alters EVERY module's resolved classpath
   # while touching no module directory. The conventions plugin already injects a
-  # `dependencies {}` block into all eight, so adding Helidon there is precisely
+  # `dependencies {}` block into all ten, so adding Helidon there is precisely
   # the change this gate must catch -- and mapping paths to module names would
   # route around it.
   # ⚠️ Mutating this to `MODULES=` makes the gate print "ok no module changed"
@@ -405,6 +407,18 @@ $one"
     echo "         Wiring worth sharing belongs in the module that owns it."
   fi
 
+  # The composition root and benchmark harness are leaves: runtime modules may
+  # not depend on either one. The root remains separately exempted from the
+  # `http` and backend rules above, but it is not exempt from staying out of
+  # the benchmark harness.
+  for leaf in $LEAF_MODULES; do
+    if [ "$m" != "$leaf" ] \
+       && printf '%s\n' "$deps" | grep -qE "project '?:$leaf'?"; then
+      fail "$m depends on $leaf (architecture.md module leaves)"
+      echo "         A leaf is a front door or tooling boundary; nothing may reach it."
+    fi
+  done
+
   # ONLY THE COMPOSITION ROOT DEPENDS ON `binstore-backends` in `src/main`
   # (M8.29). architecture.md rule 2 names `plugin`, and this once asked it of
   # `plugin` alone -- so a backend added to `ingest` passed GREEN, which is a
@@ -432,10 +446,9 @@ $one"
   esac
 done
 
-# ⚠️ The rule counts are part of the summary, not a debug aid. "8 module(s)
+# ⚠️ The rule counts are part of the summary, not a debug aid. "10 module(s)
 # checked" is equally true when every rule was skipped -- which is exactly what
 # shadowing NO_HTTP/NO_CLOUD produced, invisibly, with the suite green.
 [ "$FAILED" -eq 0 ] \
   && ok "$checked module(s) checked, rule5 tested $applied_r5, rule2 tested $applied_r2 ($WHY)$(scope_note)"
 finish
-

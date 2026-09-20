@@ -37,6 +37,7 @@ producers ──HTTP/streamed──▶ ingester nodes (≥2 per AZ, stateless)
 | `http` | thin Helidon adapter: parse `_bulk`, map errors, delegate to `ingest` | `ingest` |
 | `client` | the **consumer** (glossary.md's role name): subscription, fetch-mode dispatch, coalescing, decode. ⚠️ The module is `client` for its Gradle path; every type inside it is named for the role — `ConsumerClient`, not `ClientClient` | `format` |
 | `plugin` | `IngestionConsumerPlugin` implementation | `client` |
+| `bench` | seeded load generator and benchmark pacing seams; tooling only | nothing |
 | `server` | ⚠️ **the composition root, `main()` and the front door** (M8.1, M8.4, [ADR-0052](decisions/0052-m8-owns-assembly-and-the-first-real-backend-because-its-evidence-is-unbuyable-without-them.md)): configuration in, running process out. **The only module that may name a backend in `src/main`** — every other takes a `BinStore` — and, since [ADR-0055](decisions/0055-the-composition-root-is-the-one-module-that-may-depend-on-http.md), **the only one that may depend on `http`**. ⚠️ It is a LEAF: nothing depends on it, and `check-module.sh` asserts that | `ingest`, `sequencer`, `binstore-backends`, `http` |
 
 ⚠️ **The flush interval is adaptive, and it is the cost dial**

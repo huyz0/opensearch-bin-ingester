@@ -207,6 +207,22 @@ class ModuleGateTest {
         .isNotEqualTo("0");
   }
 
+  @Test
+  void noModuleMayDependOnTheBenchmarkLeaf(@TempDir Path dir) throws Exception {
+    scratch(dir);
+    dependencyStub("+--- project :bench");
+
+    String out = gate(null, "full");
+
+    assertThat(out)
+        .as("runtime modules must not reach the benchmark leaf%n%s", out)
+        .contains("alpha depends on bench")
+        .contains("beta depends on bench");
+    assertThat(out.lines().findFirst().orElseThrow())
+        .as("the leaf violation must fail the gate%n%s", out)
+        .isNotEqualTo("0");
+  }
+
   /**
    * Adds a {@code server} module to the scratch repo.
    *

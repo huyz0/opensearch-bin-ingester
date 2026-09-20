@@ -18,6 +18,9 @@ include(
     "http",
     "client",
     "plugin",
+    // The benchmark harness: the load generator and, from M9.4, the macro
+    // harness (ADR-0059). Nothing depends on it.
+    "bench",
     // ⚠️ LAST, because it depends on everything above it and nothing depends on
     // it -- the composition root is a leaf, which is what keeps the dependency
     // surface acyclic (M8.1, ADR-0052).
