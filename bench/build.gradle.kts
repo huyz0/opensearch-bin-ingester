@@ -52,6 +52,7 @@ val gateJmh = tasks.register<JavaExec>("allocationGateJmh") {
     mainClass.set("org.openjdk.jmh.Main")
     args(
         "-wi", "1", "-w", "1s", "-i", "2", "-r", "1s", "-f", "1",
+        "-p", "codec=ZSTD_3", "-p", "blockSize=256KiB",
         "-prof", "gc", "-rf", "json", "-rff", gateResult.get().asFile.absolutePath,
     )
 }

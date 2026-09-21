@@ -24,7 +24,7 @@
       "samples": 10,
       "status": "gated"
     },
-    "io.github.huyz0.os.biningester.benchmarks.CompressionBenchmark.compress256KiB(codec=ZSTD)": {
+    "io.github.huyz0.os.biningester.benchmarks.CompressionBenchmark.compressBlock(blockSize=256KiB,codec=ZSTD_3)": {
       "baselineBop": 263344.857993,
       "variancePct": 0.000031,
       "thresholdPct": 5.0,
