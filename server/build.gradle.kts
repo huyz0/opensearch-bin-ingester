@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-plugins { id("binjava.java-conventions") }
+plugins { id("io.github.huyz0.os.biningester.java-conventions") }
 
 dependencies {
     // ⚠️ THE COMPOSITION ROOT DEPENDS ON EVERYTHING AND NOTHING DEPENDS ON IT.
@@ -63,8 +63,8 @@ dependencies {
     // types: `binstore-backends` takes the SDK as `implementation`, so the
     // production path here names a store kind and a bucket, and nothing more.
     "integrationTestImplementation"(libs.awssdk.s3) {
-        binjava.AwsSdkHttp.EXCLUDED_CLIENTS.forEach {
-            exclude(group = binjava.AwsSdkHttp.GROUP, module = it)
+        io.github.huyz0.os.biningester.AwsSdkHttp.EXCLUDED_CLIENTS.forEach {
+            exclude(group = io.github.huyz0.os.biningester.AwsSdkHttp.GROUP, module = it)
         }
     }
     "integrationTestImplementation"(libs.awssdk.url.connection.client)

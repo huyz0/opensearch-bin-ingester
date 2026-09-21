@@ -19,7 +19,7 @@ Every attempt failed for the same reason. ADR-0004 already decided that reads
 are served by same-AZ ingester nodes, streamed through, never buffer-then-
 forward — the consumer never holds a `BinStore` reference at all. Verified
 directly: neither `plugin/src/main` nor `client/src/main` imports
-`binjava.binstore`, anywhere. So a request-count assertion in any consumer-side
+`io.github.huyz0.os.biningester.binstore`, anywhere. So a request-count assertion in any consumer-side
 test can only ever observe a store the test itself constructed and wired in
 for the purpose of counting — never one the consumer path can reach. The
 assertion cannot fail regardless of whether the consumer is correct, buggy, or
@@ -39,11 +39,11 @@ NFR-2's idle-cost zero is verified **by construction**, via a dependency
 check, not by a runtime assertion:
 
 > No class under `plugin/src/main` or `client/src/main` imports
-> `binjava.binstore`.
+> `io.github.huyz0.os.biningester.binstore`.
 
-This is checkable today by hand (`grep -rn binjava.binstore plugin/src/main
+This is checkable today by hand (`grep -rn io.github.huyz0.os.biningester.binstore plugin/src/main
 client/src/main` — no matches) and is exactly the shape `check-module.sh`
-already enforces for architecture rule 4 (nothing depends on `http`). The claim is stronger than the grep: `plugin/build.gradle.kts` and `client/build.gradle.kts` do not put `binstore-spi` (the module that defines the `binjava.binstore` package) on either module's **main** classpath at all — `client` depends only on `format`, and `plugin` depends only on `client` plus `binstore-backends`/`ingest` as `testImplementation`. So this is not "no one happens to have imported it yet"; the package is not resolvable from that classpath to import. Rung 3 of
+already enforces for architecture rule 4 (nothing depends on `http`). The claim is stronger than the grep: `plugin/build.gradle.kts` and `client/build.gradle.kts` do not put `binstore-spi` (the module that defines the `io.github.huyz0.os.biningester.binstore` package) on either module's **main** classpath at all — `client` depends only on `format`, and `plugin` depends only on `client` plus `binstore-backends`/`ingest` as `testImplementation`. So this is not "no one happens to have imported it yet"; the package is not resolvable from that classpath to import. Rung 3 of
 `gate-design`'s ladder — "derive it from a source of truth" — beats rung 7
 ("ask an agent") here: whether a class *imports a package* is a predicate over
 files in the tree, not a judgement call, so it belongs in a script the way

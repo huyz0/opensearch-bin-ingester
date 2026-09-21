@@ -43,7 +43,7 @@ hdr "check-fault-store-records"
 # ⚠️ The file is an argument so the harness test can point this at fixtures.
 # Without that the only way to test the gate is to break the real store, which
 # is how a gate comes to be tested solely by the thing it guards.
-TARGET="${1:-sequencer/src/test/java/binjava/sequencer/FaultInjectingStore.java}"
+TARGET="${1:-sequencer/src/test/java/io/github/huyz0/os/biningester/sequencer/FaultInjectingStore.java}"
 
 if [ ! -f "$TARGET" ]; then
   fail "$TARGET does not exist -- the fault-injecting store moved and this gate did not"

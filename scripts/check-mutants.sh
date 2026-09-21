@@ -64,7 +64,7 @@
 #
 # One line per mutant, keyed exactly as jzap keys it:
 #
-#   binjava.format.RunCommit::lastOffset()J::33::MATH#0   equivalent mutant on a
+#   io.github.huyz0.os.biningester.format.RunCommit::lastOffset()J::33::MATH#0   equivalent mutant on a
 #   defensive bound; the branch has no observable behaviour. M8.62
 #
 # An entry EXCLUDES that mutant from both halves of the score. Three properties

@@ -39,7 +39,7 @@ excluded from the build.**
   runtime, and every call site above the SPI is written blocking.
 - **`url-connection-client`**, which is the JDK's own `HttpURLConnection`.
   Netty (`netty-nio-client`) and Apache HttpClient 5 (`apache5-client`) are
-  excluded in `binjava.AwsSdkHttp`, from one list that drives both the module's
+  excluded in `io.github.huyz0.os.biningester.AwsSdkHttp`, from one list that drives both the module's
   dependency declaration and the root project's licence gate. The measurement:
   with them, `updateShas` pinned **45** jars; without, **30**.
 - **Exclusions live in one Kotlin object, not in two build files.** The module's

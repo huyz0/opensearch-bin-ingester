@@ -30,7 +30,7 @@ def trigger(desc):
 
 skills = []
 for d in sorted(glob.glob('.agents/skills/*/')):
-    name = os.path.basename(d.rstrip('/'))
+    name = os.path.basename(d.rstrip('/\\'))
     f = os.path.join(d, 'SKILL.md')
     if not os.path.exists(f):
         continue
@@ -52,7 +52,8 @@ def table_skills(prefix):
 
 def table_standards():
     rows = ['| Family | Standard | Read when |', '|---|---|---|']
-    rows += ['| %s | [%s](%s) | %s |' % (fam, base, path, rw) for fam, base, path, rw in stds]
+    rows += ['| %s | [%s](%s) | %s |' % (fam, base, path.replace('\\', '/'), rw)
+             for fam, base, path, rw in stds]
     return '\n'.join(rows)
 
 def table_gates():
@@ -77,9 +78,14 @@ def table_gates():
     rows = ['| Script | Stage | Enforces |', '|---|---|---|']
     wired = set()
     for _, entry, name, stage in hooks:
-        script = entry.split()[0]
+        # Hooks may be launched through a cross-platform adapter. The gate
+        # script is the .sh argument, not necessarily the first token.
+        script = next((token for token in entry.split() if token.endswith('.sh')), entry)
+        script = script.replace('\\', '/')
         wired.add(os.path.basename(script))
-        shown = entry if ' ' in entry else os.path.basename(entry)
+        shown = os.path.basename(script)
+        if os.path.basename(script) == 'build-index.sh' and '--check' in entry.split():
+            shown = 'scripts/build-index.sh --check'
         rows.append('| `%s` | %s | %s |' % (shown, stage, name))
     present = {os.path.basename(f) for f in glob.glob('scripts/check-*.sh')}
     unwired = sorted(present - wired)
@@ -107,8 +113,12 @@ def splice(path, key, body):
     if start not in txt or end not in txt:
         broken.append('%s has no index:%s region' % (path, key))
         return
+    # Use a callable replacement: generated paths may contain backslashes on
+    # Windows, and a string replacement makes re.sub interpret them as escape
+    # sequences (for example, ``\g`` as a group reference).
+    replacement = lambda _match: start + '\n' + body + '\n' + end
     new = re.sub(re.escape(start) + r'.*?' + re.escape(end),
-                 start + '\n' + body + '\n' + end, txt, flags=re.S)
+                 replacement, txt, flags=re.S)
     if new != txt:
         changed.append('%s (%s)' % (path, key))
         if mode != '--check':

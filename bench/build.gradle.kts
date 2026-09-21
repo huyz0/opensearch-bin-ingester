@@ -9,4 +9,4 @@
 // opposite reason: `server` may name everything, `bench` may be named by
 // nothing. check-module.sh enforces both leaves; ADR-0059 § Consequences says
 // why that boundary matters.
-plugins { id("binjava.java-conventions") }
+plugins { id("io.github.huyz0.os.biningester.java-conventions") }

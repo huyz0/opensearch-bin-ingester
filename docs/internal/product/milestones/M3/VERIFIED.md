@@ -28,7 +28,7 @@ carry a green line for a run that never happened.
 The two `-Xmx`-bound tiers are separate Gradle tasks and are named per
 criterion below.
 
-1. **Lengthens on sustained low `fillRatio` AND shortens at 0.9, proven against the threshold logic itself** -- `binjava.ingest.AccumulatorTest#theIntervalLengthensToTheCeilingOnceFillRatioSustainsLowForTheFullDelay`,
+1. **Lengthens on sustained low `fillRatio` AND shortens at 0.9, proven against the threshold logic itself** -- `io.github.huyz0.os.biningester.ingest.AccumulatorTest#theIntervalLengthensToTheCeilingOnceFillRatioSustainsLowForTheFullDelay`,
    `#theIntervalDoesNotLengthenBeforeTheSustainedDelayElapses` (one millisecond
    short of `intervalLengthenDelay`, so the boundary is pinned from both sides),
    `#theIntervalStartsAtTheFloor` (every pod earns lengthening rather than
@@ -43,16 +43,16 @@ criterion below.
    narrowed heading passes while covering half a criterion.
    All of these drive `fillRatio` and the thresholds directly, not "a flush
    eventually happened", which is what AC1 asks for.
-2. **Never exceeds the ceiling, never drops below the floor** -- `binjava.ingest.AccumulatorTest#theIntervalNeverExceedsTheCeilingNorDropsBelowTheFloorUnderOscillation`,
+2. **Never exceeds the ceiling, never drops below the floor** -- `io.github.huyz0.os.biningester.ingest.AccumulatorTest#theIntervalNeverExceedsTheCeilingNorDropsBelowTheFloorUnderOscillation`,
    which drives `fillRatio` adversarially between the bands and asserts the
    interval's own band on every iteration, not only at the end. Config-side
-   bounds: `binjava.ingest.IngestConfigTest#aCeilingBelowTheFloorIsRefused`,
+   bounds: `io.github.huyz0.os.biningester.ingest.IngestConfigTest#aCeilingBelowTheFloorIsRefused`,
    `#aCeilingEqualToTheFloorIsAccepted`,
    `#fillRatioThresholdsOutsideZeroToOneAreRefused`,
    `#aLowThresholdAtOrAboveTheHighThresholdIsRefused`,
    `#negativeHysteresisDelaysAreRefused`, `#aZeroLengthenDelayIsAccepted`,
    `#theDefaultsIncludeM3sAdaptiveRange`.
-3. **Asymmetric hysteresis** -- shortening reacts within `T_shorten` (default zero, the very next flush): `binjava.ingest.AccumulatorTest#theIntervalShortensToTheFloorImmediatelyOnceFillRatioReachesTheHighThreshold`;
+3. **Asymmetric hysteresis** -- shortening reacts within `T_shorten` (default zero, the very next flush): `io.github.huyz0.os.biningester.ingest.AccumulatorTest#theIntervalShortensToTheFloorImmediatelyOnceFillRatioReachesTheHighThreshold`;
    lengthening requires the full `T_lengthen`:
    `#theIntervalLengthensToTheCeilingOnceFillRatioSustainsLowForTheFullDelay`
    against `#theIntervalDoesNotLengthenBeforeTheSustainedDelayElapses`. The
@@ -60,12 +60,12 @@ criterion below.
    `#drainComputesFillRatioFromTheRealSegmentBytesNotTheEstimate`,
    `#lastFillRatioUpdatesOnEachDrainIndependently`,
    `#lastFillRatioSurvivesAnEmptyDrainAfterARealOne`.
-4. **Measured PUT rate within +/-20% of `1 / intervalCeiling` = 0.2 PUT/s at a modeled 1 MiB/s** -- `binjava.ingest.IntervalPutRateTest#theSustainedRunSettlesToTheCeilingsPutRate`,
+4. **Measured PUT rate within +/-20% of `1 / intervalCeiling` = 0.2 PUT/s at a modeled 1 MiB/s** -- `io.github.huyz0.os.biningester.ingest.IntervalPutRateTest#theSustainedRunSettlesToTheCeilingsPutRate`,
    measured through `CountingBinStore` over a 60-second window after the
    interval settles, not inferred from the interval value. The same test also
    pins that it settles within 1s of the configured 2-minute
    `intervalLengthenDelay` and then HOLDS the ceiling.
-5. **NFR-6 under the adaptive interval, at the ceiling** -- `binjava.http.MemoryFlatAtIntervalCeilingTest#memoryFlatWithTheIntervalAtItsCeiling`,
+5. **NFR-6 under the adaptive interval, at the ceiling** -- `io.github.huyz0.os.biningester.http.MemoryFlatAtIntervalCeilingTest#memoryFlatWithTheIntervalAtItsCeiling`,
    re-run for THIS record under a real 256 MB heap:
    `./gradlew :http:memoryBoundCeilingTest --rerun-tasks --no-build-cache` --
    **BUILD SUCCESSFUL in 3m20s, tests=1 skipped=0 failures=0 errors=0,
@@ -83,7 +83,7 @@ criterion below.
    (`MemoryFlatUnderTenXBodySizeTest`, `./gradlew :http:memoryBoundTest`) is
    unchanged and was NOT re-run for this record -- it is M1's evidence, not
    M3's.
-6. **The reserved lane byte round-trips** -- `binjava.format.GoldenSegmentV1Test#theCommittedGoldenV1SegmentStillParsesAtTheRightVersion`,
+6. **The reserved lane byte round-trips** -- `io.github.huyz0.os.biningester.format.GoldenSegmentV1Test#theCommittedGoldenV1SegmentStillParsesAtTheRightVersion`,
    `#theReservedLaneByteRoundTripsAsZeroForEveryRunInTheGoldenV1Segment`,
    `#aFreshlyWrittenSegmentRoundTripsTheReservedLaneByteThroughTheRealWriterAndReader`,
    `#theLaneByteIsReadFromItsOwnOffsetNotAliasedToCodecFlags`,

@@ -6,7 +6,7 @@ does not certify the evidence is true beyond what is recorded here, and a line
 naming something not actually run would violate non-negotiable 4.
 
 -1. `DeleteAndVersionIT#testAnOlderReplayDoesNotOverwriteANewerLiveWrite` (T4).
-    `./gradlew :plugin:clusterTest --tests binjava.plugin.DeleteAndVersionIT`.
+    `./gradlew :plugin:clusterTest --tests io.github.huyz0.os.biningester.plugin.DeleteAndVersionIT`.
     Mutation verified killed (omitting `_version`).
 0. `DeleteAndVersionIT#testDeleteRemovesTheDocumentFromTheIndex` and
    `DeleteAndVersionIT#testStaleVersionIsRejectedOnReplayRatherThanResurrectingTheDocument`
@@ -25,7 +25,7 @@ naming something not actually run would violate non-negotiable 4.
    1,600-consumer T1 test, a `tick()`-driven variant, a 20-shard T4 variant)
    were all attempted and withdrawn as unfalsifiable, per ADR-0023. Verified
    instead by the import-absence grep ADR-0023 names: `grep -rn
-   binjava.binstore plugin/src/main client/src/main` — no matches (checked at
+   io.github.huyz0.os.biningester.binstore plugin/src/main client/src/main` — no matches (checked at
    commit time of ADR-0023; not yet a script — M1.16e).
 4. `RestartResumeIT#testBatchStartSurvivesARealEngineCloseAndReopen` (T4, node
    level) and M1.17's three T2 tests (pointer contract) — both

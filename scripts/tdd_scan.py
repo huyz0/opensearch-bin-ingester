@@ -38,15 +38,34 @@ def check(base):
         names = git('diff', '--cached', '--name-only') or ''
         after_ref, before_ref = ':', 'HEAD:'
 
+    renamed_from = {}
+    if not base:
+        for line in (git('diff', '--cached', '--name-status', '-M') or '').splitlines():
+            fields = line.split('\t')
+            if len(fields) == 3 and fields[0].startswith('R'):
+                renamed_from[fields[2]] = fields[1]
+
     paths = [p for p in names.split() if p.endswith('.java') and TEST_PATH.search(p)]
     new_ids, blob_sha = set(), {}
     for p in paths:
         after = git('show', after_ref + p)
         if after is None:
             continue                                   # deleted
-        before = git('show', before_ref + p) or ''     # absent => new file
+        before_path = renamed_from.get(p, p)
+        before = git('show', before_ref + before_path) or ''  # absent => new file
         try:
-            fresh = test_ids(after, p) - test_ids(before, p)
+            after_ids = test_ids(after, p)
+            before_ids = test_ids(before, before_path)
+            if before_path != p:
+                # A package rename changes the fully-qualified test id but not
+                # the test.  Compare the stable class/method identity for a
+                # Git rename; non-renamed files retain strict id comparison.
+                stable = lambda ident: ident.split('#', 1)[0].split('.')[-1] + (
+                    '#' + ident.split('#', 1)[1] if '#' in ident else '')
+                fresh = {i for i in after_ids
+                         if stable(i) not in {stable(old) for old in before_ids}}
+            else:
+                fresh = after_ids - before_ids
         except UnparseableJava as e:
             print('  %sFAIL%s %s' % (RED, OFF, e))
             print('         Refusing to certify a file the parser cannot read.')
@@ -170,7 +189,7 @@ def plan(ids):
         print('  %sFAIL%s cannot locate a test source for:' % (RED, OFF))
         for i in bad:
             print('           ' + i)
-        print('         Use fully-qualified ids: binjava.format.SegmentTest#roundTrips')
+        print('         Use fully-qualified ids: io.github.huyz0.os.biningester.format.SegmentTest#roundTrips')
         return 1
     print('\n'.join(out))
     return 0

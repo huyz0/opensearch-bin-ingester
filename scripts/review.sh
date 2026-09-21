@@ -24,6 +24,19 @@ if ! STAGED_TREE=$(git write-tree 2>/dev/null); then
 fi
 OUT=".harness/review"; mkdir -p "$OUT"
 
+# Pre-commit entries may be routed through the portable launcher.  Keep the
+# command intact for execution, but normalize the wrapped script for validation
+# and reporting below.
+gate_script_path() {
+  local command="$1"
+  case "$command" in
+    python\ scripts/run-gate.py\ scripts/*.sh*)
+      printf '%s\n' "$command" | sed -n 's#^python scripts/run-gate.py \(scripts/[^ ]*\.sh\).*#\1#p'
+      ;;
+    *) printf '%s\n' "${command%% *}" ;;
+  esac
+}
+
 case "$CMD" in
   context)
     [ -n "$TASK" ] || { echo "--task required" >&2; exit 2; }
@@ -130,7 +143,7 @@ case "$CMD" in
     ' .pre-commit-config.yaml \
       | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//" \
       | sort -u)
-    if printf '%s\n' "$gate_scripts" | grep -Fxq 'scripts/build-index.sh --check'; then
+    if printf '%s\n' "$gate_scripts" | grep -Eq 'scripts/build-index\.sh --check$'; then
       gate_commands="$gate_scripts"
     else
       gate_commands="$gate_scripts"$'\n'"scripts/build-index.sh --check"
@@ -139,7 +152,7 @@ case "$CMD" in
     EXPECTED_CACHE=""
     while IFS= read -r g; do
       [ -n "$g" ] || continue
-      gate_path="${g%% *}"
+      gate_path="$(gate_script_path "$g")"
       case "$gate_path" in
         scripts/check-*.sh|scripts/build-index.sh) ;;
         *)
@@ -194,11 +207,28 @@ case "$CMD" in
     GATE_CACHE="$OUT/$STAGED_TREE.$GATE_KEY.gates"
     GATE_LOCK="$OUT/$STAGED_TREE.gates.lock"
     GATE_TMP=""
+    GATE_LOCK_DIR=""
     LOCK_TIMEOUT="${REVIEW_GATE_LOCK_TIMEOUT:-120}"
     case "$LOCK_TIMEOUT" in ''|*[!0-9]*) echo "!!! REVIEW_GATE_LOCK_TIMEOUT must be a non-negative integer: $LOCK_TIMEOUT" >&2; exit 2;; esac
-    exec 9>"$GATE_LOCK"
-    if ! flock -w "$LOCK_TIMEOUT" 9; then echo "!!! Timed out waiting for the gate run for staged tree $STAGED_TREE." >&2; exit 1; fi
-    trap 'if [ -n "$GATE_TMP" ]; then rm -f "$GATE_TMP"; fi; flock -u 9; exec 9>&-' EXIT
+    if command -v flock >/dev/null 2>&1; then
+      exec 9>"$GATE_LOCK"
+      if ! flock -w "$LOCK_TIMEOUT" 9; then echo "!!! Timed out waiting for the gate run for staged tree $STAGED_TREE." >&2; exit 1; fi
+      trap 'if [ -n "$GATE_TMP" ]; then rm -f "$GATE_TMP"; fi; flock -u 9; exec 9>&-' EXIT
+    else
+      # Git for Windows does not ship util-linux's flock.  mkdir is atomic on
+      # the local filesystems this harness supports, so use it as the fallback.
+      GATE_LOCK_DIR="${GATE_LOCK}.d"
+      lock_elapsed=0
+      while ! mkdir "$GATE_LOCK_DIR" 2>/dev/null; do
+        if [ "$lock_elapsed" -ge "$LOCK_TIMEOUT" ]; then
+          echo "!!! Timed out waiting for the gate run for staged tree $STAGED_TREE." >&2
+          exit 1
+        fi
+        sleep 1
+        lock_elapsed=$((lock_elapsed + 1))
+      done
+      trap 'if [ -n "$GATE_TMP" ]; then rm -f "$GATE_TMP"; fi; if [ -n "$GATE_LOCK_DIR" ]; then rmdir "$GATE_LOCK_DIR" 2>/dev/null || true; fi' EXIT
+    fi
     if [ -s "$GATE_CACHE" ]; then
       CACHED_GATES=$(cat "$GATE_CACHE" 2>/dev/null) || { echo "!!! Could not read the gate cache; refusing to use stale evidence." >&2; exit 1; }
       [ "$CACHED_GATES" = "$EXPECTED_CACHE" ] || { echo "!!! Gate cache is incomplete or stale; refusing to use it." >&2; exit 1; }
@@ -210,10 +240,15 @@ case "$CMD" in
       gate_lines=""
       while IFS= read -r g; do
         [ -n "$g" ] || continue
-        gate_path="${g%% *}"
+        gate_path="$(gate_script_path "$g")"
         case "$gate_path" in scripts/check-*.sh|scripts/build-index.sh) ;; *) echo "!!! Unsupported pre-commit entry: $g" >&2; exit 2;; esac
         case "$gate_path" in */check-commit-msg.sh|*/check-test-integrity.sh|*/check-reviewed.sh) continue;; esac
-        if out=$(eval "$g" 2>&1); then
+        gate_command="$g"
+        case "$g" in
+          python\ scripts/run-gate.py\ *) gate_command="${PYTHON3:-python3}${g#python}" ;;
+          scripts/*.sh*) gate_command="bash $g" ;;
+        esac
+        if out=$(eval "$gate_command" 2>&1); then
           gate_lines="$gate_lines  PASSED  $(basename "$gate_path")"$'\n'
         else
           echo "  FAILED  $(basename "$gate_path")"

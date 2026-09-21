@@ -51,7 +51,7 @@ successfully against the real published `0.1.1`, not a local patch.
 ## Decision
 
 Replace the `pitest` `JavaExec` task in
-`buildSrc/src/main/kotlin/binjava.java-conventions.gradle.kts` with the jzap
+`buildSrc/src/main/kotlin/io.github.huyz0.os.biningester.java-conventions.gradle.kts` with the jzap
 Gradle plugin (`io.github.huyz0.jzap`), applied through the same shared
 convention so every module gets `mutationTest`, `mutationTestDiff` and (on the
 root project, unused today since root applies no convention plugin here)

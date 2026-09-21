@@ -55,7 +55,7 @@ producer ──bulk/202──▶ ingester  (K8s pods, 3 AZ, scalable; disks only
 ```
 
 Deprecated synonyms are listed in the glossary and **rejected at commit time**.
-→ `scripts/check-terminology.sh`
+→ `./gradlew gates`
 
 ## Standards
 
@@ -121,13 +121,13 @@ containing a procedure rather than a pointer is a fork waiting to drift.
 
 1. **One task equals one commit equals one change that leaves the tree green.**
    The commit subject starts with the backlog task ID.
-   → `scripts/check-commit-msg.sh`
+   → `./gradlew checkCommitMessage`
 2. **Never move a threshold in the direction that weakens its gate, and never
    delete a test, to make a check pass.** Cost budgets are thresholds too.
    *No script yet.*
 3. **The test is written first and observed to fail; production code changes to
    satisfy the test, never the reverse.** New tests must have a red record.
-   → `scripts/tdd-red.sh`, `scripts/check-tdd.sh`, `scripts/check-test-integrity.sh`
+   → `./gradlew checkTdd`, `./gradlew checkTestIntegrity`
    ⚠️ These raise the cost of skipping; they do not prove virtue — see rule 4.
 4. **Never claim a test passes, a gate runs, or a number was measured, without
    having done it.** **No script enforces this, and none can.** Every other rule
@@ -138,7 +138,7 @@ containing a procedure rather than a pointer is a fork waiting to drift.
    with two recorded verdicts** — `reviewer` for production, `test-reviewer` for
    the tests — given the task and the diff but never the author's reasoning, with
    each verdict bound to the staged diff by hash.
-   → `scripts/review.sh`, `scripts/check-reviewed.sh`
+   → `./gradlew checkReviewed` (the review evidence producer remains a separate workflow)
    ⚠️ The test pass is separate because **test weakness is invisible to coverage**,
    which counts executed lines rather than constrained ones.
    ⚠️ **One agent runs both passes** (M0.114). Two agents re-read the same diff,
@@ -156,7 +156,7 @@ containing a procedure rather than a pointer is a fork waiting to drift.
    lands with its counting decorator.*
 7. **Business logic touches no socket, clock or object store directly.** If it
    needs I/O to test, it is in the wrong layer.
-   → `scripts/check-io-seam.sh`
+   → `./gradlew gates`
    ⚠️ It bans twelve I/O PACKAGES outright -- `java.nio.file`, `java.nio.channels`,
    `java.io`, `java.util.zip`, `java.util.jar`, `java.util.prefs`,
    `java.util.logging`, `java.sql`, `javax.sql`, `javax.naming`, `java.net`,
@@ -186,7 +186,7 @@ containing a procedure rather than a pointer is a fork waiting to drift.
    dependency's API can open a socket without naming one, and a helper inside
    the exempt module reaches the filesystem for a caller outside it. It raises
    the cost of reaching past a seam. The list it does enforce is in
-   `scripts/io_seam_scan.py` and every entry is pinned by a case, with the
+   `RepositoryGateChecks.ioSeam` JVM predicate and every entry is pinned by a case, with the
    sample table checked against the list itself so neither can drift.
 8. **A format change updates the format, every reader, every writer, the fakes,
    the golden files and the ADR in one commit.**
@@ -206,81 +206,47 @@ containing a procedure rather than a pointer is a fork waiting to drift.
 
 ## Gates
 
-⚠️ **This section is the honest answer to "what actually runs".** A skill or a
-standard may name a script that does not exist; `scripts/` is the truth on the
-day you read it.
-
-Running today, wired in `.pre-commit-config.yaml`. ⚠️ **This table is
-generated** from that file and from `scripts/` — a hand-maintained list of what
-runs is exactly the list that goes stale:
+⚠️ **This section is the honest answer to "what actually runs".** Enforcement
+is owned by Gradle tasks and the JDK; the historical files under `scripts/` are
+not hook entry points.
 
 <!-- index:gates:start -->
-| Script | Stage | Enforces |
+| Gradle task | Stage | Enforces |
 |---|---|---|
-| `check-portability.sh` | pre-commit | skills/README.md rules 2,3,5: skills are vendor-neutral and adapters are thin |
-| `check-gate-scope.sh` | pre-commit | every gate judges this repository only, never .tmp/ or a sibling checkout |
-| `check-harness-tests.sh` | pre-commit | the harness's own tests run -- buildSrc tests are NOT run by ./gradlew build |
-| `check-module.sh` | pre-commit | architecture.md rules 2/4/5: each module stays inside its dependency surface |
-| `check-override.sh` | pre-commit | M8.41: an override entry's round count and finding ids match the recorded verdicts |
-| `check-wired.sh` | pre-commit | M8.25: every entry of M8's unwired set is wired or owned by an open row |
-| `check-adr-refs.sh` | pre-commit | AGENTS.md: every ADR-<n> cited in the tree has a file behind it |
-| `check-javadoc-cites.sh` | pre-commit | M5.56: test citations in src/main javadoc are resolved against the tree |
-| `check-links.sh` | pre-commit | every relative markdown link resolves |
-| `scripts/build-index.sh --check` | pre-commit | the generated index regions in AGENTS.md and skills/README.md are current |
-| `check-terminology.sh` | pre-commit | glossary.md: one name per concept -- producer/ingester/writer/reader/consumer/plugin |
-| `check-fault-store-records.sh` | pre-commit | non-negotiable 9 / M5.49: every verb of the fault-injecting store is metered |
-| `check-license-headers.sh` | pre-commit | build.md: every source file carries the SPDX Apache-2.0 header |
-| `check-dependency-licenses.sh` | pre-commit | build.md: no GPL/AGPL/SSPL dependencies in an Apache-2.0 project |
-| `check-metric-cardinality.sh` | pre-commit | observability.md rule 1: no high-cardinality metric or span labels |
-| `check-test-budget.sh` | pre-commit | build.md: memory caps declared; a runaway dies as a JVM/Docker OOM, not a lost WSL2 session |
-| `check-file-size.sh` | pre-commit | code-structure.md rule 1: no source file over 700 lines |
-| `check-io-seam.sh` | pre-commit | non-negotiable 7: business logic takes a seam for every clock, socket and store |
-| `check-tdd.sh` | pre-commit | testing.md rule 2: every new test was observed to fail before the code existed |
-| `check-mutants.sh` | manual | M0.14 / testing.md rule 8: 80% of the mutants on the changed lines killed |
-| `check-reviewed.sh` | pre-commit | non-negotiable 5: the staged bytes carry both review verdicts |
-| `check-commit-msg.sh` | commit-msg | non-negotiable 1: the commit subject names a real backlog task |
-| `check-test-integrity.sh` | commit-msg | testing.md rules 4-5: no assertion weakened alongside a production change |
-
-Present in `scripts/` but **not** wired into `.pre-commit-config.yaml` — invoke by hand, from a skill, or from CI: `check-coverage.sh`, `check-milestone-verified.sh`, `check-suite-time.sh`.
+| `./gradlew gates` | pre-commit | repository invariants plus wiring, override, portability, I/O-seam, metric, module, and dependency checks |
+| `./gradlew checkHarnessTests` | pre-commit | JVM-native buildSrc gate tests |
+| `./gradlew checkWired` | pre-commit | every M8 unwired-set entry is wired or owned by an open backlog row |
+| `./gradlew checkOverride` | pre-commit | changed review override entries agree with recorded verdicts |
+| `./gradlew checkReviewed` | pre-commit | staged review verdicts are bound to the staged diff |
+| `./gradlew checkTdd` | pre-commit | newly added tests have byte-bound red evidence |
+| `./gradlew checkTestIntegrity` | commit-msg | test removals or assertion weakening have a commit-body reason |
+| `./gradlew checkCommitMessage -PcommitMessageFile=<file>` | commit-msg | commit subject names a real backlog task |
+| `./gradlew checkMilestoneVerified -PmilestoneDir=<dir>` | manual | every acceptance criterion has an evidence line |
+| `./gradlew checkCoverage` | manual | regenerated JaCoCo reports meet line and branch floors |
+| `./gradlew checkSuiteTime -PsuiteLayer=L0 -PsuiteSeconds=<n>` | manual | measured suite time stays within its layer budget |
+| `./gradlew checkMutants` | manual | native Gradle mutation-diff tasks run for modules that provide them |
+| `./gradlew dependencyLicenses` | build/check | dependency SHA-1 pins, licence files, and denied licences |
+| `./gradlew check` | build/check | runs the complete Gradle/JDK gate set and dependency licence gate |
 <!-- index:gates:end -->
 
-⚠️ **`check-mutants.sh` exists and is wired at the `manual` stage** (M0.14),
-which means an ordinary `git commit` does **not** run it. That is a cost
-decision, measured rather than assumed: `./gradlew :format:mutationTestDiff`
-over a two-line change is 42 s wall on the smallest module, against build.md's
-90 s L0 budget for the whole pre-commit set. Run it by name before offering a
-commit for review — `pre-commit run --hook-stage manual check-mutants`, or
-`scripts/check-mutants.sh`. ⚠️ **CI DOES NOT RUN IT**: the L1 test job is
-M0.27, an open row, so today the ONE thing that fires this gate is a sentence
-in the `tdd` skill -- rung 7 of `gate-design`, an instruction in a prompt,
-which differs per run and dies with the session. `CHECK_RANGE` is honoured so
-that M0.27 is a wiring change rather than a rewrite. A gate nobody can afford
-to run enforces nothing, so it is declared where every other gate is declared
-and fired where it fits.
+The historical shell/Python gate implementations are retained as migration
+references only. The enforced pre-commit path is the Gradle/JDK task graph;
+none of the hooks invokes a script interpreter.
 
 Not yet existing, and named by skills and standards that say so: the cost meter
 (`cost-budget`) and the benchmark gates. **When a skill tells you to run one of
 these and it is absent, say the gate did not run.** Do not proceed as though it
 passed.
 
-⚠️ **What CI can and cannot enforce**, because the difference matters more
-than the claim:
+⚠️ The staged-evidence tasks (`checkReviewed`, `checkTdd`, and
+`checkTestIntegrity`) intentionally inspect the local index and local evidence
+stores. CI must invoke them with the CI-specific diff/evidence setup; a clean
+checkout with no staged diff is not evidence that those predicates were
+checked.
 
-| Gate | In CI? | Why |
-|---|---|---|
-| the ten text/build gates | ✅ | `pre-commit run --all-files` |
-| `check-test-integrity` | ✅ **only with `CHECK_RANGE`** | it reads the *staged* diff, which is empty in a fresh checkout; `CHECK_RANGE=<base-ref>` makes it compare against the push or pull-request base. Without it it prints `ok` having examined nothing |
-| `check-tdd` | ❌ **cannot** | `CHECK_RANGE` lets it find the new tests, but the red records live in `.harness/tdd/red.json`, which `.gitignore` excludes — so it fails in CI with "no red record" no matter the range. Verified: `CHECK_RANGE=HEAD~1 ./scripts/check-tdd.sh` exits 1 in a clean tree |
-| `check-commit-msg`, `check-test-integrity` | ⚠️ **needs explicit invocation** | `pre-commit run --all-files` runs the pre-commit stage only and never fires commit-msg hooks |
-| `check-module` | ✅ **only with `GATE_SCOPE=full`** | its default delta path selects modules from the *staged* diff, which is empty in a fresh checkout, so it would report "no module changed" having built nothing. CI sets `GATE_SCOPE=full` to build all eight |
-| `check-reviewed` | ❌ **cannot** | its evidence lives in `.harness/review/`, gitignored and local to the machine that ran the review. ⚠️ It is a *pre-commit-stage* hook, so `--all-files` **does** invoke it — and with nothing staged it prints `ok nothing staged` and **passes vacuously**. It does not fail, which is worse: a green line that means nothing. CI runs `SKIP=check-reviewed` so the skip is visible in the log instead |
-| `check-override` | ❌ **cannot** | it judges override entries against `.harness/review/`, the same local, gitignored store; with nothing staged it prints `ok` having judged nothing, and a task with no local verdict is reported `UNJUDGED` rather than passed |
-
-⚠️ **Gates run in `delta` mode by default** — only the files a change touches —
-and print which mode they used. `GATE_SCOPE=full` examines the whole tree and is
-what CI runs. A gate that cannot be sound on a delta either escalates itself
-(`check-links` goes full whenever a file is deleted or renamed) or does not offer
-the mode. See [build.md](docs/internal/standards/build.md) § Gate scope.
+⚠️ Repository gates examine the bounded checkout; staged-evidence tasks examine
+only the staged diff by design. See [build.md](docs/internal/standards/build.md)
+§ Gate scope for the distinction.
 
 ⚠️ **Known blind spot in `check-tdd` / `check-test-integrity`:** a test
 annotated only with a project-defined *composed* annotation

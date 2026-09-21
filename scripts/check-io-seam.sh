@@ -74,10 +74,10 @@ hdr "check-io-seam"
 # Without it a commit touching no `src/main` file at all -- which is most of
 # them, and was this gate's own commit -- died as "the scanner failed" while the
 # scanner had run perfectly and found nothing to read.
-FOUND=$(scoped_files '*/src/main/java/binjava/*.java' \
+FOUND=$(scoped_files '*/src/main/java/io/github/huyz0/os/biningester/*.java' \
   | { grep -v '^binstore-backends/' || true; } \
-  | { grep -vxF -e 'server/src/main/java/binjava/server/Main.java' \
-                -e 'server/src/main/java/binjava/server/ConfigFile.java' || true; } \
+  | { grep -vxF -e 'server/src/main/java/io/github/huyz0/os/biningester/server/Main.java' \
+                -e 'server/src/main/java/io/github/huyz0/os/biningester/server/ConfigFile.java' || true; } \
   | python3 scripts/io_seam_scan.py)
 RC=$?
 [ "$RC" -eq 0 ] || { fail "the scanner failed"; echo "$FOUND"; finish; }

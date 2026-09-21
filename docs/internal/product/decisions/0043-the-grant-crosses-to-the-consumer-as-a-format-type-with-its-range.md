@@ -40,8 +40,8 @@ both.
 
 ## Decision
 
-**(a) The grant crosses as `binjava.format.Grant`, a second type for the same
-concept, not as `binjava.binstore.SignedUrl` and not as a bare `String`.**
+**(a) The grant crosses as `io.github.huyz0.os.biningester.format.Grant`, a second type for the same
+concept, not as `io.github.huyz0.os.biningester.binstore.SignedUrl` and not as a bare `String`.**
 
 `SignedUrl` cannot make this trip. architecture.md rule 1 says `format` depends
 on **nothing**, and ADR-0023 keeps `binstore-spi` out of `client` and `plugin`.

@@ -27,7 +27,7 @@ dependencies {
     testImplementation(libs.findLibrary("assertj-core").get())
     testRuntimeOnly(libs.findLibrary("junit-platform-launcher").get())
 
-    // ADR-0045: buildSrc's own plugin classpath, so binjava.java-conventions
+    // ADR-0045: buildSrc's own plugin classpath, so io.github.huyz0.os.biningester.java-conventions
     // can `id("io.github.huyz0.jzap")` it -- a literal coordinate outside the
     // catalog above, the same precedent the removed `pitest` Configuration
     // set: that catalog pins what modules compile and test against, and this
@@ -79,5 +79,17 @@ tasks.withType<Test>().configureEach {
     inputs.file(rootDir.parentFile.resolve("settings.gradle.kts"))
         .withPropertyName("rootSettings")
         .withPathSensitivity(PathSensitivity.RELATIVE)
+}
+
+tasks.register<Test>("nativeGateTest") {
+    description = "Run only the JVM-native repository gate tests"
+    group = "verification"
+    useJUnitPlatform()
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    filter {
+        includeTestsMatching("io.github.huyz0.os.biningester.GradleGateWiringTest")
+        includeTestsMatching("io.github.huyz0.os.biningester.RepositoryGateChecksTest")
+    }
 }
 

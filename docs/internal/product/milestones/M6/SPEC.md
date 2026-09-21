@@ -88,7 +88,7 @@ The plugin runs inside OpenSearch, is handed `IndexMetadata` in
 an authenticated subscription. So it pushes registration over that — **no new
 endpoint, no new credential, no unauthenticated surface** (ADR-0015 §2).
 
-⚠️ **The seam, not the socket.** `client` may not import `binjava.binstore`
+⚠️ **The seam, not the socket.** `client` may not import `io.github.huyz0.os.biningester.binstore`
 (ADR-0023) and `plugin` may not import `ingest`; the registration therefore
 travels as a type in `format` over a method on the transport seam, exactly as
 subscription does. The production transport is still M8's (M5.6e), so M6 wires

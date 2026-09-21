@@ -85,7 +85,7 @@ done
 # derives its file list from git, and to a fresh clone -- which then fails to
 # build for a reason nobody can see in the diff.
 #
-# ⚠️ This is not hypothetical: the package `binjava.build` put two Kotlin task
+# ⚠️ This is not hypothetical: the package `io.github.huyz0.os.biningester.build` put two Kotlin task
 # classes in a directory named `build/`, the standard ignore pattern matched it,
 # and `git add buildSrc` silently staged neither.
 # `.tmp/` is excluded deliberately -- it is the quarantine, and git collapses an

@@ -16,7 +16,7 @@ take**, and bytes crossing a process boundary are a wire format — so this is a
 registration.
 
 The module constraint is the same one ADR-0047 met: `client` and `plugin` may
-not import `binjava.binstore` (ADR-0023) and `plugin` may not import `ingest`
+not import `io.github.huyz0.os.biningester.binstore` (ADR-0023) and `plugin` may not import `ingest`
 (architecture.md). The only module both ends already depend on is `format`.
 
 M7 is the milestone where deletion starts, so unlike every earlier frame the

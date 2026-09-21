@@ -36,6 +36,10 @@ fi
 
 n=0
 while read -r prefix spdx _; do
+  # Git checkouts may preserve CRLF on Windows; fields must not carry the CR
+  # into the filename or SPDX comparison.
+  prefix=${prefix%$'\r'}
+  spdx=${spdx%$'\r'}
   case "$prefix" in ''|\#*) continue ;; esac
   n=$((n+1))
   [ -f "$DIR/$prefix-LICENSE.txt" ] || fail "$MANIFEST names '$prefix' with no $DIR/$prefix-LICENSE.txt"

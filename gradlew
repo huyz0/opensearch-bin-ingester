@@ -1,5 +1,9 @@
 #!/bin/sh
 
+# The first line is a harmless POSIX no-op and a Windows trampoline. This lets
+# pre-commit invoke the same extensionless entry on both operating systems.
+@goto :windows
+
 #
 # Copyright © 2015 the original authors.
 #
@@ -246,3 +250,8 @@ eval "set -- $(
     )" '"$@"'
 
 exec "$JAVACMD" "$@"
+
+:windows
+@echo off
+@call "%~dp0gradlew.bat" %*
+@exit /b %errorlevel%

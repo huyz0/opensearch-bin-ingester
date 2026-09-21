@@ -11,7 +11,7 @@ Research: docs/research/30-design-space/10-client-library-and-fetch-modes.md §7
 
 ## Context
 
-ADR-0043 put the grant on the wire as `binjava.format.Grant` and brought back
+ADR-0043 put the grant on the wire as `io.github.huyz0.os.biningester.format.Grant` and brought back
 `byteStart`/`byteLen` as coordinates, then **reopened its own decision (b)** when
 M5.45b's review established that the consumer's request is a plain whole-object
 GET: the coordinates buy nothing at the fetch, and `SegmentReader` reads the

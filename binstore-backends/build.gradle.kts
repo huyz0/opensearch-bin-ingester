@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-plugins { id("binjava.java-conventions") }
+plugins { id("io.github.huyz0.os.biningester.java-conventions") }
 
 dependencies {
     api(project(":binstore-spi"))
@@ -13,12 +13,12 @@ dependencies {
     // compile.
     implementation(libs.awssdk.s3) {
         // ⚠️ THE SDK'S OWN HTTP CLIENTS EXCLUDED, from the one list that also
-        // drives the root project's licence gate (`binjava.AwsSdkHttp`).
+        // drives the root project's licence gate (`io.github.huyz0.os.biningester.AwsSdkHttp`).
         // Without them the SDK brings Netty AND Apache HttpClient 5: two HTTP
         // stacks and a reactive runtime, to make calls this project makes
         // blocking on a virtual thread anyway.
-        binjava.AwsSdkHttp.EXCLUDED_CLIENTS.forEach {
-            exclude(group = binjava.AwsSdkHttp.GROUP, module = it)
+        io.github.huyz0.os.biningester.AwsSdkHttp.EXCLUDED_CLIENTS.forEach {
+            exclude(group = io.github.huyz0.os.biningester.AwsSdkHttp.GROUP, module = it)
         }
     }
     implementation(libs.awssdk.url.connection.client)
@@ -32,8 +32,8 @@ dependencies {
     // failure inside a 200 is not success -- are invisible against a real
     // endpoint, which answers both happily.
     testImplementation(libs.awssdk.s3) {
-        binjava.AwsSdkHttp.EXCLUDED_CLIENTS.forEach {
-            exclude(group = binjava.AwsSdkHttp.GROUP, module = it)
+        io.github.huyz0.os.biningester.AwsSdkHttp.EXCLUDED_CLIENTS.forEach {
+            exclude(group = io.github.huyz0.os.biningester.AwsSdkHttp.GROUP, module = it)
         }
     }
 
@@ -43,8 +43,8 @@ dependencies {
     // nothing to match.
     "integrationTestImplementation"(testFixtures(project(":binstore-spi")))
     "integrationTestImplementation"(libs.awssdk.s3) {
-        binjava.AwsSdkHttp.EXCLUDED_CLIENTS.forEach {
-            exclude(group = binjava.AwsSdkHttp.GROUP, module = it)
+        io.github.huyz0.os.biningester.AwsSdkHttp.EXCLUDED_CLIENTS.forEach {
+            exclude(group = io.github.huyz0.os.biningester.AwsSdkHttp.GROUP, module = it)
         }
     }
     "integrationTestImplementation"(libs.awssdk.url.connection.client)

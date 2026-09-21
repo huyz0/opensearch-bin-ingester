@@ -98,8 +98,8 @@ is uniformly affirmative is the one to distrust.
     and nothing in the tree executes a tier: `FallbackLadder` performs no I/O
     and nothing constructs it (ADR-0044 (a)). What is verified is that no
     automatic path can name a LIST, not that a degraded fleet was observed.
-14. **No Helidon in `sequencer`/`client`/`plugin`, no `binjava.binstore` in `client`/`plugin`** — `GATE_SCOPE=full ./scripts/check-module.sh` green (8 modules, rule5 tested
-    4, rule2 tested 2), and `grep -rn '^import binjava.binstore' client/src/main
+14. **No Helidon in `sequencer`/`client`/`plugin`, no `io.github.huyz0.os.biningester.binstore` in `client`/`plugin`** — `GATE_SCOPE=full ./scripts/check-module.sh` green (8 modules, rule5 tested
+    4, rule2 tested 2), and `grep -rn '^import io.github.huyz0.os.biningester.binstore' client/src/main
     plugin/src/main` returns nothing. `DirectFetchTest` and `SegmentSource` are
     the seam that keeps it that way.
 

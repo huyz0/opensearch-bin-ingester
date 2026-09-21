@@ -10,7 +10,7 @@ run rather than guessed:
      "mutationScore": 100.0, "testStrength": 100.0,
      "scoredMutants": 3, "unscoredMutants": 0, "coveredMutants": 3,
      "detectedMutants": 3, "failingBaselineTests": [],
-     "mutants": [{"key": "binjava.format.RunCommit::lastOffset()J::33::MATH#0",
+     "mutants": [{"key": "io.github.huyz0.os.biningester.format.RunCommit::lastOffset()J::33::MATH#0",
                   "class": ..., "method": ..., "line": 33, "mutator": "MATH",
                   "ordinal": 0, "sourceFile": ..., "description": ...,
                   "status": "KILLED", "killingTest": ..., "coveringTests": 1,

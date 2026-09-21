@@ -1,3 +1,7 @@
+#!/bin/sh
+@goto :windows
+exec "$(dirname "$0")/gradlew" "$@"
+:windows
 @rem
 @rem Copyright 2015 the original author or authors.
 @rem

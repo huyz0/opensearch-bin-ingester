@@ -1,0 +1,673 @@
+// SPDX-License-Identifier: Apache-2.0
+package io.github.huyz0.os.biningester.sequencer;
+
+import io.github.huyz0.os.biningester.binstore.BinStore;
+import io.github.huyz0.os.biningester.binstore.ListPage;
+import io.github.huyz0.os.biningester.binstore.ObjectStat;
+import io.github.huyz0.os.biningester.format.ChainEntry;
+import io.github.huyz0.os.biningester.format.Checkpoint;
+import io.github.huyz0.os.biningester.format.CommitDelta;
+import io.github.huyz0.os.biningester.format.Continue;
+import io.github.huyz0.os.biningester.format.RunCommit;
+import io.github.huyz0.os.biningester.format.RunKey;
+import io.github.huyz0.os.biningester.format.Seal;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * READING a chain, including across the boundary into whatever it continues from.
+ *
+ * <p>⚠️ Split out of {@link CommitLog} when M4.6e's crossing pushed that file
+ * past the 500-line limit. code-structure.md rule 1: split it, do not raise the
+ * limit. The seam is real rather than convenient — reading a chain and WRITING
+ * to one are different jobs, and only the writer needs a lease, a redrive budget
+ * or a barrier to respect.
+ *
+ * <p>⚠️ ADDRESSING COMES FROM {@link LogKeys}, never re-derived here. The key
+ * grammar zero-pads epoch and sequence to 16 hex digits so lexicographic order
+ * is numeric order (ADR-0022 left key order as the only ordering a reader has),
+ * and a second copy of that formatting would be a wire-format duplication
+ * waiting to drift.
+ *
+ * <p>⚠️ ONE SITE STILL GOES THROUGH {@link CommitLog} — {@link #firstEntry}
+ * builds one to address slot 0 — and it is a LEFTOVER of the split, not a
+ * guard. An earlier draft claimed the constructor's {@code epoch < 0} check was
+ * why it stayed; that was measured FALSE. Both callers already establish
+ * {@code chainEpoch >= 1} before reaching it, so the throw is unreachable here
+ * and a bare {@link LogKeys} leaves the suite green.
+ */
+final class ChainReplay {
+
+    /**
+     * One hop of the ancestry: which chain, where to start, and how far in.
+     *
+     * <p>⚠️ {@code from} IS WHAT M4.9 ADDED. It is the first sequence NOT
+     * already covered by a checkpoint, so the LIST starts after the entries
+     * below it and they are never GET at all — bounding the LIST, the GETs and
+     * the stats together, which is the point: the measurement this replaces had
+     * all three growing per ancestor.
+     */
+    private record Hop(long epoch, long from, long upTo) {
+    }
+
+    /** {@link Result#checkpointEpoch} when the walk began at an origin, not a checkpoint. */
+    static final long NO_CHECKPOINT = -1;
+
+    /** What a replay learned: offsets, this chain's next free slot, its seal. */
+    record Result(Map<RunKey, Long> offsets, long nextSequence, Seal seal,
+            Map<RunKey, Long> indexEntries, Map<String, Checkpoint.PodState> pods,
+            List<EpochDelta> deltas, long checkpointEpoch, long checkpointSequence) {
+
+        /** A result whose walk did not start at a checkpoint. */
+        Result(Map<RunKey, Long> offsets, long nextSequence, Seal seal,
+                Map<RunKey, Long> indexEntries, Map<String, Checkpoint.PodState> pods,
+                List<EpochDelta> deltas) {
+            this(offsets, nextSequence, seal, indexEntries, pods, deltas, NO_CHECKPOINT, 0);
+        }
+
+        /**
+         * Whether the walk started at a checkpoint, at ({@link #checkpointEpoch},
+         * {@link #checkpointSequence}) -- where the chain it read BEGINS (M8.38).
+         */
+        boolean startedAtCheckpoint() {
+            return checkpointEpoch != NO_CHECKPOINT;
+        }
+
+        /**
+         * ⚠️ `deltas` IS WHAT M7.25 RECORDED AS MISSING: this walk read every
+         * one of them and threw them away, so a `List<CommitDelta>` -- the
+         * argument `RetentionPass`, `SegmentGc` and `RetainedOffsets` all take
+         * -- could not be produced by any `src/main` method at any price.
+         * Carried here for the reason `indexEntries` and `pods` are: a replay
+         * is the only walk that already visits every entry, and rebuilding the
+         * list any other way costs one GET per delta, per pass, for ever
+         * (M8.3, ADR-0052 § 3).
+         *
+         * <p>⚠️ IT IS SCOPED TO WHAT THE REPLAY READ, which after a checkpoint
+         * is the deltas since that checkpoint rather than all of history --
+         * the same scoping `indexEntries` documents, and the right one: a
+         * checkpoint is precisely the thing that collapses what came before it.
+         */
+        Result {
+            deltas = List.copyOf(deltas);
+        }
+
+        Result(Map<RunKey, Long> offsets, long nextSequence, Seal seal,
+                Map<RunKey, Long> indexEntries, Map<String, Checkpoint.PodState> pods) {
+            this(offsets, nextSequence, seal, indexEntries, pods, List.of());
+        }
+
+        /**
+         * ⚠️ `pods` IS THE IDEMPOTENCY WINDOW, REBUILT FROM THE CHAIN (M5.1).
+         * `IdempotencyWindow` is process-local, so a SUCCESSOR started with an
+         * empty one and a replay crossing a takeover was applied twice --
+         * {@link Sequencer}'s javadoc USED TO say so and named the fix as
+         * M4.10f, which was in no build and no backlog row. That sentence is
+         * gone because this is what removed it; the contract now describes the
+         * inheritance rather than its absence. Forwarding is what makes it
+         * reachable: a forwarded commit whose reply is lost, retried after the
+         * lease moves, arrives at a pod that never saw the original.
+         *
+         * <p>⚠️ CARRIED HERE BECAUSE A REPLAY IS THE ONLY WALK THAT ALREADY
+         * VISITS EVERY ENTRY, exactly as `indexEntries` is. The data was put on
+         * the chain by M4.10c -- delta attribution and `Checkpoint.pods` -- and
+         * simply never read back.
+         */
+        Result(Map<RunKey, Long> offsets, long nextSequence, Seal seal,
+                Map<RunKey, Long> indexEntries) {
+            this(offsets, nextSequence, seal, indexEntries, Map.of());
+        }
+
+        /**
+         * ⚠️ `indexEntries` IS HOW MANY CHAIN ENTRIES MENTION EACH STREAM, and
+         * it is carried here because a replay is the only walk that already
+         * visits every entry. Rebuilding it any other way costs a second pass
+         * over the chain, and deriving it from `offsets` is impossible -- an
+         * offset says how far a stream got, not across how many entries.
+         *
+         * <p>⚠️ IT IS SCOPED TO WHAT THE REPLAY READ, which after a checkpoint
+         * is the deltas since that checkpoint rather than all of history. That
+         * is the RIGHT quantity for M4.14: a compaction threshold is chosen
+         * against what the log still holds, and a checkpoint is precisely the
+         * thing that collapses what came before it.
+         */
+        Result(Map<RunKey, Long> offsets, long nextSequence, Seal seal) {
+            this(offsets, nextSequence, seal, Map.of(), Map.of());
+        }
+    }
+
+    private final BinStore store;
+    private final String prefix;
+    private final long ownEpoch;
+    private final Map<RunKey, Long> offsets = new HashMap<>();
+    private final Map<RunKey, Long> indexEntries = new HashMap<>();
+    private final Map<String, Checkpoint.PodState> pods = new HashMap<>();
+
+    /**
+     * ⚠️ IN THE ORDER THE WALK READ THEM, which is ascending sequence within a
+     * chain and oldest ancestor first across a crossing -- the order a GC pass
+     * folds.
+     */
+    private final List<EpochDelta> deltas = new java.util.ArrayList<>();
+
+    /** One idempotency slot: a pod AND the incarnation of it that wrote. */
+    private static String slot(String podId, String incarnationId) {
+        return podId + "\0" + incarnationId;
+    }
+    private long nextSequence;
+    private Seal seal;
+
+    /** Where the walk began, if a checkpoint began it; the walk stops at the first. */
+    private long checkpointEpoch = NO_CHECKPOINT;
+    private long checkpointSequence;
+
+    private ChainReplay(BinStore store, String prefix, long ownEpoch) {
+        this.store = store;
+        this.prefix = prefix;
+        this.ownEpoch = ownEpoch;
+    }
+
+    /** Full recovery of {@code epoch}, crossing into whatever it continues from. */
+    static Result replay(BinStore store, String prefix, long epoch) throws IOException {
+        ChainReplay r = new ChainReplay(store, prefix, epoch);
+        r.replayAncestry(epoch, Long.MAX_VALUE, true);
+        return new Result(r.offsets, r.nextSequence, r.seal, Map.copyOf(r.indexEntries),
+                Map.copyOf(r.pods), r.deltas, r.checkpointEpoch, r.checkpointSequence);
+    }
+
+    /**
+     * The offsets a chain INHERITS from the slot a CONTINUE names.
+     *
+     * <p>⚠️ Needed because a NEW leader recovers its chain BEFORE opening it —
+     * the chain is empty at that moment, so there is no CONTINUE to follow, and
+     * without this it would start every stream again at 0 despite all the
+     * crossing machinery existing.
+     */
+    static Map<RunKey, Long> inherited(BinStore store, String prefix, long prevEpoch,
+            long prevSeq) throws IOException {
+        return inheritedWithPods(store, prefix, prevEpoch, prevSeq).offsets();
+    }
+
+    /**
+     * What a chain inherits: offsets AND the per-pod idempotency slots (M5.1).
+     *
+     * <p>⚠️ THE SUCCESSOR'S OWN `recover()` FINDS NOTHING, and that is why this
+     * exists. A new leader opens a NEW epoch, so recovering that chain walks an
+     * empty one; everything the predecessor applied arrives through the
+     * CONTINUE, on this path. Seeding the window from `recover` alone left it
+     * empty in exactly the case it is for -- measured: the successor assigned
+     * fresh offsets and appended a second delta for a segment already committed.
+     */
+    static Result inheritedWithPods(BinStore store, String prefix, long prevEpoch,
+            long prevSeq) throws IOException {
+        ChainReplay r = new ChainReplay(store, prefix, Long.MIN_VALUE);
+        if (prevEpoch >= 1) {
+            r.replayAncestry(prevEpoch, prevSeq, false);
+        }
+        // ⚠️ THE INHERITED WALK CARRIES ITS DELTAS TOO, and it matters more
+        // here than on the ordinary path: a successor's OWN chain is empty at
+        // this moment, so this is the only walk that has ever seen the
+        // predecessor's segments -- and those are exactly the objects its first
+        // GC pass must be able to condemn.
+        return new Result(Map.copyOf(r.offsets), r.nextSequence, r.seal,
+                Map.copyOf(r.indexEntries), Map.copyOf(r.pods), r.deltas, r.checkpointEpoch,
+                r.checkpointSequence);
+    }
+
+    /**
+     * Replays {@code epoch} and every chain it continues from, OLDEST FIRST.
+     *
+     * <p>⚠️ ITERATIVE, not recursive, and that is a correctness property rather
+     * than a style choice. Depth here is bounded by the EPOCH NUMBER — every
+     * restart, rolling deploy, TTL expiry and failed {@code start} burns one,
+     * and nothing ever compacts them — so a long-lived cluster legitimately has
+     * a very deep ancestry. Recursion made that a {@code StackOverflowError}
+     * unwinding through a public API on the startup path.
+     *
+     * <p>⚠️ TERMINATION comes from the epoch STRICTLY DECREASING, which is
+     * checked below, not from a depth cap. An earlier draft capped depth at
+     * 1000 and called anything deeper corrupt; that was FALSE and measured so —
+     * at 1002 legitimate terms every node's {@code start} threw, the lease was
+     * released, the next node minted E+1 and hit the same wall, so the cluster
+     * could never elect a sequencer again while being told its correct history
+     * was corrupt bytes.
+     */
+    private void replayAncestry(long epoch, long upTo, boolean originIsOwnChain)
+            throws IOException {
+        List<Hop> hops = new ArrayList<>();
+        // ⚠️ THE OWN CHAIN IS ALWAYS REPLAYED, before any question of ancestry.
+        // Gating this on `epoch >= 1` made an epoch-0 log — the reserved
+        // unleased chain, which every `CommitLog(store, prefix)` uses — recover
+        // NOTHING, because 0 fails the ancestry test that has no business
+        // applying to the chain itself.
+        // ⚠️ THE FIRST HOP IS CHECKED TOO, and omitting it made the bound do
+        // nothing on the path that matters. `LocalSequencer.start` calls
+        // `recover()` BEFORE `open()`, so the new chain is empty and that walk
+        // terminates immediately; the crossing that actually reads the ancestry
+        // is `inherited()`, which STARTS at the predecessor. Checking only the
+        // epochs reached by following a CONTINUE skipped exactly that one.
+        if (crossFromCheckpoint(hops, epoch, upTo)) {
+            applyChain(hops.get(0));
+            return;
+        }
+        hops.add(new Hop(epoch, 0, upTo));
+        long chainEpoch = epoch;
+        long limit = upTo;
+        // ⚠️ WHOSE CHAIN THE ORIGIN IS, not "the first iteration" (ADR-0037).
+        // `neverOpened`'s own javadoc already split these: for `replay` the
+        // origin is this node's OWN chain, recovered BEFORE `open`, so empty is
+        // normal there and crossing would read the predecessor twice. For
+        // `inherited` the origin is the PREDECESSOR, where empty is not normal
+        // at all -- and treating it as normal is what stopped the walk one epoch
+        // short, left the genuine ancestor unsealed, and produced I2.
+        boolean atOrigin = originIsOwnChain;
+        while (chainEpoch >= 1) {
+            ChainEntry first = firstEntry(chainEpoch);
+            if (first instanceof Continue opening) {
+                // ⚠️ THE ONLY TERMINATION ARGUMENT THERE IS. Nothing else stops
+                // a CONTINUE naming its own epoch, or a higher one: measured, a
+                // two-object cycle recursed until the stack went. A chain may
+                // only ever continue from a chain that was sealed BEFORE it, and
+                // epochs advance by exactly one, so a non-decreasing link is
+                // corrupt bytes — the claim the old depth cap made wrongly, made
+                // here where it is actually true.
+                if (opening.prevEpoch() >= chainEpoch) {
+                    throw new IOException("chain at epoch " + chainEpoch
+                            + " continues from epoch " + opening.prevEpoch()
+                            + ", which is not LOWER; a chain may only continue from"
+                            + " one sealed before it, so this is corrupt");
+                }
+                limit = opening.prevSeq();
+                chainEpoch = opening.prevEpoch();
+                // ⚠️ A CHECKPOINT TERMINATES THE WALK, and that is the whole of
+                // M4.9's bound. Its offsets are CUMULATIVE — the leader that
+                // wrote it had already recovered everything IT inherited — so
+                // reaching one means nothing older need be read. Without this
+                // the crossing is transitive and a takeover costs O(all
+                // commit-log entries ever written), which is the shape
+                // M4.6e's row records. Measured on THIS harness at 1/2/4/8/16
+                // prior terms: 29/46/80/148/284 requests.
+                if (chainEpoch >= 1 && crossFromCheckpoint(hops, chainEpoch, limit)) {
+                    atOrigin = false;
+                    break;
+                }
+                // ⚠️ EPOCH 0 IS NOT FOLLOWED. It is the RESERVED unleased chain
+                // (M4.4b), which a first leader names truthfully to say it had
+                // no predecessor. Replaying it would read the unleased chain
+                // into a leased one's history — the fork M4.6d removes — so the
+                // hop is not added and the loop below ends.
+                if (chainEpoch >= 1) {
+                    hops.add(new Hop(chainEpoch, 0, limit));
+                }
+                atOrigin = false;
+            } else if (neverOpened(first, atOrigin)) {
+                // ⚠️ SEALED BEFORE IT WAS EVER OPENED. A leader that acquires an
+                // epoch and dies before writing its CONTINUE leaves exactly this:
+                // a chain with a seal at slot 0 and no link. Measured, and
+                // reachable through THIS commit's own error path — `start`
+                // releases the lease when the opening PUT fails — where it
+                // silently discarded every offset assigned before it.
+                // ⚠️ The link has to be reconstructed by arithmetic because the
+                // CONTINUE that would have carried it was never written. That is
+                // sound for exactly the reason the CONTINUE normally exists to
+                // avoid needing: epochs advance by exactly one per acquisition.
+                limit = Long.MAX_VALUE;
+                chainEpoch = chainEpoch - 1;
+                atOrigin = false;
+                // ⚠️ THIS BRANCH IS PROBED TOO. Without it, the first genuinely
+                // opened chain reached across a run of BURNED epochs is replayed
+                // in full with its checkpoint sitting unread — unreachable today
+                // only because `LocalSequencer.start` resolves burned epochs
+                // through `firstInheritableAncestor` first, which is an ordering
+                // invariant held in ANOTHER CLASS. `neverOpened`'s own javadoc
+                // records that caveat rather than assuming it; so does this.
+                if (chainEpoch >= 1 && crossFromCheckpoint(hops, chainEpoch, limit)) {
+                    break;
+                }
+                if (chainEpoch >= 1) {
+                    hops.add(new Hop(chainEpoch, 0, limit));
+                }
+            } else {
+                break;
+            }
+        }
+        // Oldest first, which reads as the history did. ⚠️ NOT load-bearing,
+        // and said so because an earlier comment claimed it was: `fold` uses
+        // `Math::max`, and `nextSequence` and `seal` are both gated on
+        // `ownEpoch`, so reversing this order is an EQUIVALENT mutant. The
+        // rewind protection is the max, not the ordering.
+        for (int i = hops.size() - 1; i >= 0; i--) {
+            applyChain(hops.get(i));
+        }
+    }
+
+    /**
+     * Seeds this replay from {@code chainEpoch}'s newest checkpoint, if it has
+     * one that is SAFE to use, and reports whether the walk can stop there.
+     *
+     * <p>⚠️ SAFE MEANS AT OR BEFORE THE BARRIER. A checkpoint at sequence S
+     * reflects the chain through S-1, so it may only be used when
+     * {@code S - 1 <= upTo}. A leader that was fenced goes on writing for a
+     * while, and its checkpoints can cover entries PAST the slot its successor's
+     * CONTINUE named — applying one of those would fold a discarded suffix into
+     * the history, which is I3. When the newest is too new there is no older one
+     * to fall back to (the pointer holds one), so the walk continues unbounded
+     * and correct.
+     *
+     * <p>⚠️ THE OFFSETS ARE MERGED, not assigned, for the reason {@link #fold}
+     * gives: a crossing merges an older chain's offsets into a newer one's and
+     * taking the later value unconditionally would rewind the stream (I2).
+     */
+    private boolean crossFromCheckpoint(List<Hop> hops, long chainEpoch, long upTo)
+            throws IOException {
+        java.util.Optional<Checkpoint> found = CheckpointCursor.newest(store, prefix, chainEpoch);
+        if (found.isEmpty()) {
+            return false;
+        }
+        Checkpoint checkpoint = found.get();
+        if (checkpoint.sequence() - 1 > upTo) {
+            return false;
+        }
+        checkpoint.streams().forEach(
+                (key, at) -> offsets.merge(key, at.nextOffset(), Math::max));
+        // ⚠️ THE CHECKPOINT'S OWN POD SLOTS (M5.1). Entries below a checkpoint
+        // are never read, so without this the window is rebuilt only from the
+        // uncheckpointed tail and a replay older than the newest checkpoint
+        // would be applied twice -- which is the bounded-answering property
+        // `Checkpoint.PodState`'s javadoc says the pointer exists to give.
+        // ⚠️ A BARE SLOT CANNOT SEED, and review measured that admitting one is
+        // WORSE than skipping the checkpoint entirely. A v0 checkpoint decodes
+        // to `PodState.bare(watermark)` with a null incarnation and no pointer,
+        // and v0 objects must keep decoding for the retention window -- so this
+        // is a supported state during any rolling upgrade. Merged on flushSeq
+        // alone, a bare slot at 100 evicted a valid pointered state at 3 and
+        // then seeded the literal key "pod\0null", which no request can ever
+        // match: the retry was treated as fresh and committed twice.
+        checkpoint.pods().forEach((pod, state) -> {
+            // ⚠️ A BARE SLOT CANNOT SEED, AND ITS POD IS THEN UNPROTECTED --
+            // a stated gap, not a solved problem. `Checkpoint.decode` yields
+            // `PodState.bare(watermark)` for a v0 object: a watermark with no
+            // incarnation and no pointer, which can neither be keyed (the
+            // window is keyed by pod AND incarnation) nor followed. Admitting
+            // it is strictly worse -- merged on flushSeq alone it evicts a real
+            // pointered slot and then seeds the literal key "pod\0null", which
+            // nothing can match -- so it is skipped.
+            //
+            // ⚠️ WHAT THAT LEAVES: for a pod whose only record is a bare slot,
+            // a replay crossing a takeover is treated as fresh and applied
+            // twice, exactly as it was before this change. Every other case
+            // improves; this one does not regress. Closing it means either
+            // giving up bounded recovery for that chain -- measured breaking
+            // `BoundedRecoveryCorrectnessTest`, i.e. M4's acceptance criterion
+            // 5 -- or teaching the window an unanswerable-watermark tier.
+            // M5.22 owns it. It lasts only until v0 checkpoints age out of
+            // retention.
+            if (!state.hasPointer() || state.incarnationId() == null) {
+                return;
+            }
+            pods.merge(slot(pod, state.incarnationId()), state,
+                    (prior, now) -> now.lastAppliedFlushSeq() > prior.lastAppliedFlushSeq()
+                            ? now : prior);
+        });
+        if (chainEpoch == ownEpoch) {
+            // ⚠️ `nextSequence` IS DERIVED FROM THE ENTRIES READ, so skipping
+            // the ones a checkpoint covers would leave it short — at zero if the
+            // checkpoint covers the whole chain — and the next commit would
+            // re-race slots that are already taken. The checkpoint's own
+            // sequence IS the writer's `nextSequence` at the moment it was
+            // written, so it restores exactly what the skipped entries would.
+            nextSequence = Math.max(nextSequence, checkpoint.sequence());
+        }
+        hops.add(new Hop(chainEpoch, checkpoint.sequence(), upTo));
+        checkpointEpoch = chainEpoch;
+        checkpointSequence = checkpoint.sequence();
+        return true;
+    }
+
+    /**
+     * Whether this chain was SEALED OR ABANDONED before it was ever opened.
+     *
+     * <p>⚠️ TWO SHAPES, ONE BRANCH, and an earlier fix handled only the first.
+     * A leader that acquires an epoch and dies before writing its CONTINUE
+     * leaves either a {@code Seal} at slot 0 — if a successor got as far as
+     * fencing it — or NOTHING AT ALL, if the successor died before that too.
+     * Neither carries a link, so the same arithmetic recovers both.
+     *
+     * <p>⚠️ Measured: two consecutive takeovers each failing at or before their
+     * first PUT — a store outage spanning a failover, which is the most
+     * correlated failure this path meets — left an empty chain mid-ancestry,
+     * broke the walk, and reassigned offset 0. That is I2.
+     *
+     * <p>⚠️ NOT AT THE ORIGIN, where empty means something else entirely: a new
+     * leader recovers its own chain BEFORE opening it, so empty is the normal
+     * state at that moment and {@code open} does the inheriting explicitly.
+     * Crossing here too would read the predecessor twice on every takeover.
+     *
+     * <p>⚠️ THAT ARGUMENT COVERS ONE OF THE TWO CALLERS. For {@link #replay} the
+     * origin is this node's OWN chain, where empty is normal. For
+     * {@link #inherited} the origin is the PREDECESSOR, where empty is not
+     * normal at all — and an empty one there yields offset 0 silently, with no
+     * exception and no failing test.
+     *
+     * <p>⚠️ IT WAS NOT UNREACHABLE, and an earlier draft of this javadoc said it
+     * was — "unreachable today only because {@code LocalSequencer.start} always
+     * seals the predecessor before opening". `start` seals the epoch the WALK
+     * LANDS ON, and this caveat is what made the walk land on a burned epoch
+     * rather than the genuine ancestor, so the ordering invariant it leaned on
+     * was the very thing the caveat broke. M4.13's sweep measured the result:
+     * two readers of one cluster disagreeing about what lives at one offset.
+     * ADR-0037 closes it by passing the origin's MEANING in, so `inherited`
+     * crosses an empty origin and `replay` still does not.
+     */
+    private static boolean neverOpened(ChainEntry first, boolean atOrigin) {
+        if (first == null) {
+            return !atOrigin;
+        }
+        return first instanceof Seal sealed && sealed.sequence() == 0;
+    }
+
+    /**
+     * A chain's SLOT 0, or null if the chain is empty.
+     *
+     * <p>⚠️ ADDRESSED DIRECTLY, never LISTed. A chain's CONTINUE is always at
+     * slot 0 — that is what {@code open} means — so the ancestry is discoverable
+     * with a stat and a get. A LIST here would add one request per chain to
+     * every recovery, and two existing tests pin the LIST count precisely
+     * because paging is where this reader's cost lives.
+     */
+    private ChainEntry firstEntry(long chainEpoch) throws IOException {
+        return firstEntry(store, prefix, chainEpoch);
+    }
+
+    private static ChainEntry firstEntry(BinStore store, String prefix, long chainEpoch)
+            throws IOException {
+        String slotZero = new CommitLog(store, prefix, chainEpoch).keyFor(0);
+        if (store.stat(slotZero).isEmpty()) {
+            return null;
+        }
+        return read(store, slotZero);
+    }
+
+    /**
+     * The nearest ancestor of {@code prevEpoch}, walking backward, that was
+     * genuinely opened — carries a real {@link Continue} at slot 0, not a
+     * chain burned before ever writing one. ADR-0029: this is the ancestor a
+     * taking-over leader must SEAL before crossing into it, because it is the
+     * one whose offsets {@link #inherited} will eventually read.
+     *
+     * <p>⚠️ NOT {@link #replayAncestry}. That walk follows every
+     * {@code CONTINUE} transitively, because a full replay needs the whole
+     * ancestry. This one stops at the FIRST real {@code CONTINUE} it meets —
+     * ADR-0029's decision only needs the one hop back, because sealing it is
+     * what stops its writer, and the existing transitive walk in
+     * {@link #inherited} already reads everything beyond it once this method's
+     * caller has sealed it and named it directly in the new chain's own
+     * {@code CONTINUE}.
+     *
+     * <p>⚠️ DOES NOT SHARE {@link #neverOpened}'S ORIGIN CAVEAT ANY MORE
+     * (ADR-0037). It did, and that is what made this walk stop on a chain that
+     * was merely empty AT THAT INSTANT — the lease acquired, nothing written yet
+     * — so the caller sealed the burned epoch and left the genuine ancestor
+     * unsealed and still growing. M4.13's sweep measured the result as I2, with
+     * two readers of one cluster disagreeing about one offset. The caveat is
+     * still right for {@link #replay}, whose origin is the node's OWN chain, so
+     * the origin's MEANING is passed in rather than the flag being deleted.
+     *
+     * @return {@code prevEpoch} or a lower epoch, or {@code 0} when nothing
+     *     needs sealing — mirrors the {@code prevEpoch >= 1} guard callers
+     *     already use for "no predecessor to seal"
+     */
+    static long firstInheritableAncestor(BinStore store, String prefix, long prevEpoch)
+            throws IOException {
+        long chainEpoch = prevEpoch;
+        // ⚠️ `false`, BECAUSE THIS WALK'S ORIGIN IS A PREDECESSOR (ADR-0037).
+        // It started `true`, which meant a `prevEpoch` empty at that instant --
+        // the lease acquired, nothing written yet -- stopped the walk on the
+        // burned epoch. The caller then sealed THAT and left the genuine
+        // ancestor unsealed and still growing, which is the I2 M4.47 measured.
+        boolean atOrigin = false;
+        while (chainEpoch >= 1 && neverOpened(firstEntry(store, prefix, chainEpoch), atOrigin)) {
+            chainEpoch--;
+            atOrigin = false;
+        }
+        return chainEpoch;
+    }
+
+
+    private void applyChain(Hop hop) throws IOException {
+        LogKeys keys = new LogKeys(prefix, hop.epoch());
+        String logPrefix = keys.logPrefix();
+        // ⚠️ START THE LIST AFTER THE LAST COVERED ENTRY, rather than filtering
+        // after reading. `startAfter` is what keeps the LIST itself bounded —
+        // the measurement this replaces had LISTs growing per ancestor too, and
+        // skipping entries in the loop would leave that class untouched.
+        String startAfter = hop.from() > 0 ? keys.keyFor(hop.from() - 1) : null;
+        while (true) {
+            ListPage page = store.list(logPrefix, startAfter, 1000);
+            for (ObjectStat stat : page.objects()) {
+                // ⚠️ NOT OURS, so not READ — the GET is skipped, not issued and
+                // its failure swallowed. Swallowing would be I3 and would also
+                // make recovery's cost grow with the checkpoints beside the
+                // chain, which is the dimension its test pins.
+                // ⚠️ `continue`, never `return`: a key that sorts between two
+                // entries would otherwise TRUNCATE the chain and silently drop
+                // every offset past it (I2).
+                if (!keys.isEntryKey(stat.key())) {
+                    continue;
+                }
+                ChainEntry entry = read(store, stat.key());
+                // ⚠️ STOP AT THE SLOT THE CONTINUE NAMED, not at the chain's end.
+                // Anything past it was written by a leader that had already been
+                // fenced, so it is a discarded suffix and must not enter the
+                // history (I3).
+                if (entry.sequence() > hop.upTo()) {
+                    return;
+                }
+                applyOffsets(entry, hop.epoch());
+                // ⚠️ OFFSETS CROSS, SEQUENCE NUMBERS DO NOT. `nextSequence` is
+                // where THIS chain's next commit goes, so taking it from a
+                // predecessor would send the successor's first delta past its
+                // own empty slots and break the consecutiveness the seal
+                // protocol depends on.
+                if (hop.epoch() == ownEpoch) {
+                    nextSequence = Math.max(nextSequence, entry.sequence() + 1);
+                }
+                if (entry instanceof Seal found) {
+                    // ⚠️ ONLY THIS CHAIN'S SEAL BINDS THE WRITER. A seal in a
+                    // PREDECESSOR is the boundary a crossing reader stops at,
+                    // not a fence on the successor — a leader whose own chain is
+                    // sealed is fenced, one whose ANCESTOR is sealed is normal.
+                    if (hop.epoch() == ownEpoch) {
+                        seal = found;
+                    }
+                    return;
+                }
+            }
+            if (page.nextStartAfter().isEmpty()) {
+                return;
+            }
+            startAfter = page.nextStartAfter().get();
+        }
+    }
+
+    private void applyOffsets(ChainEntry entry, long chainEpoch) {
+        fold(entry, offsets);
+        // ⚠️ COUNTED ON THE SAME WALK (M4.14). A replay already visits every
+        // entry, so counting here costs nothing; a second pass would cost one
+        // GET per delta on the recovery path, whose whole purpose is speed.
+        if (entry instanceof CommitDelta delta) {
+            // ⚠️ WITH ITS EPOCH, BECAUSE A SEQUENCE ALONE IS NOT AN IDENTITY.
+            // "OFFSETS CROSS, SEQUENCE NUMBERS DO NOT" -- each chain numbers
+            // from its own start -- and a crossing replay reads the ANCESTOR
+            // first, so a consumer that deduplicated on the sequence alone
+            // would discard this term's own deltas as repeats of the
+            // predecessor's. Review MEASURED exactly that.
+            deltas.add(new EpochDelta(chainEpoch, delta));
+            for (io.github.huyz0.os.biningester.format.RunCommit run : delta.allRuns()) {
+                indexEntries.merge(run.key(), 1L, Long::sum);
+            }
+            // ⚠️ KEYED ON (podId, incarnationId), NEVER ON podId ALONE, and
+            // review measured why. Comparing flushSeq ACROSS incarnations lets
+            // a DEAD one win: a producer that committed flushSeq 0..100 as i1,
+            // restarted, and committed flushSeq 0 as i2 would seed the window
+            // under i1 -- leaving i2, the only incarnation that can still
+            // retry, with no protection at all and duplicating on its first
+            // retry across a takeover. `CheckpointWriter` states the rule in as
+            // many words: "Math::max WITHIN AN INCARNATION, never across one".
+            // ⚠️ AND THE HIGHEST WINS WITHIN ONE, never the last seen: a chain
+            // replays in order today, but two requests in one batch may share a
+            // triple, so the last is not necessarily the highest.
+            for (io.github.huyz0.os.biningester.format.SegmentCommit segment : delta.segments()) {
+                io.github.huyz0.os.biningester.format.SegmentCommit.Attribution a = segment.attribution();
+                if (a == null) {
+                    continue;
+                }
+                pods.merge(slot(a.podId(), a.incarnationId()),
+                        new Checkpoint.PodState(a.incarnationId(), a.flushSeq(),
+                                chainEpoch, delta.sequence()),
+                        (prior, now) -> now.lastAppliedFlushSeq() > prior.lastAppliedFlushSeq()
+                                ? now : prior);
+            }
+        }
+    }
+
+    /**
+     * ⚠️ THE ONE PLACE a delta becomes an offset. It lived here AND in
+     * {@code CommitLog.apply} until review pointed out that the split's stated
+     * principle — do not re-derive wire semantics in two places — had been
+     * applied to the key grammar and not to this.
+     *
+     * <p>{@code Math::max} rather than assignment, because entries arrive in
+     * ascending sequence within a chain but a CROSSING merges an older chain's
+     * offsets into a newer one's; taking the later value unconditionally would
+     * rewind the stream, which is I2.
+     */
+    static void fold(ChainEntry entry, Map<RunKey, Long> into) {
+        if (entry instanceof CommitDelta delta) {
+            // ⚠️ `allRuns`, deliberately: an offset is a STREAM fact, not a
+            // segment fact, so this is the one reader that genuinely does not
+            // care which object holds the records. Everything that DELIVERS
+            // records pairs each run with its own segment instead — see
+            // SubscriptionHub and ADR-0032.
+            for (RunCommit run : delta.allRuns()) {
+                into.merge(run.key(), run.lastOffset() + 1, Math::max);
+            }
+        }
+    }
+
+    /**
+     * ⚠️ PACKAGE-PRIVATE, not private, because {@link ChainEnd} reads the one
+     * entry it needs through the same decoder. Two copies of "GET it and
+     * decode it" is how a reader stops agreeing with its sibling about what a
+     * chain entry is.
+     */
+    static ChainEntry read(BinStore store, String key) throws IOException {
+        try (InputStream in = store.get(key)) {
+            return ChainEntry.decode(in.readAllBytes());
+        }
+    }
+}

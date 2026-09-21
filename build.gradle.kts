@@ -1,8 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import binjava.AwsSdkHttp
-import binjava.DependencyLicensesTask
-import binjava.UpdateShasTask
+import io.github.huyz0.os.biningester.AwsSdkHttp
+import io.github.huyz0.os.biningester.DependencyLicensesTask
+import io.github.huyz0.os.biningester.UpdateShasTask
+import io.github.huyz0.os.biningester.RepositoryGatesTask
+import io.github.huyz0.os.biningester.MilestoneVerifiedTask
+import io.github.huyz0.os.biningester.ReviewEvidenceTask
+import io.github.huyz0.os.biningester.TddEvidenceTask
+import io.github.huyz0.os.biningester.TestIntegrityTask
+import io.github.huyz0.os.biningester.CoverageGateTask
+import io.github.huyz0.os.biningester.SuiteTimeGateTask
+import io.github.huyz0.os.biningester.WiredGateTask
+import io.github.huyz0.os.biningester.OverrideGateTask
 
 // `base` gives the root project the `check` and `build` lifecycle tasks. Without
 // it, `tasks.register("check")` silently created a THIRD, unrelated task and
@@ -10,7 +19,11 @@ import binjava.UpdateShasTask
 // licence gate -- a gate that is not wired is a preference.
 plugins { base }
 
-// The root project holds no code. Modules apply `binjava.java-conventions`
+// Maven Central namespace for this GitHub-owned project. Artifact IDs remain
+// module-specific; Java packages use the corresponding hyphen-free namespace.
+group = "io.github.huyz0.os.bin-ingester"
+
+// The root project holds no code. Modules apply `io.github.huyz0.os.biningester.java-conventions`
 // from buildSrc; this file names the build and owns the licence gate.
 description = "Bundled object-store ingestion for OpenSearch pull-based ingest"
 
@@ -140,4 +153,106 @@ tasks.register<UpdateShasTask>("updateShas") {
 // It runs with `check` -- and therefore with `build` -- not as a separate step
 // someone has to remember. The old script-based gate needed a report generated
 // first, so a fresh clone failed its first commit.
-tasks.named("check") { dependsOn("dependencyLicenses") }
+tasks.named("check") { dependsOn("dependencyLicenses", "gates") }
+
+tasks.register<RepositoryGatesTask>("gates") {
+    group = "verification"
+    description = "Run all repository gates using only Gradle and the JDK"
+    repository.set(layout.projectDirectory)
+    dependsOn("dependencyLicenses")
+}
+
+tasks.register("checkHarnessTests") {
+    group = "verification"
+    description = "Run the JVM-native buildSrc gate tests"
+    val wrapperName = if (org.gradle.internal.os.OperatingSystem.current().isWindows) "gradlew.bat" else "gradlew"
+    val wrapperPath = layout.projectDirectory.file(wrapperName).asFile.absolutePath
+    val rootPath = layout.projectDirectory.asFile.absolutePath
+    doLast {
+        val process = ProcessBuilder(wrapperPath, "-p", "buildSrc", "nativeGateTest", "--no-daemon")
+            .directory(java.io.File(rootPath)).inheritIO().start()
+        check(process.waitFor() == 0) { "native buildSrc gate tests failed" }
+    }
+}
+
+tasks.register<WiredGateTask>("checkWired") {
+    group = "verification"
+    description = "Verify the milestone unwired-set predicates using the JVM"
+    repository.set(layout.projectDirectory)
+    dependsOn("dependencyLicenses")
+}
+
+tasks.register<OverrideGateTask>("checkOverride") {
+    group = "verification"
+    description = "Verify review override claims using recorded verdicts"
+    repository.set(layout.projectDirectory)
+    dependsOn("dependencyLicenses")
+}
+
+tasks.named("gates") { dependsOn("checkWired", "checkOverride", "checkHarnessTests") }
+
+tasks.register<RepositoryGatesTask>("checkCommitMessage") {
+    group = "verification"
+    description = "Validate a commit message file with the JVM gate runner"
+    repository.set(layout.projectDirectory)
+    commitMessageFile.set(providers.gradleProperty("commitMessageFile").orElse(".git/COMMIT_EDITMSG"))
+}
+
+tasks.register<MilestoneVerifiedTask>("checkMilestoneVerified") {
+    group = "verification"
+    description = "Verify every milestone acceptance criterion has evidence"
+    val milestonePath = project.findProperty("milestoneDir")?.toString() ?: "docs/internal/product/milestones/M9"
+    milestone.set(layout.projectDirectory.dir(milestonePath))
+}
+
+tasks.register<ReviewEvidenceTask>("checkReviewed") {
+    group = "verification"
+    description = "Verify staged review verdicts are bound to the staged diff"
+    repository.set(layout.projectDirectory)
+}
+
+tasks.register<TddEvidenceTask>("checkTdd") {
+    group = "verification"
+    description = "Verify newly added tests have byte-bound red evidence"
+    repository.set(layout.projectDirectory)
+}
+
+tasks.register<TestIntegrityTask>("checkTestIntegrity") {
+    group = "verification"
+    description = "Require a commit-body reason when staged tests are weakened"
+    repository.set(layout.projectDirectory)
+    commitMessageFile.set(providers.gradleProperty("commitMessageFile").orElse(".git/COMMIT_EDITMSG"))
+}
+
+tasks.register<CoverageGateTask>("checkCoverage") {
+    group = "verification"
+    description = "Check regenerated JaCoCo reports against coverage floors"
+    repository.set(layout.projectDirectory)
+}
+
+gradle.projectsEvaluated {
+    tasks.named("checkCoverage") {
+        subprojects.forEach { subproject ->
+            if (subproject.tasks.names.contains("test")) dependsOn("${subproject.path}:test")
+            if (subproject.tasks.names.contains("jacocoTestReport")) dependsOn("${subproject.path}:jacocoTestReport")
+        }
+    }
+}
+
+val checkMutants = tasks.register("checkMutants") {
+    group = "verification"
+    description = "Run the native Gradle mutation-diff tasks for every module that provides one"
+}
+gradle.projectsEvaluated {
+    checkMutants.configure {
+        subprojects.filter { it.tasks.names.contains("mutationTestDiff") }
+            .forEach { dependsOn("${it.path}:mutationTestDiff") }
+    }
+}
+
+tasks.register<SuiteTimeGateTask>("checkSuiteTime") {
+    group = "verification"
+    description = "Check a measured suite duration against its layer budget"
+    layer.set(project.findProperty("suiteLayer")?.toString() ?: "L0")
+    seconds.set(project.findProperty("suiteSeconds")?.toString()?.toDoubleOrNull() ?: 0.0)
+}

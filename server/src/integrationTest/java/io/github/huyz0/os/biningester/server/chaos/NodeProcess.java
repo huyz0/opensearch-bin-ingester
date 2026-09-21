@@ -1,0 +1,357 @@
+// SPDX-License-Identifier: Apache-2.0
+package io.github.huyz0.os.biningester.server.chaos;
+
+import io.helidon.webclient.api.WebClient;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * One ingester, running as its own operating-system process (M8.8).
+ *
+ * <p>⚠️ **A TEST THAT CALLS {@code close()} IS NOT A KILL.** {@code SIGKILL}
+ * runs no shutdown hook, flushes nothing and releases nothing. {@code SIGSTOP}
+ * freezes every thread at once, the lease renewer with the rest, and the
+ * process never learns it was frozen. Neither can be produced inside the test
+ * JVM, and research 08 §9 names the frozen process as one of the rows that
+ * finds real bugs. So this starts the shipped entry point, {@code Main}, in a
+ * JVM of its own and signals it the way the kernel and Kubernetes do.
+ *
+ * <p>⚠️ **THE TEST JVM'S OWN CLASSPATH**, so the process under test runs the
+ * same classes every other suite exercises, not a jar assembled differently.
+ */
+public final class NodeProcess implements AutoCloseable {
+
+    private static final String PAD = "x".repeat(2048);
+
+    private final String podId;
+    private final int port;
+    private final Path log;
+    private final Process process;
+    private volatile boolean paused;
+
+    private final ChaosProxy peers;
+
+    private NodeProcess(String podId, int port, Path log, Process process, ChaosProxy peers) {
+        this.podId = podId;
+        this.port = port;
+        this.log = log;
+        this.process = process;
+        this.peers = peers;
+    }
+
+    /**
+     * The proxy peers reach this node through, to cut and heal.
+     *
+     * @throws IllegalStateException if the node was started without one
+     */
+    public ChaosProxy peers() {
+        if (peers == null) {
+            throw new IllegalStateException(podId + " was started without a peer proxy");
+        }
+        return peers;
+    }
+
+    /**
+     * A jar holding only a manifest that names {@link SkewAgent}.
+     *
+     * <p>⚠️ **THE AGENT'S CLASS IS ALREADY ON THE CHILD'S CLASSPATH**, which is
+     * this JVM's, so the jar needs nothing but the {@code Premain-Class} line.
+     */
+    static Path agentJar(Path dir) throws IOException {
+        Path jar = dir.resolve("skew-agent.jar");
+        if (!Files.exists(jar)) {
+            java.util.jar.Manifest manifest = new java.util.jar.Manifest();
+            manifest.getMainAttributes().put(java.util.jar.Attributes.Name.MANIFEST_VERSION, "1.0");
+            manifest.getMainAttributes().putValue("Premain-Class", SkewAgent.class.getName());
+            try (var out = new java.util.jar.JarOutputStream(Files.newOutputStream(jar),
+                    manifest)) {
+                out.flush();
+            }
+        }
+        return jar;
+    }
+
+    /**
+     * Starts a node and waits until it answers.
+     *
+     * @param dir where its settings file and its log go
+     * @param settings the store's settings, from {@link ChaosBucket#nodeSettings()},
+     *     plus anything the row overrides
+     */
+    public static NodeProcess start(Path dir, String podId, Map<String, String> settings)
+            throws Exception {
+        return start(dir, podId, settings, Options.NONE);
+    }
+
+    /**
+     * What the network and the clock do to one node (M8.23).
+     *
+     * @param skew how far ahead of true time this process's wall clock runs
+     *     ({@link SkewAgent}); negative runs behind, zero leaves it alone
+     * @param peerProxy whether peers reach this node through a {@link ChaosProxy}
+     *     the test can cut, which isolates it from its peers inbound
+     */
+    public record Options(java.time.Duration skew, boolean peerProxy) {
+
+        public static final Options NONE = new Options(java.time.Duration.ZERO, false);
+    }
+
+    /** The same, with the network and the clock under the test's control. */
+    public static NodeProcess start(Path dir, String podId, Map<String, String> settings,
+            Options options) throws Exception {
+        int port;
+        // ⚠️ BOUND AND RELEASED, so another process could take it in the
+        // window between -- the shape ConfigExitCodeIT uses and says so. The
+        // node reports its port to nobody, so the test has to choose it.
+        try (var probe = new java.net.ServerSocket(0)) {
+            port = probe.getLocalPort();
+        }
+        ChaosProxy peers = options.peerProxy() ? new ChaosProxy("localhost", port) : null;
+        Map<String, String> all = new LinkedHashMap<>();
+        all.put("pod.id", podId);
+        all.put("pod.az", "az-a");
+        all.put("trust.domain", "cluster-a");
+        // ⚠️ THE ADVERTISED ENDPOINT IS THE PROXY when there is one: it is
+        // what the lease names, so it is what every peer dials.
+        all.put("endpoint", "http://localhost:" + (peers == null ? port : peers.port()));
+        all.put("http.port", String.valueOf(port));
+        all.put("producer.subject", "producer-1");
+        all.put("producer.allowed-indices", "logs");
+        all.putAll(settings);
+        StringBuilder text = new StringBuilder();
+        all.forEach((key, value) -> text.append(key).append('=').append(value).append('\n'));
+        Path file = dir.resolve(podId + ".properties");
+        Files.writeString(file, text.toString(), StandardCharsets.UTF_8);
+
+        // ⚠️ TO A FILE, NOT A PIPE: a pipe nobody drains fills, and the node
+        // then blocks on a log line -- which is a stall this harness would
+        // report as a finding.
+        Path log = dir.resolve(podId + ".log");
+        List<String> command = new java.util.ArrayList<>(List.of(
+                Path.of(System.getProperty("java.home"), "bin", "java").toString(), "-Xmx256m"));
+        if (!options.skew().isZero()) {
+            command.add("-javaagent:" + agentJar(dir) + "=" + options.skew());
+        }
+        command.addAll(List.of("-cp", System.getProperty("java.class.path"),
+                "io.github.huyz0.os.biningester.server.Main", file.toString()));
+        ProcessBuilder builder = new ProcessBuilder(command)
+                .redirectErrorStream(true)
+                .redirectOutput(log.toFile());
+        builder.environment().putAll(ChaosBucket.credentials());
+        NodeProcess node = new NodeProcess(podId, port, log, builder.start(), peers);
+        try {
+            node.awaitServing();
+        } catch (Exception | Error failed) {
+            node.close();
+            throw failed;
+        }
+        return node;
+    }
+
+    /**
+     * Waits until the node answers {@code /live}, or dies trying.
+     *
+     * <p>⚠️ **BOUNDED, WITH A LIVENESS CHECK EVERY TURN** — testing.md rule
+     * 15's external-system carve-out, in the shape that cannot become an
+     * unbounded wait.
+     */
+    private void awaitServing() throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120);
+        WebClient client = client();
+        while (System.nanoTime() < deadline) {
+            if (!process.isAlive()) {
+                throw new AssertionError(podId + " died before it started serving:\n" + log());
+            }
+            try {
+                client.get("/live").request().close();
+                return;
+            } catch (RuntimeException notYet) {
+                Thread.sleep(200);
+            }
+        }
+        throw new AssertionError(podId + " never started serving:\n" + log());
+    }
+
+    public String podId() {
+        return podId;
+    }
+
+    public int port() {
+        return port;
+    }
+
+    public long pid() {
+        return process.pid();
+    }
+
+    public boolean alive() {
+        return process.isAlive();
+    }
+
+    /**
+     * A client onto this node's front door.
+     *
+     * <p>⚠️ **WITH A 2 s TIMEOUT, AS A REAL PRODUCER HAS.** MEASURED (M8.12):
+     * without one, a request to a SIGSTOPped node waited out the client's 30 s
+     * default. Within seconds every round-robin producer was parked on the
+     * frozen node, nothing reached a live one, and "visibility resumed" took
+     * 30 s for a reason that had nothing to do with the sequencer.
+     */
+    public WebClient client() {
+        return WebClient.builder().baseUri("http://localhost:" + port)
+                .connectTimeout(java.time.Duration.ofSeconds(2))
+                .readTimeout(java.time.Duration.ofSeconds(2)).build();
+    }
+
+    /**
+     * Registers the index {@code logs} with {@code uuid}, as the plugin does
+     * over the wire.
+     */
+    public void registerLogs(java.util.UUID uuid) {
+        var buffer = java.nio.ByteBuffer.allocate(16);
+        buffer.putLong(uuid.getMostSignificantBits());
+        buffer.putLong(uuid.getLeastSignificantBits());
+        String indexUuid = java.util.Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(buffer.array());
+        int status = client().post(io.github.huyz0.os.biningester.http.SubscriptionService.REGISTER_PATH)
+                .submit(new io.github.huyz0.os.biningester.format.IndexRegistration(indexUuid, "logs", List.of(),
+                        4, 4, 1, 1).encode())
+                .status().code();
+        if (status != 204) {
+            throw new AssertionError(podId + " refused the registration: " + status);
+        }
+    }
+
+    /**
+     * Writes one bulk of {@code records} documents to partition 0 of
+     * {@code logs}.
+     *
+     * @return the status, which is 202 once the records are durable
+     */
+    public int write(String idPrefix, int records) {
+        StringBuilder body = new StringBuilder();
+        for (int i = 0; i < records; i++) {
+            body.append("{\"index\":{\"_id\":\"").append(idPrefix).append('-').append(i)
+                    .append("\",\"_version\":1}}\n{\"n\":").append(i).append("}\n");
+        }
+        return client().post("/logs/_bulk").queryParam("partition", "0")
+                .submit(body.toString()).status().code();
+    }
+
+    /**
+     * Writes one bulk with exactly these document ids to partition 0 of
+     * {@code logs}.
+     *
+     * @return the status, which is 202 once the records are durable
+     */
+    public int write(List<String> ids) {
+        StringBuilder body = new StringBuilder();
+        for (String id : ids) {
+            // ⚠️ 2 KB OF PAYLOAD PER RECORD, so a segment is large enough that
+            // its PUT takes measurable time -- which is the window an ack
+            // that ran ahead of its PUT would be caught in.
+            body.append("{\"index\":{\"_id\":\"").append(id)
+                    .append("\",\"_version\":1}}\n{\"pad\":\"").append(PAD).append("\"}\n");
+        }
+        return client().post("/logs/_bulk").queryParam("partition", "0")
+                .submit(body.toString()).status().code();
+    }
+
+    /**
+     * {@code SIGKILL}, sent and not waited for (M8.9).
+     *
+     * <p>⚠️ **FOR A KILL SYNCHRONISED TO AN EVENT**, where the caller's next
+     * act must follow the signal and not the process's exit.
+     */
+    public void killNow() {
+        process.destroyForcibly();
+    }
+
+    /** Everything the node has printed so far. */
+    public String log() throws IOException {
+        return Files.readString(log, StandardCharsets.UTF_8);
+    }
+
+    /**
+     * {@code SIGKILL}: no hook, no flush, no release.
+     *
+     * @return the exit code, which is the signal's
+     */
+    public int kill() throws InterruptedException {
+        resumeIfPaused();
+        process.destroyForcibly();
+        return awaitExit();
+    }
+
+    /**
+     * {@code SIGTERM}, which is what Kubernetes sends and what runs the
+     * graceful shutdown.
+     */
+    public int terminate() throws InterruptedException {
+        resumeIfPaused();
+        process.destroy();
+        return awaitExit();
+    }
+
+    /**
+     * {@code SIGSTOP}: every thread frozen at once, the lease renewer included,
+     * and nothing in the process can notice.
+     */
+    public void pause() throws Exception {
+        signal("STOP");
+        paused = true;
+    }
+
+    /** {@code SIGCONT}. */
+    public void resume() throws Exception {
+        signal("CONT");
+        paused = false;
+    }
+
+    private void resumeIfPaused() {
+        if (paused) {
+            try {
+                resume();
+            } catch (Exception ignored) {
+                // a process that cannot be continued is killed next anyway
+            }
+        }
+    }
+
+    /**
+     * ⚠️ **THROUGH {@code kill(1)}**, because the JDK sends only {@code SIGTERM}
+     * and {@code SIGKILL}. Its exit status is checked: a signal that was not
+     * delivered would leave a row asserting a freeze that never happened.
+     */
+    private void signal(String name) throws Exception {
+        Process kill = new ProcessBuilder("kill", "-" + name, String.valueOf(process.pid()))
+                .redirectErrorStream(true).start();
+        if (!kill.waitFor(10, TimeUnit.SECONDS) || kill.exitValue() != 0) {
+            throw new AssertionError("kill -" + name + " " + process.pid() + " failed: "
+                    + new String(kill.getInputStream().readAllBytes(), StandardCharsets.UTF_8));
+        }
+    }
+
+    private int awaitExit() throws InterruptedException {
+        if (!process.waitFor(60, TimeUnit.SECONDS)) {
+            throw new AssertionError(podId + " did not exit");
+        }
+        return process.exitValue();
+    }
+
+    /** Whatever state the row left it in, the process does not outlive the test. */
+    @Override
+    public void close() {
+        resumeIfPaused();
+        process.destroyForcibly();
+        if (peers != null) {
+            peers.close();
+        }
+    }
+}

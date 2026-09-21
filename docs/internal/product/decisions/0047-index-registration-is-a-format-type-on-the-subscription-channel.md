@@ -15,7 +15,7 @@ shape those bytes take**, and bytes that cross a process boundary are a wire
 format — so this is a `wire-format-change` with its own record.
 
 The constraint that shapes it: `client` and `plugin` may not import
-`binjava.binstore` (ADR-0023) and `plugin` may not import `ingest`
+`io.github.huyz0.os.biningester.binstore` (ADR-0023) and `plugin` may not import `ingest`
 (architecture.md). The only module both ends already depend on is `format`,
 which is where `SubscriptionEvent`, `CommitDelta` and `Grant` already live for
 the same reason.

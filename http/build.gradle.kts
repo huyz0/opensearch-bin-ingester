@@ -2,7 +2,7 @@
 
 import java.time.Duration
 
-plugins { id("binjava.java-conventions") }
+plugins { id("io.github.huyz0.os.biningester.java-conventions") }
 
 dependencies {
     api(project(":ingest"))
@@ -62,7 +62,7 @@ val memoryBoundTest = tasks.register<Test>("memoryBoundTest") {
     classpath = sourceSets.test.get().runtimeClasspath
     useJUnitPlatform()
     filter {
-        includeTestsMatching("binjava.http.MemoryFlatUnderTenXBodySizeTest")
+        includeTestsMatching("io.github.huyz0.os.biningester.http.MemoryFlatUnderTenXBodySizeTest")
         isFailOnNoMatchingTests = true
     }
     maxHeapSize = "256m"
@@ -106,7 +106,7 @@ val memoryBoundCeilingTest = tasks.register<Test>("memoryBoundCeilingTest") {
     classpath = sourceSets.test.get().runtimeClasspath
     useJUnitPlatform()
     filter {
-        includeTestsMatching("binjava.http.MemoryFlatAtIntervalCeilingTest")
+        includeTestsMatching("io.github.huyz0.os.biningester.http.MemoryFlatAtIntervalCeilingTest")
         isFailOnNoMatchingTests = true
     }
     maxHeapSize = "256m"

@@ -29,7 +29,7 @@ OFF = '\033[0m'
 # build.md: 8 GiB is the per-session share of a 32 GiB WSL2 box running several
 # sessions. 6 GiB is the ceiling; the rest is page cache and headroom.
 CEILING_MIB = 6144
-CONVENTIONS = 'buildSrc/src/main/kotlin/binjava.java-conventions.gradle.kts'
+CONVENTIONS = 'buildSrc/src/main/kotlin/io.github.huyz0.os.biningester.java-conventions.gradle.kts'
 
 
 def mib(text):

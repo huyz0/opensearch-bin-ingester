@@ -41,7 +41,7 @@ where the request-count *test* first becomes meaningful".
 ⚠️ **BUT NOT BY GIVING THE CONSUMER A `BinStore`.** An earlier draft of this
 spec proposed exactly that, and it is the regression ADR-0023 exists to
 prevent: the decision is enforced as a dependency check — "no class under
-`plugin/src/main` or `client/src/main` imports `binjava.binstore`" — and
+`plugin/src/main` or `client/src/main` imports `io.github.huyz0.os.biningester.binstore`" — and
 putting the SPI on the client's classpath to test that it is unused would
 break the gate (M1.16e) in order to test the property the gate holds. It would
 also contradict ADR-0004's consequence that the plugin needs no cloud SDK, no
@@ -397,7 +397,7 @@ here, not a constant. M4 applied the same discipline to the lease TTL.
     an explicit recovery action, and 300 simulated plugin nodes in the degraded
     tier stay under cost.md R15's ~1 LIST/s ceiling.
 14. **`sequencer`, `client` and `plugin` still compile with no Helidon**, and
-    **`client` and `plugin` still import no `binjava.binstore`** —
+    **`client` and `plugin` still import no `io.github.huyz0.os.biningester.binstore`** —
     `GATE_SCOPE=full ./scripts/check-module.sh` green, and ADR-0023's dependency
     check green.
 
