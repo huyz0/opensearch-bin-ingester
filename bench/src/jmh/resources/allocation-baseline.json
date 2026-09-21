@@ -1,0 +1,49 @@
+{
+  "schema": 1,
+  "metric": "gc.alloc.rate.norm",
+  "varianceDefinition": "sample standard deviation divided by sample mean, expressed as percent",
+  "noiseFloor": {
+    "forks": 10,
+    "warmups": 1,
+    "warmupTime": "100ms",
+    "measurementIterations": 1,
+    "measurementTime": "500ms",
+    "profiler": "gc"
+  },
+  "rig": {
+    "os": "Windows 11 Pro 64-bit build 26200",
+    "jdk": "Temurin OpenJDK 25.0.4.1+1-LTS",
+    "cpu": "Intel Core i5-13600KF, 14 physical / 20 logical",
+    "rustfs": "not used by JMH"
+  },
+  "benchmarks": {
+    "io.github.huyz0.os.biningester.benchmarks.AwsChunkedBodyBenchmark.decodeChunkedBody": {
+      "baselineBop": 292063.762072,
+      "variancePct": 0.003118,
+      "thresholdPct": 5.0,
+      "samples": 10,
+      "status": "gated"
+    },
+    "io.github.huyz0.os.biningester.benchmarks.CompressionBenchmark.compress256KiB(codec=ZSTD)": {
+      "baselineBop": 263344.857993,
+      "variancePct": 0.000031,
+      "thresholdPct": 5.0,
+      "samples": 10,
+      "status": "gated"
+    },
+    "io.github.huyz0.os.biningester.benchmarks.ConcurrentHashMapInitBenchmark.initializeAndSeed": {
+      "baselineBop": 448.000679,
+      "variancePct": 0.000012,
+      "thresholdPct": 5.0,
+      "samples": 10,
+      "status": "gated"
+    },
+    "io.github.huyz0.os.biningester.benchmarks.HashMapResizeBenchmark.resizeAcrossRealisticStreamCardinality": {
+      "baselineBop": 34896.057434,
+      "variancePct": 0.000005,
+      "thresholdPct": 5.0,
+      "samples": 10,
+      "status": "gated"
+    }
+  }
+}

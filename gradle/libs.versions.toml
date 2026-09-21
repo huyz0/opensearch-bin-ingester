@@ -13,6 +13,9 @@ assertj = "3.27.3"
 # concurrent API here and no dependency has to be audited for it.
 awssdk = "2.55.0"
 hdrhistogram = "2.2.2"
+jmh = "1.37"
+zstd-jni = "1.5.6-1"
+lz4-java = "1.8.0"
 
 [libraries]
 opensearch = { module = "org.opensearch:opensearch", version.ref = "opensearch" }
@@ -34,3 +37,8 @@ awssdk-s3 = { module = "software.amazon.awssdk:s3", version.ref = "awssdk" }
 # thread, which is what makes the smallest client the right one.
 awssdk-url-connection-client = { module = "software.amazon.awssdk:url-connection-client", version.ref = "awssdk" }
 hdrhistogram = { module = "org.hdrhistogram:HdrHistogram", version.ref = "hdrhistogram" }
+jmh-core = { module = "org.openjdk.jmh:jmh-core", version.ref = "jmh" }
+jmh-generator-annprocess = { module = "org.openjdk.jmh:jmh-generator-annprocess", version.ref = "jmh" }
+awssdk-http-auth-aws = { module = "software.amazon.awssdk:http-auth-aws", version.ref = "awssdk" }
+zstd-jni = { module = "com.github.luben:zstd-jni", version.ref = "zstd-jni" }
+lz4-java = { module = "org.lz4:lz4-java", version.ref = "lz4-java" }

@@ -153,7 +153,7 @@ tasks.register<UpdateShasTask>("updateShas") {
 // It runs with `check` -- and therefore with `build` -- not as a separate step
 // someone has to remember. The old script-based gate needed a report generated
 // first, so a fresh clone failed its first commit.
-tasks.named("check") { dependsOn("dependencyLicenses", "gates") }
+tasks.named("check") { dependsOn("dependencyLicenses", "gates", ":bench:check") }
 
 tasks.register<RepositoryGatesTask>("gates") {
     group = "verification"
