@@ -12,6 +12,7 @@ assertj = "3.27.3"
 # removed virtual-thread pinning on `synchronized`, so a blocking library IS the
 # concurrent API here and no dependency has to be audited for it.
 awssdk = "2.55.0"
+hdrhistogram = "2.2.2"
 
 [libraries]
 opensearch = { module = "org.opensearch:opensearch", version.ref = "opensearch" }
@@ -32,3 +33,4 @@ awssdk-s3 = { module = "software.amazon.awssdk:s3", version.ref = "awssdk" }
 # and no reactive runtime. Every call this project makes is blocking on a virtual
 # thread, which is what makes the smallest client the right one.
 awssdk-url-connection-client = { module = "software.amazon.awssdk:url-connection-client", version.ref = "awssdk" }
+hdrhistogram = { module = "org.hdrhistogram:HdrHistogram", version.ref = "hdrhistogram" }

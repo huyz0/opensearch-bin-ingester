@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.server.chaos;
 
+import io.github.huyz0.os.biningester.bench.BulkBatch;
 import io.helidon.webclient.api.WebClient;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -34,15 +35,18 @@ public final class NodeProcess implements AutoCloseable {
     private final Path log;
     private final Process process;
     private volatile boolean paused;
+    private final String macroPath;
 
     private final ChaosProxy peers;
 
-    private NodeProcess(String podId, int port, Path log, Process process, ChaosProxy peers) {
+    private NodeProcess(String podId, int port, Path log, Process process, ChaosProxy peers,
+            String macroPath) {
         this.podId = podId;
         this.port = port;
         this.log = log;
         this.process = process;
         this.peers = peers;
+        this.macroPath = macroPath;
     }
 
     /**
@@ -105,6 +109,12 @@ public final class NodeProcess implements AutoCloseable {
     /** The same, with the network and the clock under the test's control. */
     public static NodeProcess start(Path dir, String podId, Map<String, String> settings,
             Options options) throws Exception {
+        return start(dir, podId, settings, options, null);
+    }
+
+    /** Starts a node with the opt-in macro count snapshot endpoint enabled. */
+    public static NodeProcess start(Path dir, String podId, Map<String, String> settings,
+            Options options, Path countsFile) throws Exception {
         int port;
         // ⚠️ BOUND AND RELEASED, so another process could take it in the
         // window between -- the shape ConfigExitCodeIT uses and says so. The
@@ -138,13 +148,20 @@ public final class NodeProcess implements AutoCloseable {
         if (!options.skew().isZero()) {
             command.add("-javaagent:" + agentJar(dir) + "=" + options.skew());
         }
+        String macroPath;
+        if (countsFile != null) {
+            macroPath = "/_macro/store-counts/" + java.util.UUID.randomUUID();
+            command.add("-Dbinstore.macro.path=" + macroPath);
+        } else {
+            macroPath = null;
+        }
         command.addAll(List.of("-cp", System.getProperty("java.class.path"),
                 "io.github.huyz0.os.biningester.server.Main", file.toString()));
         ProcessBuilder builder = new ProcessBuilder(command)
                 .redirectErrorStream(true)
                 .redirectOutput(log.toFile());
         builder.environment().putAll(ChaosBucket.credentials());
-        NodeProcess node = new NodeProcess(podId, port, log, builder.start(), peers);
+        NodeProcess node = new NodeProcess(podId, port, log, builder.start(), peers, macroPath);
         try {
             node.awaitServing();
         } catch (Exception | Error failed) {
@@ -214,13 +231,18 @@ public final class NodeProcess implements AutoCloseable {
      * over the wire.
      */
     public void registerLogs(java.util.UUID uuid) {
+        registerIndex("logs", uuid);
+    }
+
+    /** Registers one index with the same wire shape used by the plugin. */
+    public void registerIndex(String index, java.util.UUID uuid) {
         var buffer = java.nio.ByteBuffer.allocate(16);
         buffer.putLong(uuid.getMostSignificantBits());
         buffer.putLong(uuid.getLeastSignificantBits());
         String indexUuid = java.util.Base64.getUrlEncoder().withoutPadding()
                 .encodeToString(buffer.array());
         int status = client().post(io.github.huyz0.os.biningester.http.SubscriptionService.REGISTER_PATH)
-                .submit(new io.github.huyz0.os.biningester.format.IndexRegistration(indexUuid, "logs", List.of(),
+                .submit(new io.github.huyz0.os.biningester.format.IndexRegistration(indexUuid, index, List.of(),
                         4, 4, 1, 1).encode())
                 .status().code();
         if (status != 204) {
@@ -261,6 +283,91 @@ public final class NodeProcess implements AutoCloseable {
         }
         return client().post("/logs/_bulk").queryParam("partition", "0")
                 .submit(body.toString()).status().code();
+    }
+
+    /** Writes a generated benchmark batch over the producer's real socket. */
+    public int write(BulkBatch batch) {
+        // The generator carries `_index` so the same body can be replayed by
+        // generic bulk tooling. This front door takes the index from the URL,
+        // so remove only that redundant metadata field at the process seam.
+        String body = new String(batch.body(), StandardCharsets.UTF_8)
+                .replaceAll("\\{\\\"index\\\":\\{\\\"_index\\\":\\\"[^\\\"]+\\\",",
+                        "{\\\"index\\\":{");
+        return client().post("/" + batch.stream().index() + "/_bulk")
+                .queryParam("partition", String.valueOf(batch.stream().partition()))
+                .submit(body).status().code();
+    }
+
+    /** Reads a point-in-time count snapshot before the process is terminated. */
+    public void snapshotCounts(Path path) throws IOException {
+        if (macroPath == null) {
+            throw new IllegalStateException(podId + " was not started with macro counts enabled");
+        }
+        String json;
+        try (var response = client().get(macroPath).request()) {
+            if (response.status().code() != 200) {
+                throw new IOException(podId + " count snapshot returned " + response.status().code());
+            }
+            json = response.as(String.class);
+        }
+        Path absolute = path.toAbsolutePath();
+        Path parent = absolute.getParent();
+        if (parent != null) {
+            Files.createDirectories(parent);
+        }
+        writeAtomicSnapshot(absolute, json);
+    }
+
+    static void writeAtomicSnapshot(Path absolute, String contents) throws IOException {
+        Path parent = absolute.getParent();
+        if (parent != null) {
+            Files.createDirectories(parent);
+        }
+        Path temporary = absolute.resolveSibling(absolute.getFileName() + ".tmp");
+        Files.writeString(temporary, contents, StandardCharsets.UTF_8);
+        replaceAtomically(temporary, absolute, (source, target) -> Files.move(source, target,
+                java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING));
+    }
+
+    @FunctionalInterface
+    interface AtomicMover {
+        void move(Path source, Path target) throws IOException;
+    }
+
+    static void replaceAtomically(Path temporary, Path absolute, AtomicMover mover)
+            throws IOException {
+        for (int attempt = 0; attempt < 100; attempt++) {
+            try {
+                mover.move(temporary, absolute);
+                return;
+            } catch (java.nio.file.AtomicMoveNotSupportedException unsupported) {
+                Files.deleteIfExists(temporary);
+                throw new IOException("atomic snapshot replacement is not supported", unsupported);
+            } catch (java.nio.file.AccessDeniedException denied) {
+                if (attempt == 99) {
+                    Files.deleteIfExists(temporary);
+                    throw denied;
+                }
+                try {
+                    Thread.sleep(5);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    Files.deleteIfExists(temporary);
+                    throw new IOException("interrupted during atomic snapshot replacement", interrupted);
+                }
+            }
+        }
+    }
+
+    String macroPath() {
+        return macroPath;
+    }
+
+    int status(String path) throws IOException {
+        try (var response = client().get(path).request()) {
+            return response.status().code();
+        }
     }
 
     /**

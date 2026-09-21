@@ -2,7 +2,9 @@
 package io.github.huyz0.os.biningester.server;
 
 import io.github.huyz0.os.biningester.binstore.BinStore;
+import io.github.huyz0.os.biningester.binstore.CountingBinStore;
 import io.github.huyz0.os.biningester.binstore.HealthTrackingBinStore;
+import io.github.huyz0.os.biningester.binstore.StoreCounts;
 import io.github.huyz0.os.biningester.format.IndexRegistration;
 import io.github.huyz0.os.biningester.format.RunKey;
 import io.github.huyz0.os.biningester.ingest.DefaultIngest;
@@ -71,6 +73,7 @@ public final class Assembly implements AutoCloseable {
 
     private final ServerConfig config;
     private final BinStore store;
+    private final CountingBinStore counting;
     private final HealthTrackingBinStore health;
     private final BinStore backend;
     private final SubscriptionHub hub;
@@ -144,7 +147,8 @@ public final class Assembly implements AutoCloseable {
         // (M8.15), so readiness reflects the store without a request of its
         // own. The RAW store is what is closed: the tracker holds nothing.
         this.backend = raw;
-        this.health = new HealthTrackingBinStore(raw, clock,
+        this.counting = new CountingBinStore(raw);
+        this.health = new HealthTrackingBinStore(counting, clock,
                 HealthTrackingBinStore.DEFAULT_STALL, HealthTrackingBinStore.DEFAULT_FAILURES);
         this.store = health;
         // ⚠️ `raw` IS NAMED SO THAT NOTHING BELOW CAN USE IT BY ACCIDENT: an
@@ -395,6 +399,11 @@ public final class Assembly implements AutoCloseable {
      */
     public BinStore store() {
         return backend;
+    }
+
+    /** The requests issued by this node, including calls made by health checks. */
+    public StoreCounts storeCounts() {
+        return counting.counts();
     }
 
     public SubscriptionHub hub() {

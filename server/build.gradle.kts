@@ -52,6 +52,10 @@ dependencies {
     "integrationTestImplementation"(project(":binstore-backends"))
     "integrationTestImplementation"(project(":http"))
     "integrationTestImplementation"(project(":client"))
+    // ⚠️ TEST-ONLY: the macro workload is the independent benchmark leaf;
+    // no shipped runtime classpath depends on it (ADR-0059).
+    "integrationTestImplementation"(project(":bench"))
+    "integrationTestImplementation"(libs.hdrhistogram)
     "integrationTestImplementation"(libs.helidon.webclient)
     // ⚠️ A SERVER IN THE TEST, and only to play the Kubernetes API for the
     // EndpointSlice watch (M8.13): `FakeKubeApi` streams the watch events a

@@ -6,8 +6,12 @@ import io.github.huyz0.os.biningester.http.CommitService;
 import io.github.huyz0.os.biningester.http.DrainGate;
 import io.github.huyz0.os.biningester.http.HealthService;
 import io.github.huyz0.os.biningester.http.SubscriptionService;
+import io.github.huyz0.os.biningester.binstore.StoreCounts;
 import io.helidon.webserver.WebServer;
 import io.helidon.webserver.http.HttpRouting;
+import io.helidon.webserver.http.HttpRules;
+import io.helidon.webserver.http.ServerRequest;
+import io.helidon.webserver.http.ServerResponse;
 import java.time.Clock;
 import java.util.Objects;
 
@@ -154,7 +158,7 @@ public final class FrontDoor implements AutoCloseable {
 
     private static WebServer build(ServerConfig config, Assembly assembly, Clock clock,
             DrainGate gate, io.github.huyz0.os.biningester.binstore.CrossAzBytes crossAz) {
-        return WebServer.builder()
+        HttpRouting.Builder routes = HttpRouting.builder()
                 // ⚠️ HELIDON'S OWN SHUTDOWN HOOK IS OFF. Left on, a `SIGTERM`
                 // runs it alongside `Main`'s, and it stops the listener while
                 // the drain is still at step 2. MEASURED (M8.7): a poll during
@@ -163,10 +167,7 @@ public final class FrontDoor implements AutoCloseable {
                 // own sequence stops the listener, after the drain. ⚠️ NOT
                 // PINNED: the two hooks race, and a test that saw it once
                 // passed the next run.
-                .shutdownHook(false)
-                .port(config.httpPort())
-                .routing(HttpRouting.builder()
-                        // ⚠️ READY ONLY WHILE NOT DRAINING AND THE STORE ANSWERS
+                // ⚠️ READY ONLY WHILE NOT DRAINING AND THE STORE ANSWERS
                         // (M8.15): a node partitioned from the store can only
                         // make a producer wait, so it asks not to be sent any.
                         .register(new HealthService(
@@ -175,9 +176,66 @@ public final class FrontDoor implements AutoCloseable {
                         .register(new CommitService(assembly::heldTerm,
                                 (term, pod) -> io.github.huyz0.os.biningester.sequencer.InboxDrain.drain(
                                         assembly.store(), config.prefix(), term, pod)))
-                        .register(new SubscriptionService(assembly.hub(), assembly.catalog(),
-                                assembly.watermarks(), clock, assembly.floors(), gate, crossAz)))
-                .build();
+                .register(new SubscriptionService(assembly.hub(), assembly.catalog(),
+                        assembly.watermarks(), clock, assembly.floors(), gate, crossAz));
+        String macroPath = System.getProperty("binstore.macro.path");
+        if (macroPath != null && !macroPath.isBlank()) {
+            routes.register(new MacroCountsService(assembly, macroPath));
+        }
+        return WebServer.builder().shutdownHook(false).port(config.httpPort())
+                .routing(routes).build();
+    }
+
+    private static final class MacroCountsService implements io.helidon.webserver.http.HttpService {
+        private final Assembly assembly;
+        private final String path;
+
+        private MacroCountsService(Assembly assembly, String path) {
+            this.assembly = assembly;
+            this.path = path;
+        }
+
+        @Override
+        public void routing(HttpRules rules) {
+            rules.get(path, this::counts);
+        }
+
+        private void counts(ServerRequest request, ServerResponse response) {
+            response.send(macroCountsJson(assembly.config().podId(), assembly.storeCounts()));
+        }
+    }
+
+    static String macroCountsJson(String podId, StoreCounts counts) {
+        return "{\"podId\":\"" + escapeJson(podId)
+                + "\",\"puts\":" + counts.puts()
+                + ",\"gets\":" + counts.gets()
+                + ",\"lists\":" + counts.lists()
+                + ",\"stats\":" + counts.stats()
+                + ",\"deletes\":" + counts.deletes() + "}\n";
+    }
+
+    private static String escapeJson(String value) {
+        StringBuilder escaped = new StringBuilder(value.length());
+        for (int i = 0; i < value.length(); i++) {
+            char character = value.charAt(i);
+            switch (character) {
+                case '\\' -> escaped.append("\\\\");
+                case '\"' -> escaped.append("\\\"");
+                case '\b' -> escaped.append("\\b");
+                case '\f' -> escaped.append("\\f");
+                case '\n' -> escaped.append("\\n");
+                case '\r' -> escaped.append("\\r");
+                case '\t' -> escaped.append("\\t");
+                default -> {
+                    if (character < 0x20) {
+                        escaped.append(String.format("\\u%04x", (int) character));
+                    } else {
+                        escaped.append(character);
+                    }
+                }
+            }
+        }
+        return escaped.toString();
     }
 
     /**
