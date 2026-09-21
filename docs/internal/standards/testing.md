@@ -10,7 +10,7 @@
 | T0 | pure logic — formats, filters, offsets, coalescing | none | every commit |
 | T1 | component with fakes | `MemoryBinStore` | every commit |
 | T2 | end-to-end, single JVM | `LocalFsBinStore` | every commit |
-| T3 | real object-store semantics | MinIO/LocalStack | CI |
+| T3 | real object-store semantics | RustFS | CI |
 | T4 | inside OpenSearch | Testcontainers | `clusterTest`, on demand + CI |
 
 ⚠️ **Tiers map to Gradle tasks and the default starts no container** — see
@@ -80,7 +80,7 @@ at once makes the valuable one unrunnable.
     probes rather than assumes.** CAS semantics differ per provider and that is
     where a silent divergence breaks ordering. Establish `Capabilities` by writing
     and asserting rejection, never from a version string.
-19a. ⚠️ **MinIO is a test fixture, not a supported backend** — a local Docker
+19a. ⚠️ **RustFS is a test fixture, not a supported backend** — a local Docker
     stand-in for S3's wire protocol, so tests need not hit AWS
     ([store SPI §2b](../../research/30-design-space/07-pluggable-store-abstraction.md)).
     Use it for signing, ranges, multipart, list pagination and error mapping.
@@ -88,7 +88,7 @@ at once makes the valuable one unrunnable.
     writes are not stable enough to distinguish our bug from theirs.
 19b. ⚠️ **Request counts are backend-independent; latency and dollars are not.**
     The cost gates (requests/MiB, zero LIST, **zero idle requests**) are fully
-    meaningful against MinIO. Every latency figure measured there is **modelled,
+    meaningful against RustFS. Every latency figure measured there is **modelled,
     not measured**, and must be labelled so (performance.md rule 7).
 20. **The commit protocol is tested by deterministic simulation** — injectable
     clock, faulty store, partitioned leaders, duplicated in-flight PUTs — asserting

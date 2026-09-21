@@ -3,7 +3,7 @@ package io.github.huyz0.os.biningester.server.chaos;
 
 import io.github.huyz0.os.biningester.binstore.BinStore;
 import io.github.huyz0.os.biningester.binstore.ObjectStat;
-import io.github.huyz0.os.biningester.binstore.backend.MinioFixture;
+import io.github.huyz0.os.biningester.binstore.backend.S3Fixture;
 import io.github.huyz0.os.biningester.binstore.backend.S3BinStore;
 import io.github.huyz0.os.biningester.binstore.backend.S3Settings;
 import java.net.URI;
@@ -21,7 +21,7 @@ import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.CreateBucketRequest;
 
 /**
- * A fresh MinIO bucket for one chaos row, and the instrument that reads it
+ * A fresh RustFS bucket for one chaos row, and the instrument that reads it
  * (M8.8).
  *
  * <p>⚠️ **EVERY ASSERTION IS MADE HERE, AT THE STORE, THROUGH A CLIENT THAT
@@ -29,7 +29,7 @@ import software.amazon.awssdk.services.s3.model.CreateBucketRequest;
  * asked the question under test, and a node that has been killed cannot be
  * asked at all. The bucket is the one witness that outlives every process.
  *
- * <p>⚠️ **MinIO, NOT LOCAL-FS.** The spec rejects running chaos on local-FS
+ * <p>⚠️ **RustFS, NOT LOCAL-FS.** The spec rejects running chaos on local-FS
  * (ADR-0052 § Alternatives): a rename on a local disk is not a conditional
  * PUT, so a row about a lease race would be testing a different store.
  */
@@ -49,19 +49,19 @@ public final class ChaosBucket implements AutoCloseable, ChainAudit.ChainBucketR
         this.name = name;
         this.observer = S3BinStore.open(new S3Settings(endpoint, "us-east-1", name, true, 255),
                 StaticCredentialsProvider.create(AwsBasicCredentials.create(
-                        MinioFixture.ACCESS_KEY, MinioFixture.SECRET_KEY)));
+                        S3Fixture.ACCESS_KEY, S3Fixture.SECRET_KEY)));
     }
 
-    /** Makes a new bucket on the shared MinIO container. */
+    /** Makes a new bucket on the shared RustFS container. */
     public static ChaosBucket create() {
-        String endpoint = MinioFixture.endpoint();
+        String endpoint = S3Fixture.endpoint();
         String name = "chaos-" + UUID.randomUUID();
         try (S3Client admin = S3Client.builder()
                 .endpointOverride(URI.create(endpoint))
                 .region(Region.US_EAST_1)
                 .forcePathStyle(true)
                 .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create(
-                        MinioFixture.ACCESS_KEY, MinioFixture.SECRET_KEY)))
+                        S3Fixture.ACCESS_KEY, S3Fixture.SECRET_KEY)))
                 .build()) {
             admin.createBucket(CreateBucketRequest.builder().bucket(name).build());
         }
@@ -87,8 +87,8 @@ public final class ChaosBucket implements AutoCloseable, ChainAudit.ChainBucketR
 
     /** The environment a node process reads its credentials from. */
     public static Map<String, String> credentials() {
-        return Map.of("AWS_ACCESS_KEY_ID", MinioFixture.ACCESS_KEY,
-                "AWS_SECRET_ACCESS_KEY", MinioFixture.SECRET_KEY,
+        return Map.of("AWS_ACCESS_KEY_ID", S3Fixture.ACCESS_KEY,
+                "AWS_SECRET_ACCESS_KEY", S3Fixture.SECRET_KEY,
                 "AWS_REGION", "us-east-1");
     }
 

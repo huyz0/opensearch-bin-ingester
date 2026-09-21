@@ -4,7 +4,7 @@ package io.github.huyz0.os.biningester.server.chaos;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
-import io.github.huyz0.os.biningester.binstore.backend.MinioFixture;
+import io.github.huyz0.os.biningester.binstore.backend.S3Fixture;
 import io.github.huyz0.os.biningester.format.CommitRequestFrame;
 import io.github.huyz0.os.biningester.format.IndexRegistration;
 import io.github.huyz0.os.biningester.format.RunKey;
@@ -52,7 +52,7 @@ class AzPartitionIT {
 
     @BeforeAll
     static void container() {
-        assumeTrue(MinioFixture.dockerAvailable(), "no Docker daemon: this is a chaos suite");
+        assumeTrue(S3Fixture.dockerAvailable(), "no Docker daemon: this is a chaos suite");
     }
 
     private static String uuid64(UUID uuid) {

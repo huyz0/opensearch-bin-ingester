@@ -35,9 +35,9 @@ import org.junit.jupiter.api.io.TempDir;
  * term, because its keep list lacked the deltas below the checkpoint. A
  * successor's chain now reaches the floor, and the hour is entered.
  *
- * <p>⚠️ **{@code local-fs}, NOT MinIO, AND WHY.** The sweep enters an hour only
+ * <p>⚠️ **{@code local-fs}, NOT RustFS, AND WHY.** The sweep enters an hour only
  * once the hour has ended and the orphan grace (1 h) has passed, so the
- * successor runs with its clock three hours fast. MinIO refuses a signature
+ * successor runs with its clock three hours fast. RustFS refuses a signature
  * more than 15 minutes skewed; {@code local-fs} signs nothing. Its
  * {@code putIfMatch} is atomic within one JVM only (ADR-0008's addendum), and
  * that is safe here because the two nodes are never alive at once: the first

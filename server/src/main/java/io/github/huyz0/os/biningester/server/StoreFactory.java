@@ -61,7 +61,7 @@ public final class StoreFactory {
             }
             // ⚠️ NO CREDENTIAL IS PASSED, so the SDK's default provider chain
             // resolves the pod's identity. The overload that takes one exists
-            // for the MinIO fixture and is not reachable from configuration --
+            // for the RustFS fixture and is not reachable from configuration --
             // which is what keeps "where does this process get its secret" a
             // question with one answer (security.md rule 5).
             case "s3" -> {

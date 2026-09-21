@@ -37,10 +37,10 @@ import software.amazon.awssdk.services.s3.model.CreateBucketRequest;
  * conditional write decided by a remote service, a range served over HTTP, a
  * batch delete that is one request, and the ERROR SHAPES those produce.
  *
- * <p>⚠️ **MinIO IS NOT S3** (testing.md rule 19a). Where the protocol is
+ * <p>⚠️ **RustFS IS NOT S3** (testing.md rule 19a). Where the protocol is
  * ambiguous the two differ, so what these cases assert is the shape this
  * project's own code depends on, and {@code VERIFIED.md} records which criteria
- * rest on MinIO alone.
+ * rest on RustFS alone.
  *
  * <p>⚠️ **SKIPPED, NOT FAILED, WITH NO DOCKER.** `./gradlew test` starts no
  * container by design (build.md); this suite is `integrationTest` and a
@@ -50,7 +50,7 @@ import software.amazon.awssdk.services.s3.model.CreateBucketRequest;
 class S3BinStoreIntegrationTest {
 
     private static final AwsCredentialsProvider CREDENTIALS = StaticCredentialsProvider.create(
-            AwsBasicCredentials.create(MinioFixture.ACCESS_KEY, MinioFixture.SECRET_KEY));
+            AwsBasicCredentials.create(S3Fixture.ACCESS_KEY, S3Fixture.SECRET_KEY));
 
     private static String endpoint;
 
@@ -59,8 +59,8 @@ class S3BinStoreIntegrationTest {
 
     @BeforeAll
     static void container() {
-        assumeTrue(MinioFixture.dockerAvailable(), "no Docker daemon: this is a T3 suite");
-        endpoint = MinioFixture.endpoint();
+        assumeTrue(S3Fixture.dockerAvailable(), "no Docker daemon: this is a T3 suite");
+        endpoint = S3Fixture.endpoint();
     }
 
     @BeforeEach

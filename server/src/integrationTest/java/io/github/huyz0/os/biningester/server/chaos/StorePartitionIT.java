@@ -5,7 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import io.github.huyz0.os.biningester.binstore.HealthTrackingBinStore;
-import io.github.huyz0.os.biningester.binstore.backend.MinioFixture;
+import io.github.huyz0.os.biningester.binstore.backend.S3Fixture;
 import io.github.huyz0.os.biningester.http.HealthService;
 import java.net.URI;
 import java.nio.file.Path;
@@ -47,7 +47,7 @@ class StorePartitionIT {
 
     @BeforeAll
     static void container() {
-        assumeTrue(MinioFixture.dockerAvailable(), "no Docker daemon: this is a chaos suite");
+        assumeTrue(S3Fixture.dockerAvailable(), "no Docker daemon: this is a chaos suite");
     }
 
     private static int status(NodeProcess node, String path) {
@@ -60,12 +60,12 @@ class StorePartitionIT {
 
     @Test
     void aStoreONLYPartitionFAILSReadinessAndSTOPSTheAcks() throws Exception {
-        URI minio = URI.create(MinioFixture.endpoint());
+        URI rustfs = URI.create(S3Fixture.endpoint());
         AtomicLong acks = new AtomicLong();
         AtomicBoolean stop = new AtomicBoolean();
         List<Thread> producers = new ArrayList<>();
         try (ChaosBucket bucket = ChaosBucket.create();
-                ChaosProxy store = new ChaosProxy(minio.getHost(), minio.getPort())) {
+                ChaosProxy store = new ChaosProxy(rustfs.getHost(), rustfs.getPort())) {
             Map<String, String> settings = new HashMap<>(bucket.nodeSettings());
             settings.put("store.endpoint", "http://localhost:" + store.port());
             settings.put("ingest.interval-floor", "PT0.05S");

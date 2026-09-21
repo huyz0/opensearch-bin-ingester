@@ -2,7 +2,7 @@
 
 ## Completion condition
 
-From [roadmap.md](../../roadmap.md): *"S3/MinIO benchmarks; the cost/latency
+From [roadmap.md](../../roadmap.md): *"RustFS/S3-compatible benchmarks; the cost/latency
 curve published; NFR-1/4/5 measured, not modelled"*, plus **NFR-7** (end-to-end
 p99 < 3× the flush window, reassigned from M5), measurement **M3** (the
 fan-out threshold selecting `direct`), and the rows M8 handed over under their
@@ -14,9 +14,9 @@ milestone-review harvest (M8.60–M8.75). NFR-7's harness must measure the
 [ADR-0058](../../decisions/0058-a-partitioned-pod-acks-on-a-durable-commit-intent.md)
 path, where a 202 may precede its offset.
 
-⚠️ **THE ROADMAP ROW SAYS "S3/MinIO BENCHMARKS" AND THERE IS NO S3.** A
+⚠️ **THE ROADMAP ROW SAYS "RUSTFS/S3-COMPATIBLE BENCHMARKS" AND THERE IS NO AWS S3.** A
 completion condition this milestone cannot meet is not a condition, so **M9.22
-amends the row** to MinIO benchmarks with the S3 halves named NOT-RUN — the
+amends the row** to RustFS benchmarks with the S3 halves named NOT-RUN — the
 tail latency in NFR-7, the TTFB half of measurement M3, and a dollar figure
 from a bill. It is an amendment of a plan, not of a requirement: no FR or NFR
 moves, and the numbers the row asks for are still taken.
@@ -26,7 +26,7 @@ moves, and the numbers the row asks for are still taken.
 committed results file (criterion 16).
 
 ⚠️ **ONE RIG IS AVAILABLE, AND IT IS NOT A CLOUD.** Every measurement in this
-milestone runs on one workstation: WSL2, Docker, MinIO from
+milestone runs on one workstation: WSL2, Docker, RustFS from
 `docker-compose.test.yml` (a test fixture, testing.md rule 19a), and the
 assembled ingester processes the M8 chaos harness already starts. There is no
 AWS account. So this milestone can prove three kinds of thing and must label
@@ -34,9 +34,9 @@ which it is proving:
 
 | Kind | Example | Holds on S3? |
 |---|---|---|
-| **A request count** | PUTs per MiB, GETs per segment, LISTs per hour | ✅ **Yes.** The count is a property of this project's code, not of the store; MinIO answers the same verbs the same number of times |
+| **A request count** | PUTs per MiB, GETs per segment, LISTs per hour | ✅ **Yes.** The count is a property of this project's code, not of the store; RustFS answers the same verbs the same number of times |
 | **A byte count** | cross-AZ bytes, allocation per record | ✅ **Yes**, for the same reason — provided the AZ is a label the pods carry, not a network the rig has |
-| **A latency, a throughput, or a dollar figure** | p99 visibility, MiB/s per core, $/TiB | ❌ **No.** MinIO on loopback has no S3 tail latency and no bill. A latency is a measurement of THIS RIG; a dollar figure is a measured count multiplied by a published price table, which is a model and is labelled one |
+| **A latency, a throughput, or a dollar figure** | p99 visibility, MiB/s per core, $/TiB | ❌ **No.** RustFS on loopback has no S3 tail latency and no bill. A latency is a measurement of THIS RIG; a dollar figure is a measured count multiplied by a published price table, which is a model and is labelled one |
 
 ⚠️ **AND THE RIG IS PINNED AS FAR AS IT CAN BE.** Research 40/03 §0 names five
 environment controls; this rig honours three and cannot honour two, and the
@@ -46,12 +46,12 @@ curve document records which (criterion 16):
 |---|---|
 | Fixed JDK build | ✅ honoured — the toolchain the build pins |
 | `-XX:+AlwaysPreTouch` | ✅ honoured — set on every measured JVM |
-| Record the environment with the result | ✅ honoured — kernel, JDK, CPU model, core count, container limits and the MinIO digest go in the results file |
+| Record the environment with the result | ✅ honoured — kernel, JDK, CPU model, core count, container limits and the RustFS digest go in the results file |
 | Fixed CPU governor | ❌ **cannot** — WSL2 does not expose it; run-to-run variance is measured instead and published beside every number |
-| No co-tenancy | ❌ **cannot** — one workstation runs Docker, MinIO and every JVM. So each latency is a lower bound carrying noise, never a clean p99 |
+| No co-tenancy | ❌ **cannot** — one workstation runs Docker, RustFS and every JVM. So each latency is a lower bound carrying noise, never a clean p99 |
 
 ⚠️ **NFR-1, NFR-4 and NFR-5 are counts, so M9 can MEASURE them.** NFR-7 is a
-latency, so M9 measures it on MinIO and says in the same sentence that S3's
+latency, so M9 measures it on RustFS and says in the same sentence that S3's
 PUT tail is not in the number. What a production-cloud run would add is stated
 per criterion, and is § *What a cloud run adds*.
 
@@ -59,13 +59,13 @@ per criterion, and is § *What a cloud run adds*.
 
 | ID | What M9 does to it |
 |---|---|
-| **NFR-1** (< 0.30 requests per MiB written) | Measured on the assembled fleet against MinIO, counted by `CountingBinStore`, turned into a gate |
+| **NFR-1** (< 0.30 requests per MiB written) | Measured on the assembled fleet against RustFS, counted by `CountingBinStore`, turned into a gate |
 | **NFR-2** (zero idle requests) | Already measured by M8's `IdlePodCostSoakTest`; M9 puts it in CI (M8.75) so it cannot regress unseen |
 | **NFR-3** (no LIST on the hot path) | Asserted in every macro run; M8.66 states the backfill's costs |
 | **NFR-4** (read rate scales with segments, AZs, nodes) | Measured at 16 vs 1,600 shards and 1 vs 3 vs 9 consumer nodes, with the prefetcher wired (M8.56) |
 | **NFR-5** (cross-AZ bytes < 0.1% of ingested) | Measured, which first needs pods to carry an AZ label and the peer sockets to count bytes by it (M9.2) |
 | **NFR-6** (memory bounded) | Not re-proved; the allocation gate (M9.6) is its leading indicator |
-| **NFR-7** (p99 < 3× the flush window) | Measured on MinIO, producer 202 to consumer-visible, at three windows; one point to searchable in OpenSearch |
+| **NFR-7** (p99 < 3× the flush window) | Measured on RustFS, producer 202 to consumer-visible, at three windows; one point to searchable in OpenSearch |
 | **NFR-9**, **NFR-11**, **FR-9**, **FR-10**, **FR-11**, **FR-12**, **NFR-13** | Carried by the inherited M8 rows, each citing its own |
 
 ## Scope
@@ -111,7 +111,7 @@ per criterion, and is § *What a cloud run adds*.
 ## Design
 
 **The macro harness is the M8 chaos harness pointed at a workload.**
-`NodeProcess` already starts assembled ingester processes against MinIO and
+`NodeProcess` already starts assembled ingester processes against RustFS and
 asserts at the store. M9 adds a seeded load generator (doc sizes 200 B,
 1 KiB, 10 KiB and a mixed long-tail distribution, research 40/03 §0), wraps the
 store in `CountingBinStore` inside each process, and exports the counts plus a
@@ -201,7 +201,7 @@ measured what a hand-copied number costs.
 
 ## Acceptance criteria
 
-Every criterion runs on the local rig unless it says otherwise. "MinIO" means
+Every criterion runs on the local rig unless it says otherwise. "RustFS" means
 the digest-pinned container in `docker-compose.test.yml`.
 
 1. **`check-mutants.sh` exists and gates.** It drives jzap's
@@ -216,7 +216,7 @@ the digest-pinned container in `docker-compose.test.yml`.
    exactly. Research 02's two-significant-figure prose is the SOURCE of the
    inputs, never the expected value. (M9.1)
 3. **NFR-1, counted, in BOTH regimes, and bounded PER INTERVAL.** Three
-   assembled pods with three AZ labels, MinIO, the mixed doc-size workload,
+   assembled pods with three AZ labels, RustFS, the mixed doc-size workload,
    ≥5 minutes per point.
    **Above the size-triggered rate:** **requests per MiB written < 0.30** at
    every such rate the rig sustains (at least 3 rates, the highest being the
@@ -291,7 +291,7 @@ the digest-pinned container in `docker-compose.test.yml`.
    paragraph exists to prevent. (M9.2, M9.10)
 7. **NFR-7 on the rig.** p99 from producer 202 to consumer delivery is **< 3×
    the interval ceiling** at ceilings of 250 ms, 1 s and 5 s, each over
-   ≥10,000 records at a steady rate. ⚠️ **MinIO on loopback, NOT S3**: S3's PUT
+   ≥10,000 records at a steady rate. ⚠️ **RustFS on loopback, NOT S3**: S3's PUT
    p99 is absent, so this number is a lower bound on production latency and is
    labelled that way in the curve. (M9.11)
 8. **NFR-7 to searchable, one point.** At a 1 s ceiling in `clusterTest`, p99
@@ -332,9 +332,9 @@ the digest-pinned container in `docker-compose.test.yml`.
     recorded with the result. (M9.7)
 12. **M3, the half the rig can measure.** For fan-outs 1–16, GETs per segment,
     ingester bytes served and ingester CPU under `proxy` and `direct` are
-    counted on MinIO, and the default threshold is chosen by cost and written
+    counted on RustFS, and the default threshold is chosen by cost and written
     into the curve document. ⚠️ **THE TTFB HALF IS NOT-RUN**: the question as
-    `50-open-questions.md` poses it is "given real S3 TTFB variance", and MinIO
+    `50-open-questions.md` poses it is "given real S3 TTFB variance", and RustFS
     has none. The document says the threshold is cost-chosen and names the
     cloud run that would move it. (M9.14)
 13. **M8.24's row, as written.** An OpenSearch node killed with a backlog of
@@ -369,7 +369,7 @@ the digest-pinned container in `docker-compose.test.yml`.
     committed results files; its `--check` mode is wired as a pre-commit gate
     and red when a number in the document disagrees with a results file. It
     plots requests per MiB (measured), $/TiB (modelled from the measured count
-    and the AWS price table, labelled so) and p99 (measured on MinIO, labelled
+    and the AWS price table, labelled so) and p99 (measured on RustFS, labelled
     so) against the interval ceiling, and records the rig. (M9.15)
 17. **The cost assertions gate CI, in a NAMED execution layer.** ⚠️ **THEY DO
     NOT FIT L1–L3.** Criterion 3 alone is ≥3 rates × 2 ceilings × ≥5 minutes,
@@ -395,7 +395,7 @@ the digest-pinned container in `docker-compose.test.yml`.
     indexed past; and the GETs and LISTs each tier costs are **counted** by
     `CountingBinStore`, replacing `FallbackLadder`'s modelled `TENS_OF_GETS`
     with the measured number or correcting it to it. The request rate returns
-    to zero once an ingester answers. T3 against MinIO — a count, so it holds
+    to zero once an ingester answers. T3 against RustFS — a count, so it holds
     on S3.
     ⚠️ **OR THE OTHER BRANCH, WHICH IS CHECKABLE TOO.** No approach is named
     today: a SigV4 signer in the plugin (a credential in the OpenSearch JVM)
@@ -433,7 +433,7 @@ multiplied from a price table (criterion 16). Each is a named NOT-RUN in
 | M9.1 | T0 | `CostMeterTest.scenarioAIsPointTwoFour` | per-MiB divided by MB, not MiB; LIST priced as GET |
 | M9.2 | T0 + T3 | `PeerBytesByAzTest` — same-AZ bytes counted as cross-AZ | a counter keyed by pod, not by label |
 | M9.3 | T0 | `LoadGeneratorTest` — same seed, same byte stream | a non-reproducible workload |
-| M9.4 | T3 (MinIO) | `MacroHarnessIT` — a run whose results file lacks the counts | a harness reporting latency without cost |
+| M9.4 | T3 (RustFS) | `MacroHarnessIT` — a run whose results file lacks the counts | a harness reporting latency without cost |
 | M9.5 | L5 (manual) + doc | — **no test can fail first for a profile**; it is a measurement, and its falsifiability is that the three hot spots it names are reproducible on a second run, recorded. Evidence for criterion 10 only | a benchmark set chosen on a hunch (performance.md rule 1) |
 | M9.6 | JMH + script | the allocation gate green with a baseline halved | a gate reading the wrong column |
 | M9.7 | JMH (B3) + T3 | `CodecComparisonBenchmark` reporting ratio without B/op | a codec chosen on speed alone |
@@ -445,7 +445,7 @@ multiplied from a price table (criterion 16). Each is a named NOT-RUN in
 | M9.12 | T3 (chaos) | `PartitionVisibilityIT` red with the heal drain disabled | ADR-0058's drain not running |
 | M8.24 | T4 | `KillNodeMidBacklogIT` red with the tail queued behind the catch-up | starvation |
 | M9.13 | T3 | `GapRereadIT` red with the re-read skipped | a gap indexed past |
-| M9.21 | T3 (MinIO) | `LadderStoreTiersIT` red with tier 3 answered by a reachable ingester | a tier that never runs; an uncounted recovery LIST |
+| M9.21 | T3 (RustFS) | `LadderStoreTiersIT` red with tier 3 answered by a reachable ingester | a tier that never runs; an uncounted recovery LIST |
 | M8.58 | T0 + T3 | `LeaseHolderUidTest` — a replacement pod on a dead holder's IP challenged early | matching a holder by address |
 | M9.15 | script test | `--check` green on a doctored table | a generated document nobody regenerates |
 | M9.16 | script test | the CI gate green with the cost job removed from the workflow | a CI job that silently stops running |
@@ -455,7 +455,7 @@ multiplied from a price table (criterion 16). Each is a named NOT-RUN in
 | M9.20 | doc | — (an ADR; either branch of criterion 18) | a mechanism assumed buildable |
 | M9.22 | doc | — **no test can fail first for a roadmap edit**; it changes one prose row and no code. `check-links.sh` and the M9.0 spec review carry it | a completion condition the milestone cannot meet |
 | M0.27 | script test | the L1 job green having executed zero tests | `check-harness-tests.sh`'s antidote not inherited |
-| M8.56 | T3 (MinIO) | `PrefetchWiredIT` — a second AZ's first read costing a cold GET | the prefetcher constructed but never signalled |
+| M8.56 | T3 (RustFS) | `PrefetchWiredIT` — a second AZ's first read costing a cold GET | the prefetcher constructed but never signalled |
 | M8.60 | T0 + script | `check-metric-cardinality.sh` on a per-index label; a metric test red with the counter unexported | a counter only tests can read |
 | M8.61 | T3 (chaos) | ⚠️ **TEN NAMED ASSERTIONS, EACH RED AGAINST ITS OWN DEFECT** — the row cannot be closed by tightening three of them: (1) `AzPartitionIT` intents per flush (unbounded → red with an extra intent per record); (2–4) `OrphanAfterKillIT`'s contiguity at the store, "a NEW segment", and the orphan's content (red with the orphan's bytes replaced, a reused key, a hole in the sequence); (5) `ChallengeResumeIT`'s takeover count read mid-run (red with a second takeover after the read); (6) `IdlePodCostSoakTest`'s lease bounds (red with a doubled renew rate); (7) `RollingRestartIT`'s herd budget per restart (red with every reconnect in one 100 ms window); (8–10) the three the M8 milestone review lists (5bc9672, 08cb808, 60796af), each named in the commit body with its own mutation | an assertion that passes on the very defect its row names |
 | M8.62 | `check-mutants.sh` | the gate red on the recorded surviving mutants | mutants recorded and never killed |
@@ -489,11 +489,11 @@ that reason stated.
 
 ## Risks
 
-- **The rig cannot reach the size-triggered regime.** WSL2 plus MinIO may top
+- **The rig cannot reach the size-triggered regime.** WSL2 plus RustFS may top
   out below the rate at which three pods fill segments. Then criterion 3 is
   measured with fewer pods or a smaller `maxSegmentBytes`, and the curve says
   which — never with a relaxed budget (cost.md rule 18).
-- **MinIO latency flatters NFR-7.** Stated in criterion 7; revealed only by a
+- **RustFS latency flatters NFR-7.** Stated in criterion 7; revealed only by a
   cloud run.
 - **The Docker memory ceiling** (`check-test-budget.sh`) caps fleet size. A run
   that needs more pods than fit is a finding, not a reason to raise the cap.
@@ -554,12 +554,12 @@ until it lands.
 | ID | Task | Serves |
 |---|---|---|
 | M9.0 | This spec and the decomposition | — (planning) |
-| M9.22 | **AMEND THE ROADMAP's M9 ROW**: MinIO benchmarks, with the S3 halves named NOT-RUN, so the completion condition is one this milestone can meet | — (planning) |
+| M9.22 | **QUALIFY RUSTFS AND AMEND THE ROADMAP's M9 ROW**: RustFS benchmarks, with the S3 halves named NOT-RUN, so the completion condition is one this milestone can meet | — (planning) |
 | M0.14 | `check-mutants.sh`: jzap, 80% killed on the staged diff | — (gate) |
 | M9.1 | The cost meter: requests per MiB, idle rate, $/TiB from a price table | NFR-1, NFR-4 (R9) |
 | M9.2 | An AZ label on each pod and cross-AZ bytes counted at the peer sockets | NFR-5 |
 | M9.3 | A seeded load generator with realistic doc sizes | NFR-1, NFR-7 |
-| M9.4 | The macro harness: the assembled fleet on MinIO, counts and a latency histogram per run | NFR-1, NFR-7 |
+| M9.4 | The macro harness: the assembled fleet on RustFS, counts and a latency histogram per run | NFR-1, NFR-7 |
 | M9.5 | Profile the macro harness with JFR and record the top three hot spots | NFR-7 |
 | M9.6 | The JMH harness and the allocation gate over a named set | NFR-6 |
 | M8.66 | The backfill stops on deposition, and its costs are stated in cost.md 2b | NFR-3 |

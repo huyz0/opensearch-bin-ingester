@@ -23,7 +23,7 @@ import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
  * log cannot tell the difference. Every other verb here is idempotent and worth
  * retrying, and an earlier draft turned retries off for all of them.
  *
- * <p>⚠️ **NO CONTAINER, AND NO MinIO.** What this needs is an endpoint that
+ * <p>⚠️ **NO CONTAINER, AND NO RustFS.** What this needs is an endpoint that
  * does not answer, which is a closed port — so this case runs wherever a socket
  * can be opened. It lives in the T3 source set because it makes a real network
  * call, not because it needs the fixture.

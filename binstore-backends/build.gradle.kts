@@ -37,7 +37,7 @@ dependencies {
         }
     }
 
-    // ⚠️ T3. The MinIO cases need the SDK types the backend hides from every
+    // ⚠️ T3. The RustFS cases need the SDK types the backend hides from every
     // other module, because what they assert is the wire behaviour this adapter
     // maps -- a 412 for a lost conditional write against a 404 for one with
     // nothing to match.

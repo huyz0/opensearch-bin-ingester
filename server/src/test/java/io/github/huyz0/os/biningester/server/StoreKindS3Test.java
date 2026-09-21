@@ -16,7 +16,7 @@ import org.junit.jupiter.api.Test;
  * <p>⚠️ **NO ENDPOINT IS CONTACTED HERE AND THAT IS WHY THIS IS T0.** What is
  * asserted is which settings a kind needs and which it refuses — a predicate
  * over a record, decided before a single request. The behaviour of the backend
- * against a real endpoint is M8.2's and M8.22's, against MinIO.
+ * against a real endpoint is M8.2's and M8.22's, against RustFS.
  *
  * <p>⚠️ **BOTH DIRECTIONS, AND THE SECOND IS THE ONE WORTH HAVING.** A missing
  * bucket fails loudly the first time anything is written. A bucket configured

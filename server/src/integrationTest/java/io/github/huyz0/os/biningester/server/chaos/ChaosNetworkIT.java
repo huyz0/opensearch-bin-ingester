@@ -4,7 +4,7 @@ package io.github.huyz0.os.biningester.server.chaos;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
-import io.github.huyz0.os.biningester.binstore.backend.MinioFixture;
+import io.github.huyz0.os.biningester.binstore.backend.S3Fixture;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -35,7 +35,7 @@ class ChaosNetworkIT {
 
     @BeforeAll
     static void container() {
-        assumeTrue(MinioFixture.dockerAvailable(), "no Docker daemon: this is a chaos suite");
+        assumeTrue(S3Fixture.dockerAvailable(), "no Docker daemon: this is a chaos suite");
     }
 
     private static int write(NodeProcess node, String id) {
@@ -57,9 +57,9 @@ class ChaosNetworkIT {
 
     @Test
     void aSTORECutStopsTheAcksAndTheBucketSEESNothingUntilItHEALS() throws Exception {
-        URI minio = URI.create(MinioFixture.endpoint());
+        URI rustfs = URI.create(S3Fixture.endpoint());
         try (ChaosBucket bucket = ChaosBucket.create();
-                ChaosProxy store = new ChaosProxy(minio.getHost(), minio.getPort())) {
+                ChaosProxy store = new ChaosProxy(rustfs.getHost(), rustfs.getPort())) {
             Map<String, String> settings = new HashMap<>(bucket.nodeSettings());
             settings.put("store.endpoint", "http://localhost:" + store.port());
             try (NodeProcess node = NodeProcess.start(dir, "pod0", settings)) {

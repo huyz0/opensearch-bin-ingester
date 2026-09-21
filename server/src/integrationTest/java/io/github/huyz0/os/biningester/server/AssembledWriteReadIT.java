@@ -6,7 +6,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import io.github.huyz0.os.biningester.binstore.BinStore;
 import io.github.huyz0.os.biningester.binstore.ListPage;
-import io.github.huyz0.os.biningester.binstore.backend.MinioFixture;
+import io.github.huyz0.os.biningester.binstore.backend.S3Fixture;
 import io.github.huyz0.os.biningester.binstore.backend.S3BinStore;
 import io.github.huyz0.os.biningester.binstore.backend.S3Settings;
 import io.github.huyz0.os.biningester.client.ConsumerClient;
@@ -79,8 +79,8 @@ class AssembledWriteReadIT {
 
     @BeforeAll
     static void container() {
-        assumeTrue(MinioFixture.dockerAvailable(), "no Docker daemon: this is a T3 suite");
-        endpoint = MinioFixture.endpoint();
+        assumeTrue(S3Fixture.dockerAvailable(), "no Docker daemon: this is a T3 suite");
+        endpoint = S3Fixture.endpoint();
     }
 
     private static String makeBucket() {
@@ -90,7 +90,7 @@ class AssembledWriteReadIT {
                 .region(Region.US_EAST_1)
                 .forcePathStyle(true)
                 .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create(
-                        MinioFixture.ACCESS_KEY, MinioFixture.SECRET_KEY)))
+                        S3Fixture.ACCESS_KEY, S3Fixture.SECRET_KEY)))
                 .build()) {
             admin.createBucket(CreateBucketRequest.builder().bucket(bucket).build());
         }
@@ -106,9 +106,9 @@ class AssembledWriteReadIT {
      */
     private static BinStore observer(String bucket) {
         return S3BinStore.open(new S3Settings(endpoint, "us-east-1", bucket, true,
-                255 /* MinIO's measured limit, M8.22 */),
+                255 /* RustFS's measured limit, M8.22 */),
                 StaticCredentialsProvider.create(AwsBasicCredentials.create(
-                        MinioFixture.ACCESS_KEY, MinioFixture.SECRET_KEY)));
+                        S3Fixture.ACCESS_KEY, S3Fixture.SECRET_KEY)));
     }
 
     private Path configFile(String bucket) throws Exception {
@@ -159,8 +159,8 @@ class AssembledWriteReadIT {
         // secret and `StoreFactory` passes no credentials, so if this is the
         // only place a credential appears then the production path is the one
         // resolving it.
-        System.setProperty("aws.accessKeyId", MinioFixture.ACCESS_KEY);
-        System.setProperty("aws.secretAccessKey", MinioFixture.SECRET_KEY);
+        System.setProperty("aws.accessKeyId", S3Fixture.ACCESS_KEY);
+        System.setProperty("aws.secretAccessKey", S3Fixture.SECRET_KEY);
 
         UUID stream = UUID.randomUUID();
         try (IngesterNode node = Main.run(configFile(bucket).toString())) {

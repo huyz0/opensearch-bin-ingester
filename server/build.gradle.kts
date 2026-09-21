@@ -47,7 +47,7 @@ dependencies {
     // BUCKET and its key matches the grammar" -- a process that acked from its
     // accumulator and served the read back out of the same JVM is green on the
     // 202 and on the read-back, and only a second, independently-opened client
-    // looking at MinIO can tell the two apart.
+    // looking at RustFS can tell the two apart.
     "integrationTestImplementation"(testFixtures(project(":binstore-backends")))
     "integrationTestImplementation"(project(":binstore-backends"))
     "integrationTestImplementation"(project(":http"))

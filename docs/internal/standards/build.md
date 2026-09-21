@@ -18,7 +18,7 @@ lost session.**
 | Gradle daemon | 1 GiB | `org.gradle.jvmargs=-Xmx1g` in `gradle.properties` |
 | Java compile daemon | 512 MiB | `options.forkOptions.memoryMaximumSize` in the conventions plugin |
 | Test JVM | 512 MiB | `test { maxHeapSize = "512m" }` |
-| MinIO container | 256 MiB | `--memory=256m` |
+| RustFS container | 256 MiB | `--memory=256m` |
 | OpenSearch container | 1 GiB | `--memory=1g`, `OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m` |
 | Gateway under test | 512 MiB | `-Xmx512m` |
 | Headroom / page cache | 1 GiB | — |
@@ -48,8 +48,8 @@ below the ceiling.
 | Task | Tiers | Containers | Memory | When |
 |---|---|---|---|---|
 | `./gradlew test` | T0–T2 | **none** | ~2 GiB | every commit, the default |
-| `./gradlew integrationTest` | T3 | MinIO | ~2.8 GiB | on demand + CI |
-| `./gradlew clusterTest` | T4 | OpenSearch (+MinIO) | ~4.9 GiB | on demand + CI |
+| `./gradlew integrationTest` | T3 | RustFS | ~2.8 GiB | on demand + CI |
+| `./gradlew clusterTest` | T4 | OpenSearch (+RustFS) | ~4.9 GiB | on demand + CI |
 
 1. **The default task starts no container.** A developer, or an agent running
    `/milestone`, gets a fast light loop; the heavy tiers are explicit.
@@ -143,7 +143,7 @@ dominated by code nobody touched and moves too slowly to gate a commit.
 |---|---|---|---|
 | **L0** pre-commit, local | T0–T2 unit + the text gates | **≤ 90 s** | every commit, **blocking** |
 | **L1** CI fast | L0 + cost assertions + **gate benchmarks** | **≤ 5 min** | every push/PR, **blocking** |
-| **L2** integration | T3, MinIO | ≤ 10 min | **selective** — see below |
+| **L2** integration | T3, RustFS | ≤ 10 min | **selective** — see below |
 | **L2S** soak | `./gradlew soakTest`: wall-clock cost over minutes, which no fake clock can stand in for (M8.40) | ≤ 10 min | before a milestone is declared complete; ⚠️ nightly only once CI runs a tier past the gates, which `ci.yml` does not today |
 | **L3** e2e cluster | T4, OpenSearch | ≤ 15 min *total* with L2 | selective, same triggers |
 | **L4** full benchmarks | JMH, proper fork counts | unbounded | **manual only** |

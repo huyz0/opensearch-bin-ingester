@@ -32,14 +32,14 @@ import java.util.Optional;
  *     {@code check-io-seam.sh}'s exempt list stays as short as it is
  * @param endpoint the S3 endpoint, ⚠️ **absent for AWS itself**: a hostname
  *     written out by hand for AWS is how a deployment ends up pinned to one
- *     region's endpoint. A MinIO or Ceph deployment sets it
- * @param region ⚠️ **required by `s3` EVEN AGAINST MinIO, which ignores it**:
+ *     region's endpoint. A RustFS or Ceph deployment sets it
+ * @param region ⚠️ **required by `s3` EVEN AGAINST RustFS, which ignores it**:
  *     SigV4 signs over the region, so a client with none cannot sign at all
  * @param bucket the one bucket an {@code s3} store reads and writes
  * @param pathStyle whether to address the bucket in the path rather than in the
  *     hostname. ⚠️ True for every non-AWS endpoint this project has met:
  *     virtual-host addressing needs a wildcard DNS entry per bucket, which a
- *     MinIO reached at {@code localhost} does not have
+ *     RustFS reached at {@code localhost} does not have
  */
 public record StoreConfig(String kind, Optional<String> root, Optional<String> endpoint,
         Optional<String> region, Optional<String> bucket, boolean pathStyle) {

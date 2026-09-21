@@ -4,7 +4,7 @@ package io.github.huyz0.os.biningester.server.chaos;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
-import io.github.huyz0.os.biningester.binstore.backend.MinioFixture;
+import io.github.huyz0.os.biningester.binstore.backend.S3Fixture;
 import io.github.huyz0.os.biningester.format.Lease;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -52,7 +52,7 @@ class ClockSkewIT {
 
     @BeforeAll
     static void container() {
-        assumeTrue(MinioFixture.dockerAvailable(), "no Docker daemon: this is a chaos suite");
+        assumeTrue(S3Fixture.dockerAvailable(), "no Docker daemon: this is a chaos suite");
     }
 
     private Map<String, String> settings(ChaosBucket bucket) {
