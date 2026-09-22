@@ -138,12 +138,12 @@ consumer**, stamped by the load generator and read back through the consumer
 library, with HdrHistogram. One operating point is also measured to
 "searchable" in OpenSearch at T4 (`clusterTest`), because that is what research
 40/03 §2 defines and what an operator sees. The flush window NFR-7 divides by
-is the configured **CEILING** of the adaptive interval (ADR-0017), the worst
-case — **decided by the user on 2026-09-20**. ⚠️ It still owes an ADR (M9.19),
-because it resolves an ambiguity in a REQUIREMENT's text rather than choosing an
-implementation: NFR-7 says "the configured flush window" and the interval has
-both a floor and a ceiling, so every future reading of that row rests on this
-answer.
+is the configured **CEILING** of the adaptive interval (ADR-0017; the divisor
+decision is recorded in ADR-0063), the worst case — **decided by the user on
+2026-09-20**. It resolves an ambiguity in a REQUIREMENT's text rather than
+choosing an implementation: NFR-7 says "the configured flush window" and the
+interval has both a floor and a ceiling, so every future reading of that row
+rests on this answer.
 
 **NFR-1 has two regimes, and both are asserted.** Above the rate at which
 flushes are size-triggered, the PUT rate tracks bytes ÷ segment size (R14) and
@@ -507,15 +507,15 @@ that reason stated.
 
 ## Decisions
 
-⚠️ **The four the user settled on 2026-09-20 are decided; each still owes an
-ADR, written by the task that carries it. The rest are open, and their ADR
-comes before the task starts.**
+⚠️ **The four decisions the user settled on 2026-09-20 are recorded or have
+an owning ADR task. The rest are open, and their ADR comes before the task
+starts.**
 
 **Decided, ADR owed:**
 
 1. **NFR-7's divisor is the interval CEILING**, endpoints producer 202 to
    consumer delivery. An ADR because it resolves an ambiguity in a
-   requirement's text rather than choosing an implementation. → M9.19
+   requirement's text rather than choosing an implementation. → [ADR-0063](../../decisions/0063-nfr-7-uses-the-adaptive-interval-ceiling.md)
 2. **NFR-1 is amended**: < 0.30 requests per MiB above the size-triggered
    rate, and **≤ 2 write requests per pod per INTERVAL CEILING** below it.
    ⚠️ **THE PER-SECOND FORM IS REJECTED AND THE ADR MUST SAY WHY**: it
