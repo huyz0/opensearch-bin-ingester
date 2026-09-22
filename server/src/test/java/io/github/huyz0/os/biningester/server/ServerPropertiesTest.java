@@ -138,6 +138,14 @@ class ServerPropertiesTest {
     }
 
     @Test
+    void aBLANKDurationIsREFUSEDRatherThanTakingTheDEFAULT() {
+        assertThatThrownBy(() -> ServerProperties.parse(with(ServerProperties.LEASE_TTL, "   ")))
+                .isInstanceOf(ConfigurationException.class)
+                .hasMessageContaining(ServerProperties.LEASE_TTL)
+                .hasMessageContaining("blank");
+    }
+
+    @Test
     void aNEGATIVEOrZEROSizeIsREFUSED() {
         assertThatThrownBy(() ->
                 ServerProperties.parse(with(ServerProperties.MAX_SEGMENT_BYTES, "-1")))
@@ -155,6 +163,15 @@ class ServerPropertiesTest {
                 .isInstanceOf(ConfigurationException.class)
                 .hasMessageContaining(ServerProperties.MAX_SEGMENT_BYTES)
                 .hasMessageContaining("positive");
+    }
+
+    @Test
+    void aBLANKByteSizeIsREFUSEDRatherThanTakingTheDEFAULT() {
+        assertThatThrownBy(() ->
+                ServerProperties.parse(with(ServerProperties.MAX_SEGMENT_BYTES, "   ")))
+                .isInstanceOf(ConfigurationException.class)
+                .hasMessageContaining(ServerProperties.MAX_SEGMENT_BYTES)
+                .hasMessageContaining("blank");
     }
 
     @Test
@@ -191,6 +208,15 @@ class ServerPropertiesTest {
                 .isInstanceOf(ConfigurationException.class)
                 .hasMessageContaining(ServerProperties.DIRECT_ENABLED)
                 .hasMessageContaining("yes");
+    }
+
+    @Test
+    void aBLANKBooleanIsREFUSEDRatherThanTakingTheDEFAULT() {
+        assertThatThrownBy(() ->
+                ServerProperties.parse(with(ServerProperties.DIRECT_ENABLED, "   ")))
+                .isInstanceOf(ConfigurationException.class)
+                .hasMessageContaining(ServerProperties.DIRECT_ENABLED)
+                .hasMessageContaining("blank");
     }
 
     @Test

@@ -329,8 +329,11 @@ public final class ServerProperties {
 
     private static Duration duration(Map<String, String> settings, String key, Duration fallback) {
         String value = settings.get(key);
-        if (value == null || value.isBlank()) {
+        if (value == null) {
             return fallback;
+        }
+        if (value.isBlank()) {
+            throw blankSetting(key);
         }
         Duration parsed;
         try {
@@ -352,8 +355,11 @@ public final class ServerProperties {
 
     private static long positiveBytes(Map<String, String> settings, String key, long fallback) {
         String value = settings.get(key);
-        if (value == null || value.isBlank()) {
+        if (value == null) {
             return fallback;
+        }
+        if (value.isBlank()) {
+            throw blankSetting(key);
         }
         long parsed;
         try {
@@ -421,8 +427,11 @@ public final class ServerProperties {
 
     private static boolean bool(Map<String, String> settings, String key, boolean fallback) {
         String value = settings.get(key);
-        if (value == null || value.isBlank()) {
+        if (value == null) {
             return fallback;
+        }
+        if (value.isBlank()) {
+            throw blankSetting(key);
         }
         String normalized = value.trim().toLowerCase(Locale.ROOT);
         return switch (normalized) {
@@ -435,6 +444,11 @@ public final class ServerProperties {
             default -> throw new ConfigurationException(
                     key + " must be true or false, not: " + value);
         };
+    }
+
+    private static ConfigurationException blankSetting(String key) {
+        return new ConfigurationException(key + " is set but blank — remove it, or give it a "
+                + "value; a blank is almost always an unset variable");
     }
 
     /** Every setting this parser recognises, sorted — for a usage message. */
