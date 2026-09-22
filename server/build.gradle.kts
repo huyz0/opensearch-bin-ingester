@@ -52,6 +52,10 @@ dependencies {
     "integrationTestImplementation"(project(":binstore-backends"))
     "integrationTestImplementation"(project(":http"))
     "integrationTestImplementation"(project(":client"))
+    // M9.9 verifies the real consumer-node registration seam alongside the
+    // RustFS serving-path request count; this is test-only and does not make
+    // the server depend on the plugin at runtime.
+    "integrationTestImplementation"(project(":plugin"))
     // ⚠️ TEST-ONLY: the macro workload is the independent benchmark leaf;
     // no shipped runtime classpath depends on it (ADR-0059).
     "integrationTestImplementation"(project(":bench"))
