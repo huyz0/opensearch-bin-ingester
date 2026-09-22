@@ -228,6 +228,10 @@ public final class NodeProcess implements AutoCloseable {
     }
 
     private WebClient newClient() {
+        return newClient(java.time.Duration.ofSeconds(2));
+    }
+
+    private WebClient newClient(java.time.Duration readTimeout) {
         return WebClient.builder().baseUri("http://localhost:" + port)
                 .proxy(io.helidon.webclient.api.Proxy.noProxy())
                 // The benchmark's largest NDJSON body is about 2.5 MiB. Windows can
@@ -236,7 +240,7 @@ public final class NodeProcess implements AutoCloseable {
                 .socketOptions(options -> options.socketSendBufferSize(
                         PRODUCER_SOCKET_SEND_BUFFER_BYTES))
                 .connectTimeout(java.time.Duration.ofSeconds(2))
-                .readTimeout(java.time.Duration.ofSeconds(2)).build();
+                .readTimeout(readTimeout).build();
     }
 
     private WebClient producerClient() {
@@ -283,6 +287,19 @@ public final class NodeProcess implements AutoCloseable {
                     .append("\",\"_version\":1}}\n{\"n\":").append(i).append("}\n");
         }
         try (var response = producerClient().post("/logs/_bulk").queryParam("partition", "0")
+                .submit(body.toString())) {
+            return response.status().code();
+        }
+    }
+
+    /** Writes one bulk with a longer response timeout for interval-ceiling probes. */
+    public int write(String idPrefix, int records, java.time.Duration readTimeout) {
+        StringBuilder body = new StringBuilder();
+        for (int i = 0; i < records; i++) {
+            body.append("{\"index\":{\"_id\":\"").append(idPrefix).append('-').append(i)
+                    .append("\",\"_version\":1}}\n{\"n\":").append(i).append("}\n");
+        }
+        try (var response = newClient(readTimeout).post("/logs/_bulk").queryParam("partition", "0")
                 .submit(body.toString())) {
             return response.status().code();
         }

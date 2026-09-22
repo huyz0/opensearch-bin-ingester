@@ -26,7 +26,7 @@ IDs are stable and cited by specs, tasks, and ADRs. Status is `agreed`,
 
 | ID | Requirement | Target | Status |
 |---|---|---|---|
-| NFR-1 | Write request rate | < 0.30 requests per MiB ingested | agreed |
+| NFR-1 | Write request rate | < 0.30 requests per MiB above the size-triggered regime; at most 2 write requests per pod per interval ceiling below it | agreed (ADR-0062) |
 | NFR-2 | Idle cost | **zero** object-store requests from consumers | agreed |
 | NFR-3 | LIST on hot paths | zero, and a hard runtime ceiling of ~1/s sustained | agreed |
 | NFR-16 | Governor refusals in steady state | zero | agreed |

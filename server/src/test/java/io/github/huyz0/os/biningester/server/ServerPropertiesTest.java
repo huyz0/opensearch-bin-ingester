@@ -76,8 +76,12 @@ class ServerPropertiesTest {
 
     @Test
     void aSETOptionalOVERRIDESItsDefault() {
-        ServerConfig config = ServerProperties.parse(with(ServerProperties.LEASE_TTL, "PT45S"));
+        Map<String, String> settings = minimal();
+        settings.put(ServerProperties.LEASE_TTL, "PT45S");
+        settings.put(ServerProperties.INTERVAL_CEILING, "PT17S");
+        ServerConfig config = ServerProperties.parse(settings);
         assertThat(config.leaseTtl()).isEqualTo(Duration.ofSeconds(45));
+        assertThat(config.ingest().intervalCeiling()).isEqualTo(Duration.ofSeconds(17));
     }
 
     @Test
@@ -316,7 +320,7 @@ class ServerPropertiesTest {
     void theKNOWNKeysAreREPORTABLEForAUsageMessage() {
         assertThat(ServerProperties.knownKeys())
                 .contains(ServerProperties.POD_ID, ServerProperties.ENDPOINT,
-                        ServerProperties.STORE_KIND)
-                .hasSize(29);
+                        ServerProperties.STORE_KIND, ServerProperties.INTERVAL_CEILING)
+                .hasSize(30);
     }
 }

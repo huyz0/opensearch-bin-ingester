@@ -79,6 +79,8 @@ public final class ServerProperties {
     public static final String LEASE_RENEW = "lease.renew-interval";
     /** Optional: the adaptive interval's floor. */
     public static final String INTERVAL_FLOOR = "ingest.interval-floor";
+    /** Optional: the adaptive interval's ceiling. */
+    public static final String INTERVAL_CEILING = "ingest.interval-ceiling";
     /** Optional: the segment size that forces a flush. */
     public static final String MAX_SEGMENT_BYTES = "ingest.max-segment-bytes";
     /** Optional: whether consumers may fetch with signed URLs. */
@@ -128,7 +130,8 @@ public final class ServerProperties {
     private static final Set<String> KNOWN = Set.of(POD_ID, POD_AZ, TRUST_DOMAIN, PREFIX, STORE_KIND,
             STORE_ROOT, STORE_ENDPOINT, STORE_REGION, STORE_BUCKET, STORE_PATH_STYLE,
             ENDPOINT, HTTP_PORT, PRODUCER_SUBJECT, PRODUCER_ALLOWED_INDICES,
-            LEASE_TTL, LEASE_RENEW, INTERVAL_FLOOR, MAX_SEGMENT_BYTES, DIRECT_ENABLED,
+            LEASE_TTL, LEASE_RENEW, INTERVAL_FLOOR, INTERVAL_CEILING, MAX_SEGMENT_BYTES,
+            DIRECT_ENABLED,
             RETENTION_MIN, RETENTION_MAX, RETENTION_REPORT_TIMEOUT, RETENTION_COPY_EXPIRY,
             RETENTION_PASS_INTERVAL, MEMBERSHIP_API, MEMBERSHIP_NAMESPACE, MEMBERSHIP_SERVICE,
             MEMBERSHIP_TOKEN_FILE, MEMBERSHIP_CA_FILE);
@@ -167,7 +170,7 @@ public final class ServerProperties {
                             IngestConfig.DEFAULT_MAX_SEGMENT_BYTES),
                     trustDomain,
                     IngestConfig.DEFAULT_MAX_QUEUED_PUSH_BYTES,
-                    IngestConfig.DEFAULT_INTERVAL_CEILING,
+                    duration(settings, INTERVAL_CEILING, IngestConfig.DEFAULT_INTERVAL_CEILING),
                     IngestConfig.DEFAULT_FILL_RATIO_LOW_THRESHOLD,
                     IngestConfig.DEFAULT_FILL_RATIO_HIGH_THRESHOLD,
                     IngestConfig.DEFAULT_INTERVAL_LENGTHEN_DELAY,
