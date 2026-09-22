@@ -4,7 +4,9 @@ package io.github.huyz0.os.biningester.sequencer;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.huyz0.os.biningester.binstore.Body;
+import io.github.huyz0.os.biningester.binstore.BinStore;
 import io.github.huyz0.os.biningester.binstore.CountingBinStore;
+import io.github.huyz0.os.biningester.binstore.ListPage;
 import io.github.huyz0.os.biningester.binstore.backend.MemoryBinStore;
 import io.github.huyz0.os.biningester.format.Checkpoint;
 import io.github.huyz0.os.biningester.format.CommitDelta;
@@ -16,6 +18,8 @@ import io.github.huyz0.os.biningester.format.SegmentCommit;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -39,11 +43,15 @@ class ChainBackfillTest {
 
     private final MemoryBinStore store = new MemoryBinStore();
 
-    private void delta(long epoch, long sequence) throws Exception {
-        CommitDelta delta = new CommitDelta(sequence, List.of(new SegmentCommit(
+    private CommitDelta commitDelta(long epoch, long sequence) {
+        return new CommitDelta(sequence, List.of(new SegmentCommit(
                 "bucket/data/seg-" + epoch + "-" + sequence,
                 List.of(new RunCommit(STREAM, 1, sequence)),
                 new SegmentCommit.Attribution("poda", "i1", sequence))));
+    }
+
+    private void delta(long epoch, long sequence) throws Exception {
+        CommitDelta delta = commitDelta(epoch, sequence);
         store.put(new LogKeys(PREFIX, epoch).keyFor(sequence), Body.ofBytes(delta.encode()));
     }
 
@@ -112,5 +120,72 @@ class ChainBackfillTest {
 
         assertThat(ChainBackfill.below(counted, PREFIX, 0, 0)).isEmpty();
         assertThat(counted.counts().gets()).isZero();
+    }
+
+    @Test
+    void backfillStopsWhenTermIsDeposedBeforeReading() throws Exception {
+        chain();
+        AtomicBoolean serving = new AtomicBoolean(true);
+        AtomicInteger gets = new AtomicInteger();
+        BinStore deposing = new ForwardingBinStore(store) {
+            @Override
+            public ListPage list(String prefix, String startAfter, int maxKeys) throws java.io.IOException {
+                ListPage page = super.list(prefix, startAfter, maxKeys);
+                serving.set(false);
+                return page;
+            }
+
+            @Override
+            public java.io.InputStream get(String key) throws java.io.IOException {
+                gets.incrementAndGet();
+                return super.get(key);
+            }
+        };
+        ChainMemory memory = new ChainMemory(100);
+        memory.record(4, commitDelta(4, 2));
+
+        var method = ChainBackfill.class.getMethod("inBackground", BinStore.class,
+                String.class, ChainMemory.class, java.util.function.BooleanSupplier.class);
+        java.util.function.BooleanSupplier live = serving::get;
+        Thread backfill = (Thread) method.invoke(null,
+                new Object[] {deposing, PREFIX, memory, live});
+        backfill.join(5_000);
+
+        assertThat(backfill.isAlive()).isFalse();
+        assertThat(gets).as("a deposed term must not read a listed page").hasValue(0);
+        assertThat(memory.snapshot().deltas()).hasSize(1);
+        assertThat(memory.snapshot().fromFloor()).isFalse();
+    }
+
+    @Test
+    void backfillDiscardsTheWholeWalkWhenTermIsDeposedDuringRead() throws Exception {
+        chain();
+        AtomicBoolean serving = new AtomicBoolean(true);
+        AtomicInteger gets = new AtomicInteger();
+        BinStore deposing = new ForwardingBinStore(store) {
+            @Override
+            public java.io.InputStream get(String key) throws java.io.IOException {
+                java.io.InputStream in = super.get(key);
+                if (gets.incrementAndGet() == 6) {
+                    serving.set(false);
+                }
+                return in;
+            }
+        };
+        ChainMemory memory = new ChainMemory(100);
+        memory.record(4, commitDelta(4, 2));
+
+        var method = ChainBackfill.class.getMethod("inBackground", BinStore.class,
+                String.class, ChainMemory.class, java.util.function.BooleanSupplier.class);
+        java.util.function.BooleanSupplier live = serving::get;
+        Thread backfill = (Thread) method.invoke(null,
+                new Object[] {deposing, PREFIX, memory, live});
+        backfill.join(5_000);
+
+        assertThat(backfill.isAlive()).isFalse();
+        assertThat(gets).as("the in-flight read is allowed to finish").hasValue(6);
+        assertThat(memory.snapshot().deltas())
+                .as("a deposed walk must not apply a partial result").hasSize(1);
+        assertThat(memory.snapshot().fromFloor()).isFalse();
     }
 }

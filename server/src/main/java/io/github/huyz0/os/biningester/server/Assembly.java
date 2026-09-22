@@ -26,6 +26,7 @@ import io.github.huyz0.os.biningester.ingest.WatermarkTable;
 import io.github.huyz0.os.biningester.sequencer.Checkpoints;
 import io.github.huyz0.os.biningester.sequencer.BatchingSequencer;
 import io.github.huyz0.os.biningester.sequencer.ChainBackfill;
+import io.github.huyz0.os.biningester.sequencer.ChainMemory;
 import io.github.huyz0.os.biningester.sequencer.InboxDrain;
 import io.github.huyz0.os.biningester.sequencer.ChainCollector;
 import io.github.huyz0.os.biningester.sequencer.FleetSequencer;
@@ -46,6 +47,7 @@ import java.util.UUID;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
 
 /**
  * The composition root: configuration in, object graph out (M8.1,
@@ -70,6 +72,11 @@ import java.util.concurrent.TimeUnit;
  * site rather than this class's design.
  */
 public final class Assembly implements AutoCloseable {
+
+    @FunctionalInterface
+    interface BackfillStarter {
+        Thread start(BinStore store, String prefix, ChainMemory chain, BooleanSupplier serving);
+    }
 
     private final ServerConfig config;
     private final BinStore store;
@@ -137,12 +144,26 @@ public final class Assembly implements AutoCloseable {
                 transport, clock, LeaseChallenge.NEVER);
     }
 
+    static Assembly openForTest(ServerConfig config, BinStore store,
+            SequencerTransport transport, Clock clock, BackfillStarter backfillStarter)
+            throws IOException {
+        return new Assembly(config, Objects.requireNonNull(store, "store"), false,
+                transport, clock, LeaseChallenge.NEVER, backfillStarter);
+    }
+
     private Assembly(ServerConfig config, BinStore raw, boolean ownsStore,
             SequencerTransport transport, Clock clock, LeaseChallenge challenge)
             throws IOException {
+        this(config, raw, ownsStore, transport, clock, challenge, ChainBackfill::inBackground);
+    }
+
+    private Assembly(ServerConfig config, BinStore raw, boolean ownsStore,
+            SequencerTransport transport, Clock clock, LeaseChallenge challenge,
+            BackfillStarter backfillStarter) throws IOException {
         this.config = Objects.requireNonNull(config, "config");
         Objects.requireNonNull(transport, "transport");
         Objects.requireNonNull(clock, "clock");
+        Objects.requireNonNull(backfillStarter, "backfillStarter");
         // ⚠️ EVERY STORE CALL THIS NODE MAKES GOES THROUGH THE HEALTH TRACKER
         // (M8.15), so readiness reflects the store without a request of its
         // own. The RAW store is what is closed: the tracker holds nothing.
@@ -179,8 +200,8 @@ public final class Assembly implements AutoCloseable {
                             // of a cluster (epoch 1) would otherwise widen its sweep
                             // over a retention window of empty hours, a LIST each.
                             if (term.epoch() > 1) {
-                                ChainBackfill.inBackground(store, config.prefix(),
-                                        term.chain());
+                                backfillStarter.start(store, config.prefix(),
+                                        term.chain(), term::serving);
                             }
                             // ⚠️ M8.14a: the intents of pods that died deferring
                             // have nobody else to ask for a drain.

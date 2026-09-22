@@ -32,8 +32,12 @@ request rate may NEVER scale with: records, shards, partitions, indices, documen
    `ChainBackfill`): one LIST per 1,000 chain keys plus one GET per surviving
    chain entry, off the election's path. It scales with the deltas a retention
    window holds, and is paid per TAKEOVER, never per pass -- a pass reads the
-   chain from memory. The orphan sweep it unlocks is paced to
-   `RetentionLoop.MAX_SWEEP_HOURS_PER_TICK` hour LISTs a tick.
+   chain from memory. The walk checks the term's serving lease before and
+   after every page and object read; deposition abandons the whole walk before
+   it can update chain memory, so a flapping leader pays at most its in-flight
+   page/read and cannot overlap a successor's backfill. The orphan sweep it
+   unlocks is paced to `RetentionLoop.MAX_SWEEP_HOURS_PER_TICK` hour LISTs a
+   tick.
 3. **Idle consumers issue zero requests.** At 120,000 shards a naive poll costs
    $1.2M/month as GETs, $15.5M as LISTs, doing nothing.
 4. **Always coalesce adjacent reads.** Same-region bytes are free; requests are not.

@@ -22,6 +22,8 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -101,6 +103,32 @@ class AssemblyTest {
     private static void write(Assembly assembly, String id) throws Exception {
         assembly.ingest().append(PRINCIPAL, INDEX, 0,
                 sink -> sink.accept(record(id)));
+    }
+
+    @Test
+    void aTakeoverBackfillIsWiredToTheTermServingPredicate() throws Exception {
+        AtomicReference<BooleanSupplier> serving = new AtomicReference<>();
+        Assembly.BackfillStarter starter = (store, prefix, chain, live) -> {
+            serving.set(live);
+            return Thread.ofVirtual().start(() -> { });
+        };
+
+        try (BinStore shared = StoreFactory.open(new StoreConfig("memory", Optional.empty()))) {
+            try (Assembly first = Assembly.open(config("pod1"), shared, noPeers(),
+                    Clock.systemUTC())) {
+                registerLogs(first);
+                write(first, "before-takeover");
+            }
+            try (Assembly second = Assembly.openForTest(config("pod2"), shared, noPeers(),
+                    Clock.systemUTC(), starter)) {
+                assertThat(serving).as("a takeover must pass a live-term predicate")
+                        .isNotNull();
+                assertThat(serving.get().getAsBoolean()).isTrue();
+            }
+            assertThat(serving.get().getAsBoolean())
+                    .as("the predicate must observe the term closing")
+                    .isFalse();
+        }
     }
 
     @Test

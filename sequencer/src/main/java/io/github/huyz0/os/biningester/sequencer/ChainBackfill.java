@@ -13,6 +13,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.BooleanSupplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -66,10 +67,23 @@ public final class ChainBackfill {
      * floor, the safe direction, and the next takeover tries again.
      */
     public static Thread inBackground(BinStore store, String prefix, ChainMemory chain) {
+        return inBackground(store, prefix, chain, () -> true);
+    }
+
+    /**
+     * Backfills while {@code serving} remains true. A term that loses its
+     * lease abandons the whole walk, so a successor never overlaps its
+     * predecessor's object-store scan and no partial chain is applied.
+     */
+    public static Thread inBackground(BinStore store, String prefix, ChainMemory chain,
+            BooleanSupplier serving) {
         ChainMemory.Snapshot at = chain.snapshot();
         return Thread.ofVirtual().name("chain-backfill").start(() -> {
             try {
-                chain.backfill(below(store, prefix, at.firstEpoch(), at.firstSequence()));
+                chain.backfill(below(store, prefix, at.firstEpoch(), at.firstSequence(), serving));
+            } catch (BackfillStopped stopped) {
+                LOG.log(System.Logger.Level.DEBUG,
+                        "chain backfill abandoned after this term was deposed");
             } catch (IOException | RuntimeException failed) {
                 LOG.log(System.Logger.Level.WARNING, () -> "the chain below this term's "
                         + "replay could not be read; the orphan sweep stays out of the hours "
@@ -87,13 +101,26 @@ public final class ChainBackfill {
      */
     public static List<ChainGc.DeltaAt> below(BinStore store, String prefix, long epoch,
             long sequence) throws IOException {
+        return below(store, prefix, epoch, sequence, () -> true);
+    }
+
+    /**
+     * Reads the chain below a boundary while the owning term remains live.
+     * The result is never partial: deposition aborts the walk before the
+     * caller can apply it to {@link ChainMemory}.
+     */
+    public static List<ChainGc.DeltaAt> below(BinStore store, String prefix, long epoch,
+            long sequence, BooleanSupplier serving) throws IOException {
         Objects.requireNonNull(store, "store");
         Objects.requireNonNull(prefix, "prefix");
+        Objects.requireNonNull(serving, "serving");
         List<long[]> keys = new ArrayList<>();
         String listed = prefix + "/ctl/log/0/";
         String after = null;
         do {
+            requireServing(serving);
             ListPage page = store.list(listed, after, PAGE);
+            requireServing(serving);
             for (ObjectStat object : page.objects()) {
                 Matcher m = DELTA.matcher(object.key());
                 if (!m.find()) {
@@ -111,7 +138,8 @@ public final class ChainBackfill {
 
         List<ChainGc.DeltaAt> found = new ArrayList<>();
         for (long[] key : keys) {
-            read(store, prefix, key[0], key[1]).ifPresent(found::add);
+            requireServing(serving);
+            read(store, prefix, key[0], key[1], serving).ifPresent(found::add);
         }
         return found;
     }
@@ -126,13 +154,25 @@ public final class ChainBackfill {
      * only what it already holds.
      */
     private static Optional<ChainGc.DeltaAt> read(BinStore store, String prefix, long epoch,
-            long sequence) throws IOException {
+            long sequence, BooleanSupplier serving) throws IOException {
+        requireServing(serving);
         byte[] bytes;
         try (InputStream in = store.get(new LogKeys(prefix, epoch).keyFor(sequence))) {
             bytes = in.readAllBytes();
         }
+        requireServing(serving);
         return ChainEntry.decode(bytes) instanceof CommitDelta delta
                 ? Optional.of(new ChainGc.DeltaAt(epoch, sequence, delta))
                 : Optional.empty();
+    }
+
+    private static void requireServing(BooleanSupplier serving) {
+        if (!serving.getAsBoolean()) {
+            throw new BackfillStopped();
+        }
+    }
+
+    private static final class BackfillStopped extends RuntimeException {
+        private static final long serialVersionUID = 1L;
     }
 }
