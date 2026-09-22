@@ -55,7 +55,7 @@ public final class DefaultIngest implements Ingest {
             System.getLogger(DefaultIngest.class.getName());
 
     private final IngestConfig config;
-    private final Accumulator accumulator;
+    private Accumulator accumulator;
     private final SegmentPublisher publisher;
     /**
      * ⚠️ THE INGESTER CHOOSES THE FETCH MODE, NOT THE CONSUMER (FR-6). It is
@@ -76,24 +76,23 @@ public final class DefaultIngest implements Ingest {
     /**
      * ⚠️ Half the idempotency key, with {@code podId} (M4.10). A plain
      * {@code long}, not an atomic, because every increment happens inside the
-     * drain that {@code lock} already serialises — an atomic here would imply a
-     * concurrency this class deliberately excludes.
+     * drain that the single {@link FlushCoordinator} already serialises.
      */
     private long flushSeq;
     // ⚠️ ONCE PER INSTANCE, never per flush (ADR-0036). A new process is a new
     // incarnation by construction -- no clock, no coordination -- which is what
     // lets a replay be told from a restart when `flushSeq` restarts at 0 and
-    // `podShortId` does not. Minting this inside `flushLocked` compiles, keeps
+    // `podShortId` does not. Minting this inside the flush worker keeps
     // every sequencer-seam suite green, and makes dedup a no-op in production.
     private final String incarnationId = java.util.UUID.randomUUID().toString();
     private final SubscriptionHub hub;
     private final StreamResolver streams;
 
     /**
-     * ⚠️ Covers accumulate + drain + PUT + commit as one step: the segment, its
-     * commit and the offsets it assigns must agree, and two threads draining
-     * concurrently would each PUT a segment and then race in the commit log,
-     * leaving the loser's offsets describing bytes it did not write.
+     * ⚠️ Serializes active-buffer mutation and flush detachment. The detached
+     * accumulator's PUT and commit run on {@link FlushCoordinator}, whose
+     * single queue preserves segment/offset order without holding this lock
+     * across object-store I/O.
      *
      * <p>⚠️ It does NOT cover the push — see {@link #pushes}.
      */
@@ -132,13 +131,14 @@ public final class DefaultIngest implements Ingest {
     private final Thread pusher;
 
     /** One caller waiting for the flush that will carry its records. */
-    private record Pending(RunKey stream, int offsetWithinRun, int count,
+    record Pending(RunKey stream, int offsetWithinRun, int count,
             CompletableFuture<AppendResult> done) {
     }
 
     private final List<Pending> pending = new ArrayList<>();
     private final Map<RunKey, Integer> bufferedPerStream = new HashMap<>();
     private final Thread flusher;
+    private final FlushCoordinator flushes;
     private volatile boolean closed;
     private long droppedPushes;
     private final AtomicLong undeliverablePushes = new AtomicLong();
@@ -263,6 +263,8 @@ public final class DefaultIngest implements Ingest {
         // Establishing where a chain ended is the SEQUENCER's, because only it
         // knows which epoch it may write to.
 
+        this.flushes = new FlushCoordinator(lock, work, this::flushBatch,
+                batch -> accumulator.adoptAdaptiveStateFrom(batch.accumulator()));
         this.pusher = Thread.ofVirtual().name("binstore-push").start(this::pushLoop);
         this.flusher = Thread.ofVirtual().name("binstore-flush").start(this::flushLoop);
     }
@@ -337,7 +339,7 @@ public final class DefaultIngest implements Ingest {
             mine = new Pending(stream, before, count[0], new CompletableFuture<>());
             pending.add(mine);
             if (accumulator.isFlushDue()) {
-                flushLocked();
+                enqueueFlushLocked();
             } else {
                 // ⚠️ Wakes the flusher so it re-computes its deadline rather
                 // than discovering this append up to a poll interval later.
@@ -361,11 +363,21 @@ public final class DefaultIngest implements Ingest {
 
     /** Flushes whatever is buffered, whether or not the trigger says it is due. */
     public void flushNow() throws IOException {
-        lock.lock();
-        try {
-            flushLocked();
-        } finally {
-            lock.unlock();
+        while (true) {
+            CompletableFuture<Void> done;
+            lock.lock();
+            try {
+                if (!pending.isEmpty() && !flushes.isQueued()) {
+                    done = enqueueFlushLocked();
+                } else if (flushes.isQueued()) {
+                    done = flushes.currentDone();
+                } else {
+                    return;
+                }
+            } finally {
+                lock.unlock();
+            }
+            FlushCoordinator.await(done);
         }
     }
 
@@ -383,23 +395,9 @@ public final class DefaultIngest implements Ingest {
         lock.lock();
         try {
             while (!closed) {
-                if (!pending.isEmpty() && accumulator.isFlushDue()) {
-                    try {
-                        flushLocked();
-                    } catch (IOException | RuntimeException e) {
-                        // ⚠️ CATCH EVERYTHING and keep looping. flushLocked has
-                        // already completed this batch's waiters exceptionally,
-                        // so nothing is stranded -- but a loop that DIED here
-                        // would strand every LATER append: flushes would then
-                        // happen only when a new append happened to find the
-                        // trigger true, so a producer that appends once and goes
-                        // quiet would block forever. An earlier version caught
-                        // only InterruptedException and IOException while
-                        // flushLocked rethrows RuntimeException, so a store
-                        // backend throwing IllegalStateException killed the
-                        // timer silently and permanently.
-                        continue;
-                    }
+                if (!pending.isEmpty() && !flushes.isQueued() && accumulator.isFlushDue()) {
+                    enqueueFlushLocked();
+                    continue;
                 }
                 try {
                     // ⚠️ A quarter of the interval, so the trigger is noticed
@@ -467,19 +465,24 @@ public final class DefaultIngest implements Ingest {
         }
     }
 
-    /**
-     * ⚠️ Caller holds {@link #lock}. Completes every waiting append with the
-     * slice of the run that its own records occupy.
-     */
-    private void flushLocked() throws IOException {
+    /** Detaches the active buffer and queues its store work; caller holds {@link #lock}. */
+    private CompletableFuture<Void> enqueueFlushLocked() {
         if (pending.isEmpty()) {
-            return;
+            return CompletableFuture.completedFuture(null);
         }
         List<Pending> batch = List.copyOf(pending);
         pending.clear();
         bufferedPerStream.clear();
+        Accumulator detached = accumulator;
+        accumulator = accumulator.emptyCopy();
+        return flushes.enqueue(batch, detached);
+    }
+
+    /** Runs without {@link #lock}; producers fill the replacement buffer. */
+    private void flushBatch(FlushCoordinator.Batch queued) throws IOException {
+        List<Pending> batch = queued.pending();
         try {
-            SegmentPublisher.Published published = publisher.publish(accumulator)
+            SegmentPublisher.Published published = publisher.publish(queued.accumulator())
                     .orElseThrow(() -> new IOException(
                             "the accumulator produced no segment for a non-empty batch"));
             // ⚠️ BUILT ONCE, SO A RETRY CARRIES THE SAME TRIPLE -- the only thing
@@ -514,21 +517,9 @@ public final class DefaultIngest implements Ingest {
             // segment is what `SegmentServingPath.publishSegment` does on the
             // push path; this is the same rule on the ack path.
             //
-            // ⚠️ BY THE KEY THIS FLUSH SUBMITTED, AT ANY SEGMENT COUNT. An
-            // earlier draft carved out the one-segment case -- take it whatever
-            // its key, since there is nothing to disambiguate -- and review
-            // measured that carve-out as the defect it was closing, one pod
-            // over: a forwarded reply is decoded from another pod's bytes, so a
-            // mis-routed one naming ONE foreign segment would have been read as
-            // this pod's answer, completing every waiting append with another
-            // pod's offsets while this pod's segment was never committed. An
-            // acknowledged write, lost, with no symptom -- and the SAME reply
-            // with one extra segment beside it would have failed cleanly, which
-            // is a rule whose outcome turns on how many OTHER pods flushed.
-            // `Sequencer` settles it the other way (M4.7b): a caller finds its
-            // offsets by the segment key it submitted, and a triple answered
-            // under a different key is refused, because answering with offsets
-            // belonging to other records is worse than failing.
+            // ⚠️ Match by the submitted segment key at every segment count.
+            // A forwarded delta under another key carries another pod's offsets;
+            // accepting it would acknowledge records never committed here.
             Map<RunKey, Long> firstOffsets = new HashMap<>();
             for (SegmentCommit segment : delta.segments()) {
                 if (!segment.segmentKey().equals(published.key())) {
@@ -580,7 +571,12 @@ public final class DefaultIngest implements Ingest {
                 // M1 a drop is record LOSS for that subscriber, not lag --
                 // nothing yet detects an offset gap or falls back to the log.
                 // That is M1.6d; this counter is the only signal until it lands.
-                droppedPushes++;
+                lock.lock();
+                try {
+                    droppedPushes++;
+                } finally {
+                    lock.unlock();
+                }
             } else {
                 queuedPushBytes.addAndGet(bytes);
                 pushes.add(new PendingPush(delta, published.key(), published.segment(), bytes,
@@ -637,6 +633,7 @@ public final class DefaultIngest implements Ingest {
             } finally {
                 lock.unlock();
             }
+            flushes.close();
             drainPushes();
             // ⚠️ RELEASES THE LEASE, and doing it here rather than leaving it to
             // the caller is the point. The Sequencer contract calls close "the

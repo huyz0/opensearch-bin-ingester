@@ -107,6 +107,21 @@ public final class Accumulator {
         return currentInterval;
     }
 
+    /** Creates the next empty buffer without resetting the adaptive interval state. */
+    Accumulator emptyCopy() {
+        Accumulator next = new Accumulator(config, clock);
+        next.adoptAdaptiveStateFrom(this);
+        return next;
+    }
+
+    /** Carries the detached buffer's measured fill state back to the active buffer. */
+    void adoptAdaptiveStateFrom(Accumulator other) {
+        currentInterval = other.currentInterval;
+        lowStreakStartMillis = other.lowStreakStartMillis;
+        highStreakStartMillis = other.highStreakStartMillis;
+        lastFillRatio = other.lastFillRatio;
+    }
+
     public boolean isEmpty() {
         return writer.isEmpty();
     }

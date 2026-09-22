@@ -132,6 +132,39 @@ class DefaultIngestTest {
     }
 
     @Test
+    void aCOMMITInFlightDoesNotBlockTheNextAccumulator() throws Exception {
+        StoreFakes.GatedCommit gate = new StoreFakes.GatedCommit(new MemoryBinStore());
+        CountingBinStore store = new CountingBinStore(gate);
+        try (DefaultIngest ingest = ingest(store)) {
+            CompletableFuture<AppendResult> first = appendAsync(ingest, "logs", 0, 4);
+            awaitPending(ingest, 1);
+            CompletableFuture<Void> flush = CompletableFuture.runAsync(() -> {
+                try {
+                    ingest.flushNow();
+                } catch (IOException e) {
+                    throw new CompletionException(e);
+                }
+            });
+
+            assertThat(gate.entered.await(10, TimeUnit.SECONDS))
+                    .as("the first flush reached its commit").isTrue();
+            CompletableFuture<AppendResult> second = appendAsync(ingest, "logs", 0, 4);
+            try {
+                awaitPending(ingest, 1);
+                assertThat(second).as("the next append is buffered while the commit is open")
+                        .isNotDone();
+            } finally {
+                gate.release.countDown();
+            }
+
+            flush.get(10, TimeUnit.SECONDS);
+            ingest.flushNow();
+            assertThat(first.get(10, TimeUnit.SECONDS).recordCount()).isEqualTo(4);
+            assertThat(second.get(10, TimeUnit.SECONDS).recordCount()).isEqualTo(4);
+        }
+    }
+
+    @Test
     void theQueuedBYTESAreBudgetedAndReleasedAfterDelivery() throws Exception {
         // ⚠️ An earlier version of this test used a single flush against an
         // 8-byte budget. With one flush `queuedPushBytes` is 0 at the check, so
