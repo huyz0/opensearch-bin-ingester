@@ -30,6 +30,7 @@ import java.util.Map;
 import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import org.HdrHistogram.Histogram;
 import org.opensearch.action.search.SearchResponse;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.index.query.QueryBuilders;
@@ -57,6 +58,7 @@ import org.opensearch.test.OpenSearchSingleNodeTestCase;
  */
 public class SearchableIT extends OpenSearchSingleNodeTestCase {
 
+    private static final int SEARCHABLE_RECORDS = 1_000;
     private static final SubscriptionHub HUB = new SubscriptionHub();
     private static final UUID STREAM_INDEX = UUID.randomUUID();
 
@@ -103,7 +105,7 @@ public class SearchableIT extends OpenSearchSingleNodeTestCase {
         CommitLog log = new CommitLog(store, "bins/cluster-a", 0);
         TestClock clock = new TestClock();
         Accumulator accumulator = new Accumulator(
-                new IngestConfig(Duration.ofMillis(250), 8L << 20, "cluster-a"), clock);
+                new IngestConfig(Duration.ofSeconds(1), 8L << 20, "cluster-a"), clock);
 
         // ---- the index opts in to this ingestion source
         createIndex("logs", Settings.builder()
@@ -133,13 +135,13 @@ public class SearchableIT extends OpenSearchSingleNodeTestCase {
         // here is what exposed that the factory could not.
         RunKey stream = new RunKey(BinStoreConsumerFactory.indexUuidOf(indexUuid), 0);
 
-        // ---- producer: 100 documents, exactly as a _bulk request delivers them
-        for (int i = 0; i < 100; i++) {
+        // ---- producer: 1,000 documents, exactly as a _bulk request delivers them
+        for (int i = 0; i < SEARCHABLE_RECORDS; i++) {
             accumulator.add(stream, new SegmentRecord("doc-" + i, OpType.INDEX,
                     OptionalLong.of(1),
                     ("{\"n\":" + i + ",\"kind\":\"probe\"}").getBytes(StandardCharsets.UTF_8)));
         }
-        clock.advance(Duration.ofMillis(250));
+        clock.advance(Duration.ofSeconds(1));
 
         // ⚠️ Diagnose the seam before asserting the outcome: if the engine never
         // created a shard consumer, no push can reach it and "0 documents" would
@@ -149,25 +151,38 @@ public class SearchableIT extends OpenSearchSingleNodeTestCase {
                 1, HUB.subscriberCount(stream)), 30, TimeUnit.SECONDS);
 
         long before = store.counts().total();
+        // The T3 harness owns the exact HTTP 202 endpoint. This T4 seam has no
+        // front door, so stamp before the durable handoff as a conservative
+        // searchable-tail observation rather than pretending publish() is HTTP.
+        long searchableStart = System.nanoTime();
         publish(accumulator, store, log);
-        // ⚠️ TWO requests for 100 documents: the segment and its commit delta.
-        assertEquals("100 documents cost two requests", 2, store.counts().total() - before);
+        // ⚠️ TWO requests for 1,000 documents: the segment and its commit delta.
+        assertEquals("1,000 documents cost two requests", 2, store.counts().total() - before);
 
         // ⚠️ Isolate DELIVERY from INDEXING. If the push never reached the
         // engine's consumer, "0 documents" is a subscription problem; if it did,
         // it is an indexing one. Guessing between the two is how a whole
         // afternoon disappears.
         assertBusy(() -> assertEquals("the push must reach the engine's consumer",
-                100, DELIVERED.get()), 30, TimeUnit.SECONDS);
+                SEARCHABLE_RECORDS, DELIVERED.get()), 30, TimeUnit.SECONDS);
 
         // ---- the engine polls our consumer, indexes, and Lucene makes it searchable
+        Histogram searchableLatency = new Histogram(TimeUnit.SECONDS.toNanos(60), 3);
         assertBusy(() -> {
             client().admin().indices().prepareRefresh("logs").get();
             SearchResponse response = client().prepareSearch("logs")
                     .setQuery(QueryBuilders.matchAllQuery()).setSize(0).get();
-            assertEquals("all 100 documents searchable",
-                    100L, response.getHits().getTotalHits().value());
+            assertEquals("all 1,000 documents searchable",
+                    (long) SEARCHABLE_RECORDS, response.getHits().getTotalHits().value());
+            if (searchableLatency.getTotalCount() == 0) {
+                searchableLatency.recordValue(Math.max(1, System.nanoTime() - searchableStart));
+            }
         }, 60, TimeUnit.SECONDS);
+        assertTrue("M9.11 searchable p99 at a 1 s ceiling",
+                searchableLatency.getValueAtPercentile(99.0) < TimeUnit.SECONDS.toNanos(3));
+        System.out.println("M9.11 searchable latency: records=" + SEARCHABLE_RECORDS
+                + ", p99=" + searchableLatency.getValueAtPercentile(99.0)
+                + " ns (clusterTest)");
 
         // ⚠️ _offset is deliberately NOT asserted here. It is T11c's row, which
         // requires documents spanning at least TWO flushes -- within one flush
