@@ -9,6 +9,12 @@ consumer's fallback path.
 cluster cost **$0** instead of $16,600–$207,000/month, and it removes discovery latency from the
 end-to-end budget entirely.
 
+> ⚠️ **REVISION 2026-09-22 (ADR-0064):** the break-glass sentence in §2a and §3
+> is now a node-local read broker, not a plugin-side direct S3 client. The broker
+> owns the SDK and ambient identity beside the OpenSearch node; the plugin sends
+> only a coalesced recovery key over a protected local channel. The ingester-served
+> hot path and its cost arithmetic are unchanged.
+
 ---
 
 ## 1. Why polling loses, in one table
@@ -145,9 +151,11 @@ pod is under pressure. The pod must **stream through, never buffer-then-forward*
 
  Live tail is delivered on the subscription (inline when
 small, §2c); catch-up is a ranged fetch from the same-AZ ingester node.
-**Fallback: direct S3 from the plugin** — whole-object reads, no cache, no cleverness — used only
-when no ingester node is reachable or the data is older than the cache window. It stays in the plugin
-as break-glass, not as the hot path.
+**Fallback: a node-local read broker** — whole-object reads, no cache, no
+cleverness — is used only when no ingester node is reachable or the data is
+older than the cache window. The broker, not the plugin, owns the SDK and
+ambient object-store identity; the plugin sends a protected local request.
+It remains break-glass, not the hot path.
 
 > ⚠️ **This corrects [comparison-matrix §2](../10-prior-art/04-comparison-matrix.md), item 2**, which
 > claimed that the plugin reading the object store directly is an advantage over WarpStream's
@@ -520,11 +528,16 @@ undocumented.
 |---|---|---|
 | `inline` | **No** — the bytes are in the event | small batches; the common case for trickle indices, which are under the ~19.5 KiB crossover even cross-AZ |
 | `proxy` | **No** — same-AZ pod serves from RAM (it wrote the segment, or prefetched on commit) | the default for busy streams |
-| `direct` | Yes, via a signed URL | catch-up with fan-out 1, or the pod shedding load |
+| `direct` | No plugin credentials or SDK — the plugin uses an ingester-issued signed URL while an ingester is reachable | catch-up with fan-out 1, or the pod shedding load |
 
 So in steady state **the plugin touches the object store for neither discovery nor
 data**. The only S3 GETs on the read path are the pod's prefetch — one per segment
 per non-writing AZ, issued *before* the request arrives.
+
+When no ingester is reachable, fallback tiers 2 and 3 use the node-local broker
+from ADR-0064. The broker, not the plugin, performs the recovery GET or the
+explicit recovery LIST; the plugin still receives only the recovered bytes over
+the protected local channel.
 
 ### The poller's own contribution
 

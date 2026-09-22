@@ -120,11 +120,15 @@ per-segment flushing, so a busy index sees ~250 ms without configuration and a
 trickle index sees ~5 s. ⚠️ Document it as the visible latency SLO — it is
 surprising if undocumented.
 
-### Q21 — Break-glass direct-S3 path: **yes, minimal**
-Ship it. Whole-object reads via **signed URL only** — no credentials, no SDK, no
-cache — reusing the grant mechanism `direct` mode already needs. Omitting it
-would make indexing liveness wholly dependent on service HA, and the marginal
-cost is small precisely because grants exist anyway.
+### Q21 — Break-glass direct-S3 path: **yes, minimal; revised by ADR-0064**
+Ship it through a **node-local read broker**, not through a cloud SDK or
+credential in the plugin JVM. The broker owns ambient identity and streams one
+coalesced whole-object recovery read per missing segment per OpenSearch node;
+the plugin sends only a protected local request. This works when no ingester
+can mint a short-lived grant, without turning a grant chain into a long-lived
+bearer credential. `direct` while an ingester is reachable still uses the
+short-lived signed capability in ADR-0041; the broker is for fallback tiers 2
+and 3. See [ADR-0064](../internal/product/decisions/0064-node-local-read-broker-for-store-fallback.md).
 
 ### Q22 — Serving capacity: **~1× ingest in, ~1× out per consuming copy**
 With ADR-0009 (one consuming copy), six pods at 100 MiB/s ingest:
