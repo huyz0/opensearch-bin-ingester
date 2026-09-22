@@ -3,10 +3,11 @@ package io.github.huyz0.os.biningester.plugin;
 
 import io.github.huyz0.os.biningester.client.SubscriptionTransport;
 import io.github.huyz0.os.biningester.format.ConsumerProgress;
-import java.lang.System.Logger;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicInteger;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 /**
  * What one node tells the ingester about where its shard copies have got to
@@ -42,8 +43,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public final class ProgressReporter {
 
-    private static final Logger LOG =
-            java.lang.System.getLogger(ProgressReporter.class.getName());
+    private static final Logger LOG = LogManager.getLogger(ProgressReporter.class);
 
     /**
      * One shard copy on this node, and where it has got to.
@@ -104,8 +104,8 @@ public final class ProgressReporter {
             here = positions.current();
         } catch (RuntimeException unavailable) {
             failures.incrementAndGet();
-            LOG.log(Logger.Level.WARNING, () -> "this node's shard positions could not be "
-                    + "read this interval; GC keeps meanwhile: " + unavailable);
+            LOG.warn("this node's shard positions could not be read this interval; "
+                    + "GC keeps meanwhile", unavailable);
             return;
         }
         if (here == null || here.isEmpty()) {
@@ -123,8 +123,7 @@ public final class ProgressReporter {
             // element in the list arrives as an NPE from the mapping lambda,
             // and both are "this node's positions do not make a frame".
             failures.incrementAndGet();
-            LOG.log(Logger.Level.WARNING, () -> "this node's shard positions do not make a "
-                    + "progress frame: " + refused);
+            LOG.warn("this node's shard positions do not make a progress frame", refused);
             return;
         }
         try {
@@ -132,9 +131,9 @@ public final class ProgressReporter {
             pushes.incrementAndGet();
         } catch (RuntimeException failed) {
             failures.incrementAndGet();
-            LOG.log(Logger.Level.WARNING, () -> "progress for " + frame.entries().size()
+            LOG.warn("progress for " + frame.entries().size()
                     + " shard copies did not reach the ingester; the next interval carries "
-                    + "a newer position and GC keeps meanwhile: " + failed);
+                    + "a newer position and GC keeps meanwhile", failed);
         }
     }
 

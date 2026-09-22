@@ -2,6 +2,7 @@
 package io.github.huyz0.os.biningester.plugin;
 
 import java.util.Map;
+import org.apache.logging.log4j.LogManager;
 import org.opensearch.index.IngestionConsumerFactory;
 import org.opensearch.plugins.IngestionConsumerPlugin;
 import org.opensearch.plugins.Plugin;
@@ -302,7 +303,7 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
             // ⚠️ NAMED, because it is M6.15's failure with nothing else naming it
             // (M8.35): correct for a bare transport, and a node that never
             // re-pushes after the ingester restarts.
-            System.getLogger(BinStorePlugin.class.getName()).log(System.Logger.Level.INFO,
+            LogManager.getLogger(BinStorePlugin.class).info(
                     "index registrations will not be re-pushed after an ingester restart: "
                             + "this node's subscriptions are a bare transport, which no "
                             + "reconnect reaches; install them through a NodeChannel");

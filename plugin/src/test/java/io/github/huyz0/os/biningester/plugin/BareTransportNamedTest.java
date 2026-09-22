@@ -6,10 +6,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.logging.Handler;
-import java.util.logging.Level;
-import java.util.logging.LogRecord;
-import java.util.logging.Logger;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.core.LogEvent;
+import org.apache.logging.log4j.core.Logger;
+import org.apache.logging.log4j.core.LoggerContext;
+import org.apache.logging.log4j.core.appender.AbstractAppender;
+import org.apache.logging.log4j.core.config.Property;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -35,30 +37,37 @@ class BareTransportNamedTest {
         }
     }
 
-    private static List<LogRecord> capturing(Runnable action) {
-        List<LogRecord> seen = new CopyOnWriteArrayList<>();
-        Logger logger = Logger.getLogger(BinStorePlugin.class.getName());
-        Handler probe = new Handler() {
-            @Override
-            public void publish(LogRecord record) {
-                seen.add(record);
-            }
-
-            @Override
-            public void flush() {
-            }
-
-            @Override
-            public void close() {
-            }
-        };
-        logger.addHandler(probe);
+    private static List<String> capturing(Runnable action) {
+        List<String> seen = new CopyOnWriteArrayList<>();
+        LoggerContext context = (LoggerContext) LogManager.getContext(false);
+        Logger logger = context.getLogger(BinStorePlugin.class.getName());
+        CapturingAppender probe = new CapturingAppender(seen);
+        org.apache.logging.log4j.Level oldLevel = logger.getLevel();
+        logger.setLevel(org.apache.logging.log4j.Level.ALL);
+        logger.addAppender(probe);
+        probe.start();
         try {
             action.run();
         } finally {
-            logger.removeHandler(probe);
+            logger.removeAppender(probe);
+            probe.stop();
+            logger.setLevel(oldLevel);
         }
         return seen;
+    }
+
+    private static final class CapturingAppender extends AbstractAppender {
+        private final List<String> seen;
+
+        CapturingAppender(List<String> seen) {
+            super("bare-transport-log-probe", null, null, false, Property.EMPTY_ARRAY);
+            this.seen = seen;
+        }
+
+        @Override
+        public void append(LogEvent event) {
+            seen.add(event.getLevel() + " " + event.getMessage().getFormattedMessage());
+        }
     }
 
     @Test
@@ -66,16 +75,14 @@ class BareTransportNamedTest {
         NodeSubscriptions bare = new NodeSubscriptions(new NoOpTransport(), 16);
         List<org.opensearch.cluster.ClusterStateListener> listeners = new ArrayList<>();
 
-        List<LogRecord> seen = capturing(() ->
+        List<String> seen = capturing(() ->
                 BinStorePlugin.installRegistrar(bare, listeners::add, Runnable::run));
 
         assertThat(listeners).as("the premise: it still installs one").hasSize(1);
         assertThat(seen)
                 .as("⚠️ ONE INFO LINE NAMES IT, greppable by what it means")
-                .anySatisfy(r -> {
-                    assertThat(r.getLevel()).isEqualTo(Level.INFO);
-                    assertThat(r.getMessage()).contains("no reconnect");
-                });
+                .anySatisfy(message -> assertThat(message)
+                        .startsWith("INFO ").contains("no reconnect"));
     }
 
     @Test
@@ -84,7 +91,7 @@ class BareTransportNamedTest {
         NodeSubscriptions channelled = new NodeSubscriptions(
                 new NodeChannel(onReconnect -> transport), 16);
 
-        List<LogRecord> seen = capturing(() -> BinStorePlugin.installRegistrar(channelled,
+        List<String> seen = capturing(() -> BinStorePlugin.installRegistrar(channelled,
                 new ArrayList<org.opensearch.cluster.ClusterStateListener>()::add,
                 Runnable::run));
 

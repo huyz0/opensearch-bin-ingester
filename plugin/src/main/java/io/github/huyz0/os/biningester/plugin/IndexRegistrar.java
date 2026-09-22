@@ -19,6 +19,8 @@ import org.opensearch.cluster.metadata.IndexMetadata;
 import org.opensearch.cluster.routing.RoutingNode;
 import org.opensearch.cluster.routing.ShardRouting;
 import org.opensearch.core.index.Index;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 /**
  * Tells the ingester the shape of every index this node ingests (M6.7, FR-16,
@@ -71,8 +73,7 @@ public final class IndexRegistrar implements ClusterStateListener {
      */
     static final int ATTEMPTS = 3;
 
-    private static final java.lang.System.Logger LOG =
-            java.lang.System.getLogger(IndexRegistrar.class.getName());
+    private static final Logger LOG = LogManager.getLogger(IndexRegistrar.class);
 
     /** The setting that says an index is ingested by THIS plugin. */
     static final String SOURCE_TYPE = "index.ingestion_source.type";
@@ -358,12 +359,10 @@ public final class IndexRegistrar implements ClusterStateListener {
         // what holds this index's writes, which is the window ADR-0015 § 3
         // buys.
         if (last != null) {
-            LOG.log(java.lang.System.Logger.Level.WARNING,
-                    "could not push the registration for index " + registration.indexName()
-                            + " after " + ATTEMPTS + " attempts; it will be retried on the next "
-                            + "cluster-state change. Until then this index's routed writes wait "
-                            + "in the ingester's pending pool and are refused when it expires",
-                    last);
+            LOG.warn("could not push the registration for index " + registration.indexName()
+                    + " after " + ATTEMPTS + " attempts; it will be retried on the next "
+                    + "cluster-state change. Until then this index's routed writes wait "
+                    + "in the ingester's pending pool and are refused when it expires", last);
         }
     }
 
