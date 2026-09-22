@@ -29,6 +29,7 @@ import java.util.concurrent.TimeUnit;
 public final class NodeProcess implements AutoCloseable {
 
     private static final String PAD = "x".repeat(2048);
+    private static final int PRODUCER_SOCKET_SEND_BUFFER_BYTES = 4 * 1024 * 1024;
 
     private final String podId;
     private final int port;
@@ -36,6 +37,7 @@ public final class NodeProcess implements AutoCloseable {
     private final Process process;
     private volatile boolean paused;
     private final String macroPath;
+    private final ThreadLocal<WebClient> producerClients;
 
     private final ChaosProxy peers;
 
@@ -47,6 +49,7 @@ public final class NodeProcess implements AutoCloseable {
         this.process = process;
         this.peers = peers;
         this.macroPath = macroPath;
+        this.producerClients = ThreadLocal.withInitial(this::newClient);
     }
 
     /**
@@ -221,9 +224,23 @@ public final class NodeProcess implements AutoCloseable {
      * 30 s for a reason that had nothing to do with the sequencer.
      */
     public WebClient client() {
+        return newClient();
+    }
+
+    private WebClient newClient() {
         return WebClient.builder().baseUri("http://localhost:" + port)
+                .proxy(io.helidon.webclient.api.Proxy.noProxy())
+                // The benchmark's largest NDJSON body is about 2.5 MiB. Windows can
+                // block a synchronous write when the default send buffer fills while
+                // the server is waiting for that body to become durable.
+                .socketOptions(options -> options.socketSendBufferSize(
+                        PRODUCER_SOCKET_SEND_BUFFER_BYTES))
                 .connectTimeout(java.time.Duration.ofSeconds(2))
                 .readTimeout(java.time.Duration.ofSeconds(2)).build();
+    }
+
+    private WebClient producerClient() {
+        return producerClients.get();
     }
 
     /**
@@ -241,10 +258,13 @@ public final class NodeProcess implements AutoCloseable {
         buffer.putLong(uuid.getLeastSignificantBits());
         String indexUuid = java.util.Base64.getUrlEncoder().withoutPadding()
                 .encodeToString(buffer.array());
-        int status = client().post(io.github.huyz0.os.biningester.http.SubscriptionService.REGISTER_PATH)
-                .submit(new io.github.huyz0.os.biningester.format.IndexRegistration(indexUuid, index, List.of(),
-                        4, 4, 1, 1).encode())
-                .status().code();
+        int status;
+        try (var response = client().post(
+                io.github.huyz0.os.biningester.http.SubscriptionService.REGISTER_PATH)
+                .submit(new io.github.huyz0.os.biningester.format.IndexRegistration(indexUuid, index,
+                        List.of(), 4, 4, 1, 1).encode())) {
+            status = response.status().code();
+        }
         if (status != 204) {
             throw new AssertionError(podId + " refused the registration: " + status);
         }
@@ -262,8 +282,10 @@ public final class NodeProcess implements AutoCloseable {
             body.append("{\"index\":{\"_id\":\"").append(idPrefix).append('-').append(i)
                     .append("\",\"_version\":1}}\n{\"n\":").append(i).append("}\n");
         }
-        return client().post("/logs/_bulk").queryParam("partition", "0")
-                .submit(body.toString()).status().code();
+        try (var response = producerClient().post("/logs/_bulk").queryParam("partition", "0")
+                .submit(body.toString())) {
+            return response.status().code();
+        }
     }
 
     /**
@@ -281,8 +303,10 @@ public final class NodeProcess implements AutoCloseable {
             body.append("{\"index\":{\"_id\":\"").append(id)
                     .append("\",\"_version\":1}}\n{\"pad\":\"").append(PAD).append("\"}\n");
         }
-        return client().post("/logs/_bulk").queryParam("partition", "0")
-                .submit(body.toString()).status().code();
+        try (var response = producerClient().post("/logs/_bulk").queryParam("partition", "0")
+                .submit(body.toString())) {
+            return response.status().code();
+        }
     }
 
     /** Writes a generated benchmark batch over the producer's real socket. */
@@ -293,9 +317,11 @@ public final class NodeProcess implements AutoCloseable {
         String body = new String(batch.body(), StandardCharsets.UTF_8)
                 .replaceAll("\\{\\\"index\\\":\\{\\\"_index\\\":\\\"[^\\\"]+\\\",",
                         "{\\\"index\\\":{");
-        return client().post("/" + batch.stream().index() + "/_bulk")
+        try (var response = producerClient().post("/" + batch.stream().index() + "/_bulk")
                 .queryParam("partition", String.valueOf(batch.stream().partition()))
-                .submit(body).status().code();
+                .submit(body)) {
+            return response.status().code();
+        }
     }
 
     /** Reads a point-in-time count snapshot before the process is terminated. */

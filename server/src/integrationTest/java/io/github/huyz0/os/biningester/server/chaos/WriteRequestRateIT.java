@@ -49,8 +49,8 @@ class WriteRequestRateIT {
     @Test
     void sizeTriggeredFleetStaysBelowTheWriteRequestBudgetAtThreeRates() throws Exception {
         assumeTrue(S3Fixture.dockerAvailable(), "no Docker daemon: this is a T3 suite");
-        Duration duration = Duration.parse(System.getenv().getOrDefault(
-                "M9_8_POINT_DURATION", "PT5M"));
+        Duration duration = Duration.parse(System.getProperty("m9.8.pointDuration",
+                System.getenv().getOrDefault("M9_8_POINT_DURATION", "PT5M")));
         List<RateResult> results = new ArrayList<>();
         for (RatePoint point : POINTS) {
             results.add(runPoint(point, duration));
@@ -129,7 +129,8 @@ class WriteRequestRateIT {
     private static long writeConcurrently(List<NodeProcess> nodes, RatePoint point,
             Duration duration) throws Exception {
         long deadline = System.nanoTime() + duration.toNanos();
-        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+        var executor = Executors.newVirtualThreadPerTaskExecutor();
+        try {
             List<Future<Long>> futures = new ArrayList<>();
             for (int i = 0; i < PRODUCER_COUNT; i++) {
                 NodeProcess node = nodes.get(i % nodes.size());
@@ -148,6 +149,11 @@ class WriteRequestRateIT {
                 }
             }
             return total;
+        } finally {
+            executor.shutdownNow();
+            if (!executor.awaitTermination(10, TimeUnit.SECONDS)) {
+                throw new AssertionError("producer executor did not stop after the point");
+            }
         }
     }
 
