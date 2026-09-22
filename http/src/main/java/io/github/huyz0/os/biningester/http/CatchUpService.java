@@ -2,6 +2,7 @@
 package io.github.huyz0.os.biningester.http;
 
 import io.github.huyz0.os.biningester.format.CatchUpRequestFrame;
+import io.github.huyz0.os.biningester.ingest.DurableCatchUpResponder;
 import io.helidon.webserver.http.HttpRules;
 import io.helidon.webserver.http.HttpService;
 import io.helidon.webserver.http.ServerRequest;
@@ -52,6 +53,10 @@ public final class CatchUpService implements HttpService {
         List<byte[]> frames;
         try {
             frames = Objects.requireNonNull(responder.respond(frame), "response frames");
+        } catch (DurableCatchUpResponder.ResponseTooLargeException tooLarge) {
+            response.status(io.helidon.http.Status.REQUEST_ENTITY_TOO_LARGE_413)
+                    .send(tooLarge.getMessage());
+            return;
         } catch (IOException unavailable) {
             response.status(io.helidon.http.Status.SERVICE_UNAVAILABLE_503)
                     .send("catch-up replay is temporarily unavailable");

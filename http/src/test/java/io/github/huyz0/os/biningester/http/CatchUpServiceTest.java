@@ -10,6 +10,7 @@ import io.github.huyz0.os.biningester.format.CatchUpRequestFrame;
 import io.github.huyz0.os.biningester.format.FetchMode;
 import io.github.huyz0.os.biningester.format.RunKey;
 import io.github.huyz0.os.biningester.format.SubscriptionEvent;
+import io.github.huyz0.os.biningester.ingest.DurableCatchUpResponder;
 import io.helidon.webclient.api.WebClient;
 import io.helidon.webserver.WebServer;
 import io.helidon.webserver.http.HttpRouting;
@@ -125,6 +126,21 @@ class CatchUpServiceTest {
         try (var response = WebClient.builder().baseUri("http://localhost:" + server.port())
                 .build().post(CatchUpService.PATH).submit(request.encode())) {
             assertThat(response.status().code()).isEqualTo(503);
+        }
+    }
+
+    @Test
+    void deterministicResponseBudgetFailureIsPayloadTooLarge() throws Exception {
+        server = WebServer.builder().port(0).routing(HttpRouting.builder()
+                .register(new CatchUpService(request -> {
+                    throw new DurableCatchUpResponder.ResponseTooLargeException("too large");
+                }))).build().start();
+
+        var request = new CatchUpRequestFrame(REQUEST,
+                List.of(new CatchUpRequestFrame.Stream(KEY, 41)));
+        try (var response = WebClient.builder().baseUri("http://localhost:" + server.port())
+                .build().post(CatchUpService.PATH).submit(request.encode())) {
+            assertThat(response.status().code()).isEqualTo(413);
         }
     }
 

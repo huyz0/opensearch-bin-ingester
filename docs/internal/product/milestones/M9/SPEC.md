@@ -88,8 +88,9 @@ per criterion, and is § *What a cloud run adds*.
 |---|---|
 | M8.24a — the catch-up protocol decision | **Done.** [ADR-0065](../../decisions/0065-node-scoped-catch-up-with-live-tail-priority.md) |
  | M8.24b — bounded replay primitives | **Done.** The source and coordinator are covered by focused ingest tests; the HTTP/control-frame wiring and T4 evidence remain M8.24. |
- | M8.24c — versioned catch-up control frames | **Done.** Request, event and end frames are format-owned, versioned, golden-pinned, and reject unknown versions before decoding. M8.24d carries them onto the HTTP seam. |
- | M8.24d — HTTP catch-up control seam | **Done.** A bounded POST decodes one request, delegates to a replay responder, and returns length-framed response frames; malformed requests are refused before delegation. M8.24 wires the responder to durable replay. |
+| M8.24c — versioned catch-up control frames | **Done.** Request, event and end frames are format-owned, versioned, golden-pinned, and reject unknown versions before decoding. M8.24d carries them onto the HTTP seam. |
+| M8.24d — HTTP catch-up control seam | **Done.** A bounded POST decodes one request, delegates to a replay responder, and returns length-framed response frames; malformed requests are refused before delegation. M8.24 wires the responder to durable replay. |
+| M8.24e — durable catch-up responder | **Done.** `batch_start` is translated to the source's exclusive offset, shared segment bytes are read once per response, inline event frames are emitted, and a request-matched end frame closes the response. HTTP registration and T4 evidence remain M8.24. |
 | M8.24 — the catch-up read path and the ninth chaos row | **A task.** Follows M8.24a |
 | M8.28's tiers 2 and 3 and gap re-reads | **Three tasks, DESIGNED AND BUILT IN M9** (the user's decision, 2026-09-20). (a) The gap RE-READ over a reachable ingester, with `TENS_OF_GETS` counted for it, is **M9.13**. (b) **M9.20 is an ADR choosing a THIRD approach** to plugin-side store access, both earlier candidates having been rejected on 2026-09-20 -- a SigV4 signer in the plugin (a credential in the OpenSearch JVM) and long-lived pre-issued chain grants (amending ADR-0041's short TTL). (c) **M9.21 EXECUTES tiers 2 and 3** on a real gap with NO ingester reachable, re-reading the missing window through M8.24's catch-up-from-offset read path and counting the GETs and LISTs each tier costs. ⚠️ **ADR-0057 IS SUPERSEDED IN PART** -- its decision that tiers 2 and 3 wait, and its consequence that an outage longer than the backoff leaves consumers indexing nothing -- and M9.20 says so in its own text, leaving ADR-0057's tier-0/1 half standing |
 | M8.56 — wire `SegmentPrefetcher` | **A task**, and it must land before NFR-4 is measured: without it every non-writing AZ's first read is a cold proxy GET, and the measured read rate would be the wrong design's. It also keeps `check-wired.sh`'s M5.91b entry owned until it lands |
@@ -452,6 +453,7 @@ multiplied from a price table (criterion 16). Each is a named NOT-RUN in
 | M9.12 | T3 (chaos) | `PartitionVisibilityIT` red with the heal drain disabled | ADR-0058's drain not running |
 | M8.24c | T0 | `CatchUpControlFrameTest` and golden tests red with an unknown version accepted | a mixed-version peer partially decodes a catch-up request |
 | M8.24d | T1 | `CatchUpServiceTest` red with a 501 seam or malformed request delegated | the HTTP adapter does not carry the versioned control frames or invokes replay on invalid input |
+| M8.24e | T1 | `DurableCatchUpResponderTest` red with `batch_start` passed as an inclusive offset or shared segment reads repeated | replay resumes at the wrong record or store GETs scale with streams rather than segments |
 | M8.24 | T4 | `KillNodeMidBacklogIT` red with the tail queued behind the catch-up | starvation |
 | M9.13 | T3 | `GapRereadIT` red with the re-read skipped | a gap indexed past |
 | M9.21 | T3 (RustFS) | `LadderStoreTiersIT` red with tier 3 answered by a reachable ingester | a tier that never runs; an uncounted recovery LIST |
@@ -587,6 +589,7 @@ until it lands.
 | M8.24b | Bounded replay primitives for the catch-up path | FR-9, NFR-13 |
 | M8.24c | Versioned catch-up request, event and end frames | FR-9, NFR-13 |
 | M8.24d | HTTP catch-up control seam with bounded request and response framing | FR-9, NFR-13 |
+| M8.24e | Durable catch-up responder with one GET per shared segment | FR-9, NFR-13 |
 | M8.24 | Kill an OpenSearch node mid-backlog: the catch-up read path, without starving the tail | FR-9, NFR-13 |
 | M9.13 | A gap re-read through the catch-up path, and `TENS_OF_GETS` counted | FR-10 |
 | M9.20 | **THE ADR CHOOSING HOW THE PLUGIN READS THE STORE** for ladder tiers 2 and 3 -- a third approach, superseding ADR-0057 in part | FR-10 |
