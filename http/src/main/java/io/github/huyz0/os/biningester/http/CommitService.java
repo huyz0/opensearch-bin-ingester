@@ -13,6 +13,7 @@ import io.helidon.webserver.http.ServerRequest;
 import io.helidon.webserver.http.ServerResponse;
 import java.io.IOException;
 import java.util.Objects;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Supplier;
 
 /**
@@ -57,6 +58,14 @@ public final class CommitService implements HttpService {
 
     private final Drainer drainer;
 
+    /**
+     * Peer commits may run together so the leaseholder's batch window remains
+     * a batch window. A drain takes the write side: it waits for already
+     * admitted commits, then prevents a late healed socket from advancing the
+     * dedupe mark while the inbox is being reconciled (M9.12).
+     */
+    private final ReentrantReadWriteLock drainBarrier = new ReentrantReadWriteLock(true);
+
     /** ⚠️ With the drain a deferring pod asks for when it can reach us again (M8.14a). */
     public CommitService(Supplier<Sequencer> sequencer, Drainer drainer) {
         this.sequencer = Objects.requireNonNull(sequencer, "sequencer");
@@ -83,8 +92,13 @@ public final class CommitService implements HttpService {
         }
         try {
             String requester = request.query().first("pod").orElse(null);
-            response.status(Status.OK_200)
-                    .send(String.valueOf(drainer.drain(local, requester)));
+            drainBarrier.writeLock().lock();
+            try {
+                response.status(Status.OK_200)
+                        .send(String.valueOf(drainer.drain(local, requester)));
+            } finally {
+                drainBarrier.writeLock().unlock();
+            }
         } catch (FencedException fenced) {
             response.status(HttpSequencerTransport.NOT_THE_LEASEHOLDER).send(fenced.getMessage());
         } catch (IOException failed) {
@@ -139,7 +153,13 @@ public final class CommitService implements HttpService {
             return;
         }
         try {
-            CommitDelta delta = local.commit(HttpSequencerTransport.requestOf(frame));
+            drainBarrier.readLock().lock();
+            CommitDelta delta;
+            try {
+                delta = local.commit(HttpSequencerTransport.requestOf(frame));
+            } finally {
+                drainBarrier.readLock().unlock();
+            }
             response.status(Status.OK_200).send(delta.encode());
         } catch (FencedException fenced) {
             // ⚠️ A FENCED SEQUENCER IS A REFUSAL, AND IT IS THE SAME ANSWER AS

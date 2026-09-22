@@ -146,4 +146,34 @@ class InboxDrainTest {
                 .as("podx's two stay; pody's applied one is deleted")
                 .hasSize(2);
     }
+
+    @Test
+    void aPODsIntentsAreCommittedInOneBatchWhilePODOrderStaysIntact() throws Exception {
+        MemoryBinStore store = new MemoryBinStore();
+        Inbox.write(store, PREFIX, flush("podx", "i1", 5));
+        Inbox.write(store, PREFIX, flush("podx", "i1", 6));
+        Inbox.write(store, PREFIX, flush("pody", "i1", 1));
+        List<List<Long>> batches = new java.util.ArrayList<>();
+        Sequencer recordsBatches = new Sequencer() {
+            @Override
+            public CommitDelta commitAll(List<CommitRequest> requests) {
+                batches.add(requests.stream().map(CommitRequest::flushSeq).toList());
+                CommitRequest first = requests.getFirst();
+                return new CommitDelta(1, first.segmentKey(), List.of(
+                        new io.github.huyz0.os.biningester.format.RunCommit(
+                                first.recordCounts().keySet().iterator().next(), 2, 0)));
+            }
+
+            @Override
+            public void close() {
+            }
+        };
+
+        InboxDrain.drain(store, PREFIX, recordsBatches);
+
+        assertThat(batches)
+                .as("each pod's ordered intents share one durable delta, so drain cost is "
+                        + "bounded by pods rather than intents")
+                .containsExactly(List.of(5L, 6L), List.of(1L));
+    }
 }

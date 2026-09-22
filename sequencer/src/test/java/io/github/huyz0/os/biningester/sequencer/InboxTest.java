@@ -5,6 +5,7 @@ import static io.github.huyz0.os.biningester.sequencer.DedupFixtures.PREFIX;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.github.huyz0.os.biningester.binstore.BinStore;
 import io.github.huyz0.os.biningester.binstore.CountingBinStore;
 import io.github.huyz0.os.biningester.binstore.backend.MemoryBinStore;
 import io.github.huyz0.os.biningester.format.CommitDelta;
@@ -15,6 +16,9 @@ import java.io.InputStream;
 import java.time.Duration;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -137,5 +141,57 @@ class InboxTest {
                     .isInstanceOf(IOException.class)
                     .isNotInstanceOf(CommitDeferredException.class);
         }
+    }
+
+    @Test
+    void pendingReadsIntentBodiesConcurrentlyWithoutAddingRequests() throws Exception {
+        MemoryBinStore backing = new MemoryBinStore();
+        for (long seq = 0; seq < 8; seq++) {
+            Inbox.write(backing, PREFIX, flush(seq));
+        }
+        CountingBinStore counted = new CountingBinStore(backing);
+        CountDownLatch readersEntered = new CountDownLatch(8);
+        CountDownLatch releaseReaders = new CountDownLatch(1);
+        AtomicInteger active = new AtomicInteger();
+        AtomicInteger maximum = new AtomicInteger();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        BinStore concurrentReads = (BinStore) java.lang.reflect.Proxy.newProxyInstance(
+                BinStore.class.getClassLoader(), new Class<?>[] {BinStore.class},
+                (proxy, method, args) -> {
+                    if (method.getName().equals("get")) {
+                        int now = active.incrementAndGet();
+                        maximum.accumulateAndGet(now, Math::max);
+                        readersEntered.countDown();
+                        try {
+                            releaseReaders.await();
+                        } finally {
+                            active.decrementAndGet();
+                        }
+                    }
+                    try {
+                        return method.invoke(counted, args);
+                    } catch (java.lang.reflect.InvocationTargetException failed) {
+                        throw failed.getCause();
+                    }
+                });
+
+        Thread reader = Thread.ofVirtual().start(() -> {
+            try {
+                assertThat(Inbox.pending(concurrentReads, PREFIX)).hasSize(8);
+            } catch (Throwable failed) {
+                failure.set(failed);
+            }
+        });
+        assertThat(readersEntered.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                .as("intent bodies are independent reads")
+                .isTrue();
+        releaseReaders.countDown();
+        reader.join(5_000);
+
+        assertThat(failure.get()).isNull();
+        assertThat(maximum).as("the drain can overlap intent GETs").hasValueGreaterThan(1);
+        assertThat(counted.counts().gets())
+                .as("parallelism does not add an object-store read")
+                .isEqualTo(8);
     }
 }

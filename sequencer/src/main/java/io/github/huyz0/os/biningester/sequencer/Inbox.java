@@ -15,6 +15,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 /**
  * The commit-intent inbox: where a pod that cannot reach its sequencer leaves
@@ -86,27 +90,50 @@ public final class Inbox {
     public static List<Pending> pending(BinStore store, String prefix) throws IOException {
         List<Pending> found = new ArrayList<>();
         String after = null;
-        do {
-            ListPage page = store.list(prefixFor(prefix), after, 1000);
-            for (ObjectStat object : page.objects()) {
-                if (!object.key().endsWith(".intent")) {
-                    continue;
+        ExecutorService readers = Executors.newVirtualThreadPerTaskExecutor();
+        try {
+            do {
+                ListPage page = store.list(prefixFor(prefix), after, 1000);
+                List<Future<Pending>> pageReads = new ArrayList<>();
+                for (ObjectStat object : page.objects()) {
+                    if (!object.key().endsWith(".intent")) {
+                        continue;
+                    }
+                    pageReads.add(readers.submit(() -> read(store, object)));
                 }
-                byte[] bytes;
-                try (InputStream in = store.get(object.key())) {
-                    bytes = in.readAllBytes();
+                for (Future<Pending> pageRead : pageReads) {
+                    try {
+                        found.add(pageRead.get());
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        throw new IOException("the inbox read was interrupted", interrupted);
+                    } catch (ExecutionException failed) {
+                        Throwable cause = failed.getCause();
+                        if (cause instanceof IOException io) {
+                            throw io;
+                        }
+                        throw new IOException("the inbox intent could not be read", cause);
+                    }
                 }
-                CommitRequestFrame frame = CommitRequestFrame.decode(bytes);
-                found.add(new Pending(object.key(), new CommitRequest(frame.podId(),
-                        frame.incarnationId(), frame.flushSeq(), frame.segmentKey(),
-                        frame.recordCounts())));
-            }
-            after = page.nextStartAfter().orElse(null);
-        } while (after != null);
+                after = page.nextStartAfter().orElse(null);
+            } while (after != null);
+        } finally {
+            readers.shutdownNow();
+        }
         found.sort(Comparator.comparing((Pending p) -> p.request().podId())
                 .thenComparing(p -> p.request().incarnationId())
                 .thenComparingLong(p -> p.request().flushSeq()));
         return found;
+    }
+
+    private static Pending read(BinStore store, ObjectStat object) throws IOException {
+        byte[] bytes;
+        try (InputStream in = store.get(object.key())) {
+            bytes = in.readAllBytes();
+        }
+        CommitRequestFrame frame = CommitRequestFrame.decode(bytes);
+        return new Pending(object.key(), new CommitRequest(frame.podId(), frame.incarnationId(),
+                frame.flushSeq(), frame.segmentKey(), frame.recordCounts()));
     }
 
     /**

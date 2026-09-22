@@ -4,10 +4,10 @@ package io.github.huyz0.os.biningester.sequencer;
 import io.github.huyz0.os.biningester.binstore.BinStore;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 
 /**
  * The leaseholder applies the inbox's intents and deletes them (M8.14a,
@@ -21,7 +21,11 @@ import java.util.Set;
  * <p>⚠️ **EACH POD's INTENTS IN ORDER, AND A POD STOPS AT ITS FIRST FAILURE**:
  * the dedupe window keeps one high mark per incarnation, so applying flush N+1
  * after N failed would turn N into a refused replay. Applied intents are
- * deleted; an intent that failed stays, and so does everything after it.
+ * deleted; an intent batch that failed stays, and so does everything after it.
+ * The ordered intents are committed in one batch per pod, so commit-log PUT
+ * cost scales with pods rather than with the number of intents accumulated
+ * during a partition (M9.12); the inbox's one GET per intent remains bounded
+ * recovery work.
  */
 public final class InboxDrain {
 
@@ -53,7 +57,10 @@ public final class InboxDrain {
      * and two deferring pods asking at once would otherwise apply one intent
      * in two concurrent batches, where the dedupe window counts both fresh.
      * One at a time, the second finds the first's work deleted -- which also
-     * bounds the cost at heal to the intents plus one LIST per request.
+     * bounds the cost at heal to the intents plus one LIST per page. Within
+     * one pod, the ordered intents are one {@link Sequencer#commitAll} batch,
+     * so the commit-log PUT is per pod rather than per intent; reading the
+     * intent bodies still costs one GET per intent, as the inbox format requires.
      */
     public static int drain(BinStore store, String prefix, Sequencer term, String requester)
             throws IOException {
@@ -66,33 +73,35 @@ public final class InboxDrain {
     private static int drainLocked(BinStore store, String prefix, Sequencer term,
             String requester) throws IOException {
         List<Inbox.Pending> pending = Inbox.pending(store, prefix);
-        Set<String> stalled = new HashSet<>();
-        List<String> applied = new ArrayList<>();
-        IOException first = null;
+        Map<String, List<Inbox.Pending>> byPod = new LinkedHashMap<>();
         for (Inbox.Pending intent : pending) {
             String who = intent.request().podId() + "/" + intent.request().incarnationId();
-            if (stalled.contains(who)) {
-                continue;
-            }
+            byPod.computeIfAbsent(who, ignored -> new ArrayList<>()).add(intent);
+        }
+        List<String> applied = new ArrayList<>();
+        IOException first = null;
+        int stalled = 0;
+        for (List<Inbox.Pending> batch : byPod.values()) {
+            Inbox.Pending firstIntent = batch.getFirst();
             try {
-                term.commit(intent.request());
-                applied.add(intent.key());
+                term.commitAll(batch.stream().map(Inbox.Pending::request).toList());
+                applied.addAll(batch.stream().map(Inbox.Pending::key).toList());
             } catch (FencedException fenced) {
                 deleteApplied(store, applied);
                 throw fenced;
             } catch (IOException failed) {
-                stalled.add(who);
-                if (requester == null || requester.equals(intent.request().podId())) {
+                stalled++;
+                if (requester == null || requester.equals(firstIntent.request().podId())) {
                     first = first == null ? failed : first;
                 }
                 LOG.log(System.Logger.Level.WARNING, () -> "an inbox intent could not be "
-                        + "applied; it and its pod's later intents stay: " + intent.key()
-                        + ": " + failed);
+                        + "applied; its pod's ordered batch stays: " + firstIntent.key()
+                        + " (" + batch.size() + " intents): " + failed);
             }
         }
         deleteApplied(store, applied);
         if (first != null) {
-            throw new IOException(stalled.size() + " pod(s) still have intents in the inbox",
+            throw new IOException(stalled + " pod(s) still have intents in the inbox",
                     first);
         }
         return applied.size();
