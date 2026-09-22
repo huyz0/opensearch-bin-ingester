@@ -207,7 +207,7 @@ public final class Assembly implements AutoCloseable {
                             // have nobody else to ask for a drain.
                             InboxDrain.inBackground(store, config.prefix(), term);
                             return new BatchingSequencer(term, COMMIT_WINDOW);
-                        }), challenge);
+                        }), challenge, false);
         // ⚠️ NOT PUSHED ONTO `toClose`, AND THAT IS NOT AN OMISSION.
         // `DefaultIngest.close()` closes the sequencer it was given and says so
         // in its own javadoc, and `FleetSequencer.close()` has no idempotence

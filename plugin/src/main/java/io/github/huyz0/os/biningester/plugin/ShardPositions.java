@@ -39,6 +39,12 @@ final class ShardPositions implements IndexEventListener, ProgressReporter.Posit
 
     private final Map<ShardId, IndexShard> shards = new ConcurrentHashMap<>();
 
+    ShardPositions() {}
+
+    ShardPositions(Map<ShardId, IndexShard> shards) {
+        this.shards.putAll(shards);
+    }
+
     @Override
     public void afterIndexShardStarted(IndexShard shard) {
         shards.put(shard.shardId(), shard);
@@ -46,7 +52,15 @@ final class ShardPositions implements IndexEventListener, ProgressReporter.Posit
 
     @Override
     public void beforeIndexShardClosed(ShardId id, IndexShard shard, Settings settings) {
-        shards.remove(id);
+        removeClosed(shards, id, shard);
+    }
+
+    static <T> boolean removeClosed(Map<ShardId, T> entries, ShardId id, T shard) {
+        return entries.remove(id, shard);
+    }
+
+    boolean contains(ShardId id) {
+        return shards.containsKey(id);
     }
 
     /**

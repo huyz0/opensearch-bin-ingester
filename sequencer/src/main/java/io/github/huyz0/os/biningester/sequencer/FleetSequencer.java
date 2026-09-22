@@ -62,6 +62,7 @@ public final class FleetSequencer implements Sequencer {
     private final BinStore store;
     private final String prefix;
     private final String podId;
+    private final boolean ownsTransport;
 
     /**
      * ⚠️ VOLATILE, because {@link #close} and a commit reach it from different
@@ -84,6 +85,17 @@ public final class FleetSequencer implements Sequencer {
     public FleetSequencer(BinStore store, LeaseConfig config,
             SequencerTransport transport, Leadership.Election election,
             LeaseChallenge challenge) {
+        this(store, config, transport, election, challenge, true);
+    }
+
+    /**
+     * The same fleet with explicit transport ownership for composition roots.
+     *
+     * @param ownsTransport whether closing the fleet may close {@code transport}
+     */
+    public FleetSequencer(BinStore store, LeaseConfig config,
+            SequencerTransport transport, Leadership.Election election,
+            LeaseChallenge challenge, boolean ownsTransport) {
         // ⚠️ EVERY ARGUMENT IS CHECKED BEFORE A TERM IS TAKEN, and the order is
         // the whole point. `new Leadership(...)` ELECTS in its constructor: it
         // acquires the lease, starts a renewer, seals the ancestor and replays
@@ -103,6 +115,7 @@ public final class FleetSequencer implements Sequencer {
         this.store = store;
         this.prefix = config.prefix();
         this.podId = config.podId();
+        this.ownsTransport = ownsTransport;
         this.leadership = new Leadership(election);
     }
 
@@ -330,6 +343,9 @@ public final class FleetSequencer implements Sequencer {
      * @param failed the lease-release failure, or null
      */
     private void closeTransport(IOException failed) throws IOException {
+        if (!ownsTransport) {
+            return;
+        }
         try {
             remote.close();
         } catch (IOException transportFailed) {

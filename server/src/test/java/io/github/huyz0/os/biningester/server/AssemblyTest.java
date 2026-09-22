@@ -78,6 +78,21 @@ class AssemblyTest {
         };
     }
 
+    private static final class CloseTrackingTransport implements SequencerTransport {
+        private int closes;
+
+        @Override
+        public io.github.huyz0.os.biningester.format.CommitDelta send(
+                String endpoint, CommitRequest request) {
+            throw new UnsupportedOperationException("no peer expected: " + endpoint);
+        }
+
+        @Override
+        public void close() {
+            closes++;
+        }
+    }
+
     private static void registerLogs(Assembly assembly) {
         assembly.catalog().register(new IndexRegistration(INDEX_UUID, INDEX, List.of(), 4, 4, 1, 1));
     }
@@ -103,6 +118,20 @@ class AssemblyTest {
     private static void write(Assembly assembly, String id) throws Exception {
         assembly.ingest().append(PRINCIPAL, INDEX, 0,
                 sink -> sink.accept(record(id)));
+    }
+
+    @Test
+    void aROOTDoesNotCloseAnINJECTEDTransportItDoesNotOwn() throws Exception {
+        CloseTrackingTransport transport = new CloseTrackingTransport();
+        try (BinStore shared = StoreFactory.open(new StoreConfig("memory", Optional.empty()))) {
+            try (Assembly ignored = Assembly.open(config("pod1"), shared, transport,
+                    Clock.systemUTC())) {
+                assertThat(transport.closes).isZero();
+            }
+        }
+        assertThat(transport.closes)
+                .as("the caller owns an injected transport and decides when it closes")
+                .isZero();
     }
 
     @Test

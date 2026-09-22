@@ -36,6 +36,7 @@ public final class NodeProcess implements AutoCloseable {
     private final Path log;
     private final Process process;
     private volatile boolean paused;
+    private int resumeAttempts;
     private final String macroPath;
     private final ThreadLocal<WebClient> producerClients;
 
@@ -50,6 +51,12 @@ public final class NodeProcess implements AutoCloseable {
         this.peers = peers;
         this.macroPath = macroPath;
         this.producerClients = ThreadLocal.withInitial(this::newClient);
+    }
+
+    static NodeProcess forTest(Process process, boolean paused) {
+        NodeProcess node = new NodeProcess("test", 0, Path.of("test.log"), process, null, null);
+        node.paused = paused;
+        return node;
     }
 
     /**
@@ -212,6 +219,14 @@ public final class NodeProcess implements AutoCloseable {
 
     public boolean alive() {
         return process.isAlive();
+    }
+
+    boolean paused() {
+        return paused;
+    }
+
+    int resumeAttempts() {
+        return resumeAttempts;
     }
 
     /**
@@ -434,7 +449,6 @@ public final class NodeProcess implements AutoCloseable {
      * @return the exit code, which is the signal's
      */
     public int kill() throws InterruptedException {
-        resumeIfPaused();
         process.destroyForcibly();
         return awaitExit();
     }
@@ -466,6 +480,7 @@ public final class NodeProcess implements AutoCloseable {
 
     private void resumeIfPaused() {
         if (paused) {
+            resumeAttempts++;
             try {
                 resume();
             } catch (Exception ignored) {

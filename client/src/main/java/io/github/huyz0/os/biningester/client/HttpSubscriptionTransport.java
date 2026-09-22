@@ -604,6 +604,11 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport {
         return pollFailures.get(kind).get();
     }
 
+    /** The configured first reconnect delay, exposed for production wiring checks. */
+    public Duration retryFloor() {
+        return retryFloor;
+    }
+
     /**
      * Stops this transport; every subscription's reader loop exits at its next
      * turn.
