@@ -208,7 +208,7 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport {
 
 
     /**
-     * Why a poll did not deliver, one class per outcome (M8.37, NFR-11).
+     * Why a poll did not deliver, one class per outcome (M8.37).
      *
      * <p>⚠️ **CLASSES, NEVER A STATUS OR AN INDEX**: observability.md rule 1
      * keeps labels to a closed set, and a consumer wedged against a full or a
@@ -223,8 +223,10 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport {
         SERVER_ERROR,
         /** No answer at all: refused, reset or timed out. */
         UNREACHABLE,
-        /** A 200 whose body could not be read. */
-        MALFORMED
+        /** A 200 whose body could not be read or decoded. */
+        MALFORMED,
+        /** A local callback threw while handling an answered poll. */
+        CALLBACK
     }
 
     private final java.util.Map<PollFailure, AtomicLong> pollFailures = failureCounters();
@@ -242,6 +244,13 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport {
     private static final class NotOk extends IOException {
         NotOk(String message) {
             super(message);
+        }
+    }
+
+    /** Keeps a consumer callback failure distinct from malformed wire data. */
+    private static final class CallbackFailure extends RuntimeException {
+        CallbackFailure(RuntimeException cause) {
+            super("a subscription callback failed", cause);
         }
     }
     private final AtomicBoolean closed = new AtomicBoolean();
@@ -387,7 +396,7 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport {
                     .queryParam("sub", id)
                     // ⚠️ ASKED PER POLL OF THE LISTENER, which asks only while
                     // a resume waits on a fresh floor (ADR-0056).
-                    .queryParam(FLOOR_PARAM, listener.wantsRetainedFloor(key) ? "1" : "0")
+                    .queryParam(FLOOR_PARAM, wantsFloor(listener, key) ? "1" : "0")
                     // ⚠️ SENT ONLY WHEN KNOWN. An empty `az=` would tell the
                     // ingester a zone whose name is the empty string, which it
                     // would then compare against its own and count as a
@@ -414,13 +423,19 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport {
                     // PER CONNECTION, NOT PER POLL -- a poll answers every 30 s
                     // on an idle stream, and re-registering every index on the
                     // node that often is a message storm for no new fact.
-                    onReconnect.run();
+                    try {
+                        onReconnect.run();
+                    } catch (RuntimeException callback) {
+                        throw new CallbackFailure(callback);
+                    }
                 }
                 backoff = retryFloor;
                 deliver(response, listener, stopped);
             } catch (IOException | RuntimeException dropped) {
                 if (!(dropped instanceof NotOk) && !stopped.get() && !closed.get()) {
-                    pollFailures.get(answered ? PollFailure.MALFORMED : PollFailure.UNREACHABLE)
+                    pollFailures.get(dropped instanceof CallbackFailure
+                            ? PollFailure.CALLBACK
+                            : answered ? PollFailure.MALFORMED : PollFailure.UNREACHABLE)
                             .incrementAndGet();
                 }
 
@@ -466,10 +481,26 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport {
             // torn EVENT read as "not a floor, move on" would drop records.
             if (io.github.huyz0.os.biningester.format.RetainedFloor.isRetainedFloor(frame)) {
                 io.github.huyz0.os.biningester.format.RetainedFloor floor = io.github.huyz0.os.biningester.format.RetainedFloor.decode(frame);
-                listener.onRetainedFloor(floor.key(), floor.oldestRetainedOffset());
+                try {
+                    listener.onRetainedFloor(floor.key(), floor.oldestRetainedOffset());
+                } catch (RuntimeException callback) {
+                    throw new CallbackFailure(callback);
+                }
                 continue;
             }
-            listener.onDelivery(deliveryFor(SubscriptionEvent.decode(frame)));
+            try {
+                listener.onDelivery(deliveryFor(SubscriptionEvent.decode(frame)));
+            } catch (RuntimeException callback) {
+                throw new CallbackFailure(callback);
+            }
+        }
+    }
+
+    private static boolean wantsFloor(Listener listener, RunKey key) {
+        try {
+            return listener.wantsRetainedFloor(key);
+        } catch (RuntimeException callback) {
+            throw new CallbackFailure(callback);
         }
     }
 

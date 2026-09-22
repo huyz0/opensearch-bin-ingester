@@ -5,15 +5,21 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.huyz0.os.biningester.client.HttpSubscriptionTransport;
 import io.github.huyz0.os.biningester.client.HttpSubscriptionTransport.PollFailure;
+import io.github.huyz0.os.biningester.format.FetchMode;
 import io.github.huyz0.os.biningester.format.RunKey;
+import io.github.huyz0.os.biningester.format.SubscriptionEvent;
 import io.helidon.http.Status;
 import io.helidon.webserver.WebServer;
 import io.helidon.webserver.http.HttpRouting;
 import java.net.ServerSocket;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.time.Duration;
 import java.util.EnumSet;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -70,6 +76,120 @@ class PollOutcomeCountTest {
     private String status(Status status) {
         return answering(HttpRouting.builder().get(SubscriptionService.SUBSCRIBE_PATH,
                 (req, res) -> res.status(status).send("no")));
+    }
+
+    @Test
+    void aThrowingReconnectListenerIsCALLBACKNotMALFORMED() {
+        String endpoint = answering(HttpRouting.builder().get(
+                SubscriptionService.SUBSCRIBE_PATH, (req, res) -> res.status(Status.OK_200).send("no")));
+        transport = new HttpSubscriptionTransport(endpoint,
+                () -> { throw new IllegalStateException("listener failed"); },
+                Duration.ofMillis(10), Duration.ofMillis(20), Duration.ofSeconds(2));
+        transport.subscribe(STREAM, d -> { });
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
+        while (transport.pollFailures(PollFailure.CALLBACK) < 2) {
+            assertThat(System.nanoTime()).as("callback failures counted")
+                    .isLessThan(deadline);
+            Thread.onSpinWait();
+        }
+        assertThat(transport.pollFailures(PollFailure.MALFORMED))
+                .as("a callback failure is not malformed response data")
+                .isZero();
+    }
+
+    @Test
+    void aThrowingFloorListenerIsCALLBACKNotUNREACHABLE() {
+        String endpoint = answering(HttpRouting.builder().get(
+                SubscriptionService.SUBSCRIBE_PATH,
+                (req, res) -> res.status(Status.OK_200).send(framed(
+                        new io.github.huyz0.os.biningester.format.RetainedFloor(STREAM, 1).encode()))));
+        transport = new HttpSubscriptionTransport(endpoint, () -> { },
+                Duration.ofMillis(10), Duration.ofMillis(20), Duration.ofSeconds(2));
+        transport.subscribe(STREAM, new io.github.huyz0.os.biningester.client.SubscriptionTransport.Listener() {
+            @Override
+            public void onDelivery(io.github.huyz0.os.biningester.client.Delivery delivery) {
+            }
+
+            @Override
+            public void onRetainedFloor(RunKey key, long oldestRetainedOffset) {
+                throw new IllegalStateException("floor listener failed");
+            }
+        });
+        await(PollFailure.CALLBACK, 2);
+        assertThat(transport.pollFailures(PollFailure.UNREACHABLE)).isZero();
+        assertThat(transport.pollFailures(PollFailure.MALFORMED)).isZero();
+    }
+
+    @Test
+    void aThrowingFloorAskIsCALLBACKNotUNREACHABLE() {
+        String endpoint = answering(HttpRouting.builder().get(
+                SubscriptionService.SUBSCRIBE_PATH,
+                (req, res) -> res.status(Status.OK_200).send("no")));
+        transport = new HttpSubscriptionTransport(endpoint, () -> { },
+                Duration.ofMillis(10), Duration.ofMillis(20), Duration.ofSeconds(2));
+        transport.subscribe(STREAM, new io.github.huyz0.os.biningester.client.SubscriptionTransport.Listener() {
+            @Override
+            public void onDelivery(io.github.huyz0.os.biningester.client.Delivery delivery) {
+            }
+
+            @Override
+            public boolean wantsRetainedFloor(RunKey key) {
+                throw new IllegalStateException("floor ask failed");
+            }
+        });
+        await(PollFailure.CALLBACK, 2);
+        assertThat(transport.pollFailures(PollFailure.UNREACHABLE)).isZero();
+    }
+
+    @Test
+    void aThrowingDeliveryListenerIsCALLBACKNotMALFORMED() {
+        String endpoint = answering(HttpRouting.builder().get(
+                SubscriptionService.SUBSCRIBE_PATH,
+                (req, res) -> res.status(Status.OK_200).send(framed(new SubscriptionEvent(
+                        "session", 1, 1, STREAM, "seg", 0, 1, FetchMode.INLINE,
+                        new byte[] {1}).encode()))));
+        transport = new HttpSubscriptionTransport(endpoint, () -> { },
+                Duration.ofMillis(10), Duration.ofMillis(20), Duration.ofSeconds(2));
+        transport.subscribe(STREAM, delivery -> {
+            throw new IllegalStateException("delivery listener failed");
+        });
+        await(PollFailure.CALLBACK, 2);
+        assertThat(transport.pollFailures(PollFailure.MALFORMED)).isZero();
+    }
+
+    @Test
+    void aCallbackThatClosesBeforeThrowingIsNotCounted() throws Exception {
+        CountDownLatch called = new CountDownLatch(1);
+        AtomicReference<Thread> reader = new AtomicReference<>();
+        transport = new HttpSubscriptionTransport(answering(HttpRouting.builder().get(
+                SubscriptionService.SUBSCRIBE_PATH,
+                (req, res) -> res.status(Status.OK_200).send("no"))),
+                () -> {
+                    reader.set(Thread.currentThread());
+                    called.countDown();
+                    transport.close();
+                    throw new IllegalStateException("closed callback failed");
+                }, Duration.ofMillis(10), Duration.ofMillis(20), Duration.ofSeconds(2));
+        transport.subscribe(STREAM, d -> { });
+        assertThat(called.await(5, TimeUnit.SECONDS)).isTrue();
+        assertThat(reader.get()).isNotNull();
+        reader.get().join(5_000);
+        assertThat(reader.get().isAlive()).as("the callback reader finished the catch path").isFalse();
+        assertThat(transport.pollFailures(PollFailure.CALLBACK)).isZero();
+        assertThat(transport.pollFailures(PollFailure.MALFORMED)).isZero();
+    }
+
+    private void await(PollFailure kind, long count) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
+        while (transport.pollFailures(kind) < count) {
+            assertThat(System.nanoTime()).as("%s counted", kind).isLessThan(deadline);
+            Thread.onSpinWait();
+        }
+    }
+
+    private static byte[] framed(byte[] payload) {
+        return ByteBuffer.allocate(4 + payload.length).order(ByteOrder.BIG_ENDIAN)
+                .putInt(payload.length).put(payload).array();
     }
 
     @Test

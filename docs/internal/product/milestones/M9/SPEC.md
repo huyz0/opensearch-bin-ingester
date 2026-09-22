@@ -601,7 +601,7 @@ until it lands.
 | M8.62 | Kill M8's recorded surviving mutants | — (tests) |
 | M8.63 | Replace `Thread.sleep` polling with Awaitility | — (tests) |
 | M8.64 | Sweep M8's stale prose | — (prose) |
-| M8.68 | `MALFORMED` reclassified | NFR-11 |
+| M8.68 | `MALFORMED` reclassified | — (observability) |
 | M8.69 | A blank duration, byte or boolean setting is refused | — (config) |
 | M8.70 | A readiness-to-refusal delay in graceful shutdown | NFR-9 |
 | M8.71 | Harness and composition-root loose ends | — (harness) |
