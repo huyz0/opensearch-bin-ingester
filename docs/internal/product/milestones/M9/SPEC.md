@@ -87,6 +87,7 @@ per criterion, and is § *What a cloud run adds*.
 | Row | Disposition |
 |---|---|
 | M8.24a — the catch-up protocol decision | **Done.** [ADR-0065](../../decisions/0065-node-scoped-catch-up-with-live-tail-priority.md) |
+| M8.24b — bounded replay primitives | **Done.** The source and coordinator are covered by focused ingest tests; the HTTP/control-frame wiring and T4 evidence remain M8.24. |
 | M8.24 — the catch-up read path and the ninth chaos row | **A task.** Follows M8.24a |
 | M8.28's tiers 2 and 3 and gap re-reads | **Three tasks, DESIGNED AND BUILT IN M9** (the user's decision, 2026-09-20). (a) The gap RE-READ over a reachable ingester, with `TENS_OF_GETS` counted for it, is **M9.13**. (b) **M9.20 is an ADR choosing a THIRD approach** to plugin-side store access, both earlier candidates having been rejected on 2026-09-20 -- a SigV4 signer in the plugin (a credential in the OpenSearch JVM) and long-lived pre-issued chain grants (amending ADR-0041's short TTL). (c) **M9.21 EXECUTES tiers 2 and 3** on a real gap with NO ingester reachable, re-reading the missing window through M8.24's catch-up-from-offset read path and counting the GETs and LISTs each tier costs. ⚠️ **ADR-0057 IS SUPERSEDED IN PART** -- its decision that tiers 2 and 3 wait, and its consequence that an outage longer than the backoff leaves consumers indexing nothing -- and M9.20 says so in its own text, leaving ADR-0057's tier-0/1 half standing |
 | M8.56 — wire `SegmentPrefetcher` | **A task**, and it must land before NFR-4 is measured: without it every non-writing AZ's first read is a cold proxy GET, and the measured read rate would be the wrong design's. It also keeps `check-wired.sh`'s M5.91b entry owned until it lands |
@@ -579,6 +580,7 @@ until it lands.
 | M9.19 | **NFR-7's DIVISOR**: the ADR fixing the flush window as the interval ceiling, and the endpoints | NFR-7 |
 | M9.11 | NFR-7 on the rig at three ceilings, and one point to searchable | NFR-7 |
 | M9.12 | NFR-7 on the ADR-0058 path: visibility bounded by the drain | NFR-7, FR-4 |
+| M8.24b | Bounded replay primitives for the catch-up path | FR-9, NFR-13 |
 | M8.24 | Kill an OpenSearch node mid-backlog: the catch-up read path, without starving the tail | FR-9, NFR-13 |
 | M9.13 | A gap re-read through the catch-up path, and `TENS_OF_GETS` counted | FR-10 |
 | M9.20 | **THE ADR CHOOSING HOW THE PLUGIN READS THE STORE** for ladder tiers 2 and 3 -- a third approach, superseding ADR-0057 in part | FR-10 |
