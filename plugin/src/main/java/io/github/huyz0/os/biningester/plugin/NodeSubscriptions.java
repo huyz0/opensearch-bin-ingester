@@ -172,6 +172,10 @@ public final class NodeSubscriptions implements AutoCloseable {
     public static final java.time.Duration SEGMENT_FETCH_TIMEOUT =
             java.time.Duration.ofSeconds(30);
 
+    /** Connect timeout for the long-poll subscription channel, not segment GETs. */
+    public static final java.time.Duration SUBSCRIPTION_CONNECT_TIMEOUT =
+            java.time.Duration.ofSeconds(5);
+
     /**
      * What a real node builds (M8.31): a channel, and ONE fetch path every
      * client on the node shares.

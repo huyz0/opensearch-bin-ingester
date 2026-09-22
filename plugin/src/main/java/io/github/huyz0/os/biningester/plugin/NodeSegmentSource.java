@@ -4,6 +4,7 @@ package io.github.huyz0.os.biningester.plugin;
 import io.github.huyz0.os.biningester.client.SegmentSource;
 import io.github.huyz0.os.biningester.format.Grant;
 import java.io.IOException;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -35,20 +36,19 @@ import java.util.Objects;
  * K, and a hold of C is flat in K at every C -- so the bound is a byte ceiling
  * with eviction, asserted, rather than a number in a javadoc.
  *
- * <p>⚠️ {@code fetch} IS SYNCHRONIZED, which serializes a node's fetches of
- * DIFFERENT segments too. That is a real cost and it is taken deliberately:
- * the alternative is a per-key single-flight whose only observable behaviour
- * is under concurrency, and nothing here could assert it without a barrier
- * that outlives the case. ⚠️ A production fetcher exists since M8.31
- * ({@code HttpSegmentSource}), so a slow GET now holds this lock for a real
- * network round trip; revisiting it is a measurement, not a guess.
+ * <p>⚠️ {@code fetch} IS SERIALISED PER KEY, not per node. A slow GET for one
+ * segment must not hold a different segment's fetch hostage, while concurrent
+ * deliveries for the same key still share one in-flight fetch. The cache state
+ * has its own short lock, never held across the delegate's network round trip.
  */
 public final class NodeSegmentSource implements SegmentSource {
 
     private final SegmentSource delegate;
     private final long capacityBytes;
+    private final Object cacheLock = new Object();
     private long fetches;
     private long bytesHeld;
+    private final Map<String, KeyGate> keyGates = new HashMap<>();
 
     /**
      * ⚠️ ACCESS-ORDERED, so what falls out is the segment nobody has asked for
@@ -57,6 +57,10 @@ public final class NodeSegmentSource implements SegmentSource {
      * ceiling in entries bounds nothing an operator can size a heap against.
      */
     private final Map<String, byte[]> held = new LinkedHashMap<>(16, 0.75f, true);
+
+    private static final class KeyGate {
+        private int users;
+    }
 
     public NodeSegmentSource(SegmentSource delegate, long capacityBytes) {
         this.delegate = Objects.requireNonNull(delegate, "delegate");
@@ -80,16 +84,47 @@ public final class NodeSegmentSource implements SegmentSource {
      * layer down.
      */
     @Override
-    public synchronized byte[] fetch(Grant grant) throws IOException {
+    public byte[] fetch(Grant grant) throws IOException {
         Objects.requireNonNull(grant, "grant");
-        byte[] hit = held.get(grant.url());
-        if (hit != null) {
-            return hit;
+        String key = grant.url();
+        KeyGate gate = acquire(key);
+        try {
+            synchronized (gate) {
+                byte[] hit;
+                synchronized (cacheLock) {
+                    hit = held.get(key);
+                }
+                if (hit != null) {
+                    return hit;
+                }
+                synchronized (cacheLock) {
+                    fetches++;
+                }
+                byte[] bytes = delegate.fetch(grant);
+                synchronized (cacheLock) {
+                    admit(key, bytes);
+                }
+                return bytes;
+            }
+        } finally {
+            release(key, gate);
         }
-        fetches++;
-        byte[] bytes = delegate.fetch(grant);
-        admit(grant.url(), bytes);
-        return bytes;
+    }
+
+    private KeyGate acquire(String key) {
+        synchronized (cacheLock) {
+            KeyGate gate = keyGates.computeIfAbsent(key, ignored -> new KeyGate());
+            gate.users++;
+            return gate;
+        }
+    }
+
+    private void release(String key, KeyGate gate) {
+        synchronized (cacheLock) {
+            if (--gate.users == 0) {
+                keyGates.remove(key, gate);
+            }
+        }
     }
 
     private void admit(String url, byte[] bytes) {
@@ -118,13 +153,17 @@ public final class NodeSegmentSource implements SegmentSource {
     }
 
     /** Calls that reached the delegate -- criterion 1's count. */
-    public synchronized long fetches() {
-        return fetches;
+    public long fetches() {
+        synchronized (cacheLock) {
+            return fetches;
+        }
     }
 
     /** Bytes this node currently holds, never above the ceiling. */
-    public synchronized long bytesHeld() {
-        return bytesHeld;
+    public long bytesHeld() {
+        synchronized (cacheLock) {
+            return bytesHeld;
+        }
     }
 
     /** The ceiling this node's hold is bounded by. */

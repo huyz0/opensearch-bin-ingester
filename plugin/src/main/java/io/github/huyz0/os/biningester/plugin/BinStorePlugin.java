@@ -137,7 +137,7 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
                     NodeChannel.open(endpoint,
                             io.github.huyz0.os.biningester.client.HttpSubscriptionTransport.DEFAULT_RETRY_FLOOR,
                             io.github.huyz0.os.biningester.client.HttpSubscriptionTransport.DEFAULT_RETRY_CEILING,
-                            NodeSubscriptions.SEGMENT_FETCH_TIMEOUT),
+                            NodeSubscriptions.SUBSCRIPTION_CONNECT_TIMEOUT),
                     QUEUE_CAPACITY, NodeSubscriptions.DEFAULT_SEGMENT_HOLD_BYTES);
         }
         this.subscriptions = installed == null || nodeName.isEmpty()

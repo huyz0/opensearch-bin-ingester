@@ -40,6 +40,7 @@ public final class NodeChannel implements AutoCloseable {
     }
 
     private final SubscriptionTransport transport;
+    private final Duration connectTimeout;
 
     /**
      * Wires a transport this node speaks HTTP over.
@@ -50,7 +51,7 @@ public final class NodeChannel implements AutoCloseable {
             Duration retryCeiling, Duration timeout) {
         Objects.requireNonNull(endpoint, "endpoint");
         return new NodeChannel(reconnect -> new HttpSubscriptionTransport(endpoint, reconnect,
-                retryFloor, retryCeiling, timeout));
+                retryFloor, retryCeiling, timeout), timeout);
     }
 
     /**
@@ -60,8 +61,13 @@ public final class NodeChannel implements AutoCloseable {
      * registrar".
      */
     public NodeChannel(TransportFactory factory) {
+        this(factory, null);
+    }
+
+    private NodeChannel(TransportFactory factory, Duration connectTimeout) {
         Objects.requireNonNull(factory, "factory");
         this.transport = Objects.requireNonNull(factory.open(holder::onReconnect), "transport");
+        this.connectTimeout = connectTimeout;
     }
 
     private final Holder holder = new Holder();
@@ -91,6 +97,11 @@ public final class NodeChannel implements AutoCloseable {
 
     public SubscriptionTransport transport() {
         return transport;
+    }
+
+    /** The channel connect timeout, or null for an injected test transport. */
+    Duration connectTimeout() {
+        return connectTimeout;
     }
 
     /**
