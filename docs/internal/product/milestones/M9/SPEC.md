@@ -86,7 +86,8 @@ per criterion, and is § *What a cloud run adds*.
 
 | Row | Disposition |
 |---|---|
-| M8.24 — the catch-up read path and the ninth chaos row | **A task.** Needs an ADR first (see § *Decisions*) |
+| M8.24a — the catch-up protocol decision | **Done.** [ADR-0065](../../decisions/0065-node-scoped-catch-up-with-live-tail-priority.md) |
+| M8.24 — the catch-up read path and the ninth chaos row | **A task.** Follows M8.24a |
 | M8.28's tiers 2 and 3 and gap re-reads | **Three tasks, DESIGNED AND BUILT IN M9** (the user's decision, 2026-09-20). (a) The gap RE-READ over a reachable ingester, with `TENS_OF_GETS` counted for it, is **M9.13**. (b) **M9.20 is an ADR choosing a THIRD approach** to plugin-side store access, both earlier candidates having been rejected on 2026-09-20 -- a SigV4 signer in the plugin (a credential in the OpenSearch JVM) and long-lived pre-issued chain grants (amending ADR-0041's short TTL). (c) **M9.21 EXECUTES tiers 2 and 3** on a real gap with NO ingester reachable, re-reading the missing window through M8.24's catch-up-from-offset read path and counting the GETs and LISTs each tier costs. ⚠️ **ADR-0057 IS SUPERSEDED IN PART** -- its decision that tiers 2 and 3 wait, and its consequence that an outage longer than the backoff leaves consumers indexing nothing -- and M9.20 says so in its own text, leaving ADR-0057's tier-0/1 half standing |
 | M8.56 — wire `SegmentPrefetcher` | **A task**, and it must land before NFR-4 is measured: without it every non-writing AZ's first read is a cold proxy GET, and the measured read rate would be the wrong design's. It also keeps `check-wired.sh`'s M5.91b entry owned until it lands |
 | M8.58 — address-matched challenges | **A task, and its shape is decided** (the user's decision, 2026-09-20): **the Kubernetes pod UID goes IN THE LEASE**, and `EndpointSliceView` matches `targetRef.uid` rather than the endpoint's address. ⚠️ **THAT IS A WIRE-FORMAT CHANGE**, so the task follows [`wire-format-change`](../../../../../.agents/skills/wire-format-change/SKILL.md): the format document, every reader, every writer, the fakes, the golden files and the ADR in ONE commit. Exercised against `FakeKubeApi`; a real cluster stays unavailable and the row says so |
@@ -342,8 +343,11 @@ the digest-pinned container in `docker-compose.test.yml`.
     catch-up GETs **≤ 1 per backlog segment per node**, and **EVERY record
     written after the kill visible within 3× the interval ceiling OF ITS OWN
     202**, measured per record over ≥1,000 post-kill records while the catch-up
-    runs. ⚠️ A p99 taken over one record is not a bound; the deadline is
-    per-record and the assertion fails on the first breach. T4. (M8.24)
+    runs. The producer keeps live work continuously pending for the replay
+    window, and the scheduler trace shows a catch-up turn after each bounded
+    live quantum; this is the falsifier for the no-starvation rule. ⚠️ A p99
+    taken over one record is not a bound; the deadline is per-record and the
+    assertion fails on the first breach. T4. (M8.24)
 14. **A gap is re-read over a REACHABLE ingester, and its cost is counted.**
     A forced delivery gap is filled through the catch-up path with no record
     skipped and none indexed past, and the requests are counted: the consumer
@@ -534,8 +538,9 @@ starts.**
 
 5. **Where the load generator and macro harness live** — a new `bench` module
    or a source set in `server` (code-structure.md; `check-module.sh`'s surface).
-6. **The catch-up read path** (M8.24) — resuming a subscription from an offset
-   changes the subscription protocol: `wire-format-change`.
+6. **The catch-up read path** (M8.24, after M8.24a) — resuming a subscription
+   from an offset changes the subscription protocol: `wire-format-change`.
+   The decision is [ADR-0065](../../decisions/0065-node-scoped-catch-up-with-live-tail-priority.md).
 7. **A codec or block-size default change**, if M2's measurement moves it.
 8. **Measurement M3's threshold default** — chosen on COST alone, while the
    variable `50-open-questions.md` names as deciding it (real S3 TTFB variance)

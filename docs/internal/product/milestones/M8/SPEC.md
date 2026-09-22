@@ -591,6 +591,7 @@ rows uncited.
 | M8.15 | Partitioned from the store: readiness fails, acks stop | NFR-8 |
 | M8.16 | Rolling restart: no gap > 1 s, staggered reconnects | NFR-9, FR-16 |
 | M8.17 | Clock skew ±5 min applied to the PROCESS: safety by epoch, not by clock | FR-11 |
+| M8.24a | Record the node-scoped catch-up protocol and live-tail priority rule in ADR-0065 | FR-9, NFR-13 |
 | M8.24 | Kill an OpenSearch node mid-backlog: resume from `batch_start`, and the catch-up does not starve the live tail | FR-9, NFR-13 |
 | M8.18 | The presign obligations that were waiting for a real backend (M5.37, M5.42) | NFR-10 |
 | M8.27 | Measurement M1: the lease TTL and challenge policy under `SIGSTOP` pauses, reported as numbers | FR-11 |
