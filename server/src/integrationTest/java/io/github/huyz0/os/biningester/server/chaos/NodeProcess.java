@@ -500,6 +500,17 @@ public final class NodeProcess implements AutoCloseable {
     public void close() {
         resumeIfPaused();
         process.destroyForcibly();
+        try {
+            // Windows keeps the redirected log handle open until the child
+            // has actually exited. Returning immediately leaves JUnit's
+            // @TempDir cleanup racing that handle and turns a passing test
+            // into a teardown failure.
+            if (!process.waitFor(60, TimeUnit.SECONDS)) {
+                throw new IllegalStateException(podId + " did not exit after close");
+            }
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        }
         if (peers != null) {
             peers.close();
         }

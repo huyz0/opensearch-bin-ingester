@@ -180,7 +180,7 @@ public final class FrontDoor implements AutoCloseable {
                         assembly.watermarks(), clock, assembly.floors(), gate, crossAz));
         String macroPath = System.getProperty("binstore.macro.path");
         if (macroPath != null && !macroPath.isBlank()) {
-            routes.register(new MacroCountsService(assembly, macroPath));
+            routes.register(new MacroCountsService(assembly, macroPath, crossAz));
         }
         return WebServer.builder().shutdownHook(false).port(config.httpPort())
                 .routing(routes).build();
@@ -189,10 +189,13 @@ public final class FrontDoor implements AutoCloseable {
     private static final class MacroCountsService implements io.helidon.webserver.http.HttpService {
         private final Assembly assembly;
         private final String path;
+        private final io.github.huyz0.os.biningester.binstore.CrossAzBytes crossAz;
 
-        private MacroCountsService(Assembly assembly, String path) {
+        private MacroCountsService(Assembly assembly, String path,
+                io.github.huyz0.os.biningester.binstore.CrossAzBytes crossAz) {
             this.assembly = assembly;
             this.path = path;
+            this.crossAz = crossAz;
         }
 
         @Override
@@ -201,7 +204,7 @@ public final class FrontDoor implements AutoCloseable {
         }
 
         private void counts(ServerRequest request, ServerResponse response) {
-            response.send(macroCountsJson(assembly.config().podId(), assembly.storeCounts()));
+            response.send(macroCountsJson(assembly.config().podId(), assembly.storeCounts(), crossAz));
         }
     }
 
@@ -212,6 +215,43 @@ public final class FrontDoor implements AutoCloseable {
                 + ",\"lists\":" + counts.lists()
                 + ",\"stats\":" + counts.stats()
                 + ",\"deletes\":" + counts.deletes() + "}\n";
+    }
+
+    static String macroCountsJson(String podId, StoreCounts counts,
+            io.github.huyz0.os.biningester.binstore.CrossAzBytes crossAz) {
+        // The three-argument FrontDoor.start overload predates M9.2 and can
+        // deliberately carry an untracked counter. Preserve its existing
+        // store-only snapshot contract rather than turning a compatibility
+        // caller's GET into an IllegalStateException. IngesterNode always
+        // supplies the real tracked counter used by the M9 macro harness.
+        try {
+            return trackedMacroCountsJson(podId, counts, crossAz);
+        } catch (IllegalStateException untracked) {
+            return macroCountsJson(podId, counts);
+        }
+    }
+
+    private static String trackedMacroCountsJson(String podId, StoreCounts counts,
+            io.github.huyz0.os.biningester.binstore.CrossAzBytes crossAz) {
+        return "{\"podId\":\"" + escapeJson(podId)
+                + "\",\"puts\":" + counts.puts()
+                + ",\"gets\":" + counts.gets()
+                + ",\"lists\":" + counts.lists()
+                + ",\"stats\":" + counts.stats()
+                + ",\"deletes\":" + counts.deletes()
+                + ",\"crossAzBytes\":" + crossAz.crossAzBytes()
+                + ",\"unknownPeerBytes\":" + crossAz.unknownPeerBytes()
+                + ",\"proxyRead\":" + crossAz.crossAzBytes(
+                        io.github.huyz0.os.biningester.binstore.CrossAzBytes.Transport.PROXY_READ)
+                + ",\"inlinePush\":" + crossAz.crossAzBytes(
+                        io.github.huyz0.os.biningester.binstore.CrossAzBytes.Transport.INLINE_PUSH)
+                + ",\"consumerPoll\":" + crossAz.crossAzBytes(
+                        io.github.huyz0.os.biningester.binstore.CrossAzBytes.Transport.CONSUMER_POLL)
+                + ",\"commitForward\":" + crossAz.crossAzBytes(
+                        io.github.huyz0.os.biningester.binstore.CrossAzBytes.Transport.COMMIT_FORWARD)
+                + ",\"inboxDrain\":" + crossAz.crossAzBytes(
+                        io.github.huyz0.os.biningester.binstore.CrossAzBytes.Transport.INBOX_DRAIN)
+                + "}\n";
     }
 
     private static String escapeJson(String value) {
