@@ -62,6 +62,9 @@ public final class IngesterNode implements AutoCloseable {
      */
     static final Duration SUBSCRIBER_GRACE = Duration.ofSeconds(2);
 
+    /** The readiness probe's propagation window before new work is refused. */
+    static final Duration READINESS_PROPAGATION = Duration.ofSeconds(1);
+
     /**
      * ⚠️ **HOW LONG THE REQUESTS INSIDE THE DOOR ARE GIVEN (§7 step 3).** Each
      * one waits for the flush that makes it durable, and the drain forces one
@@ -240,7 +243,11 @@ public final class IngesterNode implements AutoCloseable {
 
             @Override
             public void finishInFlight() throws Exception {
-                gate.refuseBulk();
+                try {
+            gate.awaitReadinessPropagation(READINESS_PROPAGATION);
+                } finally {
+                    gate.refuseBulk();
+                }
                 try {
                     // ⚠️ A FLUSH PER SLICE, because a request inside the door
                     // is waiting for one: its 202 is sent once its records

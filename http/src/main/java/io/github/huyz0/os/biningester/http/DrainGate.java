@@ -37,6 +37,7 @@ public final class DrainGate {
     private final Condition changed = lock.newCondition();
     private final Set<Thread> pollers = new HashSet<>();
     private volatile boolean ready = true;
+    private volatile boolean readinessPropagationInProgress;
     private boolean pollsRefused;
     private boolean bulkRefused;
     private int bulkInFlight;
@@ -68,6 +69,36 @@ public final class DrainGate {
     public void failReadiness() {
         ready = false;
         journal.accept(READINESS_FAILED);
+    }
+
+    /**
+     * Leaves the listener admitting traffic briefly after readiness fails, so
+     * a load balancer can observe the probe before new work is refused.
+     */
+    public void awaitReadinessPropagation(Duration bound) throws InterruptedException {
+        java.util.Objects.requireNonNull(bound, "bound");
+        if (bound.isNegative() || bound.isZero()) {
+            return;
+        }
+        readinessPropagationInProgress = true;
+        try {
+            lock.lock();
+            try {
+                long left = bound.toNanos();
+                while (left > 0) {
+                    left = changed.awaitNanos(left);
+                }
+            } finally {
+                lock.unlock();
+            }
+        } finally {
+            readinessPropagationInProgress = false;
+        }
+    }
+
+    /** Whether the readiness-to-refusal window is currently open. */
+    public boolean readinessPropagationInProgress() {
+        return readinessPropagationInProgress;
     }
 
     public static final String READINESS_FAILED = "readiness failed";

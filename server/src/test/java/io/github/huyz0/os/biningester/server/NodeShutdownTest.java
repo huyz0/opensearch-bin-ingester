@@ -11,6 +11,7 @@ import io.github.huyz0.os.biningester.http.HealthService;
 import io.github.huyz0.os.biningester.http.SubscriptionService;
 import io.github.huyz0.os.biningester.server.ShutdownSequence.Step;
 import io.helidon.webclient.api.WebClient;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -175,5 +176,40 @@ class NodeShutdownTest {
                 DrainGate.POLLS_RELEASED, DrainGate.BULK_REFUSED, FrontDoor.LISTENER_STOPPED,
                 Assembly.FLUSHED, Assembly.GRAPH_CLOSED);
         assertThat(node.gate().ready()).isFalse();
+    }
+
+    @Test
+    void aDRAINDelaysBulkRefusalAfterReadinessFails() throws Exception {
+        Path root = dir.resolve("store");
+        Files.createDirectories(root);
+        IngesterNode node = Main.run(configFile(root).toString());
+        try {
+            WebClient client = WebClient.builder()
+                    .baseUri("http://localhost:" + node.port()).build();
+            CompletableFuture<Void> closing = CompletableFuture.runAsync(() -> {
+                try {
+                    node.close();
+                } catch (IOException failed) {
+                    throw new java.util.concurrent.CompletionException(failed);
+                }
+            });
+
+            long propagationDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+            while (!node.gate().readinessPropagationInProgress()) {
+                assertThat(System.nanoTime()).as("readiness propagation never opened")
+                        .isLessThan(propagationDeadline);
+                Thread.onSpinWait();
+            }
+            assertThat(node.gate().ready()).isFalse();
+            assertThat(client.get(HealthService.READY_PATH).request().status().code())
+                    .as("the real readiness probe sees the drain").isEqualTo(503);
+            assertThat(client.post("/logs/_bulk").queryParam("partition", "0")
+                    .submit("").status().code())
+                    .as("traffic still reaches the listener during propagation")
+                    .isNotEqualTo(503);
+            closing.get(20, TimeUnit.SECONDS);
+        } finally {
+            node.close();
+        }
     }
 }
