@@ -61,11 +61,19 @@ public final class InboxDrain {
      * one pod, the ordered intents are one {@link Sequencer#commitAll} batch,
      * so the commit-log PUT is per pod rather than per intent; reading the
      * intent bodies still costs one GET per intent, as the inbox format requires.
+     * The lock is the inner {@link LocalSequencer}'s dedicated drain monitor
+     * when {@code term} is the elected {@link BatchingSequencer}; takeover
+     * passes that inner term while the route passes the wrapper, so both entry
+     * points must canonicalize to one monitor. It is separate from the local
+     * sequencer monitor because a batching drain calls back into that monitor.
      */
     public static int drain(BinStore store, String prefix, Sequencer term, String requester)
             throws IOException {
         Objects.requireNonNull(term, "term");
-        synchronized (term) {
+        Object lock = LocalSequencer.underneath(term)
+                .map(LocalSequencer::drainLock)
+                .orElse(term);
+        synchronized (lock) {
             return drainLocked(store, prefix, term, requester);
         }
     }

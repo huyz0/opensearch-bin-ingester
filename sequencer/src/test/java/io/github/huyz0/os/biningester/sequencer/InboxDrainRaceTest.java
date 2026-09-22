@@ -8,6 +8,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.github.huyz0.os.biningester.binstore.BinStore;
 import io.github.huyz0.os.biningester.binstore.backend.MemoryBinStore;
 import io.github.huyz0.os.biningester.format.CommitDelta;
 import java.io.IOException;
@@ -16,7 +17,9 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
@@ -103,6 +106,69 @@ class InboxDrainRaceTest {
             assertThat(deltasCarrying(store, "seg/podx-" + seq))
                     .as("⚠️ intent %d committed exactly once, not once per drain", seq)
                     .isEqualTo(1);
+        }
+    }
+
+    @Test
+    void aLocalAndBatchedDrainShareTheInnerTermLock() throws Exception {
+        MemoryBinStore backing = new MemoryBinStore();
+        LeaseManager manager = new LeaseManager(backing, config("poda", A), Clock.systemUTC());
+        LocalSequencer local = LocalSequencer.start(backing, PREFIX, manager, 8,
+                BoundedRecoveryFixture.noRenew()).orElseThrow();
+        Inbox.write(backing, PREFIX, flush("podx", 1));
+        BlockingListStore store = new BlockingListStore(backing);
+
+        try (BatchingSequencer batched = new BatchingSequencer(local, Duration.ofMillis(5))) {
+            Thread localDrain = Thread.ofVirtual().start(() -> drain(store, local));
+            assertThat(store.firstListEntered.await(5, TimeUnit.SECONDS)).isTrue();
+
+            Thread batchedDrain = Thread.ofVirtual().start(() -> drain(store, batched));
+            assertThat(store.secondListEntered.await(250, TimeUnit.MILLISECONDS))
+                    .as("the wrapper and its inner LocalSequencer must serialize drains")
+                    .isFalse();
+
+            store.releaseFirstList.countDown();
+            localDrain.join(5_000);
+            batchedDrain.join(5_000);
+            assertThat(localDrain.isAlive()).isFalse();
+            assertThat(batchedDrain.isAlive()).isFalse();
+        }
+    }
+
+    private static void drain(BinStore store, Sequencer term) {
+        try {
+            InboxDrain.drain(store, PREFIX, term);
+        } catch (IOException | RuntimeException ignored) {
+            // The second drain may observe the first drain's deletion.
+        }
+    }
+
+    private static final class BlockingListStore extends ForwardingBinStore {
+        private final AtomicInteger lists = new AtomicInteger();
+        private final CountDownLatch firstListEntered = new CountDownLatch(1);
+        private final CountDownLatch releaseFirstList = new CountDownLatch(1);
+        private final CountDownLatch secondListEntered = new CountDownLatch(1);
+
+        private BlockingListStore(io.github.huyz0.os.biningester.binstore.BinStore delegate) {
+            super(delegate);
+        }
+
+        @Override
+        public io.github.huyz0.os.biningester.binstore.ListPage list(
+                String prefix, String startAfter, int maxKeys) throws IOException {
+            int call = lists.incrementAndGet();
+            if (call == 1) {
+                firstListEntered.countDown();
+                try {
+                    releaseFirstList.await();
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("test list interrupted", interrupted);
+                }
+            } else if (call == 2) {
+                secondListEntered.countDown();
+            }
+            return super.list(prefix, startAfter, maxKeys);
         }
     }
 

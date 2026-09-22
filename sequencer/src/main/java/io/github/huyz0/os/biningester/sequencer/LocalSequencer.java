@@ -70,8 +70,8 @@ public final class LocalSequencer implements Sequencer {
     private final BinStore store;
     private final String prefix;
     private final Thread renewer;
+    private final Object drainLock = new Object();
     private volatile boolean closed;
-
     /**
      * Set when a renew came back EMPTY, which is how a holder learns it has been
      * fenced — {@link LeaseManager#renew()} says so and says the holder must
@@ -415,7 +415,7 @@ public final class LocalSequencer implements Sequencer {
                 ? batched.delegate() : sequencer;
         return inner instanceof LocalSequencer local ? Optional.of(local) : Optional.empty();
     }
-
+    Object drainLock() { return drainLock; }
     /**
      * The epoch this instance sequences at.
      *
