@@ -122,6 +122,11 @@ SOURCE_SET_TASK = {'test': 'test', 'integrationTest': 'integrationTest',
                    'clusterTest': 'clusterTest', 'soakTest': 'soakTest'}
 
 
+def source_digest(source_bytes):
+    """Hash checkout text as Git's canonical LF blob, independent of CRLF."""
+    return hashlib.sha256(source_bytes.replace(b'\r\n', b'\n')).hexdigest()
+
+
 def source_of(fq_id):
     """The file a test id lives in, or None.
 
@@ -211,7 +216,7 @@ def record_one(out_dir, ident):
     record for one. The runner therefore invokes Gradle once per selector, and
     every testcase in the results belongs to that selector by construction.
     """
-    import glob as _glob, hashlib as _h, json as _j, time as _t
+    import glob as _glob, json as _j, time as _t
     import xml.etree.ElementTree as ET
 
     cls = ident.split('#')[0]
@@ -248,7 +253,7 @@ def record_one(out_dir, ident):
     path = os.path.join(out_dir, 'red.json')
     rec = _j.load(open(path)) if os.path.exists(path) else {"red": {}}
     rec["red"][ident] = {"at": int(_t.time()), "source": src,
-                         "sha256": _h.sha256(open(src, 'rb').read()).hexdigest()}
+                         "sha256": source_digest(open(src, 'rb').read())}
     os.makedirs(out_dir, exist_ok=True)
     _j.dump(rec, open(path, 'w'), indent=2, sort_keys=True)
     print('  %sok%s   %s observed failing (%d of %d case(s))'

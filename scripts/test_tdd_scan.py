@@ -15,6 +15,12 @@ SPEC.loader.exec_module(tdd_scan)
 
 
 class TddScanPathTest(unittest.TestCase):
+    def test_source_digest_uses_canonical_git_line_endings(self):
+        self.assertEqual(
+            tdd_scan.source_digest(b"package example;\r\nclass Probe {}\r\n"),
+            tdd_scan.source_digest(b"package example;\nclass Probe {}\n"),
+        )
+
     def test_windows_buildsrc_test_path_routes_to_buildsrc_test(self):
         source = (
             r"buildSrc\src\test\java\io\github\huyz0\os\biningester\GateTest.java"

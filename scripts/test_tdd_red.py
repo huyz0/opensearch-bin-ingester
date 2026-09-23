@@ -99,7 +99,8 @@ class TddRedIntegrationTest(unittest.TestCase):
         self.assertNotIn("\r", args)
         red = json.loads((fixture / ".harness/tdd/red.json").read_text())
         record = red["red"]["example.ProbeTest#fails"]
-        self.assertEqual(record["sha256"], hashlib.sha256(test_source.read_bytes()).hexdigest())
+        canonical = test_source.read_bytes().replace(b"\r\n", b"\n")
+        self.assertEqual(record["sha256"], hashlib.sha256(canonical).hexdigest())
 
     def test_passing_test_does_not_create_red_evidence(self):
         fixture, _, run = self.run_runner("passed")
