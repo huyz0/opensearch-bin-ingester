@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.http;
 
+import io.github.huyz0.os.biningester.client.HttpSubscriptionTransport;
 import io.github.huyz0.os.biningester.format.CatchUpRequestFrame;
 import io.github.huyz0.os.biningester.ingest.DurableCatchUpResponder;
 import io.helidon.webserver.http.HttpRules;
@@ -16,7 +17,8 @@ import java.util.Objects;
 /** HTTP adapter for one node-scoped catch-up request (M8.24d, ADR-0065). */
 public final class CatchUpService implements HttpService {
 
-    public static final String PATH = "/ctl/catch-up";
+    /** POST replay control on the existing per-stream subscription URL. */
+    public static final String PATH = HttpSubscriptionTransport.SUBSCRIBE_PREFIX + "{indexUuid}/{partition}";
     static final long MAX_REQUEST_BYTES = 1L << 20;
     static final long MAX_RESPONSE_BYTES = 8L << 20;
 
@@ -36,7 +38,7 @@ public final class CatchUpService implements HttpService {
         rules.post(PATH, this::catchUp);
     }
 
-    private void catchUp(ServerRequest request, ServerResponse response) {
+    void catchUp(ServerRequest request, ServerResponse response) {
         CatchUpRequestFrame frame;
         try {
             frame = CatchUpRequestFrame.decode(bounded(request));

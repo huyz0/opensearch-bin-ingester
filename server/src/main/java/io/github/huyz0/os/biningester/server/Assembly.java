@@ -27,7 +27,10 @@ import io.github.huyz0.os.biningester.ingest.Membership;
 import io.github.huyz0.os.biningester.ingest.Peer;
 import io.github.huyz0.os.biningester.ingest.AzPeers;
 import io.github.huyz0.os.biningester.ingest.SegmentPrefetcher;
+import io.github.huyz0.os.biningester.ingest.DurableCatchUpResponder;
+import io.github.huyz0.os.biningester.ingest.SnapshotCommittedDeltaSource;
 import io.github.huyz0.os.biningester.format.DurableSegmentSignalFrame;
+import io.github.huyz0.os.biningester.format.CatchUpRequestFrame;
 import io.github.huyz0.os.biningester.http.DurableSegmentSignalSender;
 import io.github.huyz0.os.biningester.http.EndpointSliceView;
 import io.github.huyz0.os.biningester.binstore.CrossAzBytes;
@@ -380,6 +383,19 @@ public final class Assembly implements AutoCloseable {
                 .map(local -> new RetentionLoop.Term(local.chain(), local::observeRetained,
                         local::serving, fenced -> new ChainCollector(local, config.prefix())
                                 .collect(fenced, SegmentGc.DEFAULT_DELETE_BATCH)));
+    }
+
+    /** Responds from this node's currently-served committed chain without electing a term. */
+    java.util.List<byte[]> respondCatchUp(CatchUpRequestFrame request) throws IOException {
+        LocalSequencer local = LocalSequencer.underneath(sequencer.heldTerm())
+                .filter(LocalSequencer::serving)
+                .orElseThrow(() -> new IOException("this node has no serving committed chain"));
+        ChainMemory.Snapshot snapshot = local.chain().snapshot();
+        if (!snapshot.complete()) {
+            throw new IOException("the committed chain is incomplete and cannot replay safely");
+        }
+        return new DurableCatchUpResponder(store,
+                new SnapshotCommittedDeltaSource(() -> snapshot), local::epoch).respond(request);
     }
 
     /**

@@ -7,6 +7,7 @@ import io.github.huyz0.os.biningester.http.DrainGate;
 import io.github.huyz0.os.biningester.http.HealthService;
 import io.github.huyz0.os.biningester.http.SubscriptionService;
 import io.github.huyz0.os.biningester.http.DurableSegmentSignalService;
+import io.github.huyz0.os.biningester.http.CatchUpService;
 import io.github.huyz0.os.biningester.binstore.StoreCounts;
 import io.helidon.webserver.WebServer;
 import io.helidon.webserver.http.HttpRouting;
@@ -179,6 +180,7 @@ public final class FrontDoor implements AutoCloseable {
                                         assembly.store(), config.prefix(), term, pod)))
                 .register(new SubscriptionService(assembly.hub(), assembly.catalog(),
                         assembly.watermarks(), clock, assembly.floors(), gate, crossAz))
+                .register(new CatchUpService(assembly::respondCatchUp))
                 .register(new DurableSegmentSignalService(assembly.peerView(),
                         assembly::prefetchDurableSegment));
         String macroPath = System.getProperty("binstore.macro.path");
