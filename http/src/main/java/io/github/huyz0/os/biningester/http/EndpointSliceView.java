@@ -38,8 +38,12 @@ import java.util.Set;
  */
 public final class EndpointSliceView implements LeaseChallenge {
 
-    private record Member(String name, List<String> addresses, boolean ready,
-            boolean terminating) {
+    /** A ready endpoint suitable for the peer ring, with one address for a node. */
+    public record Endpoint(String podId, String address, String az) {
+    }
+
+    private record Member(String name, List<String> addresses, String az,
+            boolean ready, boolean terminating) {
     }
 
     private final Map<String, List<Member>> slices = new HashMap<>();
@@ -87,6 +91,24 @@ public final class EndpointSliceView implements LeaseChallenge {
         return true;
     }
 
+    /** Current ready endpoints with an AZ label, in a stable order. */
+    public synchronized List<Endpoint> readyEndpoints() {
+        List<Endpoint> ready = new ArrayList<>();
+        for (List<Member> members : slices.values()) {
+            for (Member member : members) {
+                if (!member.ready() || member.terminating() || member.name().isBlank()
+                        || member.az().isBlank()) {
+                    continue;
+                }
+                for (String address : member.addresses()) {
+                    ready.add(new Endpoint(member.name(), address, member.az()));
+                }
+            }
+        }
+        return ready.stream().sorted(java.util.Comparator.comparing(Endpoint::podId)
+                .thenComparing(Endpoint::address).thenComparing(Endpoint::az)).toList();
+    }
+
     private static List<Member> members(Map<?, ?> slice) {
         List<Member> members = new ArrayList<>();
         if (!(slice.get("endpoints") instanceof List<?> endpoints)) {
@@ -98,6 +120,7 @@ public final class EndpointSliceView implements LeaseChallenge {
             }
             String name = endpoint.get("targetRef") instanceof Map<?, ?> ref
                     && ref.get("name") instanceof String n ? n : "";
+            String az = endpoint.get("zone") instanceof String zone ? zone : "";
             List<String> addresses = new ArrayList<>();
             if (endpoint.get("addresses") instanceof List<?> list) {
                 for (Object address : list) {
@@ -111,7 +134,7 @@ public final class EndpointSliceView implements LeaseChallenge {
             // condition is to be read as true.
             boolean ready = !Boolean.FALSE.equals(conditions.get("ready"));
             boolean terminating = Boolean.TRUE.equals(conditions.get("terminating"));
-            members.add(new Member(name, List.copyOf(addresses), ready, terminating));
+            members.add(new Member(name, List.copyOf(addresses), az, ready, terminating));
         }
         return members;
     }

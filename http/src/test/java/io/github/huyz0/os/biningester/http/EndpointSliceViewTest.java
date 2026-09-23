@@ -32,6 +32,28 @@ class EndpointSliceViewTest {
     }
 
     @Test
+    void readyPeerEndpointsExposeTheirAZAndExcludeDrainingNodes() {
+        EndpointSliceView view = new EndpointSliceView();
+        view.apply("{\"type\":\"ADDED\",\"object\":{\"metadata\":{\"name\":\"s1\"},"
+                + "\"endpoints\":["
+                + "{\"addresses\":[\"10.0.0.9\"],\"zone\":\"az-z\","
+                + "\"conditions\":{\"ready\":true},\"targetRef\":{\"name\":\"pod-z\"}},"
+                + "{\"addresses\":[\"10.0.0.1\"],\"zone\":\"az-a\","
+                + "\"conditions\":{\"ready\":true},\"targetRef\":{\"name\":\"pod-a\"}},"
+                + "{\"addresses\":[\"10.0.0.2\"],\"zone\":\"az-b\","
+                + "\"conditions\":{\"ready\":false},\"targetRef\":{\"name\":\"pod-b\"}},"
+                + "{\"addresses\":[\"10.0.0.4\"],\"zone\":\"az-d\","
+                + "\"conditions\":{\"ready\":true,\"terminating\":true},"
+                + "\"targetRef\":{\"name\":\"pod-d\"}},"
+                + "{\"addresses\":[\"10.0.0.3\"],\"conditions\":{\"ready\":true},"
+                + "\"targetRef\":{\"name\":\"pod-c\"}}]}} ");
+
+        assertThat(view.readyEndpoints()).containsExactly(
+                new EndpointSliceView.Endpoint("pod-a", "10.0.0.1", "az-a"),
+                new EndpointSliceView.Endpoint("pod-z", "10.0.0.9", "az-z"));
+    }
+
+    @Test
     void aHolderNEVERSeenReadyIsNOTGone() {
         // ⚠️ No evidence either way: challenging it would flap leadership for
         // as long as the view lagged the lease.
