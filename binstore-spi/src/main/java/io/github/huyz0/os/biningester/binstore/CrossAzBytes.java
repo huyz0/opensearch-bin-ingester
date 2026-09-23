@@ -98,7 +98,10 @@ public final class CrossAzBytes {
         COMMIT_FORWARD,
 
         /** A peer asked to drain its inbox (ADR-0058). */
-        INBOX_DRAIN
+        INBOX_DRAIN,
+
+        /** A key-only durable-segment hint sent to a remote-AZ cache owner. */
+        DURABLE_SEGMENT_SIGNAL
     }
 
     /**

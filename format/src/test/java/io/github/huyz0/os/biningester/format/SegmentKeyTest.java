@@ -25,6 +25,19 @@ class SegmentKeyTest {
     }
 
     @Test
+    void podIdCanBeReadOnlyFromAWellFormedSegmentKey() {
+        String key = new SegmentKey("bins/cluster-a", T, "writer7", 42, 96).key();
+        assertThat(SegmentKey.podShortIdOf(key)).isEqualTo("writer7");
+        String atByteLimit = new SegmentKey("p".repeat(953), T, "pod", 1, 48).key();
+        assertThat(atByteLimit.getBytes(java.nio.charset.StandardCharsets.UTF_8)).hasSize(1024);
+        assertThat(SegmentKey.podShortIdOf(atByteLimit)).isEqualTo("pod");
+        String emptyPrefix = new SegmentKey("", T, "pod", 1, 48).key();
+        assertThat(SegmentKey.podShortIdOf(emptyPrefix)).isEqualTo("pod");
+        assertThatThrownBy(() -> SegmentKey.podShortIdOf("bins/cluster-a/data/not-a-key"))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     void keysSortChronologicallyWithinAnHour() {
         List<String> keys = new ArrayList<>();
         for (long t : new long[] {T + 9999, T + 10, T + 100000, T}) {

@@ -61,6 +61,9 @@ public record SegmentKey(
     /** ⚠️ S3, GCS and Azure all cap a key at 1024 bytes. */
     public static final int MAX_KEY_BYTES = 1024;
 
+    private static final Pattern POD_FIELD = Pattern.compile(
+            "^([0-9]{19})-([^-]+)-([0-9a-f]{16})-h([0-9]+)-(.+)\\.bseg$");
+
     public SegmentKey {
         Objects.requireNonNull(prefix, "prefix");
         Objects.requireNonNull(podShortId, "podShortId");
@@ -115,6 +118,36 @@ public record SegmentKey(
             throw new IllegalStateException("segment key exceeds " + MAX_KEY_BYTES + " bytes");
         }
         return rendered;
+    }
+
+    /** The writer identity encoded in a well-formed segment object key. */
+    public static String podShortIdOf(String key) {
+        Objects.requireNonNull(key, "key");
+        if (key.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > MAX_KEY_BYTES) {
+            throw new IllegalArgumentException("not a segment key: exceeds " + MAX_KEY_BYTES
+                    + " bytes");
+        }
+        int tailStart = key.lastIndexOf('/') + 1;
+        String tail = key.substring(tailStart);
+        Matcher matcher = POD_FIELD.matcher(tail);
+        if (!matcher.matches()) {
+            throw new IllegalArgumentException("not a segment key: " + key);
+        }
+        String filter = matcher.group(5);
+        try {
+            MembershipFilter.decode(filter);
+            long timestamp = timestampOf(key);
+            headerLenOf(key);
+            int dataPathStart = key.lastIndexOf("/data/");
+            String expectedPath = "data/" + PATH.format(Instant.ofEpochMilli(timestamp)) + "/";
+            if (dataPathStart < 0
+                    || !key.substring(dataPathStart + 1, tailStart).equals(expectedPath)) {
+                throw new IllegalArgumentException("not a segment key: " + key);
+            }
+        } catch (IOException | NumberFormatException malformed) {
+            throw new IllegalArgumentException("not a segment key: " + key, malformed);
+        }
+        return matcher.group(2);
     }
 
     /**

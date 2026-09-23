@@ -24,12 +24,14 @@ class MacroCountsJsonTest {
         crossAz.sent(CrossAzBytes.Transport.CONSUMER_POLL, "az-b", 5);
         crossAz.sent(CrossAzBytes.Transport.COMMIT_FORWARD, "az-b", 7);
         crossAz.sent(CrossAzBytes.Transport.INBOX_DRAIN, "az-b", 11);
+        crossAz.sent(CrossAzBytes.Transport.DURABLE_SEGMENT_SIGNAL, "az-b", 13);
         assertThat(FrontDoor.macroCountsJson("pod", new StoreCounts(0, 0, 0, 0, 0), crossAz))
-                .contains("\"crossAzBytes\":28")
+                .contains("\"crossAzBytes\":41")
                 .contains("\"proxyRead\":2")
                 .contains("\"inlinePush\":3")
                 .contains("\"consumerPoll\":5")
                 .contains("\"commitForward\":7")
-                .contains("\"inboxDrain\":11");
+                .contains("\"inboxDrain\":11")
+                .contains("\"durableSegmentSignal\":13");
     }
 }

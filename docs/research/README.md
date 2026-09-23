@@ -139,6 +139,7 @@ everything.
 | [01-java-runtime-helidon-vthreads.md](40-implementation/01-java-runtime-helidon-vthreads.md) | **JDK 25 LTS, not 21** (JEP 491). Helidon SE 4. CPU work off virtual threads. No `ThreadLocal` buffers | proposal |
 | [02-streaming-io-and-memory.md](40-implementation/02-streaming-io-and-memory.md) | Length-prefixed framing; **never parse the payload**; pooled buffers; backpressure by blocking | proposal |
 | [03-benchmarking-plan.md](40-implementation/03-benchmarking-plan.md) | Profile before optimising; JMH with `-prof gc`; **a cost benchmark that fails CI** | proposal |
+| [04-durable-segment-signal.md](40-implementation/04-durable-segment-signal.md) | Bounded v1 key-only hint; direct EndpointSlice source authentication; one ring owner per remote AZ; fallback remains authoritative | stable |
 
 ### Cross-cutting
 | File | Purpose |
