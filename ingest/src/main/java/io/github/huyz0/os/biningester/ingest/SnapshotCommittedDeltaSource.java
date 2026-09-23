@@ -7,18 +7,29 @@ import io.github.huyz0.os.biningester.format.RunKey;
 import io.github.huyz0.os.biningester.format.SegmentCommit;
 import io.github.huyz0.os.biningester.sequencer.ChainMemory;
 import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Optional;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Supplier;
+import java.util.function.Function;
 
 /** Reads catch-up candidates from the recovered in-memory committed-chain snapshot. */
 public final class SnapshotCommittedDeltaSource implements CommittedDeltaSource {
 
     private final Supplier<ChainMemory.Snapshot> snapshot;
+    private final Function<ChainMemory.Snapshot, Iterator<CommitDelta>> deltaIterator;
 
     public SnapshotCommittedDeltaSource(Supplier<ChainMemory.Snapshot> snapshot) {
+        this(snapshot, current -> current.deltas().iterator());
+    }
+
+    SnapshotCommittedDeltaSource(Supplier<ChainMemory.Snapshot> snapshot,
+            Function<ChainMemory.Snapshot, Iterator<CommitDelta>> deltaIterator) {
         this.snapshot = Objects.requireNonNull(snapshot, "snapshot");
+        this.deltaIterator = Objects.requireNonNull(deltaIterator, "deltaIterator");
     }
 
     @Override
@@ -43,17 +54,74 @@ public final class SnapshotCommittedDeltaSource implements CommittedDeltaSource 
         return cursor(key, exclusiveOffset);
     }
 
+    @Override
+    public SegmentReplayCursor openSegments(List<ReplayRequest> requests) {
+        Objects.requireNonNull(requests, "requests");
+        if (requests.isEmpty()) {
+            throw new IllegalArgumentException("a node replay needs at least one stream");
+        }
+        Map<RunKey, Long> offsets = new LinkedHashMap<>();
+        for (ReplayRequest request : requests) {
+            Objects.requireNonNull(request, "request");
+            if (offsets.put(request.key(), request.exclusiveOffset()) != null) {
+                throw new IllegalArgumentException("duplicate catch-up stream: " + request.key());
+            }
+        }
+        ChainMemory.Snapshot current = completeSnapshot();
+        return segmentCursor(deltaIterator.apply(current), offsets);
+    }
+
+    static SegmentReplayCursor segmentCursor(Iterator<CommitDelta> deltas,
+            Map<RunKey, Long> offsets) {
+        Objects.requireNonNull(deltas, "deltas");
+        Objects.requireNonNull(offsets, "offsets");
+        return new SegmentReplayCursor() {
+            private Iterator<SegmentCommit> segments = List.<SegmentCommit>of().iterator();
+
+            @Override
+            public Optional<ReplaySegment> next() {
+                while (true) {
+                    if (segments.hasNext()) {
+                        SegmentCommit segment = segments.next();
+                        List<CommittedRun> matching = new ArrayList<>();
+                        for (RunCommit run : segment.runs()) {
+                            Long exclusiveOffset = offsets.get(run.key());
+                            if (exclusiveOffset != null && run.lastOffset() > exclusiveOffset) {
+                                long first = Math.max(run.firstOffset(), exclusiveOffset + 1);
+                                matching.add(new CommittedRun(run.key(), segment.segmentKey(),
+                                        (int) (run.lastOffset() - first + 1), first));
+                            }
+                        }
+                        if (!matching.isEmpty()) {
+                            return Optional.of(new ReplaySegment(segment.segmentKey(), matching));
+                        }
+                        continue;
+                    }
+                    if (!deltas.hasNext()) {
+                        return Optional.empty();
+                    }
+                    segments = deltas.next().segments().iterator();
+                }
+            }
+        };
+    }
+
     private SnapshotCursor cursor(RunKey key, long exclusiveOffset) {
         Objects.requireNonNull(key, "key");
         if (exclusiveOffset < -1) {
             throw new IllegalArgumentException("exclusive offset is invalid: " + exclusiveOffset);
         }
+        ChainMemory.Snapshot current = completeSnapshot();
+        return new SnapshotCursor(key, exclusiveOffset, current.deltas());
+    }
+
+    private ChainMemory.Snapshot completeSnapshot() {
         ChainMemory.Snapshot current = Objects.requireNonNull(snapshot.get(), "snapshot result");
         if (!current.complete()) {
             throw new IllegalStateException(
                     "the committed-delta snapshot is incomplete and cannot replay safely");
         }
-        return new SnapshotCursor(key, exclusiveOffset, current.deltas());
+        return current;
     }
 
     private static final class SnapshotCursor implements ReplayCursor {

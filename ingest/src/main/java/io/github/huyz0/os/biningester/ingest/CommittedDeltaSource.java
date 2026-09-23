@@ -51,12 +51,49 @@ public interface CommittedDeltaSource {
         };
     }
 
+    /**
+     * Opens a request-wide cursor in committed segment order.
+     *
+     * <p>Implementations must stream one segment group at a time. The legacy per-stream replay
+     * method cannot safely derive this cursor: doing so would retain the complete backlog and
+     * could reorder segments across streams.
+     */
+    default SegmentReplayCursor openSegments(List<ReplayRequest> requests) {
+        Objects.requireNonNull(requests, "requests");
+        if (requests.size() != 1) {
+            throw new UnsupportedOperationException(
+                    "multi-stream segment-ordered replay requires a segment-ordered source");
+        }
+        ReplayRequest request = Objects.requireNonNull(requests.get(0), "request");
+        ReplayCursor cursor = open(request.key(), request.exclusiveOffset());
+        return () -> cursor.next().map(run -> new ReplaySegment(run.segmentKey(), List.of(run)));
+    }
+
     /** One stream's sequential replay cursor. */
     interface ReplayCursor {
         Optional<CommittedRun> next();
 
         /** Rewinds the last returned run after its sink rejected delivery. */
         void retry();
+    }
+
+    /** One physical segment and the requested runs it carries. */
+    record ReplaySegment(String segmentKey, List<CommittedRun> runs) {
+        public ReplaySegment {
+            if (segmentKey == null || segmentKey.isBlank()) {
+                throw new IllegalArgumentException("segment key is required");
+            }
+            runs = List.copyOf(Objects.requireNonNull(runs, "runs"));
+            if (runs.isEmpty() || runs.stream().anyMatch(run -> !segmentKey.equals(run.segmentKey()))) {
+                throw new IllegalArgumentException("a replay segment needs matching runs");
+            }
+        }
+    }
+
+    /** Request-wide cursor yielding one segment's matching runs at a time. */
+    @FunctionalInterface
+    interface SegmentReplayCursor {
+        Optional<ReplaySegment> next();
     }
 
     /** One stream and its next exclusive resume offset in a node request. */
