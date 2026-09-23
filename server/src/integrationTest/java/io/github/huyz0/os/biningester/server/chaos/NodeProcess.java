@@ -38,23 +38,26 @@ public final class NodeProcess implements AutoCloseable {
     private volatile boolean paused;
     private int resumeAttempts;
     private final String macroPath;
+    private final java.time.Duration producerReadTimeout;
     private final ThreadLocal<WebClient> producerClients;
 
     private final ChaosProxy peers;
 
     private NodeProcess(String podId, int port, Path log, Process process, ChaosProxy peers,
-            String macroPath) {
+            String macroPath, java.time.Duration producerReadTimeout) {
         this.podId = podId;
         this.port = port;
         this.log = log;
         this.process = process;
         this.peers = peers;
         this.macroPath = macroPath;
+        this.producerReadTimeout = producerReadTimeout;
         this.producerClients = ThreadLocal.withInitial(this::newClient);
     }
 
     static NodeProcess forTest(Process process, boolean paused) {
-        NodeProcess node = new NodeProcess("test", 0, Path.of("test.log"), process, null, null);
+        NodeProcess node = new NodeProcess("test", 0, Path.of("test.log"), process, null, null,
+                java.time.Duration.ofSeconds(2));
         node.paused = paused;
         return node;
     }
@@ -125,6 +128,13 @@ public final class NodeProcess implements AutoCloseable {
     /** Starts a node with the opt-in macro count snapshot endpoint enabled. */
     public static NodeProcess start(Path dir, String podId, Map<String, String> settings,
             Options options, Path countsFile) throws Exception {
+        return start(dir, podId, settings, options, countsFile, java.time.Duration.ofSeconds(2));
+    }
+
+    /** Starts a node with an explicit response timeout for high-throughput test producers. */
+    public static NodeProcess start(Path dir, String podId, Map<String, String> settings,
+            Options options, Path countsFile, java.time.Duration producerReadTimeout)
+            throws Exception {
         int port;
         // ⚠️ BOUND AND RELEASED, so another process could take it in the
         // window between -- the shape ConfigExitCodeIT uses and says so. The
@@ -171,7 +181,8 @@ public final class NodeProcess implements AutoCloseable {
                 .redirectErrorStream(true)
                 .redirectOutput(log.toFile());
         builder.environment().putAll(ChaosBucket.credentials());
-        NodeProcess node = new NodeProcess(podId, port, log, builder.start(), peers, macroPath);
+        NodeProcess node = new NodeProcess(podId, port, log, builder.start(), peers, macroPath,
+                producerReadTimeout);
         try {
             node.awaitServing();
         } catch (Exception | Error failed) {
@@ -243,7 +254,7 @@ public final class NodeProcess implements AutoCloseable {
     }
 
     private WebClient newClient() {
-        return newClient(java.time.Duration.ofSeconds(2));
+        return newClient(producerReadTimeout);
     }
 
     private WebClient newClient(java.time.Duration readTimeout) {

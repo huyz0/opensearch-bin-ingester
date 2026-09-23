@@ -18,7 +18,7 @@ Methodology:
    modelled number as measured. Label models and say what would falsify them.
 8. **A hot path has a benchmark**, or an explicit note saying why not. Every hot
    path is profilable: JMH for the micro case, async-profiler/JFR wired into the
-   e2e task for the macro case (L5).
+   e2e task for the macro case (L6).
 
 ## What may be a gate, and what may only be a trend
 
@@ -47,6 +47,6 @@ latency, JMH ns/op.
    that a red build means nothing. **Allocation is stable across machines**, and a
    change that 2× allocation will 2× it everywhere.
 10. **Gate benchmarks are a small named set** run with 1 fork and few iterations
-    inside L1's 5-minute budget. The full suite, with proper fork counts, is L4 and
+    inside L1's 5-minute budget. The full suite, with proper fork counts, is L5 and
     manual.
 11. **Optimisation claims come with before/after numbers in the commit body.**

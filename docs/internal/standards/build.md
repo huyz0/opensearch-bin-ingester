@@ -146,8 +146,9 @@ dominated by code nobody touched and moves too slowly to gate a commit.
 | **L2** integration | T3, RustFS | ≤ 10 min | **selective** — see below |
 | **L2S** soak | `./gradlew soakTest`: wall-clock cost over minutes, which no fake clock can stand in for (M8.40) | ≤ 10 min | nightly in the `measurement` workflow (M8.75), and before a milestone is declared complete |
 | **L3** e2e cluster | T4, OpenSearch | ≤ 15 min *total* with L2 | selective, same triggers |
-| **L4** full benchmarks | JMH, proper fork counts | unbounded | **manual only** |
-| **L5** profiling | async-profiler / JFR over e2e | unbounded | **manual only** |
+| **L4** measurement | full cost assertions; latency trends are non-gating | unbounded, outside `check-suite-time.sh` | nightly and on demand in the `measurement` workflow (M9.16) |
+| **L5** full benchmarks | JMH, proper fork counts | unbounded | **manual only** |
+| **L6** profiling | async-profiler / JFR over e2e | unbounded | **manual only** |
 
 ⚠️ **A task that exceeds its budget fails.** → `scripts/check-suite-time.sh`. A
 slow suite stops being run, and a suite that is not run is not a gate.

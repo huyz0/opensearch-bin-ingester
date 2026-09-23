@@ -416,7 +416,7 @@ the digest-pinned container in `docker-compose.test.yml`.
     | | Where | Budget | Contents |
     |---|---|---|---|
     | **Per push** | the existing L1 job | inside 5 min | the fast subset: criteria 3, 5 and 6 at ONE rate, ONE ceiling, ONE node count, 60 s per point. ⚠️ **THAT RATE IS ABOVE THE SIZE-TRIGGERED RATE**, so the point sits in the regime where `< 0.30` requests per MiB applies; a fast point below it would red correct code against a bound criterion 3 says does not hold there — **the same thresholds**, fewer points. A threshold is never loosened to fit; only the sampling shrinks |
-    | **Nightly / on demand** | a NEW workflow, `measurement`, explicitly outside L1–L3 and outside `check-suite-time.sh`'s budgets | unbounded, as L4/L5 already are | every point of criteria 3, 5 and 6; criterion 4's `soakTest` (L2S, nightly per build.md); and the non-gating latency runs behind criteria 7, 9, 11 and 13, which trend in the curve |
+    | **Nightly / on demand** | a NEW workflow, `measurement`, explicitly outside L1–L3 and outside `check-suite-time.sh`'s budgets | unbounded, as L4–L6 are | every point of criteria 3, 5 and 6; criterion 4's `soakTest` (L2S, nightly per build.md); and the non-gating latency runs behind criteria 7, 9, 11 and 13, which trend in the curve |
 
     build.md's execution-layer table gains the row in the same commit, so the
     standard and the workflow cannot disagree. A per-push run that cannot
@@ -468,7 +468,7 @@ multiplied from a price table (criterion 16). Each is a named NOT-RUN in
 | M9.2 | T0 + T3 | `PeerBytesByAzTest` — same-AZ bytes counted as cross-AZ | a counter keyed by pod, not by label |
 | M9.3 | T0 | `LoadGeneratorTest` — same seed, same byte stream | a non-reproducible workload |
 | M9.4 | T3 (RustFS) | `MacroHarnessIT` — a run whose results file lacks the counts | a harness reporting latency without cost |
-| M9.5 | L5 (manual) + doc | — **no test can fail first for a profile**; it is a measurement, and its falsifiability is that the three hot spots it names are reproducible on a second run, recorded. Evidence for criterion 10 only | a benchmark set chosen on a hunch (performance.md rule 1) |
+| M9.5 | L6 (manual) + doc | — **no test can fail first for a profile**; it is a measurement, and its falsifiability is that the three hot spots it names are reproducible on a second run, recorded. Evidence for criterion 10 only | a benchmark set chosen on a hunch (performance.md rule 1) |
 | M9.6 | JMH + script | the allocation gate green with a baseline halved | a gate reading the wrong column |
 | M9.7 | JMH (B3) + T3 | `CodecComparisonBenchmark` reporting ratio without B/op | a codec chosen on speed alone |
 | M9.8 | T3 | `WriteRequestRateIT` red with the size trigger disabled | per-flush-per-index PUTs (R1) |

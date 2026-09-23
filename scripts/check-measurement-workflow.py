@@ -39,20 +39,102 @@ def failures(workflow: str) -> list[str]:
     return problems
 
 
+def ci_failures(ci: str) -> list[str]:
+    lines = ci.splitlines()
+    problems = []
+    l1 = job_block(lines, "l1")
+    if l1 is None:
+        return ["CI workflow must define the L1 job"]
+    fast_requirements = (
+        "name: Cost assertions (fast subset)",
+        "M9_8_RATE: '40'",
+        "M9_8_POINT_DURATION: PT1M",
+        "./gradlew :server:integrationTest",
+        "WriteRequestRateIT",
+        "ReadRequestRateIT",
+        "CrossAzBytesIT",
+        "python scripts/check-cost-test-results.py --results server/build/test-results/integrationTest --profile fast",
+    )
+    for requirement in fast_requirements:
+        if not any(requirement in line for line in l1):
+            problems.append(f"L1 job must retain the fast cost subset requirement: {requirement}")
+    if any(line.lstrip().startswith("continue-on-error:") for line in l1):
+        problems.append("L1 cost tests must fail the per-push job on regression")
+    if any(line.lstrip().startswith("if:") for line in l1):
+        problems.append("L1 cost job and its steps must not be conditionally skipped")
+    return problems
+
+
+def cost_job_failures(workflow: str) -> list[str]:
+    lines = workflow.splitlines()
+    cost = job_block(lines, "cost")
+    if cost is None:
+        return ["measurement workflow must define the full cost job"]
+    problems = []
+    requirements = (
+        "L4 — full cost points",
+        "    timeout-minutes: 90",
+        "WriteRequestRateIT",
+        "LowRateWriteBudgetIT",
+        "ReadRequestRateIT",
+        "CrossAzBytesIT",
+        "--profile full",
+    )
+    for requirement in requirements:
+        if not any(requirement in line for line in cost):
+            problems.append(f"full cost job must retain {requirement}")
+    if any(line.lstrip().startswith("continue-on-error:") for line in cost):
+        problems.append("full cost assertions must gate the measurement workflow")
+    if any(line.startswith("    if:") for line in cost):
+        problems.append("full cost job must not be conditionally skipped")
+    if any(line.lstrip().startswith("if:") and line.strip() != "if: always()"
+           for line in cost):
+        problems.append("full cost assertions must not be conditionally skipped")
+
+    latency = job_block(lines, "latency-trends")
+    if latency is None:
+        problems.append("measurement workflow must define the latency-trends job")
+    else:
+        for name in ("VisibilityLatencyIT", "PartitionVisibilityIT", "MacroHarnessIT",
+                     "CompressionBenchmark", "KillNodeMidBacklogIT"):
+            if not any(name in line for line in latency):
+                problems.append(f"latency-trends job must retain criterion run {name}")
+        trend_steps = [i for i, line in enumerate(latency) if "continue-on-error: true" in line]
+        if len(trend_steps) < 4:
+            problems.append("latency trend runs must remain non-gating")
+    return problems
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workflow", type=Path, required=True)
+    parser.add_argument("--ci", type=Path)
     args = parser.parse_args()
     try:
         problems = failures(args.workflow.read_text(encoding="utf-8"))
     except OSError as error:
         print(f"cannot read measurement workflow {args.workflow}: {error}", file=sys.stderr)
         return 2
+    if args.ci is not None:
+        try:
+            ci = args.ci.read_text(encoding="utf-8")
+        except OSError as error:
+            print(f"cannot read CI workflow {args.ci}: {error}", file=sys.stderr)
+            return 2
+        problems.extend(ci_failures(ci))
+        try:
+            problems.extend(cost_job_failures(args.workflow.read_text(encoding="utf-8")))
+        except OSError as error:
+            print(f"cannot read measurement workflow {args.workflow}: {error}", file=sys.stderr)
+            return 2
     if problems:
         for problem in problems:
             print(problem, file=sys.stderr)
         return 1
     print("measurement workflow includes the scheduled L2S soak job")
+    if args.ci is not None:
+        print("measurement workflow includes full cost points and non-gating latency trends")
+        print("CI workflow includes the blocking fast L1 cost subset")
     return 0
 
 

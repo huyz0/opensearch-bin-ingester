@@ -120,5 +120,17 @@ jobs:
           python-version: '3.12'
       - name: Product unit tests
         run: ./gradlew test --no-daemon
+      - name: Cost assertions (fast subset)
+        env:
+          M9_8_RATE: '40'
+          M9_8_POINT_DURATION: PT1M
+        run: >-
+          ./gradlew :server:integrationTest
+          --tests '*chaos.WriteRequestRateIT'
+          --tests '*chaos.ReadRequestRateIT'
+          --tests '*chaos.CrossAzBytesIT'
+          --no-daemon
+      - name: Refuse skipped fast cost tests
+        run: python scripts/check-cost-test-results.py --results server/build/test-results/integrationTest --profile fast
       - name: Refuse an empty L1 test run
         run: python scripts/check-l1-tests.py

@@ -28,8 +28,11 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.locks.LockSupport;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.api.io.TempDir;
 
 /** M9.8: measured write request rate on three concurrent RustFS pods. */
@@ -43,32 +46,56 @@ class WriteRequestRateIT {
     private static final List<RatePoint> POINTS = List.of(
             new RatePoint(40), new RatePoint(80), new RatePoint(160));
 
+    @Test
+    void fastProfileSelectsOneKnownSizeTriggeredRate() {
+        assertThat(selectPoints("40")).containsExactly(new RatePoint(40));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> selectPoints("20"))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    private static List<RatePoint> selectPoints(String requestedRate) {
+        if (requestedRate == null || requestedRate.isBlank()) {
+            return POINTS;
+        }
+        final double rate;
+        try {
+            rate = Double.parseDouble(requestedRate);
+        } catch (NumberFormatException invalid) {
+            throw new IllegalArgumentException("unknown M9.8 rate: " + requestedRate, invalid);
+        }
+        return POINTS.stream().filter(point -> Double.compare(point.mibPerSecond(), rate) == 0)
+                .findFirst().map(List::of)
+                .orElseThrow(() -> new IllegalArgumentException("unsupported M9.8 rate: " + requestedRate));
+    }
+
     @TempDir
     Path directory;
 
-    @Test
-    void sizeTriggeredFleetStaysBelowTheWriteRequestBudgetAtThreeRates() throws Exception {
+    static Stream<RatePoint> ratePoints() {
+        String requested = System.getProperty("m9.8.rate");
+        if (requested == null) {
+            requested = System.getenv("M9_8_RATE");
+        }
+        return selectPoints(requested).stream();
+    }
+
+    @ParameterizedTest(name = "{displayName} at {0} MiB/s")
+    @MethodSource("ratePoints")
+    void sizeTriggeredFleetStaysBelowTheWriteRequestBudgetAtThreeRates(RatePoint point) throws Exception {
         assumeTrue(S3Fixture.dockerAvailable(), "no Docker daemon: this is a T3 suite");
         Duration duration = Duration.parse(System.getProperty("m9.8.pointDuration",
                 System.getenv().getOrDefault("M9_8_POINT_DURATION", "PT5M")));
-        List<RateResult> results = new ArrayList<>();
-        for (RatePoint point : POINTS) {
-            results.add(runPoint(point, duration));
-        }
-
-        assertThat(results).allSatisfy(result -> {
-            assertThat(result.bytesWritten()).as("the point must write data").isPositive();
-            assertThat(result.sizeTriggeredBytes())
-                    .as("point %.0f MiB/s must actually fill 8 MiB segments", result.targetMiBPerSecond())
-                    .isGreaterThanOrEqualTo((long) (result.bytesWritten() * 0.75));
-            assertThat(result.requestsPerMiB())
-                    .as("point %.0f MiB/s: puts=%d bytes=%d", result.targetMiBPerSecond(),
-                            result.counts().puts(), result.bytesWritten())
-                    .isLessThan(0.30);
-            assertThat(result.counts().lists()).as("hot-path LISTs are forbidden").isZero();
-        });
-
-        System.out.println("M9.8 write request points: " + results);
+        RateResult result = runPoint(point, duration);
+        assertThat(result.bytesWritten()).as("the point must write data").isPositive();
+        assertThat(result.sizeTriggeredBytes())
+                .as("point %.0f MiB/s must actually fill 8 MiB segments", result.targetMiBPerSecond())
+                .isGreaterThanOrEqualTo((long) (result.bytesWritten() * 0.75));
+        assertThat(result.requestsPerMiB())
+                .as("point %.0f MiB/s: puts=%d bytes=%d", result.targetMiBPerSecond(),
+                        result.counts().puts(), result.bytesWritten())
+                .isLessThan(0.30);
+        assertThat(result.counts().lists()).as("hot-path LISTs are forbidden").isZero();
+        System.out.println("M9.8 write request point: " + result);
     }
 
     private RateResult runPoint(RatePoint point, Duration duration) throws Exception {
@@ -123,7 +150,7 @@ class WriteRequestRateIT {
         Map<String, String> settings = new HashMap<>(common);
         settings.put("pod.az", az);
         return NodeProcess.start(directory, pod, settings, NodeProcess.Options.NONE,
-                directory.resolve(pod + "-counts.json"));
+                directory.resolve(pod + "-counts.json"), Duration.ofSeconds(30));
     }
 
     private static long writeConcurrently(List<NodeProcess> nodes, RatePoint point,
