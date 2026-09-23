@@ -4,9 +4,7 @@ package io.github.huyz0.os.biningester.ingest;
 import io.github.huyz0.os.biningester.binstore.BinStore;
 import io.github.huyz0.os.biningester.binstore.Capabilities;
 import io.github.huyz0.os.biningester.format.CommitDelta;
-import io.github.huyz0.os.biningester.format.RunCommit;
 import io.github.huyz0.os.biningester.format.RunKey;
-import io.github.huyz0.os.biningester.format.SegmentCommit;
 import io.github.huyz0.os.biningester.format.SegmentRecord;
 import io.github.huyz0.os.biningester.security.Principal;
 import io.github.huyz0.os.biningester.sequencer.CommitRequest;
@@ -87,6 +85,7 @@ public final class DefaultIngest implements Ingest {
     private final String incarnationId = java.util.UUID.randomUUID().toString();
     private final SubscriptionHub hub;
     private final StreamResolver streams;
+    private final DurableSegmentListener durableSegmentListener;
 
     /**
      * ⚠️ Serializes active-buffer mutation and flush detachment. The detached
@@ -206,6 +205,12 @@ public final class DefaultIngest implements Ingest {
     public DefaultIngest(IngestConfig config, BinStore store, String prefix, String podShortId,
             Sequencer sequencer, SubscriptionHub hub, Clock clock, StreamResolver streams)
             throws IOException {
+        this(config, store, prefix, podShortId, sequencer, hub, clock, streams, ignored -> { });
+    }
+
+    public DefaultIngest(IngestConfig config, BinStore store, String prefix, String podShortId,
+            Sequencer sequencer, SubscriptionHub hub, Clock clock, StreamResolver streams,
+            DurableSegmentListener durableSegmentListener) throws IOException {
         this.config = Objects.requireNonNull(config, "config");
         this.accumulator = new Accumulator(config, Objects.requireNonNull(clock, "clock"));
         this.publisher = new SegmentPublisher(Objects.requireNonNull(store, "store"),
@@ -257,6 +262,8 @@ public final class DefaultIngest implements Ingest {
         this.podShortId = podShortId;
         this.hub = Objects.requireNonNull(hub, "hub");
         this.streams = Objects.requireNonNull(streams, "streams");
+        this.durableSegmentListener = Objects.requireNonNull(
+                durableSegmentListener, "durableSegmentListener");
 
         // ⚠️ NO RECOVERY HERE ANY MORE, and the startup-latency note that used
         // to sit here moved WITH the responsibility to `LocalSequencer.start`.
@@ -499,53 +506,8 @@ public final class DefaultIngest implements Ingest {
                 return;
             }
 
-            // ⚠️ PAIRED WITH THIS POD'S SEGMENT, NOT FLATTENED OVER THE DELTA
-            // (M5.60). `delta.runs()` delegates to `CommitDelta.only()`, which
-            // THROWS on any delta naming more than one segment -- and the throw
-            // lands in this method's own handler, which completes every waiting
-            // append exceptionally. So a pod whose sequencer answers with a
-            // batch could not flush AT ALL, not merely flush badly. That is the
-            // commit-forwarding shape: a follower's flush is committed by the
-            // leaseholder alongside other pods' flushes.
-            //
-            // ⚠️ AND FLATTENING EVERY SEGMENT'S RUNS INTO ONE MAP WOULD BE
-            // WORSE THAN THE THROW. Two pods can carry runs of the SAME stream
-            // in one batch, so a map keyed by `RunKey` alone takes whichever
-            // landed last and reads this pod's records against another pod's
-            // object -- ADR-0032 with no symptom, because the append SUCCEEDS
-            // and the offsets look like offsets. Pairing each run with its own
-            // segment is what `SegmentServingPath.publishSegment` does on the
-            // push path; this is the same rule on the ack path.
-            //
-            // ⚠️ Match by the submitted segment key at every segment count.
-            // A forwarded delta under another key carries another pod's offsets;
-            // accepting it would acknowledge records never committed here.
-            Map<RunKey, Long> firstOffsets = new HashMap<>();
-            for (SegmentCommit segment : delta.segments()) {
-                if (!segment.segmentKey().equals(published.key())) {
-                    continue;
-                }
-                for (RunCommit run : segment.runs()) {
-                    firstOffsets.put(run.key(), run.firstOffset());
-                }
-            }
-            for (Pending p : batch) {
-                Long base = firstOffsets.get(p.stream());
-                if (base == null) {
-                    p.done().completeExceptionally(new IOException(
-                            "the commit carried no run for the stream this append wrote, "
-                            + "under segment " + published.key() + " -- the delta names "
-                            + delta.segments().size() + " segment(s)"));
-                    continue;
-                }
-                // ⚠️ The caller's SLICE of the run, not the whole run. Several
-                // appends to one stream share a flush, so each gets the range it
-                // actually contributed -- returning the run's own count would
-                // trip AppendResult's contiguity invariant the moment two
-                // appends batch together.
-                long first = base + p.offsetWithinRun();
-                p.done().complete(new AppendResult(p.count(), first, first + p.count() - 1));
-            }
+            DurableSegmentAcknowledgement.complete(published, delta, batch,
+                    durableSegmentListener);
             // ⚠️ Submitted only after BOTH objects are durable, and only after
             // the waiters are released: append promises DURABILITY, and a
             // consumer told about a segment it cannot GET would fail its read.
@@ -591,6 +553,11 @@ public final class DefaultIngest implements Ingest {
             }
             throw e;
         }
+    }
+
+    /** The shared serving proxy, for the composition root's cache prefetcher. */
+    public SegmentProxy segmentProxy() {
+        return serving.proxy();
     }
 
     @Override

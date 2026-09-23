@@ -156,7 +156,7 @@ public final class IngesterNode implements AutoCloseable {
         // behaviour before M8.13: failover bounded by the TTL alone.
         EndpointSliceView view = config.membership().isPresent() ? new EndpointSliceView() : null;
         Assembly assembly = Assembly.open(config, transport, clock,
-                view == null ? LeaseChallenge.NEVER : view);
+                view == null ? LeaseChallenge.NEVER : view, view, crossAz);
         java.util.List<String> journal = new java.util.concurrent.CopyOnWriteArrayList<>();
         assembly.journal(journal::add);
         try {

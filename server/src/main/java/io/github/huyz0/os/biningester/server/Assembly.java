@@ -23,6 +23,14 @@ import io.github.huyz0.os.biningester.ingest.SegmentGc;
 import io.github.huyz0.os.biningester.ingest.OrphanSweep;
 import io.github.huyz0.os.biningester.ingest.StoreGcLease;
 import io.github.huyz0.os.biningester.ingest.WatermarkTable;
+import io.github.huyz0.os.biningester.ingest.Membership;
+import io.github.huyz0.os.biningester.ingest.Peer;
+import io.github.huyz0.os.biningester.ingest.AzPeers;
+import io.github.huyz0.os.biningester.ingest.SegmentPrefetcher;
+import io.github.huyz0.os.biningester.format.DurableSegmentSignalFrame;
+import io.github.huyz0.os.biningester.http.DurableSegmentSignalSender;
+import io.github.huyz0.os.biningester.http.EndpointSliceView;
+import io.github.huyz0.os.biningester.binstore.CrossAzBytes;
 import io.github.huyz0.os.biningester.sequencer.Checkpoints;
 import io.github.huyz0.os.biningester.sequencer.BatchingSequencer;
 import io.github.huyz0.os.biningester.sequencer.ChainBackfill;
@@ -90,6 +98,8 @@ public final class Assembly implements AutoCloseable {
     private final RetainedFloors floors;
     private final FleetSequencer sequencer;
     private final DefaultIngest ingest;
+    private final EndpointSliceView peerView;
+    private final SegmentPrefetcher prefetcher;
     private final RoutedIngest routed;
     private final Deque<AutoCloseable> toClose = new ArrayDeque<>();
     private volatile boolean closed;
@@ -115,11 +125,19 @@ public final class Assembly implements AutoCloseable {
      */
     public static Assembly open(ServerConfig config, SequencerTransport transport, Clock clock,
             LeaseChallenge challenge) throws IOException {
+        return open(config, transport, clock, challenge, null, null);
+    }
+
+    /** Builds the graph with the live EndpointSlice view used by durable-segment hints. */
+    public static Assembly open(ServerConfig config, SequencerTransport transport, Clock clock,
+            LeaseChallenge challenge, EndpointSliceView peerView, CrossAzBytes crossAz)
+            throws IOException {
         Objects.requireNonNull(config, "config");
         Objects.requireNonNull(challenge, "challenge");
         BinStore store = StoreFactory.open(config.store());
         try {
-            return new Assembly(config, store, true, transport, clock, challenge);
+            return new Assembly(config, store, true, transport, clock, challenge,
+                    ChainBackfill::inBackground, peerView, crossAz, null);
         } catch (RuntimeException | IOException failed) {
             // ⚠️ THE STORE IS OURS AND THE CONSTRUCTOR THREW, so nobody else
             // holds a reference that could close it. Without this, a failure
@@ -140,26 +158,46 @@ public final class Assembly implements AutoCloseable {
      */
     public static Assembly open(ServerConfig config, BinStore store,
             SequencerTransport transport, Clock clock) throws IOException {
+        return open(config, store, transport, clock, null, null);
+    }
+
+    /** Same as {@link #open(ServerConfig, BinStore, SequencerTransport, Clock)}, with peer hints. */
+    public static Assembly open(ServerConfig config, BinStore store,
+            SequencerTransport transport, Clock clock, EndpointSliceView peerView,
+            CrossAzBytes crossAz) throws IOException {
         return new Assembly(config, Objects.requireNonNull(store, "store"), false,
-                transport, clock, LeaseChallenge.NEVER);
+                transport, clock, LeaseChallenge.NEVER, ChainBackfill::inBackground,
+                peerView, crossAz, null);
+    }
+
+    static Assembly openForTest(ServerConfig config, BinStore store,
+            SequencerTransport transport, Clock clock, EndpointSliceView peerView,
+            CrossAzBytes crossAz, DurableSegmentSignalSender.PeerPost signalPost)
+            throws IOException {
+        return new Assembly(config, Objects.requireNonNull(store, "store"), false,
+                transport, clock, LeaseChallenge.NEVER, ChainBackfill::inBackground,
+                peerView, crossAz, signalPost);
     }
 
     static Assembly openForTest(ServerConfig config, BinStore store,
             SequencerTransport transport, Clock clock, BackfillStarter backfillStarter)
             throws IOException {
         return new Assembly(config, Objects.requireNonNull(store, "store"), false,
-                transport, clock, LeaseChallenge.NEVER, backfillStarter);
+                transport, clock, LeaseChallenge.NEVER, backfillStarter, null, null, null);
     }
 
     private Assembly(ServerConfig config, BinStore raw, boolean ownsStore,
             SequencerTransport transport, Clock clock, LeaseChallenge challenge)
             throws IOException {
-        this(config, raw, ownsStore, transport, clock, challenge, ChainBackfill::inBackground);
+        this(config, raw, ownsStore, transport, clock, challenge, ChainBackfill::inBackground,
+                null, null, null);
     }
 
     private Assembly(ServerConfig config, BinStore raw, boolean ownsStore,
             SequencerTransport transport, Clock clock, LeaseChallenge challenge,
-            BackfillStarter backfillStarter) throws IOException {
+            BackfillStarter backfillStarter, EndpointSliceView peerView, CrossAzBytes crossAz,
+            DurableSegmentSignalSender.PeerPost signalPost)
+            throws IOException {
         this.config = Objects.requireNonNull(config, "config");
         Objects.requireNonNull(transport, "transport");
         Objects.requireNonNull(clock, "clock");
@@ -168,6 +206,7 @@ public final class Assembly implements AutoCloseable {
         // (M8.15), so readiness reflects the store without a request of its
         // own. The RAW store is what is closed: the tracker holds nothing.
         this.backend = raw;
+        this.peerView = peerView == null ? new EndpointSliceView() : peerView;
         this.counting = new CountingBinStore(raw);
         this.health = new HealthTrackingBinStore(counting, clock,
                 HealthTrackingBinStore.DEFAULT_STALL, HealthTrackingBinStore.DEFAULT_FAILURES);
@@ -217,8 +256,25 @@ public final class Assembly implements AutoCloseable {
         // lease is still released, because the writer releases it.
 
         try {
+            DurableSegmentSignalSender signalSender = peerView != null && config.httpPort() > 0
+                    ? signalPost == null
+                            ? new DurableSegmentSignalSender(
+                                    crossAz == null ? CrossAzBytes.untracked() : crossAz,
+                                    config.httpPort())
+                            : new DurableSegmentSignalSender(
+                                    crossAz == null ? CrossAzBytes.untracked() : crossAz,
+                                    config.httpPort(), signalPost)
+                    : null;
             this.ingest = new DefaultIngest(config.ingest(), store, config.prefix(),
-                    config.podId(), this.sequencer, this.hub, clock, this::streamFor);
+                    config.podId(), this.sequencer, this.hub, clock, this::streamFor,
+                    segmentKey -> {
+                        if (signalSender != null) {
+                            signalSender.send(new DurableSegmentSignalFrame(config.podId(),
+                                    config.az(), segmentKey), this.peerView.readyEndpoints());
+                        }
+                    });
+            this.prefetcher = new SegmentPrefetcher(new EndpointMembership(config, this.peerView),
+                    this.ingest.segmentProxy());
         } catch (RuntimeException | IOException failed) {
             // ⚠️ THE TERM IS ALREADY TAKEN AT THIS POINT, and if this throws
             // nothing will ever hold a reference to the sequencer again.
@@ -420,6 +476,49 @@ public final class Assembly implements AutoCloseable {
      */
     public BinStore store() {
         return backend;
+    }
+
+    EndpointSliceView peerView() {
+        return peerView;
+    }
+
+    void prefetchDurableSegment(String segmentKey, String writerAz) throws IOException {
+        prefetcher.onDurable(segmentKey, writerAz);
+    }
+
+    /** The same node-wide cache read path the subscription service serves from. */
+    public io.github.huyz0.os.biningester.ingest.SegmentProxy segmentProxy() {
+        return ingest.segmentProxy();
+    }
+
+    private static final class EndpointMembership implements Membership {
+        private final ServerConfig config;
+        private final EndpointSliceView view;
+
+        private EndpointMembership(ServerConfig config, EndpointSliceView view) {
+            this.config = config;
+            this.view = view;
+        }
+
+        @Override
+        public Peer self() {
+            return new Peer(config.podId(), config.endpoint(), config.az());
+        }
+
+        @Override
+        public AzPeers localAz() {
+            return new AzPeers(config.az(), view.readyEndpoints().stream()
+                    .filter(endpoint -> config.az().equals(endpoint.az()))
+                    .map(endpoint -> new Peer(endpoint.podId(), peerUri(endpoint.address(),
+                            config.httpPort()), endpoint.az()))
+                    .toList());
+        }
+
+        private static String peerUri(String address, int port) {
+            String host = address.indexOf(':') >= 0 && !address.startsWith("[")
+                    ? "[" + address + "]" : address;
+            return "http://" + host + ":" + port;
+        }
     }
 
     /** The requests issued by this node, including calls made by health checks. */

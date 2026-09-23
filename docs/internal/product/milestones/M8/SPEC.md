@@ -598,7 +598,9 @@ rows uncited.
 | M8.28 | The fallback ladder EXECUTES on a real gap, and its GET cost is counted rather than modelled | FR-10 |
 | M8.32 | The routed path through the assembled server (M6.19): `os_routing` placement and FR-13's refusal | FR-13 |
 | M8.31 | Wire the consumer-side fetch path: `NodeSegmentSource`, `NodeSubscriptions` and the first production `SegmentSource` (M5.91b) | FR-10, NFR-4 |
-| M8.56 | Wire `SegmentPrefetcher` into the assembled ingester (split from M8.31) | FR-10, NFR-4 |
+| M8.56 | Parent: wire `SegmentPrefetcher` into the assembled ingester (split from M8.31); closed by M8.84 and M8.85 | FR-10, NFR-4 |
+| M8.84 | Production assembly wiring, best-effort listener failure semantics, and a one-remote-AZ RustFS proof using the public production assembly and real pooled HTTP | FR-10, NFR-4 |
+| M8.85 | Multi-candidate-per-AZ integration proof that only the deterministic ring owner fetches and warms its shared cache | FR-10, NFR-4 |
 | M8.57 | The watch cuts a forward to a holder it reports gone, so a paused leader costs the probe window (found by M8.55) | FR-11, NFR-9 |
 | M8.30 | Join GC's deletions to the consumer's refusal over the production transport (M7.23) | FR-9, FR-10 |
 | M8.29 | Extend `check-module.sh`: only the root may depend on `binstore-backends` in `src/main` | — (gate) |
