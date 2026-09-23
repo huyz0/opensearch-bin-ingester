@@ -144,7 +144,7 @@ dominated by code nobody touched and moves too slowly to gate a commit.
 | **L0** pre-commit, local | T0–T2 unit + the text gates | **≤ 90 s** | every commit, **blocking** |
 | **L1** CI fast | L0 + cost assertions + **gate benchmarks** | **≤ 5 min** | every push/PR, **blocking** |
 | **L2** integration | T3, RustFS | ≤ 10 min | **selective** — see below |
-| **L2S** soak | `./gradlew soakTest`: wall-clock cost over minutes, which no fake clock can stand in for (M8.40) | ≤ 10 min | before a milestone is declared complete; ⚠️ nightly only once CI runs a tier past the gates, which `ci.yml` does not today |
+| **L2S** soak | `./gradlew soakTest`: wall-clock cost over minutes, which no fake clock can stand in for (M8.40) | ≤ 10 min | nightly in the `measurement` workflow (M8.75), and before a milestone is declared complete |
 | **L3** e2e cluster | T4, OpenSearch | ≤ 15 min *total* with L2 | selective, same triggers |
 | **L4** full benchmarks | JMH, proper fork counts | unbounded | **manual only** |
 | **L5** profiling | async-profiler / JFR over e2e | unbounded | **manual only** |

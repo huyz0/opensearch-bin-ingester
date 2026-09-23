@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 class GradleGateWiringTest {
@@ -44,6 +45,52 @@ class GradleGateWiringTest {
     }
 
     @Test
+    void measurementWorkflowRequiresTheNightlySoakJob() throws Exception {
+        Path root = repository();
+        Path workflow = root.resolve(".github/workflows/measurement.yml");
+        Run valid = checkMeasurementWorkflow(workflow);
+        assertThat(valid.exitCode()).isZero();
+        assertThat(valid.output()).contains("scheduled L2S soak job");
+
+        Path mutated = root.resolve("buildSrc/build/tmp/measurement-workflow")
+                .resolve(UUID.randomUUID().toString() + ".yml");
+        Files.createDirectories(mutated.getParent());
+        Files.writeString(mutated, Files.readString(workflow)
+                .replace("        run: ./gradlew soakTest --no-daemon\n", ""));
+        Run missingSoak = checkMeasurementWorkflow(mutated);
+        assertThat(missingSoak.exitCode()).isEqualTo(1);
+        assertThat(missingSoak.output()).contains("soak");
+
+        String original = Files.readString(workflow);
+        Files.writeString(mutated, original.replace("'17 3 * * *'", "'17 3 1 1 *'"));
+        Run nonNightly = checkMeasurementWorkflow(mutated);
+        assertThat(nonNightly.exitCode()).isEqualTo(1);
+        assertThat(nonNightly.output()).contains("nightly");
+
+        Files.writeString(mutated, original.replace("  soak:\n", "  soak:\n    if: false\n"));
+        Run disabledSoak = checkMeasurementWorkflow(mutated);
+        assertThat(disabledSoak.exitCode()).isEqualTo(1);
+        assertThat(disabledSoak.output()).contains("conditionally disabled");
+
+        Files.writeString(mutated, original.replace("        run: ./gradlew soakTest --no-daemon\n",
+                "        if: false\n        run: ./gradlew soakTest --no-daemon\n"));
+        Run disabledStep = checkMeasurementWorkflow(mutated);
+        assertThat(disabledStep.exitCode()).isEqualTo(1);
+        assertThat(disabledStep.output()).contains("conditionally disabled");
+
+        Files.writeString(mutated, original.replace("    timeout-minutes: 10", "    timeout-minutes: 11"));
+        Run excessiveTimeout = checkMeasurementWorkflow(mutated);
+        assertThat(excessiveTimeout.exitCode()).isEqualTo(1);
+        assertThat(excessiveTimeout.output()).contains("ten-minute");
+
+        Files.writeString(mutated, original.replace("        run: ./gradlew soakTest --no-daemon\n",
+                "        run: ./gradlew soakTest --no-daemon\n        continue-on-error: ${{ true }}\n"));
+        Run ignoredSoakFailure = checkMeasurementWorkflow(mutated);
+        assertThat(ignoredSoakFailure.exitCode()).isEqualTo(1);
+        assertThat(ignoredSoakFailure.output()).contains("ignore a failed soakTest step");
+    }
+
+    @Test
     void wiringTestReadsTheStagedHookBlob() throws Exception {
         Process process = new ProcessBuilder("git", "show", ":.pre-commit-config.yaml")
                 .directory(repository().toFile()).redirectErrorStream(true).start();
@@ -72,4 +119,14 @@ class GradleGateWiringTest {
         assertThat(process.waitFor()).isZero();
         return text;
     }
+
+    private static Run checkMeasurementWorkflow(Path workflow) throws Exception {
+        Process process = ProcessSupport.builder("python", "scripts/check-measurement-workflow.py",
+                "--workflow", workflow.toString()).directory(repository().toFile())
+                .redirectErrorStream(true).start();
+        String output = new String(process.getInputStream().readAllBytes());
+        return new Run(process.waitFor(), output);
+    }
+
+    private record Run(int exitCode, String output) {}
 }

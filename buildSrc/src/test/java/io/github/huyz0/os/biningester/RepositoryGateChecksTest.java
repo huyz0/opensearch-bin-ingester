@@ -12,6 +12,12 @@ import org.junit.jupiter.api.Test;
 
 class RepositoryGateChecksTest {
     @Test
+    void nativeHarnessKeepsTheMeasurementWorkflowWiringTestIncluded() throws Exception {
+        String build = Files.readString(Path.of("build.gradle.kts"));
+        assertThat(build).contains("includeTestsMatching(\"io.github.huyz0.os.biningester.GradleGateWiringTest\")");
+    }
+
+    @Test
     void moduleDriftRefusesASettingsEntryWithoutABuildFile() throws Exception {
         Path root = Files.createTempDirectory("gate-module-");
         Files.writeString(root.resolve("settings.gradle.kts"), "include(\"ghost\")\n");

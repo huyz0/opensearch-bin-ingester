@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+name: measurement
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  soak:
+    name: "L2S — idle-cost soak"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+      - name: Idle-cost soak test
+        run: ./gradlew soakTest --no-daemon
