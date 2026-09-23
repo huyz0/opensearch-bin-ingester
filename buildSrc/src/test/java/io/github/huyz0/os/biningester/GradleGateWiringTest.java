@@ -41,6 +41,7 @@ class GradleGateWiringTest {
         assertThat(stagedFile("gradlew")).contains(":windows").contains("gradlew.bat");
         assertThat(stagedFile("gradlew.bat")).contains("#!/bin/sh").contains("gradlew\"");
         assertThat(stagedFile("build.gradle.kts")).contains("dependsOn(\"checkWired\", \"checkOverride\", \"checkHarnessTests\")");
+        assertThat(stagedFile("build.gradle.kts")).contains("tasks.named(\"gates\") { dependsOn(\"checkCostLatencyCurve\") }");
     }
 
     @Test

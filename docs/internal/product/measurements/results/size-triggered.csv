@@ -1,0 +1,4 @@
+rate_mib_s,puts,requests_per_mib,duration_seconds,interval_floor_ms,interval_ceiling_ms,status
+40,35,0.2714,5,1000,5000,smoke
+80,35,0.2744,5,1000,5000,smoke
+160,35,0.2722,5,1000,5000,smoke

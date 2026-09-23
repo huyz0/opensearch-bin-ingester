@@ -12,6 +12,8 @@ import io.github.huyz0.os.biningester.CoverageGateTask
 import io.github.huyz0.os.biningester.SuiteTimeGateTask
 import io.github.huyz0.os.biningester.WiredGateTask
 import io.github.huyz0.os.biningester.OverrideGateTask
+import io.github.huyz0.os.biningester.CheckCostLatencyCurveTask
+import io.github.huyz0.os.biningester.GenerateCostLatencyCurveTask
 
 // `base` gives the root project the `check` and `build` lifecycle tasks. Without
 // it, `tasks.register("check")` silently created a THIRD, unrelated task and
@@ -161,6 +163,26 @@ tasks.register<RepositoryGatesTask>("gates") {
     repository.set(layout.projectDirectory)
     dependsOn("dependencyLicenses")
 }
+
+tasks.register<GenerateCostLatencyCurveTask>("generateCostLatencyCurve") {
+    group = "verification"
+    description = "Regenerate M9's cost/latency curve from committed measurement results"
+    resultsDirectory.set(layout.projectDirectory.dir("docs/internal/product/measurements/results"))
+    outputFile.set(layout.projectDirectory.file("docs/internal/product/measurements/cost-latency-curve.md"))
+    svgFile.set(layout.projectDirectory.file("docs/internal/product/measurements/cost-latency-curve.svg"))
+}
+
+tasks.register<CheckCostLatencyCurveTask>("checkCostLatencyCurve") {
+    group = "verification"
+    description = "Run the curve generator's --check mode against committed results"
+    resultsDirectory.set(layout.projectDirectory.dir("docs/internal/product/measurements/results"))
+    document.set(layout.projectDirectory.file("docs/internal/product/measurements/cost-latency-curve.md"))
+    svg.set(layout.projectDirectory.file("docs/internal/product/measurements/cost-latency-curve.svg"))
+}
+
+tasks.named("checkCostLatencyCurve") { mustRunAfter("generateCostLatencyCurve") }
+
+tasks.named("gates") { dependsOn("checkCostLatencyCurve") }
 
 tasks.register("checkHarnessTests") {
     group = "verification"

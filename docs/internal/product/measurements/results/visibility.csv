@@ -1,0 +1,4 @@
+ceiling_ms,records,p50_ms,p99_ms,max_ms,bound_3x_ms,status
+250,10000,0.942,11.395,11.428,750,measured
+1000,10000,0.864,13.681,13.705,3000,measured
+5000,10000,0.892,3.396,3.426,15000,measured

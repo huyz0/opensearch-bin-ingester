@@ -1,0 +1,3 @@
+ceiling_ms,puts,elapsed_seconds,status
+250,24,3.07,smoke
+5000,4,5.05,smoke

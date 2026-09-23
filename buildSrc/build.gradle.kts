@@ -90,6 +90,7 @@ tasks.register<Test>("nativeGateTest") {
     filter {
         includeTestsMatching("io.github.huyz0.os.biningester.GradleGateWiringTest")
         includeTestsMatching("io.github.huyz0.os.biningester.RepositoryGateChecksTest")
+        includeTestsMatching("io.github.huyz0.os.biningester.CostLatencyCurveGeneratorTest")
     }
 }
 
