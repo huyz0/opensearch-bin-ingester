@@ -8,7 +8,6 @@ import io.helidon.webserver.http.HttpRules;
 import io.helidon.webserver.http.HttpService;
 import io.helidon.webserver.http.ServerRequest;
 import io.helidon.webserver.http.ServerResponse;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.util.List;
@@ -27,9 +26,29 @@ public final class CatchUpService implements HttpService {
         List<byte[]> respond(CatchUpRequestFrame request) throws IOException;
     }
 
-    private final Responder responder;
+    @FunctionalInterface
+    public interface StreamingResponder {
+        void respond(CatchUpRequestFrame request, FrameSink sink) throws IOException;
+    }
+
+    @FunctionalInterface
+    public interface FrameSink {
+        void write(byte[] frame) throws IOException;
+    }
+
+    private final StreamingResponder responder;
 
     public CatchUpService(Responder responder) {
+        Objects.requireNonNull(responder, "responder");
+        this.responder = (request, sink) -> {
+            for (byte[] frame : Objects.requireNonNull(responder.respond(request),
+                    "response frames")) {
+                sink.write(frame);
+            }
+        };
+    }
+
+    public CatchUpService(StreamingResponder responder) {
         this.responder = Objects.requireNonNull(responder, "responder");
     }
 
@@ -52,39 +71,39 @@ public final class CatchUpService implements HttpService {
             return;
         }
 
-        List<byte[]> frames;
+        OutputStream[] output = new OutputStream[1];
         try {
-            frames = Objects.requireNonNull(responder.respond(frame), "response frames");
-        } catch (DurableCatchUpResponder.ResponseTooLargeException tooLarge) {
-            response.status(io.helidon.http.Status.REQUEST_ENTITY_TOO_LARGE_413)
-                    .send(tooLarge.getMessage());
-            return;
-        } catch (IOException unavailable) {
-            response.status(io.helidon.http.Status.SERVICE_UNAVAILABLE_503)
-                    .send("catch-up replay is temporarily unavailable");
-            return;
-        } catch (IllegalArgumentException malformed) {
-            response.status(io.helidon.http.Status.BAD_REQUEST_400)
-                    .send(String.valueOf(malformed.getMessage()));
-            return;
-        }
-
-        try {
-            ByteArrayOutputStream body = new ByteArrayOutputStream();
-            long responseBytes = 0;
-            for (byte[] responseFrame : frames) {
-                responseBytes = writeFrameWithinBudget(body, responseBytes, responseFrame);
+            responder.respond(frame, responseFrame -> {
+                requireFrameWithinBudget(responseFrame);
+                if (output[0] == null) {
+                    response.status(io.helidon.http.Status.OK_200);
+                    output[0] = response.outputStream();
+                }
+                PollAnswer.writeFrame(output[0], responseFrame);
+                output[0].flush();
+            });
+            if (output[0] == null) {
+                response.status(io.helidon.http.Status.OK_200).send(new byte[0]);
             }
-            response.status(io.helidon.http.Status.OK_200).send(body.toByteArray());
-        } catch (BodyTooLargeException tooLarge) {
-            response.status(io.helidon.http.Status.REQUEST_ENTITY_TOO_LARGE_413)
-                    .send(tooLarge.getMessage());
+        } catch (DurableCatchUpResponder.ResponseTooLargeException tooLarge) {
+            refuseBeforeStreaming(response, output[0], tooLarge.getMessage());
+        } catch (IOException unavailable) {
+            failBeforeOrDuringStreaming(response, output[0],
+                    io.helidon.http.Status.SERVICE_UNAVAILABLE_503,
+                    "catch-up replay is temporarily unavailable", unavailable);
         } catch (IllegalArgumentException malformed) {
-            response.status(io.helidon.http.Status.BAD_REQUEST_400)
-                    .send(String.valueOf(malformed.getMessage()));
-        } catch (IOException impossible) {
-            response.status(io.helidon.http.Status.INTERNAL_SERVER_ERROR_500)
-                    .send("could not frame catch-up response");
+            failBeforeOrDuringStreaming(response, output[0],
+                    io.helidon.http.Status.BAD_REQUEST_400,
+                    String.valueOf(malformed.getMessage()), malformed);
+        } finally {
+            if (output[0] != null) {
+                try {
+                    output[0].close();
+                } catch (IOException ignored) {
+                    // An incomplete response has no matching end frame, so the
+                    // consumer must leave its replay position unacknowledged.
+                }
+            }
         }
     }
 
@@ -95,13 +114,41 @@ public final class CatchUpService implements HttpService {
             throw new IllegalArgumentException("a catch-up response frame is required");
         }
         long framedBytes = (long) PollAnswer.FRAME_PREFIX_BYTES + frame.length;
-        if (framedBytes > MAX_RESPONSE_BYTES
-                || currentBytes > MAX_RESPONSE_BYTES - framedBytes) {
-            throw new BodyTooLargeException("the catch-up response exceeds "
+        if (framedBytes > MAX_RESPONSE_BYTES) {
+            throw new BodyTooLargeException("a catch-up frame exceeds "
                     + MAX_RESPONSE_BYTES + " bytes");
         }
         PollAnswer.writeFrame(output, frame);
         return currentBytes + framedBytes;
+    }
+
+    private static void requireFrameWithinBudget(byte[] frame)
+            throws DurableCatchUpResponder.ResponseTooLargeException {
+        if (frame == null || frame.length == 0) {
+            throw new IllegalArgumentException("a catch-up response frame is required");
+        }
+        long framedBytes = (long) PollAnswer.FRAME_PREFIX_BYTES + frame.length;
+        if (framedBytes > MAX_RESPONSE_BYTES) {
+            throw new DurableCatchUpResponder.ResponseTooLargeException("a catch-up frame exceeds "
+                    + MAX_RESPONSE_BYTES + " bytes");
+        }
+    }
+
+    private static void refuseBeforeStreaming(ServerResponse response, OutputStream output,
+            String message) {
+        if (output == null) {
+            response.status(io.helidon.http.Status.REQUEST_ENTITY_TOO_LARGE_413).send(message);
+        }
+    }
+
+    private static void failBeforeOrDuringStreaming(ServerResponse response, OutputStream output,
+            io.helidon.http.Status status, String message, Exception failure) {
+        if (output == null) {
+            response.status(status).send(message);
+        } else {
+            throw new IllegalStateException("catch-up response failed after streaming began",
+                    failure);
+        }
     }
 
     private static byte[] bounded(ServerRequest request) throws IOException {

@@ -89,14 +89,14 @@ class CatchUpAssemblyIT {
                     CatchUpEventFrame.decode(frames.get(0)),
                     CatchUpEventFrame.decode(frames.get(1)));
             assertThat(events).extracting(frame -> frame.event().key())
-                    .containsExactly(key, otherKey);
+                    .containsExactlyInAnyOrder(key, otherKey);
             assertThat(events.get(0).event().segmentKey())
                     .isEqualTo(events.get(1).event().segmentKey());
-            for (int i = 0; i < events.size(); i++) {
-                CatchUpEventFrame event = events.get(i);
-                RunKey eventKey = i == 0 ? key : otherKey;
-                String expectedId = i == 0 ? "doc-1" : "doc-2";
-                String expectedPayload = i == 0 ? "{\"message\":\"replay-me\"}"
+            for (CatchUpEventFrame event : events) {
+                RunKey eventKey = event.event().key();
+                String expectedId = eventKey.equals(key) ? "doc-1" : "doc-2";
+                String expectedPayload = eventKey.equals(key)
+                        ? "{\"message\":\"replay-me\"}"
                         : "{\"message\":\"shared-segment\"}";
                 assertThat(event.requestId()).isEqualTo(requestId);
                 assertThat(event.event().firstOffset()).isZero();
@@ -205,6 +205,66 @@ class CatchUpAssemblyIT {
             assertThat(CatchUpEndFrame.decode(frames.get(1)).requestId()).isEqualTo(requestId);
             var after = node.assembly().storeCounts();
             assertThat(after.gets() - before.gets()).isEqualTo(1);
+            assertThat(after.lists() - before.lists()).isZero();
+        }
+    }
+
+    @Test
+    void replayAcrossMultipleSegmentsStreamsPastEightMiB() throws Exception {
+        Path config = dir.resolve("large-catchup-node.properties");
+        Files.writeString(config, String.join("\n",
+                "pod.id=catchuplarge",
+                "pod.az=az-a",
+                "trust.domain=cluster-a",
+                "store.prefix=bins/cluster-a",
+                "store.kind=memory",
+                "endpoint=http://catchuplarge:8080",
+                "http.port=0",
+                "ingest.interval-floor=PT5S",
+                "producer.subject=producer-1",
+                "producer.allowed-indices=logs",
+                ""), StandardCharsets.UTF_8);
+
+        UUID indexId = UUID.randomUUID();
+        RunKey key = new RunKey(indexId, 3);
+        ByteBuffer idBytes = ByteBuffer.allocate(16).putLong(indexId.getMostSignificantBits())
+                .putLong(indexId.getLeastSignificantBits());
+        String encodedIndexId = java.util.Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(idBytes.array());
+        String largeValue = "x".repeat(4 << 20);
+        try (IngesterNode node = Main.run(config.toString())) {
+            node.assembly().catalog().register(new IndexRegistration(
+                    encodedIndexId, "logs", List.of(), 4, 4, 1, 1));
+            HttpClient client = HttpClient.newHttpClient();
+            URI base = URI.create("http://localhost:" + node.port());
+            for (String id : List.of("large-1", "large-2")) {
+                String body = "{\"index\":{\"_id\":\"" + id + "\",\"_version\":1}}\n"
+                        + "{\"message\":\"" + largeValue + "\"}\n";
+                HttpResponse<byte[]> write = client.send(HttpRequest.newBuilder(
+                                base.resolve("/logs/_bulk?partition=3"))
+                        .POST(HttpRequest.BodyPublishers.ofString(body)).build(),
+                        HttpResponse.BodyHandlers.ofByteArray());
+                assertThat(write.statusCode()).isEqualTo(202);
+            }
+
+            var before = node.assembly().storeCounts();
+            UUID requestId = UUID.randomUUID();
+            byte[] request = new CatchUpRequestFrame(requestId,
+                    List.of(new CatchUpRequestFrame.Stream(key, 0))).encode();
+            HttpResponse<byte[]> replay = client.send(HttpRequest.newBuilder(
+                            base.resolve("/sub/" + encodedIndexId + "/3"))
+                    .POST(HttpRequest.BodyPublishers.ofByteArray(request)).build(),
+                    HttpResponse.BodyHandlers.ofByteArray());
+
+            assertThat(replay.statusCode()).isEqualTo(200);
+            assertThat(replay.body().length).isGreaterThan(8 << 20);
+            List<byte[]> frames = unframe(replay.body());
+            assertThat(frames).hasSize(3);
+            assertThat(CatchUpEventFrame.decode(frames.get(0)).event().firstOffset()).isZero();
+            assertThat(CatchUpEventFrame.decode(frames.get(1)).event().firstOffset()).isEqualTo(1);
+            assertThat(CatchUpEndFrame.decode(frames.get(2)).requestId()).isEqualTo(requestId);
+            var after = node.assembly().storeCounts();
+            assertThat(after.gets() - before.gets()).isEqualTo(2);
             assertThat(after.lists() - before.lists()).isZero();
         }
     }

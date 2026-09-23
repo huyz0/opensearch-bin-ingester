@@ -3,6 +3,7 @@ package io.github.huyz0.os.biningester.http;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.github.huyz0.os.biningester.client.HttpSubscriptionTransport;
 import io.github.huyz0.os.biningester.client.StreamFraming;
 import io.github.huyz0.os.biningester.format.CatchUpEndFrame;
 import io.github.huyz0.os.biningester.format.CatchUpEventFrame;
@@ -14,8 +15,18 @@ import io.github.huyz0.os.biningester.ingest.DurableCatchUpResponder;
 import io.helidon.webclient.api.WebClient;
 import io.helidon.webserver.WebServer;
 import io.helidon.webserver.http.HttpRouting;
+import java.io.IOException;
 import java.io.ByteArrayOutputStream;
 import java.io.ByteArrayInputStream;
+import java.io.InputStream;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
@@ -28,6 +39,8 @@ class CatchUpServiceTest {
     private static final UUID REQUEST = UUID.fromString("11111111-2222-3333-4444-555555555555");
     private static final RunKey KEY = new RunKey(
             UUID.fromString("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"), 7);
+    private static final String TEST_PATH = HttpSubscriptionTransport.SUBSCRIBE_PREFIX
+            + KEY.indexId() + "/" + KEY.partitionId();
     private WebServer server;
 
     @AfterEach
@@ -54,7 +67,7 @@ class CatchUpServiceTest {
         var request = new CatchUpRequestFrame(REQUEST,
                 List.of(new CatchUpRequestFrame.Stream(KEY, 41)));
         try (var response = WebClient.builder().baseUri("http://localhost:" + server.port())
-                .build().post(CatchUpService.PATH).submit(request.encode())) {
+                .build().post(TEST_PATH).submit(request.encode())) {
             assertThat(response.status().code()).isEqualTo(200);
             var body = response.entity().as(byte[].class);
             var input = new ByteArrayInputStream(body);
@@ -76,7 +89,7 @@ class CatchUpServiceTest {
                 }))).build().start();
 
         try (var response = WebClient.builder().baseUri("http://localhost:" + server.port())
-                .build().post(CatchUpService.PATH).submit(new byte[] {1, 2, 3})) {
+                .build().post(TEST_PATH).submit(new byte[] {1, 2, 3})) {
             assertThat(response.status().code()).isEqualTo(400);
         }
         assertThat(called).hasValue(false);
@@ -92,7 +105,7 @@ class CatchUpServiceTest {
                 }))).build().start();
 
         try (var response = WebClient.builder().baseUri("http://localhost:" + server.port())
-                .build().post(CatchUpService.PATH)
+                .build().post(TEST_PATH)
                 .submit(new byte[(int) CatchUpService.MAX_REQUEST_BYTES + 1])) {
             assertThat(response.status().code()).isEqualTo(413);
         }
@@ -109,7 +122,7 @@ class CatchUpServiceTest {
         var request = new CatchUpRequestFrame(REQUEST,
                 List.of(new CatchUpRequestFrame.Stream(KEY, 41)));
         try (var response = WebClient.builder().baseUri("http://localhost:" + server.port())
-                .build().post(CatchUpService.PATH).submit(request.encode())) {
+                .build().post(TEST_PATH).submit(request.encode())) {
             assertThat(response.status().code()).isEqualTo(413);
         }
     }
@@ -124,7 +137,7 @@ class CatchUpServiceTest {
         var request = new CatchUpRequestFrame(REQUEST,
                 List.of(new CatchUpRequestFrame.Stream(KEY, 41)));
         try (var response = WebClient.builder().baseUri("http://localhost:" + server.port())
-                .build().post(CatchUpService.PATH).submit(request.encode())) {
+                .build().post(TEST_PATH).submit(request.encode())) {
             assertThat(response.status().code()).isEqualTo(503);
         }
     }
@@ -139,7 +152,7 @@ class CatchUpServiceTest {
         var request = new CatchUpRequestFrame(REQUEST,
                 List.of(new CatchUpRequestFrame.Stream(KEY, 41)));
         try (var response = WebClient.builder().baseUri("http://localhost:" + server.port())
-                .build().post(CatchUpService.PATH).submit(request.encode())) {
+                .build().post(TEST_PATH).submit(request.encode())) {
             assertThat(response.status().code()).isEqualTo(413);
         }
     }
@@ -155,7 +168,7 @@ class CatchUpServiceTest {
     }
 
     @Test
-    void individuallyValidFramesCannotExceedTheCumulativeResponseBudget() throws Exception {
+    void individuallyValidFramesMayExceedTheFormerCumulativeResponseBudget() throws Exception {
         int each = ((int) CatchUpService.MAX_RESPONSE_BYTES - PollAnswer.FRAME_PREFIX_BYTES) / 2 + 1;
         server = WebServer.builder().port(0).routing(HttpRouting.builder()
                 .register(new CatchUpService(request -> List.of(
@@ -165,8 +178,83 @@ class CatchUpServiceTest {
         var request = new CatchUpRequestFrame(REQUEST,
                 List.of(new CatchUpRequestFrame.Stream(KEY, 41)));
         try (var response = WebClient.builder().baseUri("http://localhost:" + server.port())
-                .build().post(CatchUpService.PATH).submit(request.encode())) {
-            assertThat(response.status().code()).isEqualTo(413);
+                .build().post(TEST_PATH).submit(request.encode())) {
+            assertThat(response.status().code()).isEqualTo(200);
+            assertThat(response.entity().as(byte[].class).length)
+                    .isGreaterThan((int) CatchUpService.MAX_RESPONSE_BYTES);
+        }
+    }
+
+    @Test
+    void responseMaySpanMoreThanEightMiBAcrossSeveralFrames() throws Exception {
+        int frameBytes = 4 << 20;
+        server = WebServer.builder().port(0).routing(HttpRouting.builder()
+                .register(new CatchUpService(request -> List.of(
+                        new byte[frameBytes], new byte[frameBytes]))))
+                .build().start();
+
+        var request = new CatchUpRequestFrame(REQUEST,
+                List.of(new CatchUpRequestFrame.Stream(KEY, 41)));
+        try (var response = WebClient.builder().baseUri("http://localhost:" + server.port())
+                .build().post(TEST_PATH).submit(request.encode())) {
+            assertThat(response.status().code()).isEqualTo(200);
+            assertThat(response.entity().as(byte[].class).length)
+                    .isGreaterThan((int) CatchUpService.MAX_RESPONSE_BYTES);
+        }
+    }
+
+    @Test
+    void firstFlushedFrameArrivesBeforeResponderCompletes() throws Exception {
+        byte[] firstFrame = new byte[] {1, 2, 3};
+        byte[] endFrame = new CatchUpEndFrame(REQUEST).encode();
+        var responderBlocked = new CountDownLatch(1);
+        var allowResponderToFinish = new CountDownLatch(1);
+        server = WebServer.builder().port(0).routing(HttpRouting.builder()
+                .register(new CatchUpService((CatchUpService.StreamingResponder) (request, sink) -> {
+                    sink.write(firstFrame);
+                    responderBlocked.countDown();
+                    try {
+                        if (!allowResponderToFinish.await(5, TimeUnit.SECONDS)) {
+                            throw new IOException("test did not release the responder");
+                        }
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        throw new IOException("responder was interrupted", interrupted);
+                    }
+                    sink.write(endFrame);
+                }))).build().start();
+
+        var request = new CatchUpRequestFrame(REQUEST,
+                List.of(new CatchUpRequestFrame.Stream(KEY, 41)));
+        HttpRequest httpRequest = HttpRequest.newBuilder(
+                        URI.create("http://localhost:" + server.port() + TEST_PATH))
+                .timeout(Duration.ofSeconds(10))
+                .POST(HttpRequest.BodyPublishers.ofByteArray(request.encode()))
+                .build();
+        HttpResponse<InputStream> response = HttpClient.newHttpClient()
+                .sendAsync(httpRequest, HttpResponse.BodyHandlers.ofInputStream())
+                .get(5, TimeUnit.SECONDS);
+
+        try (InputStream body = response.body()) {
+            assertThat(response.statusCode()).isEqualTo(200);
+            assertThat(responderBlocked.await(2, TimeUnit.SECONDS)).isTrue();
+            ByteArrayOutputStream expected = new ByteArrayOutputStream();
+            PollAnswer.writeFrame(expected, firstFrame);
+            CompletableFuture<byte[]> firstBytes = CompletableFuture.supplyAsync(() -> {
+                try {
+                    return body.readNBytes(expected.size());
+                } catch (IOException failure) {
+                    throw new java.util.concurrent.CompletionException(failure);
+                }
+            });
+            try {
+                assertThat(firstBytes.get(2, TimeUnit.SECONDS)).containsExactly(expected.toByteArray());
+                assertThat(allowResponderToFinish.getCount()).isEqualTo(1L);
+            } finally {
+                allowResponderToFinish.countDown();
+            }
+        } finally {
+            allowResponderToFinish.countDown();
         }
     }
 }
