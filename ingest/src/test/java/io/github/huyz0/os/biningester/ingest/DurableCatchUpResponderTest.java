@@ -27,8 +27,10 @@ import java.io.ByteArrayInputStream;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
 class DurableCatchUpResponderTest {
@@ -76,11 +78,34 @@ class DurableCatchUpResponderTest {
         byte[] segment = writer.toByteArray(0);
         CountingBinStore store = new CountingBinStore(new MemoryBinStore());
         store.put("segments/shared", Body.ofBytes(segment));
-        CommittedDeltaSource source = (key, offset, limit) -> List.of(
-                new CommittedDeltaSource.CommittedRun(key, "segments/shared", 1,
+        CommittedDeltaSource source = new CommittedDeltaSource() {
+            @Override
+            public List<CommittedRun> replay(RunKey key, long offset, int limit) {
+                return List.of(new CommittedRun(key, "segments/shared", 1,
                         key.equals(KEY) ? 41 : 52)).stream()
-                .filter(run -> offset < run.firstOffset())
-                .toList();
+                        .filter(run -> offset < run.firstOffset())
+                        .toList();
+            }
+
+            @Override
+            public SegmentReplayCursor openSegments(List<ReplayRequest> requests) {
+                List<CommittedRun> runs = List.of(
+                        new CommittedRun(KEY, "segments/shared", 1, 41),
+                        new CommittedRun(OTHER, "segments/shared", 1, 52));
+                return new SegmentReplayCursor() {
+                    private boolean emitted;
+
+                    @Override
+                    public Optional<ReplaySegment> next() {
+                        if (emitted) {
+                            return Optional.empty();
+                        }
+                        emitted = true;
+                        return Optional.of(new ReplaySegment("segments/shared", runs));
+                    }
+                };
+            }
+        };
 
         var responder = new DurableCatchUpResponder(store, source, () -> 9);
         var request = new CatchUpRequestFrame(REQUEST, List.of(
@@ -91,8 +116,79 @@ class DurableCatchUpResponderTest {
 
         assertThat(frames).hasSize(3);
         assertThat(store.counts().gets()).isEqualTo(1);
+        assertThat(store.counts().lists()).isZero();
         assertThat(CatchUpEventFrame.decode(frames.get(0)).event().key()).isEqualTo(KEY);
         assertThat(CatchUpEventFrame.decode(frames.get(1)).event().key()).isEqualTo(OTHER);
+    }
+
+    @Test
+    void streamsOneSegmentBeforeReadingTheNextBacklogSegment() throws Exception {
+        SegmentWriter firstWriter = new SegmentWriter();
+        firstWriter.add(KEY, record("first-key"), 0);
+        firstWriter.add(OTHER, record("first-other"), 0);
+        byte[] first = firstWriter.toByteArray(0);
+        byte[] second = segment(KEY, "second");
+        CountingBinStore store = new CountingBinStore(new MemoryBinStore());
+        store.put("segments/first", Body.ofBytes(first));
+        store.put("segments/second", Body.ofBytes(second));
+        AtomicInteger segmentsRequested = new AtomicInteger();
+        CommittedDeltaSource source = new CommittedDeltaSource() {
+            @Override
+            public List<CommittedRun> replay(RunKey key, long offset, int limit) {
+                return List.of();
+            }
+
+            @Override
+            public SegmentReplayCursor openSegments(List<ReplayRequest> requests) {
+                return new SegmentReplayCursor() {
+                    private int segment;
+
+                    @Override
+                    public Optional<ReplaySegment> next() {
+                        segmentsRequested.incrementAndGet();
+                        if (segment == 0) {
+                            segment++;
+                            return Optional.of(new ReplaySegment("segments/first", List.of(
+                                    new CommittedRun(KEY, "segments/first", 1, 0),
+                                    new CommittedRun(OTHER, "segments/first", 1, 0))));
+                        }
+                        if (segment == 1) {
+                            segment++;
+                            return Optional.of(new ReplaySegment("segments/second", List.of(
+                                    new CommittedRun(KEY, "segments/second", 1, 1))));
+                        }
+                        return Optional.empty();
+                    }
+                };
+            }
+        };
+        var request = new CatchUpRequestFrame(REQUEST,
+                List.of(new CatchUpRequestFrame.Stream(KEY, 0),
+                        new CatchUpRequestFrame.Stream(OTHER, 0)));
+        List<byte[]> emitted = new ArrayList<>();
+        var responder = new DurableCatchUpResponder(store, source, () -> 9);
+
+        responder.respond(request, frame -> {
+            emitted.add(frame);
+            int expectedGets = emitted.size() <= 2 ? 1 : 2;
+            assertThat(store.counts().gets()).isEqualTo(expectedGets);
+            int expectedSegmentsRequested = switch (emitted.size()) {
+                case 1, 2 -> 1;
+                case 3 -> 2;
+                default -> 3;
+            };
+            assertThat(segmentsRequested).hasValue(expectedSegmentsRequested);
+        });
+
+        assertThat(emitted).hasSize(4);
+        assertThat(CatchUpEventFrame.decode(emitted.get(0)).event().segmentKey())
+                .isEqualTo("segments/first");
+        assertThat(CatchUpEventFrame.decode(emitted.get(1)).event().segmentKey())
+                .isEqualTo("segments/first");
+        assertThat(CatchUpEventFrame.decode(emitted.get(2)).event().segmentKey())
+                .isEqualTo("segments/second");
+        assertThat(CatchUpEndFrame.decode(emitted.get(3)).requestId()).isEqualTo(REQUEST);
+        assertThat(store.counts().lists()).isZero();
     }
 
     @Test
@@ -108,6 +204,25 @@ class DurableCatchUpResponderTest {
                         List.of(new CatchUpRequestFrame.Stream(KEY, 0))));
 
         assertThat(exclusives).first().isEqualTo(-1L);
+    }
+
+    @Test
+    void rejectsAnOversizedFrameOnTheStreamingSinkEvenWhenTheSegmentFits() throws Exception {
+        CountingBinStore store = new CountingBinStore(new MemoryBinStore());
+        store.put("segments/frame", Body.ofBytes(new byte[63]));
+        CommittedDeltaSource source = (key, offset, limit) -> offset < 0
+                ? List.of(new CommittedDeltaSource.CommittedRun(key, "segments/frame", 1, 0))
+                : List.of();
+        var responder = new DurableCatchUpResponder(store, source, () -> 9, 64);
+        List<byte[]> emitted = new ArrayList<>();
+
+        assertThatThrownBy(() -> responder.respond(new CatchUpRequestFrame(REQUEST,
+                List.of(new CatchUpRequestFrame.Stream(KEY, 0))), emitted::add))
+                .isInstanceOf(DurableCatchUpResponder.ResponseTooLargeException.class);
+
+        assertThat(emitted).isEmpty();
+        assertThat(store.counts().gets()).isEqualTo(1);
+        assertThat(store.counts().lists()).isZero();
     }
 
     @Test
@@ -153,11 +268,20 @@ class DurableCatchUpResponderTest {
                         List.of(new CatchUpRequestFrame.Stream(KEY, 0)))))
                 .isInstanceOf(DurableCatchUpResponder.ResponseTooLargeException.class);
 
+        List<byte[]> streamed = new java.util.ArrayList<>();
+        new DurableCatchUpResponder(store, source, () -> 9, cumulativeBudget).respond(
+                new CatchUpRequestFrame(REQUEST,
+                        List.of(new CatchUpRequestFrame.Stream(KEY, 0))), streamed::add);
+        assertThat(streamed).hasSize(3);
+        assertThat(streamed.stream().mapToLong(bytes -> bytes.length + 4L).sum())
+                .isGreaterThan(cumulativeBudget);
+
         try (var oversized = new MemoryBinStore()) {
             oversized.put("too-large", Body.ofBytes(new byte[65]));
             assertThatThrownBy(() -> new DurableCatchUpResponder(oversized,
-                    (key, offset, limit) -> List.of(
-                            new CommittedDeltaSource.CommittedRun(key, "too-large", 1, 0)),
+                    (key, offset, limit) -> offset < 0 ? List.of(
+                            new CommittedDeltaSource.CommittedRun(key, "too-large", 1, 0))
+                            : List.of(),
                     () -> 9, 64).respond(new CatchUpRequestFrame(REQUEST,
                             List.of(new CatchUpRequestFrame.Stream(KEY, 0)))))
                     .isInstanceOf(IOException.class);
@@ -166,8 +290,9 @@ class DurableCatchUpResponderTest {
         try (var probe = new ProbeStore()) {
             probe.put("too-large", Body.ofBytes(new byte[65]));
             assertThatThrownBy(() -> new DurableCatchUpResponder(probe,
-                    (key, offset, limit) -> List.of(
-                            new CommittedDeltaSource.CommittedRun(key, "too-large", 1, 0)),
+                    (key, offset, limit) -> offset < 0 ? List.of(
+                            new CommittedDeltaSource.CommittedRun(key, "too-large", 1, 0))
+                            : List.of(),
                     () -> 9, 64).respond(new CatchUpRequestFrame(REQUEST,
                             List.of(new CatchUpRequestFrame.Stream(KEY, 0)))))
                     .isInstanceOf(DurableCatchUpResponder.ResponseTooLargeException.class);
