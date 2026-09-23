@@ -21,15 +21,24 @@ public final class SnapshotCommittedDeltaSource implements CommittedDeltaSource 
 
     private final Supplier<ChainMemory.Snapshot> snapshot;
     private final Function<ChainMemory.Snapshot, Iterator<CommitDelta>> deltaIterator;
+    private final Function<CommitDelta, Iterator<SegmentCommit>> segmentIterator;
 
     public SnapshotCommittedDeltaSource(Supplier<ChainMemory.Snapshot> snapshot) {
-        this(snapshot, current -> current.deltas().iterator());
+        this(snapshot, current -> current.deltas().iterator(),
+                delta -> delta.segments().iterator());
     }
 
     SnapshotCommittedDeltaSource(Supplier<ChainMemory.Snapshot> snapshot,
             Function<ChainMemory.Snapshot, Iterator<CommitDelta>> deltaIterator) {
+        this(snapshot, deltaIterator, delta -> delta.segments().iterator());
+    }
+
+    SnapshotCommittedDeltaSource(Supplier<ChainMemory.Snapshot> snapshot,
+            Function<ChainMemory.Snapshot, Iterator<CommitDelta>> deltaIterator,
+            Function<CommitDelta, Iterator<SegmentCommit>> segmentIterator) {
         this.snapshot = Objects.requireNonNull(snapshot, "snapshot");
         this.deltaIterator = Objects.requireNonNull(deltaIterator, "deltaIterator");
+        this.segmentIterator = Objects.requireNonNull(segmentIterator, "segmentIterator");
     }
 
     @Override
@@ -68,13 +77,20 @@ public final class SnapshotCommittedDeltaSource implements CommittedDeltaSource 
             }
         }
         ChainMemory.Snapshot current = completeSnapshot();
-        return segmentCursor(deltaIterator.apply(current), offsets);
+        return segmentCursor(deltaIterator.apply(current), offsets, segmentIterator);
     }
 
     static SegmentReplayCursor segmentCursor(Iterator<CommitDelta> deltas,
             Map<RunKey, Long> offsets) {
+        return segmentCursor(deltas, offsets, delta -> delta.segments().iterator());
+    }
+
+    static SegmentReplayCursor segmentCursor(Iterator<CommitDelta> deltas,
+            Map<RunKey, Long> offsets,
+            Function<CommitDelta, Iterator<SegmentCommit>> segmentIterator) {
         Objects.requireNonNull(deltas, "deltas");
         Objects.requireNonNull(offsets, "offsets");
+        Objects.requireNonNull(segmentIterator, "segmentIterator");
         return new SegmentReplayCursor() {
             private Iterator<SegmentCommit> segments = List.<SegmentCommit>of().iterator();
 
@@ -100,7 +116,7 @@ public final class SnapshotCommittedDeltaSource implements CommittedDeltaSource 
                     if (!deltas.hasNext()) {
                         return Optional.empty();
                     }
-                    segments = deltas.next().segments().iterator();
+                    segments = segmentIterator.apply(deltas.next());
                 }
             }
         };
