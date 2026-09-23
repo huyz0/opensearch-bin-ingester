@@ -140,9 +140,89 @@ class CatchUpAssemblyIT {
         }
     }
 
+    @Test
+    void productionRouteResumesAtPositivePersistedBatchStart() throws Exception {
+        Path config = dir.resolve("resume-node.properties");
+        Files.writeString(config, String.join("\n",
+                "pod.id=catchupresume",
+                "pod.az=az-a",
+                "trust.domain=cluster-a",
+                "store.prefix=bins/cluster-a",
+                "store.kind=memory",
+                "endpoint=http://catchupresume:8080",
+                "http.port=0",
+                "ingest.interval-floor=PT5S",
+                "producer.subject=producer-1",
+                "producer.allowed-indices=logs",
+                ""), StandardCharsets.UTF_8);
+
+        UUID indexId = UUID.randomUUID();
+        RunKey key = new RunKey(indexId, 3);
+        ByteBuffer idBytes = ByteBuffer.allocate(16).putLong(indexId.getMostSignificantBits())
+                .putLong(indexId.getLeastSignificantBits());
+        String encodedIndexId = java.util.Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(idBytes.array());
+        try (IngesterNode node = Main.run(config.toString())) {
+            node.assembly().catalog().register(new IndexRegistration(
+                    encodedIndexId, "logs", List.of(), 4, 4, 1, 1));
+            HttpClient client = HttpClient.newHttpClient();
+            URI base = URI.create("http://localhost:" + node.port());
+            HttpResponse<byte[]> write = client.send(HttpRequest.newBuilder(
+                            base.resolve("/logs/_bulk?partition=3"))
+                    .POST(HttpRequest.BodyPublishers.ofString(bulkBodyWithRecords(
+                            "doc-0", "already-indexed", "doc-1", "resume-here", "doc-2", "resume-too")))
+                    .build(), HttpResponse.BodyHandlers.ofByteArray());
+            assertThat(write.statusCode()).isEqualTo(202);
+
+            var before = node.assembly().storeCounts();
+            UUID requestId = UUID.randomUUID();
+            byte[] request = new CatchUpRequestFrame(requestId,
+                    List.of(new CatchUpRequestFrame.Stream(key, 1))).encode();
+            HttpResponse<byte[]> replay = client.send(HttpRequest.newBuilder(
+                            base.resolve("/sub/" + encodedIndexId + "/3"))
+                    .POST(HttpRequest.BodyPublishers.ofByteArray(request)).build(),
+                    HttpResponse.BodyHandlers.ofByteArray());
+
+            assertThat(replay.statusCode()).isEqualTo(200);
+            List<byte[]> frames = unframe(replay.body());
+            assertThat(frames).hasSize(2);
+            CatchUpEventFrame event = CatchUpEventFrame.decode(frames.get(0));
+            assertThat(event.requestId()).isEqualTo(requestId);
+            assertThat(event.event().key()).isEqualTo(key);
+            assertThat(event.event().firstOffset()).isEqualTo(1);
+            assertThat(event.event().recordCount()).isEqualTo(2);
+            var reader = SegmentReader.open(event.event().inline());
+            var run = reader.find(key).orElseThrow();
+            var records = reader.read(run);
+            assertThat(records).hasSize(3);
+            var resumed = records.subList((int) event.event().firstOffset(),
+                    (int) event.event().firstOffset() + event.event().recordCount());
+            assertThat(resumed).extracting(record -> record.id()).containsExactly("doc-1", "doc-2");
+            assertThat(new String(resumed.get(0).payload(), StandardCharsets.UTF_8))
+                    .isEqualTo("{\"message\":\"resume-here\"}");
+            assertThat(new String(resumed.get(1).payload(), StandardCharsets.UTF_8))
+                    .isEqualTo("{\"message\":\"resume-too\"}");
+            assertThat(CatchUpEndFrame.decode(frames.get(1)).requestId()).isEqualTo(requestId);
+            var after = node.assembly().storeCounts();
+            assertThat(after.gets() - before.gets()).isEqualTo(1);
+            assertThat(after.lists() - before.lists()).isZero();
+        }
+    }
+
     private static String bulkBody(String id, String message) {
         return "{\"index\":{\"_id\":\"" + id + "\",\"_version\":1}}\n"
                 + "{\"message\":\"" + message + "\"}\n";
+    }
+
+    private static String bulkBodyWithRecords(String... idAndMessages) {
+        if (idAndMessages.length == 0 || idAndMessages.length % 2 != 0) {
+            throw new IllegalArgumentException("bulk records require id/message pairs");
+        }
+        StringBuilder body = new StringBuilder();
+        for (int i = 0; i < idAndMessages.length; i += 2) {
+            body.append(bulkBody(idAndMessages[i], idAndMessages[i + 1]));
+        }
+        return body.toString();
     }
 
     private static List<byte[]> unframe(byte[] body) {
