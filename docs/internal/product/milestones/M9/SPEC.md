@@ -9,7 +9,7 @@ fan-out threshold selecting `direct`), and the rows M8 handed over under their
 M8 IDs: the catch-up read path and the ninth chaos row (M8.24), the ladder's
 store tiers and gap re-reads ([ADR-0057](../../decisions/0057-the-store-reading-fallback-tiers-and-gap-re-reads-wait-for-m9.md),
 whose deferral M9 discharges and whose decision is superseded in part),
-the prefetcher (M8.56), address-matched challenges (M8.58), and M8's
+the prefetcher (M8.82, M8.83, M8.56), address-matched challenges (M8.58), and M8's
 milestone-review harvest (M8.60–M8.81). NFR-7's harness must measure the
 [ADR-0058](../../decisions/0058-a-partitioned-pod-acks-on-a-durable-commit-intent.md)
 path, where a 202 may precede its offset.
@@ -93,7 +93,9 @@ per criterion, and is § *What a cloud run adds*.
 | M8.24e — durable catch-up responder | **Done.** `batch_start` is translated to the source's exclusive offset, shared segment bytes are read once per response, inline event frames are emitted, and a request-matched end frame closes the response. HTTP registration and T4 evidence remain M8.24. |
 | M8.24 — the catch-up read path and the ninth chaos row | **A task.** Follows M8.24a |
 | M8.28's tiers 2 and 3 and gap re-reads | **Three tasks, DESIGNED AND BUILT IN M9** (the user's decision, 2026-09-20). (a) The gap RE-READ over a reachable ingester, with `TENS_OF_GETS` counted for it, is **M9.13**. (b) **M9.20 is an ADR choosing a THIRD approach** to plugin-side store access, both earlier candidates having been rejected on 2026-09-20 -- a SigV4 signer in the plugin (a credential in the OpenSearch JVM) and long-lived pre-issued chain grants (amending ADR-0041's short TTL). (c) **M9.21 EXECUTES tiers 2 and 3** on a real gap with NO ingester reachable, re-reading the missing window through M8.24's catch-up-from-offset read path and counting the GETs and LISTs each tier costs. ⚠️ **ADR-0057 IS SUPERSEDED IN PART** -- its decision that tiers 2 and 3 wait, and its consequence that an outage longer than the backoff leaves consumers indexing nothing -- and M9.20 says so in its own text, leaving ADR-0057's tier-0/1 half standing |
-| M8.56 — wire `SegmentPrefetcher` | **A task**, and it must land before NFR-4 is measured: without it every non-writing AZ's first read is a cold proxy GET, and the measured read rate would be the wrong design's. It also keeps `check-wired.sh`'s M5.91b entry owned until it lands |
+| M8.82 — expose ready EndpointSlice peers | **A task**, prerequisite to constructing the live peer ring |
+| M8.83 — versioned durable-segment hint | **A task**, prerequisite to signalling the per-AZ cache owner; adds a new cross-AZ transport to criterion 6's accounting |
+| M8.56 — wire `SegmentPrefetcher` | **A task**, after M8.82 and M8.83, and before NFR-4 is measured: without it every non-writing AZ's first read is a cold proxy GET, and the measured read rate would be the wrong design's. It also keeps `check-wired.sh`'s M5.91b entry owned until it lands |
 | M8.58 — address-matched challenges | **A task, and its shape is decided** (the user's decision, 2026-09-20): **the Kubernetes pod UID goes IN THE LEASE**, and `EndpointSliceView` matches `targetRef.uid` rather than the endpoint's address. ⚠️ **THAT IS A WIRE-FORMAT CHANGE**, so the task follows [`wire-format-change`](../../../../../.agents/skills/wire-format-change/SKILL.md): the format document, every reader, every writer, the fakes, the golden files and the ADR in ONE commit. Exercised against `FakeKubeApi`; a real cluster stays unavailable and the row says so |
 | M8.60–M8.81 — M8's milestone-review harvest | **Twenty-one tasks**, each as written, including M8.76/.77 split from the combined M8.73 review fix, M8.79/.80 split from M8.78 after round-three review, and M8.81's canonical source digest on Windows. M8.61 and M8.62 name many commits and may be split at take-up by `next-task` if one commit's worth turns out to be less |
 | measurement M3 (`direct` fan-out threshold) | **A task (M9.14)**, and half of it is NOT-RUN on this rig: see criterion 12 |
@@ -178,6 +180,23 @@ with them. ⚠️ `direct` mode is the deliberate exception — the consumer fet
 for itself, which is what measurement M3's threshold exists to ration — so it
 is measured separately (criterion 12) and excluded from the flat bound.
 
+**The prefetch signal is a directed hint, not gossip.** M8.82 exposes the
+ready, AZ-labelled peer set already supplied by Kubernetes. M8.83 sends only a
+versioned frame containing writer identity, writer AZ and the segment key to
+the rendezvous-ring owner in each other AZ; no payload bytes or commit facts
+cross on this path. The receiver binds the claimed writer identity and AZ to
+the request's `remotePeer().host()` and the current ready `EndpointSlice`
+address set before any store read; a known-writer claim from a different peer
+is refused, and the segment key's encoded pod ID must equal the claimed writer
+ID. The hint may be lost or stale without affecting correctness: the
+existing object-store path remains the fallback. Its maximum frame is 1,550
+bytes (the 8-byte header, bounded fields, and length prefixes); at the default
+8 MiB segment size, two cross-AZ copies contribute at most 0.037% of producer
+bytes. The M9.10 run counts it with every other transport against the full
+NFR-5 limit, and the signal fan-out is capped at AZs−1 per segment rather than
+growing with nodes, streams or consumers. Its reader, writer, fake, golden and
+ADR travel together as a `wire-format-change` task.
+
 **Profile, then JMH** (performance.md rule 1). JFR over the macro harness names
 the top three hot spots; JMH benchmarks are written for those plus B3 (needed
 by M2 regardless). Only allocation per record is a gate (performance.md rule
@@ -196,8 +215,8 @@ measured what a hand-copied number costs.
 | **R1, R14, R1b** (bundle; PUT rate tracks bytes ÷ segment size; the interval is the dial) | **Measured for the first time.** Criterion 3 is NFR-1 counted |
 | **R2, R15 / NFR-3** | Every macro run asserts 0 LIST on the hot path. M8.66 writes the backfill's LIST+GET cost into cost.md rule 2b |
 | **R3 / NFR-2** | Unchanged; moved into CI (M8.75) |
-| **R5, R10, R13 / NFR-4** | Measured: GETs per segment per AZ with the prefetcher wired (M8.56), flat in shards |
-| **R12 / NFR-5** | Measured as bytes |
+| **R5, R10, R13 / NFR-4** | Measured: GETs per segment per AZ with the prefetcher wired (M8.56), flat in shards; budget remains at most one prefetch GET per non-writing AZ plus cold misses |
+| **NFR-5 cross-AZ byte budget** | M8.83 adds the durable-signal frame to byte accounting; at most AZs−1 hints per segment. At 8 MiB, the maximum two frames contribute 0.037% of producer bytes, leaving the rest of the `<0.1%` budget for the other named transports; criterion 6 measures all of them together |
 | **M8.24's catch-up path** | ⚠️ **NEW READS**, the only production change here that adds requests: a catch-up must cost GETs per SEGMENT in the backlog, shared per node (R5), never per shard. Budget: ≤ 1 GET per backlog segment per consumer node, asserted |
 | **M9.13's gap re-read** | Replaces `TENS_OF_GETS` (modelled) with a counted number |
 | **M9.21's tiers 2 and 3** | ⚠️ **NEW READS, AND THEY ARE THE PLUGIN's OWN**: tier 2 polls the commit chain, tier 3 is an explicit recovery LIST of the data prefix. Both run only when NO ingester is reachable, so they are a recovery path, which is where R2 permits a LIST and nowhere else. Budget: tier 2 ≤ 1 GET per chain delta per NODE (R5 — never per shard), tier 3 ≤ 1 LIST per recovery action per node, both counted rather than modelled, and the rate returns to zero the moment an ingester answers |
@@ -272,7 +291,8 @@ the digest-pinned container in `docker-compose.test.yml`.
    accepted. ⚠️ **THE INSTRUMENTED TRANSPORTS ARE NAMED**, not left as "the
    peer sockets": the proxy read path a consumer takes to an ingester in
    another AZ (cost.md rules 10–11, the largest term), `inline` push payloads,
-   the commit forward (`SequencerTransport`), and the inbox drain's reads.
+   the commit forward (`SequencerTransport`), the inbox drain's reads, and the
+   key-only durable-segment prefetch signal (M8.83).
    ⚠️ **AND AT LEAST ONE RUN FETCHES ACROSS AN AZ BOUNDARY**: a steady-state
    write-only run has near-zero cross-AZ bytes by construction and an
    uninstrumented build would pass it, so the criterion requires a run with
@@ -282,7 +302,9 @@ the digest-pinned container in `docker-compose.test.yml`.
    ⚠️ **THE LARGEST TERM IS NOT COUNTABLE YET, AND THE NUMBER MUST SAY SO.**
    M9.2 instrumented the sockets that exist: the consumer's poll answer (its
    `inline` payloads, its `direct` grants and the answer's own framing), the
-   commit forward and the inbox drain. **A segment served in `proxy` mode does
+   commit forward and the inbox drain. M8.83 adds the prefetch-signal byte
+   count to the node-wide report; its frame is bounded to at most 1,550 bytes and
+   at most one is sent per non-writing AZ per segment. **A segment served in `proxy` mode does
    not travel over any wired route today** — a `proxy` push carries no inline
    bytes and no ingester endpoint serves the segment to a consumer — so the
    `PROXY_READ` column counts the EVENT FRAME that names the segment, not the
@@ -362,14 +384,15 @@ the digest-pinned container in `docker-compose.test.yml`.
     it could only ever "confirm" the constant by measuring something else.
     That constant is criterion 18's. (M9.13)
 15. **Every other inherited row is closed by the test or gate § *Test plan*
-    NAMES FOR IT** — M8.60–M8.75, each with a row there giving its tier, the
+    NAMES FOR IT** — M8.60–M8.83, each with a row there giving its tier, the
     test that must fail first by name, and the mutation it catches.
     ⚠️ **ONE EXCLUSION, BY NAME: M8.64**, a prose sweep, whose claims are
     sentences no predicate over the tree can judge (M7.35 measured this); it is
     closed by `check-links.sh`, `check-javadoc-cites.sh` and the review reading
     the sentences, and `VERIFIED.md` says so rather than naming a test that
     does not exist. Every other row names one. And
-    `check-wired.sh` stays green with M8.56 done. `VERIFIED.md` carries one
+    `check-wired.sh` stays green with M8.56 done; criterion 5 covers M8.56's
+    production prefetch behavior. `VERIFIED.md` carries one
     line per row, citing that test. ⚠️ An earlier draft said "closed by its own
     named test or gate" and named nothing, which was green for any work at
     all.
@@ -465,8 +488,11 @@ multiplied from a price table (criterion 16). Each is a named NOT-RUN in
 | M9.19 | doc | — (an ADR; `check-adr-refs.sh` and `check-links.sh` carry it) | a divisor nobody wrote down |
 | M9.20 | doc | — (an ADR; either branch of criterion 18) | a mechanism assumed buildable |
 | M9.22 | doc | — **no test can fail first for a roadmap edit**; it changes one prose row and no code. `check-links.sh` and the M9.0 spec review carry it | a completion condition the milestone cannot meet |
+| M9.23 | doc | — **no test can fail first for a task decomposition edit**; this row's criterion is the reviewed SPEC decomposition and its cost/test accounting | an integration task hiding two unmodelled prerequisites |
 | M0.27 | script test | the L1 job green having executed zero tests | `check-harness-tests.sh`'s antidote not inherited |
-| M8.56 | T3 (RustFS) | `PrefetchWiredIT` — a second AZ's first read costing a cold GET | the prefetcher constructed but never signalled |
+| M8.82 | T1 | `EndpointSliceViewTest#readyPeerEndpointsExposeTheirAZAndExcludeDrainingNodes` red with ready endpoint extraction returning empty | guessing an AZ or including a draining endpoint in the peer ring |
+| M8.83 | T1 + T2 | `DurableSegmentSignalFrameTest` golden/unknown-version cases and `DurableSegmentSignalServiceTest` — valid known-writer/source/key triple accepted; a different source claiming that writer and a key naming another pod are refused before any GET; maximum fan-out/frame byte count is ≤0.037% for an 8 MiB segment. The format definition, reader, writer, fake, golden and its ADR travel together under `wire-format-change`; link/ADR checks pin the documents | unversioned/ambiguous bytes, spoofed identity, or arbitrary external keys triggering cache GETs |
+| M8.56 | T3 (RustFS) | `PrefetchWiredIT` — a second AZ's first read is served from its warmed cache, with one GET per non-writing AZ and no additional GET on first consumer read | the prefetcher constructed but never signalled, or signalled to every peer instead of one owner per AZ |
 | M8.60 | T0 + script | `check-metric-cardinality.sh` on a per-index label; a metric test red with the counter unexported | a counter only tests can read |
 | M8.61 | T3 (chaos) | ⚠️ **TEN NAMED ASSERTIONS, EACH RED AGAINST ITS OWN DEFECT** — the row cannot be closed by tightening three of them: (1) `AzPartitionIT` intents per flush (unbounded → red with an extra intent per record); (2–4) `OrphanAfterKillIT`'s contiguity at the store, "a NEW segment", and the orphan's content (red with the orphan's bytes replaced, a reused key, a hole in the sequence); (5) `ChallengeResumeIT`'s takeover count read mid-run (red with a second takeover after the read); (6) `IdlePodCostSoakTest`'s lease bounds (red with a doubled renew rate); (7) `RollingRestartIT`'s herd budget per restart (red with every reconnect in one 100 ms window); (8–10) the three the M8 milestone review lists (5bc9672, 08cb808, 60796af), each named in the commit body with its own mutation | an assertion that passes on the very defect its row names |
 | M8.62 | `check-mutants.sh` | the gate red on the recorded surviving mutants | mutants recorded and never killed |
@@ -490,8 +516,8 @@ multiplied from a price table (criterion 16). Each is a named NOT-RUN in
 
 ⚠️ **EVERY TASK IN § *Tasks* HAS A ROW HERE** — spec/SKILL.md requires a tier,
 the test that must fail first BY NAME, and the mutation it catches, per task.
-⚠️ **SIX ROWS NAME NO TEST AND SAY WHY IN THE ROW** — M9.0, M9.5, M9.19,
-M9.20, M9.22 and M8.64 are a spec, a profile, two ADRs, a roadmap edit and a
+⚠️ **SEVEN ROWS NAME NO TEST AND SAY WHY IN THE ROW** — M9.0, M9.5, M9.19,
+M9.20, M9.22, M9.23 and M8.64 are a spec, a profile, two ADRs, two plan edits and a
 prose sweep: none is a behaviour a test can pin, and writing a plausible test
 name for them would be the weaker failure. Criterion 15 reads this table and
 excludes M8.64 by name.
@@ -504,6 +530,12 @@ that reason stated.
 
 ## Risks
 
+- **Peer authentication depends on direct pod-to-pod source addresses.** A
+  service-mesh sidecar, NAT or proxy can make `remotePeer().host()` differ from
+  the EndpointSlice pod address; in that deployment every hint is safely
+  refused and the object-store fallback costs extra GETs. Do not authenticate
+  from a forwarded header. The T2 test uses a direct socket; deployment must
+  preserve that source identity for prefetch to be effective.
 - **The rig cannot reach the size-triggered regime.** WSL2 plus RustFS may top
   out below the rate at which three pods fill segments. Then criterion 3 is
   measured with fewer pods or a smaller `maxSegmentBytes`, and the curve says
@@ -565,12 +597,15 @@ starts.**
 ⚠️ **Dependency order**: gates and meters, then the harness, then the
 measurements, then the inherited rows that change what is measured, then the
 document. Inherited rows keep their M8 IDs; `check-wired.sh` needs M8.56 open
-until it lands.
+until it lands. M8.82 and M8.83 are prerequisites added after the missing
+EndpointSlice peer view and durable-signal boundary were confirmed; M8.56 is
+the final assembly task and depends on both.
 
 | ID | Task | Serves |
 |---|---|---|
 | M9.0 | This spec and the decomposition | — (planning) |
 | M9.22 | **QUALIFY RUSTFS AND AMEND THE ROADMAP's M9 ROW**: RustFS benchmarks, with the S3 halves named NOT-RUN, so the completion condition is one this milestone can meet | — (planning) |
+| M9.23 | Decompose M8.56 from the discovered peer-view and durable-signal prerequisites; update criterion, cost and test plan | FR-10, NFR-4, NFR-5 |
 | M0.14 | `check-mutants.sh`: jzap, 80% killed on the staged diff | — (gate) |
 | M9.1 | The cost meter: requests per MiB, idle rate, $/TiB from a price table | NFR-1, NFR-4 (R9) |
 | M9.2 | An AZ label on each pod and cross-AZ bytes counted at the peer sockets | NFR-5 |
@@ -581,6 +616,8 @@ until it lands.
 | M8.66 | The backfill stops on deposition, and its costs are stated in cost.md 2b | NFR-3 |
 | M8.65 | The inbox drain's serialisation made literal | FR-11 |
 | M8.67 | `NodeSegmentSource`'s node-wide lock split per key, measured | NFR-4, FR-10 |
+| M8.82 | Expose ready, AZ-labelled peers from the `EndpointSlice` view | FR-10, NFR-4, NFR-9 |
+| M8.83 | Add the versioned durable-segment signal, its ADR and format/research documentation; authenticate the sender, pin golden bytes, and count cross-AZ bytes | FR-10, FR-12, NFR-4, NFR-5 |
 | M8.56 | Wire `SegmentPrefetcher` into the assembled ingester | FR-10, NFR-4 |
 | M9.7 | Measurement M2: block size and codec | NFR-1 |
 | M9.8 | NFR-1 counted on the assembled fleet: the < 0.30 bound asserted above the size-triggered rate, and the low-rate counts REPORTED | NFR-1 |
