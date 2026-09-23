@@ -247,6 +247,26 @@ class GradleGateWiringTest {
         assertThat(skippedLowRate.output()).contains("skipped");
     }
 
+    @Test
+    void milestoneEvidenceCheckerRejectsMissingCriterionLine() throws Exception {
+        Path fixture = repository().resolve("buildSrc/build/tmp/milestone-verified")
+                .resolve(UUID.randomUUID().toString());
+        Files.createDirectories(fixture);
+        Files.writeString(fixture.resolve("SPEC.md"), "## Acceptance criteria\n"
+                + "1. first behaviour\n2. second behaviour\n\n## Design\n");
+        Path verified = fixture.resolve("VERIFIED.md");
+        Files.writeString(verified, "1. FirstTest#first proves the first behaviour.\n"
+                + "2. SecondTest#second proves the second behaviour.\n");
+
+        Run complete = checkMilestoneVerified(fixture);
+        assertThat(complete.exitCode()).isZero();
+
+        Files.writeString(verified, "1. FirstTest#first proves the first behaviour.\n");
+        Run missing = checkMilestoneVerified(fixture);
+        assertThat(missing.exitCode()).isEqualTo(1);
+        assertThat(missing.output()).contains("criterion 2 has no evidence line");
+    }
+
     private static String writeRateCases(int count) {
         StringBuilder cases = new StringBuilder();
         int[] rates = {40, 80, 160};
@@ -307,6 +327,14 @@ class GradleGateWiringTest {
     private static Run checkCostResults(Path results, String profile) throws Exception {
         Process process = ProcessSupport.builder("python", "scripts/check-cost-test-results.py",
                 "--results", results.toString(), "--profile", profile)
+                .directory(repository().toFile()).redirectErrorStream(true).start();
+        String output = new String(process.getInputStream().readAllBytes());
+        return new Run(process.waitFor(), output);
+    }
+
+    private static Run checkMilestoneVerified(Path milestone) throws Exception {
+        Process process = ProcessSupport.builder("python", "scripts/run-gate.py",
+                "scripts/check-milestone-verified.sh", milestone.toString())
                 .directory(repository().toFile()).redirectErrorStream(true).start();
         String output = new String(process.getInputStream().readAllBytes());
         return new Run(process.waitFor(), output);
