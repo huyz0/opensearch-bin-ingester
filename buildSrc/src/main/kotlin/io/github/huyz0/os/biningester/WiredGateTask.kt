@@ -64,14 +64,61 @@ abstract class WiredGateTask : DefaultTask() {
         if (cells.size > 2 && !cells.last().startsWith("done")) cells.first() else null
     }.toSet()
     private fun codeOnly(text: String): String = text.replace(Regex("(?s)/\\*.*?\\*/"), " ").replace(Regex("(?m)//[^\\r\\n]*"), " ").replace(Regex("\"(?:\\\\.|[^\"\\\\])*\""), " ")
-    private fun predicates(cell: String): List<Pair<String, String>> = Regex("`([^`]+)`").findAll(cell).mapNotNull {
-        val span = it.groupValues[1].trim()
-        if (span == "main") "main" to "" else {
+    private fun predicates(cell: String): List<Pair<String, String>> {
+        val spans = Regex("`([^`]+)`").findAll(cell).map { it.groupValues[1].trim() }.toList()
+        val accepted = mutableListOf<Pair<String, String>>()
+        for (span in spans) {
+            if (span == "main") {
+                accepted += "main" to ""
+                continue
+            }
             val p = span.split(Regex("\\s+"), limit = 2)
-            if (p.size == 2 && p[0] in setOf("new", "new-impl", "call", "implements", "returns", "constant")) p[0] to p[1] else null
+            if (p.size != 2 || p[0] !in setOf("new", "new-impl", "call", "implements", "returns", "constant") ||
+                (p[0] == "call" && !Regex("[A-Za-z_$][\\w$]*(?:\\.[A-Za-z_$][\\w$]*){2,}").matches(p[1]))) {
+                return emptyList()
+            }
+            accepted += p[0] to p[1]
         }
-    }.toList()
+        return accepted
+    }
     private fun declares(code: String, name: String) = Regex("\\b(class|interface|record|enum)\\s+${Regex.escape(name)}\\b").containsMatchIn(code)
+    private fun packageName(code: String) = Regex("(?m)^\\s*package\\s+([\\w.]+)\\s*;")
+        .find(code)?.groupValues?.get(1).orEmpty()
+    private fun declaredTypes(sources: List<Triple<Path, String, String>>): Set<String> = sources.flatMap { source ->
+        val pkg = packageName(source.third)
+        Regex("\\b(?:class|interface|record|enum)\\s+([A-Za-z_$][\\w$]*)")
+            .findAll(source.third).map { match -> if (pkg.isEmpty()) match.groupValues[1] else "$pkg.${match.groupValues[1]}" }
+    }.toSet()
+    private fun qualifiedType(name: String, code: String, knownTypes: Set<String>): String {
+        if ('.' in name) return name
+        val imported = Regex("\\bimport\\s+([\\w.]+)\\s*;").findAll(code)
+            .map { it.groupValues[1] }.firstOrNull { it.substringAfterLast('.') == name }
+        if (imported != null) return imported
+        val pkg = packageName(code)
+        val samePackage = if (pkg.isEmpty()) name else "$pkg.$name"
+        if (samePackage in knownTypes) return samePackage
+        val wildcardImports = Regex("\\bimport\\s+([\\w.]+)\\.\\*\\s*;")
+            .findAll(code).map { it.groupValues[1] }.toSet()
+        val candidates = knownTypes.filter { it.substringAfterLast('.') == name && it.substringBeforeLast('.', "") in wildcardImports }
+        if (candidates.size == 1) return candidates.single()
+        if (candidates.size > 1) return "<ambiguous>.$name"
+        return samePackage
+    }
+    private fun methodScope(code: String, offset: Int): IntRange? {
+        val controls = setOf("if", "for", "while", "switch", "catch", "synchronized", "try", "when")
+        return Regex("\\b([A-Za-z_$][\\w$]*)\\s*\\([^{};]*\\)\\s*(?:throws\\s+[^{}]+)?\\{").findAll(code)
+            .mapNotNull { match ->
+                if (match.groupValues[1] in controls) return@mapNotNull null
+                val open = match.range.last
+                var depth = 0
+                var close = -1
+                for (index in open until code.length) {
+                    if (code[index] == '{') depth++
+                    if (code[index] == '}' && --depth == 0) { close = index; break }
+                }
+                if (close > open && offset in (open + 1 until close)) open + 1 until close else null
+            }.minByOrNull { it.last - it.first }
+    }
     private fun constructs(sources: List<Triple<Path, String, String>>, name: String): Boolean {
         val pattern = Regex("\\bnew\\s+${Regex.escape(name)}\\s*[(<]")
         if (sources.any { pattern.containsMatchIn(it.third) && !declares(it.third, name) }) return true
@@ -85,8 +132,43 @@ abstract class WiredGateTask : DefaultTask() {
     private fun judge(kind: String, arg: String, s: List<Triple<Path, String, String>>): Boolean = when (kind) {
         "new" -> constructs(s, arg)
         "new-impl" -> implementors(s, arg).any { constructs(s, it) }
-        "call" -> s.any { Regex("(?:\\.|::)${Regex.escape(arg)}\\b").containsMatchIn(it.third) &&
-            !Regex("\\b\\w[\\w<>\\[\\], ?]*\\s+${Regex.escape(arg)}\\s*\\([^)]*\\)\\s*[{;]").containsMatchIn(it.third) }
+        "call" -> {
+            val target = arg.split('.')
+            if (target.size < 3) false else {
+                val knownTypes = declaredTypes(s)
+                val method = target.last()
+                val type = target.dropLast(1).joinToString(".")
+                val simpleType = type.substringAfterLast('.')
+                val targetTypes = s.filter { declares(it.third, simpleType) }
+                    .map { qualifiedType(simpleType, it.third, knownTypes) }.toSet()
+                val targetType = type
+                if (targetType !in targetTypes) false else {
+                    val staticCall = Regex("\\b((?:[A-Za-z_$][\\w$]*\\.)*[A-Za-z_$][\\w$]*)\\s*(?:\\.|::)\\s*${Regex.escape(method)}\\s*\\(")
+                    val methodCall = Regex("\\b(\\w+)\\s*(?:\\.|::)\\s*${Regex.escape(method)}\\s*\\(")
+                    s.any { source ->
+                        if (declares(source.third, simpleType) && qualifiedType(simpleType, source.third, knownTypes) == targetType) false else {
+                            val declarations = Regex("\\b((?:[A-Za-z_$][\\w$]*\\.)*[A-Za-z_$][\\w$]*)\\s+(\\w+)\\b(?!\\s*\\()")
+                                .findAll(source.third).map { match ->
+                                    Triple(match.range.first, match.groupValues[1], match.groupValues[2])
+                                }.toList()
+                            staticCall.findAll(source.third)
+                                .any { qualifiedType(it.groupValues[1], source.third, knownTypes) == targetType } ||
+                                methodCall.findAll(source.third).any { call ->
+                                    val callScope = methodScope(source.third, call.range.first)
+                                    val visible = declarations.filter { declaration ->
+                                        declaration.third == call.groupValues[1] &&
+                                            (methodScope(source.third, declaration.first) == null ||
+                                                methodScope(source.third, declaration.first) == callScope)
+                                    }
+                                    visible.isNotEmpty() && visible.all {
+                                        qualifiedType(it.second, source.third, knownTypes) == targetType
+                                    }
+                                }
+                        }
+                    }
+                }
+            }
+        }
         "implements" -> implementors(s, arg).isNotEmpty()
         "main" -> s.any { Regex("\\bpublic\\s+static\\s+void\\s+main\\s*\\(").containsMatchIn(it.third) }
         "returns" -> s.any { Regex("(?:^|[\\s.])${Regex.escape(arg).replace("\\ ", "\\\\s*")}\\s+\\w+\\s*\\(").containsMatchIn(it.third) }

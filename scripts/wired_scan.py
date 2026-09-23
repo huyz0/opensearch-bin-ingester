@@ -17,7 +17,7 @@ A predicate is a backticked span in the third column, one of:
                         call `T.m(` from another file when T's file builds T
     `new-impl I`        `new C(` for some src/main class C implementing I,
                         outside C's own file
-    `call m`            `.m(` or `::m` outside the files declaring m
+    `call pkg.T.m`      a call through a receiver declared as exactly pkg.T, or pkg.T.m/pkg.T::m
     `implements I`      a src/main type implements I (or X.I)
     `main`              `public static void main(`
     `returns T`         a method whose return type is exactly T
@@ -66,6 +66,65 @@ def declares_type(code, name):
     return re.search(r'\b(class|interface|record|enum)\s+' + re.escape(name) + r'\b', code)
 
 
+def package_name(code):
+    match = re.search(r'(?m)^\s*package\s+([\w.]+)\s*;', code)
+    return match.group(1) if match else ''
+
+
+def declared_types(sources):
+    result = set()
+    for _, _, code in sources:
+        package = package_name(code)
+        for name in re.findall(r'\b(?:class|interface|record|enum)\s+([A-Za-z_$][\w$]*)', code):
+            result.add(f'{package}.{name}' if package else name)
+    return result
+
+
+def qualified_type(name, code, known_types):
+    if '.' in name:
+        return name
+    imported = next((value for value in re.findall(r'\bimport\s+([\w.]+)\s*;', code)
+                     if value.rsplit('.', 1)[-1] == name), None)
+    if imported:
+        return imported
+    package = package_name(code)
+    same_package = f'{package}.{name}' if package else name
+    if same_package in known_types:
+        return same_package
+    wildcard_imports = set(re.findall(r'\bimport\s+([\w.]+)\.\*\s*;', code))
+    candidates = {value for value in known_types
+                  if value.rsplit('.', 1)[-1] == name
+                  and value.rpartition('.')[0] in wildcard_imports}
+    if len(candidates) == 1:
+        return next(iter(candidates))
+    if len(candidates) > 1:
+        return f'<ambiguous>.{name}'
+    return same_package
+
+
+def method_scope(code, offset):
+    controls = {'if', 'for', 'while', 'switch', 'catch', 'synchronized', 'try', 'when'}
+    scope = re.compile(r'\b([A-Za-z_$][\w$]*)\s*\([^{};]*\)\s*(?:throws\s+[^{}]+)?\{')
+    matches = []
+    for match in scope.finditer(code):
+        if match.group(1) in controls:
+            continue
+        opening = match.end() - 1
+        depth = 0
+        closing = None
+        for index in range(opening, len(code)):
+            if code[index] == '{':
+                depth += 1
+            elif code[index] == '}':
+                depth -= 1
+                if depth == 0:
+                    closing = index
+                    break
+        if closing is not None and opening < offset < closing:
+            matches.append((opening + 1, closing))
+    return min(matches, key=lambda span: span[1] - span[0]) if matches else None
+
+
 def constructs(sources, name):
     pat = re.compile(r'\bnew\s+' + re.escape(name) + r'\s*[(<]')
     if any(pat.search(code) and not declares_type(code, name) for _, _, code in sources):
@@ -78,7 +137,6 @@ def constructs(sources, name):
         return False
     call = re.compile(r'\b' + re.escape(name) + r'\s*\.\s*\w+\s*\(')
     return any(not declares_type(code, name) and any(
-        # ⚠️ NOT `new T.Nested(`: that builds the nested type, never T.
         not re.search(r'\bnew\s*$', code[:m.start()]) for m in call.finditer(code))
         for _, _, code in sources)
 
@@ -95,10 +153,40 @@ def judge(kind, arg, sources):
     if kind == 'new-impl':
         return any(constructs(sources, c) for c in implementors(sources, arg))
     if kind == 'call':
-        use = re.compile(r'(?:\.|::)' + re.escape(arg) + r'\b(?!\s*\w)')
-        decl = re.compile(r'\b\w[\w<>\[\], ?]*\s+' + re.escape(arg) + r'\s*\([^)]*\)\s*'
-                          r'(?:throws[^{;]*)?[{;]')
-        return any(use.search(code) and not decl.search(code) for _, _, code in sources)
+        target = re.fullmatch(r'((?:[A-Za-z_$][\w$]*\.)*[A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)', arg)
+        if not target:
+            return False
+        type_name, method = target.groups()
+        known_types = declared_types(sources)
+        simple_type = type_name.rsplit('.', 1)[-1]
+        target_types = {qualified_type(simple_type, code, known_types) for _, _, code in sources
+                        if declares_type(code, simple_type)}
+        target_type = type_name if '.' in type_name else next(iter(target_types), None)
+        if target_type is None or target_type not in target_types:
+            return False
+        static_call = re.compile(r'\b((?:[A-Za-z_$][\w$]*\.)*[A-Za-z_$][\w$]*)\s*(?:\.|::)\s*'
+                                 + re.escape(method) + r'\s*\(')
+        method_call = re.compile(r'\b(\w+)\s*(?:\.|::)\s*' + re.escape(method) + r'\s*\(')
+        for _, _, code in sources:
+            if declares_type(code, simple_type) and qualified_type(simple_type, code, known_types) == target_type:
+                continue
+            declarations = [
+                (match.start(), match.group(1), match.group(2), method_scope(code, match.start()))
+                for match in re.finditer(
+                    r'\b((?:[A-Za-z_$][\w$]*\.)*[A-Za-z_$][\w$]*)\s+(\w+)\b(?!\s*\()', code)]
+            static_target_call = any(qualified_type(match.group(1), code, known_types) == target_type
+                                     for match in static_call.finditer(code))
+            def receiver_matches(call):
+                call_scope = method_scope(code, call.start())
+                visible = [declaration for declaration in declarations
+                           if declaration[2] == call.group(1)
+                           and (declaration[3] is None or declaration[3] == call_scope)]
+                return bool(visible) and all(
+                    qualified_type(declaration[1], code, known_types) == target_type
+                    for declaration in visible)
+            if static_target_call or any(receiver_matches(match) for match in method_call.finditer(code)):
+                return True
+        return False
     if kind == 'implements':
         return bool(implementors(sources, arg))
     if kind == 'main':
@@ -133,6 +221,8 @@ def predicates(cell):
         kind, _, arg = span.partition(' ')
         if kind not in ('new', 'new-impl', 'call', 'implements', 'returns', 'constant') \
                 or not arg.strip():
+            return None
+        if kind == 'call' and not re.fullmatch(r'[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*){2,}', arg.strip()):
             return None
         out.append((kind, arg.strip()))
     return out or None

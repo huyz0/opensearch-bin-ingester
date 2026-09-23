@@ -59,7 +59,7 @@ of what each one is.
 - M5.6e — WIRED.
 - M5.91a — WIRED.
 - M5.91b — ⚠️ STILL UNWIRED: nothing constructs `SegmentPrefetcher`. Owned by M8.56, deferred to M9 by the user's decision of 2026-09-20.
-- M5.91c — WIRED (`call tierFor`, by M8.28).
+- M5.91c — WIRED (`call io.github.huyz0.os.biningester.client.FallbackLadder.tierFor`, by M8.28).
 - M6.15 — WIRED.
 - M6.19 — WIRED (M8.32).
 - M7.17 — WIRED.

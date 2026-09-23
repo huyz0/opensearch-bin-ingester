@@ -123,15 +123,15 @@ class WiredGateTest {
   @Test
   void EVERYPredicateInACellMustHOLD() throws Exception {
     scratch();
-    entry("`new Widget`; `call spin`", "—");
-    source("a/src/main/java/x/Widget.java", "class Widget { void spin() {} }\n");
-    source("b/src/main/java/x/Root.java", "class Root { Object w = new Widget(); }\n");
+    entry("`new Widget`; `call x.Widget.spin`", "—");
+    source("a/src/main/java/x/Widget.java", "package x; class Widget { void spin() {} }\n");
+    source("b/src/main/java/x/Root.java", "package x; class Root { Object w = new Widget(); }\n");
 
     assertThat(scan().exit())
         .as("constructed and never run is M5.91c's exact defect").isEqualTo(1);
 
     source("b/src/main/java/x/Root.java",
-        "class Root { void go() { new Widget().spin(); } }\n");
+        "package x; class Root { Widget widget; void go() { new Widget(); widget.spin(); } }\n");
     assertThat(scan().exit()).isZero();
   }
 

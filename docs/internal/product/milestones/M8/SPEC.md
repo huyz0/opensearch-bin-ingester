@@ -45,11 +45,11 @@ written, the cell is wrong and is fixed HERE.
 | M5.6e | the production `SequencerTransport` — `InProcessTransport` in `testFixtures` is the only implementation | `new-impl SequencerTransport` (a construction of an implementation) | — |
 | M5.91a | no production `main()` (closed by M8.4) | `main` | — |
 | M5.91b | `SegmentPrefetcher`, `NodeSegmentSource`, `NodeSubscriptions` — built only by tests (closed by M8.31 for the last two, and by M8.56 for `SegmentPrefetcher`) | `new SegmentPrefetcher`; `new NodeSegmentSource`; `new NodeSubscriptions` | M8.56 |
-| M5.91c | `FallbackLadder` — built only by tests, and never EXECUTED (closed by M8.28, criterion 20) | `call tierFor` (a static policy: RUN, since there is nothing to construct) | — |
-| M6.15 | `IndexRegistrar.onReconnect()`, called by nothing because no production `SubscriptionTransport` exists | `call onReconnect` | — |
+| M5.91c | `FallbackLadder` — built only by tests, and never EXECUTED (closed by M8.28, criterion 20) | `call io.github.huyz0.os.biningester.client.FallbackLadder.tierFor` (a static policy: RUN, since there is nothing to construct) | — |
+| M6.15 | `IndexRegistrar.onReconnect()`, called by nothing because no production `SubscriptionTransport` exists | `call io.github.huyz0.os.biningester.plugin.IndexRegistrar.onReconnect` | — |
 | M6.19 | `RoutedIngest` — the routed path, in no deployable server | `new RoutedIngest` | — |
 | M7.17 | `ProgressReporter.Positions` — no production source (M8.43, split out of M8.6) | `implements Positions` | — |
-| M7.18 | the retained-floor frame from GC to the consumer (closed by M8.6, ADR-0056) | `call retainedFrom` | — |
+| M7.18 | the retained-floor frame from GC to the consumer (closed by M8.6, ADR-0056) | `call io.github.huyz0.os.biningester.client.ConsumerClient.retainedFrom` | — |
 | M7.21n | `RetentionPass`, `LeasedGc`, `RetentionObservable` — constructed only by their own tests (closed by M8.5) | `new RetentionPass`; `new LeasedGc`; `new RetentionObservable` | — |
 | M7.24 | `ChainGc`, constructed only by its own test (M8.39; split out of M8.5 because every checkpoint source is a read per pass) | `new ChainGc` | — |
 | M7.25 | the commit chain — **no `src/main` method produces a `List<CommitDelta>`** | `new ChainMemory` (closed by M8.3: the chain is a Snapshot record component, which a method-return predicate could not see) | — |

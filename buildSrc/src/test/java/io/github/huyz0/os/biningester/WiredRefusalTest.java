@@ -74,18 +74,60 @@ class WiredRefusalTest {
   @Test
   void aCALLOnlyInsideTheDECLARINGFileIsRefused() throws Exception {
     write("a/src/main/java/x/Widget.java",
-        "class Widget { void spin() {} void go() { this.spin(); } }\n");
-    assertThat(scan("`call spin`")).as("the class calling itself").isEqualTo(1);
+        "package x; class Widget { void spin() {} void go() { this.spin(); } }\n");
+    assertThat(scan("`call x.Widget.spin`")).as("the class calling itself").isEqualTo(1);
   }
 
   @Test
-  void constructingANESTEDTypeIsNotConstructingTheOUTERONE() throws Exception {
-    // ⚠️ MEASURED by review: the factory fallback read `new Widget.Options(`
-    // as a call `Widget.Options(` and reported WIDGET wired.
-    write("a/src/main/java/x/Widget.java", "class Widget { record Options(int n) {}\n"
-        + " static Widget make() { return new Widget(); } }\n");
-    write("b/src/main/java/x/Root.java", "class Root { Object o = new Widget.Options(3); }\n");
-    assertThat(scan("`new Widget`")).isEqualTo(1);
+  void aDIFFERENTReceiverTypeWithTheSameMethodIsNotTheNamedCall() throws Exception {
+    write("a/src/main/java/x/Widget.java", "package x; class Widget { void spin() {} }\n");
+    write("b/src/main/java/x/Other.java", "package x; class Other { void spin() {} }\n");
+    write("b/src/main/java/x/Root.java", "package x; class Root { Other other; void run() { other.spin(); } }\n");
+    assertThat(scan("`call x.Widget.spin`")).isEqualTo(1);
+  }
+
+  @Test
+  void aSHADOWEDReceiverOfAnotherTypeDoesNotWireTheNamedCall() throws Exception {
+    write("a/src/main/java/x/Widget.java", "package x; class Widget { void spin() {} }\n");
+    write("b/src/main/java/x/Other.java", "package x; class Other {}\n");
+    write("b/src/main/java/x/Root.java", "package x; class Root { Widget widget;\n"
+        + " void run() { { Other widget; widget.spin(); } } }\n");
+    assertThat(scan("`call x.Widget.spin`")).isEqualTo(1);
+  }
+
+  @Test
+  void anUNQUALIFIEDCallBesideAValidConstructionIsRefused() throws Exception {
+    write("a/src/main/java/x/Widget.java", "class Widget {}\n");
+    write("b/src/main/java/x/Other.java", "class Other { void spin() {} }\n");
+    write("b/src/main/java/x/Root.java", "class Root { Object built = new Widget();\n"
+        + " Other other; void run() { other.spin(); } }\n");
+    assertThat(scan("`new Widget`; `call spin`")).isEqualTo(1);
+  }
+
+  @Test
+  void aSAMENamedReceiverFromAnotherPackageDoesNotWireTheNamedCall() throws Exception {
+    write("a/src/main/java/pkg/Widget.java", "package pkg; class Widget { void spin() {} }\n");
+    write("b/src/main/java/other/Widget.java", "package other; class Widget { void spin() {} }\n");
+    write("b/src/main/java/pkg/Root.java", "package pkg; class Root {\n"
+        + " other.Widget widget; void run() { widget.spin(); }\n}\n");
+    assertThat(scan("`call pkg.Widget.spin`")).isEqualTo(1);
+  }
+
+  @Test
+  void aSTATICCallToAnotherPackagesSameNamedTypeDoesNotWireTheNamedCall() throws Exception {
+    write("a/src/main/java/pkg/Widget.java", "package pkg; class Widget { static void spin() {} }\n");
+    write("b/src/main/java/other/Widget.java", "package other; class Widget { static void spin() {} }\n");
+    write("b/src/main/java/pkg/Root.java", "package pkg; class Root {\n"
+        + " void run() { other.Widget.spin(); }\n}\n");
+    assertThat(scan("`call pkg.Widget.spin`")).isEqualTo(1);
+  }
+
+  @Test
+  void aFullyQualifiedCallThroughTheNamedReceiverIsAccepted() throws Exception {
+    write("a/src/main/java/x/Widget.java", "package x; class Widget { void spin() {} }\n");
+    write("b/src/main/java/x/Root.java",
+        "package x; class Root { Widget widget; void run() { widget.spin(); } }\n");
+    assertThat(scan("`call x.Widget.spin`")).isZero();
   }
 
   @Test
