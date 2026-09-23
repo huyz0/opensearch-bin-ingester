@@ -28,7 +28,8 @@ fi
 # `test` would deadlock every T3 and T4 test in a milestone's plan: no way to
 # record one honestly, and the forgeable red.json waiting right there.
 PLAN="$OUT/plan.txt"
-python3 scripts/tdd_scan.py plan "$@" > "$PLAN" || { cat "$PLAN"; FAILED=1; finish; }
+PYTHON="${PYTHON3:-python3}"
+"$PYTHON" scripts/tdd_scan.py plan "$@" > "$PLAN" || { cat "$PLAN"; FAILED=1; finish; }
 
 # One Gradle invocation PER SELECTOR. A parameterized invocation appears in the
 # JUnit XML as `[1] arg, arg` with no method name, so results can only be
@@ -36,15 +37,17 @@ python3 scripts/tdd_scan.py plan "$@" > "$PLAN" || { cat "$PLAN"; FAILED=1; fini
 RC=0
 while read -r task sel; do
   [ -n "$task" ] || continue
+  # Windows Python writes CRLF; normalize through a no-newline CLI boundary.
+  sel=$("$PYTHON" scripts/tdd_scan.py normalize-selector "$sel") || { fail "could not normalize Gradle selector"; FAILED=1; finish; }
   ident="${sel%.*}#${sel##*.}"
-  find . -path '*/build/test-results/*' -name 'TEST-*.xml' -delete 2>/dev/null || true
   case "$task" in
     buildSrc:*) GRADLE=(./gradlew -p buildSrc "${task#buildSrc:}") ;;
     *)          GRADLE=(./gradlew "$task") ;;
   esac
   echo "         ${GRADLE[*]} --tests $sel"
+  find . -path '*/build/test-results/*' -name 'TEST-*.xml' -delete 2>/dev/null || true
   "${GRADLE[@]}" --tests "$sel" >> "$OUT/red.log" 2>&1
-  python3 scripts/tdd_scan.py record-one "$OUT" "$ident" || RC=1
+  "$PYTHON" scripts/tdd_scan.py record-one "$OUT" "$ident" || RC=1
 done < "$PLAN"
 [ "$RC" -eq 0 ] || FAILED=1
 finish

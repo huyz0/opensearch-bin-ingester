@@ -10,7 +10,7 @@ M8 IDs: the catch-up read path and the ninth chaos row (M8.24), the ladder's
 store tiers and gap re-reads ([ADR-0057](../../decisions/0057-the-store-reading-fallback-tiers-and-gap-re-reads-wait-for-m9.md),
 whose deferral M9 discharges and whose decision is superseded in part),
 the prefetcher (M8.56), address-matched challenges (M8.58), and M8's
-milestone-review harvest (M8.60–M8.75). NFR-7's harness must measure the
+milestone-review harvest (M8.60–M8.80). NFR-7's harness must measure the
 [ADR-0058](../../decisions/0058-a-partitioned-pod-acks-on-a-durable-commit-intent.md)
 path, where a 202 may precede its offset.
 
@@ -95,7 +95,7 @@ per criterion, and is § *What a cloud run adds*.
 | M8.28's tiers 2 and 3 and gap re-reads | **Three tasks, DESIGNED AND BUILT IN M9** (the user's decision, 2026-09-20). (a) The gap RE-READ over a reachable ingester, with `TENS_OF_GETS` counted for it, is **M9.13**. (b) **M9.20 is an ADR choosing a THIRD approach** to plugin-side store access, both earlier candidates having been rejected on 2026-09-20 -- a SigV4 signer in the plugin (a credential in the OpenSearch JVM) and long-lived pre-issued chain grants (amending ADR-0041's short TTL). (c) **M9.21 EXECUTES tiers 2 and 3** on a real gap with NO ingester reachable, re-reading the missing window through M8.24's catch-up-from-offset read path and counting the GETs and LISTs each tier costs. ⚠️ **ADR-0057 IS SUPERSEDED IN PART** -- its decision that tiers 2 and 3 wait, and its consequence that an outage longer than the backoff leaves consumers indexing nothing -- and M9.20 says so in its own text, leaving ADR-0057's tier-0/1 half standing |
 | M8.56 — wire `SegmentPrefetcher` | **A task**, and it must land before NFR-4 is measured: without it every non-writing AZ's first read is a cold proxy GET, and the measured read rate would be the wrong design's. It also keeps `check-wired.sh`'s M5.91b entry owned until it lands |
 | M8.58 — address-matched challenges | **A task, and its shape is decided** (the user's decision, 2026-09-20): **the Kubernetes pod UID goes IN THE LEASE**, and `EndpointSliceView` matches `targetRef.uid` rather than the endpoint's address. ⚠️ **THAT IS A WIRE-FORMAT CHANGE**, so the task follows [`wire-format-change`](../../../../../.agents/skills/wire-format-change/SKILL.md): the format document, every reader, every writer, the fakes, the golden files and the ADR in ONE commit. Exercised against `FakeKubeApi`; a real cluster stays unavailable and the row says so |
-| M8.60–M8.75 — M8's milestone-review harvest | **Sixteen tasks**, each as written. M8.61 and M8.62 name many commits and may be split at take-up by `next-task` if one commit's worth turns out to be less |
+| M8.60–M8.80 — M8's milestone-review harvest | **Twenty tasks**, each as written, including M8.76/.77 split from the combined M8.73 review fix and M8.79/.80 split from M8.78 after round-three review. M8.61 and M8.62 name many commits and may be split at take-up by `next-task` if one commit's worth turns out to be less |
 | measurement M3 (`direct` fan-out threshold) | **A task (M9.14)**, and half of it is NOT-RUN on this rig: see criterion 12 |
 | M5.43, M5.45d | **Already done** (`directEnabled` exists; `publishSegment` serves `DIRECT`). Nothing inherited |
 
@@ -480,7 +480,10 @@ multiplied from a price table (criterion 16). Each is a named NOT-RUN in
 | M8.70 | T3 | `ShutdownDrainIT` — 503s served before readiness flips | a rollout that drops requests |
 | M8.71 | T0 + T3 | **four named cases, each red first**: `NodeProcessKillResumesPausedTest` (a paused node killed and never reaped), `RetryFloorCallerTest` (`DEFAULT_RETRY_FLOOR` unread by production), `RootClosesOnlyOwnedTransportTest` (an injected transport closed by the root), `ShardPositionsCloseTest` (removal by shard id alone, evicting another index's entry) | four unpinned behaviours, each invisible to coverage |
 | M8.72 | T4 (`clusterTest`) | `PluginLoggingIT` — the lines absent from the log4j output | logs that reach nobody |
-| M8.73 | script test | `check-wired` green on a fully-qualified nested construction | a gate grammar with a hole |
+| M8.76 | JVM and Python gate tests | wildcard-imported instance and static call predicates resolve to their declared type; ambiguous wildcard imports are refused | a correct call is falsely treated as unwired, or an ambiguous call is accepted |
+| M8.77 | JVM and Python gate tests | `new pkg.Widget.Nested(...)` does not satisfy `new Widget` | a nested-type construction falsely wires the outer type |
+| M8.79 | Python unit and Bash integration tests | Windows-style paths and Python paths with spaces work; CRLF selector reaches scoped Gradle without `\\r`; failure red hashes source bytes, but a passing test produces no red | the selected test is not run, a passing test is recorded red, or its red is not bound to the source |
+| M8.80 | Python unit and Bash integration tests | prior JUnit reports are removed; cleanup failure exits before Gradle and cannot mint red evidence | stale JUnit failure is recorded although the selected test never ran |
 | M8.74 | T0 + T3 | `PeerReplyTooLargeTest` — a 400 treated as unknown | blaming the producer for the peer |
 | M8.75 | script test | the workflow check green with `soakTest` removed | NFR-2 regressing unseen |
 
@@ -606,7 +609,10 @@ until it lands.
 | M8.70 | A readiness-to-refusal delay in graceful shutdown | NFR-9 |
 | M8.71 | Harness and composition-root loose ends | — (harness) |
 | M8.72 | Verify the three `System.getLogger` lines reach the OpenSearch log | NFR-11 |
-| M8.73 | `check-wired`'s grammar | — (gate) |
+| M8.76 | `check-wired` resolves package-qualified calls, including wildcard imports | — (gate) |
+| M8.77 | `check-wired` excludes qualified nested-type construction | — (gate) |
+| M8.79 | TDD recorder resolves Windows source paths and selector line endings | — (gate) |
+| M8.80 | TDD recorder fails closed when stale-result cleanup cannot finish | — (gate) |
 | M8.74 | `BodyTooLargeException` blames the right side; 400 is a known outcome | FR-12 |
 | M0.27 | The L1 CI job (Docker, `soakTest` and the cost jobs need it; it lands with the first product test, which exists now) | — (CI) |
 | M8.75 | Put `soakTest` in the nightly `measurement` workflow (L2S, nightly per build.md), with a script asserting the workflow names it | NFR-2 |

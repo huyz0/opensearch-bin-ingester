@@ -149,6 +149,7 @@ def task_for(src):
     Testing.md rule 1, non-negotiable 7: if it needs I/O to test, it is in the
     wrong layer.
     """
+    src = src.replace('\\', '/')
     m = re.search(r'/src/([^/]+)/java/', src)
     task = SOURCE_SET_TASK.get(m.group(1) if m else '', None)
     if task is None:
@@ -172,6 +173,11 @@ def task_for(src):
     # gains tests. Invisible until now because buildSrc, the only place with
     # tests, is special-cased just above.
     return ':%s:%s' % (src.split('/', 1)[0], task)
+
+
+def normalize_selector(selector):
+    """Remove the carriage return left by Bash read on a Windows CRLF plan."""
+    return selector.removesuffix('\r')
 
 
 def plan(ids):
@@ -274,6 +280,9 @@ if __name__ == '__main__':
         # task, or 'none' when the source set is not a test one.
         for src in sys.argv[2:]:
             print(task_for(src) or 'none')
+        sys.exit(0)
+    if cmd == 'normalize-selector':
+        sys.stdout.write(normalize_selector(sys.argv[2]))
         sys.exit(0)
     if cmd == 'plan':
         sys.exit(plan(sys.argv[2:]))
