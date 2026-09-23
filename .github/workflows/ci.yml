@@ -103,3 +103,22 @@ jobs:
         # check-tdd cannot run at all for the same reason: red records live in
         # gitignored .harness/. AGENTS.md § Gates.
         run: SKIP=check-reviewed,check-tdd pre-commit run --all-files --show-diff-on-failure
+
+  l1:
+    name: "L1 — unit tests"
+    needs: gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Product unit tests
+        run: ./gradlew test --no-daemon
+      - name: Refuse an empty L1 test run
+        run: python scripts/check-l1-tests.py

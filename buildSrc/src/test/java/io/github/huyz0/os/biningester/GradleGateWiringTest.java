@@ -32,6 +32,18 @@ class GradleGateWiringTest {
     }
 
     @Test
+    void l1JobRunsProductTestsAndRefusesZeroResults() throws Exception {
+        String workflow = stagedFile(".github/workflows/ci.yml");
+
+        assertThat(workflow)
+                .contains("name: \"L1 — unit tests\"")
+                .contains("run: ./gradlew test --no-daemon")
+                .contains("        run: python scripts/check-l1-tests.py\n");
+        assertThat(workflow.substring(workflow.indexOf("\n  l1:")))
+                .doesNotContain("continue-on-error:", "\n    if:", "\n        if:");
+    }
+
+    @Test
     void wiringTestReadsTheStagedHookBlob() throws Exception {
         Process process = new ProcessBuilder("git", "show", ":.pre-commit-config.yaml")
                 .directory(repository().toFile()).redirectErrorStream(true).start();
