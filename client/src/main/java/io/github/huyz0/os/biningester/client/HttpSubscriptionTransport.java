@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.client;
 
+import io.github.huyz0.os.biningester.format.CatchUpRequestFrame;
 import io.github.huyz0.os.biningester.format.ConsumerProgress;
 import io.github.huyz0.os.biningester.format.IndexRegistration;
 import io.github.huyz0.os.biningester.format.RunKey;
@@ -14,6 +15,7 @@ import java.time.Duration;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 
 /**
  * The consumer's half of the subscription channel (M8.21, M5.6e, FR-16, FR-9).
@@ -84,6 +86,7 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport {
     public static final String PROGRESS_PATH = "/ctl/progress";
 
     private final WebClient client;
+    private final HttpCatchUpExchange catchUpExchange;
     private final String az;
     private final Runnable onReconnect;
     private final Duration retryFloor;
@@ -321,6 +324,7 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport {
             throw new IllegalArgumentException("retry floor must be positive and at or below the "
                     + "ceiling: " + retryFloor + " / " + retryCeiling);
         }
+        this.catchUpExchange = new HttpCatchUpExchange(endpoint, timeout, pollWait);
         this.client = WebClient.builder()
                 .baseUri(endpoint)
                 .connectTimeout(timeout)
@@ -365,6 +369,17 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport {
             stopped.set(true);
             reader.interrupt();
         };
+    }
+
+    @Override
+    public CatchUpResult requestCatchUp(CatchUpRequestFrame request,
+            Consumer<SubscriptionEvent> lane) throws IOException {
+        Objects.requireNonNull(request, "request");
+        Objects.requireNonNull(lane, "lane");
+        if (closed.get()) {
+            throw new IllegalStateException("transport is closed");
+        }
+        return catchUpExchange.request(request, lane);
     }
 
     private void readForever(RunKey key, String id, Listener listener, AtomicBoolean stopped) {

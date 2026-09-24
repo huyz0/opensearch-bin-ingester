@@ -1,11 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.client;
 
+import io.github.huyz0.os.biningester.format.CatchUpRequestFrame;
 import io.github.huyz0.os.biningester.format.RunKey;
+import io.github.huyz0.os.biningester.format.SubscriptionEvent;
+import java.io.IOException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.Consumer;
 
 /**
  * How a consumer is told its stream advanced.
@@ -17,6 +21,27 @@ import java.util.Objects;
  * scale inside L0's budget.
  */
 public interface SubscriptionTransport {
+
+    /** Outcome of a node-scoped catch-up exchange. */
+    enum CatchUpResult {
+        /** A matching end frame completed the exchange. */
+        COMPLETE,
+        /** The peer does not implement catch-up and live polling remains usable. */
+        UNSUPPORTED
+    }
+
+    /**
+     * Sends one node-scoped, stream-count-bounded replay request on the live
+     * delivery URL. Implementations synchronously offer each validated event
+     * to {@code lane} before reading the next frame, allowing a bounded lane to
+     * apply backpressure. Older transport implementations may report unsupported.
+     */
+    default CatchUpResult requestCatchUp(CatchUpRequestFrame request,
+            Consumer<SubscriptionEvent> lane) throws IOException {
+        Objects.requireNonNull(request, "request");
+        Objects.requireNonNull(lane, "lane");
+        return CatchUpResult.UNSUPPORTED;
+    }
 
     /** Handed each delivery for the subscribed stream. */
     @FunctionalInterface

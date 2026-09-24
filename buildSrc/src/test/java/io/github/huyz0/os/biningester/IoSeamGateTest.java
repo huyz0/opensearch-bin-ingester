@@ -132,7 +132,8 @@ class IoSeamGateTest {
    * scenario lib.sh says {@code workspace_files} exists to make unreachable.
    */
   /**
-   * The composition root's two edge files, exempted BY NAME since M8.4.
+   * The composition root's two edge files, plus the HTTP transport's streaming
+   * exchange adapter, exempted BY NAME.
    *
    * <p>⚠️ THE ORACLE HAS TO KNOW ABOUT THEM OR IT COUNTS A DIFFERENT SET than
    * the gate does, and the case below would red for a correct gate.
@@ -144,7 +145,8 @@ class IoSeamGateTest {
    */
   private static final List<String> EXEMPT_FILES = List.of(
       "server/src/main/java/io/github/huyz0/os/biningester/server/Main.java",
-      "server/src/main/java/io/github/huyz0/os/biningester/server/ConfigFile.java");
+      "server/src/main/java/io/github/huyz0/os/biningester/server/ConfigFile.java",
+      "client/src/main/java/io/github/huyz0/os/biningester/client/HttpCatchUpExchange.java");
 
   @Test
   void thisRepositoryPassesAndTheGateSaysHowManyFilesItRead() throws Exception {
@@ -165,9 +167,9 @@ class IoSeamGateTest {
   }
 
   /**
-   * ⚠️ **AN EXEMPTION NOBODY CAN FALSIFY IS A HOLE.** Two files are excused
+   * ⚠️ **AN EXEMPTION NOBODY CAN FALSIFY IS A HOLE.** Three files are excused
    * from this gate, and nothing so far says they still need to be. This runs
-   * the scanner over exactly those two and asserts that each is reported — so
+   * the scanner over exactly those three and asserts that each is reported — so
    * the excuse is measured on every commit, and the day a refactor moves the
    * clock or the file read out of one of them, this case goes red and the entry
    * has to be DELETED rather than carried forward as a standing licence.

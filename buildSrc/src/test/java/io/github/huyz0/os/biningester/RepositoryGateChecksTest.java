@@ -56,6 +56,31 @@ class RepositoryGateChecksTest {
     }
 
     @Test
+    void ioGateAllowsStreamingHttpOnlyInTheNamedCatchUpExchangeAdapter() throws Exception {
+        Path root = Files.createTempDirectory("gate-streaming-http-");
+        String adapterPath = "client/src/main/java/io/github/huyz0/os/biningester/client/HttpCatchUpExchange.java";
+        String reference = "class HttpCatchUpExchange { java.net.http.HttpClient client; }\n";
+        Path adapter = root.resolve(adapterPath);
+        Files.createDirectories(adapter.getParent());
+        Files.writeString(adapter, reference);
+        ArrayList<String> failures = new ArrayList<>();
+
+        RepositoryGateChecks.INSTANCE.ioSeam(root, java.util.List.of(adapter), failures);
+
+        assertThat(failures).as("streaming network I/O is confined to the transport seam")
+                .isEmpty();
+
+        Path businessLogic = root.resolve(
+                "client/src/main/java/io/github/huyz0/os/biningester/client/ConsumerClient.java");
+        Files.writeString(businessLogic, reference);
+        failures.clear();
+        RepositoryGateChecks.INSTANCE.ioSeam(root, java.util.List.of(businessLogic), failures);
+
+        assertThat(failures).singleElement().satisfies(failure -> assertThat(failure)
+                .contains("I/O package java.net", "ConsumerClient.java"));
+    }
+
+    @Test
     void tddEvidenceRequiresARealByteBoundRedRecord() {
         String sha = "abc";
         assertThat(TddEvidenceTask.Companion.redRecordMatches(

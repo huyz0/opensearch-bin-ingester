@@ -81,7 +81,7 @@ object RepositoryGateChecks {
         val allowed = listOf("java.net.URI", "java.net.URLEncoder", "java.net.URLDecoder", "java.io.IOException", "java.io.UncheckedIOException", "java.io.FileNotFoundException", "java.io.InputStream", "java.io.OutputStream", "java.io.ByteArrayInputStream", "java.io.ByteArrayOutputStream", "java.io.FilterInputStream", "java.io.Closeable", "java.io.Flushable", "java.io.DataInputStream", "java.io.DataOutputStream", "java.io.Serializable", "java.util.zip.CRC32", "java.util.zip.CRC32C", "java.util.zip.Adler32")
         files.filter { it.extension() == "java" && normalized(it).contains("/src/main/java/") }
             .filterNot { normalized(it).contains("/binstore-backends/") }
-            .filterNot { root.relativize(it).toString().replace('\\', '/') in setOf("server/src/main/java/io/github/huyz0/os/biningester/server/Main.java", "server/src/main/java/io/github/huyz0/os/biningester/server/ConfigFile.java") }
+            .filterNot { root.relativize(it).toString().replace('\\', '/') in setOf("server/src/main/java/io/github/huyz0/os/biningester/server/Main.java", "server/src/main/java/io/github/huyz0/os/biningester/server/ConfigFile.java", "client/src/main/java/io/github/huyz0/os/biningester/client/HttpCatchUpExchange.java") }
             .forEach { file ->
                 val text = stripJavaNoise(file.readText())
                 packages.forEach { pkg ->
