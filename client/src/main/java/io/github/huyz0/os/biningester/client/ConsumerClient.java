@@ -9,16 +9,12 @@ import io.github.huyz0.os.biningester.format.SegmentRecord;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.time.Duration;
-import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
-import java.util.concurrent.TimeUnit;
 
 /**
  * Subscribes to one stream and hands records to the plugin in order.
@@ -43,8 +39,7 @@ public final class ConsumerClient implements AutoCloseable {
     private static final System.Logger LOG =
             System.getLogger(ConsumerClient.class.getName());
 
-    private final BlockingQueue<Delivery> deliveries;
-    private final Deque<ConsumerRecord> ready = new ArrayDeque<>();
+    private final ConsumerDeliveryQueues deliveryQueues;
     private final AutoCloseable subscription;
     private final RunKey key;
     private final SegmentSource segmentSource;
@@ -153,7 +148,7 @@ public final class ConsumerClient implements AutoCloseable {
         if (queueCapacity <= 0) {
             throw new IllegalArgumentException("queue capacity must be positive");
         }
-        this.deliveries = new ArrayBlockingQueue<>(queueCapacity);
+        this.deliveryQueues = new ConsumerDeliveryQueues(queueCapacity, this::decodeAndReportGap);
         this.subscription = subscribe.apply(this);
     }
 
@@ -207,7 +202,7 @@ public final class ConsumerClient implements AutoCloseable {
      */
 
     public void deliver(Delivery delivery) {
-        if (!deliveries.offer(Objects.requireNonNull(delivery, "delivery"))) {
+        if (!deliveryQueues.deliverLive(Objects.requireNonNull(delivery, "delivery"))) {
             // ⚠️ COUNTED, NOT LOGGED AND NOT THROWN. This runs on the
             // ingester's push path, where throwing would be indistinguishable
             // from a dead subscriber and would cost this node every OTHER
@@ -216,6 +211,33 @@ public final class ConsumerClient implements AutoCloseable {
             dropped.increment();
         }
     }
+
+    /** Opens a node-scoped catch-up delivery lane for one exchange. */
+    public void beginCatchUp(java.util.UUID requestId) {
+        deliveryQueues.beginCatchUp(requestId);
+    }
+
+    /** Adds a replay delivery, applying backpressure when the bounded lane is full. */
+    public void deliverCatchUp(java.util.UUID requestId, Delivery delivery)
+            throws InterruptedException {
+        if (!key.equals(Objects.requireNonNull(delivery, "delivery").key())) {
+            throw new IllegalArgumentException("catch-up delivery belongs to another stream");
+        }
+        deliveryQueues.deliverCatchUp(requestId, delivery);
+    }
+
+    /** Marks the matching exchange end; true when all replay records are handed out. */
+    public boolean completeCatchUp(java.util.UUID requestId) {
+        return deliveryQueues.completeCatchUp(requestId);
+    }
+
+    /** Whether the matching exchange ended and all its records were handed out. */
+    public boolean catchUpComplete(java.util.UUID requestId) {
+        return deliveryQueues.catchUpComplete(requestId);
+    }
+
+    /** Bounded number of live records served while catch-up is also pending. */
+    public static final int LIVE_RECORD_QUANTUM = 8;
 
     /**
      * The oldest offset of this stream that is still readable (M7.16).
@@ -431,16 +453,12 @@ public final class ConsumerClient implements AutoCloseable {
      * <p>WARNING: blocks for the WHOLE timeout when nothing arrives.
      */
     public Optional<ConsumerRecord> readNext(Duration pollTimeout) throws InterruptedException {
-        if (!ready.isEmpty()) {
-            return Optional.of(ready.poll());
-        }
-        Delivery delivery = deliveries.poll(pollTimeout.toMillis(), TimeUnit.MILLISECONDS);
-        if (delivery == null) {
-            return Optional.empty();
-        }
+        return deliveryQueues.readNext(pollTimeout);
+    }
+
+    private void decodeAndReportGap(Delivery delivery, Deque<ConsumerRecord> out) {
         reportAnyGap(delivery);
-        decodeInto(delivery, ready);
-        return Optional.ofNullable(ready.poll());
+        decodeInto(delivery, out);
     }
 
     /**
@@ -572,7 +590,7 @@ public final class ConsumerClient implements AutoCloseable {
 
     /** How many deliveries are queued but not yet decoded. */
     public int queuedDeliveries() {
-        return deliveries.size();
+        return deliveryQueues.queuedLiveDeliveries();
     }
 
     /**
