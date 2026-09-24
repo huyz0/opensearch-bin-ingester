@@ -197,6 +197,8 @@ class ProductionFetchPathTest {
     void theINGESTEREndpointIsARegisteredNODESetting() {
         assertThat(new BinStorePlugin(Settings.EMPTY).getSettings())
                 .as("⚠️ AN UNREGISTERED SETTING REFUSES THE NODE AT BOOT")
-                .contains(BinStorePlugin.INGESTER_ENDPOINT);
+                .contains(BinStorePlugin.INGESTER_ENDPOINT, BinStorePlugin.READER_ENDPOINT,
+                        BinStorePlugin.READER_SECRET_FILE, BinStorePlugin.STORE_BUCKET,
+                        BinStorePlugin.STORE_PREFIX, BinStorePlugin.TIER_TWO_INTERVAL);
     }
 }

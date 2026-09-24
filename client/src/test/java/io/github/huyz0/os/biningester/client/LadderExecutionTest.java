@@ -80,15 +80,18 @@ class LadderExecutionTest {
         try (AutoCloseable subscription = transport.subscribe(new RunKey(UUID.randomUUID(), 0),
                 (SubscriptionTransport.Listener) delivery -> { })) {
             await("the first answer", () -> transport.tier() == FallbackLadder.AutomaticTier.PUSH);
+            assertThat(transport.ingesterAnswers()).isTrue();
 
             answering.set(false);
             await("the loss", () -> transport.tier() == FallbackLadder.AutomaticTier.RECONNECT);
+            assertThat(transport.ingesterAnswers()).isFalse();
             // ⚠️ SEVERAL FAILED POLLS, or "entered once, not once per failed
             // poll" constrains nothing -- review MEASURED it green with every
             // failure counted as an entry.
             await("three refused polls", () -> refused.get() >= 3);
             answering.set(true);
             await("the return", () -> transport.tier() == FallbackLadder.AutomaticTier.PUSH);
+            assertThat(transport.ingesterAnswers()).isTrue();
         } finally {
             transport.close();
         }

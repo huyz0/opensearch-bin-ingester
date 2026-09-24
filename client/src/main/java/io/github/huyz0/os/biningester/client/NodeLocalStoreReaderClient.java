@@ -10,6 +10,7 @@ import java.net.http.HttpResponse;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Base64;
+import java.util.Optional;
 import java.util.OptionalLong;
 
 /** Plugin-side bounded HTTP client; its only credential source is the installation secret file. */
@@ -18,6 +19,13 @@ public final class NodeLocalStoreReaderClient implements AutoCloseable {
     private final URI endpoint;
     private final String authorization;
     private final long maxBytes;
+
+    /** Composition-root helper that keeps URI and filesystem types out of the plugin module. */
+    public static NodeLocalStoreReaderClient open(String endpoint, String secretFile,
+            Duration timeout, long maxBytes) throws IOException {
+        return new NodeLocalStoreReaderClient(URI.create(endpoint), Path.of(secretFile), timeout,
+                maxBytes);
+    }
 
     public NodeLocalStoreReaderClient(URI endpoint, Path secretFile, Duration timeout,
             long maxBytes) throws IOException {
@@ -39,19 +47,34 @@ public final class NodeLocalStoreReaderClient implements AutoCloseable {
     }
 
     public InputStream get(String bucket, String prefix, String key) throws IOException {
+        return getIfPresent(bucket, prefix, key).orElseThrow(
+                () -> new IOException("node-local reader answered HTTP 404"));
+    }
+
+    /** One bounded GET; a missing next-chain slot is an ordinary empty result. */
+    public Optional<InputStream> getIfPresent(String bucket, String prefix, String key)
+            throws IOException {
         HttpRequest request = request("/v1/object", bucket, prefix, key);
         try {
             HttpResponse<InputStream> response = client.send(request,
                     HttpResponse.BodyHandlers.ofInputStream());
+            if (response.statusCode() == 404) {
+                return missingResponse(response.body());
+            }
             if (response.statusCode() != 200) {
                 response.body().close();
                 throw new IOException("node-local reader answered HTTP " + response.statusCode());
             }
-            return new LimitedInputStream(response.body(), maxBytes);
+            return Optional.of(new LimitedInputStream(response.body(), maxBytes));
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
             throw new IOException("node-local reader request interrupted");
         }
+    }
+
+    static Optional<InputStream> missingResponse(InputStream body) throws IOException {
+        body.close();
+        return Optional.empty();
     }
 
     public OptionalLong stat(String bucket, String prefix, String key) throws IOException {

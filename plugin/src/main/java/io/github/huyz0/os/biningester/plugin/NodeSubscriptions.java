@@ -3,12 +3,14 @@ package io.github.huyz0.os.biningester.plugin;
 
 import io.github.huyz0.os.biningester.client.ConsumerClient;
 import io.github.huyz0.os.biningester.client.SubscriptionTransport;
+import io.github.huyz0.os.biningester.format.CommitDelta;
 import io.github.huyz0.os.biningester.format.RunKey;
 import io.github.huyz0.os.biningester.format.SubscriptionEvent;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -34,6 +36,9 @@ public final class NodeSubscriptions implements AutoCloseable {
     private final AtomicInteger clientsCreated = new AtomicInteger();
     private final int queueCapacity;
     private final SubscriptionTransport transport;
+    private volatile TierTwoChainPoller tierTwoPoller;
+    private AutoCloseable tierTwoReader;
+    private final AtomicReference<CommitDelta> pendingTierTwoDelta = new AtomicReference<>();
 
     /**
      * ⚠️ ONE SEGMENT SOURCE FOR THE WHOLE NODE (M5.45h), or none.
@@ -71,6 +76,10 @@ public final class NodeSubscriptions implements AutoCloseable {
             new SubscriptionTransport.Listener() {
                 @Override
                 public void onDelivery(io.github.huyz0.os.biningester.client.Delivery delivery) {
+                    TierTwoChainPoller poller = tierTwoPoller;
+                    if (poller != null) {
+                        poller.observeCursor(delivery.sequencerEpoch(), delivery.chainSequence());
+                    }
                     Entry entry = clients.get(delivery.key());
                     if (entry != null) {
                         entry.client.deliver(delivery);
@@ -300,7 +309,7 @@ public final class NodeSubscriptions implements AutoCloseable {
      * call for the same key opens a FRESH subscription rather than handing
      * back one that is already dead.
      */
-    public void release(RunKey key) {
+    public synchronized void release(RunKey key) {
         clients.computeIfPresent(key, (k, entry) -> {
             synchronized (entry.client) {
                 entry.refCount--;
@@ -345,6 +354,11 @@ public final class NodeSubscriptions implements AutoCloseable {
         return transport;
     }
 
+    /** True only when every live subscription on this node is back on the ingester path. */
+    boolean ingesterAnswers() {
+        return transport.ingesterAnswers();
+    }
+
     /** How many clients were actually constructed -- criterion 6's counter. */
     public int clientsCreated() {
         return clientsCreated.get();
@@ -352,6 +366,43 @@ public final class NodeSubscriptions implements AutoCloseable {
 
     public int openClients() {
         return clients.size();
+    }
+
+    /** Installs exactly one node-scoped Tier 2 poller and its reader resource. */
+    synchronized void enableTierTwo(TierTwoChainPoller.DeltaReader reader,
+            java.util.function.BooleanSupplier ingesterReachable,
+            java.util.function.Consumer<CommitDelta> consumer, AutoCloseable readerResource) {
+        if (tierTwoPoller != null) {
+            try {
+                Objects.requireNonNull(readerResource, "readerResource").close();
+            } catch (Exception failed) {
+                throw new IllegalStateException("could not close a duplicate node-local reader",
+                        failed);
+            }
+            return;
+        }
+        tierTwoReader = Objects.requireNonNull(readerResource, "readerResource");
+        tierTwoPoller = new TierTwoChainPoller(-1, -1, reader, ingesterReachable, consumer);
+    }
+
+    /** One scheduled node-wide tick, regardless of the number of clients or shards. */
+    synchronized void pollTierTwo(long interval) {
+        TierTwoChainPoller poller = tierTwoPoller;
+        if (poller != null && !clients.isEmpty() && pendingTierTwoDelta.get() == null) {
+            poller.poll(interval);
+        }
+    }
+
+    /** Holds the one fetched delta for M9.44 recovery; never silently discard it. */
+    void offerTierTwoDelta(CommitDelta delta) {
+        if (!pendingTierTwoDelta.compareAndSet(null, Objects.requireNonNull(delta, "delta"))) {
+            throw new IllegalStateException("the previous Tier 2 delta has not been consumed");
+        }
+    }
+
+    /** The recovery episode takes ownership of this delta exactly once. */
+    CommitDelta takeTierTwoDelta() {
+        return pendingTierTwoDelta.getAndSet(null);
     }
 
     /** Installs the node-wide recovery callback for all current and future streams. */
@@ -439,5 +490,15 @@ public final class NodeSubscriptions implements AutoCloseable {
         // The clients hold none of their own since M5.62, so closing them frees
         // their queues and leaves this node registered until this line runs.
         subscription.close();
+        AutoCloseable reader = tierTwoReader;
+        tierTwoReader = null;
+        if (reader != null) {
+            try {
+                reader.close();
+            } catch (Exception failed) {
+                throw new IllegalStateException("could not close the node-local store reader",
+                        failed);
+            }
+        }
     }
 }

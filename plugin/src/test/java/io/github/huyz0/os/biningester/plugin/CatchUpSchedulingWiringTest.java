@@ -19,6 +19,14 @@ final class CatchUpSchedulingWiringTest {
         var subscriptions = new NodeSubscriptions(transport, 16);
         var key = new RunKey(java.util.UUID.fromString("00000000-0000-0000-0000-0000000000ac"), 0);
         subscriptions.clientFor(key);
+        var tierTwoRequests = new java.util.concurrent.atomic.AtomicInteger();
+        subscriptions.enableTierTwo((epoch, sequence) -> {
+            tierTwoRequests.incrementAndGet();
+            return java.util.Optional.empty();
+        }, () -> false, ignored -> { }, () -> { });
+        transport.listeners.getFirst().onDelivery(new io.github.huyz0.os.biningester.client.Delivery(
+                key, "segment/key", 1, 0, io.github.huyz0.os.biningester.format.FetchMode.INLINE,
+                new byte[0], null, 0, 1));
         var positions = new MutableShardPositions();
         var settings = Settings.builder().put("node.name", "test-catch-up").build();
         var intervals = new ArrayList<org.opensearch.common.unit.TimeValue>();
@@ -54,16 +62,19 @@ final class CatchUpSchedulingWiringTest {
 
             assertThat(intervals).containsExactly(
                     BinStorePlugin.PROGRESS_INTERVAL.get(settings),
-                    BinStorePlugin.PROGRESS_INTERVAL.get(settings));
+                    BinStorePlugin.PROGRESS_INTERVAL.get(settings),
+                    BinStorePlugin.TIER_TWO_INTERVAL.get(settings));
             assertThat(generic.tasks).hasSize(1);
             generic.tasks.get(0).run();
             scheduled.forEach(Runnable::run);
             assertThat(transport.requests).isZero();
+            assertThat(tierTwoRequests).hasValue(1);
 
             positions.ready = java.util.Optional.of(List.of(
                     new io.github.huyz0.os.biningester.format.CatchUpRequestFrame.Stream(key, 0)));
             scheduled.forEach(Runnable::run);
             assertThat(transport.requests).isEqualTo(1);
+            assertThat(tierTwoRequests).hasValue(2);
         } finally {
             BinStorePlugin.uninstall();
             subscriptions.close();
@@ -98,8 +109,12 @@ final class CatchUpSchedulingWiringTest {
 
     private static final class CatchUpTransport implements SubscriptionTransport {
         private int requests;
+        private final List<Listener> listeners = new ArrayList<>();
 
-        @Override public AutoCloseable subscribe(RunKey key, Listener listener) { return () -> { }; }
+        @Override public AutoCloseable subscribe(RunKey key, Listener listener) {
+            listeners.add(listener);
+            return () -> listeners.remove(listener);
+        }
         @Override public void register(io.github.huyz0.os.biningester.format.IndexRegistration registration) { }
         @Override
         public CatchUpResult requestCatchUp(io.github.huyz0.os.biningester.format.CatchUpRequestFrame request,

@@ -53,12 +53,33 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
             org.opensearch.common.settings.Setting.simpleString("binstore.ingester.endpoint",
                     org.opensearch.common.settings.Setting.Property.NodeScope);
 
+    /** Optional authenticated node-local reader; its credential is never a setting value. */
+    public static final org.opensearch.common.settings.Setting<String> READER_ENDPOINT =
+            org.opensearch.common.settings.Setting.simpleString("binstore.reader.endpoint", "",
+                    org.opensearch.common.settings.Setting.Property.NodeScope);
+    public static final org.opensearch.common.settings.Setting<String> READER_SECRET_FILE =
+            org.opensearch.common.settings.Setting.simpleString("binstore.reader.secret_file", "",
+                    org.opensearch.common.settings.Setting.Property.NodeScope);
+    public static final org.opensearch.common.settings.Setting<String> STORE_BUCKET =
+            org.opensearch.common.settings.Setting.simpleString("binstore.store.bucket", "",
+                    org.opensearch.common.settings.Setting.Property.NodeScope);
+    public static final org.opensearch.common.settings.Setting<String> STORE_PREFIX =
+            org.opensearch.common.settings.Setting.simpleString("binstore.store.prefix", "",
+                    org.opensearch.common.settings.Setting.Property.NodeScope);
+    public static final org.opensearch.common.settings.Setting<
+            org.opensearch.common.unit.TimeValue> TIER_TWO_INTERVAL =
+            org.opensearch.common.settings.Setting.timeSetting("binstore.fallback.poll.interval",
+                    org.opensearch.common.unit.TimeValue.timeValueSeconds(5),
+                    org.opensearch.common.unit.TimeValue.timeValueMillis(100),
+                    org.opensearch.common.settings.Setting.Property.NodeScope);
+
     /** This node's shards of this plugin's indices, for the progress reporter. */
     private final ShardPositions positions;
 
     @Override
     public java.util.List<org.opensearch.common.settings.Setting<?>> getSettings() {
-        return java.util.List.of(PROGRESS_INTERVAL, INGESTER_ENDPOINT);
+        return java.util.List.of(PROGRESS_INTERVAL, INGESTER_ENDPOINT, READER_ENDPOINT,
+                READER_SECRET_FILE, STORE_BUCKET, STORE_PREFIX, TIER_TWO_INTERVAL);
     }
 
     /**
@@ -149,10 +170,61 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
                 : PER_NODE.computeIfAbsent(nodeName, installed);
         this.progressInterval = PROGRESS_INTERVAL.get(
                 settings == null ? org.opensearch.common.settings.Settings.EMPTY : settings);
+        var configured = settings == null ? org.opensearch.common.settings.Settings.EMPTY : settings;
+        this.tierTwoInterval = TIER_TWO_INTERVAL.get(configured);
+        if (this.subscriptions != null) {
+            enableTierTwo(configured, this.subscriptions);
+        }
     }
 
     /** {@link #PROGRESS_INTERVAL} as this node was configured with it. */
     private final org.opensearch.common.unit.TimeValue progressInterval;
+    private final org.opensearch.common.unit.TimeValue tierTwoInterval;
+
+    static void enableTierTwo(org.opensearch.common.settings.Settings settings,
+            NodeSubscriptions subscriptions) {
+        String endpoint = READER_ENDPOINT.get(settings);
+        String secretFile = READER_SECRET_FILE.get(settings);
+        String bucket = STORE_BUCKET.get(settings);
+        String prefix = STORE_PREFIX.get(settings);
+        boolean configured = !endpoint.isEmpty() || !secretFile.isEmpty()
+                || !bucket.isEmpty() || !prefix.isEmpty();
+        if (!configured) {
+            return;
+        }
+        if (endpoint.isEmpty() || secretFile.isEmpty() || bucket.isEmpty() || prefix.isEmpty()) {
+            throw new IllegalArgumentException("Tier 2 reader endpoint, secret file, bucket and prefix "
+                    + "must all be configured together");
+        }
+        final io.github.huyz0.os.biningester.client.NodeLocalStoreReaderClient reader;
+        try {
+            reader = io.github.huyz0.os.biningester.client.NodeLocalStoreReaderClient.open(
+                    endpoint, secretFile, java.time.Duration.ofSeconds(5), 64L << 20);
+        } catch (java.io.IOException | IllegalArgumentException invalid) {
+            throw new IllegalArgumentException("could not configure the node-local Tier 2 reader",
+                    invalid);
+        }
+        subscriptions.enableTierTwo((epoch, sequence) -> {
+            String key = String.format(java.util.Locale.ROOT,
+                    "%s/ctl/log/0/%016x/%016x.delta", prefix, epoch, sequence);
+            return decodeDelta(reader.getIfPresent(bucket, prefix, key));
+        }, subscriptions::ingesterAnswers,
+                subscriptions::offerTierTwoDelta, reader);
+    }
+
+    static java.util.Optional<io.github.huyz0.os.biningester.format.CommitDelta> decodeDelta(
+            java.util.Optional<java.io.InputStream> result) throws java.io.IOException {
+        if (result.isEmpty()) {
+            return java.util.Optional.empty();
+        }
+        try (var body = result.orElseThrow()) {
+            return java.util.Optional.of(io.github.huyz0.os.biningester.format.CommitDelta
+                    .decode(body.readAllBytes()));
+        }
+    }
+
+    private final java.util.concurrent.atomic.AtomicLong tierTwoIntervals =
+            new java.util.concurrent.atomic.AtomicLong();
 
     /**
      * Used by in-process tests that own the lifetime themselves.
@@ -173,6 +245,8 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
         this.subscriptions = subscriptions;
         this.positions = java.util.Objects.requireNonNull(positions, "positions");
         this.progressInterval = PROGRESS_INTERVAL.getDefault(
+                org.opensearch.common.settings.Settings.EMPTY);
+        this.tierTwoInterval = TIER_TWO_INTERVAL.getDefault(
                 org.opensearch.common.settings.Settings.EMPTY);
     }
 
@@ -294,6 +368,9 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
                     () -> catchUpSnapshot(clusterService, positions));
             threadPool.scheduleWithFixedDelay(catchUp::attempt, progressInterval,
                     org.opensearch.threadpool.ThreadPool.Names.GENERIC);
+            threadPool.scheduleWithFixedDelay(
+                    () -> subscriptions.pollTierTwo(tierTwoIntervals.incrementAndGet()),
+                    tierTwoInterval, org.opensearch.threadpool.ThreadPool.Names.GENERIC);
             threadPool.generic().execute(catchUp::attempt);
         }
         return java.util.List.of();

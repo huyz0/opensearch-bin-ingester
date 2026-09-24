@@ -22,6 +22,11 @@ import java.util.function.Consumer;
  */
 public interface SubscriptionTransport {
 
+    /** Whether this transport currently has an answering ingester path. */
+    default boolean ingesterAnswers() {
+        return false;
+    }
+
     /** Outcome of a node-scoped catch-up exchange. */
     enum CatchUpResult {
         /** A matching end frame completed the exchange. */

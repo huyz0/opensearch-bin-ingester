@@ -250,6 +250,11 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport, A
         }
     }
 
+    @Override
+    public boolean ingesterAnswers() {
+        return tier() == FallbackLadder.AutomaticTier.PUSH;
+    }
+
     /** Keeps a consumer callback failure distinct from malformed wire data. */
     private static final class CallbackFailure extends RuntimeException {
         CallbackFailure(RuntimeException cause) {

@@ -40,6 +40,16 @@ class FallbackLadderTest {
                             + "scanning breaches it at fan-out -- %s", tier)
                     .isZero();
         }
+        SubscriptionTransport bare = new SubscriptionTransport() {
+            @Override
+            public AutoCloseable subscribe(io.github.huyz0.os.biningester.format.RunKey key,
+                    Listener listener) {
+                return () -> { };
+            }
+        };
+        assertThat(bare.ingesterAnswers())
+                .as("a transport without a reachability signal must not claim an ingester answered")
+                .isFalse();
     }
 
     /**

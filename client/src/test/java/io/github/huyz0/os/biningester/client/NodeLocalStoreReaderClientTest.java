@@ -141,6 +141,55 @@ class NodeLocalStoreReaderClientTest {
     }
 
     @Test
+    void getIfPresentTreats404AsAnEmptyChainSlot() throws Exception {
+        Path secret = directory.resolve("reader.secret");
+        InstallationSecret.create(secret);
+        var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/object", exchange -> {
+            int status = "missing".equals(exchange.getRequestHeaders().getFirst("X-Bin-Key"))
+                    ? 404 : 200;
+            try {
+                if (status == 404) {
+                    exchange.sendResponseHeaders(status, -1);
+                } else {
+                    byte[] body = "delta".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+                    exchange.sendResponseHeaders(status, body.length);
+                    exchange.getResponseBody().write(body);
+                }
+            } catch (java.io.IOException disconnected) {
+                // A disconnected client may close the response before the server finishes.
+            } finally {
+                exchange.close();
+            }
+        });
+        server.start();
+        try (var client = new NodeLocalStoreReaderClient(
+                URI.create("http://127.0.0.1:" + server.getAddress().getPort()), secret,
+                Duration.ofSeconds(2), 1024)) {
+            assertThat(client.getIfPresent("bucket", "prefix", "missing")).isEmpty();
+            assertThatThrownBy(() -> client.get("bucket", "prefix", "missing"))
+                    .isInstanceOf(java.io.IOException.class).hasMessageContaining("404");
+            try (var body = client.getIfPresent("bucket", "prefix", "present").orElseThrow()) {
+                assertThat(new String(body.readAllBytes(), java.nio.charset.StandardCharsets.US_ASCII))
+                        .isEqualTo("delta");
+            }
+            class TrackedBody extends java.io.ByteArrayInputStream {
+                boolean closed;
+                TrackedBody() { super(new byte[] {1}); }
+                @Override public void close() throws java.io.IOException {
+                    closed = true;
+                    super.close();
+                }
+            }
+            TrackedBody tracked = new TrackedBody();
+            assertThat(NodeLocalStoreReaderClient.missingResponse(tracked)).isEmpty();
+            assertThat(tracked.closed).isTrue();
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
     void refusesEmptyMalformedAndOversizedStatBodies() throws Exception {
         Path secret = directory.resolve("reader.secret");
         InstallationSecret.create(secret);
