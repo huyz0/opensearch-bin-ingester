@@ -19,7 +19,19 @@ import org.apache.logging.log4j.Logger;
 final class NodeCatchUpCoordinator {
 
     private static final Logger LOG = LogManager.getLogger(NodeCatchUpCoordinator.class);
-    private record GapRange(long start, long through) { }
+    private record GapRange(long start, long through, long epoch, long sequence) {
+        private static GapRange merge(GapRange previous, GapRange current) {
+            boolean hasPrevious = previous != null;
+            boolean sameEpoch = hasPrevious && previous.epoch() == current.epoch();
+            long start = hasPrevious ? Math.min(previous.start(), current.start()) : current.start();
+            long through = hasPrevious
+                    ? Math.max(previous.through(), current.through()) : current.through();
+            long epoch = !hasPrevious ? current.epoch() : sameEpoch ? previous.epoch() : -1;
+            long sequence = !hasPrevious ? current.sequence()
+                    : sameEpoch ? Math.max(previous.sequence(), current.sequence()) : -1;
+            return new GapRange(start, through, epoch, sequence);
+        }
+    }
 
     private final SubscriptionTransport transport;
     private final NodeSubscriptions clients;
@@ -31,6 +43,8 @@ final class NodeCatchUpCoordinator {
     private final Map<io.github.huyz0.os.biningester.format.RunKey, GapRange> pendingGaps =
             new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<io.github.huyz0.os.biningester.format.RunKey, Long> gapTargets =
+            new java.util.HashMap<>();
+    private final Map<io.github.huyz0.os.biningester.format.RunKey, GapRange> requestedGaps =
             new java.util.HashMap<>();
     private CatchUpRequestFrame request;
     private boolean gapRequest;
@@ -81,6 +95,7 @@ final class NodeCatchUpCoordinator {
             gapRequest = true;
             streams.forEach(stream -> {
                 GapRange range = pendingGaps.get(stream.key());
+                requestedGaps.put(stream.key(), range);
                 deliveredUpTo.put(stream.key(), stream.batchStart());
                 gapTargets.put(stream.key(), range.through());
             });
@@ -90,9 +105,18 @@ final class NodeCatchUpCoordinator {
         }
         Set<io.github.huyz0.os.biningester.format.RunKey> requested = new HashSet<>();
         request.streams().forEach(stream -> requested.add(stream.key()));
+        boolean[] refusedEvent = {false};
         try {
             SubscriptionTransport.CatchUpResult result = transport.requestCatchUp(request,
-                    event -> accept(event, requested));
+                    event -> {
+                        if (!accept(event, requested)) {
+                            refusedEvent[0] = true;
+                        }
+                    });
+            if (refusedEvent[0]) {
+                LOG.warn("catch-up lane refused a replay event; the same request will retry");
+                return;
+            }
             if (result == SubscriptionTransport.CatchUpResult.UNSUPPORTED) {
                 if (!gapRequest) {
                     done = true;
@@ -118,8 +142,7 @@ final class NodeCatchUpCoordinator {
             if (gapRequest) {
                 for (CatchUpRequestFrame.Stream stream : request.streams()) {
                     clients.completeGapRepair(stream.key());
-                    pendingGaps.remove(stream.key(), new GapRange(stream.batchStart(),
-                            gapTargets.get(stream.key())));
+                    pendingGaps.remove(stream.key(), requestedGaps.get(stream.key()));
                 }
             } else {
                 done = true;
@@ -130,29 +153,76 @@ final class NodeCatchUpCoordinator {
             catchUpClients.clear();
             gapTargets.clear();
         } catch (IOException | RuntimeException failed) {
+            if (gapRequest && !clients.ingesterAnswers()) {
+                try {
+                    if (recoverFromNodeStore(requested)) {
+                        clients.completeCatchUp(request.requestId(), catchUpClients);
+                        for (CatchUpRequestFrame.Stream stream : request.streams()) {
+                            clients.completeGapRepair(stream.key());
+                            pendingGaps.remove(stream.key(), requestedGaps.get(stream.key()));
+                        }
+                        clearRequest();
+                        return;
+                    }
+                } catch (RuntimeException localRecoveryFailed) {
+                    LOG.warn("node-local gap recovery failed; the affected streams remain held",
+                            localRecoveryFailed);
+                }
+            }
             LOG.warn("node catch-up exchange failed; it will retry at the progress interval", failed);
         }
     }
 
-    private void requestGap(io.github.huyz0.os.biningester.format.RunKey key,
-            io.github.huyz0.os.biningester.client.DeliveryGapException gap) {
-        pendingGaps.merge(key, new GapRange(gap.expectedOffset(), gap.receivedOffset()),
-                (previous, next) -> new GapRange(Math.min(previous.start(), next.start()),
-                        Math.max(previous.through(), next.through())));
+    private boolean recoverFromNodeStore(Set<io.github.huyz0.os.biningester.format.RunKey> requested) {
+        Map<io.github.huyz0.os.biningester.format.RunKey, TierThreeRecovery.Gap> gaps =
+                new java.util.HashMap<>();
+        long epoch = -1;
+        long sequence = -1;
+        for (CatchUpRequestFrame.Stream stream : request.streams()) {
+            GapRange range = requestedGaps.get(stream.key());
+            if (range == null || range.epoch() < 0 || range.sequence() < 0
+                    || (epoch >= 0 && epoch != range.epoch())) {
+                return false;
+            }
+            epoch = range.epoch();
+            sequence = Math.max(sequence, range.sequence());
+            gaps.put(stream.key(), new TierThreeRecovery.Gap(range.start(), range.through()));
+        }
+        if (gaps.isEmpty()) {
+            return false;
+        }
+        return clients.recoverTierThree(epoch, sequence, gaps,
+                event -> accept(event, requested));
     }
 
-    private void accept(SubscriptionEvent event,
+    private synchronized void requestGap(io.github.huyz0.os.biningester.format.RunKey key,
+            io.github.huyz0.os.biningester.client.DeliveryGapException gap) {
+        GapRange next = new GapRange(gap.expectedOffset(), gap.receivedOffset(),
+                gap.sequencerEpoch(), gap.chainSequence());
+        pendingGaps.put(key, GapRange.merge(pendingGaps.get(key), next));
+    }
+
+    private void clearRequest() {
+        request = null;
+        gapRequest = false;
+        deliveredUpTo.clear();
+        catchUpClients.clear();
+        gapTargets.clear();
+        requestedGaps.clear();
+    }
+
+    private boolean accept(SubscriptionEvent event,
             Set<io.github.huyz0.os.biningester.format.RunKey> requested) {
         if (event.via() != io.github.huyz0.os.biningester.format.FetchMode.INLINE) {
             throw new IllegalStateException("catch-up events must carry inline bytes");
         }
         if (!requested.contains(event.key())) {
-            return;
+            return true;
         }
         long next = deliveredUpTo.get(event.key());
         long exclusive = Math.addExact(event.firstOffset(), event.recordCount());
         if (exclusive <= next) {
-            return;
+            return true;
         }
         if (event.firstOffset() < next) {
             throw new IllegalStateException("catch-up retry overlapped a previously delivered range");
@@ -160,9 +230,11 @@ final class NodeCatchUpCoordinator {
         if (event.firstOffset() > next) {
             throw new IllegalStateException("catch-up response skipped records after offset " + next);
         }
-        if (clients.deliverCatchUp(request.requestId(), event)) {
-            deliveredUpTo.put(event.key(), exclusive);
-            catchUpClients.add(event.key());
+        if (!clients.deliverCatchUp(request.requestId(), event)) {
+            return false;
         }
+        deliveredUpTo.put(event.key(), exclusive);
+        catchUpClients.add(event.key());
+        return true;
     }
 }

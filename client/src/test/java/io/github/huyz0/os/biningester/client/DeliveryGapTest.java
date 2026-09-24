@@ -63,6 +63,12 @@ class DeliveryGapTest {
                 FetchMode.INLINE, segmentOf(ids));
     }
 
+    private static Delivery delivery(long firstOffset, long epoch, long sequence, String... ids)
+            throws Exception {
+        return new Delivery(KEY, "seg-" + firstOffset, ids.length, firstOffset,
+                FetchMode.INLINE, segmentOf(ids), null, epoch, sequence);
+    }
+
     /** ⚠️ FED, holding no subscription: the node-scoped shape since M5.62. */
     private static ConsumerClient fed(int queueCapacity) {
         return new ConsumerClient(KEY, queueCapacity, null);
@@ -98,7 +104,7 @@ class DeliveryGapTest {
         assertThat(drain(client, 1))
                 .as("PREMISE: the queued delivery is read, freeing the queue")
                 .containsExactly("b");
-        client.deliver(delivery(3, "d"));
+        client.deliver(delivery(3, 4, 17, "d"));
 
         assertThat(drain(client, 1))
                 .as("the stream KEEPS WORKING across the gap -- research doc 02 § 6: an "
@@ -119,7 +125,7 @@ class DeliveryGapTest {
         client.deliver(delivery(1, "b"));
         client.deliver(delivery(2, "c"));
         drain(client, 1);
-        client.deliver(delivery(3, "d"));
+        client.deliver(delivery(3, 4, 17, "d"));
         drain(client, 1);
 
         DeliveryGapException gap = client.lastGap().orElseThrow();
@@ -132,6 +138,8 @@ class DeliveryGapTest {
                 .as("the first offset that WAS delivered after the gap")
                 .isEqualTo(3);
         assertThat(gap.missingRecords()).isEqualTo(1);
+        assertThat(gap.sequencerEpoch()).isEqualTo(4);
+        assertThat(gap.chainSequence()).isEqualTo(17);
         assertThat(gap.droppedLocally())
                 .as("this consumer's own queue dropped them, which is a capacity to raise -- "
                         + "an operator told only that records are missing cannot tell that from "

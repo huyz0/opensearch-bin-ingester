@@ -210,6 +210,20 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
             return decodeDelta(reader.getIfPresent(bucket, prefix, key));
         }, subscriptions::ingesterAnswers,
                 subscriptions::offerTierTwoDelta, reader);
+        subscriptions.enableTierThree(new TierThreeRecovery(bucket, prefix,
+                new TierThreeRecovery.Reader() {
+                    @Override
+                    public java.util.OptionalLong stat(String storeBucket, String storePrefix,
+                            String key) throws java.io.IOException {
+                        return reader.stat(storeBucket, storePrefix, key);
+                    }
+
+                    @Override
+                    public java.util.Optional<java.io.InputStream> get(String storeBucket,
+                            String storePrefix, String key) throws java.io.IOException {
+                        return reader.getIfPresent(storeBucket, storePrefix, key);
+                    }
+                }));
     }
 
     static java.util.Optional<io.github.huyz0.os.biningester.format.CommitDelta> decodeDelta(

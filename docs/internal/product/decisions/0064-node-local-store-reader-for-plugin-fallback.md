@@ -1,6 +1,6 @@
 # 0064. Use a node-local store reader for plugin fallback
 
-Status: accepted — clarified 2026-09-24 by M9.49 on request permissions, naming and local process identity; clarified 2026-09-25 by M9.50 on allowed recovery object keys; clarified 2026-09-25 by M9.41 on carrying the commit cursor through live and catch-up events
+Status: accepted — clarified 2026-09-24 by M9.49 on request permissions, naming and local process identity; clarified 2026-09-25 by M9.50 on allowed recovery object keys; clarified 2026-09-25 by M9.41 on carrying the commit cursor through live and catch-up events; clarified 2026-09-25 by M9.44 that Tier 3's 30-GET ceiling bounds request spend, not wall-clock latency: ordered replay latency grows with serial object-store TTFB, plus one pointer STAT
 Date: 2026-09-22
 Requirements: FR-10, NFR-4
 Research: docs/research/30-design-space/04-discovery-and-tailing.md §2a, §3; docs/research/30-design-space/10-client-library-and-fetch-modes.md §4; docs/research/50-open-questions.md Q21
@@ -27,7 +27,11 @@ node, and its GET/STAT counts must be measured by M9.21. Tier 3 must resolve the
 newest checkpoint pointer before it can fetch the checkpoint and ordered deltas;
 that resolution uses one checkpoint-pointer STAT per recovery episode. The
 episode is bounded to at most 30 GETs total (checkpoint, deltas and segments),
-and the STAT and GET counts are reported separately.
+and 64 MiB of aggregate object bytes read and retained, including projected
+inline-event copies; the STAT and GET counts are reported separately.
+Ingester availability is rechecked before each Tier 3 STAT/GET and before
+replay delivery; if an ingester answers mid-episode, local recovery stops and
+the gap remains held for the normal catch-up path.
 
 ## Decision
 
@@ -132,9 +136,11 @@ change requests per MiB or the node-scoped Tier 2/3 request budgets.
   be upgraded with the plugin contract.
 - Tier 2 and Tier 3 requests are outage-recovery work, coalesced per node. Each
   Tier 3 episode adds exactly one checkpoint-pointer STAT and at most 30 GETs;
-  all operations are counted separately, with zero automatic LISTs. This does
-  not change steady-state request rates, which remain governed by the ingester
-  cache and prefetch path.
+  aggregate bytes read and retained are capped at 64 MiB per Tier 3 episode;
+  all operations are counted separately, with zero automatic LISTs. If the
+  byte ceiling is reached, or an ingester answers mid-episode, recovery stops
+  and leaves the gap held. This does not change steady-state request rates,
+  which remain governed by the ingester cache and prefetch path.
 - Recovery correctness depends on the reader's bounded streaming and on the
   catch-up path's coalescing. M9.21 must exercise both and count them rather
   than treating `TENS_OF_GETS` as a design constant.

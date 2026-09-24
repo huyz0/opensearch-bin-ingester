@@ -535,7 +535,8 @@ public final class ConsumerClient implements AutoCloseable {
         boolean locally = droppedNow > droppedAttributed;
         droppedAttributed = droppedNow;
         DeliveryGapException gap =
-                new DeliveryGapException(key, expected, delivery.firstOffset(), locally);
+                new DeliveryGapException(key, expected, delivery.firstOffset(), locally,
+                        delivery.sequencerEpoch(), delivery.chainSequence());
         gaps.increment();
         lastGap = gap;
         // ⚠️ LOGGED AND COUNTED, NEVER THROWN, and the corpus is what decides

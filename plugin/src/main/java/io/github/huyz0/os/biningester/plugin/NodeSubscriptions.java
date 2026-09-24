@@ -37,6 +37,7 @@ public final class NodeSubscriptions implements AutoCloseable {
     private final int queueCapacity;
     private final SubscriptionTransport transport;
     private volatile TierTwoChainPoller tierTwoPoller;
+    private volatile TierThreeRecovery tierThreeRecovery;
     private AutoCloseable tierTwoReader;
     private final AtomicReference<CommitDelta> pendingTierTwoDelta = new AtomicReference<>();
 
@@ -405,6 +406,26 @@ public final class NodeSubscriptions implements AutoCloseable {
         return pendingTierTwoDelta.getAndSet(null);
     }
 
+    /** Installs the node-wide Tier 3 path beside the existing Tier 2 reader. */
+    void enableTierThree(TierThreeRecovery recovery) {
+        if (tierThreeRecovery != null) {
+            throw new IllegalStateException("node Tier 3 recovery is already configured");
+        }
+        tierThreeRecovery = Objects.requireNonNull(recovery, "recovery");
+    }
+
+    /** Runs explicit gap recovery only while no ingester endpoint answers. */
+    boolean recoverTierThree(long epoch, long throughSequence,
+            Map<RunKey, TierThreeRecovery.Gap> gaps,
+            TierThreeRecovery.RecoverySink sink) {
+        TierThreeRecovery recovery = tierThreeRecovery;
+        if (recovery == null || ingesterAnswers()) {
+            return false;
+        }
+        return recovery.recoverWithSink(epoch, throughSequence, gaps, sink,
+                () -> !ingesterAnswers());
+    }
+
     /** Installs the node-wide recovery callback for all current and future streams. */
     void onGap(java.util.function.BiConsumer<RunKey,
             io.github.huyz0.os.biningester.client.DeliveryGapException> handler) {
@@ -441,9 +462,13 @@ public final class NodeSubscriptions implements AutoCloseable {
                     new io.github.huyz0.os.biningester.client.Delivery(event.key(),
                             event.segmentKey(), event.recordCount(), event.firstOffset(),
                             io.github.huyz0.os.biningester.format.FetchMode.INLINE,
-                            event.inline(), null, event.sequencerEpoch());
+                            event.inline(), null, event.sequencerEpoch(), event.chainSequence());
+            TierTwoChainPoller poller = tierTwoPoller;
             if (!entry.client.tryDeliverCatchUp(requestId, delivery)) {
-                throw new IllegalStateException("catch-up lane is full; retry the exchange");
+                return false;
+            }
+            if (poller != null) {
+                poller.observeCursor(event.sequencerEpoch(), event.chainSequence());
             }
             return true;
         }

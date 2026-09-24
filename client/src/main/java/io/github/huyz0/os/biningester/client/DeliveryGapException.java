@@ -36,9 +36,16 @@ public final class DeliveryGapException extends IOException {
     private final long expectedOffset;
     private final long receivedOffset;
     private final boolean droppedLocally;
+    private final long sequencerEpoch;
+    private final long chainSequence;
 
     DeliveryGapException(RunKey key, long expectedOffset, long receivedOffset,
             boolean droppedLocally) {
+        this(key, expectedOffset, receivedOffset, droppedLocally, -1, -1);
+    }
+
+    DeliveryGapException(RunKey key, long expectedOffset, long receivedOffset,
+            boolean droppedLocally, long sequencerEpoch, long chainSequence) {
         super("stream " + key + " skipped offsets [" + expectedOffset + ", " + receivedOffset
                 + ") -- " + (droppedLocally
                         ? "this consumer's queue was full and dropped them, so it is behind and "
@@ -49,6 +56,8 @@ public final class DeliveryGapException extends IOException {
         this.expectedOffset = expectedOffset;
         this.receivedOffset = receivedOffset;
         this.droppedLocally = droppedLocally;
+        this.sequencerEpoch = sequencerEpoch;
+        this.chainSequence = chainSequence;
     }
 
     /** The stream the gap is in. */
@@ -81,5 +90,15 @@ public final class DeliveryGapException extends IOException {
      */
     public boolean droppedLocally() {
         return droppedLocally;
+    }
+
+    /** Commit-chain term of the delivery that exposed this gap, or {@code -1}. */
+    public long sequencerEpoch() {
+        return sequencerEpoch;
+    }
+
+    /** Commit-chain sequence of the delivery that exposed this gap, or {@code -1}. */
+    public long chainSequence() {
+        return chainSequence;
     }
 }
