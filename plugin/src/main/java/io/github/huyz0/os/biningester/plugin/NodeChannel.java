@@ -141,8 +141,13 @@ public final class NodeChannel implements AutoCloseable {
      */
     @Override
     public void close() {
-        if (transport instanceof HttpSubscriptionTransport http) {
-            http.close();
+        if (transport instanceof AutoCloseable closeable) {
+            try {
+                closeable.close();
+            } catch (Exception failed) {
+                throw new IllegalStateException("could not close the node subscription transport",
+                        failed);
+            }
         }
     }
 }

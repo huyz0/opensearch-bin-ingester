@@ -23,7 +23,7 @@ import java.util.Set;
 import java.util.function.Consumer;
 
 /** Streams and validates one node-scoped catch-up exchange over the existing subscription route. */
-final class HttpCatchUpExchange {
+final class HttpCatchUpExchange implements AutoCloseable {
 
     private final URI endpoint;
     private final Duration requestTimeout;
@@ -118,5 +118,10 @@ final class HttpCatchUpExchange {
 
     private static String path(RunKey key) {
         return "/sub/" + key.indexId() + "/" + key.partitionId();
+    }
+
+    @Override
+    public void close() {
+        streamingClient.close();
     }
 }

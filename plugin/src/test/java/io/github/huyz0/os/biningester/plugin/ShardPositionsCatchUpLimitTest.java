@@ -58,7 +58,7 @@ class ShardPositionsCatchUpLimitTest {
                             .put("index.version.created", Version.CURRENT.id)
                             .put("index.number_of_shards", count)
                             .put("index.number_of_replicas", 0)
-                            .put("index.uuid", indexUuid.toString())
+                            .put("index.uuid", indexUuid(indexUuid))
                             .put(IndexRegistrar.SOURCE_TYPE, BinStorePlugin.TYPE))
                     .build();
             IndexRoutingTable.Builder indexRouting = IndexRoutingTable.builder(indexMetadata.getIndex());
@@ -86,5 +86,11 @@ class ShardPositionsCatchUpLimitTest {
                 .routingTable(routing.build())
                 .nodes(DiscoveryNodes.builder().localNodeId("node-a").add(localNode).build())
                 .build();
+    }
+
+    private static String indexUuid(UUID id) {
+        return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(
+                java.nio.ByteBuffer.allocate(16).putLong(id.getMostSignificantBits())
+                        .putLong(id.getLeastSignificantBits()).array());
     }
 }

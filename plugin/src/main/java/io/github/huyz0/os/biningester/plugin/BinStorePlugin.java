@@ -107,6 +107,7 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
     private static final java.util.Map<String, NodeSubscriptions> PER_NODE =
             new java.util.concurrent.ConcurrentHashMap<>();
 
+    private final String nodeName;
     private final NodeSubscriptions subscriptions;
 
     /**
@@ -127,6 +128,7 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
         this.positions = new ShardPositions();
         java.util.function.Function<String, NodeSubscriptions> installed = factory;
         String nodeName = settings == null ? "" : settings.get("node.name", "");
+        this.nodeName = nodeName;
         // ⚠️ A NODE WITH NO NAME GETS NOTHING rather than a shared default:
         // keying two unnamed nodes together is the static this task removes,
         // wearing a default's clothes. Every real node has one.
@@ -167,6 +169,7 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
 
     /** Deterministic in-package construction for tests of the node entrypoint wiring. */
     BinStorePlugin(NodeSubscriptions subscriptions, ShardPositions positions) {
+        this.nodeName = null;
         this.subscriptions = subscriptions;
         this.positions = java.util.Objects.requireNonNull(positions, "positions");
         this.progressInterval = PROGRESS_INTERVAL.getDefault(
@@ -211,6 +214,20 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
     static void uninstall() {
         factory = null;
         PER_NODE.clear();
+    }
+
+    /** Releases this node's shared subscriptions when OpenSearch closes the plugin. */
+    @Override
+    public void close() {
+        if (subscriptions == null || nodeName == null || nodeName.isEmpty()
+                || !PER_NODE.remove(nodeName, subscriptions)) {
+            return;
+        }
+        subscriptions.close();
+        NodeChannel channel = subscriptions.channel();
+        if (channel != null) {
+            channel.close();
+        }
     }
 
     /**
@@ -274,12 +291,26 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
                     org.opensearch.threadpool.ThreadPool.Names.GENERIC);
             NodeCatchUpCoordinator catchUp = new NodeCatchUpCoordinator(
                     subscriptions.transport(), subscriptions,
-                    () -> positions.catchUpSnapshot(clusterService.state()));
+                    () -> catchUpSnapshot(clusterService, positions));
             threadPool.scheduleWithFixedDelay(catchUp::attempt, progressInterval,
                     org.opensearch.threadpool.ThreadPool.Names.GENERIC);
             threadPool.generic().execute(catchUp::attempt);
         }
         return java.util.List.of();
+    }
+
+    private static java.util.Optional<java.util.List<
+            io.github.huyz0.os.biningester.format.CatchUpRequestFrame.Stream>> catchUpSnapshot(
+                    org.opensearch.cluster.service.ClusterService clusterService,
+                    ShardPositions positions) {
+        final org.opensearch.cluster.ClusterState state;
+        try {
+            state = clusterService.state();
+        } catch (AssertionError notInitialized) {
+            // The eager first attempt can race OpenSearch's initial state publication.
+            return java.util.Optional.empty();
+        }
+        return positions.catchUpSnapshot(state);
     }
 
     /**

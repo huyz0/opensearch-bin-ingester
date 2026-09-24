@@ -247,7 +247,7 @@ class NodeCatchUpDeliveryTest {
                         .put("index.version.created", Version.CURRENT.id)
                         .put("index.number_of_shards", 2)
                         .put("index.number_of_replicas", 0)
-                        .put("index.uuid", INDEX.toString())
+                        .put("index.uuid", indexUuid(INDEX))
                         .put(IndexRegistrar.SOURCE_TYPE, BinStorePlugin.TYPE))
                 .build();
         IndexRoutingTable.Builder index = IndexRoutingTable.builder(metadata.getIndex());
@@ -284,5 +284,11 @@ class NodeCatchUpDeliveryTest {
         writer.add(key, new SegmentRecord("doc", OpType.INDEX, OptionalLong.of(1),
                 "{\"id\":\"doc\"}".getBytes(StandardCharsets.UTF_8)), 7L);
         return writer.toByteArray(11L);
+    }
+
+    private static String indexUuid(UUID id) {
+        return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(
+                java.nio.ByteBuffer.allocate(16).putLong(id.getMostSignificantBits())
+                        .putLong(id.getLeastSignificantBits()).array());
     }
 }

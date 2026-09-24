@@ -362,6 +362,7 @@ public final class HttpSequencerTransport implements SequencerTransport {
     @Override
     public void close() {
         closed = true;
+        clients.values().forEach(WebClient::closeResource);
         clients.clear();
     }
 }

@@ -45,7 +45,7 @@ import java.util.function.Consumer;
  * turns that into a synchronised storm against a node that has just started —
  * research 08 §7 step 2's thundering herd, arriving from the other direction.
  */
-public final class HttpSubscriptionTransport implements SubscriptionTransport {
+public final class HttpSubscriptionTransport implements SubscriptionTransport, AutoCloseable {
 
     /**
      * ⚠️ **THE PATHS LIVE HERE AND THE INGESTER READS THEM**, not the other way
@@ -634,6 +634,9 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport {
      * handle on the transport itself, for the root that built it.
      */
     public void close() {
-        closed.set(true);
+        if (closed.compareAndSet(false, true)) {
+            catchUpExchange.close();
+            client.closeResource();
+        }
     }
 }

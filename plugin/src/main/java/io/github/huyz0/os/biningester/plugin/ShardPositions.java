@@ -146,7 +146,7 @@ class ShardPositions implements IndexEventListener, ProgressReporter.Positions {
                 return Optional.empty();
             }
             result.add(new CatchUpRequestFrame.Stream(
-                    new RunKey(java.util.UUID.fromString(routing.index().getUUID()),
+                    new RunKey(BinStoreConsumerFactory.indexUuidOf(routing.index().getUUID()),
                             routing.id()), batchStart.getAsLong()));
         }
         result.sort(Comparator.comparing((CatchUpRequestFrame.Stream stream) ->

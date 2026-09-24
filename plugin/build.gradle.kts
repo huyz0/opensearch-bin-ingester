@@ -35,6 +35,8 @@ dependencies {
     }
     "clusterTestImplementation"(project(":ingest"))
     "clusterTestImplementation"(project(":binstore-backends"))
+    // T4 restart/backlog proof starts the production ingester assembly in-process.
+    "clusterTestImplementation"(project(":server"))
     // ⚠️ TEST ONLY, for `TestSequencers`: since M4.6d a `DefaultIngest` needs a
     // Sequencer, and these ITs drive the real ingester over a real store.
     "clusterTestImplementation"(testFixtures(project(":sequencer")))
