@@ -109,6 +109,9 @@ public final class ConsumerClient implements AutoCloseable {
     /** The most recent gap, or {@code null} if there has been none. */
     private volatile DeliveryGapException lastGap;
 
+    private volatile java.util.function.Consumer<DeliveryGapException> gapHandler;
+    private volatile boolean gapRepairPending;
+
     public ConsumerClient(SubscriptionTransport transport, RunKey key, int queueCapacity) {
         this(transport, key, queueCapacity, null);
     }
@@ -214,7 +217,7 @@ public final class ConsumerClient implements AutoCloseable {
 
     /** Opens a node-scoped catch-up delivery lane for one exchange. */
     public void beginCatchUp(java.util.UUID requestId) {
-        deliveryQueues.beginCatchUp(requestId);
+        deliveryQueues.beginCatchUp(requestId, gapRepairPending);
     }
 
     /** Adds a replay delivery, applying backpressure when the bounded lane is full. */
@@ -464,9 +467,13 @@ public final class ConsumerClient implements AutoCloseable {
         return deliveryQueues.readNext(pollTimeout);
     }
 
-    private void decodeAndReportGap(Delivery delivery, Deque<ConsumerRecord> out) {
-        reportAnyGap(delivery);
-        decodeInto(delivery, out);
+    private boolean decodeAndReportGap(Delivery delivery, Deque<ConsumerRecord> out,
+            boolean replay) {
+        boolean decode = reportAnyGap(delivery, replay);
+        if (decode) {
+            decodeInto(delivery, out);
+        }
+        return decode || !gapRepairPending;
     }
 
     /**
@@ -494,17 +501,26 @@ public final class ConsumerClient implements AutoCloseable {
      * falling silent is the same loss one step along, and a two-gap case pins
      * it.
      */
-    private void reportAnyGap(Delivery delivery) {
+    private boolean reportAnyGap(Delivery delivery, boolean replay) {
         long expected = expectedNextOffset;
         long end = delivery.firstOffset() + delivery.recordCount();
-        // ⚠️ NEVER REWOUND. A delivery starting BEFORE what was expected is a
-        // REPEAT, not a gap -- the hub re-sending a window a resubscribe
-        // already covered -- and moving the tracker backwards would then
-        // report a gap on the next ordinary delivery, manufacturing the defect
-        // this method exists to find.
-        expectedNextOffset = Math.max(expectedNextOffset, end);
-        if (expected < 0 || delivery.firstOffset() <= expected) {
-            return;
+        if (replay) {
+            expectedNextOffset = Math.max(expectedNextOffset, end);
+            return true;
+        }
+        if (expected < 0) {
+            expectedNextOffset = end;
+            return true;
+        }
+        if (delivery.firstOffset() < expected && end <= expected) {
+            return false;
+        }
+        if (delivery.firstOffset() < expected) {
+            throw new IllegalStateException("delivery overlaps the next expected offset");
+        }
+        if (delivery.firstOffset() == expected) {
+            expectedNextOffset = end;
+            return true;
         }
         // ⚠️ ATTRIBUTED, NOT COMPARED TO ZERO. A drop belongs to the FIRST gap
         // reported after it, and only to that one: the baseline moves when a
@@ -532,6 +548,31 @@ public final class ConsumerClient implements AutoCloseable {
         // hand. An earlier draft of this class DID throw, and the review that
         // caught it is the reason this paragraph exists.
         LOG.log(System.Logger.Level.WARNING, gap.getMessage());
+        java.util.function.Consumer<DeliveryGapException> handler = gapHandler;
+        if (handler == null) {
+            expectedNextOffset = end;
+            return true;
+        }
+        gapRepairPending = true;
+        deliveryQueues.pauseLiveForGap();
+        handler.accept(gap);
+        // Keep the delivery that exposed the gap queued until replay reaches
+        // this offset; decoding it now could make it impossible to suppress an
+        // overlap if replay includes the same records.
+        return false;
+    }
+
+    /** Installs the node-wide replay owner for delivery gaps. */
+    public void onGap(java.util.function.Consumer<DeliveryGapException> handler) {
+        gapHandler = Objects.requireNonNull(handler, "handler");
+    }
+
+    /** Releases this client's read hold after its gap replay completes. */
+    public void completeGapRepair() {
+        if (gapRepairPending) {
+            deliveryQueues.resumeLiveAfterGap();
+            gapRepairPending = false;
+        }
     }
 
     /** How many gaps this consumer has reported (M6.1). */

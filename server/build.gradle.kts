@@ -56,6 +56,9 @@ dependencies {
     // RustFS serving-path request count; this is test-only and does not make
     // the server depend on the plugin at runtime.
     "integrationTestImplementation"(project(":plugin"))
+    // NodeCatchUpCoordinator's production Log4j API is normally supplied by
+    // OpenSearch; include it when the T3 suite runs that coordinator in-process.
+    "integrationTestImplementation"(libs.opensearch)
     // ⚠️ TEST-ONLY: the macro workload is the independent benchmark leaf;
     // no shipped runtime classpath depends on it (ADR-0059).
     "integrationTestImplementation"(project(":bench"))

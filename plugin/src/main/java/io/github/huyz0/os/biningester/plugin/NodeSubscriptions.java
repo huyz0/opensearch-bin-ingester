@@ -28,6 +28,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 public final class NodeSubscriptions implements AutoCloseable {
 
     private final Map<RunKey, Entry> clients = new ConcurrentHashMap<>();
+    private volatile java.util.function.BiConsumer<RunKey,
+            io.github.huyz0.os.biningester.client.DeliveryGapException> gapHandler;
 
     private final AtomicInteger clientsCreated = new AtomicInteger();
     private final int queueCapacity;
@@ -264,6 +266,11 @@ public final class NodeSubscriptions implements AutoCloseable {
             // `nodeListener` is what this node is subscribed with, and a client
             // that closed a subscription would close every other run's with it.
             ConsumerClient client = new ConsumerClient(k, queueCapacity, nodeSegmentSource);
+            java.util.function.BiConsumer<RunKey,
+                    io.github.huyz0.os.biningester.client.DeliveryGapException> handler = gapHandler;
+            if (handler != null) {
+                client.onGap(gap -> handler.accept(k, gap));
+            }
             try {
                 subscription.add(k);
             } catch (RuntimeException failedToSubscribe) {
@@ -347,6 +354,13 @@ public final class NodeSubscriptions implements AutoCloseable {
         return clients.size();
     }
 
+    /** Installs the node-wide recovery callback for all current and future streams. */
+    void onGap(java.util.function.BiConsumer<RunKey,
+            io.github.huyz0.os.biningester.client.DeliveryGapException> handler) {
+        gapHandler = Objects.requireNonNull(handler, "handler");
+        clients.forEach((key, entry) -> entry.client.onGap(gap -> handler.accept(key, gap)));
+    }
+
     /** Whether every stream in a routing snapshot currently has a held client. */
     boolean holdsAll(List<RunKey> keys) {
         return keys.stream().allMatch(clients::containsKey);
@@ -397,6 +411,18 @@ public final class NodeSubscriptions implements AutoCloseable {
                 }
                 if (requestId.equals(entry.catchUpRequest)) {
                     entry.client.completeCatchUp(requestId);
+                }
+            }
+        }
+    }
+
+    /** Unblocks the matching client after the coordinator has replayed its gap range. */
+    void completeGapRepair(RunKey key) {
+        Entry entry = clients.get(key);
+        if (entry != null) {
+            synchronized (entry.client) {
+                if (clients.get(key) == entry && entry.refCount > 0) {
+                    entry.client.completeGapRepair();
                 }
             }
         }
