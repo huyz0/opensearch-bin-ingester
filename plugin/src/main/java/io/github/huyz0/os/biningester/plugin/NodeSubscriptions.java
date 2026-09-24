@@ -4,6 +4,7 @@ package io.github.huyz0.os.biningester.plugin;
 import io.github.huyz0.os.biningester.client.ConsumerClient;
 import io.github.huyz0.os.biningester.client.SubscriptionTransport;
 import io.github.huyz0.os.biningester.format.RunKey;
+import io.github.huyz0.os.biningester.format.SubscriptionEvent;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -133,6 +134,7 @@ public final class NodeSubscriptions implements AutoCloseable {
     private static final class Entry {
         final ConsumerClient client;
         int refCount;
+        java.util.UUID catchUpRequest;
 
         Entry(ConsumerClient client) {
             this.client = client;
@@ -253,7 +255,9 @@ public final class NodeSubscriptions implements AutoCloseable {
         // `nodeListener` reads other keys, which a bin lock does not hold.
         Entry entry = clients.compute(key, (k, existing) -> {
             if (existing != null) {
-                existing.refCount++;
+                synchronized (existing.client) {
+                    existing.refCount++;
+                }
                 return existing;
             }
             // ⚠️ THE FED CONSTRUCTOR, holding no subscription of its own:
@@ -291,10 +295,11 @@ public final class NodeSubscriptions implements AutoCloseable {
      */
     public void release(RunKey key) {
         clients.computeIfPresent(key, (k, entry) -> {
-            entry.refCount--;
-            if (entry.refCount > 0) {
-                return entry;
-            }
+            synchronized (entry.client) {
+                entry.refCount--;
+                if (entry.refCount > 0) {
+                    return entry;
+                }
             // ⚠️ INSIDE THE COMPUTE, for the reason `clientFor` gives at
             // length: the entry and the registration must move together, or a
             // `clientFor` interleaving between them unsubscribes a stream a
@@ -314,9 +319,9 @@ public final class NodeSubscriptions implements AutoCloseable {
             // the life of the node. The hub then counts this node as a consumer
             // of every segment carrying this run and keeps pushing it bytes --
             // the NFR-5 waste this whole row removes.
-            subscription.remove(k);
-            entry.client.close();
-            return null;
+                subscription.remove(k);
+                return null;
+            }
         });
     }
 
@@ -342,11 +347,67 @@ public final class NodeSubscriptions implements AutoCloseable {
         return clients.size();
     }
 
+    /** Whether every stream in a routing snapshot currently has a held client. */
+    boolean holdsAll(List<RunKey> keys) {
+        return keys.stream().allMatch(clients::containsKey);
+    }
+
+    /** Routes only to clients held now; a shard closed during the exchange is dropped. */
+    boolean deliverCatchUp(java.util.UUID requestId, SubscriptionEvent event) {
+        Entry entry = clients.get(event.key());
+        if (entry == null) {
+            return false;
+        }
+        synchronized (entry.client) {
+            if (clients.get(event.key()) != entry || entry.refCount == 0) {
+                return false;
+            }
+            if (entry.catchUpRequest == null) {
+                entry.client.beginCatchUp(requestId);
+                entry.catchUpRequest = requestId;
+            } else if (!entry.catchUpRequest.equals(requestId)) {
+                if (!entry.client.catchUpComplete(entry.catchUpRequest)) {
+                    throw new IllegalStateException("another catch-up exchange is still active");
+                }
+                entry.client.beginCatchUp(requestId);
+                entry.catchUpRequest = requestId;
+            }
+            io.github.huyz0.os.biningester.client.Delivery delivery =
+                    new io.github.huyz0.os.biningester.client.Delivery(event.key(),
+                            event.segmentKey(), event.recordCount(), event.firstOffset(),
+                            io.github.huyz0.os.biningester.format.FetchMode.INLINE,
+                            event.inline(), null, event.sequencerEpoch());
+            if (!entry.client.tryDeliverCatchUp(requestId, delivery)) {
+                throw new IllegalStateException("catch-up lane is full; retry the exchange");
+            }
+            return true;
+        }
+    }
+
+    /** Marks the matching end for each stream which actually received replay records. */
+    void completeCatchUp(java.util.UUID requestId, java.util.Set<RunKey> delivered) {
+        for (RunKey key : delivered) {
+            Entry entry = clients.get(key);
+            if (entry == null) {
+                continue;
+            }
+            synchronized (entry.client) {
+                if (clients.get(key) != entry || entry.refCount == 0) {
+                    continue;
+                }
+                if (requestId.equals(entry.catchUpRequest)) {
+                    entry.client.completeCatchUp(requestId);
+                }
+            }
+        }
+    }
+
     @Override
     public void close() {
         // ⚠️ Node shutdown closes everything regardless of ref count -- there
         // is no "later" for anything still open to be released into.
-        clients.values().forEach(e -> e.client.close());
+        // Per-client transports are detached; the one node subscription below
+        // owns all registrations and is the only resource that needs closing.
         clients.clear();
         // ⚠️ THE SUBSCRIPTION GOES LAST AND IS THE ONLY THING THAT UNSUBSCRIBES.
         // The clients hold none of their own since M5.62, so closing them frees

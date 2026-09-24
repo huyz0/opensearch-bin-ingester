@@ -54,7 +54,7 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
                     org.opensearch.common.settings.Setting.Property.NodeScope);
 
     /** This node's shards of this plugin's indices, for the progress reporter. */
-    private final ShardPositions positions = new ShardPositions();
+    private final ShardPositions positions;
 
     @Override
     public java.util.List<org.opensearch.common.settings.Setting<?>> getSettings() {
@@ -124,6 +124,7 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
      * call order -- see {@link #factory}.
      */
     public BinStorePlugin(org.opensearch.common.settings.Settings settings) {
+        this.positions = new ShardPositions();
         java.util.function.Function<String, NodeSubscriptions> installed = factory;
         String nodeName = settings == null ? "" : settings.get("node.name", "");
         // ⚠️ A NODE WITH NO NAME GETS NOTHING rather than a shared default:
@@ -161,7 +162,13 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
      * finds it.
      */
     BinStorePlugin(NodeSubscriptions subscriptions) {
+        this(subscriptions, new ShardPositions());
+    }
+
+    /** Deterministic in-package construction for tests of the node entrypoint wiring. */
+    BinStorePlugin(NodeSubscriptions subscriptions, ShardPositions positions) {
         this.subscriptions = subscriptions;
+        this.positions = java.util.Objects.requireNonNull(positions, "positions");
         this.progressInterval = PROGRESS_INTERVAL.getDefault(
                 org.opensearch.common.settings.Settings.EMPTY);
     }
@@ -265,6 +272,12 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
                     positions);
             threadPool.scheduleWithFixedDelay(reporter::report, progressInterval,
                     org.opensearch.threadpool.ThreadPool.Names.GENERIC);
+            NodeCatchUpCoordinator catchUp = new NodeCatchUpCoordinator(
+                    subscriptions.transport(), subscriptions,
+                    () -> positions.catchUpSnapshot(clusterService.state()));
+            threadPool.scheduleWithFixedDelay(catchUp::attempt, progressInterval,
+                    org.opensearch.threadpool.ThreadPool.Names.GENERIC);
+            threadPool.generic().execute(catchUp::attempt);
         }
         return java.util.List.of();
     }

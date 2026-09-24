@@ -18,7 +18,7 @@ public final class CatchUpService implements HttpService {
 
     /** POST replay control on the existing per-stream subscription URL. */
     public static final String PATH = HttpSubscriptionTransport.SUBSCRIBE_PREFIX + "{indexUuid}/{partition}";
-    static final long MAX_REQUEST_BYTES = 1L << 20;
+    static final long MAX_REQUEST_BYTES = 4L << 20;
     static final long MAX_RESPONSE_BYTES = 8L << 20;
 
     @FunctionalInterface

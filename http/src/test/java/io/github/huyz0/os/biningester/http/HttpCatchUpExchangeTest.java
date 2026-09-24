@@ -149,6 +149,33 @@ class HttpCatchUpExchangeTest {
     }
 
     @Test
+    void oldPeerBadRequestForV2LeavesLivePollingRunning() throws Exception {
+        assertUnsupportedPeerDoesNotDisruptLivePoll(Status.BAD_REQUEST_400, requestWithStreams(1025));
+    }
+
+    @Test
+    void oldPeerRequestLimitForV2LeavesLivePollingRunning() throws Exception {
+        assertUnsupportedPeerDoesNotDisruptLivePoll(
+                Status.REQUEST_ENTITY_TOO_LARGE_413, requestWithStreams(1025));
+    }
+
+    @Test
+    void dispatchesARequestAboveTheV1StreamLimitAsOneV2Exchange() throws Exception {
+        AtomicInteger streamCount = new AtomicInteger();
+        server = WebServer.builder().port(0).routing(HttpRouting.builder()
+                .register(new CatchUpService((request, sink) -> {
+                    streamCount.set(request.streams().size());
+                    sink.write(new CatchUpEndFrame(request.requestId()).encode());
+                }))).build().start();
+        transport = connect();
+        var request = requestWithStreams(1025);
+
+        assertThat(transport.requestCatchUp(request, event -> { }))
+                .isEqualTo(SubscriptionTransport.CatchUpResult.COMPLETE);
+        assertThat(streamCount.get()).isEqualTo(1025);
+    }
+
+    @Test
     void responseWithoutMatchingEndFailsInsteadOfCompleting() throws Exception {
         SubscriptionEvent replayed = event(REQUESTED, "truncated");
         server = WebServer.builder().port(0).routing(HttpRouting.builder()
@@ -236,6 +263,11 @@ class HttpCatchUpExchangeTest {
 
     private void assertUnsupportedPeerDoesNotDisruptLivePoll(Status catchUpStatus)
             throws Exception {
+        assertUnsupportedPeerDoesNotDisruptLivePoll(catchUpStatus, request());
+    }
+
+    private void assertUnsupportedPeerDoesNotDisruptLivePoll(Status catchUpStatus,
+            CatchUpRequestFrame request) throws Exception {
         AtomicInteger polls = new AtomicInteger();
         AtomicInteger catchUps = new AtomicInteger();
         SubscriptionEvent live = event(REQUESTED, "live");
@@ -250,7 +282,7 @@ class HttpCatchUpExchangeTest {
             int beforeCatchUp = polls.get();
 
             SubscriptionTransport.CatchUpResult result = transport.requestCatchUp(
-                    request(), event -> { throw new AssertionError("legacy peer returned an event"); });
+                    request, event -> { throw new AssertionError("legacy peer returned an event"); });
 
             assertThat(result).isEqualTo(SubscriptionTransport.CatchUpResult.UNSUPPORTED);
             assertThat(catchUps).hasValue(1);
@@ -269,6 +301,14 @@ class HttpCatchUpExchangeTest {
     private static CatchUpRequestFrame request() {
         return new CatchUpRequestFrame(REQUEST_ID,
                 List.of(new CatchUpRequestFrame.Stream(REQUESTED, 41)));
+    }
+
+    private static CatchUpRequestFrame requestWithStreams(int count) {
+        List<CatchUpRequestFrame.Stream> streams = java.util.stream.IntStream.range(0, count)
+                .mapToObj(partition -> new CatchUpRequestFrame.Stream(
+                        new RunKey(REQUESTED.indexId(), partition), partition))
+                .toList();
+        return new CatchUpRequestFrame(REQUEST_ID, streams);
     }
 
     private static SubscriptionEvent event(RunKey key, String segment) {

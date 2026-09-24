@@ -402,7 +402,7 @@ public final class IndexRegistrar implements ClusterStateListener {
      * never be written to into its catalog -- and would make the push count
      * scale with a number that has nothing to do with us.
      */
-    private static boolean ours(IndexMetadata metadata) {
+    static boolean ours(IndexMetadata metadata) {
         String type = metadata.getSettings().get(SOURCE_TYPE);
         return type != null && type.equalsIgnoreCase(BinStorePlugin.TYPE);
     }

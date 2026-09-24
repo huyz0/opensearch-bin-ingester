@@ -79,12 +79,12 @@ class CatchUpControlFrameTest {
     void unknownVersionsRefuseBeforeDecodingAnyCatchUpFrame() {
         var request = new CatchUpRequestFrame(REQUEST, List.of(
                 new CatchUpRequestFrame.Stream(KEY, 41))).encode();
-        request[7] = 2;
+        request[7] = 3;
 
         var event = eventFrame().encode();
-        event[7] = 2;
+        event[7] = 3;
         var end = endFrame().encode();
-        end[7] = 2;
+        end[7] = 3;
 
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> CatchUpRequestFrame.decode(request))
                 .isInstanceOf(java.io.IOException.class)
@@ -127,21 +127,35 @@ class CatchUpControlFrameTest {
                 .isInstanceOf(java.io.IOException.class)
                 .hasMessageContaining("maximum");
 
-        var tooManyStreams = java.util.stream.IntStream.range(0, 1025)
+        var aboveV1Limit = java.util.stream.IntStream.range(0, 1025)
                 .mapToObj(partition -> new CatchUpRequestFrame.Stream(
                         new RunKey(KEY.indexId(), partition), 0))
                 .toList();
+        var v2Request = new CatchUpRequestFrame(REQUEST, aboveV1Limit);
+        assertThat(v2Request.encode()[7]).isEqualTo((byte) 2);
+        assertThat(CatchUpRequestFrame.decode(v2Request.encode()).streams())
+                .hasSize(1025);
+        byte[] falselyTaggedV1 = v2Request.encode();
+        falselyTaggedV1[7] = 1;
         org.assertj.core.api.Assertions.assertThatThrownBy(
-                () -> new CatchUpRequestFrame(REQUEST, tooManyStreams))
+                () -> CatchUpRequestFrame.decode(falselyTaggedV1))
+                .isInstanceOf(java.io.IOException.class)
+                .hasMessageContaining("1024");
+
+        var maximumStreams = java.util.Collections.nCopies(CatchUpRequestFrame.MAX_STREAMS,
+                new CatchUpRequestFrame.Stream(KEY, Long.MAX_VALUE));
+        var maximumRequest = new CatchUpRequestFrame(REQUEST, maximumStreams);
+        byte[] maximumEncoded = maximumRequest.encode();
+        assertThat(maximumEncoded[7]).isEqualTo((byte) 2);
+        assertThat(maximumEncoded.length).isLessThanOrEqualTo(4 << 20);
+        assertThat(CatchUpRequestFrame.decode(maximumEncoded).streams())
+                .hasSize(CatchUpRequestFrame.MAX_STREAMS);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> new CatchUpRequestFrame(REQUEST,
+                java.util.Collections.nCopies(CatchUpRequestFrame.MAX_STREAMS + 1,
+                        new CatchUpRequestFrame.Stream(KEY, 0))))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("maximum");
-        var maximumStreams = java.util.stream.IntStream.range(0, 1024)
-                .mapToObj(partition -> new CatchUpRequestFrame.Stream(
-                        new RunKey(KEY.indexId(), partition), 0))
-                .toList();
-        assertThat(CatchUpRequestFrame.decode(
-                new CatchUpRequestFrame(REQUEST, maximumStreams).encode()).streams())
-                .hasSize(1024);
 
         var partitionOverflow = new byte[request.length + 9];
         System.arraycopy(request, 0, partitionOverflow, 0, 42);
@@ -170,6 +184,19 @@ class CatchUpControlFrameTest {
 
         try (var golden = CatchUpControlFrameTest.class
                 .getResourceAsStream("/golden/catch-up-request-v1.hex")) {
+            assertThat(golden).isNotNull();
+            assertThat(java.util.HexFormat.of().formatHex(request.encode()))
+                    .isEqualTo(new String(golden.readAllBytes(), StandardCharsets.UTF_8).trim());
+        }
+    }
+
+    @Test
+    void v2RequestGoldenBytesStayStable() throws Exception {
+        var request = new CatchUpRequestFrame(REQUEST, List.of(
+                new CatchUpRequestFrame.Stream(KEY, 41)), CatchUpRequestFrame.VERSION_2);
+
+        try (var golden = CatchUpControlFrameTest.class
+                .getResourceAsStream("/golden/catch-up-request-v2.hex")) {
             assertThat(golden).isNotNull();
             assertThat(java.util.HexFormat.of().formatHex(request.encode()))
                     .isEqualTo(new String(golden.readAllBytes(), StandardCharsets.UTF_8).trim());

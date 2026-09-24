@@ -4,9 +4,17 @@ package io.github.huyz0.os.biningester.plugin;
 import java.io.IOException;
 import java.lang.System.Logger;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import io.github.huyz0.os.biningester.format.CatchUpRequestFrame;
+import io.github.huyz0.os.biningester.format.RunKey;
+import org.opensearch.cluster.ClusterState;
+import org.opensearch.cluster.metadata.IndexMetadata;
+import org.opensearch.cluster.routing.RoutingNode;
+import org.opensearch.cluster.routing.ShardRouting;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.core.index.shard.ShardId;
 import org.opensearch.index.shard.IndexEventListener;
@@ -33,7 +41,7 @@ import org.opensearch.indices.pollingingest.StreamPoller;
  * {@code createComponents} is not given the node's shards: a shard of one of
  * this plugin's indices is added when it starts and dropped when it closes.
  */
-final class ShardPositions implements IndexEventListener, ProgressReporter.Positions {
+class ShardPositions implements IndexEventListener, ProgressReporter.Positions {
 
     private static final Logger LOG = System.getLogger(ShardPositions.class.getName());
 
@@ -90,6 +98,70 @@ final class ShardPositions implements IndexEventListener, ProgressReporter.Posit
         return here;
     }
 
+    /**
+     * A complete, fresh snapshot of all plugin shard copies assigned locally.
+     * An assigned but not-yet-started copy, missing listener registration, or
+     * unreadable store defers the whole node request. A started store with no
+     * commit is the legitimate beginning of its stream: {@code batch_start=0}.
+     */
+    Optional<List<CatchUpRequestFrame.Stream>> catchUpSnapshot(ClusterState state) {
+        return catchUpSnapshot(state, routing -> {
+            IndexShard shard = shards.get(new ShardId(routing.index(), routing.id()));
+            if (shard == null) {
+                return java.util.OptionalLong.empty();
+            }
+            try {
+                return java.util.OptionalLong.of(committedForCatchUp(shard));
+            } catch (IOException | RuntimeException unreadable) {
+                LOG.log(Logger.Level.DEBUG, "catch-up position is not readable yet for "
+                        + routing.shardId(), unreadable);
+                return java.util.OptionalLong.empty();
+            }
+        });
+    }
+
+    static Optional<List<CatchUpRequestFrame.Stream>> catchUpSnapshot(ClusterState state,
+            java.util.function.Function<ShardRouting, java.util.OptionalLong> committedPositions) {
+        String localNodeId = state.nodes().getLocalNodeId();
+        RoutingNode local = localNodeId == null ? null : state.getRoutingNodes().node(localNodeId);
+        if (local == null) {
+            return Optional.empty();
+        }
+        List<CatchUpRequestFrame.Stream> result = new ArrayList<>();
+        for (ShardRouting routing : local) {
+            IndexMetadata metadata = state.metadata().index(routing.index());
+            if (metadata == null || !IndexRegistrar.ours(metadata)) {
+                continue;
+            }
+            if (!routing.started()) {
+                return Optional.empty();
+            }
+            java.util.OptionalLong batchStart;
+            try {
+                batchStart = committedPositions.apply(routing);
+            } catch (RuntimeException unreadable) {
+                return Optional.empty();
+            }
+            if (batchStart == null || batchStart.isEmpty()) {
+                return Optional.empty();
+            }
+            result.add(new CatchUpRequestFrame.Stream(
+                    new RunKey(java.util.UUID.fromString(routing.index().getUUID()),
+                            routing.id()), batchStart.getAsLong()));
+        }
+        result.sort(Comparator.comparing((CatchUpRequestFrame.Stream stream) ->
+                        stream.key().indexId().toString())
+                .thenComparingInt(stream -> stream.key().partitionId()));
+        if (result.size() > CatchUpRequestFrame.MAX_STREAMS) {
+            throw new CatchUpRequestFrame.StreamLimitException(result.size(),
+                    CatchUpRequestFrame.MAX_STREAMS);
+        }
+        if (result.isEmpty()) {
+            return Optional.empty();
+        }
+        return Optional.of(List.copyOf(result));
+    }
+
     private static Long committed(IndexShard shard) throws IOException {
         Store store = shard.store();
         if (!store.tryIncRef()) {
@@ -102,5 +174,23 @@ final class ShardPositions implements IndexEventListener, ProgressReporter.Posit
         } finally {
             store.decRef();
         }
+    }
+
+    private static Long committedForCatchUp(IndexShard shard) throws IOException {
+        Store store = shard.store();
+        if (!store.tryIncRef()) {
+            throw new IOException("shard store is closing");
+        }
+        try {
+            String batchStart = store.readLastCommittedSegmentsInfo().getUserData()
+                    .get(StreamPoller.BATCH_START);
+            return catchUpBatchStart(batchStart);
+        } finally {
+            store.decRef();
+        }
+    }
+
+    static long catchUpBatchStart(String batchStart) {
+        return batchStart == null ? 0L : BinStoreOffset.fromString(batchStart).offset();
     }
 }

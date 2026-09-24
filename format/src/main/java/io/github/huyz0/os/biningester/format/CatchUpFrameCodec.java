@@ -37,7 +37,12 @@ final class CatchUpFrameCodec {
         return new UUID(bytes.getLong(), bytes.getLong());
     }
 
-    static void requireVersion(Cursor cursor, int magic, int version, int kind, String what)
+    static int requireVersion(Cursor cursor, int magic, int version, int kind, String what)
+            throws IOException {
+        return requireVersion(cursor, magic, new int[] {version}, kind, what);
+    }
+
+    static int requireVersion(Cursor cursor, int magic, int[] versions, int kind, String what)
             throws IOException {
         int actualMagic = intValue(cursor.bytes(4));
         if (actualMagic != magic) {
@@ -45,15 +50,17 @@ final class CatchUpFrameCodec {
                     + Integer.toHexString(actualMagic));
         }
         int actualVersion = intValue(cursor.bytes(4));
-        if (actualVersion != version) {
+        if (java.util.Arrays.stream(versions).noneMatch(version -> version == actualVersion)) {
             throw new IOException(what + " version " + actualVersion
-                    + " is not readable by this build, which knows " + version);
+                    + " is not readable by this build, which knows "
+                    + java.util.Arrays.toString(versions));
         }
         int actualKind = cursor.bytes(1)[0] & 0xFF;
         if (actualKind != kind) {
             throw new IOException(what + " has unexpected frame kind " + actualKind
                     + ", expected " + kind);
         }
+        return actualVersion;
     }
 
     static void finish(Cursor cursor, String what) throws IOException {

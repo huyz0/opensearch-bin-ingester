@@ -60,6 +60,8 @@ class RegistrationWiringTest {
         private final List<IndexRegistration> registered =
                 java.util.Collections.synchronizedList(new ArrayList<>());
         private int refusalsLeft;
+        private final java.util.concurrent.atomic.AtomicInteger catchUpRequests =
+                new java.util.concurrent.atomic.AtomicInteger();
 
         @Override
         public AutoCloseable subscribe(RunKey key, Listener listener) {
@@ -73,6 +75,14 @@ class RegistrationWiringTest {
                 throw new IllegalStateException("the subscription is reconnecting");
             }
             registered.add(registration);
+        }
+
+        @Override
+        public SubscriptionTransport.CatchUpResult requestCatchUp(
+                io.github.huyz0.os.biningester.format.CatchUpRequestFrame request,
+                java.util.function.Consumer<io.github.huyz0.os.biningester.format.SubscriptionEvent> lane) {
+            catchUpRequests.incrementAndGet();
+            return SubscriptionTransport.CatchUpResult.UNSUPPORTED;
         }
 
         private List<String> names() {
@@ -390,6 +400,11 @@ class RegistrationWiringTest {
             org.opensearch.threadpool.ThreadPool.terminate(threadPool, 10,
                     java.util.concurrent.TimeUnit.SECONDS);
         }
+    }
+
+    @Test
+    void createComponentsSchedulesCatchUpRetriesAtTheProgressInterval() {
+        CatchUpSchedulingWiringTest.verifySchedulingAndRetry();
     }
 
     /**

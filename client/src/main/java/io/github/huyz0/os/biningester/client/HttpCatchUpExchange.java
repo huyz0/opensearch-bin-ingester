@@ -62,6 +62,13 @@ final class HttpCatchUpExchange {
                     || status == Status.NOT_IMPLEMENTED_501.code()) {
                 return CatchUpResult.UNSUPPORTED;
             }
+            if (request.version() == CatchUpRequestFrame.VERSION_2
+                    && (status == Status.BAD_REQUEST_400.code()
+                            || status == Status.REQUEST_ENTITY_TOO_LARGE_413.code())) {
+                // A v1 peer rejects the v2 stream bound as an unknown version
+                // (400), or its old body cap rejects the larger request (413).
+                return CatchUpResult.UNSUPPORTED;
+            }
             if (status != Status.OK_200.code()) {
                 throw new IOException("catch-up answered HTTP " + status);
             }
