@@ -53,6 +53,20 @@ final class CatchUpDeliveryLane {
         }
     }
 
+    boolean tryPut(UUID id, Delivery delivery) {
+        Objects.requireNonNull(delivery, "delivery");
+        reserve(id, delivery.recordCount());
+        if (!deliveries.offer(delivery)) {
+            rollback(delivery.recordCount());
+            return false;
+        }
+        synchronized (deliveryLock) {
+            available.release();
+            deliveryAvailable.release();
+        }
+        return true;
+    }
+
     private synchronized void reserve(UUID id, int records) {
         requireActive(id);
         if (endSeen) {

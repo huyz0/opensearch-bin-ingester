@@ -50,6 +50,10 @@ final class ConsumerDeliveryQueues {
         catchUp.put(requestId, delivery);
     }
 
+    boolean tryDeliverCatchUp(java.util.UUID requestId, Delivery delivery) {
+        return catchUp.tryPut(requestId, delivery);
+    }
+
     boolean completeCatchUp(java.util.UUID requestId) {
         return catchUp.end(requestId);
     }

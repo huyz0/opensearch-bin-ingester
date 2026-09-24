@@ -226,6 +226,14 @@ public final class ConsumerClient implements AutoCloseable {
         deliveryQueues.deliverCatchUp(requestId, delivery);
     }
 
+    /** Adds replay to the bounded lane without holding the caller on consumer progress. */
+    public boolean tryDeliverCatchUp(java.util.UUID requestId, Delivery delivery) {
+        if (!key.equals(Objects.requireNonNull(delivery, "delivery").key())) {
+            throw new IllegalArgumentException("catch-up delivery belongs to another stream");
+        }
+        return deliveryQueues.tryDeliverCatchUp(requestId, delivery);
+    }
+
     /** Marks the matching exchange end; true when all replay records are handed out. */
     public boolean completeCatchUp(java.util.UUID requestId) {
         return deliveryQueues.completeCatchUp(requestId);
