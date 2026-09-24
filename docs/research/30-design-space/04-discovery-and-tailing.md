@@ -9,11 +9,14 @@ consumer's fallback path.
 cluster cost **$0** instead of $16,600–$207,000/month, and it removes discovery latency from the
 end-to-end budget entirely.
 
-> ⚠️ **REVISION 2026-09-22 (ADR-0064):** the break-glass sentence in §2a and §3
-> is now a node-local read broker, not a plugin-side direct S3 client. The broker
-> owns the SDK and ambient identity beside the OpenSearch node; the plugin sends
-> only a coalesced recovery key over a protected local channel. The ingester-served
-> hot path and its cost arithmetic are unchanged.
+> ⚠️ **REVISION 2026-09-24 (ADR-0064, clarified by M9.49):** the break-glass
+> sentence in §2a and §3 is now a node-local store reader (`NodeLocalStoreReader`),
+> not a plugin-side direct S3 client. The reader owns the SDK and ambient identity
+> beside the OpenSearch node; the plugin sends only a coalesced recovery key over
+> a protected local channel. Automatic Tier 2/3 perform counted GETs and zero
+> LISTs; Tier 3 additionally performs exactly one checkpoint-pointer STAT per
+> recovery episode and is bounded to 30 GETs. The ingester-served hot path and
+> its cost arithmetic are unchanged.
 
 ---
 
@@ -151,9 +154,9 @@ pod is under pressure. The pod must **stream through, never buffer-then-forward*
 
  Live tail is delivered on the subscription (inline when
 small, §2c); catch-up is a ranged fetch from the same-AZ ingester node.
-**Fallback: a node-local read broker** — whole-object reads, no cache, no
+**Fallback: a node-local store reader** — whole-object reads, no cache, no
 cleverness — is used only when no ingester node is reachable or the data is
-older than the cache window. The broker, not the plugin, owns the SDK and
+older than the cache window. The reader, not the plugin, owns the SDK and
 ambient object-store identity; the plugin sends a protected local request.
 It remains break-glass, not the hot path.
 
@@ -534,10 +537,10 @@ So in steady state **the plugin touches the object store for neither discovery n
 data**. The only S3 GETs on the read path are the pod's prefetch — one per segment
 per non-writing AZ, issued *before* the request arrives.
 
-When no ingester is reachable, fallback tiers 2 and 3 use the node-local broker
-from ADR-0064. The broker, not the plugin, performs the recovery GET or the
-explicit recovery LIST; the plugin still receives only the recovered bytes over
-the protected local channel.
+When no ingester is reachable, fallback tiers 2 and 3 use `NodeLocalStoreReader`
+from ADR-0064. It performs counted recovery GETs and exactly one checkpoint-pointer
+STAT for Tier 3; it never LISTs. Tier 4 operator recovery is a separate path. The
+plugin receives only recovered bytes over the protected local channel.
 
 ### The poller's own contribution
 

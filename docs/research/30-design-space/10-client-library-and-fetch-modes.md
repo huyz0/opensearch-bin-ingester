@@ -205,7 +205,7 @@ fetch from.
 |---|---|
 | `proxy` request fails | retry another same-AZ pod, then cross-AZ; then `direct` if it holds a valid grant |
 | `grant` expired / 403 | ask the ingester for a fresh grant; do not cache grants across retries |
-| No pod reachable at all | fallback ladder tier 2+ ([discovery-and-tailing §3](04-discovery-and-tailing.md)) — a node-local broker performs break-glass whole-object reads, with no plugin SDK or credentials |
+| No pod reachable at all | fallback ladder tier 2+ ([discovery-and-tailing §3](04-discovery-and-tailing.md)) — `NodeLocalStoreReader` performs break-glass whole-object reads, with no plugin SDK or credentials |
 | Inline payload corrupt | ignore it and fetch by coordinates — inline is an accelerator, never the source of truth |
 
 Because every event carries coordinates regardless of mode, **every mode can degrade to every other

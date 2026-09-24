@@ -1,6 +1,6 @@
-# 0064. Use a node-local read broker for plugin store fallback
+# 0064. Use a node-local store reader for plugin fallback
 
-Status: accepted
+Status: accepted — clarified 2026-09-24 by M9.49 on request permissions, naming and local process identity
 Date: 2026-09-22
 Requirements: FR-10, NFR-4
 Research: docs/research/30-design-space/04-discovery-and-tailing.md §2a, §3; docs/research/30-design-space/10-client-library-and-fetch-modes.md §4; docs/research/50-open-questions.md Q21
@@ -23,37 +23,49 @@ in the exact failure case the fallback is meant to cover.
 
 The fallback is explicitly a recovery path, not a second hot path: it may read
 the whole segment, it must coalesce all runs for one segment on one OpenSearch
-node, and its GET/LIST counts must be measured by M9.21.
+node, and its GET/STAT counts must be measured by M9.21. Tier 3 must resolve the
+newest checkpoint pointer before it can fetch the checkpoint and ordered deltas;
+that resolution uses one checkpoint-pointer STAT per recovery episode. The
+episode is bounded to at most 30 GETs total (checkpoint, deltas and segments),
+and the STAT and GET counts are reported separately.
 
 ## Decision
 
-Use a **node-local read broker** beside each OpenSearch node. The plugin sends
-the broker a structured recovery request containing the configured store
-namespace, one segment key, and the requested delivery window. The broker owns
+Use a **node-local store reader** (`NodeLocalStoreReader`) beside each OpenSearch node. The plugin sends
+the reader a structured recovery request containing the configured store
+namespace, one segment key, and the requested delivery window. The reader owns
 the object-store SDK, ambient workload identity and endpoint configuration; it
 streams the whole object back without exposing credentials or a signed URL to
 the plugin.
 
-The broker contract is deliberately narrow:
+The reader contract is deliberately narrow:
 
-- only GET of keys under the configured bucket/prefix is permitted;
-- LIST is refused except for the explicitly entered recovery tier, where it is
-  separately counted and paced;
-- one request represents one coalesced segment per OpenSearch node, never one
-  request per record, shard, partition or run;
-- the broker streams with bounded buffers, enforces an object-size limit and
+- for automatic Tier 2, only GET of keys under the configured bucket/prefix is
+  permitted; automatic Tier 3 permits GET plus one STAT of the newest checkpoint
+  pointer before checkpoint/delta/segment GETs. All GET and STAT operations are
+  counted; no other STAT is permitted. The operator-entered Tier 4 LIST is a
+  separate recovery tool/path, not exposed by `NodeLocalStoreReader`;
+- automatic Tiers 2 and 3 issue no LIST; only the separate, operator-entered
+  Tier 4 data-prefix scan may LIST, outside M9.21 and separately counted and
+  paced under cost.md R15;
+- each recovery episode represents one node-scoped operation, never one request
+  per record, shard, partition or run; Tier 2 polling is likewise coalesced once
+  per OpenSearch node and poll interval;
+- the reader streams with bounded buffers, enforces an object-size limit and
   reports store failures without logging credentials or object payloads; and
-- the local channel is protected by OS ownership/permissions and a
-  per-installation authentication secret, never by index settings or cluster
-  state.
+- the plugin and companion run under the same dedicated OS service account;
+  the per-installation authentication secret is in a file readable only by
+  that account, and the actual plugin-side client reads it through that
+  owner-only path. OS ownership/permissions protect the local channel; the
+  secret is never in index settings or cluster state.
 
-The plugin uses this broker only for fallback tiers 2 and 3. Inline and proxy
+The plugin uses this reader only for fallback tiers 2 and 3. Inline and proxy
 delivery remain unchanged, and a reachable ingester remains preferred. If both
-the ingester fleet and the local broker/store are unavailable, the consumer
+the ingester fleet and the local reader/store are unavailable, the consumer
 stays in the ladder's visible recovery state: indexing is delayed, but durable
 records are not skipped or acknowledged as consumed.
 
-M9.21 owns the executable broker seam and the RustFS request counts. Its result
+M9.21 owns the executable `NodeLocalStoreReader` seam and the RustFS request counts. Its result
 must replace `FallbackLadder`'s modelled `TENS_OF_GETS` with the measured
 number, or amend that estimate with a new ADR if the result is not acceptable.
 
@@ -75,24 +87,30 @@ number, or amend that estimate with a new ADR if the result is not acceptable.
   reachable, but it cannot operate when the ingester fleet is the failed
   component.
 
+- **Discover checkpoints or the commit chain with LIST.** Rejected. Automatic
+  recovery must issue zero LISTs; LIST costs 12.5 GETs under cost.md and is not
+  acceptable for a node-local automatic path. Tier 3 instead pays exactly one
+  counted checkpoint-pointer STAT per recovery episode, plus bounded GETs.
+
 - **Keep tiers 2 and 3 deferred.** Rejected. It leaves the consumer unable to
   make progress during an ingester outage even though the only durable state is
-  in the object store. The node-local broker adds a stateless companion, not a
+  in the object store. The node-local store reader adds a stateless companion, not a
   new durable dependency, and keeps the failure mode visible when the store
   itself is unavailable.
 
 ## Consequences
 
 - The plugin remains free of cloud SDKs, object-store credentials and signed
-  URL handling. The broker becomes the only new deployment artifact and must
+  URL handling. The reader becomes the only new deployment artifact and must
   be upgraded with the plugin contract.
-- The fallback can add one whole-object GET per missing segment per OpenSearch
-  node, plus only the explicitly entered recovery LISTs. It does not change
-  steady-state request rates, which remain governed by the ingester cache and
-  prefetch path.
-- Recovery correctness depends on the broker's bounded streaming and on the
+- Tier 2 and Tier 3 requests are outage-recovery work, coalesced per node. Each
+  Tier 3 episode adds exactly one checkpoint-pointer STAT and at most 30 GETs;
+  all operations are counted separately, with zero automatic LISTs. This does
+  not change steady-state request rates, which remain governed by the ingester
+  cache and prefetch path.
+- Recovery correctness depends on the reader's bounded streaming and on the
   catch-up path's coalescing. M9.21 must exercise both and count them rather
   than treating `TENS_OF_GETS` as a design constant.
-- A broker outage is an indexing-latency incident, not a data-loss path. The
+- A reader outage is an indexing-latency incident, not a data-loss path. The
   fallback ladder must keep the gap visible and resume from the durable
-  pointer once either the broker/store or an ingester becomes available.
+  pointer once either the reader/store or an ingester becomes available.

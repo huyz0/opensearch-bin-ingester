@@ -74,7 +74,7 @@ range safely from `batch_start` under the existing at-least-once semantics.
   ingester restart or failover and therefore cannot recover an acknowledged
   backlog from durable state.
 * **Give the plugin a cloud SDK or long-lived grants.** Rejected by
-  [ADR-0064](0064-node-local-read-broker-for-store-fallback.md): credentials
+  [ADR-0064](0064-node-local-store-reader-for-plugin-fallback.md): credentials
   do not belong in the OpenSearch JVM, and a long-lived grant changes the
   security boundary.
 * **Use LIST to discover the backlog.** Rejected: LIST is recovery-only and

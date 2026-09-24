@@ -24,7 +24,7 @@ intentional results where the acceptance condition is outstanding or absent.
 15. PARTIAL: inherited-row evidence/status is enumerated below. The M8.60–64, M8.74, M8.77 and M8.80 rows remain open; M8.58 and M8.24 parent remain open (NOT-RUN). M8.64 is prose-only and explicitly excluded from automated criterion-line coverage by the spec; it is still an open review action, not silently treated as tested.
 16. `gradlew generateCostLatencyCurve` generated the committed Markdown/SVG from `measurements/results`; `checkCostLatencyCurve` is wired into `gates`. The checked-in inputs explicitly mark M9.8 and M9.18 as smoke, not full acceptance runs.
 17. `measurement.yml`, the 60-second L1 subset and the `nightly-measurement` execution-layer docs are checked by `checkMeasurementWorkflow`. The full nightly GitHub workflow is NOT-RUN here; the separate full local profile timed out at 10 minutes.
-18. NOT-RUN: ADR-0064 selects the node-local read broker, but M9.21 `LadderStoreTiersIT` and M8.24 are unfinished. Tiers 2 and 3 have not executed; their GET/LIST cost is not measured.
+18. NOT-RUN: ADR-0064 selects `NodeLocalStoreReader`, but M9.21 `LadderStoreTiersIT` and M8.24 are unfinished. Tiers 2 and 3 have not executed; their GET/STAT cost is not measured, and zero automatic-tier LISTs remain to be proven.
 19. NOT-RUN: M8.58's pod-UID lease wire-format change is absent; no lease format, readers/writers, fake or golden change is claimed.
 
 **Explicit scope disposition:** FR-21's refusing half is owned by no milestone
