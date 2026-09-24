@@ -1,6 +1,6 @@
 # 0064. Use a node-local store reader for plugin fallback
 
-Status: accepted — clarified 2026-09-24 by M9.49 on request permissions, naming and local process identity
+Status: accepted — clarified 2026-09-24 by M9.49 on request permissions, naming and local process identity; clarified 2026-09-25 by M9.50 on allowed recovery object keys
 Date: 2026-09-22
 Requirements: FR-10, NFR-4
 Research: docs/research/30-design-space/04-discovery-and-tailing.md §2a, §3; docs/research/30-design-space/10-client-library-and-fetch-modes.md §4; docs/research/50-open-questions.md Q21
@@ -33,7 +33,8 @@ and the STAT and GET counts are reported separately.
 
 Use a **node-local store reader** (`NodeLocalStoreReader`) beside each OpenSearch node. The plugin sends
 the reader a structured recovery request containing the configured store
-namespace, one segment key, and the requested delivery window. The reader owns
+namespace, one allowlisted recovery object key, and the requested delivery
+window. The reader owns
 the object-store SDK, ambient workload identity and endpoint configuration; it
 streams the whole object back without exposing credentials or a signed URL to
 the plugin.
@@ -45,6 +46,17 @@ The reader contract is deliberately narrow:
   pointer before checkpoint/delta/segment GETs. All GET and STAT operations are
   counted; no other STAT is permitted. The operator-entered Tier 4 LIST is a
   separate recovery tool/path, not exposed by `NodeLocalStoreReader`;
+- the complete automatic GET allowlist is (a) the checkpoint pointer at
+  `<prefix>/ctl/log/0/<epoch:016x>/ckpt/LATEST` (STAT then GET; its GET body is
+  the checkpoint per ADR-0034), (b) a commit delta at
+  `<prefix>/ctl/log/0/<epoch:016x>/<sequence:016x>.delta`, and (c) a segment at
+  `<prefix>/data/<yyyy>/<MM>/<dd>/<HH>/<timestampMillis:019d>-<podShortId>-<sequence:016x>-h<headerLen>-<filterEncoded>.bseg`.
+  The hex fields are lowercase, zero-padded, and canonical; the segment time
+  fields and `podShortId`/filter follow `SegmentKey`. The configured bucket and
+  prefix are fixed at assembly, so callers cannot select them. Validate the
+  entire key against its canonical grammar and that exact namespace: no arbitrary
+  key, URI, bucket, prefix, traversal, extra path component, or seq-keyed `.ckpt`
+  object is accepted. STAT is refused for delta and segment keys;
 - automatic Tiers 2 and 3 issue no LIST; only the separate, operator-entered
   Tier 4 data-prefix scan may LIST, outside M9.21 and separately counted and
   paced under cost.md R15;
