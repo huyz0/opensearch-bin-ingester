@@ -132,8 +132,8 @@ class IoSeamGateTest {
    * scenario lib.sh says {@code workspace_files} exists to make unreachable.
    */
   /**
-   * The composition root's two edge files, plus the HTTP transport's streaming
-   * exchange adapter, exempted BY NAME.
+   * The composition root's three edge files and the HTTP/secret-file client
+   * adapters, exempted BY NAME.
    *
    * <p>⚠️ THE ORACLE HAS TO KNOW ABOUT THEM OR IT COUNTS A DIFFERENT SET than
    * the gate does, and the case below would red for a correct gate.
@@ -146,7 +146,10 @@ class IoSeamGateTest {
   private static final List<String> EXEMPT_FILES = List.of(
       "server/src/main/java/io/github/huyz0/os/biningester/server/Main.java",
       "server/src/main/java/io/github/huyz0/os/biningester/server/ConfigFile.java",
-      "client/src/main/java/io/github/huyz0/os/biningester/client/HttpCatchUpExchange.java");
+      "server/src/main/java/io/github/huyz0/os/biningester/server/NodeLocalStoreReaderMain.java",
+      "client/src/main/java/io/github/huyz0/os/biningester/client/HttpCatchUpExchange.java",
+      "client/src/main/java/io/github/huyz0/os/biningester/client/InstallationSecret.java",
+      "client/src/main/java/io/github/huyz0/os/biningester/client/NodeLocalStoreReaderClient.java");
 
   @Test
   void thisRepositoryPassesAndTheGateSaysHowManyFilesItRead() throws Exception {
@@ -167,16 +170,16 @@ class IoSeamGateTest {
   }
 
   /**
-   * ⚠️ **AN EXEMPTION NOBODY CAN FALSIFY IS A HOLE.** Three files are excused
+   * ⚠️ **AN EXEMPTION NOBODY CAN FALSIFY IS A HOLE.** Six files are excused
    * from this gate, and nothing so far says they still need to be. This runs
-   * the scanner over exactly those three and asserts that each is reported — so
+   * the scanner over exactly those six and asserts that each is reported — so
    * the excuse is measured on every commit, and the day a refactor moves the
    * clock or the file read out of one of them, this case goes red and the entry
    * has to be DELETED rather than carried forward as a standing licence.
    *
    * <p>⚠️ IT IS ALSO THE EVIDENCE THAT THE EXEMPTION IS LOAD-BEARING AT ALL.
    * Without it, "the gate passes" would be equally true of an exemption list
-   * naming two files that never reached past a seam in the first place.
+   * naming files that never reached past a seam in the first place.
    */
   @Test
   void theEXEMPTFilesGENUINELYReachPastASeam() throws Exception {

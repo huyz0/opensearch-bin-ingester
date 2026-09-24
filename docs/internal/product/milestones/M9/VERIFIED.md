@@ -69,6 +69,7 @@ Evidence references below point to the named backlog task's acceptance evidence 
 | M8.81 | `test_source_digest_uses_canonical_git_line_endings` plus `checkTdd`; done. |
 | M8.82 | `EndpointSliceViewTest` ready AZ-labelled peer snapshot; done. |
 | M8.83 | BPDS versioned frame golden/authentication/byte-count component tests; done, integrated signal use is M8.56. |
+| M9.42 | `NodeLocalStoreReaderKeyPolicyTest`, `NodeLocalStoreReaderTest`, `NodeLocalStoreReaderMainTest`, `NodeLocalStoreReaderProcessIT` including `--init-secret`, and POSIX secret-permission regression; `gates`, TDD, test-integrity, and diff-scoped mutation (111/138, 80.4%) passed. `check-coverage.sh` measured coverage below repository floors; Gradle `checkCoverage` could not parse missing JaCoCo `report.dtd`. Cost-meter gate is absent. M9.43–M9.45 and M9.21 remain open. |
 
 ## Milestone review at this checkpoint
 

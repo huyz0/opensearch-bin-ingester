@@ -15,13 +15,14 @@ import java.util.Properties;
 /**
  * Reads the settings an operator wrote, off a disk (M8.4).
  *
- * <p>⚠️ **ONE OF TWO FILES IN THIS PROJECT THAT NAMES {@code java.nio.file},
+ * <p>⚠️ **ONE OF THREE SERVER FILES IN THIS PROJECT THAT NAMES {@code java.nio.file},
  * AND IT IS EXEMPTED BY NAME.** {@code check-io-seam.sh} exempts
- * {@code binstore-backends} as a MODULE; this file and {@link Main} are listed
+ * {@code binstore-backends} as a MODULE; this file, {@link Main} and
+ * {@link NodeLocalStoreReaderMain} are listed
  * individually instead, so that {@link Assembly}, {@link StoreFactory},
  * {@link FrontDoor}, {@link IngesterNode} and {@link ServerProperties} stay
  * under the gate. ⚠️ The M8 SPEC's design section says "the exemption list
- * grows by exactly one module"; two files is strictly narrower than that and is
+ * grows by exactly one module"; three files are strictly narrower than that and are
  * the shape actually taken — recorded here because a reader comparing the two
  * would otherwise think one of them was wrong.
  *

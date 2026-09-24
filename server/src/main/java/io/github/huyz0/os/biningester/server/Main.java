@@ -17,8 +17,8 @@ import java.util.concurrent.CountDownLatch;
  * puts this row before the chaos matrix to avoid: the matrix would then be
  * killing a process nothing else exercises.
  *
- * <p>⚠️ **ONE OF TWO FILES EXEMPT FROM {@code check-io-seam.sh} BY NAME**, the
- * other being {@link ConfigFile}. What it reaches for is the real clock, which
+ * <p>⚠️ **ONE OF THREE SERVER FILES EXEMPT FROM {@code check-io-seam.sh} BY NAME**,
+ * alongside {@link ConfigFile} and {@link NodeLocalStoreReaderMain}. What it reaches for is the real clock, which
  * is banned by CONSTRUCT ({@code Clock.system}) everywhere else — and that ban
  * is the whole reason eight milestones of tests can move time at all. The
  * exemption is what a composition root IS: the I/O and the clock become real in

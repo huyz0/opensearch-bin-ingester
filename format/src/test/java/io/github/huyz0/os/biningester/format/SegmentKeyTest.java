@@ -38,6 +38,22 @@ class SegmentKeyTest {
     }
 
     @Test
+    void parsingAKeyRegeneratesItsCanonicalValue() {
+        SegmentKey original = new SegmentKey("bins/cluster-a", T, "writer7", 42, 96,
+                new MembershipFilter.None().encode());
+
+        assertThat(SegmentKey.parse(original.key())).isEqualTo(original);
+        assertThat(SegmentKey.parse(original.key()).key()).isEqualTo(original.key());
+        String exactlyAtByteLimit = new SegmentKey("p".repeat(953), T, "pod", 1, 48).key();
+        assertThat(exactlyAtByteLimit.getBytes(java.nio.charset.StandardCharsets.UTF_8)).hasSize(1024);
+        assertThat(SegmentKey.parse(exactlyAtByteLimit).key()).isEqualTo(exactlyAtByteLimit);
+        String emptyPrefix = new SegmentKey("", T, "pod", 1, 48).key();
+        assertThat(SegmentKey.parse(emptyPrefix).prefix()).isEmpty();
+        assertThatThrownBy(() -> SegmentKey.parse(original.key().replace("writer7", "bad-writer")))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     void keysSortChronologicallyWithinAnHour() {
         List<String> keys = new ArrayList<>();
         for (long t : new long[] {T + 9999, T + 10, T + 100000, T}) {

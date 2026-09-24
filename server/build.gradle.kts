@@ -2,6 +2,30 @@
 
 plugins { id("io.github.huyz0.os.biningester.java-conventions") }
 
+tasks.register<JavaExec>("runNodeLocalStoreReader") {
+    group = "application"
+    description = "Run the standalone loopback-only node-local store reader"
+    mainClass.set("io.github.huyz0.os.biningester.server.NodeLocalStoreReaderMain")
+    classpath = sourceSets.main.get().runtimeClasspath
+    val readerConfig = providers.gradleProperty("readerConfig")
+    doFirst {
+        require(readerConfig.isPresent) { "pass -PreaderConfig=<path-to-reader-properties>" }
+        args(readerConfig.get())
+    }
+}
+
+tasks.register<JavaExec>("initNodeLocalStoreReaderSecret") {
+    group = "application"
+    description = "Create a random owner-only installation secret for the local reader"
+    mainClass.set("io.github.huyz0.os.biningester.server.NodeLocalStoreReaderMain")
+    classpath = sourceSets.main.get().runtimeClasspath
+    val secretPath = providers.gradleProperty("readerSecretPath")
+    doFirst {
+        require(secretPath.isPresent) { "pass -PreaderSecretPath=<path-for-secret-file>" }
+        args("--init-secret", secretPath.get())
+    }
+}
+
 dependencies {
     // ⚠️ THE COMPOSITION ROOT DEPENDS ON EVERYTHING AND NOTHING DEPENDS ON IT.
     // That is what makes it a leaf in the dependency surface rather than a

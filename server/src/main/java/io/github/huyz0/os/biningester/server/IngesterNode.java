@@ -109,7 +109,7 @@ public final class IngesterNode implements AutoCloseable {
      * @param clock ⚠️ the ONE clock the graph reads. {@link Main} passes the
      *     real one; a test passes its own, and nothing below this line calls
      *     {@code Clock.systemUTC()} for itself — which is what
-     *     {@code check-io-seam.sh} enforces for every module but the two files
+       *     {@code check-io-seam.sh} enforces for every module but the three composition-root files
      *     named in its exempt list
      * @throws IOException if the store cannot be opened or the term cannot be
      *     taken

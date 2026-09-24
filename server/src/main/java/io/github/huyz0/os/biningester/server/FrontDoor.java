@@ -42,7 +42,7 @@ import java.util.Objects;
  *
  * <p>⚠️ **THIS CLASS NAMES NO SOCKET AND READS NO CLOCK.** It takes the clock
  * and hands Helidon a port; {@code check-io-seam.sh} therefore still judges it,
- * which is the point of keeping the two files that must reach past a seam
+ * which is the point of keeping the three server composition-root files that must reach past a seam
  * ({@link Main} and {@link ConfigFile}) as small as they are.
  */
 public final class FrontDoor implements AutoCloseable {

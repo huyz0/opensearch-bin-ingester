@@ -120,6 +120,39 @@ public record SegmentKey(
         return rendered;
     }
 
+    /** Parses only a key that this canonical renderer can reproduce exactly. */
+    public static SegmentKey parse(String key) {
+        Objects.requireNonNull(key, "key");
+        if (key.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > MAX_KEY_BYTES) {
+            throw new IllegalArgumentException("not a segment key: exceeds " + MAX_KEY_BYTES
+                    + " bytes");
+        }
+        int tailStart = key.lastIndexOf('/') + 1;
+        Matcher matcher = POD_FIELD.matcher(key.substring(tailStart));
+        if (!matcher.matches()) {
+            throw new IllegalArgumentException("not a segment key");
+        }
+        try {
+            long timestampMillis = timestampOf(key);
+            String podShortId = podShortIdOf(key);
+            long sequence = Long.parseUnsignedLong(matcher.group(3), 16);
+            int headerLen = headerLenOf(key);
+            String filterEncoded = matcher.group(5);
+            int dataPath = key.lastIndexOf("/data/");
+            if (dataPath < 0) {
+                throw new IllegalArgumentException("not a segment key");
+            }
+            SegmentKey parsed = new SegmentKey(key.substring(0, dataPath), timestampMillis,
+                    podShortId, sequence, headerLen, filterEncoded);
+            if (!parsed.key().equals(key)) {
+                throw new IllegalArgumentException("not a canonical segment key");
+            }
+            return parsed;
+        } catch (NumberFormatException malformed) {
+            throw new IllegalArgumentException("not a segment key", malformed);
+        }
+    }
+
     /** The writer identity encoded in a well-formed segment object key. */
     public static String podShortIdOf(String key) {
         Objects.requireNonNull(key, "key");

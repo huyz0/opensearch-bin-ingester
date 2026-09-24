@@ -173,12 +173,15 @@ containing a procedure rather than a pointer is a fork waiting to drift.
    REQUIRES, and `LocalDate.now(clock)` is how you read it.
    `binstore-backends` is exempt: it is the adapter. Three files are exempt by
    name: `server/.../Main.java` (real clock), `server/.../ConfigFile.java`
-   (settings file), and `client/.../HttpCatchUpExchange.java` (the JDK
+   (settings file), `server/.../NodeLocalStoreReaderMain.java` (reader process,
+   secret and loopback socket), `client/.../HttpCatchUpExchange.java` (the JDK
    streaming HTTP response for catch-up; Helidon's blocking submit path waits
-   for the complete body). ⚠️ Files rather than the whole modules, so the
+   for the complete body), `client/.../InstallationSecret.java` (owner-only
+   secret-file adapter), and `client/.../NodeLocalStoreReaderClient.java`
+   (loopback HTTP adapter). ⚠️ Files rather than the whole modules, so the
    remaining server composition stays under the gate and other consumer code
    cannot open sockets. The exemption is pinned by a case that scans exactly
-   those three and fails if any stops reaching past its seam, so it cannot
+   those six and fails if any stops reaching past its seam, so it cannot
    outlive its reason.
    ⚠️ **NEITHER HALF IS CLOSED.** The package half must name every package a
    reach can live in, and the construct half is a hand-named list; each is
