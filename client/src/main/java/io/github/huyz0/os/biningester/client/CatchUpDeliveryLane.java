@@ -20,7 +20,12 @@ final class CatchUpDeliveryLane {
     private boolean endSeen;
 
     CatchUpDeliveryLane(int capacity, Object deliveryLock, Semaphore deliveryAvailable) {
-        deliveries = new ArrayBlockingQueue<>(capacity);
+        this(new ArrayBlockingQueue<>(capacity), deliveryLock, deliveryAvailable);
+    }
+
+    CatchUpDeliveryLane(BlockingQueue<Delivery> deliveries, Object deliveryLock,
+            Semaphore deliveryAvailable) {
+        this.deliveries = Objects.requireNonNull(deliveries, "deliveries");
         this.deliveryLock = deliveryLock;
         this.deliveryAvailable = deliveryAvailable;
     }
