@@ -93,6 +93,7 @@ public final class SnapshotCommittedDeltaSource implements CommittedDeltaSource 
         Objects.requireNonNull(segmentIterator, "segmentIterator");
         return new SegmentReplayCursor() {
             private Iterator<SegmentCommit> segments = List.<SegmentCommit>of().iterator();
+            private long chainSequence = CommittedRun.CHAIN_SEQUENCE_UNKNOWN;
 
             @Override
             public Optional<ReplaySegment> next() {
@@ -105,7 +106,7 @@ public final class SnapshotCommittedDeltaSource implements CommittedDeltaSource 
                             if (exclusiveOffset != null && run.lastOffset() > exclusiveOffset) {
                                 long first = Math.max(run.firstOffset(), exclusiveOffset + 1);
                                 matching.add(new CommittedRun(run.key(), segment.segmentKey(),
-                                        (int) (run.lastOffset() - first + 1), first));
+                                        (int) (run.lastOffset() - first + 1), first, chainSequence));
                             }
                         }
                         if (!matching.isEmpty()) {
@@ -116,7 +117,9 @@ public final class SnapshotCommittedDeltaSource implements CommittedDeltaSource 
                     if (!deltas.hasNext()) {
                         return Optional.empty();
                     }
-                    segments = segmentIterator.apply(deltas.next());
+                    CommitDelta delta = deltas.next();
+                    chainSequence = delta.sequence();
+                    segments = segmentIterator.apply(delta);
                 }
             }
         };
@@ -162,7 +165,8 @@ public final class SnapshotCommittedDeltaSource implements CommittedDeltaSource 
         @Override
         public Optional<CommittedRun> next() {
             while (deltaIndex < deltas.size()) {
-                List<SegmentCommit> segments = deltas.get(deltaIndex).segments();
+                CommitDelta delta = deltas.get(deltaIndex);
+                List<SegmentCommit> segments = delta.segments();
                 while (segmentIndex < segments.size()) {
                     SegmentCommit segment = segments.get(segmentIndex);
                     while (runIndex < segment.runs().size()) {
@@ -171,7 +175,8 @@ public final class SnapshotCommittedDeltaSource implements CommittedDeltaSource 
                         if (run.key().equals(key) && run.lastOffset() > exclusiveOffset) {
                             long first = Math.max(run.firstOffset(), exclusiveOffset + 1);
                             CommittedRun result = new CommittedRun(key, segment.segmentKey(),
-                                    (int) (run.lastOffset() - first + 1), first);
+                                    (int) (run.lastOffset() - first + 1), first,
+                                    delta.sequence());
                             retryDeltaIndex = deltaIndex;
                             retrySegmentIndex = segmentIndex;
                             retryRunIndex = candidateRunIndex;

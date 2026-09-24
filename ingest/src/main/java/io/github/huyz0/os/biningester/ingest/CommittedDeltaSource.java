@@ -108,13 +108,20 @@ public interface CommittedDeltaSource {
     }
 
     /** One committed run and the segment that contains its records. */
-    record CommittedRun(RunKey key, String segmentKey, int recordCount, long firstOffset) {
+    record CommittedRun(RunKey key, String segmentKey, int recordCount, long firstOffset,
+            long chainSequence) {
+        public static final long CHAIN_SEQUENCE_UNKNOWN = -1L;
+
+        public CommittedRun(RunKey key, String segmentKey, int recordCount, long firstOffset) {
+            this(key, segmentKey, recordCount, firstOffset, CHAIN_SEQUENCE_UNKNOWN);
+        }
+
         public CommittedRun {
             Objects.requireNonNull(key, "key");
             if (segmentKey == null || segmentKey.isBlank()) {
                 throw new IllegalArgumentException("segment key is required");
             }
-            if (recordCount <= 0 || firstOffset < 0) {
+            if (recordCount <= 0 || firstOffset < 0 || chainSequence < CHAIN_SEQUENCE_UNKNOWN) {
                 throw new IllegalArgumentException("committed run bounds are invalid");
             }
         }

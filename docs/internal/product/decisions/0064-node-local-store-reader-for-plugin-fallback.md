@@ -1,6 +1,6 @@
 # 0064. Use a node-local store reader for plugin fallback
 
-Status: accepted — clarified 2026-09-24 by M9.49 on request permissions, naming and local process identity; clarified 2026-09-25 by M9.50 on allowed recovery object keys
+Status: accepted — clarified 2026-09-24 by M9.49 on request permissions, naming and local process identity; clarified 2026-09-25 by M9.50 on allowed recovery object keys; clarified 2026-09-25 by M9.41 on carrying the commit cursor through live and catch-up events
 Date: 2026-09-22
 Requirements: FR-10, NFR-4
 Research: docs/research/30-design-space/04-discovery-and-tailing.md §2a, §3; docs/research/30-design-space/10-client-library-and-fetch-modes.md §4; docs/research/50-open-questions.md Q21
@@ -80,6 +80,21 @@ records are not skipped or acknowledged as consumed.
 M9.21 owns the executable `NodeLocalStoreReader` seam and the RustFS request counts. Its result
 must replace `FallbackLadder`'s modelled `TENS_OF_GETS` with the measured
 number, or amend that estimate with a new ADR if the result is not acceptable.
+
+The subscription cursor is the commit-chain sequence, not a stream offset or
+either event epoch. Version 4 appends that non-negative sequence to both live
+and catch-up events. Its grant-presence byte permits the same cursor on inline,
+proxy and direct deliveries; v1-v3 remain readable and decode with an absent
+sequence. The live publisher takes it from `CommitDelta.sequence()`, and
+catch-up takes it from the source delta that yielded each run. A consumer with
+an older event can continue to use stream offsets, while Tier 2 starts from the
+exact commit cursor as soon as a v4 event arrives.
+
+For the pinned sequence 9,876, v4 adds three encoded bytes over the matching
+v2 inline or v3 direct event: one grant-presence byte plus a two-byte unsigned
+varint. A sequence up to `Long.MAX_VALUE` adds at most ten bytes. This changes
+subscription bandwidth only; it adds no object-store operation and does not
+change requests per MiB or the node-scoped Tier 2/3 request budgets.
 
 ## Alternatives considered
 

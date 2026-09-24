@@ -50,6 +50,25 @@ class SubscriptionEventTest {
         }
     }
 
+    @Test
+    void v4CarriesTheExactCommitChainSequence() throws Exception {
+        SubscriptionEvent v3 = new SubscriptionEvent("sess-abc", 42L, 1L, KEY,
+                "seg/2026/09/11/xyz", 1_000L, 128, FetchMode.DIRECT, new byte[0],
+                new Grant("https://store.example/segment?sig=abc",
+                        java.time.Instant.ofEpochMilli(1_757_764_800_000L)),
+                4_096L, 65_536L, 9_876L);
+        byte[] frame = v3.encode();
+        assertThat(ByteBuffer.wrap(frame).order(ByteOrder.BIG_ENDIAN).getInt(4))
+                .as("a commit sequence selects subscription event v4")
+                .isEqualTo(4);
+        SubscriptionEvent decoded = SubscriptionEvent.decode(frame);
+        assertThat(decoded.chainSequence()).isEqualTo(9_876L);
+        assertThat(decoded.encode()).isEqualTo(frame);
+        assertThatThrownBy(() -> SubscriptionEvent.decode(
+                java.util.Arrays.copyOf(frame, frame.length - 1)))
+                .isInstanceOf(IOException.class);
+    }
+
     /**
      * Every field survives, one at a time.
      *

@@ -117,6 +117,30 @@ class SnapshotCommittedDeltaSourceTest {
     }
 
     @Test
+    void carriesEachDeltasOwnSequenceAcrossCatchUp() {
+        CommitDelta first = new CommitDelta(17, List.of(new SegmentCommit("seg-a",
+                List.of(new RunCommit(KEY, 1, 0)), null)));
+        CommitDelta second = new CommitDelta(73, List.of(new SegmentCommit("seg-b",
+                List.of(new RunCommit(KEY, 1, 1)), null)));
+        ChainMemory.Snapshot snapshot = new ChainMemory.Snapshot(
+                List.of(first, second), true, 2, 73, 2, 73, true);
+        var cursor = new SnapshotCommittedDeltaSource(() -> snapshot)
+                .openSegments(List.of(new CommittedDeltaSource.ReplayRequest(KEY, -1)));
+
+        assertThat(cursor.next()).get().satisfies(segment -> {
+            assertThat(segment.segmentKey()).isEqualTo("seg-a");
+            assertThat(segment.runs()).extracting(CommittedDeltaSource.CommittedRun::chainSequence)
+                    .containsExactly(17L);
+        });
+        assertThat(cursor.next()).get().satisfies(segment -> {
+            assertThat(segment.segmentKey()).isEqualTo("seg-b");
+            assertThat(segment.runs()).extracting(CommittedDeltaSource.CommittedRun::chainSequence)
+                    .containsExactly(73L);
+        });
+        assertThat(cursor.next()).isEmpty();
+    }
+
+    @Test
     void includesOnlyRequestedStreamsAndTrimsEachAfterItsExclusiveOffset() {
         RunKey unrequested = new RunKey(UUID.randomUUID(), 2);
         RunKey alreadyConsumed = new RunKey(UUID.randomUUID(), 3);
@@ -142,6 +166,8 @@ class SnapshotCommittedDeltaSourceTest {
                 .containsExactly(1L, 0L);
         assertThat(segment.runs()).extracting(CommittedDeltaSource.CommittedRun::recordCount)
                 .containsExactly(2, 1);
+        assertThat(segment.runs()).extracting(CommittedDeltaSource.CommittedRun::chainSequence)
+                .containsExactly(1L, 1L);
         assertThat(cursor.next()).isEmpty();
     }
 

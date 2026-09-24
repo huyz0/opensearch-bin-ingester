@@ -642,7 +642,9 @@ public final class SubscriptionService implements HttpService {
         // term" on a wire that cannot express absence.
         long epoch = Math.max(0, push.sequencerEpoch());
         return new SubscriptionEvent(session, epoch, 1L, push.key(),
-                push.segmentKey(), push.firstOffset(), push.recordCount(), push.via(), inline);
+                push.segmentKey(), push.firstOffset(), push.recordCount(), push.via(), inline,
+                push.grant(), SubscriptionEvent.RANGE_ABSENT, SubscriptionEvent.RANGE_ABSENT,
+                push.chainSequence());
     }
 
     private void register(ServerRequest request, ServerResponse response) {

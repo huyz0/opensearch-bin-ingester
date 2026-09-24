@@ -348,14 +348,14 @@ class SubscriptionEventGrantTest {
                 .isInstanceOf(java.io.IOException.class);
     }
 
-    /** An unknown version still STOPS, and v4 is the next one nobody has written. */
+    /** An unknown version still STOPS, even though v4 is now a known shape. */
     @Test
-    void aVERSIONFOUREventIsREFUSEDNotSkipped() throws Exception {
+    void anUNKNOWNVersionIsREFUSEDNotSkipped() throws Exception {
         byte[] v3 = event(GRANT, 4_096L, 65_536L).encode();
-        v3[7] = 4;
+        v3[7] = 5;
 
         assertThatThrownBy(() -> SubscriptionEvent.decode(v3))
                 .isInstanceOf(java.io.IOException.class)
-                .hasMessageContaining("unsupported subscription event version: 4");
+                .hasMessageContaining("unsupported subscription event version: 5");
     }
 }

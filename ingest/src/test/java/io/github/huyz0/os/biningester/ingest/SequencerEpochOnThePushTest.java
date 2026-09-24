@@ -111,6 +111,23 @@ class SequencerEpochOnThePushTest {
                 .isNotEqualTo(0L);
     }
 
+    @Test
+    void livePushCarriesTheExactCommitChainSequence() throws Exception {
+        CountingBinStore store = new CountingBinStore(new MemoryBinStore());
+        SubscriptionHub hub = new SubscriptionHub();
+        Watching watching = new Watching();
+        CommitDelta committed = new CommitDelta(73, "seg-sequence",
+                List.of(new RunCommit(LOGS_0, 1, 0)));
+
+        try (var ignored = hub.subscribe(LOGS_0, watching)) {
+            hub.publish(committed, "seg-sequence", new byte[2048], serving(store), 37L);
+        }
+
+        assertThat(watching.seen).singleElement()
+                .extracting(SubscriptionHub.Push::chainSequence)
+                .isEqualTo(73L);
+    }
+
     /**
      * The two epochs are not transposable at the push site (M5.15d's hazard).
      *
@@ -191,6 +208,9 @@ class SequencerEpochOnThePushTest {
                 .as("and it carries the chain epoch, which the INLINE arm carrying it does "
                         + "not imply -- the three arms pass it separately")
                 .isEqualTo(53L);
+        assertThat(watching.seen.get(0).chainSequence())
+                .as("every fetch mode must preserve the exact commit cursor")
+                .isEqualTo(1L);
     }
 
     private static SegmentServing serving(CountingBinStore store) {

@@ -86,7 +86,7 @@ final class SegmentServingPath {
     }
 
     void publishSegment(SegmentCommit committed, byte[] heldBytes,
-            SegmentServing serving, long sequencerEpoch) {
+            SegmentServing serving, long sequencerEpoch, long chainSequence) {
         // ⚠️ LINKED, so delivery order follows first-subscription order rather
         // than a hash, which makes a failure reproducible run to run.
         //
@@ -152,7 +152,7 @@ final class SegmentServingPath {
 
         switch (via) {
             case INLINE -> deliver(committed.segmentKey(), targets, FetchMode.INLINE,
-                    sinks -> writeHeldBytes(heldBytes, sinks), null, sequencerEpoch);
+                    sinks -> writeHeldBytes(heldBytes, sinks), null, sequencerEpoch, chainSequence);
             // ⚠️ FROM THE HELD ARRAY WHEN WE HAVE ONE, and only from the store
             // when we do not. `proxy` names how the bytes reach the CONSUMER;
             // it is never a reason to buy a GET for bytes this pod is already
@@ -161,7 +161,7 @@ final class SegmentServingPath {
                     heldBytes == null
                             ? sinks -> streamFromStore(serving, committed.segmentKey(), sinks)
                             : sinks -> writeHeldBytesChunked(heldBytes, serving, sinks),
-                    null, sequencerEpoch);
+                    null, sequencerEpoch, chainSequence);
             // ⚠️ NO BYTES AT ALL, WHICH IS WHAT `direct` MEANS. The consumer
             // fetches with the grant, so this pod writes nothing to the sink
             // and issues no store request of its own -- the saving the mode
@@ -177,7 +177,7 @@ final class SegmentServingPath {
             // here instead. In practice it is gated by `directEnabled`
             // defaulting off and by neither shipping backend presigning.
             case DIRECT -> deliver(committed.segmentKey(), targets, FetchMode.DIRECT,
-                    sinks -> { }, serving.issuer(), sequencerEpoch);
+                    sinks -> { }, serving.issuer(), sequencerEpoch, chainSequence);
         }
     }
 
@@ -272,7 +272,7 @@ final class SegmentServingPath {
      *     passing the sentinel while the whole suite stayed green
      */
     private void deliver(String segmentKey, List<Target> targets, FetchMode via, Source source,
-            GrantIssuer issuer, long sequencerEpoch) {
+            GrantIssuer issuer, long sequencerEpoch, long chainSequence) {
         List<Tracking> opened = new ArrayList<>();
         List<List<Push>> pushes = new ArrayList<>();
         List<Target> live = new ArrayList<>();
@@ -300,7 +300,7 @@ final class SegmentServingPath {
             List<Push> forThisConsumer = new ArrayList<>(t.runs().size());
             for (RunCommit run : t.runs()) {
                 forThisConsumer.add(new Push(run.key(), segmentKey, run.recordCount(),
-                        run.firstOffset(), via, EMPTY, grant, sequencerEpoch));
+                        run.firstOffset(), via, EMPTY, grant, sequencerEpoch, chainSequence));
             }
             try {
                 SegmentSink sink = t.subscriber().open(List.copyOf(forThisConsumer));

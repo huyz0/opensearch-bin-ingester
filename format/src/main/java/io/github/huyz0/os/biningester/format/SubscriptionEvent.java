@@ -9,7 +9,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 
 /**
- * One push, as the subscription protocol puts it on a wire (FR-6, M5.14).
+ * One live push or catch-up event, as the subscription protocol puts it on a
+ * wire (FR-6, M5.14; M9.41).
  *
  * <p>⚠️ A SESSION AND A SEQUENCER EPOCH, which is what M5's completion
  * condition asks the push channel to carry. The SESSION identifies a
@@ -133,13 +134,27 @@ import java.util.Objects;
  *     on every decode
  * @param byteLen the run's length in bytes, or {@link #RANGE_ABSENT}. See
  *     {@code byteStart} -- the two are absent together or present together
+ * @param chainSequence the commit-chain sequence in v4, or
+ *     {@link #CHAIN_SEQUENCE_ABSENT} for v1-v3 and unsequenced fixtures
  */
 public record SubscriptionEvent(String session, long sequencerEpoch, long sessionEpoch,
         RunKey key, String segmentKey, long firstOffset, int recordCount, FetchMode via,
-        byte[] inline, Grant grant, long byteStart, long byteLen) {
+        byte[] inline, Grant grant, long byteStart, long byteLen, long chainSequence) {
+
+    /** What a v1-v3 frame carries when the commit-chain sequence is absent. */
+    public static final long CHAIN_SEQUENCE_ABSENT = -1L;
+
+    /** Existing call sites describe legacy-shaped events until they supply a chain sequence. */
+    public SubscriptionEvent(String session, long sequencerEpoch, long sessionEpoch,
+            RunKey key, String segmentKey, long firstOffset, int recordCount, FetchMode via,
+            byte[] inline, Grant grant, long byteStart, long byteLen) {
+        this(session, sequencerEpoch, sessionEpoch, key, segmentKey, firstOffset, recordCount,
+                via, inline, grant, byteStart, byteLen, CHAIN_SEQUENCE_ABSENT);
+    }
 
     /**
-     * An event with no grant, which is every event a v1 or v2 writer produced.
+     * An event with no grant and no chain sequence, which retains the v1/v2
+     * constructor shape used by existing call sites.
      *
      * <p>⚠️ IT EXISTS SO THE GRANT COST NO CALL SITES. A record may declare
      * constructors beside its canonical one, so the thirty-eight existing
@@ -153,7 +168,7 @@ public record SubscriptionEvent(String session, long sequencerEpoch, long sessio
             RunKey key, String segmentKey, long firstOffset, int recordCount, FetchMode via,
             byte[] inline) {
         this(session, sequencerEpoch, sessionEpoch, key, segmentKey, firstOffset, recordCount,
-                via, inline, null, RANGE_ABSENT, RANGE_ABSENT);
+                via, inline, null, RANGE_ABSENT, RANGE_ABSENT, CHAIN_SEQUENCE_ABSENT);
     }
 
     /**
@@ -194,6 +209,9 @@ public record SubscriptionEvent(String session, long sequencerEpoch, long sessio
      */
     public static final int VERSION_3 = 3;
 
+    /** Adds an explicit grant-presence byte, an optional grant, and the required chain sequence. */
+    public static final int VERSION_4 = 4;
+
     /**
      * What a v1 event's session epoch reads as: there was no such field.
      *
@@ -224,93 +242,8 @@ public record SubscriptionEvent(String session, long sequencerEpoch, long sessio
         Objects.requireNonNull(segmentKey, "segmentKey");
         Objects.requireNonNull(via, "via");
         Objects.requireNonNull(inline, "inline");
-        if (session.isBlank()) {
-            throw new IllegalArgumentException("a blank session identifies no subscription");
-        }
-        if (sequencerEpoch < 0) {
-            throw new IllegalArgumentException("an epoch of " + sequencerEpoch + " is not a term");
-        }
-        if (sessionEpoch < 0) {
-            throw new IllegalArgumentException(
-                    "a session epoch of " + sessionEpoch + " is not a request order");
-        }
-        // ⚠️ A RANGE WITHOUT A GRANT IS UNREACHABLE ON THE WIRE, so accepting
-        // it in memory would let a caller build an event that does not survive
-        // a round trip: `encode` writes the range only inside the grant, so the
-        // coordinates would vanish and `decode` would hand back an unequal
-        // event. Refusing here is what keeps encode-decode-equals total.
-        // ⚠️ A GRANT IMPLIES A SESSION EPOCH, AND REFUSING IT HERE IS WHAT
-        // MAKES THAT TRUE. ADR-0042's amendment assigned this decision to this
-        // row by name -- "either a v3 body carries the sentinel, re-opening the
-        // in-band collision round 1 blocked on, or the slot is special-cased;
-        // deciding that is part of adding the field, not after it". The slot is
-        // NOT special-cased: a v3 body carries the epoch, so 0 there is the
-        // sentinel and cannot also be a value.
-        //
-        // ⚠️ WITHOUT THIS GUARD `encode` EMITS A BODY `decode` REFUSES, which
-        // review measured: a grant with an absent epoch stamps VERSION_3,
-        // writes 0 into the epoch slot, and the reader throws. The ingester
-        // would record a successful push that every consumer rejects.
-        if (grant != null && sessionEpoch == SESSION_EPOCH_ABSENT) {
-            throw new IllegalArgumentException("a grant needs a session epoch: a v3 body carries "
-                    + "one, so an absent epoch cannot be encoded alongside a grant");
-        }
-        if (grant == null && (byteStart != RANGE_ABSENT || byteLen != RANGE_ABSENT)) {
-            throw new IllegalArgumentException(
-                    "a byte range without a grant has nothing to scope; ADR-0041's range is part "
-                            + "of the grant, not of the event");
-        }
-        // ⚠️ BOTH OR NEITHER, because a half range is not a range and the
-        // presence byte on the wire can only say one thing about the pair.
-        if ((byteStart == RANGE_ABSENT) != (byteLen == RANGE_ABSENT)) {
-            throw new IllegalArgumentException("a byte range needs both a start and a length, "
-                    + "got (" + byteStart + ", " + byteLen + ")");
-        }
-        if (byteStart != RANGE_ABSENT && byteLen <= 0) {
-            throw new IllegalArgumentException(
-                    "a byte range of length " + byteLen + " grants nothing");
-        }
-        // ⚠️ AND A NEGATIVE START IS NOT A RANGE EITHER. Review measured
-        // `(-7, 5)` constructing, encoding, and then being REFUSED by `decode`
-        // -- so the comment above about keeping encode-decode-equals total was
-        // false for every negative start except the sentinel itself.
-        if (byteStart != RANGE_ABSENT && byteStart < 0) {
-            throw new IllegalArgumentException(
-                    "a byte range starting at " + byteStart + " is not a range");
-        }
-        if (firstOffset < 0) {
-            throw new IllegalArgumentException("offsets are never negative");
-        }
-        if (recordCount <= 0) {
-            throw new IllegalArgumentException("a push of nothing is not a push");
-        }
-        // ⚠️ THE LAST OFFSET MUST EXIST. An event whose range runs past
-        // Long.MAX_VALUE describes offsets no consumer can address, and
-        // `lastOffset()` would return a NEGATIVE number that compares as
-        // earlier than the first -- so a consumer would see the range run
-        // backwards rather than see an error.
-        // ⚠️ `recordCount - 1`, because the LAST offset is
-        // `firstOffset + recordCount - 1`. Round-2 review measured the earlier
-        // form rejecting `firstOffset = Long.MAX_VALUE, recordCount = 1`, whose
-        // last offset is exactly Long.MAX_VALUE and does not overflow.
-        if (firstOffset > Long.MAX_VALUE - (recordCount - 1)) {
-            throw new IllegalArgumentException(
-                    "a push of " + recordCount + " from " + firstOffset + " runs past the last "
-                            + "addressable offset");
-        }
-        // ⚠️ THE PAIRING IS VALIDATED, not left to the caller. `via=PROXY` with
-        // bytes attached would make the consumer's behaviour depend on which
-        // field it happened to trust, and `via=INLINE` with none is a delivery
-        // that decodes to nothing -- the silent record loss `SubscriptionHub`'s
-        // own javadoc already warns about for the empty-array case.
-        if (via == FetchMode.INLINE && inline.length == 0) {
-            throw new IllegalArgumentException(
-                    "via=INLINE carries the bytes, and none are attached");
-        }
-        if (via != FetchMode.INLINE && inline.length > 0) {
-            throw new IllegalArgumentException(
-                    "via=" + via + " does not carry bytes, but " + inline.length + " are attached");
-        }
+        SubscriptionEventValidation.validate(session, sequencerEpoch, sessionEpoch,
+                firstOffset, recordCount, via, inline, grant, byteStart, byteLen, chainSequence);
         inline = inline.clone();
     }
 
@@ -349,6 +282,7 @@ public record SubscriptionEvent(String session, long sequencerEpoch, long sessio
             return false;
         }
         return sequencerEpoch == that.sequencerEpoch && sessionEpoch == that.sessionEpoch
+                && chainSequence == that.chainSequence
                 && firstOffset == that.firstOffset
                 && recordCount == that.recordCount
                 && session.equals(that.session) && key.equals(that.key)
@@ -366,8 +300,8 @@ public record SubscriptionEvent(String session, long sequencerEpoch, long sessio
 
     @Override
     public int hashCode() {
-        return Objects.hash(session, sequencerEpoch, sessionEpoch, key, segmentKey, firstOffset,
-                recordCount, via, grant, byteStart, byteLen)
+        return Objects.hash(session, sequencerEpoch, sessionEpoch, chainSequence, key, segmentKey,
+                firstOffset, recordCount, via, grant, byteStart, byteLen)
                 * 31 + java.util.Arrays.hashCode(inline);
     }
 
@@ -388,6 +322,7 @@ public record SubscriptionEvent(String session, long sequencerEpoch, long sessio
                 // had not, so the object could distinguish the two cases while
                 // nothing a human reads could.
                 + ", sessionEpoch=" + sessionEpoch
+                + ", chainSequence=" + chainSequence
                 + ", key=" + key
                 + ", segmentKey=" + segmentKey + ", firstOffset=" + firstOffset
                 + ", recordCount=" + recordCount + ", via=" + via
@@ -446,9 +381,11 @@ public record SubscriptionEvent(String session, long sequencerEpoch, long sessio
         boolean carriesGrant = grant != null;
         boolean carriesSessionEpoch = carriesGrant || sessionEpoch != SESSION_EPOCH_ABSENT;
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        out.writeBytes(header(carriesGrant ? VERSION_3 : carriesSessionEpoch
-                ? VERSION_2
-                : VERSION_1));
+        boolean carriesChainSequence = chainSequence != CHAIN_SEQUENCE_ABSENT;
+        int version = carriesChainSequence ? VERSION_4
+                : carriesGrant ? VERSION_3
+                : carriesSessionEpoch ? VERSION_2 : VERSION_1;
+        out.writeBytes(header(version));
         putString(out, session);
         SegmentWriter.putUvarint(out, sequencerEpoch);
         // ⚠️ THE UUID AS ITS TWO LONGS, not as text. A `UUID.toString` costs 36
@@ -473,9 +410,14 @@ public record SubscriptionEvent(String session, long sequencerEpoch, long sessio
         if (carriesSessionEpoch) {
             SegmentWriter.putUvarint(out, sessionEpoch);
         }
-        // ⚠️ APPENDED AGAIN, for the reason the paragraph above gives: a v3
-        // body is a v2 body plus the grant, so the three golden files differ by
-        // one field each and `decode` stays a single forward pass.
+        // v3 appends grant fields to v2. v4 instead inserts an explicit grant
+        // presence byte here, then appends its required chain sequence, allowing
+        // all three fetch modes to carry the same commit cursor.
+        if (carriesChainSequence) {
+            // v4 gives grant presence an explicit tag so live inline/proxy
+            // events can carry the same chain cursor as direct events.
+            out.write(carriesGrant ? 1 : 0);
+        }
         if (carriesGrant) {
             putString(out, grant.url());
             SegmentWriter.putUvarint(out, grant.expiresAt().toEpochMilli());
@@ -491,6 +433,9 @@ public record SubscriptionEvent(String session, long sequencerEpoch, long sessio
                 SegmentWriter.putUvarint(out, byteStart);
                 SegmentWriter.putUvarint(out, byteLen);
             }
+        }
+        if (carriesChainSequence) {
+            SegmentWriter.putUvarint(out, chainSequence);
         }
         return out.toByteArray();
     }
@@ -520,7 +465,8 @@ public record SubscriptionEvent(String session, long sequencerEpoch, long sessio
             throw new IOException("not a subscription event: magic " + Integer.toHexString(magic));
         }
         int version = b.getInt(4);
-        if (version != VERSION_1 && version != VERSION_2 && version != VERSION_3) {
+        if (version != VERSION_1 && version != VERSION_2 && version != VERSION_3
+                && version != VERSION_4) {
             // ⚠️ REFUSED, NOT SKIPPED -- see the class javadoc. A consumer that
             // ignored an event it could not read would report a clean stream
             // while losing records.
@@ -550,7 +496,7 @@ public record SubscriptionEvent(String session, long sequencerEpoch, long sessio
         // `wire-format-change`'s "ship the read side first" that is reachable
         // in one commit: a reader built today parses what a v1 writer produced,
         // and a v1 event's session epoch reads as ABSENT rather than as zero.
-        long sessionEpoch = version == VERSION_2 || version == VERSION_3
+        long sessionEpoch = version == VERSION_2 || version == VERSION_3 || version == VERSION_4
                 ? c.uvarint()
                 : SESSION_EPOCH_ABSENT;
         if (sessionEpoch < 0) {
@@ -566,7 +512,7 @@ public record SubscriptionEvent(String session, long sequencerEpoch, long sessio
         // a well-formed v1 body, so a writer holding zero is not stopped here
         // or anywhere in this class. That is a MINTING invariant and M5.15b
         // owns it.
-        if ((version == VERSION_2 || version == VERSION_3)
+        if ((version == VERSION_2 || version == VERSION_3 || version == VERSION_4)
                 && sessionEpoch == SESSION_EPOCH_ABSENT) {
             throw new IOException("a version " + version + " event may not carry an absent "
                     + "session epoch; an event without one is version 1");
@@ -574,7 +520,15 @@ public record SubscriptionEvent(String session, long sequencerEpoch, long sessio
         Grant grant = null;
         long byteStart = RANGE_ABSENT;
         long byteLen = RANGE_ABSENT;
-        if (version == VERSION_3) {
+        boolean carriesGrant = version == VERSION_3;
+        if (version == VERSION_4) {
+            int grantPresent = c.bytes(1)[0] & 0xff;
+            if (grantPresent != 0 && grantPresent != 1) {
+                throw new IOException("invalid v4 grant presence: " + grantPresent);
+            }
+            carriesGrant = grantPresent == 1;
+        }
+        if (carriesGrant) {
             String url = getString(c);
             long expiresAtMillis = c.uvarint();
             // ⚠️ GUARDED HERE, NOT LEFT TO THE RECORD. `Grant`'s own guards are
@@ -610,6 +564,10 @@ public record SubscriptionEvent(String session, long sequencerEpoch, long sessio
                             + ") is not a range");
                 }
             }
+        }
+        long chainSequence = version == VERSION_4 ? c.uvarint() : CHAIN_SEQUENCE_ABSENT;
+        if (version == VERSION_4 && chainSequence < 0) {
+            throw new IOException("chain sequence is not non-negative");
         }
         // ⚠️ TRAILING BYTES ARE A REFUSAL, matching every other decoder here:
         // `ChainEntry`, `Checkpoint` and `SegmentReader` all end with this
@@ -648,7 +606,8 @@ public record SubscriptionEvent(String session, long sequencerEpoch, long sessio
         try {
             return new SubscriptionEvent(session, sequencerEpoch, sessionEpoch,
                     new RunKey(new java.util.UUID(indexHi, indexLo), (int) partition), segmentKey,
-                    firstOffset, (int) recordCount, mode, inline, grant, byteStart, byteLen);
+                    firstOffset, (int) recordCount, mode, inline, grant, byteStart, byteLen,
+                    chainSequence);
         } catch (IllegalArgumentException malformed) {
             // ⚠️ The constructor's invariants are the FORMAT's invariants, so a
             // violation arriving over the wire is a parse failure rather than a

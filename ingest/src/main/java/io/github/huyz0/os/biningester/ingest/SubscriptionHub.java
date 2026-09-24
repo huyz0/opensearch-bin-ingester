@@ -47,6 +47,8 @@ public final class SubscriptionHub {
      * must not depend on {@code sequencer} for a constant (architecture.md).
      */
     public static final long EPOCH_UNKNOWN = -1L;
+    /** What a fixture-backed push carries when it is not tied to a commit delta. */
+    public static final long CHAIN_SEQUENCE_UNKNOWN = -1L;
 
     /**
      * What a subscriber is handed when its stream advances.
@@ -79,7 +81,15 @@ public final class SubscriptionHub {
      * segment arrived" sees an empty one and must branch on {@code via} first.
      */
     public record Push(RunKey key, String segmentKey, int recordCount, long firstOffset,
-            FetchMode via, byte[] segment, io.github.huyz0.os.biningester.format.Grant grant, long sequencerEpoch) {
+            FetchMode via, byte[] segment, io.github.huyz0.os.biningester.format.Grant grant,
+            long sequencerEpoch, long chainSequence) {
+
+        public Push(RunKey key, String segmentKey, int recordCount, long firstOffset,
+                FetchMode via, byte[] segment, io.github.huyz0.os.biningester.format.Grant grant,
+                long sequencerEpoch) {
+            this(key, segmentKey, recordCount, firstOffset, via, segment, grant, sequencerEpoch,
+                    CHAIN_SEQUENCE_UNKNOWN);
+        }
 
         /**
          * A push with no grant, which is every {@code inline} and {@code proxy}
@@ -99,13 +109,15 @@ public final class SubscriptionHub {
          */
         public Push(RunKey key, String segmentKey, int recordCount, long firstOffset,
                 FetchMode via, byte[] segment) {
-            this(key, segmentKey, recordCount, firstOffset, via, segment, null, EPOCH_UNKNOWN);
+            this(key, segmentKey, recordCount, firstOffset, via, segment, null, EPOCH_UNKNOWN,
+                    CHAIN_SEQUENCE_UNKNOWN);
         }
 
         /** A push with a grant and no chain, which is what a `direct` fixture builds. */
         public Push(RunKey key, String segmentKey, int recordCount, long firstOffset,
                 FetchMode via, byte[] segment, io.github.huyz0.os.biningester.format.Grant grant) {
-            this(key, segmentKey, recordCount, firstOffset, via, segment, grant, EPOCH_UNKNOWN);
+            this(key, segmentKey, recordCount, firstOffset, via, segment, grant, EPOCH_UNKNOWN,
+                    CHAIN_SEQUENCE_UNKNOWN);
         }
 
         public Push {
@@ -113,6 +125,9 @@ public final class SubscriptionHub {
             Objects.requireNonNull(segmentKey, "segmentKey");
             Objects.requireNonNull(via, "via");
             Objects.requireNonNull(segment, "segment");
+            if (chainSequence < CHAIN_SEQUENCE_UNKNOWN) {
+                throw new IllegalArgumentException("chain sequence is invalid: " + chainSequence);
+            }
             // ⚠️ A GRANT BELONGS TO `direct` AND NOWHERE ELSE. An `inline` push
             // already carries the bytes and a `proxy` push is about to be
             // written them, so a grant on either is a signed URL minted for a
@@ -561,7 +576,8 @@ public final class SubscriptionHub {
         for (SegmentCommit committed : delta.segments()) {
             byte[] held = committed.segmentKey().equals(heldSegmentKey) ? heldBytes : null;
             try {
-                servingPath.publishSegment(committed, held, serving, sequencerEpoch);
+                servingPath.publishSegment(committed, held, serving, sequencerEpoch,
+                        delta.sequence());
             } catch (UncheckedIOException storeFailed) {
                 if (firstFailure == null) {
                     firstFailure = storeFailed;

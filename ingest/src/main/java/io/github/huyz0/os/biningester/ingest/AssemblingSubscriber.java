@@ -63,7 +63,8 @@ final class AssemblingSubscriber {
                     // log and no counter. An invariant added in one place and
                     // not honoured in another is worse than no invariant.
                     onSegment.accept(new SubscriptionHub.Push(push.key(), push.segmentKey(), push.recordCount(),
-                            push.firstOffset(), push.via(), whole, push.grant()));
+                            push.firstOffset(), push.via(), whole, push.grant(), push.sequencerEpoch(),
+                            push.chainSequence()));
                 }
             }
         };

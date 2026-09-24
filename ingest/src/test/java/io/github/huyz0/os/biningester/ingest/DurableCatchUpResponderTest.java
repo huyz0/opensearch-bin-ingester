@@ -48,7 +48,7 @@ class DurableCatchUpResponderTest {
         store.put("segments/one", Body.ofBytes(segment));
         List<Long> exclusives = new ArrayList<>();
         CommittedDeltaSource source = source(exclusives,
-                new CommittedDeltaSource.CommittedRun(KEY, "segments/one", 1, 41));
+                new CommittedDeltaSource.CommittedRun(KEY, "segments/one", 1, 41, 73));
 
         var responder = new DurableCatchUpResponder(store, source, () -> 9);
         var request = new CatchUpRequestFrame(REQUEST,
@@ -63,6 +63,7 @@ class DurableCatchUpResponderTest {
         assertThat(event.event().firstOffset()).isEqualTo(41);
         assertThat(event.event().recordCount()).isEqualTo(1);
         assertThat(event.event().sequencerEpoch()).isEqualTo(9);
+        assertThat(event.event().chainSequence()).isEqualTo(73);
         assertThat(event.event().via()).isEqualTo(FetchMode.INLINE);
         assertThat(event.event().inline()).isEqualTo(segment);
         assertThat(CatchUpEndFrame.decode(frames.get(1)).requestId()).isEqualTo(REQUEST);

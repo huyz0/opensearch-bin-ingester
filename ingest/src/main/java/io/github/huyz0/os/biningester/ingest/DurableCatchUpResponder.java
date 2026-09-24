@@ -99,7 +99,9 @@ public final class DurableCatchUpResponder {
                 SubscriptionEvent event = new SubscriptionEvent(
                         request.requestId().toString(), epoch.getAsLong(), 1,
                         run.key(), run.segmentKey(), run.firstOffset(), run.recordCount(),
-                        FetchMode.INLINE, segment);
+                        FetchMode.INLINE, segment, null,
+                        SubscriptionEvent.RANGE_ABSENT, SubscriptionEvent.RANGE_ABSENT,
+                        run.chainSequence());
                 byte[] encoded = new CatchUpEventFrame(request.requestId(), event).encode();
                 requireFrameWithinBudget(encoded);
                 sink.write(encoded);

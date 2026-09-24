@@ -50,7 +50,17 @@ import java.util.Objects;
  * reproduce the $3,732/month design ADR-0004 rejected.
  */
 public record Delivery(RunKey key, String segmentKey, int recordCount, long firstOffset,
-        FetchMode via, byte[] segment, io.github.huyz0.os.biningester.format.Grant grant, long sequencerEpoch) {
+        FetchMode via, byte[] segment, io.github.huyz0.os.biningester.format.Grant grant,
+        long sequencerEpoch, long chainSequence) {
+
+    public static final long CHAIN_SEQUENCE_UNKNOWN = -1L;
+
+    public Delivery(RunKey key, String segmentKey, int recordCount, long firstOffset,
+            FetchMode via, byte[] segment, io.github.huyz0.os.biningester.format.Grant grant,
+            long sequencerEpoch) {
+        this(key, segmentKey, recordCount, firstOffset, via, segment, grant, sequencerEpoch,
+                CHAIN_SEQUENCE_UNKNOWN);
+    }
 
     /**
      * What {@link #sequencerEpoch()} carries when the publisher models no
@@ -64,7 +74,8 @@ public record Delivery(RunKey key, String segmentKey, int recordCount, long firs
     /** A delivery with no grant, which is every {@code inline} and {@code proxy} one. */
     public Delivery(RunKey key, String segmentKey, int recordCount, long firstOffset,
             FetchMode via, byte[] segment) {
-        this(key, segmentKey, recordCount, firstOffset, via, segment, null, EPOCH_UNKNOWN);
+        this(key, segmentKey, recordCount, firstOffset, via, segment, null, EPOCH_UNKNOWN,
+                CHAIN_SEQUENCE_UNKNOWN);
     }
 
     /**
@@ -78,7 +89,8 @@ public record Delivery(RunKey key, String segmentKey, int recordCount, long firs
      */
     public Delivery(RunKey key, String segmentKey, int recordCount, long firstOffset,
             FetchMode via, byte[] segment, io.github.huyz0.os.biningester.format.Grant grant) {
-        this(key, segmentKey, recordCount, firstOffset, via, segment, grant, EPOCH_UNKNOWN);
+        this(key, segmentKey, recordCount, firstOffset, via, segment, grant, EPOCH_UNKNOWN,
+                CHAIN_SEQUENCE_UNKNOWN);
     }
 
     public Delivery {
@@ -86,6 +98,9 @@ public record Delivery(RunKey key, String segmentKey, int recordCount, long firs
         Objects.requireNonNull(segmentKey, "segmentKey");
         Objects.requireNonNull(via, "via");
         Objects.requireNonNull(segment, "segment");
+        if (chainSequence < CHAIN_SEQUENCE_UNKNOWN) {
+            throw new IllegalArgumentException("chain sequence is invalid: " + chainSequence);
+        }
         if (recordCount <= 0) {
             throw new IllegalArgumentException("a delivery of nothing is not a delivery");
         }

@@ -73,6 +73,33 @@ class GoldenSubscriptionEventTest {
                 SubscriptionEvent.RANGE_ABSENT, SubscriptionEvent.RANGE_ABSENT);
     }
 
+    private static SubscriptionEvent v4Inline() {
+        return new SubscriptionEvent("sess-abc", 42L, 3L, KEY,
+                "seg/2026/09/11/xyz", 1_000L, 128, FetchMode.INLINE,
+                new byte[] {1, 2, 3, 4, 5}, null, SubscriptionEvent.RANGE_ABSENT,
+                SubscriptionEvent.RANGE_ABSENT, 9_876L);
+    }
+
+    private static SubscriptionEvent v4DirectWithRange() {
+        return new SubscriptionEvent("sess-abc", 42L, 3L, KEY, "seg/2026/09/11/xyz",
+                1_000L, 128, FetchMode.DIRECT, new byte[0],
+                new Grant("https://store.example/seg/2026/09/11/xyz?sig=abc",
+                        java.time.Instant.ofEpochMilli(1_757_764_800_000L)),
+                4_096L, 65_536L, 9_876L);
+    }
+
+    @Test
+    void v4InlineAndDirectFramesMatchGoldenBytesAndRoundTrip() throws Exception {
+        for (var fixture : java.util.Map.of(
+                "subscription-event-inline-v4.bin", v4Inline(),
+                "subscription-event-direct-v4.bin", v4DirectWithRange()).entrySet()) {
+            byte[] stored = golden(fixture.getKey());
+            assertThat(fixture.getValue().encode()).isEqualTo(stored);
+            assertThat(SubscriptionEvent.decode(stored)).isEqualTo(fixture.getValue());
+            assertThat(SubscriptionEvent.decode(stored).encode()).isEqualTo(stored);
+        }
+    }
+
     /**
      * A v3 {@code direct} event carrying a grant AND its byte range.
      *
@@ -291,12 +318,18 @@ class GoldenSubscriptionEventTest {
                 .order(java.nio.ByteOrder.BIG_ENDIAN);
         var v2 = java.nio.ByteBuffer.wrap(golden("subscription-event-inline-v2.bin"))
                 .order(java.nio.ByteOrder.BIG_ENDIAN);
+        var v3 = java.nio.ByteBuffer.wrap(golden("subscription-event-direct-v3.bin"))
+                .order(java.nio.ByteOrder.BIG_ENDIAN);
+        var v4 = java.nio.ByteBuffer.wrap(golden("subscription-event-inline-v4.bin"))
+                .order(java.nio.ByteOrder.BIG_ENDIAN);
 
         assertThat(v1.getInt(0)).isEqualTo(SubscriptionEvent.MAGIC);
         assertThat(v2.getInt(0)).as("the magic does not move between versions")
                 .isEqualTo(SubscriptionEvent.MAGIC);
         assertThat(v1.getInt(4)).isEqualTo(SubscriptionEvent.VERSION_1);
         assertThat(v2.getInt(4)).isEqualTo(SubscriptionEvent.VERSION_2);
+        assertThat(v3.getInt(4)).isEqualTo(SubscriptionEvent.VERSION_3);
+        assertThat(v4.getInt(4)).isEqualTo(SubscriptionEvent.VERSION_4);
         // ⚠️ THE CONSTANT, NOT A LITERAL. A first draft of this line asserted
         // against 0x424A4348, a number I invented -- ChainEntry.MAGIC is
         // 0x42444C54, so the assertion passed without comparing the two things

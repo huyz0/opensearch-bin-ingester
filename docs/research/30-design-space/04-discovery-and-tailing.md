@@ -271,6 +271,13 @@ event.
 > §2a's `HTTP/2 + NDJSON` recommendation is about the CHANNEL and is **not** overturned — the
 > framing is still open, and ADR-0042 records that its fields carry over unchanged if the channel
 > lands as NDJSON.
+> ⚠️ **REVISED 2026-09-25 by M9.41 / ADR-0064:** version 4 appends the non-negative commit-chain
+> sequence to both live and catch-up events, without reinterpreting either epoch or any stream
+> offset. A grant-presence byte lets inline and proxy events carry that same cursor without a
+> grant; direct events retain the grant and optional byte range. v1-v3 bytes remain decodable and
+> report the chain sequence absent. The live writer sources the value from `CommitDelta.sequence()`;
+> durable catch-up sources it from the committed delta that contains the run. This is the exact
+> cursor Tier 2 resumes from, so a per-stream offset can no longer be mistaken for chain position.
 
 ```
 <- event: batch

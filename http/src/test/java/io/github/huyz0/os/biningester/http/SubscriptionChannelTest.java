@@ -111,6 +111,9 @@ class SubscriptionChannelTest {
                             + "records for ever")
                     .isEqualTo(5000);
             assertThat(got.get(0).recordCount()).isEqualTo(100);
+            assertThat(got.get(0).chainSequence())
+                    .as("the same committed delta sequence reaches the consumer over live push")
+                    .isEqualTo(1L);
         }
     }
 
