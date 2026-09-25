@@ -261,6 +261,21 @@ def record_one(out_dir, ident):
     return 0
 
 
+def clean_reports(root):
+    """Remove prior Gradle JUnit reports, refusing to continue on any failure."""
+    import pathlib
+
+    failed = False
+    for report in pathlib.Path(root).glob("*/build/test-results/*/TEST-*.xml"):
+        try:
+            report.unlink()
+        except OSError as e:
+            print("  %sFAIL%s cannot remove prior JUnit report %s: %s"
+                  % (RED, OFF, report, e), file=sys.stderr)
+            failed = True
+    return 1 if failed else 0
+
+
 if __name__ == '__main__':
     cmd = sys.argv[1] if len(sys.argv) > 1 else 'check'
     if cmd == 'scan':
@@ -293,4 +308,6 @@ if __name__ == '__main__':
         sys.exit(plan(sys.argv[2:]))
     if cmd == 'record-one':
         sys.exit(record_one(sys.argv[2], sys.argv[3]))
+    if cmd == 'clean-reports':
+        sys.exit(clean_reports(sys.argv[2]))
     sys.exit(check(sys.argv[2] if len(sys.argv) > 2 else ''))

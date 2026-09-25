@@ -40,12 +40,16 @@ while read -r task sel; do
   # Windows Python writes CRLF; normalize through a no-newline CLI boundary.
   sel=$("$PYTHON" scripts/tdd_scan.py normalize-selector "$sel") || { fail "could not normalize Gradle selector"; FAILED=1; finish; }
   ident="${sel%.*}#${sel##*.}"
+  "$PYTHON" scripts/tdd_scan.py clean-reports . || {
+    fail "prior JUnit report cleanup failed; refusing to run selected test"
+    FAILED=1
+    finish
+  }
   case "$task" in
     buildSrc:*) GRADLE=(./gradlew -p buildSrc "${task#buildSrc:}") ;;
     *)          GRADLE=(./gradlew "$task") ;;
   esac
   echo "         ${GRADLE[*]} --tests $sel"
-  find . -path '*/build/test-results/*' -name 'TEST-*.xml' -delete 2>/dev/null || true
   "${GRADLE[@]}" --tests "$sel" >> "$OUT/red.log" 2>&1
   "$PYTHON" scripts/tdd_scan.py record-one "$OUT" "$ident" || RC=1
 done < "$PLAN"

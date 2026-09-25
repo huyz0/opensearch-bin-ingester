@@ -35,7 +35,7 @@ def bash_path(path):
 
 
 class TddRedIntegrationTest(unittest.TestCase):
-    def run_runner(self, fake_result):
+    def run_runner(self, fake_result, fail_cleanup=False):
         bash = bash_executable()
         if bash is None:
             self.skipTest("Bash is required to exercise tdd-red.sh")
@@ -52,6 +52,13 @@ class TddRedIntegrationTest(unittest.TestCase):
             "class ProbeTest { @Test void fails() {} }\n"
         )
         (fixture / ".harness/tdd").mkdir(parents=True)
+        prior_report = fixture / "buildSrc/build/test-results/test/TEST-example.ProbeTest.xml"
+        prior_report.parent.mkdir(parents=True)
+        prior_report.write_text(
+            "<testsuite tests='1' failures='1'><testcase classname='example.ProbeTest' "
+            "name='fails()'><failure/></testcase></testsuite>"
+        )
+        prior_report_bytes = prior_report.read_bytes()
 
         gradle = fixture / "gradlew"
         gradle.write_text(
@@ -75,12 +82,16 @@ class TddRedIntegrationTest(unittest.TestCase):
         python_launcher = fixture / "python runtime/python3"
         python_launcher.parent.mkdir(parents=True)
         python_launcher.write_text(
-            "#!/usr/bin/env bash\nexec " + json.dumps(python3) + " \"$@\"\n"
+            "#!/usr/bin/env bash\n"
+            "if [ \"$FAKE_CLEANUP_RESULT\" = failed ] && "
+            "[ \"$1\" = scripts/tdd_scan.py ] && [ \"$2\" = clean-reports ]; then exit 1; fi\n"
+            "exec " + json.dumps(python3) + " \"$@\"\n"
         )
         python_launcher.chmod(0o755)
         env = os.environ.copy()
         env["PYTHON3"] = bash_path(python_launcher)
         env["FAKE_TEST_RESULT"] = fake_result
+        env["FAKE_CLEANUP_RESULT"] = "failed" if fail_cleanup else "passed"
         run = subprocess.run(
             [bash, "scripts/tdd-red.sh", "example.ProbeTest#fails"],
             cwd=fixture,
@@ -88,10 +99,10 @@ class TddRedIntegrationTest(unittest.TestCase):
             capture_output=True,
             text=True,
         )
-        return fixture, test_source, run
+        return fixture, test_source, run, prior_report, prior_report_bytes
 
     def test_crlf_plan_runs_the_scoped_test_and_records_its_red_bound_to_source(self):
-        fixture, test_source, run = self.run_runner("failed")
+        fixture, test_source, run, _, _ = self.run_runner("failed")
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         args = (fixture / "gradle-args.txt").read_text()
         self.assertIn("-p buildSrc test", args)
@@ -103,9 +114,19 @@ class TddRedIntegrationTest(unittest.TestCase):
         self.assertEqual(record["sha256"], hashlib.sha256(canonical).hexdigest())
 
     def test_passing_test_does_not_create_red_evidence(self):
-        fixture, _, run = self.run_runner("passed")
+        fixture, _, run, _, _ = self.run_runner("passed")
         self.assertEqual(run.returncode, 1, run.stdout + run.stderr)
         self.assertFalse((fixture / ".harness/tdd/red.json").exists())
+
+    def test_cleanup_failure_stops_before_gradle_and_cannot_record_stale_red(self):
+        fixture, _, run, prior_report, prior_report_bytes = self.run_runner(
+            "failed", fail_cleanup=True
+        )
+        self.assertNotEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertIn("prior JUnit report cleanup", run.stdout + run.stderr)
+        self.assertFalse((fixture / "gradle-args.txt").exists())
+        self.assertFalse((fixture / ".harness/tdd/red.json").exists())
+        self.assertEqual(prior_report.read_bytes(), prior_report_bytes)
 
 
 if __name__ == "__main__":
