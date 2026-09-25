@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.server.chaos;
 
+import static org.awaitility.Awaitility.await;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
@@ -9,8 +10,14 @@ import io.github.huyz0.os.biningester.format.Lease;
 import io.github.huyz0.os.biningester.format.RunEntry;
 import io.github.huyz0.os.biningester.format.SegmentReader;
 import io.github.huyz0.os.biningester.format.SegmentRecord;
+import io.github.huyz0.os.biningester.http.HttpSequencerTransport;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -106,12 +113,15 @@ class KillSequencerMidCommitIT {
                                 + "term; the lease names " + lease.holderPodId()));
                 String chain = ChaosBucket.PREFIX + "/ctl/log/0/"
                         + String.format("%016x", lease.epoch()) + "/";
-                int before = bucket.keys(chain).size();
-                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
-                while (bucket.keys(chain).size() == before) {
-                    assertThat(System.nanoTime()).as("no commit landed in round %d", round)
-                            .isLessThan(deadline);
-                }
+                int before = bucket.keysOnePage(chain).size();
+                long chainWaitStarted = System.nanoTime();
+                long chainWaitLists = bucket.observerCounts().lists();
+                await().pollInterval(Duration.ofSeconds(1)).during(Duration.ofSeconds(2))
+                        .atMost(Duration.ofSeconds(32)).untilAsserted(() ->
+                                assertThat(bucket.keysOnePage(chain).size())
+                                        .as("a committed chain entry remains visible")
+                                        .isGreaterThan(before));
+                assertObservedListRate(bucket, chainWaitLists, chainWaitStarted);
                 leader.killNow();
                 killed.add(leader.podId() + "@epoch" + lease.epoch());
                 nodes.remove(leader);
@@ -127,17 +137,24 @@ class KillSequencerMidCommitIT {
             // acks above may all be deferred intents (ADR-0058), which only a
             // live term's seal and drain turn into committed records.
             awaitLiveTerm(bucket, nodes);
-            long drainDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(60);
-            while (bucket.keys(ChaosBucket.PREFIX + "/ctl/inbox/0/").stream()
-                    .anyMatch(k -> k.endsWith(".intent"))) {
-                assertThat(System.nanoTime()).as("the inbox never drained")
-                        .isLessThan(drainDeadline);
-                Thread.sleep(100);
-            }
+            Lease finalTerm = bucket.lease().orElseThrow();
+            NodeProcess leaseholder = nodes.stream()
+                    .filter(node -> node.podId().equals(finalTerm.holderPodId())).findFirst()
+                    .orElseThrow(() -> new AssertionError("no running node holds the final term"));
+            requestInboxDrain(leaseholder);
             stop.set(true);
             for (Thread producer : producers) {
                 producer.join(TimeUnit.SECONDS.toMillis(60));
             }
+            String inbox = ChaosBucket.PREFIX + "/ctl/inbox/0/";
+            long inboxWaitStarted = System.nanoTime();
+            long inboxWaitLists = bucket.observerCounts().lists();
+            await().pollInterval(Duration.ofSeconds(1)).during(Duration.ofSeconds(2))
+                    .atMost(Duration.ofSeconds(32)).untilAsserted(() ->
+                            assertThat(bucket.keysOnePage(inbox))
+                                    .as("the final inbox drain remains complete")
+                                    .noneMatch(key -> key.endsWith(".intent")));
+            assertObservedListRate(bucket, inboxWaitLists, inboxWaitStarted);
             for (NodeProcess node : nodes) {
                 node.terminate();
             }
@@ -200,27 +217,25 @@ class KillSequencerMidCommitIT {
     }
 
     static void awaitAcks(Set<String> acked, int target) throws InterruptedException {
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120);
-        while (acked.size() < target) {
-            assertThat(System.nanoTime()).as("acks stalled at %d", acked.size())
-                    .isLessThan(deadline);
-            Thread.sleep(100);
-        }
+        await().pollInterval(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(120))
+                .untilAsserted(() -> assertThat(acked).hasSizeGreaterThanOrEqualTo(target));
     }
 
     /** Waits until the lease is unexpired and names a running node. */
     private static void awaitLiveTerm(ChaosBucket bucket, List<NodeProcess> nodes)
             throws Exception {
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(60);
-        while (true) {
-            Lease current = bucket.lease().orElseThrow();
-            if (current.expiresAtMillis() > System.currentTimeMillis()
-                    && nodes.stream().anyMatch(n -> n.podId().equals(current.holderPodId()))) {
-                return;
-            }
-            assertThat(System.nanoTime()).as("no live term").isLessThan(deadline);
-            Thread.sleep(100);
-        }
+        long waitStarted = System.nanoTime();
+        long waitLists = bucket.observerCounts().lists();
+        await().pollInterval(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(60))
+                .untilAsserted(() -> {
+                    Lease current = bucket.lease().orElseThrow();
+                    assertThat(current.expiresAtMillis()).as("a live term is unexpired")
+                            .isGreaterThan(System.currentTimeMillis());
+                    assertThat(nodes.stream()
+                            .anyMatch(n -> n.podId().equals(current.holderPodId())))
+                            .as("a live term names a running node").isTrue();
+                });
+        assertObservedListRate(bucket, waitLists, waitStarted);
     }
 
     /** Every id in every committed segment, with how often it appears. */
@@ -236,5 +251,25 @@ class KillSequencerMidCommitIT {
             }
         }
         return found;
+    }
+
+    private static void assertObservedListRate(ChaosBucket bucket, long listsBefore,
+            long startedNanos) {
+        long elapsedNanos = System.nanoTime() - startedNanos;
+        long allowance = (long) Math.ceil(elapsedNanos / (double) TimeUnit.SECONDS.toNanos(1)) + 1;
+        long lists = bucket.observerCounts().lists() - listsBefore;
+        assertThat(lists).as("RustFS observer LIST rate over %.3f seconds", elapsedNanos / 1e9)
+                .isLessThanOrEqualTo(allowance);
+    }
+
+    private static void requestInboxDrain(NodeProcess leaseholder) throws Exception {
+        URI endpoint = URI.create("http://localhost:" + leaseholder.port()
+                + HttpSequencerTransport.DRAIN_PATH);
+        HttpRequest request = HttpRequest.newBuilder(endpoint).timeout(Duration.ofSeconds(30))
+                .POST(HttpRequest.BodyPublishers.noBody()).build();
+        HttpResponse<String> response = HttpClient.newHttpClient().send(request,
+                HttpResponse.BodyHandlers.ofString());
+        assertThat(response.statusCode()).as("the live leaseholder drains its inbox")
+                .isEqualTo(200);
     }
 }

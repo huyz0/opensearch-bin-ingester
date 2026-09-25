@@ -121,6 +121,15 @@ public final class ChaosBucket implements AutoCloseable, ChainAudit.ChainBucketR
         }
     }
 
+    /** One LIST page, refusing to hide extra requests behind pagination. */
+    public List<String> keysOnePage(String prefix) throws java.io.IOException {
+        var page = observer.list(prefix, null, 1000);
+        if (page.nextStartAfter().isPresent()) {
+            throw new java.io.IOException("one-page observation exceeded 1000 keys: " + prefix);
+        }
+        return page.objects().stream().map(ObjectStat::key).toList();
+    }
+
     /** One object's bytes. */
     @Override
     public byte[] get(String key) throws java.io.IOException {
