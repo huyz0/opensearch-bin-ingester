@@ -14,6 +14,7 @@ import java.io.IOException;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -51,6 +52,8 @@ class ForwardChallengeTest {
     /** A holder that accepts the forward and answers after {@code answerAfter}, or never. */
     private static final class FrozenHolder implements SequencerTransport {
         final CountDownLatch parked = new CountDownLatch(1);
+        final CountDownLatch release = new CountDownLatch(1);
+        final CountDownLatch interruptObserved = new CountDownLatch(1);
         final Duration answerAfter;
         final CommitDelta answer;
 
@@ -63,8 +66,9 @@ class ForwardChallengeTest {
         public CommitDelta send(String endpoint, CommitRequest request) throws IOException {
             parked.countDown();
             try {
-                Thread.sleep(answerAfter.toMillis());
+                release.await(answerAfter.toMillis(), TimeUnit.MILLISECONDS);
             } catch (InterruptedException interrupted) {
+                interruptObserved.countDown();
                 Thread.currentThread().interrupt();
                 throw new IOException("interrupted");
             }
@@ -111,6 +115,11 @@ class ForwardChallengeTest {
             assertThat(Duration.ofNanos(System.nanoTime() - began))
                     .as("⚠️ CUT SHORT BY THE EVIDENCE, not after the holder's 20 s")
                     .isLessThan(Duration.ofSeconds(2));
+            assertThat(frozen.interruptObserved.await(1, TimeUnit.SECONDS))
+                    .as("⚠️ cut cancels the still-blocked transport sender")
+                    .isTrue();
+        } finally {
+            frozen.release.countDown();
         }
     }
 
