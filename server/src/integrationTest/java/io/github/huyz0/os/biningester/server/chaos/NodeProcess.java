@@ -15,6 +15,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -159,6 +160,7 @@ public final class NodeProcess implements AutoCloseable {
         all.put("producer.subject", "producer-1");
         all.put("producer.allowed-indices", "logs");
         all.putAll(settings);
+        all.put("pod.uid", UUID.randomUUID().toString());
         Properties properties = new Properties();
         all.forEach(properties::setProperty);
         Path file = dir.resolve(podId + ".properties");

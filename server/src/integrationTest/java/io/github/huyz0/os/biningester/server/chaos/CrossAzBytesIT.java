@@ -42,11 +42,26 @@ class CrossAzBytesIT {
             Map<String, String> settings = new HashMap<>(bucket.nodeSettings());
             settings.put("producer.allowed-indices", INDEX);
             settings.put("pod.az", "az-a");
+            settings.put("pod.uid", "caller-supplied");
             NodeProcess node = null;
+            NodeProcess secondNode = null;
             try {
                 Path counts = directory.resolve("cross-az-counts.json");
                 node = NodeProcess.start(directory, "poda", settings, NodeProcess.Options.NONE,
                         counts);
+                var nodeSettings = new java.util.Properties();
+                try (var input = Files.newInputStream(directory.resolve("poda.properties"))) {
+                    nodeSettings.load(input);
+                }
+                assertThat(nodeSettings.getProperty("pod.uid")).isNotEqualTo("caller-supplied");
+                assertThat(UUID.fromString(nodeSettings.getProperty("pod.uid"))).isNotNull();
+                secondNode = NodeProcess.start(directory, "podb", settings);
+                var secondNodeSettings = new java.util.Properties();
+                try (var input = Files.newInputStream(directory.resolve("podb.properties"))) {
+                    secondNodeSettings.load(input);
+                }
+                assertThat(UUID.fromString(secondNodeSettings.getProperty("pod.uid")))
+                        .isNotEqualTo(UUID.fromString(nodeSettings.getProperty("pod.uid")));
                 UUID stream = UUID.randomUUID();
                 node.registerIndex(INDEX, stream);
                 RunKey key = new RunKey(stream, 0);
@@ -104,6 +119,9 @@ class CrossAzBytesIT {
             } finally {
                 if (node != null) {
                     node.close();
+                }
+                if (secondNode != null) {
+                    secondNode.close();
                 }
             }
         }
