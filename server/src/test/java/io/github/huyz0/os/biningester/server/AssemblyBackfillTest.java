@@ -7,6 +7,7 @@ import io.github.huyz0.os.biningester.binstore.BinStore;
 import io.github.huyz0.os.biningester.format.CommitDelta;
 import io.github.huyz0.os.biningester.format.RunKey;
 import io.github.huyz0.os.biningester.ingest.IngestConfig;
+import io.github.huyz0.os.biningester.sequencer.ChainBackfill;
 import io.github.huyz0.os.biningester.sequencer.CommitRequest;
 import io.github.huyz0.os.biningester.sequencer.LocalSequencer;
 import io.github.huyz0.os.biningester.sequencer.SequencerTransport;
@@ -17,6 +18,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
@@ -68,15 +70,22 @@ class AssemblyBackfillTest {
                     term.commit(new CommitRequest("p", "i", i, "seg/" + i, Map.of(stream, 1)));
                 }
             }
-            try (Assembly second = Assembly.open(config("pod2"), shared, noPeers(),
-                    Clock.systemUTC())) {
+            AtomicReference<Thread> backfillWorker = new AtomicReference<>();
+            try (Assembly second = Assembly.openForTest(config("pod2"), shared, noPeers(),
+                    Clock.systemUTC(), (store, prefix, chain, serving) -> {
+                        Thread worker = ChainBackfill.inBackground(store, prefix, chain, serving);
+                        backfillWorker.set(worker);
+                        return worker;
+                    })) {
                 LocalSequencer term = LocalSequencer.underneath(second.heldTerm()).orElseThrow();
-                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(60);
-                while (!term.chain().snapshot().fromFloor()) {
-                    assertThat(System.nanoTime()).as("the backfill never landed")
-                            .isLessThan(deadline);
-                    Thread.sleep(20);
-                }
+                Thread worker = backfillWorker.get();
+                assertThat(worker).as("the takeover starts the real backfill worker").isNotNull();
+                worker.join(TimeUnit.SECONDS.toMillis(60));
+                assertThat(worker.isAlive()).as("the backfill worker completes within 60 s")
+                        .isFalse();
+                assertThat(term.chain().snapshot().fromFloor())
+                        .as("the real successor backfill reaches the chain floor")
+                        .isTrue();
 
                 assertThat(term.chain().snapshot().deltas())
                         .as("⚠️ THE PREDECESSOR's FIRST COMMIT, below the checkpoint the "
