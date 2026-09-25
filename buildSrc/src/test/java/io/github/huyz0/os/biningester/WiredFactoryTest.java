@@ -67,4 +67,16 @@ class WiredFactoryTest {
 
     assertThat(scan()).isEqualTo(1);
   }
+
+  @Test
+  void aQUALIFIEDNestedConstructionDoesNotConstructItsOuterType() throws Exception {
+    scratch();
+    write("a/src/main/java/pkg/Widget.java",
+        "package pkg; class Widget { static class Nested {} "
+            + "static Widget create() { return new Widget(); } }\n");
+    write("b/src/main/java/other/Root.java",
+        "package other; class Root { Object value = new pkg.Widget.Nested(); }\n");
+
+    assertThat(scan()).isEqualTo(1);
+  }
 }

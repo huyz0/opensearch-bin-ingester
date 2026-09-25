@@ -65,6 +65,22 @@ class WiredGrammarTest {
         .hasMessageContaining("M1.1: unwired");
   }
 
+  @Test
+  void aQualifiedNestedConstructionDoesNotWireItsOuterType() throws Exception {
+    WiredGateTask task = task("`new Widget`");
+    source("a/src/main/java/pkg/Widget.java", "package pkg; class Widget {\n"
+        + " static class Nested {}\n"
+        + " static Widget create() { return new Widget(); }\n"
+        + "}\n");
+    source("b/src/main/java/other/Root.java", "package other; class Root {\n"
+        + " Object value = new pkg.Widget.Nested();\n"
+        + "}\n");
+
+    assertThatThrownBy(task::verify)
+        .isInstanceOf(GradleException.class)
+        .hasMessageContaining("M1.1: unwired");
+  }
+
   private WiredGateTask task(String predicate) throws Exception {
     Path spec = repo.resolve("docs/internal/product/milestones/M8/SPEC.md");
     Files.createDirectories(spec.getParent());

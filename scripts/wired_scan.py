@@ -136,8 +136,13 @@ def constructs(sources, name):
     if not any(declares_type(code, name) and pat.search(code) for _, _, code in sources):
         return False
     call = re.compile(r'\b' + re.escape(name) + r'\s*\.\s*\w+\s*\(')
+    # A qualified nested construction also contains a dotted `Widget.Nested(`
+    # prefix. Do not mistake it for a static factory call on Widget.
+    new_qualified_prefix = re.compile(
+        r'\bnew\s+(?:[A-Za-z_$][\w$]*\s*\.\s*)*$')
     return any(not declares_type(code, name) and any(
-        not re.search(r'\bnew\s*$', code[:m.start()]) for m in call.finditer(code))
+        not new_qualified_prefix.search(code[:m.start()])
+        for m in call.finditer(code))
         for _, _, code in sources)
 
 

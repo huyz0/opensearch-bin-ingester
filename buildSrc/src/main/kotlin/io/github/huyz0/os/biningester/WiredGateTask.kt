@@ -124,7 +124,12 @@ abstract class WiredGateTask : DefaultTask() {
         if (sources.any { pattern.containsMatchIn(it.third) && !declares(it.third, name) }) return true
         if (!sources.any { declares(it.third, name) && pattern.containsMatchIn(it.third) }) return false
         val call = Regex("\\b${Regex.escape(name)}\\s*\\.\\w+\\s*\\(")
-        return sources.any { !declares(it.third, name) && call.containsMatchIn(it.third) }
+        val newQualifiedPrefix = Regex("\\bnew\\s+(?:[A-Za-z_$][\\w$]*\\s*\\.\\s*)*$")
+        return sources.any { source ->
+            !declares(source.third, name) && call.findAll(source.third).any { match ->
+                !newQualifiedPrefix.containsMatchIn(source.third.substring(0, match.range.first))
+            }
+        }
     }
     private fun implementors(sources: List<Triple<Path, String, String>>, iface: String): Set<String> = sources.flatMap {
         Regex("\\b(?:class|record|enum)\\s+(\\w+)[^{;]*\\bimplements\\b[^{}]*${Regex.escape(iface)}\\b").findAll(it.third).map { m -> m.groupValues[1] }.toList()
