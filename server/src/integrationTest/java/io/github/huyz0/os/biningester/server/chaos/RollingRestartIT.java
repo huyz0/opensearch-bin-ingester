@@ -21,6 +21,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -48,6 +49,7 @@ class RollingRestartIT {
     private static final int SUBSCRIBERS = 200;
     private static final int PRODUCERS = 4;
     private static final Duration WINDOW = Duration.ofMillis(100);
+    private static final Duration SUBSCRIPTION_TIMEOUT = Duration.ofSeconds(5);
     private static final double HERD_BUDGET = 0.20;
     private static final Duration GAP_BUDGET = Duration.ofSeconds(1);
 
@@ -94,8 +96,13 @@ class RollingRestartIT {
         UUID index = UUID.randomUUID();
         RunKey stream = new RunKey(index, 0);
         ConcurrentLinkedQueue<Long> reconnects = new ConcurrentLinkedQueue<>();
+        List<ConcurrentLinkedQueue<Long>> reconnectsPerRestart = new ArrayList<>();
+        for (int i = 0; i < PODS; i++) {
+            reconnectsPerRestart.add(new ConcurrentLinkedQueue<>());
+        }
         ConcurrentLinkedQueue<Long> acks = new ConcurrentLinkedQueue<>();
         AtomicBoolean restarting = new AtomicBoolean();
+        AtomicInteger activeRestart = new AtomicInteger(-1);
         AtomicBoolean stop = new AtomicBoolean();
         List<AutoCloseable> subscriptions = new ArrayList<>();
         List<HttpSubscriptionTransport> transports = new ArrayList<>();
@@ -112,11 +119,16 @@ class RollingRestartIT {
                         () -> {
                             // ⚠️ THE FIRST CONNECT IS NOT A RECONNECT.
                             if (connects.incrementAndGet() > 1 && restarting.get()) {
-                                reconnects.add(System.nanoTime());
+                                long at = System.nanoTime();
+                                reconnects.add(at);
+                                int restart = activeRestart.get();
+                                if (restart >= 0) {
+                                    reconnectsPerRestart.get(restart).add(at);
+                                }
                             }
                         },
                         HttpSubscriptionTransport.DEFAULT_RETRY_FLOOR,
-                        HttpSubscriptionTransport.DEFAULT_RETRY_CEILING, Duration.ofSeconds(5));
+                        HttpSubscriptionTransport.DEFAULT_RETRY_CEILING, SUBSCRIPTION_TIMEOUT);
                 transports.add(transport);
                 subscriptions.add(transport.subscribe(stream,
                         (SubscriptionTransport.Listener) delivery -> { }));
@@ -157,14 +169,22 @@ class RollingRestartIT {
             long began = System.nanoTime();
             restarting.set(true);
             for (int i = 0; i < PODS; i++) {
+                activeRestart.set(i);
                 NodeProcess old = nodes.get(i);
                 old.terminate();
                 lb.remove(old.port());
                 nodes.set(i, start(bucket, lb, "podr" + i, index));
+                // Keep this restart's attribution open through the subscription
+                // timeout, the full first jitter range (1.5 retry floors), and
+                // service probes before the next pod starts its restart. The
+                // final episode remains active through the post-restart window.
+                Thread.sleep(HttpSubscriptionTransport.DEFAULT_RETRY_FLOOR.multipliedBy(2)
+                        .plus(SUBSCRIPTION_TIMEOUT).plus(ServiceLb.PROBE_PERIOD).toMillis());
             }
             long restarted = System.nanoTime();
             Thread.sleep(3000);
             long ended = System.nanoTime();
+            activeRestart.set(-1);
             stop.set(true);
             for (Thread writer : writers) {
                 writer.join(TimeUnit.SECONDS.toMillis(10));
@@ -193,12 +213,28 @@ class RollingRestartIT {
             }
             int busiest = windows.values().stream().mapToInt(Integer::intValue).max().orElse(0);
             double share = reconnects.isEmpty() ? 0 : busiest / (double) reconnects.size();
+            TreeMap<Integer, String> perRestart = new TreeMap<>();
+            for (int i = 0; i < PODS; i++) {
+                List<Long> episode = reconnectsPerRestart.get(i).stream().sorted().toList();
+                assertThat(episode)
+                        .as("pod restart %d produced measured reconnects", i)
+                        .isNotEmpty();
+                int episodeBusiest = busiestWindow(episode);
+                double episodeShare = episodeBusiest / (double) episode.size();
+                perRestart.put(i, episodeBusiest + "/" + episode.size() + " ("
+                        + Math.round(episodeShare * 1000) / 10.0 + "%)");
+                assertThat(episodeShare)
+                        .as("⚠️ RESTART %d: no 100 ms window carries over 20%% of that restart's "
+                                + "reconnects (%d/%d)", i, episodeBusiest, episode.size())
+                        .isLessThanOrEqualTo(HERD_BUDGET);
+            }
 
             System.out.println("M8.16 worst visibility gap " + worstGap / 1_000_000 + " ms (budget "
                     + GAP_BUDGET.toMillis() + " ms); reconnects " + reconnects.size()
                     + " over " + windows.size() + " windows of " + WINDOW.toMillis()
                     + " ms, busiest " + busiest + " = " + Math.round(share * 1000) / 10.0
-                    + "% (budget " + (int) (HERD_BUDGET * 100) + "%)");
+                    + "% (budget " + (int) (HERD_BUDGET * 100) + "%); per restart "
+                    + perRestart);
             assertThat(reconnects.size())
                     .as("the premise: the restart really moved the subscribers")
                     .isGreaterThanOrEqualTo(SUBSCRIBERS / 2);
@@ -219,5 +255,14 @@ class RollingRestartIT {
             transports.forEach(HttpSubscriptionTransport::close);
             nodes.forEach(NodeProcess::close);
         }
+    }
+
+    /** Largest reconnect count in any established, fixed {@code WINDOW} bucket. */
+    private static int busiestWindow(List<Long> sortedTimes) {
+        TreeMap<Long, Integer> windows = new TreeMap<>();
+        for (long at : sortedTimes) {
+            windows.merge(at / WINDOW.toNanos(), 1, Integer::sum);
+        }
+        return windows.values().stream().mapToInt(Integer::intValue).max().orElse(0);
     }
 }
