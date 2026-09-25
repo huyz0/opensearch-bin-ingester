@@ -431,7 +431,11 @@ the digest-pinned container in `docker-compose.test.yml`.
     `CountingBinStore`, with **zero LISTs** for automatic tiers 2 and 3,
     replacing `FallbackLadder`'s modelled `TENS_OF_GETS` with the measured
     number or correcting it to it. The request rate returns to zero once an
-    ingester answers. T3 against RustFS — a count, so it holds on S3.
+    ingester answers. T3 against RustFS — a count, so it holds on S3. M9.45
+    measured five Tier 3 GETs for the canonical checkpoint/three-delta/shared-
+    segment episode; a separate ingester-return episode used six before local
+    replay stopped. The 30-GET limit remains the hard ceiling, not a typical
+    estimate.
     ⚠️ **OR THE OTHER BRANCH, WHICH IS CHECKABLE TOO.** No approach is named
     today: a SigV4 signer in the plugin (a credential in the OpenSearch JVM)
     and long-lived pre-issued grants (amending ADR-0041) were both rejected on

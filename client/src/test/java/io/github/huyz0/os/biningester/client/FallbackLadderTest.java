@@ -89,17 +89,13 @@ class FallbackLadderTest {
                 .isEqualTo(FallbackLadder.AutomaticTier.RECOVER);
     }
 
-    /**
-     * Tier 3's GET figure is doc 04 section 3's "tens", not one (M5.18, round
-     * 1's minor).
-     */
+    /** Tier 3's representative replay count is measured by M9.45, not guessed. */
     @Test
     void theRECOVERTierCostsTENSOfGetsRatherThanOne() {
         assertThat(FallbackLadder.AutomaticTier.RECOVER.getsPerNodePerInterval())
-                .as("doc 04 section 3 prices a replay at \"tens of GETs, once\"; carrying 1 "
-                        + "here tells whoever adds up a recovering fleet a thirtieth of the "
-                        + "number. MODELLED, not measured -- M8's chaos matrix falsifies it")
-                .isEqualTo(30);
+                .as("M9.45 measures checkpoint + three delta + one shared segment GET; "
+                        + "TierThreeRecovery separately caps a full episode at 30 GETs")
+                .isEqualTo(5);
     }
 
     @Test

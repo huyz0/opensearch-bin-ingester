@@ -30,9 +30,9 @@ import java.util.Objects;
  *
  * <p>⚠️ TIERS 0 AND 1 EXECUTE SINCE M8.28: {@code HttpSubscriptionTransport}
  * asks {@link #tierFor} at every transition it observes and counts the tiers
- * it enters. Tiers 2 and 3 read the store, which a plugin holding no cloud SDK
- * cannot yet do, and re-reading a gap needs a catch-up read path that does not
- * exist -- both are M9's, by ADR-0057.
+ * it enters. Tiers 2 and 3 read through the authenticated node-local reader
+ * and replay through the catch-up lane (M9.21, ADR-0064); they issue no LIST
+ * and remain subordinate to an answering ingester.
  */
 public final class FallbackLadder {
 
@@ -99,16 +99,12 @@ public final class FallbackLadder {
 
         /**
          * Tier 3: resolve the lease, read the newest checkpoint, replay the
-         * deltas — tens of GETs, ONCE, not per interval.
+         * deltas — five GETs in M9.45's measured fixture, ONCE, not per interval.
          *
-         * <p>⚠️ {@link #TENS_OF_GETS} IS A MODEL AND NOT A MEASUREMENT
-         * (performance.md rule 7). An earlier draft carried 1 here, which is
-         * conservative for the LIST question this class exists for and wrong
-         * in the cheap direction for the GET question: doc 04 section 3 prices
-         * tier 3 at "tens of GETs, once", so a reader adding up a fleet's
-         * recovery would have been told a thirtieth of it. What falsifies the
-         * number is a real replay counting its own GETs, which ADR-0057 moved
-         * to M9 with the catch-up read path it needs.
+         * <p>⚠️ The five-GET figure is measured by M9.45 for one checkpoint,
+         * three deltas and one shared missing segment. It is a representative
+         * episode, NOT the upper bound: {@code TierThreeRecovery} independently
+         * enforces the 30-GET episode cap, and longer chains can use more.
          *
          * <p>⚠️ ONCE, NOT PER INTERVAL, and the accessor's name overstates
          * this one tier. The burst is bounded by the replay rather than by the
@@ -117,23 +113,17 @@ public final class FallbackLadder {
          * nodes recovering would otherwise breach R15 here rather than at tier
          * 4.
          */
-        RECOVER(Model.TENS_OF_GETS, 0);
+        RECOVER(Model.MEASURED_GETS, 0);
 
-        /**
-         * Doc 04 section 3's "tens of GETs" for one node's replay, as a
-         * number.
-         *
-         * <p>⚠️ MODELLED, and the corpus says "tens" rather than a figure.
-         * Thirty is the middle of that word and nothing measures it yet.
-         */
-        static final int TENS_OF_GETS = Model.TENS_OF_GETS;
+        /** Observed Tier 3 GET count for the M9.45 canonical replay fixture. */
+        static final int MEASURED_GETS = Model.MEASURED_GETS;
 
         /**
          * ⚠️ A HOLDER, because an enum constant's argument may not read a
          * static field of its own enum -- the constants are initialised first.
          */
         private static final class Model {
-            static final int TENS_OF_GETS = 30;
+            static final int MEASURED_GETS = 5;
 
             private Model() {
             }

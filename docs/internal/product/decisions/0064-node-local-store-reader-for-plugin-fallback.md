@@ -1,6 +1,6 @@
 # 0064. Use a node-local store reader for plugin fallback
 
-Status: accepted — clarified 2026-09-24 by M9.49 on request permissions, naming and local process identity; clarified 2026-09-25 by M9.50 on allowed recovery object keys; clarified 2026-09-25 by M9.41 on carrying the commit cursor through live and catch-up events; clarified 2026-09-25 by M9.44 that Tier 3's 30-GET ceiling bounds request spend, not wall-clock latency: ordered replay latency grows with serial object-store TTFB, plus one pointer STAT
+Status: accepted — clarified 2026-09-24 by M9.49 on request permissions, naming and local process identity; clarified 2026-09-25 by M9.50 on allowed recovery object keys; clarified 2026-09-25 by M9.41 on carrying the commit cursor through live and catch-up events; clarified 2026-09-25 by M9.44 that Tier 3's 30-GET ceiling bounds request spend, not wall-clock latency: ordered replay latency grows with serial object-store TTFB, plus one pointer STAT; clarified 2026-09-25 by M9.45 that the canonical RustFS episode costs five Tier 3 GETs (pointer, three deltas, one shared segment), while a mid-replay restoration episode cost six; 30 remains the hard cap, not the measured typical cost
 Date: 2026-09-22
 Requirements: FR-10, NFR-4
 Research: docs/research/30-design-space/04-discovery-and-tailing.md §2a, §3; docs/research/30-design-space/10-client-library-and-fetch-modes.md §4; docs/research/50-open-questions.md Q21
