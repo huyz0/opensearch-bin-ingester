@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
@@ -39,6 +40,7 @@ class ForwardChallengeTest {
 
     private static final String A = "pod-a:9000";
     private static final String B = "pod-b:9000";
+    private static final String C = "pod-c:9000";
 
     private static LeaseConfig config(String podId, String endpoint) {
         return new LeaseConfig(PREFIX, podId, endpoint,
@@ -149,6 +151,76 @@ class ForwardChallengeTest {
         try (RemoteSequencer remote = new RemoteSequencer(store, config("podb", B), slow,
                 watch)) {
             assertThat(remote.commit(flush())).isSameAs(answer);
+        }
+    }
+
+    @Test
+    void aREFUSALRedirectedToANewFrozenHolderIsCutByItsWatch() throws Exception {
+        MemoryBinStore store = new MemoryBinStore();
+        LeaseManager oldHolder = new LeaseManager(store, config("poda", A),
+                java.time.Clock.systemUTC());
+        LeaseManager newHolder = new LeaseManager(store, config("podc", C),
+                java.time.Clock.systemUTC());
+        assertThat(oldHolder.tryAcquire()).as("the premise: pod-a holds the first lease")
+                .isPresent();
+
+        FrozenHolder frozen = new FrozenHolder(Duration.ofSeconds(20), null);
+        SequencerTransport redirectThenFreeze = new SequencerTransport() {
+            @Override
+            public CommitDelta send(String endpoint, CommitRequest request) throws IOException {
+                if (endpoint.equals(A)) {
+                    oldHolder.release();
+                    assertThat(newHolder.tryAcquire())
+                            .as("the refusal redirects to a new lease epoch")
+                            .isPresent();
+                    throw new NotTheLeaseholderException("the first holder was deposed");
+                }
+                assertThat(endpoint).isEqualTo(C);
+                return frozen.send(endpoint, request);
+            }
+
+            @Override
+            public void close() {
+            }
+        };
+        LeaseChallenge watch = lease -> lease.holderPodId().equals("podc")
+                && frozen.parked.getCount() == 0;
+        CountDownLatch completed = new CountDownLatch(1);
+        AtomicReference<Throwable> outcome = new AtomicReference<>();
+
+        try (RemoteSequencer remote = new RemoteSequencer(store, config("podb", B),
+                redirectThenFreeze, watch)) {
+            try {
+                long began = System.nanoTime();
+                Thread.ofVirtual().start(() -> {
+                    try {
+                        remote.commit(flush());
+                    } catch (Throwable failed) {
+                        outcome.set(failed);
+                    } finally {
+                        completed.countDown();
+                    }
+                });
+
+                assertThat(frozen.parked.await(1, TimeUnit.SECONDS))
+                        .as("the retry reached the new holder named by the lease")
+                        .isTrue();
+                assertThat(completed.await(2, TimeUnit.SECONDS))
+                        .as("the second send is watched, not left to its 20 s timeout")
+                        .isTrue();
+                assertThat(outcome.get())
+                        .isExactlyInstanceOf(IOException.class)
+                        .hasMessageContaining("podc")
+                        .hasMessageContaining("may have landed");
+                assertThat(Duration.ofNanos(System.nanoTime() - began))
+                        .isLessThan(Duration.ofSeconds(2));
+                assertThat(frozen.interruptObserved.await(1, TimeUnit.SECONDS))
+                        .as("the new holder's sender is interrupted on the watched cut")
+                        .isTrue();
+            } finally {
+                frozen.release.countDown();
+                completed.await(1, TimeUnit.SECONDS);
+            }
         }
     }
 
