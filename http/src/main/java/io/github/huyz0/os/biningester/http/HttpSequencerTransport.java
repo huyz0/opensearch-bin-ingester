@@ -41,10 +41,10 @@ import java.util.concurrent.ConcurrentHashMap;
  *       peer answered that it does not hold the lease. ⚠️ **A REFUSAL, NOT A
  *       FAILURE**: nothing was applied, so re-reading the lease and resending
  *       is safe, and that is what the caller does.</li>
- *   <li><b>413</b> — an {@link IOException} saying the peer refused the BYTES:
- *       ⚠️ **KNOWN, not ambiguous.** Nothing was decoded, so nothing was
- *       applied — and resending it unchanged anywhere will be refused again,
- *       which is why it is not a refusal in the leaseholder sense either.</li>
+ *   <li><b>400 or 413</b> — an {@link IOException} saying the peer refused the
+ *       request: it was invalid or too large. ⚠️ **KNOWN, not ambiguous.**
+ *       The peer did not apply it, and retrying the unchanged request will be
+ *       refused again, so neither status is a leaseholder refusal.</li>
  *   <li><b>anything else, or no answer at all</b> — {@link IOException}, which
  *       is ⚠️ **AMBIGUOUS**: the request may have been applied and only the
  *       reply lost. A caller may resend a REFUSED request, never one whose
@@ -170,16 +170,16 @@ public final class HttpSequencerTransport implements SequencerTransport {
             if (response.status().code() == NOT_THE_LEASEHOLDER.code()) {
                 throw new NotTheLeaseholderException(endpoint + " does not hold the lease");
             }
-            if (response.status().code() == Status.REQUEST_ENTITY_TOO_LARGE_413.code()) {
-                // ⚠️ KNOWN, NOT UNKNOWN, and that distinction is the point:
-                // the peer refused the BYTES and never decoded a frame, so
-                // nothing was applied -- but resending it anywhere will be
-                // refused again, so this is not a `NotTheLeaseholderException`
-                // either. Reporting it as "the outcome is UNKNOWN" would send
-                // an operator hunting for a commit that never happened.
-                throw new IOException("commit to " + endpoint + " was REFUSED as too large: "
-                        + read(response) + " -- nothing was applied, and resending it "
-                        + "unchanged will be refused again");
+            if (response.status().code() == Status.BAD_REQUEST_400.code()
+                    || response.status().code() == Status.REQUEST_ENTITY_TOO_LARGE_413.code()) {
+                // ⚠️ KNOWN, NOT UNKNOWN: 400 rejects an invalid frame and 413
+                // rejects an oversized one before commit. A reply body is also
+                // bounded by `read`; its overflow is rendered as a neutral
+                // sentinel, never as though this node's request body was too
+                // large. Retrying an unchanged request will be refused again.
+                throw new IOException("commit to " + endpoint + " was REFUSED with HTTP "
+                        + response.status().code() + ": " + read(response)
+                        + " -- nothing was applied, and resending it unchanged will be refused again");
             }
             if (response.status().code() != Status.OK_200.code()) {
                 // ⚠️ THE PEER's OWN MESSAGE TRAVELS WITH THE STATUS. Without it

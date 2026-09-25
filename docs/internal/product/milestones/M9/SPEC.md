@@ -569,7 +569,7 @@ multiplied from a price table (criterion 16). Each is a named NOT-RUN in
 | M8.79 | Python unit and Bash integration tests | Windows-style paths and Python paths with spaces work; CRLF selector reaches scoped Gradle without `\\r`; failure red hashes source bytes, but a passing test produces no red | the selected test is not run, a passing test is recorded red, or its red is not bound to the source |
 | M8.80 | Python unit and Bash integration tests | prior JUnit reports are removed; cleanup failure exits before Gradle and cannot mint red evidence | stale JUnit failure is recorded although the selected test never ran |
 | M8.81 | Python unit and Bash integration tests | CRLF and LF source checkouts produce the same canonical Git-content digest, and red evidence matches the staged source bytes checked by `checkTdd` | Windows red records are stale against the staged LF blob |
-| M8.74 | T0 + T3 | `PeerReplyTooLargeTest` — a 400 treated as unknown | blaming the producer for the peer |
+| M8.74 | T1 (controlled peer HTTP server; no object-store behavior) | `PeerReplyTooLargeTest` — readable and oversized 400 replies are known, non-ambiguous refusals and never misattribute the peer's reply size to the producer | treating an ordinary 400 as unknown or blaming the producer for an oversized peer reply |
 | M8.75 | script test | the workflow check green with `soakTest` removed | NFR-2 regressing unseen |
 
 ⚠️ **EVERY TASK IN § *Tasks* HAS A ROW HERE** — spec/SKILL.md requires a tier,
