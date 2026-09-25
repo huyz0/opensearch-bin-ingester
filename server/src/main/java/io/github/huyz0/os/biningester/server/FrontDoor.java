@@ -177,7 +177,8 @@ public final class FrontDoor implements AutoCloseable {
                         .register(new BulkService(assembly.ingest(), config.principal(), gate))
                         .register(new CommitService(assembly::heldTerm,
                                 (term, pod) -> io.github.huyz0.os.biningester.sequencer.InboxDrain.drain(
-                                        assembly.store(), config.prefix(), term, pod)))
+                                        assembly.store(), config.prefix(), term, pod,
+                                        assembly.metrics()::failedIntentBatch)))
                 .register(new SubscriptionService(assembly.hub(), assembly.catalog(),
                         assembly.watermarks(), clock, assembly.floors(), gate, crossAz))
                 .register(new CatchUpService(assembly::respondCatchUp))

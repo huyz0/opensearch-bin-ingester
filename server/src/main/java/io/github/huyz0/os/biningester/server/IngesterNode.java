@@ -167,7 +167,8 @@ public final class IngesterNode implements AutoCloseable {
             if (view != null) {
                 MembershipConfig membership = config.membership().get();
                 watch = new EndpointSliceWatch(membership.apiBase(), membership.namespace(),
-                        membership.service(), token, view, trust);
+                        membership.service(), token, view, trust,
+                        ignored -> assembly.metrics().endpointSliceWatchFailed());
             }
             IngesterNode node = new IngesterNode(assembly,
                     FrontDoor.start(assembly, clock, journal::add, crossAz), transport, clock,

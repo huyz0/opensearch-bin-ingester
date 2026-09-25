@@ -73,12 +73,19 @@ public final class ProgressReporter {
 
     private final SubscriptionTransport transport;
     private final Positions positions;
+    private final Runnable failureHook;
     private final AtomicInteger pushes = new AtomicInteger();
     private final AtomicInteger failures = new AtomicInteger();
 
     public ProgressReporter(SubscriptionTransport transport, Positions positions) {
+        this(transport, positions, () -> { });
+    }
+
+    public ProgressReporter(SubscriptionTransport transport, Positions positions,
+            Runnable failureHook) {
         this.transport = Objects.requireNonNull(transport, "transport");
         this.positions = Objects.requireNonNull(positions, "positions");
+        this.failureHook = Objects.requireNonNull(failureHook, "failureHook");
     }
 
     /**
@@ -103,7 +110,7 @@ public final class ProgressReporter {
             // `pushFailures()` never moved.
             here = positions.current();
         } catch (RuntimeException unavailable) {
-            failures.incrementAndGet();
+            failed();
             LOG.warn("this node's shard positions could not be read this interval; "
                     + "GC keeps meanwhile", unavailable);
             return;
@@ -122,7 +129,7 @@ public final class ProgressReporter {
             // refuses a duplicate copy or a blank id with an IAE, but a null
             // element in the list arrives as an NPE from the mapping lambda,
             // and both are "this node's positions do not make a frame".
-            failures.incrementAndGet();
+            failed();
             LOG.warn("this node's shard positions do not make a progress frame", refused);
             return;
         }
@@ -130,7 +137,7 @@ public final class ProgressReporter {
             transport.report(frame);
             pushes.incrementAndGet();
         } catch (RuntimeException failed) {
-            failures.incrementAndGet();
+            failed();
             LOG.warn("progress for " + frame.entries().size()
                     + " shard copies did not reach the ingester; the next interval carries "
                     + "a newer position and GC keeps meanwhile", failed);
@@ -152,5 +159,10 @@ public final class ProgressReporter {
      */
     public int pushFailures() {
         return failures.get();
+    }
+
+    private void failed() {
+        failures.incrementAndGet();
+        failureHook.run();
     }
 }

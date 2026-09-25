@@ -89,6 +89,17 @@ class LadderExecutionTest {
             // poll" constrains nothing -- review MEASURED it green with every
             // failure counted as an entry.
             await("three refused polls", () -> refused.get() >= 3);
+            await("three unavailable-poll metric increments",
+                    () -> transport.pollFailures(
+                            HttpSubscriptionTransport.PollFailure.UNAVAILABLE) >= 3);
+            assertThat(transport.pollFailures(HttpSubscriptionTransport.PollFailure.UNAVAILABLE))
+                    .as("HTTP 503 is counted as unavailable, not a generic server error")
+                    .isEqualTo(refused.get());
+            assertThat(transport.pollFailures(HttpSubscriptionTransport.PollFailure.SERVER_ERROR))
+                    .isZero();
+            assertThat(transport.reconnects())
+                    .as("the subscription reconnect metric counts the transition")
+                    .isEqualTo(1);
             answering.set(true);
             await("the return", () -> transport.tier() == FallbackLadder.AutomaticTier.PUSH);
             assertThat(transport.ingesterAnswers()).isTrue();

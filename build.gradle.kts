@@ -86,6 +86,17 @@ val licenceMappings = mapOf(
     // same Apache-2.0 licence from the same project, so a per-jar licence file
     // would be 36 identical copies -- and 36 places for one of them to drift.
     "^helidon.*" to "helidon",
+    // These Apache-2.0 libraries share the canonical Apache text already
+    // carried with Helidon; each upstream artifact supplies its own notices.
+    "^micrometer-.*" to "helidon",
+    "^prometheus-metrics-.*" to "helidon",
+    "^micrometer-registry-prometheus.*" to "helidon",
+    "^simpleclient.*" to "helidon",
+    // Jakarta JSON API and Eclipse Parsson offer EPL-2.0 alongside GPL-2.0
+    // with the Classpath Exception; this project takes the EPL-2.0 option.
+    "^jakarta[.]json-api$" to "junit",
+    "^parsson$" to "junit",
+    "^LatencyUtils$" to "latencyutils",
     // ⚠️ THE AWS SDK v2 IS 29 ARTIFACTS UNDER ONE APACHE-2.0 LICENCE, from one
     // project, so they share one licence file the way Helidon's 36 do. ⚠️ BUT
     // THEY ARE ENUMERATED AND ANCHORED RATHER THAN MATCHED BY A PREFIX, because

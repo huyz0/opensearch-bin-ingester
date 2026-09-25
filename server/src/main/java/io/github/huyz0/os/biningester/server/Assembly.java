@@ -94,6 +94,7 @@ public final class Assembly implements AutoCloseable {
     private final BinStore store;
     private final CountingBinStore counting;
     private final HealthTrackingBinStore health;
+    private final IngesterMetrics metrics;
     private final BinStore backend;
     private final SubscriptionHub hub;
     private final IndexCatalog catalog;
@@ -215,6 +216,7 @@ public final class Assembly implements AutoCloseable {
         this.health = new HealthTrackingBinStore(counting, clock,
                 HealthTrackingBinStore.DEFAULT_STALL, HealthTrackingBinStore.DEFAULT_FAILURES);
         this.store = health;
+        this.metrics = new IngesterMetrics();
         // ⚠️ `raw` IS NAMED SO THAT NOTHING BELOW CAN USE IT BY ACCIDENT: an
         // earlier draft kept the parameter called `store`, which shadowed the
         // field, and every consumer below was handed the UNTRACKED store --
@@ -248,9 +250,10 @@ public final class Assembly implements AutoCloseable {
                             }
                             // ⚠️ M8.14a: the intents of pods that died deferring
                             // have nobody else to ask for a drain.
-                            InboxDrain.inBackground(store, config.prefix(), term);
+                            InboxDrain.inBackground(store, config.prefix(), term,
+                                    metrics::failedIntentBatch);
                             return new BatchingSequencer(term, COMMIT_WINDOW);
-                        }), challenge, false);
+                        }), challenge, false, metrics::failedIntentBatch);
         // ⚠️ NOT PUSHED ONTO `toClose`, AND THAT IS NOT AN OMISSION.
         // `DefaultIngest.close()` closes the sequencer it was given and says so
         // in its own javadoc, and `FleetSequencer.close()` has no idempotence
@@ -543,6 +546,10 @@ public final class Assembly implements AutoCloseable {
     /** The requests issued by this node, including calls made by health checks. */
     public StoreCounts storeCounts() {
         return counting.counts();
+    }
+
+    IngesterMetrics metrics() {
+        return metrics;
     }
 
     public SubscriptionHub hub() {

@@ -8,6 +8,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.LongConsumer;
 
 /**
  * The leaseholder applies the inbox's intents and deletes them (M8.14a,
@@ -42,7 +43,7 @@ public final class InboxDrain {
      *     the pod that asked stays deferring rather than forwarding past them
      */
     public static int drain(BinStore store, String prefix, Sequencer term) throws IOException {
-        return drain(store, prefix, term, null);
+        return drain(store, prefix, term, null, ignored -> { });
     }
 
     /**
@@ -69,17 +70,24 @@ public final class InboxDrain {
      */
     public static int drain(BinStore store, String prefix, Sequencer term, String requester)
             throws IOException {
+        return drain(store, prefix, term, requester, ignored -> { });
+    }
+
+    /** The same drain, reporting the size of each failed per-pod intent batch in memory. */
+    public static int drain(BinStore store, String prefix, Sequencer term, String requester,
+            LongConsumer failedBatchSize) throws IOException {
         Objects.requireNonNull(term, "term");
+        Objects.requireNonNull(failedBatchSize, "failedBatchSize");
         Object lock = LocalSequencer.underneath(term)
                 .map(LocalSequencer::drainLock)
                 .orElse(term);
         synchronized (lock) {
-            return drainLocked(store, prefix, term, requester);
+            return drainLocked(store, prefix, term, requester, failedBatchSize);
         }
     }
 
     private static int drainLocked(BinStore store, String prefix, Sequencer term,
-            String requester) throws IOException {
+            String requester, LongConsumer failedBatchSize) throws IOException {
         List<Inbox.Pending> pending = Inbox.pending(store, prefix);
         Map<String, List<Inbox.Pending>> byPod = new LinkedHashMap<>();
         for (Inbox.Pending intent : pending) {
@@ -99,6 +107,12 @@ public final class InboxDrain {
                 throw fenced;
             } catch (IOException failed) {
                 stalled++;
+                try {
+                    failedBatchSize.accept(batch.size());
+                } catch (RuntimeException metricsFailure) {
+                    LOG.log(System.Logger.Level.WARNING,
+                            "could not record failed inbox intent attempts", metricsFailure);
+                }
                 if (requester == null || requester.equals(firstIntent.request().podId())) {
                     first = first == null ? failed : first;
                 }
@@ -126,9 +140,15 @@ public final class InboxDrain {
      * intents of pods that died deferring have nobody else to ask.
      */
     public static Thread inBackground(BinStore store, String prefix, Sequencer term) {
+        return inBackground(store, prefix, term, ignored -> { });
+    }
+
+    /** The same one-shot takeover drain, with a process-local failed-attempt counter. */
+    public static Thread inBackground(BinStore store, String prefix, Sequencer term,
+            LongConsumer failedBatchSize) {
         return Thread.ofVirtual().name("inbox-drain").start(() -> {
             try {
-                drain(store, prefix, term);
+                drain(store, prefix, term, null, failedBatchSize);
             } catch (IOException | RuntimeException failed) {
                 LOG.log(System.Logger.Level.WARNING, () -> "the inbox drain at takeover did "
                         + "not finish; a deferring pod's next request tries again: " + failed);

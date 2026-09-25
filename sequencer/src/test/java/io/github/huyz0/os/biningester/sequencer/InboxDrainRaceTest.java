@@ -193,9 +193,9 @@ class InboxDrainRaceTest {
             }
         };
 
-        assertThatCode(() -> InboxDrain.drain(store, PREFIX, failsForX, "pody"))
-                .as("⚠️ pody's intents are in: it stops deferring, whatever podx's are doing")
-                .doesNotThrowAnyException();
+        assertThat(InboxDrain.drain(store, PREFIX, failsForX, "pody"))
+                .as("pody's intent is applied and returned as a count even while podx is stuck")
+                .isEqualTo(1);
         assertThatThrownBy(() -> InboxDrain.drain(store, PREFIX, failsForX, "podx"))
                 .as("and podx, whose intent stuck, keeps deferring")
                 .isInstanceOf(IOException.class);

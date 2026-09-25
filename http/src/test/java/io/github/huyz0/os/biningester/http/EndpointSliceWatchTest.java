@@ -14,6 +14,7 @@ import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -144,5 +145,20 @@ class EndpointSliceWatchTest {
         var closing = java.util.concurrent.CompletableFuture.runAsync(watch::close);
 
         closing.get(5, TimeUnit.SECONDS);
+    }
+
+    @Test
+    void connectionFailuresAreReportedToTheInMemoryMetricSink() throws Exception {
+        AtomicLong recordedFailures = new AtomicLong();
+        WebServer closedEndpoint = WebServer.builder().port(0).build().start();
+        String apiBase = "http://127.0.0.1:" + closedEndpoint.port();
+        closedEndpoint.stop();
+        watch = new EndpointSliceWatch(apiBase, "ingest", "ingester",
+                Optional::empty, new EndpointSliceView(), List.of(), recordedFailures::addAndGet)
+                .start();
+
+        await(() -> recordedFailures.get() > 0, "the failed connection reaches the metric sink");
+
+        assertThat(recordedFailures.get()).isEqualTo(watch.failures());
     }
 }

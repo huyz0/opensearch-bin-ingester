@@ -36,6 +36,7 @@ public final class NodeSubscriptions implements AutoCloseable {
     private final AtomicInteger clientsCreated = new AtomicInteger();
     private final int queueCapacity;
     private final SubscriptionTransport transport;
+    private final io.github.huyz0.os.biningester.client.SubscriptionMetrics metrics;
     private volatile TierTwoChainPoller tierTwoPoller;
     private volatile TierThreeRecovery tierThreeRecovery;
     private AutoCloseable tierTwoReader;
@@ -226,6 +227,8 @@ public final class NodeSubscriptions implements AutoCloseable {
     public NodeSubscriptions(SubscriptionTransport transport, int queueCapacity,
             io.github.huyz0.os.biningester.client.SegmentSource nodeSegmentSource) {
         this.transport = Objects.requireNonNull(transport, "transport");
+        this.metrics = transport instanceof io.github.huyz0.os.biningester.client.HttpSubscriptionTransport http
+                ? http.metrics() : new io.github.huyz0.os.biningester.client.SubscriptionMetrics();
         this.nodeSegmentSource = nodeSegmentSource;
         if (queueCapacity <= 0) {
             throw new IllegalArgumentException("queue capacity must be positive");
@@ -353,6 +356,19 @@ public final class NodeSubscriptions implements AutoCloseable {
      */
     public SubscriptionTransport transport() {
         return transport;
+    }
+
+    /** The process-local source counters exported by the host node's telemetry adapter. */
+    public io.github.huyz0.os.biningester.client.SubscriptionMetrics metrics() {
+        return metrics;
+    }
+
+    /** The worst live fallback tier, or the initial reconnect tier for a bare transport. */
+    public double currentFallbackTier() {
+        if (transport instanceof io.github.huyz0.os.biningester.client.HttpSubscriptionTransport http) {
+            return http.tier().ordinal();
+        }
+        return io.github.huyz0.os.biningester.client.FallbackLadder.AutomaticTier.RECONNECT.ordinal();
     }
 
     /** True only when every live subscription on this node is back on the ingester path. */

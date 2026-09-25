@@ -169,7 +169,9 @@ class InboxDrainTest {
             }
         };
 
-        InboxDrain.drain(store, PREFIX, recordsBatches);
+        assertThat(InboxDrain.drain(store, PREFIX, recordsBatches))
+                .as("the return value is the number of intents applied")
+                .isEqualTo(3);
 
         assertThat(batches)
                 .as("each pod's ordered intents share one durable delta, so drain cost is "

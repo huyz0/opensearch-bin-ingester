@@ -6,6 +6,7 @@ import io.github.huyz0.os.biningester.format.CommitDelta;
 import java.io.IOException;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.LongConsumer;
 
 /**
  * Leads when it can, forwards when it cannot (M5.6, FR-11).
@@ -63,6 +64,7 @@ public final class FleetSequencer implements Sequencer {
     private final String prefix;
     private final String podId;
     private final boolean ownsTransport;
+    private final LongConsumer failedIntentBatch;
 
     /**
      * ⚠️ VOLATILE, because {@link #close} and a commit reach it from different
@@ -96,6 +98,13 @@ public final class FleetSequencer implements Sequencer {
     public FleetSequencer(BinStore store, LeaseConfig config,
             SequencerTransport transport, Leadership.Election election,
             LeaseChallenge challenge, boolean ownsTransport) {
+        this(store, config, transport, election, challenge, ownsTransport, ignored -> { });
+    }
+
+    /** The same fleet, reporting failed inbox application attempts to its owner. */
+    public FleetSequencer(BinStore store, LeaseConfig config,
+            SequencerTransport transport, Leadership.Election election,
+            LeaseChallenge challenge, boolean ownsTransport, LongConsumer failedIntentBatch) {
         // ⚠️ EVERY ARGUMENT IS CHECKED BEFORE A TERM IS TAKEN, and the order is
         // the whole point. `new Leadership(...)` ELECTS in its constructor: it
         // acquires the lease, starts a renewer, seals the ancestor and replays
@@ -111,11 +120,13 @@ public final class FleetSequencer implements Sequencer {
         Objects.requireNonNull(config, "config");
         Objects.requireNonNull(transport, "transport");
         Objects.requireNonNull(challenge, "challenge");
+        Objects.requireNonNull(failedIntentBatch, "failedIntentBatch");
         this.remote = new RemoteSequencer(store, config, transport, challenge);
         this.store = store;
         this.prefix = config.prefix();
         this.podId = config.podId();
         this.ownsTransport = ownsTransport;
+        this.failedIntentBatch = failedIntentBatch;
         this.leadership = new Leadership(election);
     }
 
@@ -142,7 +153,7 @@ public final class FleetSequencer implements Sequencer {
                 // ⚠️ THIS POD's OWN INTENTS FIRST: committing past them here
                 // would raise its high mark over them, and the drain would then
                 // refuse each as a replay -- acked writes lost (M8.14a).
-                InboxDrain.drain(store, prefix, mine, podId);
+                InboxDrain.drain(store, prefix, mine, podId, failedIntentBatch);
                 deferring = false;
             }
             try {

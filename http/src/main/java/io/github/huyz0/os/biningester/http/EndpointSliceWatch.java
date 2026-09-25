@@ -10,6 +10,7 @@ import java.time.Duration;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Supplier;
+import java.util.function.LongConsumer;
 
 /**
  * Watches the ingester Service's {@code EndpointSlice}s and feeds every event
@@ -46,6 +47,7 @@ public final class EndpointSliceWatch implements AutoCloseable {
     private final String service;
     private final Supplier<Optional<String>> token;
     private final EndpointSliceView view;
+    private final LongConsumer failureRecorder;
     private volatile boolean closed;
     private volatile Thread loop;
     private volatile int connections;
@@ -73,6 +75,14 @@ public final class EndpointSliceWatch implements AutoCloseable {
     public EndpointSliceWatch(String apiBase, String namespace, String service,
             Supplier<Optional<String>> token, EndpointSliceView view,
             java.util.List<java.security.cert.X509Certificate> trust) {
+        this(apiBase, namespace, service, token, view, trust, ignored -> { });
+    }
+
+    /** The same watch with an in-memory observer for connection and stream failures. */
+    public EndpointSliceWatch(String apiBase, String namespace, String service,
+            Supplier<Optional<String>> token, EndpointSliceView view,
+            java.util.List<java.security.cert.X509Certificate> trust,
+            LongConsumer failureRecorder) {
         Objects.requireNonNull(apiBase, "apiBase");
         Objects.requireNonNull(trust, "trust");
         this.path = "/apis/discovery.k8s.io/v1/namespaces/"
@@ -80,6 +90,7 @@ public final class EndpointSliceWatch implements AutoCloseable {
         this.service = Objects.requireNonNull(service, "service");
         this.token = Objects.requireNonNull(token, "token");
         this.view = Objects.requireNonNull(view, "view");
+        this.failureRecorder = Objects.requireNonNull(failureRecorder, "failureRecorder");
         var builder = WebClient.builder().baseUri(apiBase)
                 .connectTimeout(Duration.ofSeconds(5))
                 .readTimeout(READ_TIMEOUT);
@@ -121,6 +132,13 @@ public final class EndpointSliceWatch implements AutoCloseable {
                 // ⚠️ COUNTED AND RETRIED: the view keeps its last state, and
                 // the challenge falls back to the TTL until the next event.
                 failures++;
+                try {
+                    failureRecorder.accept(1);
+                } catch (RuntimeException metricsFailure) {
+                    System.getLogger(EndpointSliceWatch.class.getName()).log(
+                            System.Logger.Level.WARNING,
+                            "could not record EndpointSlice watch failure", metricsFailure);
+                }
             }
             if (closed) {
                 return;

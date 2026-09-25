@@ -6,6 +6,7 @@ import org.apache.logging.log4j.LogManager;
 import org.opensearch.index.IngestionConsumerFactory;
 import org.opensearch.plugins.IngestionConsumerPlugin;
 import org.opensearch.plugins.Plugin;
+import org.opensearch.plugins.TelemetryAwarePlugin;
 
 /**
  * Registers this ingestion source with an OpenSearch node.
@@ -21,7 +22,8 @@ import org.opensearch.plugins.Plugin;
  * index.ingestion_source.mapper_type: default
  * </pre>
  */
-public final class BinStorePlugin extends Plugin implements IngestionConsumerPlugin {
+public final class BinStorePlugin extends Plugin implements IngestionConsumerPlugin,
+        TelemetryAwarePlugin {
 
     /** The value of {@code index.ingestion_source.type}. */
     public static final String TYPE = "BINSTORE";
@@ -130,6 +132,7 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
 
     private final String nodeName;
     private final NodeSubscriptions subscriptions;
+    private final io.github.huyz0.os.biningester.client.SubscriptionMetrics metrics;
 
     /**
      * The only public constructor: the node calls this one reflectively.
@@ -168,6 +171,9 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
         this.subscriptions = installed == null || nodeName.isEmpty()
                 ? null
                 : PER_NODE.computeIfAbsent(nodeName, installed);
+        this.metrics = this.subscriptions == null
+                ? new io.github.huyz0.os.biningester.client.SubscriptionMetrics()
+                : this.subscriptions.metrics();
         this.progressInterval = PROGRESS_INTERVAL.get(
                 settings == null ? org.opensearch.common.settings.Settings.EMPTY : settings);
         var configured = settings == null ? org.opensearch.common.settings.Settings.EMPTY : settings;
@@ -257,6 +263,9 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
     BinStorePlugin(NodeSubscriptions subscriptions, ShardPositions positions) {
         this.nodeName = null;
         this.subscriptions = subscriptions;
+        this.metrics = subscriptions == null
+                ? new io.github.huyz0.os.biningester.client.SubscriptionMetrics()
+                : subscriptions.metrics();
         this.positions = java.util.Objects.requireNonNull(positions, "positions");
         this.progressInterval = PROGRESS_INTERVAL.getDefault(
                 org.opensearch.common.settings.Settings.EMPTY);
@@ -374,7 +383,9 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
             // `ProgressReporter.report` contains its own failures, so a bad
             // interval cannot cancel the schedule (M8.43).
             ProgressReporter reporter = new ProgressReporter(subscriptions.transport(),
-                    positions);
+                    positions, () -> metrics.increment(
+                            io.github.huyz0.os.biningester.client.SubscriptionMetrics.Counter
+                                    .PROGRESS_PUSH_FAILURES));
             threadPool.scheduleWithFixedDelay(reporter::report, progressInterval,
                     org.opensearch.threadpool.ThreadPool.Names.GENERIC);
             NodeCatchUpCoordinator catchUp = new NodeCatchUpCoordinator(
@@ -388,6 +399,65 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
             threadPool.generic().execute(catchUp::attempt);
         }
         return java.util.List.of();
+    }
+
+    /** Registers node-local process counters in OpenSearch's native telemetry registry. */
+    @Override
+    public java.util.Collection<Object> createComponents(
+            org.opensearch.transport.client.Client client,
+            org.opensearch.cluster.service.ClusterService clusterService,
+            org.opensearch.threadpool.ThreadPool threadPool,
+            org.opensearch.watcher.ResourceWatcherService resourceWatcherService,
+            org.opensearch.script.ScriptService scriptService,
+            org.opensearch.core.xcontent.NamedXContentRegistry xContentRegistry,
+            org.opensearch.env.Environment environment,
+            org.opensearch.env.NodeEnvironment nodeEnvironment,
+            org.opensearch.core.common.io.stream.NamedWriteableRegistry namedWriteableRegistry,
+            org.opensearch.cluster.metadata.IndexNameExpressionResolver indexNameExpressionResolver,
+            java.util.function.Supplier<org.opensearch.repositories.RepositoriesService> repositories,
+            org.opensearch.telemetry.tracing.Tracer tracer,
+            org.opensearch.telemetry.metrics.MetricsRegistry metricsRegistry) {
+        var handles = registerMetrics(metricsRegistry);
+        java.util.Collection<Object> components = createComponents(client, clusterService,
+                threadPool, resourceWatcherService, scriptService, xContentRegistry, environment,
+                nodeEnvironment, namedWriteableRegistry, indexNameExpressionResolver, repositories);
+        java.util.ArrayList<Object> withMetrics = new java.util.ArrayList<>(components);
+        withMetrics.add(handles);
+        return java.util.List.copyOf(withMetrics);
+    }
+
+    Object registerMetrics(org.opensearch.telemetry.metrics.MetricsRegistry registry) {
+        java.util.EnumMap<io.github.huyz0.os.biningester.client.SubscriptionMetrics.Counter,
+                java.util.function.LongConsumer> sinks = new java.util.EnumMap<>(
+                        io.github.huyz0.os.biningester.client.SubscriptionMetrics.Counter.class);
+        for (var metric : io.github.huyz0.os.biningester.client.SubscriptionMetrics.Counter.values()) {
+            var counter = registry.createCounter(metricName(metric),
+                    "Process-local OpenSearch binary ingester diagnostic counter", "1");
+            sinks.put(metric, delta -> counter.add((double) delta));
+        }
+        metrics.install(sinks);
+        return registry.createGauge("biningester_fallback_current_tier",
+                "Worst live subscription fallback tier: push=0, reconnect=1, poll-chain=2, recover=3",
+                "1", () -> subscriptions == null ? 0.0 : subscriptions.currentFallbackTier(),
+                org.opensearch.telemetry.metrics.tags.Tags.EMPTY);
+    }
+
+    private static String metricName(
+            io.github.huyz0.os.biningester.client.SubscriptionMetrics.Counter metric) {
+        return switch (metric) {
+            case FALLBACK_TIER_PUSH_ENTRIES -> "biningester_fallback_tier_push_entries_total";
+            case FALLBACK_TIER_RECONNECT_ENTRIES -> "biningester_fallback_tier_reconnect_entries_total";
+            case FALLBACK_TIER_POLL_CHAIN_ENTRIES -> "biningester_fallback_tier_poll_chain_entries_total";
+            case FALLBACK_TIER_RECOVER_ENTRIES -> "biningester_fallback_tier_recover_entries_total";
+            case SUBSCRIPTION_RECONNECTS -> "biningester_subscription_reconnects_total";
+            case POLL_FAILURE_UNAVAILABLE -> "biningester_subscription_poll_failure_unavailable_total";
+            case POLL_FAILURE_REFUSED -> "biningester_subscription_poll_failure_refused_total";
+            case POLL_FAILURE_SERVER_ERROR -> "biningester_subscription_poll_failure_server_error_total";
+            case POLL_FAILURE_UNREACHABLE -> "biningester_subscription_poll_failure_unreachable_total";
+            case POLL_FAILURE_MALFORMED -> "biningester_subscription_poll_failure_malformed_total";
+            case POLL_FAILURE_CALLBACK -> "biningester_subscription_poll_failure_callback_total";
+            case PROGRESS_PUSH_FAILURES -> "biningester_progress_push_failures_total";
+        };
     }
 
     private static java.util.Optional<java.util.List<

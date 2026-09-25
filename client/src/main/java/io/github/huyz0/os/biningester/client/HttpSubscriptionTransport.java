@@ -142,7 +142,7 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport, A
      */
     private final int maxAnswerBytes;
 
-    private final AtomicLong reconnects = new AtomicLong();
+    private final SubscriptionMetrics metrics = new SubscriptionMetrics();
 
     /**
      * ⚠️ **THE LADDER, EXECUTED, PER SUBSCRIPTION** (M8.28, ADR-0057).
@@ -164,13 +164,13 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport, A
     private final java.util.Map<String, Ladder> ladders =
             new java.util.concurrent.ConcurrentHashMap<>();
 
-    private final java.util.Map<FallbackLadder.AutomaticTier, AtomicLong> entered =
-            new java.util.EnumMap<>(FallbackLadder.AutomaticTier.class);
-
-    {
-        for (FallbackLadder.AutomaticTier each : FallbackLadder.AutomaticTier.values()) {
-            entered.put(each, new AtomicLong());
-        }
+    private static SubscriptionMetrics.Counter tierCounter(FallbackLadder.AutomaticTier tier) {
+        return switch (tier) {
+            case PUSH -> SubscriptionMetrics.Counter.FALLBACK_TIER_PUSH_ENTRIES;
+            case RECONNECT -> SubscriptionMetrics.Counter.FALLBACK_TIER_RECONNECT_ENTRIES;
+            case POLL_CHAIN -> SubscriptionMetrics.Counter.FALLBACK_TIER_POLL_CHAIN_ENTRIES;
+            case RECOVER -> SubscriptionMetrics.Counter.FALLBACK_TIER_RECOVER_ENTRIES;
+        };
     }
 
     /**
@@ -198,14 +198,14 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport, A
      * consumer fell down the ladder rather than how long it stayed.
      */
     public long tierEntries(FallbackLadder.AutomaticTier tier) {
-        return entered.get(tier).get();
+        return metrics.count(tierCounter(tier));
     }
 
     private void enter(Ladder ladder, FallbackLadder.Health health) {
         FallbackLadder.AutomaticTier next = FallbackLadder.tierFor(health);
         if (next != ladder.tier) {
             ladder.tier = next;
-            entered.get(next).incrementAndGet();
+            metrics.increment(tierCounter(next));
         }
     }
 
@@ -232,15 +232,20 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport, A
         CALLBACK
     }
 
-    private final java.util.Map<PollFailure, AtomicLong> pollFailures = failureCounters();
+    private static SubscriptionMetrics.Counter failureCounter(PollFailure kind) {
+        return switch (kind) {
+            case UNAVAILABLE -> SubscriptionMetrics.Counter.POLL_FAILURE_UNAVAILABLE;
+            case REFUSED -> SubscriptionMetrics.Counter.POLL_FAILURE_REFUSED;
+            case SERVER_ERROR -> SubscriptionMetrics.Counter.POLL_FAILURE_SERVER_ERROR;
+            case UNREACHABLE -> SubscriptionMetrics.Counter.POLL_FAILURE_UNREACHABLE;
+            case MALFORMED -> SubscriptionMetrics.Counter.POLL_FAILURE_MALFORMED;
+            case CALLBACK -> SubscriptionMetrics.Counter.POLL_FAILURE_CALLBACK;
+        };
+    }
 
-    private static java.util.Map<PollFailure, AtomicLong> failureCounters() {
-        java.util.EnumMap<PollFailure, AtomicLong> counters = new java.util.EnumMap<>(
-                PollFailure.class);
-        for (PollFailure kind : PollFailure.values()) {
-            counters.put(kind, new AtomicLong());
-        }
-        return java.util.Collections.unmodifiableMap(counters);
+    /** The in-memory counter bank exposed to the node-level metrics adapter. */
+    public SubscriptionMetrics metrics() {
+        return metrics;
     }
 
     /** An answer that was not 200, already counted by its class. */
@@ -426,16 +431,16 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport, A
                     .request()) {
                 int code = response.status().code();
                 if (code != Status.OK_200.code()) {
-                    pollFailures.get(code == Status.SERVICE_UNAVAILABLE_503.code()
+                    metrics.increment(failureCounter(code == Status.SERVICE_UNAVAILABLE_503.code()
                             ? PollFailure.UNAVAILABLE
                             : code >= 400 && code < 500 ? PollFailure.REFUSED
-                            : PollFailure.SERVER_ERROR).incrementAndGet();
+                            : PollFailure.SERVER_ERROR));
                     throw new NotOk("subscribe answered " + response.status());
                 }
                 answered = true;
                 if (!connected) {
                     connected = true;
-                    reconnects.incrementAndGet();
+                    metrics.increment(SubscriptionMetrics.Counter.SUBSCRIPTION_RECONNECTS);
                     enter(ladder, FallbackLadder.Health.PUSHING);
                     // ⚠️ AFTER THE FIRST ANSWER, NOT BEFORE IT: a registration
                     // pushed at a node that has not answered yet is racing the
@@ -453,10 +458,9 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport, A
                 deliver(response, listener, stopped);
             } catch (IOException | RuntimeException dropped) {
                 if (!(dropped instanceof NotOk) && !stopped.get() && !closed.get()) {
-                    pollFailures.get(dropped instanceof CallbackFailure
+                    metrics.increment(failureCounter(dropped instanceof CallbackFailure
                             ? PollFailure.CALLBACK
-                            : answered ? PollFailure.MALFORMED : PollFailure.UNREACHABLE)
-                            .incrementAndGet();
+                            : answered ? PollFailure.MALFORMED : PollFailure.UNREACHABLE));
                 }
 
                 // ⚠️ ORDINARY. A rolling deploy drops every subscription on the
@@ -616,12 +620,12 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport, A
      * open" that does not require guessing with a sleep.
      */
     public long reconnects() {
-        return reconnects.get();
+        return metrics.count(SubscriptionMetrics.Counter.SUBSCRIPTION_RECONNECTS);
     }
 
     /** How many polls failed with {@code kind}, across every subscription (M8.37). */
     public long pollFailures(PollFailure kind) {
-        return pollFailures.get(kind).get();
+        return metrics.count(failureCounter(kind));
     }
 
     /** The configured first reconnect delay, exposed for production wiring checks. */

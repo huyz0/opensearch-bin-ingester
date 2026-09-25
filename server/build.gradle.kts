@@ -60,6 +60,8 @@ dependencies {
     // dependency. `check-module.sh`'s NO_HTTP set is `format binstore-spi
     // sequencer ingest`, and this module is above all four.
     implementation(libs.helidon.webserver)
+    implementation(libs.helidon.webserver.observe.metrics)
+    runtimeOnly(libs.helidon.metrics.system.meters)
 
     // ⚠️ TEST ONLY, and it is a PRODUCER's client rather than a consumer's:
     // `NodeStartTest` posts a `_bulk` over a real socket, because "the listener

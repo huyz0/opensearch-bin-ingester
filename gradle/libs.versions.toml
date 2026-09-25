@@ -26,6 +26,8 @@ opensearch-agent-bootstrap = { module = "org.opensearch:opensearch-agent-bootstr
 opensearch-agent = { module = "org.opensearch:opensearch-agent", version.ref = "opensearch" }
 helidon-webserver = { module = "io.helidon.webserver:helidon-webserver", version.ref = "helidon" }
 helidon-webclient = { module = "io.helidon.webclient:helidon-webclient", version.ref = "helidon" }
+helidon-webserver-observe-metrics = { module = "io.helidon.webserver.observe:helidon-webserver-observe-metrics", version.ref = "helidon" }
+helidon-metrics-system-meters = { module = "io.helidon.metrics:helidon-metrics-system-meters", version.ref = "helidon" }
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
 junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }

@@ -13,6 +13,7 @@ assertj      Apache-2.0
 byte-buddy   Apache-2.0
 opentest4j   Apache-2.0
 helidon      Apache-2.0
+latencyutils BSD-2-Clause
 
 # Added when the gate was first satisfied: every jar the licenseCheck
 # configuration resolves, mapped from the licence its published POM
