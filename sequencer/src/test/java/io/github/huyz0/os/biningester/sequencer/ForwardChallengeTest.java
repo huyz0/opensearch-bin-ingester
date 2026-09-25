@@ -116,7 +116,7 @@ class ForwardChallengeTest {
                     .hasMessageContaining("may have landed");
             assertThat(Duration.ofNanos(System.nanoTime() - began))
                     .as("⚠️ CUT SHORT BY THE EVIDENCE, not after the holder's 20 s")
-                    .isLessThan(Duration.ofSeconds(2));
+                    .isLessThan(Duration.ofMillis(750));
             assertThat(frozen.interruptObserved.await(1, TimeUnit.SECONDS))
                     .as("⚠️ cut cancels the still-blocked transport sender")
                     .isTrue();
