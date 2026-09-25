@@ -32,9 +32,11 @@ task can have several:
 It does NOT parse a verdict claim ("all three passed"), a per-round finding
 count ("four, then three, then two") or "both majors" -- which is every one of
 M8.4's three mistakes. What it catches is an id or a round that never existed.
-A task with no verdict here is UNJUDGED, reported and not failed: the store is
-gitignored and local, so a fresh checkout has none (the reason this cannot run
-in CI, as check-reviewed cannot).
+A task with no verdict in the supplied stores is UNJUDGED, reported and not
+failed. The command is delta-scoped by the staged Git index; a fresh CI checkout
+has no staged override-entry diff, so it validates no entries there. Unlike
+check-reviewed, committed verdicts under review/verdicts/ can be used when a
+changed entry is selected.
 """
 import glob
 import json

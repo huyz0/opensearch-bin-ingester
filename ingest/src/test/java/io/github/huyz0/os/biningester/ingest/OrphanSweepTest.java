@@ -26,8 +26,9 @@ import org.junit.jupiter.api.Test;
  * <p>⚠️ THE CASE THAT MATTERS IS THE ONE THAT KEEPS. Deleting an uncommitted
  * segment that is merely SLOW to commit destroys acknowledged data: the commit
  * may still be in flight, and the degraded {@code ctl/inbox/} path (M8's) is
- * slower than the direct one and does not exist yet to be measured. The
- * past-grace delete is the easy half.
+ * slower than the direct one. The maximum in-flight delay remains a stated
+ * bound rather than a measured worst case. The past-grace delete is the easy
+ * half.
  */
 class OrphanSweepTest {
 
@@ -218,9 +219,9 @@ class OrphanSweepTest {
     @Test
     void theDEFAULTSAreNamedInTheTreeRatherThanInEachCallersHead() {
         assertThat(OrphanSweep.DEFAULT_GRACE)
-                .as("⚠️ research 06 §4's one hour, and generous on purpose: it must exceed "
-                        + "the maximum possible commit delay INCLUDING the degraded inbox "
-                        + "path, which does not exist yet to be measured. A caller picking "
+                .as("⚠️ research 06 §4's one hour, and generous on purpose: it exceeds "
+                        + "the conservative commit-delay bound INCLUDING the degraded inbox "
+                        + "path; its maximum in-flight delay is not measured. A caller picking "
                         + "its own from memory is how this becomes ten minutes on one "
                         + "deployment and acknowledged data is deleted")
                 .isEqualTo(Duration.ofHours(1));

@@ -12,8 +12,8 @@ package io.github.huyz0.os.biningester.ingest;
  * {@code sequencer} and carries the CAS, the TTL and the epoch fencing this
  * project already built; this interface is the two questions GC needs of it, so
  * the GC path can be driven by a test clock without a store round trip. Wiring
- * it to the real lease is the deployment's job, and no production {@code main()}
- * exists to do that yet (M5.91).
+ * The production composition root wires this seam to the real lease (M8.1,
+ * M8.4).
  */
 public interface GcLease {
 

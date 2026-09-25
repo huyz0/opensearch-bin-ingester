@@ -6,11 +6,12 @@
 # three times in three rounds.
 #
 # ⚠️ DELTA ONLY, AND ONLY THE ENTRIES THE STAGED DIFF ADDS OR CHANGES. The
-# verdicts are gitignored and local, so an entry written on another machine has
-# none here, and every old entry would be judged against a store it was never
-# recorded into. Such a task is reported UNJUDGED, never passed in silence.
-# ⚠️ IT CANNOT RUN IN CI for a task whose record is only local, for
-# check-reviewed's reason; review/verdicts/ is committed, but most tasks are not in it.
+# verdicts are read from both the local .harness store and committed
+# review/verdicts/, so an entry with no record in either is reported UNJUDGED,
+# never passed in silence.
+# ⚠️ A FRESH CI CHECKOUT HAS NO STAGED DIFF, so this delta check validates no
+# entries there. That is distinct from check-reviewed's need for local verdicts;
+# committed verdicts can be used here when a changed entry is actually selected.
 source "$(dirname "$0")/lib.sh"
 cd "$ROOT"
 hdr "check-override"

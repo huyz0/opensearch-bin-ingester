@@ -25,41 +25,22 @@ import org.junit.jupiter.api.Test;
 /**
  * Two ingesters over one store, and only one of them holds the term (M5.6b).
  *
- * <p>⚠️ IT DOES NOT CLOSE M4'S CORRECTNESS HOLE. Several places in this tree
- * have claimed it does, this file's own headline among them. Two attempts to
- * say HOW MANY were both wrong, and so was the {@code grep} that replaced the
- * count — it is case-sensitive, and these headlines are capitals. So this
- * paragraph enumerates nothing and points at nothing as complete — three
- * attempts to do so in this one file were each incomplete. The M5.6e row
- * records the sites known when it was written; M5's SPEC and roadmap carry
- * claims this commit cannot correct, which is M5.20's under sdd.md. M4 introduced a lease so that exactly one sequencer
- * writes the chain and shipped only the local implementation, so a pod that was
- * not the leaseholder could not commit at all. {@code RemoteSequencer} made
- * forwarding possible; {@code FleetSequencer} chose to use it; neither was ever
- * handed to a {@code DefaultIngest}. What is new here is that a producer's
- * records now reach the chain THROUGH a pod that cannot write it. What is still
- * missing is below.
+ * <p>⚠️ THIS TEST IS NOT THE PRODUCTION-FLEET PROOF. It uses
+ * {@link InProcessTransport} and a memory store to exercise forwarding at the
+ * component seam. The production transport and composition root were added in
+ * M8.1/M8.4; their assembled and process-level evidence lives in the M8
+ * acceptance tests, not here.
  *
- * <p>⚠️ WHAT IT DOES NOT PROVE, and an earlier draft of this paragraph named
- * only the first of the two, which made the list read as complete when it was
- * not:
+ * <p>⚠️ WHAT THIS TEST DOES NOT PROVE:
  *
  * <ul>
- *   <li><b>There is no production {@link SequencerTransport} at all.</b> {@code
- *       InProcessTransport} is the only implementation in the tree and it lives
- *       in {@code testFixtures}, so the forwarding hop below is a fake. A real
- *       pod could not be assembled this way even today: {@code new
- *       FleetSequencer(store, config, ???, election)} has nothing to pass. That
- *       is M5.6e, and it is the same shape M1.11b records for the subscription
- *       seam.</li>
- *   <li><b>There is no production {@code main()}</b> either — M2.1's row says
- *       so — so nothing assembles any of this outside a test.</li>
+ *   <li>The production socket transport, object-store backend and process
+ *       lifecycle are not exercised by this in-memory fixture.</li>
  * </ul>
  *
- * <p>So this is T1 over two pods and a memory store, not M5's SPEC criterion 1
- * (three pods, {@code CountingBinStore} over the chain prefix) and not its T2
- * row (a non-leaseholder pod's write is SEARCHABLE). It proves the commit path;
- * the milestone's own end-to-end criterion is still ahead of it.
+ * <p>So this is T1 over two simulated pods and a memory store, not the M8
+ * assembled or multi-process acceptance evidence. It proves the component
+ * commit path only.
  */
 class ForwardingIngestTest {
 

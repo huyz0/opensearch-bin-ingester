@@ -28,9 +28,10 @@ import java.util.Set;
  * <p>⚠️ THE GRACE PERIOD MUST EXCEED THE MAXIMUM POSSIBLE COMMIT DELAY, AND
  * GETTING IT WRONG DELETES ACKNOWLEDGED DATA. An uncommitted segment is not
  * necessarily an orphan: its commit may still be in flight, and the degraded
- * {@code ctl/inbox/} path (M8's) is slower than the direct one and does not
- * exist yet to be measured. The default is generous — one hour, research 06 §4
- * — and the case that matters is the one that KEEPS.
+ * {@code ctl/inbox/} path (M8's) is slower than the direct one. The five-minute
+ * maximum commit delay remains a conservative stated bound, not a measured
+ * worst case. The default is generous — one hour, research 06 §4 — and the case
+ * that matters is the one that KEEPS.
  *
  * <p>⚠️ A COMMITTED SEGMENT IS NEVER A CANDIDATE, whatever its age. Only the
  * log knows whether its records have been read; a sweep that deleted by age
@@ -83,10 +84,10 @@ public final class OrphanSweep {
     /**
      * The longest a PUT segment's commit is taken to be in flight (M8.52).
      *
-     * <p>⚠️ A STATED GUESS, NOT A MEASUREMENT, and generous: a forwarded commit
-     * times out at the lease TTL (seconds), and the degraded {@code ctl/inbox/}
-     * path, the slow one, does not exist yet to be measured. Shortening it is
-     * how acknowledged data is deleted.
+     * <p>⚠️ A STATED CONSERVATIVE BOUND, NOT A MEASURED WORST CASE: a forwarded
+     * commit times out at the lease TTL (seconds), while the degraded
+     * {@code ctl/inbox/} path exists and is slower. Shortening this bound without
+     * measuring the maximum in-flight delay is how acknowledged data is deleted.
      */
     public static final Duration MAX_COMMIT_DELAY = Duration.ofMinutes(5);
 
