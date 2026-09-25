@@ -18,6 +18,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -129,6 +130,11 @@ class KillMidFlushIT {
             Set<String> acked = ConcurrentHashMap.newKeySet();
             AtomicBoolean killed = new AtomicBoolean();
             CountDownLatch done = new CountDownLatch(PRODUCERS);
+            CountDownLatch putSenderReady = new CountDownLatch(1);
+            CountDownLatch releasePutSender = new CountDownLatch(1);
+            AtomicBoolean snapshotStarted = new AtomicBoolean();
+            CountDownLatch joinObserved = new CountDownLatch(1);
+            List<Thread> putSenders = new CopyOnWriteArrayList<>();
             try {
                 node.registerLogs(UUID.randomUUID());
                 for (int t = 0; t < PRODUCERS; t++) {
@@ -152,7 +158,8 @@ class KillMidFlushIT {
                                     if (trigger == Trigger.AT_THE_ACK) {
                                         node.killNow();
                                     } else {
-                                        killAtTheNextPut(node, bucket, acked,
+                                        killAtTheNextPut(node, bucket, acked, putSenders,
+                                                putSenderReady, releasePutSender,
                                                 ids(run, producer, "next"));
                                     }
                                 }
@@ -166,7 +173,52 @@ class KillMidFlushIT {
                 }
                 assertThat(done.await(240, TimeUnit.SECONDS))
                         .as("the producers never reached the kill").isTrue();
+                if (!putSenders.isEmpty()) {
+                    assertThat(putSenderReady.await(30, TimeUnit.SECONDS))
+                            .as("the post-PUT sender never reached its response")
+                            .isTrue();
+                    assertThat(putSenders.getFirst().isAlive())
+                            .as("the post-PUT sender remains in flight after producers finish")
+                            .isTrue();
+                    Thread joiningThread = Thread.currentThread();
+                    CountDownLatch releaseObserverDone = new CountDownLatch(1);
+                    Thread releaseOnJoin = Thread.ofVirtual().start(() -> {
+                        try {
+                            while (!snapshotStarted.get()) {
+                                if (joiningThread.getState() == Thread.State.TIMED_WAITING) {
+                                    joinObserved.countDown();
+                                    releasePutSender.countDown();
+                                    return;
+                                }
+                                Thread.yield();
+                            }
+                            releasePutSender.countDown();
+                        } finally {
+                            releaseObserverDone.countDown();
+                        }
+                    });
+                    putSenders.getFirst().join(TimeUnit.SECONDS.toMillis(30));
+                    assertThat(putSenders.getFirst().isAlive())
+                            .as("the post-PUT sender completes before the ack snapshot")
+                            .isFalse();
+                    snapshotStarted.set(true);
+                    assertThat(releaseObserverDone.await(30, TimeUnit.SECONDS))
+                            .as("the sender release observer terminates").isTrue();
+                    assertThat(releaseOnJoin.isAlive())
+                            .as("the sender release observer terminates").isFalse();
+                    assertThat(joinObserved.getCount())
+                            .as("the post-PUT sender was released only after the ack snapshot thread entered join")
+                            .isZero();
+                }
+                releasePutSender.countDown();
+                for (Thread sender : putSenders) {
+                    assertThat(sender.isAlive())
+                            .as("the post-PUT sender completed before the ack snapshot")
+                            .isFalse();
+                }
             } finally {
+                snapshotStarted.set(true);
+                releasePutSender.countDown();
                 node.close();
             }
             return new Run(trigger, Set.copyOf(acked), readAll(bucket));
@@ -191,17 +243,30 @@ class KillMidFlushIT {
      * rather than hanging it.
      */
     private static void killAtTheNextPut(NodeProcess node, ChaosBucket bucket, Set<String> acked,
+            List<Thread> senders, CountDownLatch senderReady, CountDownLatch releaseSender,
             List<String> next) throws Exception {
         int before = bucket.segments().size();
-        Thread.ofVirtual().start(() -> {
+        Thread sender = Thread.ofVirtual().start(() -> {
+            boolean accepted = false;
             try {
-                if (node.write(next) == 202) {
-                    acked.addAll(next);
-                }
+                accepted = node.write(next) == 202;
             } catch (RuntimeException gone) {
                 // the kill landed first, which is the point
+            } finally {
+                senderReady.countDown();
+            }
+            try {
+                if (!releaseSender.await(30, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("post-PUT sender release timed out");
+                }
+                if (accepted) {
+                    acked.addAll(next);
+                }
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
             }
         });
+        senders.add(sender);
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
         while (bucket.segments().size() == before) {
             if (System.nanoTime() > deadline) {
