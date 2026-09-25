@@ -6,6 +6,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.huyz0.os.biningester.format.RunKey;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.LongSupplier;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -70,6 +74,55 @@ class FreshFloorResumeCheckTest {
 
         assertThatThrownBy(() -> client.checkResume(900, freshAfter))
                 .as("⚠️ THE FRESH FLOOR IS THE ONE CHECKED: 900 is below 950")
+                .isInstanceOf(PositionCollectedException.class);
+    }
+
+    @Test
+    void aReportAfterTheFloorCheckCannotClearTheResume() throws Exception {
+        ConsumerClient client = client();
+        client.retainedFrom(500);
+        long freshAfter = client.requestFreshFloor();
+        CountDownLatch countReadEntered = new CountDownLatch(1);
+        CountDownLatch releaseCountRead = new CountDownLatch(1);
+        CountDownLatch checkFinished = new CountDownLatch(1);
+        AtomicReference<Object> outcome = new AtomicReference<>();
+        LongSupplier delayedCountRead = () -> {
+            countReadEntered.countDown();
+            try {
+                if (!releaseCountRead.await(2, TimeUnit.SECONDS)) {
+                    throw new AssertionError("test did not release the report-count read");
+                }
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError("report-count read was interrupted", interrupted);
+            }
+            return client.floorReports();
+        };
+
+        try {
+            Thread.ofVirtual().start(() -> {
+                try {
+                    outcome.set(client.checkResume(900, freshAfter, delayedCountRead));
+                } catch (Throwable result) {
+                    outcome.set(result);
+                } finally {
+                    checkFinished.countDown();
+                }
+            });
+
+            assertThat(countReadEntered.await(1, TimeUnit.SECONDS))
+                    .as("the check reached its controlled report-count snapshot")
+                    .isTrue();
+            client.retainedFrom(950);
+        } finally {
+            releaseCountRead.countDown();
+            assertThat(checkFinished.await(1, TimeUnit.SECONDS))
+                    .as("the controlled check finishes after the report is released")
+                    .isTrue();
+        }
+
+        assertThat(outcome.get())
+                .as("⚠️ the new floor is checked before its report can clear the resume")
                 .isInstanceOf(PositionCollectedException.class);
     }
 }

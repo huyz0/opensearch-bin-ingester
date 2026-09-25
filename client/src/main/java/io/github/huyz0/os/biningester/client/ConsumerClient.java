@@ -15,6 +15,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
+import java.util.function.LongSupplier;
 
 /**
  * Subscribes to one stream and hands records to the plugin in order.
@@ -438,7 +439,16 @@ public final class ConsumerClient implements AutoCloseable {
      */
     public boolean checkResume(long fromOffset, long freshAfter)
             throws PositionCollectedException {
-        long reports = floorReports.get();
+        return checkResume(fromOffset, freshAfter, floorReports::get);
+    }
+
+    /**
+     * Package-private count seam so the read/check ordering can be tested under
+     * a forced report interleaving without changing the public resume API.
+     */
+    boolean checkResume(long fromOffset, long freshAfter, LongSupplier reportCount)
+            throws PositionCollectedException {
+        long reports = Objects.requireNonNull(reportCount, "reportCount").getAsLong();
         refuseIfCollected(fromOffset);
         return reports > freshAfter;
     }
