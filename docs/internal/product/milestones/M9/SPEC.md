@@ -224,6 +224,7 @@ measured what a hand-copied number costs.
 | **M8.24's catch-up path** | ⚠️ **NEW READS**, the only production change here that adds requests: a catch-up must cost GETs per SEGMENT in the backlog, shared per node (R5), never per shard. Budget: ≤ 1 GET per backlog segment per consumer node and zero LIST, asserted by M8.24f and M8.24h |
 | **M9.13's gap re-read** | Counts ingester GETs at ≤1 per segment replayed to fill the consumer's contiguous unindexed range; the consumer issues zero store requests. `TENS_OF_GETS` remains M9.21/criterion 18's tier-3 model and is not priced here. |
 | **M9.21's tiers 2 and 3** | ⚠️ **NEW READS, AND THEY ARE THE NODE-LOCAL READER'S**: tier 2 polls the next commit-chain delta; tier 3 resolves the newest checkpoint and replays its deltas. Both run only when NO ingester is reachable. Budget: tier 2 ≤ 1 GET for the current chain cursor per NODE per poll interval, including repeated 404s (R5 — never per shard); tier 3 is a bounded one-time recovery episode of at most 30 GETs total per node, including checkpoint, delta and missing-segment objects, plus at most 1 checkpoint-pointer STAT. If the window needs more, recovery stays visibly incomplete, delivers no records past the gap and leaves the consumer cursor unchanged until an ingester answers. Count GETs and STATs separately. Both tiers are counted rather than modelled, and their request rate returns to zero the moment an ingester answers. Automatic tiers 2/3 issue ZERO LISTs; the separate, explicit Tier 4 data-prefix scan is not implemented or entered by M9.21 |
+| **M9.52 reader-first lease rollout** | No change to request count: all normal writers retain the legacy lease bytes and the existing read/CAS request sequence. M8.58 later adds only the UID field to that existing lease object, increasing payload bytes by the UID and JSON field overhead without adding a store operation |
 | **NFR-1's low-rate bound** (M9.18) | No request change: a second asserted bound over the same counts, ≤ 2 write requests per pod per INTERVAL CEILING |
 | **Everything else** | None. Harness, meter, gates, ADRs and documents add no production requests |
 
@@ -448,12 +449,15 @@ the digest-pinned container in `docker-compose.test.yml`.
     records tiers 2 and 3 as NOT-BUILT with the ADR cited, M9.21 is not
     started, and its backlog row is closed by the ADR — never by an execution
     that did not happen. (M9.20, then M9.21 or the re-deferral)
-19. **M8.58's lease change is complete in one commit.** The pod UID is in the
-    lease and `EndpointSliceView` matches `targetRef.uid`; the format document,
-    every reader and writer, the fakes, the golden files and the ADR land
-    together; a lease in the previous format is handled as that document
-    states; and a replacement pod on a dead holder's IP is **not** challenged
-    early — red before the change. (M8.58)
+19. **M8.58's lease change is complete in one commit after a reader-first
+    rollout.** M9.52 first makes every reader accept both lease schemas while
+    all production writers continue emitting the legacy bytes; M8.58's writer
+    activation is to be deployed only after this reader release is fleet-wide.
+    M8.58 then writes the pod UID and
+    matches `targetRef.uid`; the format document, every writer, the fakes, the
+    golden files and the ADR land together, and previous-format leases remain
+    readable. A replacement pod on a dead holder's IP is **not** challenged
+    early — red before the change. (M9.52, then M8.58)
 
 ### What a cloud run adds
 
@@ -515,7 +519,8 @@ multiplied from a price table (criterion 16). Each is a named NOT-RUN in
 | M9.43 | T1/T2 | `TierTwoChainPollTest` puts ≥16 subscriptions/shards on one node with the same cursor and fails if polling is per subscription rather than node-coalesced, reads more than one next-chain-cursor key per node per interval (including repeated 404s), performs LIST, or continues once an ingester answers | Tier 2 request rate scales with streams or becomes steady-state traffic |
 | M9.44 | T2/T3 | `TierThreeRecoveryTest` puts ≥16 subscriptions/shards on one node sharing missing segment keys; it fails if GETs scale per subscriber, recovery omits checkpoint/chain reads, reads past the replay window, repeats a missing-segment GET, issues LIST, or any pointer/delta/segment failure or 30-GET cap exhaustion does not return incomplete with the gap visible and all affected cursors unchanged. M9.48 reviews these assertions before implementation | Tier 3 costs are modeled or unbounded, or recovery can skip committed records |
 | M9.45 | T3 (RustFS) | `LadderStoreTiersIT` proves ≥16 subscriptions on one node share segment GETs; it fails on per-subscription fetches, Tier 3 while an ingester answers, wrong tier order, skipped/indexed-past gaps, counters differing from actual operations, missing checkpoint STAT+GET, any LIST, >30 GETs, unmeasured `TENS_OF_GETS`, or fallback after ingester restoration | a tier that never runs; an uncounted GET/STAT; an automatic LIST; replay loss; or fallback leaking into normal operation |
-| M8.58 | T0 + T3 | `LeaseHolderUidTest` — a replacement pod on a dead holder's IP challenged early | matching a holder by address |
+| M9.52 | T0 | `LeaseTest#itReadsBothTheLegacyAndHolderUidLeaseGoldenBytes`; deployed binaries still emit legacy lease bytes | fleet cannot safely read new lease bytes during rollout |
+| M8.58 | T0 + T3 | `LeaseHolderUidTest` — a replacement pod on a dead holder's IP challenged early; a lease without UID is not early-challenged | matching a holder by address or losing legacy lease compatibility |
 | M9.15 | script test | `--check` green on a doctored table | a generated document nobody regenerates |
 | M9.16 | script test | the CI gate green with the cost job removed from the workflow | a CI job that silently stops running |
 | M9.17 | script + milestone review | `check-milestone-verified.sh` green with a criterion's evidence line deleted | ⚠️ **THE SCRIPT FORCES ENUMERATION AND NOTHING MORE** — its own header says it cannot verify an evidence line is TRUE, its check is a regex, and M7.31 MEASURED six overstated lines all passing it. What catches an overstated line is the milestone review reading `VERIFIED.md` against the tree, as M8.19 did; this row's second half is that review, and its finding list is the record |
@@ -704,7 +709,8 @@ the final assembly task and depends on both.
 | M9.50 | Define the automatic reader's canonical object-key grammars: `<prefix>/ctl/log/0/<epoch:016x>/ckpt/LATEST`, `<prefix>/ctl/log/0/<epoch:016x>/<sequence:016x>.delta`, and the complete `SegmentKey` data path; bind them to the assembled bucket/prefix, scope STAT to `ckpt/LATEST`, reject noncanonical or other-namespace keys before store I/O, and align ADR-0064 plus M9.42's assertions | FR-10, NFR-4 |
 | M9.51 | Remove the stale duplicate M9.50 entry from the SPEC task list; keep exactly one M9.50 task row and preserve the separate M9.50 test-plan mapping | FR-10, NFR-4 |
 | M9.14 | Measurement M3: the `direct` fan-out threshold, by cost | FR-6, NFR-4 |
-| M8.58 | The watch matches the holder by identity, not address | NFR-9, FR-11 |
+| M9.52 | Prepare lease readers for the additive holder UID field while preserving legacy writes, then roll out all readers before M8.58 activates the new writer schema | FR-11 |
+| M8.58 | The watch matches the holder by UID, not address, after M9.52's reader-first rollout; format, every writer, fakes, goldens and ADR change together | NFR-9, FR-11 |
 | M8.60 | Export M8's test-only counters as bounded-label metrics | NFR-11 |
 | M8.61 | Tighten M8's chaos assertions that pass on their named defect | NFR-8, NFR-9 |
 | M8.62 | Kill M8's recorded surviving mutants | — (tests) |

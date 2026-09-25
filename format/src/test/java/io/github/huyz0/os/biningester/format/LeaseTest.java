@@ -4,6 +4,7 @@ package io.github.huyz0.os.biningester.format;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.io.InputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;
@@ -25,6 +26,41 @@ class LeaseTest {
     void aLeaseRoundTripsThroughItsEncoding() throws Exception {
         Lease l = new Lease(7, "pod1", "10.0.0.4:8080", 1_700_000_000_000L);
         assertThat(Lease.decode(l.encode())).isEqualTo(l);
+    }
+
+    @Test
+    void itReadsBothTheLegacyAndHolderUidLeaseGoldenBytes() throws Exception {
+        byte[] legacy = golden("lease-legacy.json");
+        byte[] withUid = golden("lease-holder-uid.json");
+
+        Lease oldLease = Lease.decode(legacy);
+        assertThat(oldLease.epoch()).isEqualTo(3L);
+        assertThat(oldLease.holderPodId()).isEqualTo("podA");
+        assertThat(oldLease.holderPodUid()).isEmpty();
+        assertThat(oldLease.holderEndpoint()).isEqualTo("http://10.0.0.4:8080");
+        assertThat(oldLease.expiresAtMillis()).isEqualTo(99L);
+        assertThat(new String(oldLease.encode(), StandardCharsets.UTF_8))
+                .isEqualTo(new String(legacy, StandardCharsets.UTF_8).strip());
+        Lease newLease = Lease.decode(withUid);
+        assertThat(newLease.holderPodUid()).isEqualTo("uid-7f3a");
+        assertThat(newLease.encode()).containsExactly(
+                new String(withUid, StandardCharsets.UTF_8).strip().getBytes(StandardCharsets.UTF_8));
+        Lease renewed = newLease.renewedUntil(100L);
+        assertThat(renewed.holderPodUid()).isEqualTo("uid-7f3a");
+        assertThat(renewed.expiresAtMillis()).isEqualTo(100L);
+        assertThatThrownBy(() -> new Lease(3, "podA", "uid\"bad",
+                "http://10.0.0.4:8080", 99L))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("holderPodUid");
+    }
+
+    private static byte[] golden(String name) throws IOException {
+        try (InputStream in = LeaseTest.class.getResourceAsStream("/golden/" + name)) {
+            if (in == null) {
+                throw new IOException("missing lease golden: " + name);
+            }
+            return in.readAllBytes();
+        }
     }
 
     @Test

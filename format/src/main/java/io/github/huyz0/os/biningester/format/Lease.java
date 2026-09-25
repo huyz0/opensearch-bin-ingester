@@ -28,8 +28,9 @@ import java.util.Objects;
  * other {@code putIfMatch} CAS'd control object, and for the same reason: when a
  * cluster stops committing, the first question anyone asks is "who holds the
  * lease and until when", and the answer must be legible with {@code cat}. The
- * shape is four flat fields with no nesting and no floats. ⚠️ There is no
- * ESCAPING either, so the constructor refuses every character the encoder
+ * legacy shape is four flat fields with no nesting and no floats; the prepared
+ * reader also recognizes one additive {@code holderPodUid} field. ⚠️ There is
+ * no ESCAPING either, so the constructor refuses every character the encoder
  * could not represent — see {@code rejectUnrepresentable}. An earlier draft of
  * this javadoc justified the absence by saying "a {@code podId} refuses
  * {@code -} and {@code /} upstream", which was wrong twice over: that guard is
@@ -41,16 +42,25 @@ import java.util.Objects;
  * @param epoch the term of leadership, in the object path so a fenced writer's
  *     in-flight PUT lands where readers of the new epoch never look
  * @param holderPodId which node holds it
+ * @param holderPodUid the immutable Kubernetes identity; empty only for a
+ *     lease written before this field existed
  * @param holderEndpoint where to reach that node. ⚠️ EMPTY in M4, which has no
  *     peer mesh to publish; the field is in the shape from the first lease so
  *     that M5's commit forwarding — which must REACH the holder — is not a
  *     format change
  * @param expiresAtMillis when it lapses, on the injected clock's timeline
  */
-public record Lease(long epoch, String holderPodId, String holderEndpoint, long expiresAtMillis) {
+public record Lease(long epoch, String holderPodId, String holderPodUid, String holderEndpoint,
+        long expiresAtMillis) {
+
+    /** The legacy four-field lease shape; retained for reader-first rollout. */
+    public Lease(long epoch, String holderPodId, String holderEndpoint, long expiresAtMillis) {
+        this(epoch, holderPodId, "", holderEndpoint, expiresAtMillis);
+    }
 
     public Lease {
         Objects.requireNonNull(holderPodId, "holderPodId");
+        Objects.requireNonNull(holderPodUid, "holderPodUid");
         Objects.requireNonNull(holderEndpoint, "holderEndpoint");
         if (epoch < 0) {
             // ⚠️ Epochs only ever increase. A negative one could only come
@@ -79,6 +89,7 @@ public record Lease(long epoch, String holderPodId, String holderEndpoint, long 
         // `-`/`/` restriction `CommitRequest` carries lives in another module
         // and would not have refused a quote.
         rejectUnrepresentable("holderPodId", holderPodId);
+        rejectUnrepresentable("holderPodUid", holderPodUid);
         rejectUnrepresentable("holderEndpoint", holderEndpoint);
         if (expiresAtMillis < 0) {
             throw new IllegalArgumentException(
@@ -140,7 +151,7 @@ public record Lease(long epoch, String holderPodId, String holderEndpoint, long 
      * every few seconds and orphan the one before it.
      */
     public Lease renewedUntil(long newExpiresAtMillis) {
-        return new Lease(epoch, holderPodId, holderEndpoint, newExpiresAtMillis);
+        return new Lease(epoch, holderPodId, holderPodUid, holderEndpoint, newExpiresAtMillis);
     }
 
     /**
@@ -158,15 +169,17 @@ public record Lease(long epoch, String holderPodId, String holderEndpoint, long 
     public byte[] encode() {
         String json = "{\"epoch\":" + epoch
                 + ",\"holderPodId\":\"" + holderPodId + '"'
+                + (holderPodUid.isEmpty() ? "" : ",\"holderPodUid\":\"" + holderPodUid + '"')
                 + ",\"holderEndpoint\":\"" + holderEndpoint + '"'
                 + ",\"expiresAtMillis\":" + expiresAtMillis + '}';
         return json.getBytes(StandardCharsets.UTF_8);
     }
 
     /**
-     * ⚠️ REFUSES anything that is not exactly this shape, loudly and now. A
-     * lease a future reader cannot parse makes leadership undecidable, and the
-     * cluster would stop committing with no explanation in the object itself.
+     * ⚠️ REFUSES anything that is not exactly one of the two canonical shapes,
+     * loudly and now. A lease a future reader cannot parse makes leadership
+     * undecidable, and the cluster would stop committing with no explanation
+     * in the object itself.
      */
     public static Lease decode(byte[] bytes) throws IOException {
         if (bytes == null) {
@@ -199,6 +212,7 @@ public record Lease(long epoch, String holderPodId, String holderEndpoint, long 
             parsed = new Lease(
                     longField(s, "epoch"),
                     stringField(s, "holderPodId"),
+                    optionalStringField(s, "holderPodUid"),
                     stringField(s, "holderEndpoint"),
                     longField(s, "expiresAtMillis"));
         } catch (IllegalArgumentException | NullPointerException e) {
@@ -235,6 +249,14 @@ public record Lease(long epoch, String holderPodId, String holderEndpoint, long 
             throw new IOException("lease has an unterminated " + name + ": " + s);
         }
         return s.substring(from, end);
+    }
+
+    private static String optionalStringField(String s, String name) throws IOException {
+        String marker = '"' + name + "\":\"";
+        if (!s.contains(marker)) {
+            return "";
+        }
+        return stringField(s, name);
     }
 
     private static long longField(String s, String name) throws IOException {
