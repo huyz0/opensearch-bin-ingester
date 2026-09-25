@@ -39,8 +39,8 @@ import org.junit.jupiter.api.io.TempDir;
 @Timeout(value = 60, unit = TimeUnit.SECONDS, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
 class EndpointSliceWatchTlsTest {
 
-    private static final Lease POD0 = new Lease(3, "pod0", "http://10.0.0.1:8080",
-            Long.MAX_VALUE);
+    private static final Lease POD0 = new Lease(3, "pod0", "uid-pod0",
+            "http://10.0.0.1:8080", Long.MAX_VALUE);
     private static final String PASS = "changeit";
 
     @TempDir

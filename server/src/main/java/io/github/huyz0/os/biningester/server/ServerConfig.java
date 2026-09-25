@@ -22,6 +22,7 @@ import java.util.Set;
  * @param podId this node's identity in the lease, and ⚠️ the thing a takeover is
  *     attributed to — a duplicate across two pods is two leaders that each
  *     believe they hold one lease
+ * @param podUid this pod's immutable Kubernetes UID, written into new leases
  * @param az this pod's availability zone, as a LABEL (M9.2, NFR-5). ⚠️ **IT IS
  *     WHAT MAKES A CROSS-AZ BYTE COUNTABLE**: every peer transport compares a
  *     peer's label with this one, so a pod whose zone is wrong reports a
@@ -58,7 +59,17 @@ import java.util.Set;
 public record ServerConfig(String podId, String az, String trustDomain, String prefix,
         StoreConfig store, Duration leaseTtl, Duration leaseRenewInterval, String endpoint, IngestConfig ingest,
         int httpPort, String producerSubject, Set<String> allowedIndices,
-        RetentionConfig retention, java.util.Optional<MembershipConfig> membership) {
+        RetentionConfig retention, java.util.Optional<MembershipConfig> membership,
+        String podUid) {
+
+    /** Compatibility constructor for callers without a Kubernetes identity. */
+    public ServerConfig(String podId, String az, String trustDomain, String prefix,
+            StoreConfig store, Duration leaseTtl, Duration leaseRenewInterval, String endpoint,
+            IngestConfig ingest, int httpPort, String producerSubject, Set<String> allowedIndices,
+            RetentionConfig retention, java.util.Optional<MembershipConfig> membership) {
+        this(podId, az, trustDomain, prefix, store, leaseTtl, leaseRenewInterval, endpoint, ingest,
+                httpPort, producerSubject, allowedIndices, retention, membership, "");
+    }
 
     /**
      * The same, with no {@code EndpointSlice} watch (M8.13).
@@ -104,6 +115,7 @@ public record ServerConfig(String podId, String az, String trustDomain, String p
 
     public ServerConfig {
         Objects.requireNonNull(podId, "podId");
+        Objects.requireNonNull(podUid, "podUid");
         Objects.requireNonNull(az, "az");
         Objects.requireNonNull(trustDomain, "trustDomain");
         Objects.requireNonNull(prefix, "prefix");

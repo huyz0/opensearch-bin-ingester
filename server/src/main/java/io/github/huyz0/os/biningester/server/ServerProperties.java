@@ -38,6 +38,8 @@ public final class ServerProperties {
 
     /** Required: this node's identity in the lease. */
     public static final String POD_ID = "pod.id";
+    /** Required: the immutable Kubernetes Pod UID (Downward API metadata.uid) written into leases. */
+    public static final String POD_UID = "pod.uid";
     /**
      * Required: this pod's availability zone, as a LABEL (M9.2, NFR-5).
      *
@@ -127,7 +129,7 @@ public final class ServerProperties {
 
     static final Duration DEFAULT_LEASE_RENEW = Duration.ofSeconds(3);
 
-    private static final Set<String> KNOWN = Set.of(POD_ID, POD_AZ, TRUST_DOMAIN, PREFIX, STORE_KIND,
+    private static final Set<String> KNOWN = Set.of(POD_ID, POD_UID, POD_AZ, TRUST_DOMAIN, PREFIX, STORE_KIND,
             STORE_ROOT, STORE_ENDPOINT, STORE_REGION, STORE_BUCKET, STORE_PATH_STYLE,
             ENDPOINT, HTTP_PORT, PRODUCER_SUBJECT, PRODUCER_ALLOWED_INDICES,
             LEASE_TTL, LEASE_RENEW, INTERVAL_FLOOR, INTERVAL_CEILING, MAX_SEGMENT_BYTES,
@@ -203,7 +205,7 @@ public final class ServerProperties {
                                     RetentionConfig.DEFAULT_COPY_EXPIRY),
                             duration(settings, RETENTION_PASS_INTERVAL,
                                     io.github.huyz0.os.biningester.ingest.RetentionLoop.DEFAULT_PASS_INTERVAL)),
-                    membership(settings));
+                    membership(settings), required(settings, POD_UID));
         } catch (IllegalArgumentException refused) {
             // ⚠️ `ConfigurationException` IS AN `IllegalArgumentException`, so
             // one already carrying a key's name lands here too and is returned

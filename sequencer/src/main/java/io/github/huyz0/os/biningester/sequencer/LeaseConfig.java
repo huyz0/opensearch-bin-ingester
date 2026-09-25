@@ -33,16 +33,25 @@ import java.util.Objects;
  * @param prefix the object-store prefix this cluster's objects live under
  * @param podId which node this is — ⚠️ a wire value, written into the lease
  * @param endpoint where peers reach this node's sequencer
+ * @param podUid this pod's immutable Kubernetes identity; empty only for
+ *     non-Kubernetes/legacy callers
  * @param ttl how long a lease stays valid without renewal
  * @param renewInterval how often the holder should renew
  */
-public record LeaseConfig(String prefix, String podId, String endpoint,
+public record LeaseConfig(String prefix, String podId, String endpoint, String podUid,
         Duration ttl, Duration renewInterval) {
+
+    /** Compatibility constructor for callers that still write legacy leases. */
+    public LeaseConfig(String prefix, String podId, String endpoint,
+            Duration ttl, Duration renewInterval) {
+        this(prefix, podId, endpoint, "", ttl, renewInterval);
+    }
 
     public LeaseConfig {
         Objects.requireNonNull(prefix, "prefix");
         Objects.requireNonNull(podId, "podId");
         Objects.requireNonNull(endpoint, "endpoint");
+        Objects.requireNonNull(podUid, "podUid");
         Objects.requireNonNull(ttl, "ttl");
         Objects.requireNonNull(renewInterval, "renewInterval");
         if (podId.isBlank()) {

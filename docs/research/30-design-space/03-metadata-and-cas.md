@@ -91,8 +91,17 @@ index and per-index ordering is trivially coherent; a manual override exists for
 Each slot has a lease object:
 
 ```
-<prefix>/ctl/lease/<slot>.json   ->  { epoch, holderPodId, holderEndpoint, expiresAtMillis }
+<prefix>/ctl/lease/<slot>.json   ->  { epoch, holderPodId, holderPodUid, holderEndpoint, expiresAtMillis }
 ```
+
+`holderPodUid` is additive: readers accept both the original four-field lease
+and the five-field lease, while new writers persist the Kubernetes Pod UID.
+It is the only identity used by the EndpointSlice early-challenge view; an old
+lease without the UID remains readable but cannot be early-challenged and waits
+for expiry. The reader-only release must be fleet-wide before deploying a
+writer that emits this field. This adds the UID and JSON field overhead (54
+bytes for the Kubernetes 36-character UUID) to an existing lease write, not a
+store request.
 
 **Acquire / renew:**
 1. `GET` the lease, keep its `Version`.

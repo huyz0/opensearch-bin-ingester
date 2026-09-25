@@ -70,6 +70,7 @@ class ConfigFileTest {
         Path file = dir.resolve("node.properties");
         Files.write(file, String.join("\n",
                 "pod.id=pod7",
+                "pod.uid=uid-pod7",
                 "pod.az=az-a",
                 "trust.domain=cluster-a",
                 "store.prefix=bins/cluster-a",

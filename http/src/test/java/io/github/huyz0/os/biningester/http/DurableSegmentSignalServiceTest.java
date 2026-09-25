@@ -21,9 +21,9 @@ class DurableSegmentSignalServiceTest {
         view.apply("{\"type\":\"ADDED\",\"object\":{\"metadata\":{\"name\":\"s1\"},"
                 + "\"endpoints\":["
                 + "{\"addresses\":[\"10.0.0.1\"],\"zone\":\"az-a\",\"conditions\":{\"ready\":true},"
-                + "\"targetRef\":{\"name\":\"writera\"}},"
+                + "\"targetRef\":{\"name\":\"writera\",\"uid\":\"uid-writera\"}},"
                 + "{\"addresses\":[\"10.0.0.2\"],\"zone\":\"az-b\",\"conditions\":{\"ready\":true},"
-                + "\"targetRef\":{\"name\":\"writerb\"}}]}} ");
+                + "\"targetRef\":{\"name\":\"writerb\",\"uid\":\"uid-writerb\"}}]}} ");
         return view;
     }
 
@@ -101,7 +101,7 @@ class DurableSegmentSignalServiceTest {
         var loopback = new EndpointSliceView();
         loopback.apply("{\"type\":\"ADDED\",\"object\":{\"metadata\":{\"name\":\"s1\"},"
                 + "\"endpoints\":[{\"addresses\":[\"127.0.0.1\"],\"zone\":\"az-a\","
-                + "\"conditions\":{\"ready\":true},\"targetRef\":{\"name\":\"writera\"}}]}} ");
+                + "\"conditions\":{\"ready\":true},\"targetRef\":{\"name\":\"writera\",\"uid\":\"uid-writera\"}}]}} ");
         var server = WebServer.builder().port(0)
                 .routing(HttpRouting.builder().register(new DurableSegmentSignalService(loopback,
                         (key, az) -> calls.incrementAndGet())))
@@ -127,7 +127,7 @@ class DurableSegmentSignalServiceTest {
         var loopback = new EndpointSliceView();
         loopback.apply("{\"type\":\"ADDED\",\"object\":{\"metadata\":{\"name\":\"s1\"},"
                 + "\"endpoints\":[{\"addresses\":[\"127.0.0.1\"],\"zone\":\"az-a\","
-                + "\"conditions\":{\"ready\":true},\"targetRef\":{\"name\":\"writera\"}}]}} ");
+                + "\"conditions\":{\"ready\":true},\"targetRef\":{\"name\":\"writera\",\"uid\":\"uid-writera\"}}]}} ");
         var server = WebServer.builder().port(0)
                 .routing(HttpRouting.builder().register(new DurableSegmentSignalService(loopback,
                         (key, az) -> calls.incrementAndGet())))

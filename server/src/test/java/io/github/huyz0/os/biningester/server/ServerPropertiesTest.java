@@ -23,6 +23,7 @@ class ServerPropertiesTest {
     private static Map<String, String> minimal() {
         Map<String, String> settings = new HashMap<>();
         settings.put(ServerProperties.POD_ID, "pod1");
+        settings.put(ServerProperties.POD_UID, "uid-pod1");
         settings.put(ServerProperties.POD_AZ, "az-a");
         settings.put(ServerProperties.TRUST_DOMAIN, "cluster-a");
         settings.put(ServerProperties.PREFIX, "bins/cluster-a");
@@ -45,6 +46,7 @@ class ServerPropertiesTest {
         ServerConfig config = ServerProperties.parse(minimal());
 
         assertThat(config.podId()).isEqualTo("pod1");
+        assertThat(config.podUid()).isEqualTo("uid-pod1");
         assertThat(config.trustDomain()).isEqualTo("cluster-a");
         assertThat(config.prefix()).isEqualTo("bins/cluster-a");
         assertThat(config.endpoint()).isEqualTo("http://pod1:8080");
@@ -86,7 +88,8 @@ class ServerPropertiesTest {
 
     @Test
     void aMISSINGRequiredSettingIsREFUSEDAndTheMessageNamesTheKEY() {
-        for (String key : new String[] {ServerProperties.POD_ID, ServerProperties.POD_AZ,
+        for (String key : new String[] {ServerProperties.POD_ID, ServerProperties.POD_UID,
+                ServerProperties.POD_AZ,
                 ServerProperties.TRUST_DOMAIN, ServerProperties.PREFIX,
                 ServerProperties.STORE_KIND, ServerProperties.ENDPOINT}) {
             Map<String, String> settings = minimal();
@@ -241,17 +244,10 @@ class ServerPropertiesTest {
 
     @Test
     void aSTOREROOTIsCARRIEDThroughToTheStoreConfig() {
-        ServerConfig config = ServerProperties.parse(new HashMap<>(Map.of(
-                ServerProperties.POD_ID, "pod1",
-                ServerProperties.POD_AZ, "az-a",
-                ServerProperties.TRUST_DOMAIN, "cluster-a",
-                ServerProperties.PREFIX, "bins/cluster-a",
-                ServerProperties.STORE_KIND, "local-fs",
-                ServerProperties.STORE_ROOT, "/var/lib/io.github.huyz0.os.biningester",
-                ServerProperties.ENDPOINT, "http://pod1:8080",
-                ServerProperties.HTTP_PORT, "8080",
-                ServerProperties.PRODUCER_SUBJECT, "producer-1",
-                ServerProperties.PRODUCER_ALLOWED_INDICES, "logs")));
+        Map<String, String> settings = minimal();
+        settings.put(ServerProperties.STORE_KIND, "local-fs");
+        settings.put(ServerProperties.STORE_ROOT, "/var/lib/io.github.huyz0.os.biningester");
+        ServerConfig config = ServerProperties.parse(settings);
 
         assertThat(config.store().root()).contains("/var/lib/io.github.huyz0.os.biningester");
     }
@@ -347,6 +343,6 @@ class ServerPropertiesTest {
         assertThat(ServerProperties.knownKeys())
                 .contains(ServerProperties.POD_ID, ServerProperties.ENDPOINT,
                         ServerProperties.STORE_KIND, ServerProperties.INTERVAL_CEILING)
-                .hasSize(30);
+                .hasSize(31);
     }
 }

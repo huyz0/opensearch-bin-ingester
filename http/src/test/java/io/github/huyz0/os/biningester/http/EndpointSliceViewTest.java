@@ -11,8 +11,8 @@ import org.junit.jupiter.api.Test;
  */
 class EndpointSliceViewTest {
 
-    private static final Lease POD0 = new Lease(3, "pod0", "http://10.0.0.1:8080",
-            Long.MAX_VALUE);
+    private static final Lease POD0 = new Lease(3, "pod0", "uid-pod0",
+            "http://10.0.0.1:8080", Long.MAX_VALUE);
 
     /** One watch event for slice {@code s1}, with one endpoint. */
     static String event(String type, String pod, String address, Boolean ready,
@@ -23,7 +23,8 @@ class EndpointSliceViewTest {
         return "{\"type\":\"" + type + "\",\"object\":{\"kind\":\"EndpointSlice\","
                 + "\"metadata\":{\"name\":\"s1\"},\"endpoints\":[{\"addresses\":[\""
                 + address + "\"],\"conditions\":{" + conditions + "},\"targetRef\":"
-                + "{\"kind\":\"Pod\",\"name\":\"" + pod + "\"}}]}}";
+                + "{\"kind\":\"Pod\",\"name\":\"" + pod + "\",\"uid\":\"uid-"
+                + pod + "\"}}]}}";
     }
 
     static String empty(String type) {
@@ -114,15 +115,16 @@ class EndpointSliceViewTest {
     @Test
     void theHolderIsMatchedByPODNameORByTheADDRESSInItsEndpoint() {
         EndpointSliceView byAddress = new EndpointSliceView();
-        byAddress.apply(event("ADDED", "some-other-name", "10.0.0.1", true, false));
+        byAddress.apply(eventWithUid("ADDED", "some-other-name", "uid-pod0", "10.0.0.1",
+                true, false));
         assertThat(byAddress.holderGone(POD0)).isFalse();
         byAddress.apply(empty("MODIFIED"));
-        assertThat(byAddress.holderGone(POD0)).as("⚠️ MATCHED BY ADDRESS").isTrue();
+        assertThat(byAddress.holderGone(POD0)).as("matched by UID, not address").isTrue();
 
         EndpointSliceView byName = new EndpointSliceView();
-        byName.apply(event("ADDED", "pod0", "10.9.9.9", true, false));
+        byName.apply(eventWithUid("ADDED", "pod0", "uid-pod0", "10.9.9.9", true, false));
         byName.apply(empty("MODIFIED"));
-        assertThat(byName.holderGone(POD0)).as("⚠️ MATCHED BY POD NAME").isTrue();
+        assertThat(byName.holderGone(POD0)).as("matched by UID, not name").isTrue();
     }
 
     @Test
@@ -157,7 +159,41 @@ class EndpointSliceViewTest {
         view.apply(empty("MODIFIED"));
         view.apply(event("MODIFIED", "podX", "10.0.0.1", false, false));
 
-        assertThat(view.holderGone(new Lease(4, "podX", "http://10.0.0.1:8080", Long.MAX_VALUE)))
+        assertThat(view.holderGone(new Lease(4, "podX", "uid-podX",
+                "http://10.0.0.1:8080", Long.MAX_VALUE)))
                 .as("⚠️ podX IS NAMED, AND WAS NEVER SEEN READY").isFalse();
+    }
+
+    @Test
+    void aReplacementOnTheSameAddressCannotInheritThePreviousPodsUidEvidence() {
+        EndpointSliceView view = new EndpointSliceView();
+        view.apply(eventWithUid("ADDED", "pod0", "uid-old", "10.0.0.1", true, false));
+        view.apply(empty("MODIFIED"));
+        // StatefulSet replacements retain the same pod name as well as sometimes
+        // receiving the same address; only the UID distinguishes incarnations.
+        view.apply(eventWithUid("MODIFIED", "pod0", "uid-new", "10.0.0.1", false, false));
+
+        Lease replacement = new Lease(4, "pod0", "uid-new", "http://10.0.0.1:8080",
+                Long.MAX_VALUE);
+        assertThat(view.holderGone(replacement))
+                .as("a different UID on a reused address has never been seen ready")
+                .isFalse();
+    }
+
+    @Test
+    void aLegacyLeaseWithoutUidNeverUsesNameOrAddressAsEarlyChallengeEvidence() {
+        EndpointSliceView view = new EndpointSliceView();
+        view.apply(eventWithUid("ADDED", "pod0", "uid-old", "10.0.0.1", true, false));
+        view.apply(empty("MODIFIED"));
+
+        assertThat(view.holderGone(POD0))
+                .as("legacy leases have no immutable pod identity")
+                .isFalse();
+    }
+
+    private static String eventWithUid(String type, String pod, String uid, String address,
+            Boolean ready, Boolean terminating) {
+        String event = event(type, pod, address, ready, terminating);
+        return event.replace("\"uid\":\"uid-" + pod + "\"", "\"uid\":\"" + uid + "\"");
     }
 }

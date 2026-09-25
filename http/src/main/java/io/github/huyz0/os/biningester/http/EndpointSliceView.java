@@ -3,7 +3,6 @@ package io.github.huyz0.os.biningester.http;
 
 import io.github.huyz0.os.biningester.format.Lease;
 import io.github.huyz0.os.biningester.sequencer.LeaseChallenge;
-import java.net.URI;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -42,13 +41,12 @@ public final class EndpointSliceView implements LeaseChallenge {
     public record Endpoint(String podId, String address, String az) {
     }
 
-    private record Member(String name, List<String> addresses, String az,
+    private record Member(String name, String uid, List<String> addresses, String az,
             boolean ready, boolean terminating) {
     }
 
     private final Map<String, List<Member>> slices = new HashMap<>();
-    private final Set<String> namesSeenReady = new HashSet<>();
-    private final Set<String> addressesSeenReady = new HashSet<>();
+    private final Set<String> uidsSeenReady = new HashSet<>();
 
     /**
      * Applies one line of a watch stream: {@code {"type":..., "object":{...}}}.
@@ -78,8 +76,9 @@ public final class EndpointSliceView implements LeaseChallenge {
                 slices.put(name, members);
                 for (Member member : members) {
                     if (member.ready()) {
-                        namesSeenReady.add(member.name());
-                        addressesSeenReady.addAll(member.addresses());
+                        if (!member.uid().isBlank()) {
+                            uidsSeenReady.add(member.uid());
+                        }
                     }
                 }
             }
@@ -120,6 +119,8 @@ public final class EndpointSliceView implements LeaseChallenge {
             }
             String name = endpoint.get("targetRef") instanceof Map<?, ?> ref
                     && ref.get("name") instanceof String n ? n : "";
+            String uid = endpoint.get("targetRef") instanceof Map<?, ?> ref
+                    && ref.get("uid") instanceof String u ? u : "";
             String az = endpoint.get("zone") instanceof String zone ? zone : "";
             List<String> addresses = new ArrayList<>();
             if (endpoint.get("addresses") instanceof List<?> list) {
@@ -134,7 +135,7 @@ public final class EndpointSliceView implements LeaseChallenge {
             // condition is to be read as true.
             boolean ready = !Boolean.FALSE.equals(conditions.get("ready"));
             boolean terminating = Boolean.TRUE.equals(conditions.get("terminating"));
-            members.add(new Member(name, List.copyOf(addresses), az, ready, terminating));
+            members.add(new Member(name, uid, List.copyOf(addresses), az, ready, terminating));
         }
         return members;
     }
@@ -142,23 +143,16 @@ public final class EndpointSliceView implements LeaseChallenge {
     /**
      * {@inheritDoc}
      *
-     * <p>⚠️ **BY POD NAME FIRST, AND BY ADDRESS ONLY WHERE NO ENDPOINT CARRIES
-     * THE HOLDER'S NAME.** An address outlives its pod: a new pod can be given
-     * the IP of one that died, and matched by address alone it would inherit
-     * the dead pod's "seen ready" and be challenged the moment it took the
-     * term, before its own readiness had passed.
+     * <p>⚠️ **BY IMMUTABLE POD UID ONLY.** Pod names and addresses can both be
+     * reused by a replacement. A lease written before UIDs were added has no
+     * reliable identity and therefore cannot produce early-challenge evidence;
+     * it safely waits for expiry.
      */
     @Override
     public synchronized boolean holderGone(Lease current) {
-        String name = current.holderPodId();
-        String host = hostOf(current.holderEndpoint());
-        boolean named = slices.values().stream().flatMap(List::stream)
-                .anyMatch(member -> member.name().equals(name));
-        if (named || namesSeenReady.contains(name)) {
-            return namesSeenReady.contains(name) && goneBy(member -> member.name().equals(name));
-        }
-        return !host.isEmpty() && addressesSeenReady.contains(host)
-                && goneBy(member -> member.addresses().contains(host));
+        String uid = current.holderPodUid();
+        return !uid.isBlank() && uidsSeenReady.contains(uid)
+                && goneBy(member -> member.uid().equals(uid));
     }
 
     /**
@@ -174,14 +168,5 @@ public final class EndpointSliceView implements LeaseChallenge {
             }
         }
         return true;
-    }
-
-    private static String hostOf(String endpoint) {
-        try {
-            String host = URI.create(endpoint).getHost();
-            return host == null ? "" : host;
-        } catch (IllegalArgumentException notAUri) {
-            return "";
-        }
     }
 }

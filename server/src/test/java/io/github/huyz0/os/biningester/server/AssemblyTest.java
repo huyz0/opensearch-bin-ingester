@@ -6,12 +6,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.huyz0.os.biningester.binstore.BinStore;
 import io.github.huyz0.os.biningester.format.IndexRegistration;
+import io.github.huyz0.os.biningester.format.Lease;
 import io.github.huyz0.os.biningester.format.RunKey;
 import io.github.huyz0.os.biningester.format.SegmentRecord;
 import io.github.huyz0.os.biningester.ingest.IngestConfig;
 import io.github.huyz0.os.biningester.ingest.SubscriptionHub;
 import io.github.huyz0.os.biningester.security.Principal;
 import io.github.huyz0.os.biningester.sequencer.CommitRequest;
+import io.github.huyz0.os.biningester.sequencer.LeaseManager;
 import io.github.huyz0.os.biningester.sequencer.SequencerTransport;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -76,6 +78,16 @@ class AssemblyTest {
             public void close() {
             }
         };
+    }
+
+    private static ServerConfig config(String podId, String podUid) {
+        return new ServerConfig(podId, "az-a", "cluster-a", "bins/cluster-a",
+                new StoreConfig("memory", Optional.empty()),
+                Duration.ofSeconds(10), Duration.ofSeconds(3), "http://" + podId + ":8080",
+                IngestConfig.defaults("cluster-a"), 0, "producer-1", java.util.Set.of("logs"),
+                new RetentionConfig(Duration.ofMinutes(1), Duration.ofHours(2),
+                        Duration.ofSeconds(10), Duration.ofHours(3), Duration.ofDays(1)),
+                Optional.empty(), podUid);
     }
 
     private static final class CloseTrackingTransport implements SequencerTransport {
@@ -195,6 +207,46 @@ class AssemblyTest {
             assertThat(assembly.store().list("bins/cluster-a/ctl/lease/", null, 100).objects())
                     .as("and the LEASE too, which is what a peer reads to find the leader")
                     .isNotEmpty();
+        }
+    }
+
+    @Test
+    void theAssembledSequencerLeaseCarriesTheConfiguredPodUid() throws Exception {
+        String uid = "uid-assembly-pod1";
+        try (BinStore shared = StoreFactory.open(new StoreConfig("memory", Optional.empty()));
+                Assembly assembly = Assembly.open(config("pod1", uid), shared, noPeers(),
+                        Clock.systemUTC())) {
+            try (var in = shared.get("bins/cluster-a/ctl/lease/0.json")) {
+                assertThat(Lease.decode(in.readAllBytes()).holderPodUid()).isEqualTo(uid);
+            }
+        }
+    }
+
+    @Test
+    void theAssembledGcLeaseCarriesTheConfiguredPodUid() throws Exception {
+        String uid = "uid-assembly-pod1";
+        AtomicReference<LeaseManager> gcLease = new AtomicReference<>();
+        try (BinStore shared = StoreFactory.open(new StoreConfig("memory", Optional.empty()));
+                Assembly assembly = Assembly.openForTestWithLeaseManagerFactory(
+                        config("pod1", uid), shared, noPeers(),
+                        Clock.systemUTC(), (RetentionAssembly.LeaseManagerFactory)
+                                (store, leaseConfig, clock, challenge) -> {
+                                    LeaseManager manager = new LeaseManager(store, leaseConfig,
+                                            clock, challenge);
+                                    if (leaseConfig.prefix().endsWith("/gc")) {
+                                        gcLease.set(manager);
+                                    }
+                                    return manager;
+                                })) {
+            LeaseManager manager = gcLease.get();
+            assertThat(manager).as("Assembly must wire its GC lease through the factory")
+                    .isNotNull();
+            manager.tryAcquire().orElseThrow();
+            try (var in = shared.get("bins/cluster-a/gc/ctl/lease/0.json")) {
+                assertThat(Lease.decode(in.readAllBytes()).holderPodUid()).isEqualTo(uid);
+            } finally {
+                manager.release();
+            }
         }
     }
 

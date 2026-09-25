@@ -161,8 +161,14 @@ public record Lease(long epoch, String holderPodId, String holderPodUid, String 
      * reader following the chain cannot tell from an epoch it failed to read;
      * reusing would let a fenced writer's objects pass for the new term's.
      */
+    public Lease takenOverBy(String podId, String podUid, String endpoint,
+            long newExpiresAtMillis) {
+        return new Lease(epoch + 1, podId, podUid, endpoint, newExpiresAtMillis);
+    }
+
+    /** Retains the legacy no-UID transition for callers that have not rolled forward. */
     public Lease takenOverBy(String podId, String endpoint, long newExpiresAtMillis) {
-        return new Lease(epoch + 1, podId, endpoint, newExpiresAtMillis);
+        return takenOverBy(podId, "", endpoint, newExpiresAtMillis);
     }
 
     /** ⚠️ Fixed field order, so equal leases are byte-identical — see the test. */

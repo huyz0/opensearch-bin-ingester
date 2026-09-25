@@ -434,6 +434,65 @@ class LeaseManagerTest {
     }
 
     @Test
+    void theConfiguredPodUidIsWrittenOnColdStartAndTakeover() throws Exception {
+        MemoryBinStore shared = new MemoryBinStore();
+        TestClock clock = new TestClock();
+        Lease first = new LeaseManager(shared,
+                new LeaseConfig("bins/cluster-a", "podA", "10.0.0.1:1", "uid-a",
+                        TTL, RENEW), clock).tryAcquire().orElseThrow();
+        assertThat(first.holderPodUid()).isEqualTo("uid-a");
+        String key = new LeaseConfig("bins/cluster-a", "podA", "10.0.0.1:1", "uid-a",
+                TTL, RENEW).leaseKey();
+        assertThat(Lease.decode(shared.get(key).readAllBytes())).isEqualTo(first);
+
+        clock.advance(TTL);
+        Lease successor = new LeaseManager(shared,
+                new LeaseConfig("bins/cluster-a", "podB", "10.0.0.2:2", "uid-b",
+                        TTL, RENEW), clock).tryAcquire().orElseThrow();
+        assertThat(successor.holderPodUid()).isEqualTo("uid-b");
+        assertThat(Lease.decode(shared.get(key).readAllBytes())).isEqualTo(successor);
+    }
+
+    @Test
+    void aReplacementWithTheSamePodNameCanChallengeThePreviousUid() throws Exception {
+        MemoryBinStore shared = new MemoryBinStore();
+        TestClock clock = new TestClock();
+        LeaseConfig firstConfig = new LeaseConfig("bins/cluster-a", "pod1", "10.0.0.1:1",
+                "uid-old", TTL, RENEW);
+        Lease first = new LeaseManager(shared, firstConfig, clock).tryAcquire().orElseThrow();
+
+        LeaseManager replacement = new LeaseManager(shared,
+                new LeaseConfig("bins/cluster-a", "pod1", "10.0.0.2:2", "uid-new",
+                        TTL, RENEW),
+                clock, current -> {
+                    assertThat(current).isEqualTo(first);
+                    return true;
+                });
+
+        Lease taken = replacement.tryAcquire().orElseThrow();
+        assertThat(taken.epoch()).isEqualTo(first.epoch() + 1);
+        assertThat(taken.holderPodId()).isEqualTo("pod1");
+        assertThat(taken.holderPodUid()).isEqualTo("uid-new");
+        assertThat(taken.holderEndpoint()).isEqualTo("10.0.0.2:2");
+    }
+
+    @Test
+    void aPodDoesNotChallengeItsOwnUidEvenWhenItsEndpointIsReportedGone() throws Exception {
+        MemoryBinStore shared = new MemoryBinStore();
+        TestClock clock = new TestClock();
+        LeaseConfig config = new LeaseConfig("bins/cluster-a", "pod1", "10.0.0.1:1",
+                "uid-same", TTL, RENEW);
+        Lease first = new LeaseManager(shared, config, clock).tryAcquire().orElseThrow();
+
+        LeaseManager sameProcess = new LeaseManager(shared, config, clock, current -> true);
+
+        assertThat(sameProcess.tryAcquire())
+                .as("a live holder must not fence itself on transient endpoint-watch evidence")
+                .isEmpty();
+        assertThat(Lease.decode(shared.get(config.leaseKey()).readAllBytes())).isEqualTo(first);
+    }
+
+    @Test
     void aLostAcquisitionDropsAnyBeliefFromAnEarlierTerm() throws Exception {
         // ⚠️ `adopt`'s own belief-clearing, which round-2 review measured as
         // unconstrained: the two fenced-holder tests both reach the clearing in

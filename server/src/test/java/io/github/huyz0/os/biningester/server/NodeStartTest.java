@@ -48,6 +48,7 @@ class NodeStartTest {
         Path file = dir.resolve("node.properties");
         StringBuilder text = new StringBuilder(String.join("\n",
                 "pod.id=pod1",
+                "pod.uid=uid-pod1",
                 "pod.az=az-a",
                 "trust.domain=cluster-a",
                 "store.prefix=bins/cluster-a",
@@ -209,6 +210,7 @@ class NodeStartTest {
             Path file = dir.resolve("blocked.properties");
             Files.write(file, String.join("\n",
                     "pod.id=pod1",
+                    "pod.uid=uid-pod1",
                     "pod.az=az-a",
                     "trust.domain=cluster-a",
                     "store.prefix=bins/cluster-a",

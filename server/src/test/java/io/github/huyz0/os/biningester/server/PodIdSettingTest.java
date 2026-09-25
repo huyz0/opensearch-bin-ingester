@@ -23,6 +23,7 @@ class PodIdSettingTest {
     private static Map<String, String> settings(String podId) {
         Map<String, String> settings = new HashMap<>();
         settings.put(ServerProperties.POD_ID, podId);
+        settings.put(ServerProperties.POD_UID, "uid-pod1");
         settings.put(ServerProperties.POD_AZ, "az-a");
         settings.put(ServerProperties.TRUST_DOMAIN, "cluster-a");
         settings.put(ServerProperties.PREFIX, "bins/cluster-a");

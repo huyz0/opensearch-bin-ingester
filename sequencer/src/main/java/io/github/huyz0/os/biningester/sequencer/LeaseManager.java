@@ -119,6 +119,7 @@ public final class LeaseManager {
     private final BinStore store;
     private final String key;
     private final String podId;
+    private final String podUid;
     private final String endpoint;
     private final Duration ttl;
     private final Duration renewInterval;
@@ -152,6 +153,7 @@ public final class LeaseManager {
         // each of its store call sites. `LeaseConfig` owns whether these are
         // VALID; this class owns what they mean.
         this.podId = config.podId();
+        this.podUid = config.podUid();
         this.endpoint = config.endpoint();
         this.ttl = config.ttl();
         this.renewInterval = config.renewInterval();
@@ -259,7 +261,8 @@ public final class LeaseManager {
             // "readers of the new epoch never look there" would be VOID, because
             // it would not be a different epoch. Reserving 0 makes every leased
             // chain provably disjoint from the unleased one.
-            Lease fresh = new Lease(1, podId, endpoint, clock.millis() + ttl.toMillis());
+            Lease fresh = new Lease(1, podId, podUid, endpoint,
+                    clock.millis() + ttl.toMillis());
             return adopt(fresh, writeOrRemember(fresh,
                     () -> store.putIfAbsent(key, Body.ofBytes(fresh.encode()))));
         }
@@ -268,10 +271,14 @@ public final class LeaseManager {
         // nodes end up sequencing at once.
         Lease current = read();
         // ⚠️ AN UNEXPIRED LEASE IS TAKEN ONLY ON EVIDENCE THE HOLDER IS GONE
-        // (M8.13), and never from this pod itself: a pod does not challenge
-        // its own term, whatever the platform says about its endpoint.
-        boolean challenged = !current.holderPodId().equals(podId)
-                && challenge.holderGone(current);
+        // (M8.13). Pod names are stable across StatefulSet replacements, so
+        // the name alone cannot establish that this process is the holder.
+        // A matching UID does; a legacy UID-less lease remains self-held by
+        // name for compatibility and is never early-challenged.
+        boolean sameHolder = current.holderPodId().equals(podId)
+                && (current.holderPodUid().isEmpty()
+                        || current.holderPodUid().equals(podUid));
+        boolean challenged = !sameHolder && challenge.holderGone(current);
         if (!current.isExpiredAt(clock.millis()) && !challenged) {
             // ⚠️ CONDITIONAL, never blanket (M4.3e). Every other path clears
             // the belief when it learns it is fenced, and `adopt`'s comment
@@ -287,7 +294,8 @@ public final class LeaseManager {
             }
             return Optional.empty();
         }
-        Lease taken = current.takenOverBy(podId, endpoint, clock.millis() + ttl.toMillis());
+        Lease taken = current.takenOverBy(podId, podUid, endpoint,
+                clock.millis() + ttl.toMillis());
         return adopt(taken, writeOrRemember(taken, () -> store.putIfMatch(key,
                 Body.ofBytes(taken.encode()), stat.get().version())));
     }

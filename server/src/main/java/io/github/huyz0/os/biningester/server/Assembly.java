@@ -14,14 +14,9 @@ import io.github.huyz0.os.biningester.ingest.IngestConfig;
 import io.github.huyz0.os.biningester.ingest.PendingPool;
 import io.github.huyz0.os.biningester.ingest.RoutedIngest;
 import io.github.huyz0.os.biningester.ingest.SubscriptionHub;
-import io.github.huyz0.os.biningester.ingest.LeasedGc;
 import io.github.huyz0.os.biningester.ingest.RetainedFloors;
 import io.github.huyz0.os.biningester.ingest.RetentionLoop;
-import io.github.huyz0.os.biningester.ingest.RetentionObservable;
-import io.github.huyz0.os.biningester.ingest.RetentionRule;
 import io.github.huyz0.os.biningester.ingest.SegmentGc;
-import io.github.huyz0.os.biningester.ingest.OrphanSweep;
-import io.github.huyz0.os.biningester.ingest.StoreGcLease;
 import io.github.huyz0.os.biningester.ingest.WatermarkTable;
 import io.github.huyz0.os.biningester.ingest.Membership;
 import io.github.huyz0.os.biningester.ingest.Peer;
@@ -191,6 +186,15 @@ public final class Assembly implements AutoCloseable {
                 transport, clock, LeaseChallenge.NEVER, backfillStarter, null, null, null);
     }
 
+    static Assembly openForTestWithLeaseManagerFactory(ServerConfig config, BinStore store,
+            SequencerTransport transport, Clock clock,
+            RetentionAssembly.LeaseManagerFactory leaseManagerFactory)
+            throws IOException {
+        return new Assembly(config, Objects.requireNonNull(store, "store"), false,
+                transport, clock, LeaseChallenge.NEVER, ChainBackfill::inBackground,
+                null, null, null, leaseManagerFactory);
+    }
+
     private Assembly(ServerConfig config, BinStore raw, boolean ownsStore,
             SequencerTransport transport, Clock clock, LeaseChallenge challenge)
             throws IOException {
@@ -203,10 +207,21 @@ public final class Assembly implements AutoCloseable {
             BackfillStarter backfillStarter, EndpointSliceView peerView, CrossAzBytes crossAz,
             DurableSegmentSignalSender.PeerPost signalPost)
             throws IOException {
+        this(config, raw, ownsStore, transport, clock, challenge, backfillStarter,
+                peerView, crossAz, signalPost, LeaseManager::new);
+    }
+
+    private Assembly(ServerConfig config, BinStore raw, boolean ownsStore,
+            SequencerTransport transport, Clock clock, LeaseChallenge challenge,
+            BackfillStarter backfillStarter, EndpointSliceView peerView, CrossAzBytes crossAz,
+            DurableSegmentSignalSender.PeerPost signalPost,
+            RetentionAssembly.LeaseManagerFactory leaseManagerFactory)
+            throws IOException {
         this.config = Objects.requireNonNull(config, "config");
         Objects.requireNonNull(transport, "transport");
         Objects.requireNonNull(clock, "clock");
         Objects.requireNonNull(backfillStarter, "backfillStarter");
+        Objects.requireNonNull(leaseManagerFactory, "leaseManagerFactory");
         // ⚠️ EVERY STORE CALL THIS NODE MAKES GOES THROUGH THE HEALTH TRACKER
         // (M8.15), so readiness reflects the store without a request of its
         // own. The RAW store is what is closed: the tracker holds nothing.
@@ -231,9 +246,8 @@ public final class Assembly implements AutoCloseable {
         this.watermarks = new WatermarkTable(clock, kept.reportTimeout(), kept.copyExpiry(),
                 kept.minRetention());
 
-        LeaseConfig leases = new LeaseConfig(config.prefix(), config.podId(), config.endpoint(),
-                config.leaseTtl(), config.leaseRenewInterval());
-        LeaseManager manager = new LeaseManager(store, leases, clock, challenge);
+        LeaseConfig leases = sequencerLeaseConfig(config);
+        LeaseManager manager = leaseManagerFactory.create(store, leases, clock, challenge);
         this.sequencer = new FleetSequencer(store, leases, transport,
                 () -> LocalSequencer.start(store, config.prefix(), manager, SEAL_REDRIVE_BUDGET)
                         .map(term -> {
@@ -308,7 +322,8 @@ public final class Assembly implements AutoCloseable {
                 new PendingPool(clock, PENDING_TIMEOUT, PENDING_BYTES_PER_INDEX),
                 PENDING_TIMEOUT, clock);
 
-        this.retention = retentionLoop(config, store, clock);
+        this.retention = RetentionAssembly.create(config, store, clock, this::retentionTerm,
+                watermarks, leaseManagerFactory);
         // ⚠️ THE FLOOR A CONSUMER IS TOLD, READ ON DEMAND (ADR-0056). The epoch
         // is the one this pod last committed under, known without a request;
         // below 1 there has been no lease and there is no chain to read.
@@ -339,39 +354,9 @@ public final class Assembly implements AutoCloseable {
         });
     }
 
-    /**
-     * The loop that collects expired segments and orphans on this node (M8.5).
-     *
-     * <p>⚠️ **THE GC LEASE IS ITS OWN OBJECT**, under {@code <prefix>/gc}:
-     * sharing the sequencer's lease would make every pass contend with the
-     * commit path, and releasing it at the end of a pass would hand the
-     * SEQUENCER term to whoever asked next. See {@link StoreGcLease}.
-     *
-     * <p>⚠️ **THE SOURCE IS THE TERM THIS NODE HOLDS AND STILL SERVES, OR
-     * NOTHING.** Held is not enough -- see {@code LocalSequencer.serving()}. A follower
-     * writes no chain; a pass over a term it does not hold would condemn
-     * segments it cannot fence. {@code heldTerm()} does not elect, so asking
-     * costs nothing on the five pods in six that hold no term.
-     */
-    private RetentionLoop retentionLoop(ServerConfig config, BinStore store, Clock clock) {
-        RetentionConfig kept = config.retention();
-        LeaseConfig gcLease = new LeaseConfig(config.prefix() + "/gc", config.podId(),
-                config.endpoint(), config.leaseTtl(), config.leaseRenewInterval());
-        LeasedGc leased = new LeasedGc(
-                new StoreGcLease(new LeaseManager(store, gcLease, clock), clock), store);
-        RetentionRule rule = new RetentionRule(clock, kept.minRetention(), kept.maxRetention(),
-                RetentionRule.DEFAULT_SAFETY_MARGIN,
-                (segmentKey, age) -> LOG.log(System.Logger.Level.ERROR, () -> "a segment "
-                        + segmentKey + " was deleted at the retention ceiling, " + age
-                        + " old: a consumer had not read it and has lost data"),
-                watermarks::of);
-        RetentionObservable observable = new RetentionObservable(clock, kept.minRetention(),
-                kept.maxRetention(), kept.reportTimeout(),
-                alarm -> LOG.log(System.Logger.Level.WARNING, () -> "retention alarm "
-                        + alarm.kind() + " on " + alarm.stream() + ": " + alarm.detail()));
-        return new RetentionLoop(this::retentionTerm, leased, rule, observable, clock,
-                config.prefix(), kept.minRetention(), OrphanSweep.DEFAULT_GRACE,
-                SegmentGc.DEFAULT_DELETE_BATCH);
+    static LeaseConfig sequencerLeaseConfig(ServerConfig config) {
+        return new LeaseConfig(config.prefix(), config.podId(), config.endpoint(),
+                config.podUid(), config.leaseTtl(), config.leaseRenewInterval());
     }
 
     /**
