@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -154,10 +155,12 @@ public final class NodeProcess implements AutoCloseable {
         all.put("producer.subject", "producer-1");
         all.put("producer.allowed-indices", "logs");
         all.putAll(settings);
-        StringBuilder text = new StringBuilder();
-        all.forEach((key, value) -> text.append(key).append('=').append(value).append('\n'));
+        Properties properties = new Properties();
+        all.forEach(properties::setProperty);
         Path file = dir.resolve(podId + ".properties");
-        Files.writeString(file, text.toString(), StandardCharsets.UTF_8);
+        try (var writer = Files.newBufferedWriter(file, StandardCharsets.UTF_8)) {
+            properties.store(writer, null);
+        }
 
         // ⚠️ TO A FILE, NOT A PIPE: a pipe nobody drains fills, and the node
         // then blocks on a log line -- which is a stall this harness would

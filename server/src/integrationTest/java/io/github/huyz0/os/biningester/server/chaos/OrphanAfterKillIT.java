@@ -7,9 +7,11 @@ import io.github.huyz0.os.biningester.binstore.ListPage;
 import io.github.huyz0.os.biningester.binstore.ObjectStat;
 import io.github.huyz0.os.biningester.binstore.backend.LocalFsBinStore;
 import io.github.huyz0.os.biningester.format.RunEntry;
+import io.github.huyz0.os.biningester.format.RunKey;
 import io.github.huyz0.os.biningester.format.SegmentReader;
 import io.github.huyz0.os.biningester.format.SegmentRecord;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -118,6 +120,22 @@ class OrphanAfterKillIT {
         return ids;
     }
 
+    private static Map<String, String> payloadsIn(LocalFsBinStore store, String segment)
+            throws Exception {
+        byte[] bytes;
+        try (InputStream in = store.get(segment)) {
+            bytes = in.readAllBytes();
+        }
+        Map<String, String> payloads = new HashMap<>();
+        SegmentReader reader = SegmentReader.open(bytes);
+        for (RunEntry entry : reader.directory()) {
+            for (SegmentRecord record : reader.read(entry)) {
+                payloads.put(record.id(), new String(record.payload(), StandardCharsets.UTF_8));
+            }
+        }
+        return payloads;
+    }
+
     private static List<String> batch(String tag) {
         List<String> ids = new ArrayList<>();
         for (int i = 0; i < BATCH; i++) {
@@ -168,6 +186,17 @@ class OrphanAfterKillIT {
                 // the commit won the race with the kill: nothing to sweep, try again
                 continue;
             }
+            Map<String, String> orphanContents = new HashMap<>();
+            for (String orphan : orphans) {
+                orphanContents.putAll(payloadsIn(store, orphan));
+            }
+            assertThat(orphanContents)
+                    .as("the orphan contains the exact ids and payload from the killed batch")
+                    .containsKeys(retry.toArray(String[]::new));
+            String expectedPayload = "{\"pad\":\"" + "x".repeat(2048) + "\"}";
+            for (String id : retry) {
+                assertThat(orphanContents).containsEntry(id, expectedPayload);
+            }
             System.out.println("M8.10 attempt " + attempt + ": " + orphans.size()
                     + " orphan(s) after the kill, " + committed.size() + " committed");
 
@@ -198,10 +227,22 @@ class OrphanAfterKillIT {
             }
             ChainAudit after = audit(store);
             assertThat(after.violations()).as("⚠️ NO OFFSET GAP, NO DOUBLE ASSIGNMENT").isEmpty();
+            assertThat(after.nextOffsets())
+                    .as("store audit ends exactly after the five acked batches and the retry")
+                    .containsEntry(new RunKey(index, 0), (long) (6 * BATCH));
             Set<String> landed = new HashSet<>();
+            Set<String> retrySegments = new HashSet<>();
             for (String segment : after.committedSegments()) {
-                landed.addAll(idsIn(store, segment));
+                Set<String> ids = idsIn(store, segment);
+                landed.addAll(ids);
+                if (!java.util.Collections.disjoint(ids, retry)) {
+                    retrySegments.add(segment);
+                }
             }
+            assertThat(retrySegments)
+                    .as("the retried batch is committed in a segment outside the pre-kill set")
+                    .isNotEmpty()
+                    .doesNotContainAnyElementsOf(committed);
             assertThat(landed).as("⚠️ THE RETRY LANDED, IN A COMMITTED SEGMENT")
                     .containsAll(retry);
             return;
