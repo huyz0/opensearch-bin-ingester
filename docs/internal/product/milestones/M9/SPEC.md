@@ -545,7 +545,7 @@ multiplied from a price table (criterion 16). Each is a named NOT-RUN in
 | M8.61f | T3 (chaos) | (8) `KillMidFlushIT` joins the sender before taking its final ack snapshot; red when the sender is not joined and a late acknowledgement can race the measured kill window | an unstable ack snapshot falsifying the measured kill window |
 | M8.61g | T3 (chaos) | (9) `ChaosHarnessIT` waits for the lease expiry to stabilize after `SIGSTOP` before recording the frozen expiry; red when it snapshots immediately while a renewal PUT is still in flight | a renewal completing after the snapshot and making a stopped leader appear to retain a frozen lease |
 | M8.61h | T1 (fake chain reader) | (10) One `ChainAuditTest` fixture contains an opened-but-empty skipped epoch and an uncontinued delta epoch; one exact expected audit-result assertion includes both diagnostics. Red if the audit omits the skipped epoch or accepts the dropped history | an incomplete audit result passing despite either the burned-epoch or dropped-history defect |
-| M8.62 | `check-mutants.sh` | the gate red on the recorded surviving mutants | mutants recorded and never killed |
+| M8.62a | T1 (`MemoryBinStore`): `ForwardChallengeTest#aFORWARDParkedOnAHolderTheWATCHReportsGONEFailsPROMPTLY` requires exact outward type `IOException` and a message containing “may have landed”; replacing the cut with `NotTheLeaseholderException` must lose that ambiguity marker and fail. No production code changes, so this test-only child adds no production coverage; report the global `checkCoverage` result without treating the existing below-floor modules as passing | a possibly-landed commit is reported as a safe fenced refusal |
 | M8.63 | T3 | `check-suite-time.sh` and the Awaitility-converted tests red with the condition never satisfied | a sleep that hides a race |
 | M8.64 | doc | — **no test can fail first for a prose sweep**: the claims are sentences, and no predicate over the tree distinguishes a true one from a false one (M7.35 measured exactly this). `check-links.sh` and `check-javadoc-cites.sh` carry the citations; the review reads the sentences | prose asserting a mechanism that no longer exists |
 | M8.65 | T0 + T3 | `InboxDrainSerialisationTest` — two entry points on two locks | M8.48/49's two-commit-paths bug class |
@@ -729,7 +729,8 @@ the final assembly task and depends on both.
 | M8.61f | Stabilize `KillMidFlushIT` ack accounting before its final snapshot | NFR-8 |
 | M8.61g | Wait for lease expiry to stabilize after `SIGSTOP` in `ChaosHarnessIT` | NFR-9 |
 | M8.61h | Test the opened-but-empty skipped-epoch and dropped-history cases in `ChainAudit` with a fake reader | NFR-8 |
-| M8.62 | Kill M8's recorded surviving mutants | — (tests) |
+| M8.62 | Parent: kill each M8 recorded surviving mutant with a case that fails on that mutation; take children in the source-commit order in `backlog.md` | — (tests) |
+| M8.62a | Pin the watch-cut result to exact outward `IOException` and require “may have landed” so a `NotTheLeaseholderException` substitution cannot turn an ambiguous commit into an apparent safe refusal | FR-11, NFR-9 |
 | M8.63 | Replace `Thread.sleep` polling with Awaitility | — (tests) |
 | M8.64 | Sweep M8's stale prose | — (prose) |
 | M8.68 | `MALFORMED` reclassified | — (observability) |

@@ -106,8 +106,8 @@ class ForwardChallengeTest {
 
             assertThatThrownBy(() -> remote.commit(flush()))
                     .as("⚠️ THE SAME FAILURE A TIMEOUT GIVES: may have landed")
-                    .isInstanceOf(IOException.class)
-                    .hasMessageContaining("poda");
+                    .isExactlyInstanceOf(IOException.class)
+                    .hasMessageContaining("may have landed");
             assertThat(Duration.ofNanos(System.nanoTime() - began))
                     .as("⚠️ CUT SHORT BY THE EVIDENCE, not after the holder's 20 s")
                     .isLessThan(Duration.ofSeconds(2));
