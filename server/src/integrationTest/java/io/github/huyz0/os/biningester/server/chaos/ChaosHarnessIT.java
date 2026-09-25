@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import io.github.huyz0.os.biningester.binstore.backend.S3Fixture;
 import java.nio.file.Path;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeAll;
@@ -26,6 +28,11 @@ import org.junit.jupiter.api.io.TempDir;
 @Timeout(value = 300, unit = TimeUnit.SECONDS, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
 class ChaosHarnessIT {
 
+    private static final long PAUSE_MILLIS = 7_000;
+    private static final long LEASE_TTL_MILLIS = TimeUnit.SECONDS.toMillis(10);
+    private static final long MIN_RESUMED_TTL_REMAINING_MILLIS =
+            LEASE_TTL_MILLIS - TimeUnit.SECONDS.toMillis(1);
+
     @TempDir
     Path dir;
 
@@ -36,7 +43,9 @@ class ChaosHarnessIT {
 
     /** A node that holds the sequencer term, which it takes on its first commit. */
     private NodeProcess leader(ChaosBucket bucket) throws Exception {
-        NodeProcess node = NodeProcess.start(dir, "pod1", bucket.nodeSettings());
+        Map<String, String> settings = new HashMap<>(bucket.nodeSettings());
+        settings.put("lease.ttl", "PT10S");
+        NodeProcess node = NodeProcess.start(dir, "pod1", settings);
         node.registerLogs(UUID.randomUUID());
         assertThat(node.write("first", 1)).as("the premise: a write that takes the term")
                 .isEqualTo(202);
@@ -87,19 +96,55 @@ class ChaosHarnessIT {
             }
 
             node.pause();
-            long frozen = bucket.leaseExpiry().getAsLong();
-            Thread.sleep(7_000);
+            long frozen = awaitStableLeaseExpiry(bucket, node);
+            Thread.sleep(PAUSE_MILLIS);
             long stillFrozen = bucket.leaseExpiry().getAsLong();
             assertThat(node.alive()).as("paused is not dead").isTrue();
-            node.resume();
 
             assertThat(stillFrozen).as("⚠️ A STOPPED PROCESS RENEWS NOTHING").isEqualTo(frozen);
+            node.resume();
+            long resumedAt = System.currentTimeMillis();
+            long freshRenewalFloor = resumedAt + MIN_RESUMED_TTL_REMAINING_MILLIS;
             deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
-            while (bucket.leaseExpiry().getAsLong() == frozen) {
-                assertThat(System.nanoTime()).as("⚠️ AND A RESUMED ONE RENEWS AGAIN")
+            long resumedExpiry = bucket.leaseExpiry().getAsLong();
+            while (resumedExpiry < freshRenewalFloor) {
+                assertThat(resumedExpiry)
+                        .as("a delayed pre-pause renewal PUT must not appear after the frozen snapshot")
+                        .isEqualTo(frozen);
+                assertThat(System.nanoTime()).as("⚠️ AND A RESUMED ONE RENEWS AGAIN with a fresh "
+                        + "ten-second TTL, not a delayed pre-pause PUT")
                         .isLessThan(deadline);
                 Thread.sleep(200);
+                resumedExpiry = bucket.leaseExpiry().getAsLong();
             }
         }
+    }
+
+    /**
+     * Lets a renewal PUT already in flight at SIGSTOP settle before taking the
+     * expiry snapshot. Any later PUT during the seven-second hold fails the
+     * caller's equality assertion. Any stale expiry change between the final
+     * frozen read and the first fresh resumed expiry fails; a fresh renewal is
+     * identified by retaining at least nine seconds of the ten-second TTL.
+     */
+    private static long awaitStableLeaseExpiry(ChaosBucket bucket, NodeProcess node)
+            throws Exception {
+        long latest = bucket.leaseExpiry().getAsLong();
+        long stableSince = System.nanoTime();
+        long stableFor = TimeUnit.SECONDS.toNanos(1);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
+        while (System.nanoTime() < deadline) {
+            Thread.sleep(100);
+            assertThat(node.alive()).as("SIGSTOP leaves the process alive while its lease settles")
+                    .isTrue();
+            long observed = bucket.leaseExpiry().getAsLong();
+            if (observed != latest) {
+                latest = observed;
+                stableSince = System.nanoTime();
+            } else if (System.nanoTime() - stableSince >= stableFor) {
+                return latest;
+            }
+        }
+        throw new AssertionError("the lease expiry did not stabilize within 20 seconds of SIGSTOP");
     }
 }
