@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.server.chaos;
 
+import static org.awaitility.Awaitility.await;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
@@ -99,7 +100,11 @@ class ClockSkewIT {
                 producers.add(Thread.ofVirtual().start(() ->
                         KillSequencerMidCommitIT.produce(producer, nodes, acked, stop)));
             }
-            KillSequencerMidCommitIT.awaitAcks(acked, 600);
+            long ackWaitStarted = System.nanoTime();
+            long ackWaitLists = bucket.observerCounts().lists();
+            await().pollInterval(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(120))
+                    .untilAsserted(() -> assertThat(acked).hasSizeGreaterThanOrEqualTo(600));
+            assertObservedListRate(bucket, ackWaitLists, ackWaitStarted);
             Lease later = bucket.lease().orElseThrow();
             stop.set(true);
             for (Thread producer : producers) {
@@ -157,20 +162,27 @@ class ClockSkewIT {
 
             fast.kill();
             long killed = System.nanoTime();
-            int acksWhileStuck = 0;
             Set<String> stuckAcked = new java.util.HashSet<>();
-            while (System.nanoTime() - killed < LEASE_TTL.plusSeconds(20).toNanos()) {
+            Duration observation = LEASE_TTL.plusSeconds(20);
+            long observationStarted = System.nanoTime();
+            long listsBefore = bucket.observerCounts().lists();
+            await().pollInterval(Duration.ofSeconds(1)).during(observation)
+                    .atMost(observation.plusSeconds(2)).untilAsserted(() -> {
                 try {
                     String tag = "stuck-" + System.nanoTime();
                     if (follower.write(tag, 1) == 202) {
-                        acksWhileStuck++;
                         stuckAcked.add(tag + "-0");
                     }
                 } catch (RuntimeException noAnswer) {
                     // expected while nobody can commit
                 }
-                Thread.sleep(500);
-            }
+                Lease current = bucket.lease().orElseThrow();
+                assertThat(current.holderPodId())
+                        .as("the fast leader keeps the held term throughout TTL+20s")
+                        .isEqualTo(fastTerm.holderPodId());
+                assertThat(current.epoch()).isEqualTo(fastTerm.epoch());
+            });
+            assertObservedListRate(bucket, listsBefore, observationStarted);
             Lease after = bucket.lease().orElseThrow();
             follower.terminate();
             ChainAudit audit = ChainAudit.of(bucket);
@@ -180,7 +192,7 @@ class ClockSkewIT {
             System.out.println("M8.17 fast pod: " + TimeUnit.NANOSECONDS.toSeconds(
                     System.nanoTime() - killed) + " s after its death the term is still "
                     + after.holderPodId() + "@" + after.epoch() + "; acks meanwhile "
-                    + acksWhileStuck);
+                    + stuckAcked.size());
             assertThat(after.epoch())
                     .as("⚠️ LIVENESS, AS PREDICTED: NO TAKEOVER WITHIN THE TTL + 20 s, because "
                             + "the dead pod's expiry is its fast clock's")
@@ -243,10 +255,15 @@ class ClockSkewIT {
                         KillSequencerMidCommitIT.produce(producer, nodes, acked, stop)));
             }
             // ⚠️ SEVERAL RENEW INTERVALS, so churn would show as epochs
-            long until = System.nanoTime() + LEASE_TTL.multipliedBy(3).toNanos();
-            while (System.nanoTime() < until) {
-                Thread.sleep(200);
-            }
+            long observationStarted = System.nanoTime();
+            long listsBefore = bucket.observerCounts().lists();
+            await().pollInterval(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(30))
+                    .untilAsserted(() -> assertStableFastTerm(bucket, first));
+            Duration observation = LEASE_TTL.multipliedBy(3);
+            await().pollInterval(Duration.ofSeconds(1)).during(observation)
+                    .atMost(observation.plusSeconds(2))
+                    .untilAsserted(() -> assertStableFastTerm(bucket, first));
+            assertObservedListRate(bucket, listsBefore, observationStarted);
             Lease after = bucket.lease().orElseThrow();
             stop.set(true);
             for (Thread producer : producers) {
@@ -278,5 +295,20 @@ class ClockSkewIT {
             stop.set(true);
             nodes.forEach(NodeProcess::close);
         }
+    }
+
+    private static void assertStableFastTerm(ChaosBucket bucket, Lease initial) throws Exception {
+        Lease current = bucket.lease().orElseThrow();
+        assertThat(current.holderPodId()).isEqualTo("pod1");
+        assertThat(current.epoch() - initial.epoch()).isEqualTo(1);
+    }
+
+    private static void assertObservedListRate(ChaosBucket bucket, long listsBefore,
+            long startedNanos) {
+        long elapsedNanos = System.nanoTime() - startedNanos;
+        long allowance = (long) Math.ceil(elapsedNanos / (double) TimeUnit.SECONDS.toNanos(1)) + 1;
+        long lists = bucket.observerCounts().lists() - listsBefore;
+        assertThat(lists).as("RustFS observer LIST rate over %.3f seconds", elapsedNanos / 1e9)
+                .isLessThanOrEqualTo(allowance);
     }
 }

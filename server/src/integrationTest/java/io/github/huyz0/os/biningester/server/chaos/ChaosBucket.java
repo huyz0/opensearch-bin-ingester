@@ -2,6 +2,7 @@
 package io.github.huyz0.os.biningester.server.chaos;
 
 import io.github.huyz0.os.biningester.binstore.BinStore;
+import io.github.huyz0.os.biningester.binstore.CountingBinStore;
 import io.github.huyz0.os.biningester.binstore.ObjectStat;
 import io.github.huyz0.os.biningester.binstore.backend.S3Fixture;
 import io.github.huyz0.os.biningester.binstore.backend.S3BinStore;
@@ -42,14 +43,15 @@ public final class ChaosBucket implements AutoCloseable, ChainAudit.ChainBucketR
 
     private final String endpoint;
     private final String name;
-    private final BinStore observer;
+    private final CountingBinStore observer;
 
     private ChaosBucket(String endpoint, String name) {
         this.endpoint = endpoint;
         this.name = name;
-        this.observer = S3BinStore.open(new S3Settings(endpoint, "us-east-1", name, true, 255),
+        this.observer = new CountingBinStore(S3BinStore.open(
+                new S3Settings(endpoint, "us-east-1", name, true, 255),
                 StaticCredentialsProvider.create(AwsBasicCredentials.create(
-                        S3Fixture.ACCESS_KEY, S3Fixture.SECRET_KEY)));
+                        S3Fixture.ACCESS_KEY, S3Fixture.SECRET_KEY))));
     }
 
     /** Makes a new bucket on the shared RustFS container. */
@@ -95,6 +97,11 @@ public final class ChaosBucket implements AutoCloseable, ChainAudit.ChainBucketR
     /** The store, read by nobody but the test. */
     public BinStore observer() {
         return observer;
+    }
+
+    /** The object-store requests made by the independent test observer. */
+    public io.github.huyz0.os.biningester.binstore.StoreCounts observerCounts() {
+        return observer.counts();
     }
 
     /** Every key under {@code prefix}, following every page. */
