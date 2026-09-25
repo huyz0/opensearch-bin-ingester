@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.server.chaos;
 
+import static org.awaitility.Awaitility.await;
+import static org.assertj.core.api.Assertions.assertThat;
+
 import io.github.huyz0.os.biningester.bench.BulkBatch;
 import io.helidon.webclient.api.WebClient;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -203,20 +207,20 @@ public final class NodeProcess implements AutoCloseable {
      * unbounded wait.
      */
     private void awaitServing() throws Exception {
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120);
         WebClient client = client();
-        while (System.nanoTime() < deadline) {
-            if (!process.isAlive()) {
-                throw new AssertionError(podId + " died before it started serving:\n" + log());
-            }
-            try {
-                client.get("/live").request().close();
-                return;
-            } catch (RuntimeException notYet) {
-                Thread.sleep(200);
-            }
-        }
-        throw new AssertionError(podId + " never started serving:\n" + log());
+        await().pollInterval(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(120))
+                .untilAsserted(() -> {
+                    if (!process.isAlive()) {
+                        throw new AssertionError(
+                                podId + " died before it started serving:\n" + log());
+                    }
+                    try (var response = client.get("/live").request()) {
+                        assertThat(response.status().code())
+                                .as(podId + " /live responds successfully").isEqualTo(200);
+                    } catch (RuntimeException notYet) {
+                        throw new AssertionError(podId + " is not serving yet", notYet);
+                    }
+                });
     }
 
     public String podId() {

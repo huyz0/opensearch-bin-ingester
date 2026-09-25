@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.server.chaos;
 
+import static org.awaitility.Awaitility.await;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
@@ -10,6 +11,7 @@ import io.github.huyz0.os.biningester.format.SegmentReader;
 import io.github.huyz0.os.biningester.format.SegmentRecord;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -22,6 +24,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -134,6 +137,7 @@ class KillMidFlushIT {
             CountDownLatch releasePutSender = new CountDownLatch(1);
             AtomicBoolean snapshotStarted = new AtomicBoolean();
             CountDownLatch joinObserved = new CountDownLatch(1);
+            AtomicReference<Throwable> producerFailure = new AtomicReference<>();
             List<Thread> putSenders = new CopyOnWriteArrayList<>();
             try {
                 node.registerLogs(UUID.randomUUID());
@@ -164,8 +168,8 @@ class KillMidFlushIT {
                                     }
                                 }
                             }
-                        } catch (Exception failed) {
-                            throw new IllegalStateException(failed);
+                        } catch (Exception | AssertionError failed) {
+                            producerFailure.compareAndSet(null, failed);
                         } finally {
                             done.countDown();
                         }
@@ -173,6 +177,8 @@ class KillMidFlushIT {
                 }
                 assertThat(done.await(240, TimeUnit.SECONDS))
                         .as("the producers never reached the kill").isTrue();
+                assertThat(producerFailure.get())
+                        .as("producer and trigger failures reach the test thread").isNull();
                 if (!putSenders.isEmpty()) {
                     assertThat(putSenderReady.await(30, TimeUnit.SECONDS))
                             .as("the post-PUT sender never reached its response")
@@ -245,7 +251,8 @@ class KillMidFlushIT {
     private static void killAtTheNextPut(NodeProcess node, ChaosBucket bucket, Set<String> acked,
             List<Thread> senders, CountDownLatch senderReady, CountDownLatch releaseSender,
             List<String> next) throws Exception {
-        int before = bucket.segments().size();
+        String dataPrefix = ChaosBucket.PREFIX + "/data/";
+        Set<String> before = Set.copyOf(bucket.keysOnePage(dataPrefix));
         Thread sender = Thread.ofVirtual().start(() -> {
             boolean accepted = false;
             try {
@@ -267,14 +274,31 @@ class KillMidFlushIT {
             }
         });
         senders.add(sender);
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-        while (bucket.segments().size() == before) {
-            if (System.nanoTime() > deadline) {
-                node.killNow();
-                throw new AssertionError("no new segment reached the bucket within 10 s");
-            }
-        }
+        AtomicReference<String> visibleSegment = new AtomicReference<>();
+        await().pollInterval(Duration.ofMillis(1)).atMost(Duration.ofSeconds(10))
+                .untilAsserted(() -> {
+                    List<String> segments = bucket.keysOnePage(dataPrefix);
+                    List<String> added = segments.stream().filter(key -> !before.contains(key))
+                            .toList();
+                    assertThat(added).as("a new segment reaches the bucket").isNotEmpty();
+                    visibleSegment.compareAndSet(null, added.getFirst());
+                });
         node.killNow();
+        long listsBefore = bucket.observerCounts().lists();
+        long observationStarted = System.nanoTime();
+        await().pollInterval(Duration.ofSeconds(1)).during(Duration.ofSeconds(2))
+                .atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                        assertThat(bucket.keysOnePage(dataPrefix)).contains(visibleSegment.get()));
+        assertObservedListRate(bucket, listsBefore, observationStarted);
+    }
+
+    private static void assertObservedListRate(ChaosBucket bucket, long listsBefore,
+            long startedNanos) {
+        long elapsedNanos = System.nanoTime() - startedNanos;
+        long allowance = (long) Math.ceil(elapsedNanos / (double) TimeUnit.SECONDS.toNanos(1)) + 1;
+        long lists = bucket.observerCounts().lists() - listsBefore;
+        assertThat(lists).as("RustFS observer LIST rate over %.3f seconds", elapsedNanos / 1e9)
+                .isLessThanOrEqualTo(allowance);
     }
 
     /** Every id in every segment in the bucket, with how many times it appears. */
