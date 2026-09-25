@@ -22,7 +22,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
@@ -91,13 +90,11 @@ class RetentionRefusalTest {
         return body.toString();
     }
 
-    private static void await(String what, java.util.function.BooleanSupplier done)
-            throws InterruptedException {
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
-        while (!done.getAsBoolean()) {
-            assertThat(System.nanoTime()).as("never: %s", what).isLessThan(deadline);
-            Thread.sleep(50);
-        }
+    private static void awaitCondition(String what, java.util.function.BooleanSupplier done) {
+        org.awaitility.Awaitility.await(what)
+                .atMost(Duration.ofSeconds(30))
+                .pollInterval(Duration.ofSeconds(1))
+                .until(done::getAsBoolean);
     }
 
     @Test
@@ -112,7 +109,7 @@ class RetentionRefusalTest {
                     .status().code()).isEqualTo(202);
 
             var store = node.assembly().store();
-            await("the node's own retention pass deleted the segment", () -> {
+            awaitCondition("the node's own retention pass deleted the segment", () -> {
                 try {
                     return store.list(PREFIX + "/data/", null, 100).objects().isEmpty();
                 } catch (java.io.IOException failed) {
@@ -130,7 +127,7 @@ class RetentionRefusalTest {
                 local.commit(new CommitRequest("p", "i", i, "absent/" + i, Map.of(other, 1)));
             }
             long epoch = local.epoch();
-            await("a checkpoint recording the collected floor", () -> {
+            awaitCondition("a checkpoint recording the collected floor", () -> {
                 try {
                     Optional<Checkpoint> newest = Checkpoints.newest(store, PREFIX, epoch);
                     return newest.map(c -> c.streams().get(stream))
@@ -146,7 +143,7 @@ class RetentionRefusalTest {
                     Duration.ofSeconds(1));
             try (ConsumerClient consumer = new ConsumerClient(transport, stream, 64)) {
                 consumer.requestFreshFloor();
-                await("the floor reached the consumer over HTTP",
+                awaitCondition("the floor reached the consumer over HTTP",
                         () -> consumer.retainedFloor().isPresent());
 
                 assertThatThrownBy(() -> consumer.refuseIfCollected(0))

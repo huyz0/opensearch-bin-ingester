@@ -68,6 +68,9 @@ dependencies {
     // is up and the three services are on it" is not a property an in-process
     // call can check. Nothing here reaches the production classpath.
     testImplementation(libs.helidon.webclient)
+    // Awaitility is used only by tests waiting on the assembled HTTP endpoint;
+    // no production runtime or object-store request path depends on it.
+    testImplementation(libs.awaitility)
 
     // ⚠️ T3, AND AGAINST A REAL ENDPOINT. Criterion 1 is "the object is in the
     // BUCKET and its key matches the grammar" -- a process that acked from its

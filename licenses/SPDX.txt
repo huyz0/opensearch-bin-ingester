@@ -10,6 +10,7 @@
 junit        EPL-2.0   # junit-5.x artifacts (^junit-.*)
 junit4       EPL-1.0   # junit:junit:4.13.2, transitive via org.opensearch.test:framework
 assertj      Apache-2.0
+awaitility   Apache-2.0
 byte-buddy   Apache-2.0
 opentest4j   Apache-2.0
 helidon      Apache-2.0
