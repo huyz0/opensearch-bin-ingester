@@ -140,6 +140,9 @@ class AzPartitionIT {
                     intents.add(key);
                 }
             }
+            assertThat(intents)
+                    .as("the three cut bulk flushes persist at most one intent object each")
+                    .hasSizeLessThanOrEqualTo(3);
             assertThat(duringCut)
                     .as("⚠️ THE WRITES IN THE CUT WERE ACKED -- on a durable intent (ADR-0058)")
                     .hasSize(60);
