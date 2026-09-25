@@ -509,11 +509,43 @@ public final class NodeProcess implements AutoCloseable {
      * delivered would leave a row asserting a freeze that never happened.
      */
     private void signal(String name) throws Exception {
+        if (System.getProperty("os.name").startsWith("Windows")) {
+            signalWindows(name);
+            return;
+        }
         Process kill = new ProcessBuilder("kill", "-" + name, String.valueOf(process.pid()))
                 .redirectErrorStream(true).start();
         if (!kill.waitFor(10, TimeUnit.SECONDS) || kill.exitValue() != 0) {
             throw new AssertionError("kill -" + name + " " + process.pid() + " failed: "
                     + new String(kill.getInputStream().readAllBytes(), StandardCharsets.UTF_8));
+        }
+    }
+
+    /** Windows has no POSIX signals; suspend/resume the child through its native process handle. */
+    private void signalWindows(String name) throws Exception {
+        String nativeCall = switch (name) {
+            case "STOP" -> "NtSuspendProcess";
+            case "CONT" -> "NtResumeProcess";
+            default -> throw new IllegalArgumentException("unsupported process signal: " + name);
+        };
+        String declarations = "using System; using System.Runtime.InteropServices; "
+                + "public static class NodeProcessSignals { "
+                + "[DllImport(\"ntdll.dll\")] public static extern int NtSuspendProcess(IntPtr h); "
+                + "[DllImport(\"ntdll.dll\")] public static extern int NtResumeProcess(IntPtr h); }";
+        String encodedDeclarations = java.util.Base64.getEncoder().encodeToString(
+                declarations.getBytes(StandardCharsets.UTF_8));
+        String script = "Add-Type -TypeDefinition ([Text.Encoding]::UTF8.GetString("
+                + "[Convert]::FromBase64String('" + encodedDeclarations + "'))); "
+                + "$p = [System.Diagnostics.Process]::GetProcessById(" + process.pid() + "); "
+                + "$status = [NodeProcessSignals]::" + nativeCall + "($p.Handle); "
+                + "if ($status -ne 0) { [Console]::Error.WriteLine(('NTSTATUS 0x{0:X8}' -f $status)); exit 1 }";
+        Process nativeSignal = new ProcessBuilder("powershell.exe", "-NoLogo", "-NoProfile",
+                "-NonInteractive", "-Command", script).redirectErrorStream(true).start();
+        if (!nativeSignal.waitFor(10, TimeUnit.SECONDS) || nativeSignal.exitValue() != 0) {
+            nativeSignal.destroyForcibly();
+            throw new AssertionError("Windows " + name + " for process " + process.pid()
+                    + " failed: " + new String(nativeSignal.getInputStream().readAllBytes(),
+                            StandardCharsets.UTF_8));
         }
     }
 

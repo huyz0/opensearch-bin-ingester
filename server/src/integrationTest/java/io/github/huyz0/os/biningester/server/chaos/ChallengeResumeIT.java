@@ -138,6 +138,12 @@ class ChallengeResumeIT {
             stop.set(true);
             viaFollower.join(TimeUnit.SECONDS.toMillis(30));
             viaResumed.join(TimeUnit.SECONDS.toMillis(30));
+            assertThat(viaFollower.isAlive()).as("follower producer completed").isFalse();
+            assertThat(viaResumed.isAlive()).as("resumed-leader producer completed").isFalse();
+            Lease completed = bucket.lease().orElseThrow();
+            assertThat(completed.epoch())
+                    .as("exactly one takeover through stable completion, including after the earlier read")
+                    .isEqualTo(before.epoch() + 1);
             for (NodeProcess node : nodes) {
                 node.terminate();
             }
