@@ -163,6 +163,10 @@ class IdlePodCostSoakTest {
             long manyLease = manyAfter[0] - manyBefore[0];
             long oneOther = oneAfter[1] - oneBefore[1];
             long manyOther = manyAfter[1] - manyBefore[1];
+            Duration renewInterval = one.assembly.config().leaseRenewInterval();
+            long intervalCount = (WINDOW.toNanos() + renewInterval.toNanos() - 1)
+                    / renewInterval.toNanos();
+            long renewalCeiling = intervalCount + 2;
             System.out.println("M8.40 over " + WINDOW.toMinutes() + " min idle: 1 subscriber "
                     + oneLease + " lease + " + oneOther + " other; " + MANY + " subscribers "
                     + manyLease + " lease + " + manyOther + " other " + many.meter.otherByVerb);
@@ -175,13 +179,19 @@ class IdlePodCostSoakTest {
                     .as("⚠️ AND NOTHING BUT THE LEASE AT ONE: %s", one.meter.otherByVerb)
                     .isZero();
             assertThat(oneLease).as("the premise: the lease was renewed").isPositive();
-            long perRenewal = Math.max(1, Math.max(oneLease, manyLease)
-                    / Math.max(1, WINDOW.dividedBy(one.assembly.config().leaseRenewInterval())));
+            assertThat(oneLease)
+                    .as("one renewal per configured %s interval, plus two boundary renewals",
+                            renewInterval)
+                    .isLessThanOrEqualTo(renewalCeiling);
+            assertThat(manyLease)
+                    .as("one renewal per configured %s interval, plus two boundary renewals",
+                            renewInterval)
+                    .isLessThanOrEqualTo(renewalCeiling);
             assertThat(Math.abs(oneLease - manyLease))
                     .as("⚠️ THE SAME RENEWALS AT 1 AND AT %d, to within one renewal's "
                             + "requests (%d): a subscriber-driven lease cost would not be",
-                            MANY, perRenewal)
-                    .isLessThanOrEqualTo(perRenewal);
+                            MANY, 1)
+                    .isLessThanOrEqualTo(1);
         }
     }
 }
