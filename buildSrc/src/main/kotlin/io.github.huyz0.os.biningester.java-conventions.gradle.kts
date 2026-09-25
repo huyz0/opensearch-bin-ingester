@@ -158,6 +158,14 @@ testing {
             }
             targets.configureEach {
                 testTask.configure {
+                    // M9.53: the nightly full cost profile runs several
+                    // five-minute points in one integrationTest task. Keep
+                    // the normal ten-minute guard, but let that explicitly
+                    // named L4 invocation use the CI job's 90-minute cap.
+                    if (project.path == ":server"
+                        && providers.gradleProperty("m9.fullMeasurement").orNull == "true") {
+                        timeout.set(Duration.ofMinutes(60))
+                    }
                     // ⚠️ THE REPOSITORY ROOT, BECAUSE THE CONTAINER IS DESCRIBED
                     // THERE. A T3 case starts `docker-compose.test.yml`, which is
                     // the root's file and not the module's, and a test JVM's

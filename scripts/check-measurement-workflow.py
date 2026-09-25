@@ -83,6 +83,9 @@ def cost_job_failures(workflow: str) -> list[str]:
     for requirement in requirements:
         if not any(requirement in line for line in cost):
             problems.append(f"full cost job must retain {requirement}")
+    if not any(line.strip() == "./gradlew :server:integrationTest -Pm9.fullMeasurement=true"
+               for line in cost):
+        problems.append("full cost job must opt into the extended integration-test timeout")
     if any(line.lstrip().startswith("continue-on-error:") for line in cost):
         problems.append("full cost assertions must gate the measurement workflow")
     if any(line.startswith("    if:") for line in cost):

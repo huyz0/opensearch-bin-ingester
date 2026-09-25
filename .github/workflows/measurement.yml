@@ -25,7 +25,7 @@ jobs:
           python-version: '3.12'
       - name: Full cost points
         run: >-
-          ./gradlew :server:integrationTest
+          ./gradlew :server:integrationTest -Pm9.fullMeasurement=true
           --tests '*chaos.WriteRequestRateIT'
           --tests '*chaos.LowRateWriteBudgetIT'
           --tests '*chaos.ReadRequestRateIT'

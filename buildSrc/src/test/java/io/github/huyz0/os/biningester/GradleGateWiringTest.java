@@ -159,6 +159,79 @@ class GradleGateWiringTest {
     }
 
     @Test
+    void fullMeasurementUsesTheExtendedIntegrationTestTimeout() throws Exception {
+        Path root = repository();
+        Path measurement = root.resolve(".github/workflows/measurement.yml");
+        Path ci = root.resolve(".github/workflows/ci.yml");
+        String validWorkflow = Files.readString(measurement).replace(
+                "          ./gradlew :server:integrationTest\n",
+                "          ./gradlew :server:integrationTest -Pm9.fullMeasurement=true\n");
+        Path fixture = root.resolve("buildSrc/build/tmp/measurement-timeout")
+                .resolve(UUID.randomUUID().toString());
+        Files.createDirectories(fixture);
+        Path withOverride = fixture.resolve("measurement.yml");
+        Files.writeString(withOverride, validWorkflow);
+        Run valid = checkMeasurementWorkflow(withOverride, ci);
+        assertThat(valid.exitCode()).isZero();
+
+        Path withoutOverride = fixture.resolve("measurement-without-timeout.yml");
+        Files.writeString(withoutOverride, validWorkflow.replace(
+                " -Pm9.fullMeasurement=true", ""));
+        Run missingOverride = checkMeasurementWorkflow(withoutOverride, ci);
+        assertThat(missingOverride.exitCode()).isEqualTo(1);
+        assertThat(missingOverride.output()).contains("extended integration-test timeout");
+
+        Path commentedOverride = fixture.resolve("measurement-commented-timeout.yml");
+        Files.writeString(commentedOverride, validWorkflow.replace(
+                "          ./gradlew :server:integrationTest -Pm9.fullMeasurement=true\n",
+                "          ./gradlew :server:integrationTest\n"
+                        + "          # ./gradlew :server:integrationTest -Pm9.fullMeasurement=true\n"));
+        Run nonExecutableOverride = checkMeasurementWorkflow(commentedOverride, ci);
+        assertThat(nonExecutableOverride.exitCode()).isEqualTo(1);
+        assertThat(nonExecutableOverride.output()).contains("extended integration-test timeout");
+
+    }
+
+    @Test
+    void fullMeasurementTimeoutAppliesOnlyToServerIntegrationTest() throws Exception {
+        Path root = repository();
+        Path fixture = root.resolve("buildSrc/build/tmp/measurement-timeout-scope")
+                .resolve(UUID.randomUUID().toString());
+        Files.createDirectories(fixture);
+        Path initScript = fixture.resolve("timeout-scope.init.gradle");
+        Files.writeString(initScript, """
+                gradle.projectsEvaluated {
+                    def serverProject = gradle.rootProject.findProject(':server')
+                    def pluginProject = gradle.rootProject.findProject(':plugin')
+                    if (serverProject != null && pluginProject != null) {
+                        [serverProject, pluginProject].each { targetProject ->
+                            def task = targetProject.tasks.getByName('integrationTest')
+                            println("M9_TIMEOUT_SCOPE:${targetProject.path}:${task.timeout.get().toMinutes()}")
+                        }
+                    }
+                }
+                """);
+        String[] command = System.getProperty("os.name").toLowerCase().contains("win")
+                ? new String[]{"cmd", "/c", "gradlew.bat", ":server:help", ":plugin:help",
+                    "-Pm9.fullMeasurement=true", "--init-script", initScript.toString(),
+                    "--no-configuration-cache", "--no-daemon"}
+                : new String[]{"./gradlew", ":server:help", ":plugin:help",
+                    "-Pm9.fullMeasurement=true", "--init-script", initScript.toString(),
+                    "--no-configuration-cache", "--no-daemon"};
+        Path outputFile = fixture.resolve("gradle.log");
+        Process process = new ProcessBuilder(command).directory(root.toFile())
+                .redirectErrorStream(true).redirectOutput(outputFile.toFile()).start();
+        boolean finished = process.waitFor(120, java.util.concurrent.TimeUnit.SECONDS);
+        if (!finished) {
+            process.destroyForcibly();
+        }
+        String output = Files.exists(outputFile) ? Files.readString(outputFile) : "";
+        assertThat(finished).as("Gradle timeout configuration probe must finish").isTrue();
+        assertThat(process.exitValue()).as(output).isZero();
+        assertThat(output).contains("M9_TIMEOUT_SCOPE::server:60", "M9_TIMEOUT_SCOPE::plugin:10");
+    }
+
+    @Test
     void costResultCheckRequiresEveryNamedTestToExecute() throws Exception {
         Path root = repository();
         Path fixture = root.resolve("buildSrc/build/tmp/cost-results")
