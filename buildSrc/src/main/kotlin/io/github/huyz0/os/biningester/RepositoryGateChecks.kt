@@ -3,6 +3,7 @@ package io.github.huyz0.os.biningester
 
 import java.nio.file.Files
 import java.nio.file.Path
+import kotlin.io.path.extension
 import kotlin.io.path.isRegularFile
 import kotlin.io.path.readText
 
@@ -61,6 +62,29 @@ object RepositoryGateChecks {
                 if (!Files.isDirectory(skills.resolve(name))) failures += "$command targets no skill"
                 if (!text.contains(".agents/skills/$name/SKILL.md")) failures += "$command does not point to its skill"
                 if (Files.readAllLines(command).size > 20) failures += "$command is longer than 20 lines"
+            }
+        }
+    }
+
+    fun terminology(root: Path, files: List<Path>, failures: MutableList<String>) {
+        val deprecated = listOf(
+            "service pod" to "ingester node", "service node" to "ingester node",
+            "the service" to "the ingester", "client library" to "consumer library",
+            "service-side" to "ingester-side", "ingester pod" to "ingester node",
+            "collector" to "one of the six roles"
+        )
+        files.filter { it.extension in setOf("java", "kt", "kts", "md") }.forEach { file ->
+            // Relative and separator-normalised: the glossary must name the
+            // deprecated terms to forbid them, and a backslash-only match left
+            // it unexempted on POSIX.
+            val relative = root.relativize(file).toString().replace('\\', '/')
+            if (relative == "docs/internal/standards/glossary.md" ||
+                file.toString().contains("scripts") ||
+                file.fileName.toString() in setOf("RepositoryGatesTask.kt", "RepositoryGateChecks.kt")) return@forEach
+            file.readText().lineSequence().forEachIndexed { line, text ->
+                if (!text.trimStart().startsWith("//") && !text.trimStart().startsWith("<!--") &&
+                    deprecated.any { Regex("\\b${Regex.escape(it.first)}\\b", RegexOption.IGNORE_CASE).containsMatchIn(text) })
+                    failures += "deprecated terminology at $relative:${line + 1}"
             }
         }
     }

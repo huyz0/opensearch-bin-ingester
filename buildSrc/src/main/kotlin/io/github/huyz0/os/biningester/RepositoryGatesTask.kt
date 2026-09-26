@@ -42,7 +42,7 @@ abstract class RepositoryGatesTask : DefaultTask() {
         checkFileSizes(root, files, failures)
         checkMarkdownLinks(root, files, failures)
         checkAdrReferences(root, files, failures)
-        checkTerminology(root, files, failures)
+        RepositoryGateChecks.terminology(root, files, failures)
         checkBuildWiring(root, failures)
         checkGeneratedIndexes(root, failures)
         RepositoryGateChecks.gateScope(root, failures)
@@ -131,24 +131,6 @@ abstract class RepositoryGatesTask : DefaultTask() {
         files.filter { it.extension in setOf("md", "java", "kt", "kts") }.forEach { file ->
             ref.findAll(file.readText()).map { "ADR-${it.groupValues[1]}" }.filter { it !in adrs }
                 .distinct().forEach { failures += "${root.relativize(file)} cites missing $it" }
-        }
-    }
-
-    private fun checkTerminology(root: Path, files: List<Path>, failures: MutableList<String>) {
-        val deprecated = listOf(
-            "service pod" to "ingester node", "service node" to "ingester node",
-            "the service" to "the ingester", "client library" to "consumer library",
-            "service-side" to "ingester-side", "ingester pod" to "ingester node",
-            "collector" to "one of the six roles"
-        )
-        files.filter { it.extension in setOf("java", "kt", "kts", "md") }.forEach { file ->
-            if (file.toString().contains("docs\\internal\\standards\\glossary.md") ||
-                file.toString().contains("scripts") || file.fileName.toString() == "RepositoryGatesTask.kt") return@forEach
-            file.readText().lineSequence().forEachIndexed { line, text ->
-                if (!text.trimStart().startsWith("//") && !text.trimStart().startsWith("<!--") &&
-                    deprecated.any { Regex("\\b${Regex.escape(it.first)}\\b", RegexOption.IGNORE_CASE).containsMatchIn(text) })
-                    failures += "deprecated terminology at ${root.relativize(file)}:${line + 1}"
-            }
         }
     }
 

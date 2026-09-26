@@ -29,6 +29,27 @@ class RepositoryGateChecksTest {
     }
 
     @Test
+    void terminologyExemptsTheGlossaryOnEveryPathSeparatorAndStillRefusesOtherDocs() throws Exception {
+        // The glossary must name the deprecated terms to forbid them. The
+        // exemption once matched only a backslash path, so on POSIX the gate
+        // refused the glossary itself and `gates` was red on a clean tree.
+        Path root = Files.createTempDirectory("gate-terms-");
+        Path glossary = root.resolve("docs/internal/standards/glossary.md");
+        Path other = root.resolve("docs/internal/standards/other.md");
+        Files.createDirectories(glossary.getParent());
+        // Concatenated so this file does not itself carry the deprecated term.
+        String line = "Never write \"the " + "service\"; write ingester.\n";
+        Files.writeString(glossary, line);
+        Files.writeString(other, line);
+        ArrayList<String> failures = new ArrayList<>();
+
+        RepositoryGateChecks.INSTANCE.terminology(root, java.util.List.of(glossary, other), failures);
+
+        assertThat(failures).containsExactly(
+                "deprecated terminology at docs/internal/standards/other.md:1");
+    }
+
+    @Test
     void moduleDriftRefusesASettingsEntryWithoutABuildFile() throws Exception {
         Path root = Files.createTempDirectory("gate-module-");
         Files.writeString(root.resolve("settings.gradle.kts"), "include(\"ghost\")\n");
