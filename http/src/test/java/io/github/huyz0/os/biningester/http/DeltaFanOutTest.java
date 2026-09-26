@@ -503,6 +503,26 @@ class DeltaFanOutTest {
     }
 
     @Test
+    void aRelayedDeltaIsPublishedAndPushedWithinTheAzButNeverHintedOnward() throws Exception {
+        List<Sent> sent = new CopyOnWriteArrayList<>();
+        List<Local> local = new CopyOnWriteArrayList<>();
+        CrossAzBytes crossAz = new CrossAzBytes("az-a");
+        try (DeltaFanOut fanOut = new DeltaFanOut("a1", "az-a", PORT, crossAz, () -> FLEET,
+                (delta, epoch) -> local.add(new Local(epoch, delta.sequence())),
+                (endpoint, path, body) -> sent.add(new Sent(endpoint, path, body)),
+                Duration.ofMillis(1))) {
+            fanOut.relayed(delta(5), 2);
+            await(() -> fanOut.delivered() == 1, "the one same-AZ push");
+
+            assertThat(local).containsExactly(new Local(2, 5));
+            assertThat(sent).extracting(Sent::endpoint).containsExactly("http://10.0.0.2:8080");
+            assertThat(sent).extracting(Sent::path).containsOnly(DeltaFanOut.PUSH_PATH);
+            assertThat(crossAz.crossAzBytes()).as("nothing leaves the AZ").isZero();
+            assertThat(fanOut.lanes()).as("no lane to a remote relay is even opened").isEqualTo(1);
+        }
+    }
+
+    @Test
     void theBackoffDoublesAndIsCapped() {
         assertThat(DeltaFanOut.nextBackoff(100)).isEqualTo(200);
         assertThat(DeltaFanOut.nextBackoff(1500)).isEqualTo(DeltaFanOut.MAX_BACKOFF.toMillis());

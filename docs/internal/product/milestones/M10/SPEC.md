@@ -327,6 +327,7 @@ request.
 | M10.19 | T1 | `LocalSequencer` hook cases (fresh once, ambiguous-landed once, replay never) | a replay published; a landed delta reported twice |
 | M10.19a | T1 | push/hint targeting from a view; per-peer ordering under retry; lane bounds; departure; `/ctl/push` authorization | a hint sent to a non-relay; a whole delta sent cross-AZ; a failed frame reordered; a still-ready peer's backlog dropped |
 | M10.20 | T1 | relay cases (one GET per hint; hints handled serially in arrival order; a failed GET retried before the next hint, then counted as lost; a hint for a missing delta advances nothing; a non-relay drops hints) | a GET per pod; concurrent reads publishing out of order; a transient failure skipping a delta; a forged hint advancing the publisher |
+| M10.20a | T1 | an assembled leaseholder and a same-AZ follower over one store: the follower's subscriber receives a write it never saw; commits before attach are not lost | a node that still publishes its own flush; a hook installed after the inbox drain |
 | M10.21 | T3 | `EveryPodReceivesEveryRecordIT` | criterion 13 on the assembled rig |
 | M10.5 | T3 (RustFS, three `NodeProcess`es) | `CrossAzBytesIT#threeAzProxyServingStaysBelowTheNfr5Budget`, `#aCrossAzProxyFetchCountsItsPayload` | payload not counted; same-AZ counted as cross-AZ; per-consumer GET |
 
@@ -398,7 +399,8 @@ depend on the route.
 | M10.18 | The ordered publisher: `(epoch, sequence)`-monotonic publication, held-segment bytes registered before commit, and a `DefaultIngest` switch that stops publishing its own commits | FR-5, NFR-4 |
 | M10.19 | The leaseholder side, part 1: `LocalSequencer`'s `onCommitted` hook (fresh and ambiguous-landed deltas) and `DELTA_PUSH`/`DELTA_HINT` counting | FR-5, NFR-5 |
 | M10.19a | The leaseholder side, part 2 (split from M10.19 by its third review round): local publish, per-peer ordered retrying push senders to same-AZ pods, hints to each remote AZ's relay, `/ctl/push`; built and tested, not yet wired into a node | FR-5, NFR-5 |
-| M10.20 | The relay: `/ctl/hint` accepted only by its AZ's relay, one GET of the named delta, local publish, push to the AZ's other ready pods; and switching nodes to publish through the chain, which waits for the relay (M10.19's review: switching first leaves a remote-AZ pod receiving nothing) | FR-5, NFR-4 |
+| M10.20 | The relay: `/ctl/hint` accepted only by its AZ's relay, one GET of the named delta, local publish, push to the AZ's other ready pods | FR-5, NFR-4 |
+| M10.20a | Switching nodes to publish through the chain, which waits for the relay (M10.19's review: switching first leaves a remote-AZ pod receiving nothing) | FR-5, NFR-4 |
 | M10.21 | T3 on RustFS: three pods, three AZ labels, fake `EndpointSlice`; every pod's consumer receives every record; counted and idle bounds (criterion 13) | FR-5, NFR-5, NFR-2 |
 | M10.22 | Catch-up served by a follower, so a consumer's gap repair works on any pod (ADR-0075's named gap) -- or its disposition, if it does not fit M10 | FR-9, FR-5 |
 | M10.5 | NFR-5 on RustFS across three AZ labels with the proxy payload counted, a cross-AZ control run, GETs per segment bounded; results committed | NFR-5, NFR-4 |

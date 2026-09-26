@@ -43,9 +43,9 @@ import java.util.function.Supplier;
  * counted: a gap on that peer that only catch-up off the
  * leaseholder repairs until M10.22. Nothing here blocks the commit path.
  *
- * <p>⚠️ **NOT WIRED INTO A NODE HERE.** M10.20 adds the relay and switches
- * nodes to publish through the chain together; switching first would leave a
- * remote-AZ pod receiving nothing, not even its own writes.
+ * <p>⚠️ **NOT WIRED INTO A NODE HERE.** M10.20a switches nodes to publish
+ * through the chain, after the relay (M10.20) exists; switching first would
+ * leave a remote-AZ pod receiving nothing, not even its own writes.
  *
  * <p>⚠️ **THE RELAY IS THE LOWEST READY POD ID IN ITS AZ**, by
  * {@link #relayOf}, and the hint route accepts a hint only on the pod that
@@ -160,6 +160,19 @@ public final class DeltaFanOut implements AutoCloseable {
 
     /** The committed-delta hook: never throws into the commit that called it. */
     public void committed(CommitDelta delta, long epoch) {
+        deliver(delta, epoch, true);
+    }
+
+    /**
+     * A delta this pod read as its AZ's relay (M10.20): published locally and
+     * pushed to the other ready pods of this AZ, never hinted onward -- the
+     * leaseholder already hinted every remote AZ.
+     */
+    public void relayed(CommitDelta delta, long epoch) {
+        deliver(delta, epoch, false);
+    }
+
+    private void deliver(CommitDelta delta, long epoch, boolean hintOtherAzs) {
         Objects.requireNonNull(delta, "delta");
         local.accept(delta, epoch);
         byte[] push;
@@ -178,6 +191,9 @@ public final class DeltaFanOut implements AutoCloseable {
         for (Map.Entry<String, String> peer : wanted.entrySet()) {
             String az = peer.getValue();
             if (!selfAz.equals(az)) {
+                if (!hintOtherAzs) {
+                    continue;
+                }
                 targets.put(peer.getKey(),
                         new Frame(HINT_PATH, hint, CrossAzBytes.Transport.DELTA_HINT, az));
             } else if (push != null) {
