@@ -109,4 +109,16 @@ class MacroCountsJsonTest {
                 .contains("\"leasePuts\":23")
                 .contains("\"crossAzBytes\":41");
     }
+
+    @Test
+    void deltaPushesAndHintsAreReportedByTransport() {
+        CrossAzBytes crossAz = new CrossAzBytes("az-a");
+        crossAz.sent(CrossAzBytes.Transport.DELTA_PUSH, "az-b", 17);
+        crossAz.sent(CrossAzBytes.Transport.DELTA_HINT, "az-b", 24);
+        crossAz.sent(CrossAzBytes.Transport.DELTA_PUSH, "az-a", 1000);
+        assertThat(FrontDoor.macroCountsJson("pod", new StoreCounts(0, 0, 0, 0, 0), crossAz))
+                .contains("\"deltaPush\":17")
+                .contains("\"deltaHint\":24")
+                .contains("\"crossAzBytes\":41");
+    }
 }

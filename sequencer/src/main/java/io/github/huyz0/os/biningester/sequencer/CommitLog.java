@@ -457,6 +457,7 @@ public final class CommitLog {
             }
             if (written.isPresent()) {
                 apply(delta);
+                reportCommitted(delta);
                 return delta;
             }
             // ⚠️ Somebody else took this slot. Read what they wrote, fold their
@@ -598,6 +599,39 @@ public final class CommitLog {
             // assigned are now part of this chain's history, and a seal written
             // without them would leave a reader's state disagreeing with the log.
             apply(taken);
+        }
+    }
+
+    /**
+     * Who is told of each delta this log makes durable (M10.19, ADR-0075).
+     *
+     * <p>⚠️ **ONCE PER DURABLE DELTA, NEVER FOR A REPLAY.** It fires where this
+     * log's own {@code putIfAbsent} succeeds, and -- through
+     * {@link LocalSequencer} -- where an append whose response was lost is found
+     * to have landed. Recovery's {@code apply} of entries already in the chain
+     * does not fire it. ⚠️ An ambiguous append its own term never reconciled
+     * (it was fenced or closed first) is therefore reported by nobody: a gap
+     * only catch-up repairs (M10.22).
+     *
+     * <p>⚠️ **IT MUST NOT FAIL A COMMIT.** The delta is durable before the
+     * listener runs, so a throw is logged and swallowed; the listener's job is
+     * to hand the delta to a queue, not to deliver it.
+     */
+    private volatile java.util.function.ObjLongConsumer<CommitDelta> committed =
+            (delta, epoch) -> { };
+
+    /** Sets the listener for this log's durable deltas (ADR-0075). */
+    public void onCommitted(java.util.function.ObjLongConsumer<CommitDelta> listener) {
+        committed = Objects.requireNonNull(listener, "listener");
+    }
+
+    void reportCommitted(CommitDelta delta) {
+        try {
+            committed.accept(delta, epoch);
+        } catch (RuntimeException failed) {
+            System.getLogger(CommitLog.class.getName()).log(System.Logger.Level.WARNING,
+                    "the committed-delta listener failed at epoch " + epoch + " sequence "
+                            + delta.sequence() + "; the delta is durable", failed);
         }
     }
 

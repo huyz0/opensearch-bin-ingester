@@ -101,7 +101,13 @@ public final class CrossAzBytes {
         INBOX_DRAIN,
 
         /** A key-only durable-segment hint sent to a remote-AZ cache owner. */
-        DURABLE_SEGMENT_SIGNAL
+        DURABLE_SEGMENT_SIGNAL,
+
+        /** A whole durable delta pushed to a pod of the sender's own AZ (ADR-0075). */
+        DELTA_PUSH,
+
+        /** A 24-byte delta hint sent to a remote AZ's relay (ADR-0075). */
+        DELTA_HINT
     }
 
     /**

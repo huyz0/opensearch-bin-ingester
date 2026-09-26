@@ -33,14 +33,16 @@ import java.util.concurrent.atomic.AtomicLong;
  * <p>⚠️ **THE QUEUE IS BOUNDED IN BYTES AS WELL AS DELTAS.** A delta is
  * metadata, but ~150 KiB of it at scale (ADR-0075), so a count alone would
  * let a stalled worker hold hundreds of MiB before the first drop. Offering
- * past either bound drops the delta and counts it; the consumer's gap path
- * repairs it (M8.24), as it repairs a push lost on the wire. Blocking instead
+ * past either bound drops the delta and counts it -- a gap for this pod's
+ * consumers, which only catch-up off the leaseholder repairs until M10.22
+ * (ADR-0075: a follower cannot serve it). Blocking instead
  * would put a slow subscriber on the commit path, which is the trade
  * {@code DefaultIngest}'s push queue already refuses for the same reason.
  *
- * <p>⚠️ **CLOSING DELIVERS WHAT IS QUEUED**, within five seconds -- the bound
+ * <p>⚠️ **CLOSING DELIVERS WHAT IS QUEUED**, for five seconds -- the bound
  * {@code DefaultIngest.drainPushes} keeps for the same Kubernetes grace
- * period -- and counts whatever it then abandons.
+ * period -- then interrupts the worker, waits at most five more for it to
+ * stop, and counts whatever it abandons.
  */
 public final class ChainPublisher implements AutoCloseable {
 
@@ -203,7 +205,7 @@ public final class ChainPublisher implements AutoCloseable {
             } catch (RuntimeException publishFailed) {
                 failed.incrementAndGet();
                 LOG.log(System.Logger.Level.WARNING, "publish of " + segment.segmentKey()
-                        + " failed; consumers recover it through their gap path", publishFailed);
+                        + " failed; a gap for this pod's consumers until catch-up repairs it", publishFailed);
             }
         }
         published.incrementAndGet();

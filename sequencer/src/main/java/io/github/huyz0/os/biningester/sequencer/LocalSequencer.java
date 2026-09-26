@@ -5,7 +5,6 @@ import io.github.huyz0.os.biningester.binstore.BinStore;
 import io.github.huyz0.os.biningester.format.CommitDelta;
 import io.github.huyz0.os.biningester.format.Seal;
 import java.util.Map;
-import java.util.HashMap;
 import java.util.ArrayList;
 import io.github.huyz0.os.biningester.format.SegmentCommit;
 import io.github.huyz0.os.biningester.format.Lease;
@@ -626,12 +625,8 @@ public final class LocalSequencer implements Sequencer {
                 window.applied(attribution, pending.epoch(), landed.get().sequence());
             }
         }
-        // ⚠️ AND THE CHECKPOINT, WHICH IS WHAT A SUCCESSOR INHERITS (M5.25).
-        // Seeding only the in-memory window left this pod answering the retry
-        // and the next pod not: `CheckpointWriter` learns from commits that
-        // RETURNED, so an ambiguously-landed flush reached it never, and a
-        // successor inherited the fact only while that delta was still in the
-        // uncheckpointed tail.
+        // The listener and the checkpoint (M5.25) never saw this append return.
+        log.reportCommitted(landed.get());
         CheckpointWriter writer = checkpoints;
         if (writer != null) {
             writer.observeReconciled(landed.get().segments(), pending.epoch(),
@@ -664,6 +659,11 @@ public final class LocalSequencer implements Sequencer {
             writer.observe(requests, delta.sequence());
         }
         return delta;
+    }
+
+    /** Every delta this term makes durable, once, never a replay (ADR-0075). */
+    public void onCommitted(java.util.function.ObjLongConsumer<CommitDelta> listener) {
+        log.onCommitted(listener);
     }
 
     @Override
