@@ -192,11 +192,14 @@ object CostLatencyCurveGenerator {
     @JvmStatic
     fun check(results: Path, output: Path, svgOutput: Path) {
         val expected = render(results)
-        if (!Files.exists(output) || Files.readString(output) != expected
-            || !Files.exists(svgOutput) || Files.readString(svgOutput) != renderSvg(results)) {
+        if (!Files.exists(output) || normalizeNewlines(Files.readString(output)) != expected
+            || !Files.exists(svgOutput)
+            || normalizeNewlines(Files.readString(svgOutput)) != renderSvg(results)) {
             throw IllegalStateException("cost-latency curve is stale; run generateCostLatencyCurve")
         }
     }
+
+    private fun normalizeNewlines(value: String): String = value.replace("\r\n", "\n")
 
     @JvmStatic
     fun main(args: Array<String>) {

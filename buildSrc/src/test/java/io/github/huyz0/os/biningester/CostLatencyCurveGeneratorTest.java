@@ -90,6 +90,10 @@ class CostLatencyCurveGeneratorTest {
         Files.writeString(generatedSvg, chart);
         CostLatencyCurveGenerator.check(results, generatedDocument, generatedSvg);
 
+        Files.writeString(generatedDocument, generated.replace("\n", "\r\n"));
+        Files.writeString(generatedSvg, chart.replace("\n", "\r\n"));
+        CostLatencyCurveGenerator.check(results, generatedDocument, generatedSvg);
+
         Files.writeString(generatedSvg, chart.replace("measured counts, modelled dollars",
                 "mutated chart"));
         assertThatThrownBy(

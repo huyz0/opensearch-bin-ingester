@@ -33,6 +33,9 @@ gate_script_path() {
     python\ scripts/run-gate.py\ scripts/*.sh*)
       printf '%s\n' "$command" | sed -n 's#^python scripts/run-gate.py \(scripts/[^ ]*\.sh\).*#\1#p'
       ;;
+    "./gradlew.bat gates") printf '%s\n' "gradle-gates" ;;
+    "./gradlew.bat checkTdd") printf '%s\n' "scripts/check-tdd.sh" ;;
+    "./gradlew.bat checkReviewed") printf '%s\n' "scripts/check-reviewed.sh" ;;
     *) printf '%s\n' "${command%% *}" ;;
   esac
 }
@@ -154,14 +157,14 @@ case "$CMD" in
       [ -n "$g" ] || continue
       gate_path="$(gate_script_path "$g")"
       case "$gate_path" in
-        scripts/check-*.sh|scripts/build-index.sh) ;;
+        */check-commit-msg.sh|*/check-test-integrity.sh|*/check-reviewed.sh) continue ;;
+      esac
+      case "$gate_path" in
+        scripts/check-*.sh|scripts/build-index.sh|gradle-gates) ;;
         *)
           echo "!!! Unsupported pre-commit entry: $g" >&2
           exit 2
           ;;
-      esac
-      case "$gate_path" in
-        */check-commit-msg.sh|*/check-test-integrity.sh|*/check-reviewed.sh) continue ;;
       esac
       EXPECTED_CACHE="$EXPECTED_CACHE  PASSED  $(basename "$gate_path")"$'\n'
     done <<< "$gate_commands"
@@ -172,6 +175,7 @@ case "$CMD" in
       GATE_INPUTS="$GATE_INPUTS worktree:$input:$input_mode:$input_sha"
     done < <(git ls-files -co --exclude-standard -z | sort -z)
     while IFS= read -r -d '' input; do
+      [ -f "$input" ] || continue
       input_sha=$(sha256sum "$input" | cut -d' ' -f1) || { echo "!!! Could not hash ignored source gate input: $input" >&2; exit 2; }
       input_mode=$(stat -c '%a' "$input") || { echo "!!! Could not stat ignored source gate input: $input" >&2; exit 2; }
       GATE_INPUTS="$GATE_INPUTS ignored-source:$input:$input_mode:$input_sha"
@@ -241,9 +245,13 @@ case "$CMD" in
       while IFS= read -r g; do
         [ -n "$g" ] || continue
         gate_path="$(gate_script_path "$g")"
-        case "$gate_path" in scripts/check-*.sh|scripts/build-index.sh) ;; *) echo "!!! Unsupported pre-commit entry: $g" >&2; exit 2;; esac
+        case "$gate_path" in scripts/check-*.sh|scripts/build-index.sh|gradle-gates) ;; *) echo "!!! Unsupported pre-commit entry: $g" >&2; exit 2;; esac
         case "$gate_path" in */check-commit-msg.sh|*/check-test-integrity.sh|*/check-reviewed.sh) continue;; esac
-        gate_command="$g"
+        case "$g" in
+          "./gradlew.bat gates") gate_command="./gradlew gates" ;;
+          "./gradlew.bat checkTdd") gate_command="bash scripts/check-tdd.sh" ;;
+          *) gate_command="$g" ;;
+        esac
         case "$g" in
           python\ scripts/run-gate.py\ *) gate_command="${PYTHON3:-python3}${g#python}" ;;
           scripts/*.sh*) gate_command="bash $g" ;;

@@ -11,6 +11,17 @@ import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;
 
 class RepositoryGateChecksTest {
+
+    @Test
+    void stagedCsvAndSvgBlobsMatchWindowsCheckouts() {
+        byte[] staged = "value,other\n1,2\n".getBytes(StandardCharsets.UTF_8);
+        byte[] windows = "value,other\r\n1,2\r\n".getBytes(StandardCharsets.UTF_8);
+        assertThat(RepositoryGatesTask.Companion.contentMatches("results.csv", staged, windows))
+                .isTrue();
+        assertThat(RepositoryGatesTask.Companion.contentMatches("curve.svg", staged, windows))
+                .isTrue();
+    }
+
     @Test
     void nativeHarnessKeepsTheMeasurementWorkflowWiringTestIncluded() throws Exception {
         String build = Files.readString(Path.of("build.gradle.kts"));

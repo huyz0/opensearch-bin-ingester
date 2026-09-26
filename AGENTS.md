@@ -216,20 +216,21 @@ not hook entry points.
 <!-- index:gates:start -->
 | Gradle task | Stage | Enforces |
 |---|---|---|
-| `./gradlew gates` | pre-commit | repository invariants plus wiring, override, portability, I/O-seam, metric, module, and dependency checks |
-| `./gradlew checkHarnessTests` | pre-commit | JVM-native buildSrc gate tests |
-| `./gradlew checkWired` | pre-commit | every M8 unwired-set entry is wired or owned by an open backlog row |
-| `./gradlew checkOverride` | pre-commit | changed review override entries agree with recorded verdicts |
-| `./gradlew checkReviewed` | pre-commit | staged review verdicts are bound to the staged diff |
-| `./gradlew checkTdd` | pre-commit | newly added tests have byte-bound red evidence |
-| `./gradlew checkTestIntegrity` | commit-msg | test removals or assertion weakening have a commit-body reason |
-| `./gradlew checkCommitMessage -PcommitMessageFile=<file>` | commit-msg | commit subject names a real backlog task |
-| `./gradlew checkMilestoneVerified -PmilestoneDir=<dir>` | manual | every acceptance criterion has an evidence line |
-| `./gradlew checkCoverage` | manual | regenerated JaCoCo reports meet line and branch floors |
-| `./gradlew checkSuiteTime -PsuiteLayer=L0 -PsuiteSeconds=<n>` | manual | measured suite time stays within its layer budget |
-| `./gradlew checkMutants` | manual | native Gradle mutation-diff tasks run for modules that provide them |
-| `./gradlew dependencyLicenses` | build/check | dependency SHA-1 pins, licence files, and denied licences |
-| `./gradlew check` | build/check | runs the complete Gradle/JDK gate set and dependency licence gate |
+| `./gradlew gates` | pre-commit | Run all repository gates using only Gradle and the JDK |
+| `./gradlew checkCostLatencyCurve` | pre-commit | Run the curve generator's --check mode against committed results |
+| `./gradlew checkHarnessTests` | pre-commit | Run the JVM-native buildSrc gate tests |
+| `./gradlew checkWired` | pre-commit | Verify the milestone unwired-set predicates using the JVM |
+| `./gradlew checkOverride` | pre-commit | Verify review override claims using recorded verdicts |
+| `./gradlew checkReviewed` | pre-commit | Verify staged review verdicts are bound to the staged diff |
+| `./gradlew checkTdd` | pre-commit | Verify newly added tests have byte-bound red evidence |
+| `./gradlew checkTestIntegrity` | commit-msg | Require a commit-body reason when staged tests are weakened |
+| `./gradlew checkCommitMessage` | commit-msg | Validate a commit message file with the JVM gate runner |
+| `./gradlew checkMilestoneVerified` | manual | Verify every milestone acceptance criterion has evidence |
+| `./gradlew checkCoverage` | manual | Check regenerated JaCoCo reports against coverage floors |
+| `./gradlew checkSuiteTime` | manual | Check a measured suite duration against its layer budget |
+| `./gradlew checkMutants` | manual | Run the native Gradle mutation-diff tasks for every module that provides one |
+| `./gradlew dependencyLicenses` | build/check | Every dependency jar has a pinned sha and a committed licence |
+| `./gradlew check` | build/check | Runs the complete Gradle/JDK gate set and dependency licence gate |
 <!-- index:gates:end -->
 
 The historical shell/Python gate implementations are retained as migration

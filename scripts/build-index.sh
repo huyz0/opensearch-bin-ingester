@@ -14,7 +14,7 @@ changed = []
 broken = []
 
 def frontmatter(path, key):
-    with open(path) as f:
+    with open(path, encoding='utf-8') as f:
         txt = f.read()
     m = re.search(r'^%s:\s*(.+)$' % key, txt, re.M)
     return m.group(1).strip() if m else ''
@@ -57,49 +57,61 @@ def table_standards():
     return '\n'.join(rows)
 
 def table_gates():
-    """The Gates table, read from .pre-commit-config.yaml and scripts/.
+    """Generate the enforcement table from registered Gradle tasks and hooks.
 
-    Hand-maintained, this table was wrong in three directions at once: it named
-    a hook that was not wired, omitted four that were, and never mentioned a
-    script that existed. A section that calls itself "the honest answer to what
-    actually runs" is the last place a stale list belongs, so it is generated.
+    The hook manifest names only launch points; `gates` owns additional tasks
+    through its Gradle dependency graph. Read their descriptions from the task
+    registrations and add those transitive gates explicitly so the index does
+    not regress to treating a Gradle build as a list of shell scripts.
     """
-    cfg = open('.pre-commit-config.yaml').read()
-    hooks = []
+    with open('.pre-commit-config.yaml', encoding='utf-8') as f:
+        cfg = f.read()
+    with open('build.gradle.kts', encoding='utf-8') as f:
+        gradle = f.read()
+    hooks = {}
     for block in re.split(r'\n      - id: ', cfg)[1:]:
-        hid = block.split('\n', 1)[0].strip()
-        ent = re.search(r'^\s*entry:\s*(.+)$', block, re.M)
-        nam = re.search(r'^\s*name:\s*"(.*)"\s*$', block, re.M)
-        stg = re.search(r'^\s*stages:\s*\[(.*)\]', block, re.M)
-        hooks.append((hid,
-                      ent.group(1).strip() if ent else '?',
-                      nam.group(1) if nam else '',
-                      stg.group(1).strip() if stg else 'pre-commit'))
-    rows = ['| Script | Stage | Enforces |', '|---|---|---|']
-    wired = set()
-    for _, entry, name, stage in hooks:
-        # Hooks may be launched through a cross-platform adapter. The gate
-        # script is the .sh argument, not necessarily the first token.
-        script = next((token for token in entry.split() if token.endswith('.sh')), entry)
-        script = script.replace('\\', '/')
-        wired.add(os.path.basename(script))
-        shown = os.path.basename(script)
-        if os.path.basename(script) == 'build-index.sh' and '--check' in entry.split():
-            shown = 'scripts/build-index.sh --check'
-        rows.append('| `%s` | %s | %s |' % (shown, stage, name))
-    present = {os.path.basename(f) for f in glob.glob('scripts/check-*.sh')}
-    unwired = sorted(present - wired)
-    out = '\n'.join(rows)
-    if unwired:
-        # ⚠️ No reason is asserted here. An earlier version claimed each unwired
-        # script "needs an argument a whole-tree hook cannot supply", which is
-        # false for check-module.sh -- it runs with zero arguments on the delta
-        # path. A generator cannot know why a script is unwired, so it states
-        # the fact and leaves the reason to the script.
-        out += ('\n\nPresent in `scripts/` but **not** wired into '
-                '`.pre-commit-config.yaml` — invoke by hand, from a skill, or from CI: '
-                + ', '.join('`%s`' % u for u in unwired) + '.')
-    return out
+        entry = re.search(r'^\s*entry:\s*\./gradlew\.bat\s+(\S+)', block, re.M)
+        stage = re.search(r'^\s*stages:\s*\[(.*)\]', block, re.M)
+        if entry:
+            hooks[entry.group(1)] = stage.group(1).strip() if stage else 'pre-commit'
+
+    descriptions = {}
+    registration = re.compile(
+        r'tasks\.register(?:<[^>]+>)?\("([A-Za-z0-9]+)"\)\s*\{')
+    for match in registration.finditer(gradle):
+        next_registration = registration.search(gradle, match.end())
+        end = next_registration.start() if next_registration else len(gradle)
+        body = gradle[match.end():end]
+        description = re.search(r'^\s*description\s*=\s*"([^"]+)"', body, re.M)
+        if description:
+            descriptions[match.group(1)] = description.group(1)
+
+    stages = {
+        'gates': 'pre-commit',
+        'checkCostLatencyCurve': 'pre-commit',
+        'checkHarnessTests': 'pre-commit',
+        'checkWired': 'pre-commit',
+        'checkOverride': 'pre-commit',
+        'checkReviewed': hooks.get('checkReviewed', 'pre-commit'),
+        'checkTdd': hooks.get('checkTdd', 'pre-commit'),
+        'checkTestIntegrity': hooks.get('checkTestIntegrity', 'commit-msg'),
+        'checkCommitMessage': hooks.get('checkCommitMessage', 'commit-msg'),
+        'checkMilestoneVerified': 'manual',
+        'checkCoverage': 'manual',
+        'checkSuiteTime': 'manual',
+        'checkMutants': hooks.get('checkMutants', 'manual'),
+        'dependencyLicenses': 'build/check',
+        'check': 'build/check',
+    }
+    descriptions['check'] = 'Runs the complete Gradle/JDK gate set and dependency licence gate'
+    rows = ['| Gradle task | Stage | Enforces |', '|---|---|---|']
+    for task, stage in stages.items():
+        description = descriptions.get(task)
+        if not description:
+            broken.append('build.gradle.kts has no task description for ' + task)
+            continue
+        rows.append('| `./gradlew %s` | %s | %s |' % (task, stage, description))
+    return '\n'.join(rows)
 
 
 def splice(path, key, body):
@@ -108,7 +120,8 @@ def splice(path, key, body):
     if not os.path.exists(path):
         broken.append('%s does not exist' % path)
         return
-    txt = open(path).read()
+    with open(path, encoding='utf-8') as f:
+        txt = f.read()
     start, end = '<!-- index:%s:start -->' % key, '<!-- index:%s:end -->' % key
     if start not in txt or end not in txt:
         broken.append('%s has no index:%s region' % (path, key))
@@ -122,7 +135,8 @@ def splice(path, key, body):
     if new != txt:
         changed.append('%s (%s)' % (path, key))
         if mode != '--check':
-            open(path, 'w').write(new)
+            with open(path, 'w', encoding='utf-8', newline='') as f:
+                f.write(new)
 
 splice('AGENTS.md', 'skills', table_skills('.agents/skills/'))
 splice('AGENTS.md', 'standards', table_standards())
@@ -135,7 +149,8 @@ splice('.agents/skills/README.md', 'skills', table_skills(''))
 # and --check passed because that line is outside the markers. A script that
 # exists must not be named as absent.
 if os.path.exists('AGENTS.md'):
-    txt = open('AGENTS.md').read()
+    with open('AGENTS.md', encoding='utf-8') as f:
+        txt = f.read()
     # ⚠️ Anchored on a heading, so it FAILS when the anchor is gone rather than
     # silently passing. Both reviewers defeated the first version by rewording
     # the heading or inserting a blank line -- which would have shipped the very

@@ -8,6 +8,7 @@ import io.github.huyz0.os.biningester.http.HealthService;
 import io.github.huyz0.os.biningester.http.SubscriptionService;
 import io.github.huyz0.os.biningester.http.DurableSegmentSignalService;
 import io.github.huyz0.os.biningester.http.CatchUpService;
+import io.github.huyz0.os.biningester.binstore.PutPurposeCounts;
 import io.github.huyz0.os.biningester.binstore.StoreCounts;
 import io.helidon.webserver.WebServer;
 import io.helidon.webserver.http.HttpRouting;
@@ -210,7 +211,8 @@ public final class FrontDoor implements AutoCloseable {
         }
 
         private void counts(ServerRequest request, ServerResponse response) {
-            response.send(macroCountsJson(assembly.config().podId(), assembly.storeCounts(), crossAz));
+            response.send(macroCountsJson(assembly.config().podId(), assembly.storeCounts(),
+                    assembly.putPurposeCounts(), crossAz));
         }
     }
 
@@ -225,26 +227,31 @@ public final class FrontDoor implements AutoCloseable {
 
     static String macroCountsJson(String podId, StoreCounts counts,
             io.github.huyz0.os.biningester.binstore.CrossAzBytes crossAz) {
+        return macroCountsJson(podId, counts, null, crossAz);
+    }
+
+    static String macroCountsJson(String podId, StoreCounts counts,
+            PutPurposeCounts purposePuts,
+            io.github.huyz0.os.biningester.binstore.CrossAzBytes crossAz) {
         // The three-argument FrontDoor.start overload predates M9.2 and can
         // deliberately carry an untracked counter. Preserve its existing
         // store-only snapshot contract rather than turning a compatibility
         // caller's GET into an IllegalStateException. IngesterNode always
         // supplies the real tracked counter used by the M9 macro harness.
         try {
-            return trackedMacroCountsJson(podId, counts, crossAz);
+            return trackedMacroCountsJson(podId, counts, purposePuts, crossAz);
         } catch (IllegalStateException untracked) {
-            return macroCountsJson(podId, counts);
+            return purposePuts == null ? macroCountsJson(podId, counts)
+                    : purposeMacroCountsJson(podId, counts, purposePuts);
         }
     }
 
     private static String trackedMacroCountsJson(String podId, StoreCounts counts,
+            PutPurposeCounts purposePuts,
             io.github.huyz0.os.biningester.binstore.CrossAzBytes crossAz) {
-        return "{\"podId\":\"" + escapeJson(podId)
-                + "\",\"puts\":" + counts.puts()
-                + ",\"gets\":" + counts.gets()
-                + ",\"lists\":" + counts.lists()
-                + ",\"stats\":" + counts.stats()
-                + ",\"deletes\":" + counts.deletes()
+        String base = purposePuts == null ? macroCountsJson(podId, counts).stripTrailing()
+                : purposeMacroCountsJson(podId, counts, purposePuts).stripTrailing();
+        return base.substring(0, base.length() - 1)
                 + ",\"crossAzBytes\":" + crossAz.crossAzBytes()
                 + ",\"unknownPeerBytes\":" + crossAz.unknownPeerBytes()
                 + ",\"proxyRead\":" + crossAz.crossAzBytes(
@@ -260,6 +267,21 @@ public final class FrontDoor implements AutoCloseable {
                 + ",\"durableSegmentSignal\":" + crossAz.crossAzBytes(
                         io.github.huyz0.os.biningester.binstore.CrossAzBytes.Transport.DURABLE_SEGMENT_SIGNAL)
                 + "}\n";
+    }
+
+    private static String purposeMacroCountsJson(String podId, StoreCounts counts,
+            PutPurposeCounts purposePuts) {
+        return "{\"podId\":\"" + escapeJson(podId)
+                + "\",\"puts\":" + purposePuts.total()
+                + ",\"gets\":" + counts.gets()
+                + ",\"lists\":" + counts.lists()
+                + ",\"stats\":" + counts.stats()
+                + ",\"deletes\":" + counts.deletes()
+                + ",\"dataPuts\":" + purposePuts.dataPuts()
+                + ",\"commitPuts\":" + purposePuts.commitPuts()
+                + ",\"checkpointPuts\":" + purposePuts.checkpointPuts()
+                + ",\"leasePuts\":" + purposePuts.leasePuts()
+                + ",\"otherPuts\":" + purposePuts.otherPuts() + "}\n";
     }
 
     private static String escapeJson(String value) {

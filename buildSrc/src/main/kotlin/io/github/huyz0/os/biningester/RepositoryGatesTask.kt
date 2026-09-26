@@ -89,7 +89,7 @@ abstract class RepositoryGatesTask : DefaultTask() {
         }
 
         fun contentMatches(path: String, staged: ByteArray, working: ByteArray): Boolean {
-            val text = path.substringAfterLast('.').lowercase() in setOf("java", "kt", "kts", "gradle", "md", "sh", "py", "yaml", "yml", "json", "txt", "properties", "sha1", "toml") ||
+            val text = path.substringAfterLast('.').lowercase() in setOf("java", "kt", "kts", "gradle", "md", "sh", "py", "yaml", "yml", "json", "txt", "properties", "sha1", "toml", "csv", "svg") ||
                 path.substringAfterLast('/').lowercase() in setOf(".gitignore", "license", "notice", "gradlew", "gradlew.bat")
             if (!text) return staged.contentEquals(working)
             fun normalize(bytes: ByteArray): ByteArray = String(bytes, Charsets.UTF_8).replace("\r\n", "\n").toByteArray(Charsets.UTF_8)

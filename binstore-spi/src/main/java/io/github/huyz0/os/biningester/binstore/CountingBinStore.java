@@ -25,7 +25,11 @@ import java.util.concurrent.atomic.LongAdder;
 public final class CountingBinStore implements BinStore {
 
     private final BinStore delegate;
-    private final LongAdder puts = new LongAdder();
+    private final LongAdder dataPuts = new LongAdder();
+    private final LongAdder commitPuts = new LongAdder();
+    private final LongAdder checkpointPuts = new LongAdder();
+    private final LongAdder leasePuts = new LongAdder();
+    private final LongAdder otherPuts = new LongAdder();
     private final LongAdder gets = new LongAdder();
     private final LongAdder lists = new LongAdder();
     private final LongAdder stats = new LongAdder();
@@ -37,7 +41,36 @@ public final class CountingBinStore implements BinStore {
 
     /** What has been issued so far. */
     public StoreCounts counts() {
-        return new StoreCounts(puts.sum(), gets.sum(), lists.sum(), stats.sum(), deletes.sum());
+        return new StoreCounts(putPurposeCounts().total(), gets.sum(), lists.sum(), stats.sum(),
+                deletes.sum());
+    }
+
+    /** PUT counts by bounded object-key purpose; their sum equals {@link #counts()}'s PUTs. */
+    public PutPurposeCounts putPurposeCounts() {
+        return new PutPurposeCounts(dataPuts.sum(), commitPuts.sum(), checkpointPuts.sum(),
+                leasePuts.sum(), otherPuts.sum());
+    }
+
+    private void countPut(String key) {
+        if (hasPathSegment(key, "/ctl/log/", "ctl/log/")
+                && hasPathSegment(key, "/ckpt/", "ckpt/")
+                && (key.endsWith(".ckpt") || key.endsWith("/LATEST"))) {
+            checkpointPuts.increment();
+        } else if (hasPathSegment(key, "/ctl/log/", "ctl/log/")
+                && key.endsWith(".delta")) {
+            commitPuts.increment();
+        } else if (hasPathSegment(key, "/ctl/lease/", "ctl/lease/")
+                && key.endsWith(".json")) {
+            leasePuts.increment();
+        } else if (hasPathSegment(key, "/data/", "data/") && key.endsWith(".bseg")) {
+            dataPuts.increment();
+        } else {
+            otherPuts.increment();
+        }
+    }
+
+    private static boolean hasPathSegment(String key, String nested, String root) {
+        return key.startsWith(root) || key.contains(nested);
     }
 
     @Override
@@ -63,7 +96,7 @@ public final class CountingBinStore implements BinStore {
 
     @Override
     public Version put(String key, Body body) throws IOException {
-        puts.increment();
+        countPut(key);
         return delegate.put(key, body);
     }
 
@@ -72,7 +105,7 @@ public final class CountingBinStore implements BinStore {
         // ⚠️ A LOST race is still a request. The commit log is a chain of these
         // and the losers are billed, so counting only the winner would report a
         // contended cluster as costing the same as an idle one.
-        puts.increment();
+        countPut(key);
         return delegate.putIfAbsent(key, body);
     }
 
@@ -80,7 +113,7 @@ public final class CountingBinStore implements BinStore {
     public Optional<Version> putIfMatch(String key, Body body, Version expected) throws IOException {
         // ⚠️ A LOST match is still a request, same reasoning as putIfAbsent: a
         // lease renewal or registry update that lost the race was still billed.
-        puts.increment();
+        countPut(key);
         return delegate.putIfMatch(key, body, expected);
     }
 
@@ -91,8 +124,8 @@ public final class CountingBinStore implements BinStore {
         // CompleteMultipartUpload, AbortMultipartUpload) are each billed calls
         // in their own right, so the writer itself must be decorated, not just
         // this one call.
-        puts.increment();
-        return new CountingMultipartWriter(delegate.multipart(key));
+        countPut(key);
+        return new CountingMultipartWriter(key, delegate.multipart(key));
     }
 
     /**
@@ -104,22 +137,24 @@ public final class CountingBinStore implements BinStore {
      * abort()} that already ran and was already counted.
      */
     private final class CountingMultipartWriter implements MultipartWriter {
+        private final String key;
         private final MultipartWriter delegate;
         private volatile boolean done;
 
-        CountingMultipartWriter(MultipartWriter delegate) {
+        CountingMultipartWriter(String key, MultipartWriter delegate) {
+            this.key = key;
             this.delegate = delegate;
         }
 
         @Override
         public void uploadPart(int partNumber, Body body) throws IOException {
-            puts.increment();
+            countPut(key);
             delegate.uploadPart(partNumber, body);
         }
 
         @Override
         public Version complete() throws IOException {
-            puts.increment();
+            countPut(key);
             // ⚠️ `done` is set only on the SUCCESS path. Round-1 review found
             // this set unconditionally, before delegating: when complete()
             // THROWS (e.g. a minPartSize violation, which by design is only
@@ -136,7 +171,7 @@ public final class CountingBinStore implements BinStore {
 
         @Override
         public void abort() throws IOException {
-            puts.increment();
+            countPut(key);
             // ⚠️ Same reasoning as complete(): only mark done on success, so a
             // failing abort() does not silently swallow a subsequent close()'s
             // own cleanup attempt.
@@ -151,7 +186,7 @@ public final class CountingBinStore implements BinStore {
                 // real AbortMultipartUpload -- MultipartWriter's own contract
                 // ("close() behaves exactly like abort()") makes this a real
                 // request, not free cleanup.
-                puts.increment();
+                countPut(key);
                 done = true;
             }
             delegate.close();

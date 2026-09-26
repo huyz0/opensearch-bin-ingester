@@ -4,6 +4,7 @@ package io.github.huyz0.os.biningester.server;
 import io.github.huyz0.os.biningester.binstore.BinStore;
 import io.github.huyz0.os.biningester.binstore.CountingBinStore;
 import io.github.huyz0.os.biningester.binstore.HealthTrackingBinStore;
+import io.github.huyz0.os.biningester.binstore.PutPurposeCounts;
 import io.github.huyz0.os.biningester.binstore.StoreCounts;
 import io.github.huyz0.os.biningester.format.IndexRegistration;
 import io.github.huyz0.os.biningester.format.RunKey;
@@ -531,6 +532,11 @@ public final class Assembly implements AutoCloseable {
     /** The requests issued by this node, including calls made by health checks. */
     public StoreCounts storeCounts() {
         return counting.counts();
+    }
+
+    /** PUT counts partitioned by object-key purpose; all categories remain in storeCounts().puts(). */
+    public PutPurposeCounts putPurposeCounts() {
+        return counting.putPurposeCounts();
     }
 
     IngesterMetrics metrics() {
