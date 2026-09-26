@@ -70,6 +70,52 @@ final class AssemblingSubscriber {
         };
     }
 
+    /**
+     * Assembles only {@code inline} segments; every other push is handed on
+     * with an empty segment and nothing copied (M10.3, NFR-6, ADR-0073).
+     *
+     * <p>⚠️ **A {@code proxy} OR {@code direct} PUSH CARRIES NO BYTES ON THE
+     * WIRE**, so assembling one per session bought a whole-segment copy -- up to
+     * {@code maxSegmentBytes} (8 MiB by default) per session for every segment
+     * above the inline cap and every cold publish -- charged to the node's queue
+     * budget and then dropped at encode. The consumer fetches those bytes itself: through the
+     * segment route, or under its grant.
+     */
+    static SubscriptionHub.Subscriber inlineOnly(Consumer<SubscriptionHub.Push> onSegment) {
+        Objects.requireNonNull(onSegment, "onSegment");
+        SubscriptionHub.Subscriber assembling = of(onSegment);
+        return new SubscriptionHub.Subscriber() {
+            @Override
+            public SegmentSink open(List<SubscriptionHub.Push> pushes)
+                    throws java.io.IOException {
+                return carriesBytes(pushes) ? assembling.open(pushes) : DISCARDING;
+            }
+
+            @Override
+            public void complete(List<SubscriptionHub.Push> pushes, SegmentSink sink)
+                    throws java.io.IOException {
+                if (carriesBytes(pushes)) {
+                    assembling.complete(pushes, sink);
+                    return;
+                }
+                for (SubscriptionHub.Push push : pushes) {
+                    onSegment.accept(new SubscriptionHub.Push(push.key(), push.segmentKey(),
+                            push.recordCount(), push.firstOffset(), push.via(), EMPTY,
+                            push.grant(), push.sequencerEpoch(), push.chainSequence()));
+                }
+            }
+        };
+    }
+
+    private static final byte[] EMPTY = new byte[0];
+
+    private static final SegmentSink DISCARDING = (buffer, offset, length) -> { };
+
+    private static boolean carriesBytes(List<SubscriptionHub.Push> pushes) {
+        return pushes.stream().anyMatch(push ->
+                push.via() == io.github.huyz0.os.biningester.format.FetchMode.INLINE);
+    }
+
     private static final class AssemblingSink implements SegmentSink {
         private final ByteArrayOutputStream out = new ByteArrayOutputStream();
 

@@ -289,7 +289,7 @@ request.
 | M10.2 | T2 (assembled server, loopback) | `ProxyDeliveryOverHttpTest#aSegmentAboveTheInlineCapIsDecodedThroughTheProxyRoute` | `bytesOf` returns the delivery's empty array |
 | M10.2 | T0 | `ConsumerClientProxyTest#aFailedProxyFetchPropagates` | failure swallowed into an empty poll |
 | M10.2 | T1 | `NodeSegmentSourceTest#kRunsOfOneSegmentCostOneProxyFetch` | per-run fetch |
-| M10.3 | T1 | `SubscriptionServiceProxyBudgetTest#aProxyPushChargesNothingToTheQueueBudget` | per-session assembly restored |
+| M10.3 | T1 | `SubscriptionProxyBudgetTest#aProxyPushChargesNothingToTheQueueBudget` | per-session assembly restored |
 | M10.4 | T1 | `BinStorePluginAzTest#theConfiguredAzReachesPollAndProxyRequests` | setting read and dropped |
 | M10.5 | T3 (RustFS, three `NodeProcess`es) | `CrossAzBytesIT#threeAzProxyServingStaysBelowTheNfr5Budget`, `#aCrossAzProxyFetchCountsItsPayload` | payload not counted; same-AZ counted as cross-AZ; per-consumer GET |
 

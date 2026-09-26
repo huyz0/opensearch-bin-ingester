@@ -266,6 +266,15 @@ public final class SubscriptionHub {
     }
 
     /**
+     * Like {@link #assembling}, but only {@code inline} segments are assembled;
+     * {@code proxy} and {@code direct} pushes arrive with an empty segment
+     * (M10.3). What an adapter whose wire carries only inline bytes wants.
+     */
+    public static Subscriber assemblingInline(Consumer<Push> onSegment) {
+        return AssemblingSubscriber.inlineOnly(onSegment);
+    }
+
+    /**
      * The session registry, which is the ingester side of SPEC criterion 11.
      *
      * <p>⚠️ IT IS A FIELD OF THE HUB rather than a seam, because a session is

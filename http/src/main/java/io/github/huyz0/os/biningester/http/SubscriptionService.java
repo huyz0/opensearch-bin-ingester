@@ -328,7 +328,10 @@ public final class SubscriptionService implements HttpService {
             // consumer that stopped polling would stop deliveries to all of
             // them. A full queue drops, and the consumer resumes from its own
             // committed position.
-            this.subscription = hub.subscribe(key, SubscriptionHub.assembling(this::offer));
+            // ⚠️ INLINE ONLY (M10.3): the answer carries bytes for `inline`
+            // alone, so assembling a `proxy` or `direct` segment here copied
+            // it per session, charged the budget, and dropped it at encode.
+            this.subscription = hub.subscribe(key, SubscriptionHub.assemblingInline(this::offer));
             this.lastPolledMillis = nowMillis;
         }
 
