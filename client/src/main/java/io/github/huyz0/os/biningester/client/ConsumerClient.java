@@ -44,6 +44,7 @@ public final class ConsumerClient implements AutoCloseable {
     private final AutoCloseable subscription;
     private final RunKey key;
     private final SegmentSource segmentSource;
+    private final ProxySource proxySource;
 
     /**
      * The offset the NEXT delivery must start at, or {@code -1} before the
@@ -119,7 +120,13 @@ public final class ConsumerClient implements AutoCloseable {
 
     public ConsumerClient(SubscriptionTransport transport, RunKey key, int queueCapacity,
             SegmentSource segmentSource) {
-        this(key, queueCapacity, segmentSource,
+        this(transport, key, queueCapacity, segmentSource, null);
+    }
+
+    /** With a source for {@code proxy} deliveries as well (M10.2). */
+    public ConsumerClient(SubscriptionTransport transport, RunKey key, int queueCapacity,
+            SegmentSource segmentSource, ProxySource proxySource) {
+        this(key, queueCapacity, segmentSource, proxySource,
                 client -> Objects.requireNonNull(transport, "transport")
                         .subscribe(key, client.listener()));
     }
@@ -142,12 +149,20 @@ public final class ConsumerClient implements AutoCloseable {
      * the owner's to do.
      */
     public ConsumerClient(RunKey key, int queueCapacity, SegmentSource segmentSource) {
-        this(key, queueCapacity, segmentSource, client -> () -> { });
+        this(key, queueCapacity, segmentSource, null);
+    }
+
+    /** Fed, with a source for {@code proxy} deliveries as well (M10.2). */
+    public ConsumerClient(RunKey key, int queueCapacity, SegmentSource segmentSource,
+            ProxySource proxySource) {
+        this(key, queueCapacity, segmentSource, proxySource, client -> () -> { });
     }
 
     private ConsumerClient(RunKey key, int queueCapacity, SegmentSource segmentSource,
+            ProxySource proxySource,
             java.util.function.Function<ConsumerClient, AutoCloseable> subscribe) {
         this.segmentSource = segmentSource;
+        this.proxySource = proxySource;
         this.key = Objects.requireNonNull(key, "key");
         if (queueCapacity <= 0) {
             throw new IllegalArgumentException("queue capacity must be positive");
@@ -637,6 +652,16 @@ public final class ConsumerClient implements AutoCloseable {
      * a source is a misconfiguration an operator must see.
      */
     private byte[] bytesOf(Delivery delivery) throws IOException {
+        if (delivery.via() == FetchMode.PROXY) {
+            // ⚠️ A PROXY EVENT CARRIES NO BYTES (M10.2): before this arm the
+            // empty array went to the decoder, which threw on every segment
+            // above the inline cap.
+            if (proxySource == null) {
+                throw new IllegalStateException("segment " + delivery.segmentKey()
+                        + " was served `proxy` to a consumer with no proxy source");
+            }
+            return proxySource.fetch(delivery.segmentKey());
+        }
         if (delivery.via() != FetchMode.DIRECT) {
             return delivery.segment();
         }

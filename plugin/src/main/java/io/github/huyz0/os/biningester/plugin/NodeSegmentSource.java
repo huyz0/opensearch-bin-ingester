@@ -41,9 +41,11 @@ import java.util.Objects;
  * deliveries for the same key still share one in-flight fetch. The cache state
  * has its own short lock, never held across the delegate's network round trip.
  */
-public final class NodeSegmentSource implements SegmentSource {
+public final class NodeSegmentSource implements SegmentSource,
+        io.github.huyz0.os.biningester.client.ProxySource {
 
     private final SegmentSource delegate;
+    private final io.github.huyz0.os.biningester.client.ProxySource proxy;
     private final long capacityBytes;
     private final Object cacheLock = new Object();
     private long fetches;
@@ -63,7 +65,18 @@ public final class NodeSegmentSource implements SegmentSource {
     }
 
     public NodeSegmentSource(SegmentSource delegate, long capacityBytes) {
+        this(delegate, null, capacityBytes);
+    }
+
+    /**
+     * Also coalescing {@code proxy} fetches (M10.2): K runs of one segment on
+     * this node cost one request to the ingester's route, held under the same
+     * byte ceiling as {@code direct} fetches.
+     */
+    public NodeSegmentSource(SegmentSource delegate,
+            io.github.huyz0.os.biningester.client.ProxySource proxy, long capacityBytes) {
         this.delegate = Objects.requireNonNull(delegate, "delegate");
+        this.proxy = proxy;
         if (capacityBytes < 0) {
             throw new IllegalArgumentException(
                     "a negative hold is not a bound; got " + capacityBytes);
@@ -86,7 +99,31 @@ public final class NodeSegmentSource implements SegmentSource {
     @Override
     public byte[] fetch(Grant grant) throws IOException {
         Objects.requireNonNull(grant, "grant");
-        String key = grant.url();
+        return fetchOnce(grant.url(), () -> delegate.fetch(grant));
+    }
+
+    /**
+     * A {@code proxy} segment's bytes, fetched at most once per (node, segment)
+     * while the hold keeps them -- the same rules as {@link #fetch(Grant)}.
+     *
+     * <p>⚠️ KEYED APART FROM GRANT URLS, so a segment key can never collide
+     * with a signed URL in the hold.
+     */
+    @Override
+    public byte[] fetch(String segmentKey) throws IOException {
+        Objects.requireNonNull(segmentKey, "segmentKey");
+        if (proxy == null) {
+            throw new IllegalStateException("this node holds no proxy source");
+        }
+        return fetchOnce("proxy:" + segmentKey, () -> proxy.fetch(segmentKey));
+    }
+
+    @FunctionalInterface
+    private interface Fetch {
+        byte[] get() throws IOException;
+    }
+
+    private byte[] fetchOnce(String key, Fetch fetch) throws IOException {
         KeyGate gate = acquire(key);
         try {
             synchronized (gate) {
@@ -100,7 +137,7 @@ public final class NodeSegmentSource implements SegmentSource {
                 synchronized (cacheLock) {
                     fetches++;
                 }
-                byte[] bytes = delegate.fetch(grant);
+                byte[] bytes = fetch.get();
                 synchronized (cacheLock) {
                     admit(key, bytes);
                 }

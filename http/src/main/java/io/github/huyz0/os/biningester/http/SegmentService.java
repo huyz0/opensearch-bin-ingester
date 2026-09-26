@@ -49,10 +49,12 @@ import java.util.Optional;
 public final class SegmentService implements HttpService {
 
     /** The route. */
-    public static final String PATH = "/seg";
+    public static final String PATH =
+            io.github.huyz0.os.biningester.client.HttpProxySource.PATH;
 
     /** The query parameter naming the segment's object key. */
-    public static final String KEY_PARAM = "key";
+    public static final String KEY_PARAM =
+            io.github.huyz0.os.biningester.client.HttpProxySource.KEY_PARAM;
 
     /** The consumer's zone, for accounting only. */
     public static final String AZ_PARAM = SubscriptionService.AZ_PARAM;

@@ -205,9 +205,18 @@ public final class NodeSubscriptions implements AutoCloseable {
         NodeSubscriptions built = new NodeSubscriptions(
                 Objects.requireNonNull(channel, "channel").transport(), queueCapacity,
                 new NodeSegmentSource(new io.github.huyz0.os.biningester.client.HttpSegmentSource(SEGMENT_FETCH_TIMEOUT),
+                        channel.endpoint() == null ? null
+                                : new io.github.huyz0.os.biningester.client.HttpProxySource(
+                                        channel.endpoint(), SEGMENT_FETCH_TIMEOUT, null),
                         holdBytes));
         built.channel = channel;
         return built;
+    }
+
+    /** The node's proxy source, or null -- for the wiring test (M10.2). */
+    io.github.huyz0.os.biningester.client.ProxySource proxySource() {
+        return nodeSegmentSource instanceof io.github.huyz0.os.biningester.client.ProxySource p
+                ? p : null;
     }
 
     /** Whether a {@code direct} delivery has something on this node to fetch it with. */
@@ -278,7 +287,9 @@ public final class NodeSubscriptions implements AutoCloseable {
             // ⚠️ THE FED CONSTRUCTOR, holding no subscription of its own:
             // `nodeListener` is what this node is subscribed with, and a client
             // that closed a subscription would close every other run's with it.
-            ConsumerClient client = new ConsumerClient(k, queueCapacity, nodeSegmentSource);
+            ConsumerClient client = new ConsumerClient(k, queueCapacity, nodeSegmentSource,
+                    nodeSegmentSource instanceof io.github.huyz0.os.biningester.client.ProxySource p
+                            ? p : null);
             java.util.function.BiConsumer<RunKey,
                     io.github.huyz0.os.biningester.client.DeliveryGapException> handler = gapHandler;
             if (handler != null) {

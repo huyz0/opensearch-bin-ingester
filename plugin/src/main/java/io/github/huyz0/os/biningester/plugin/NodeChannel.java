@@ -50,8 +50,8 @@ public final class NodeChannel implements AutoCloseable {
     public static NodeChannel open(String endpoint, Duration retryFloor,
             Duration retryCeiling, Duration timeout) {
         Objects.requireNonNull(endpoint, "endpoint");
-        return new NodeChannel(reconnect -> new HttpSubscriptionTransport(endpoint, reconnect,
-                retryFloor, retryCeiling, timeout), timeout);
+        return new NodeChannel(reconnect -> new HttpSubscriptionTransport(endpoint,
+                reconnect, retryFloor, retryCeiling, timeout), timeout, endpoint);
     }
 
     /**
@@ -61,10 +61,11 @@ public final class NodeChannel implements AutoCloseable {
      * registrar".
      */
     public NodeChannel(TransportFactory factory) {
-        this(factory, null);
+        this(factory, null, null);
     }
 
-    private NodeChannel(TransportFactory factory, Duration connectTimeout) {
+    private NodeChannel(TransportFactory factory, Duration connectTimeout, String endpoint) {
+        this.endpoint = endpoint;
         Objects.requireNonNull(factory, "factory");
         this.transport = Objects.requireNonNull(factory.open(holder::onReconnect), "transport");
         this.connectTimeout = connectTimeout;
@@ -93,6 +94,16 @@ public final class NodeChannel implements AutoCloseable {
         void wire(IndexRegistrar wired) {
             this.registrar = wired;
         }
+    }
+
+    private final String endpoint;
+
+    /**
+     * The ingester endpoint this channel opened, or null for one built from a
+     * factory -- the node's proxy fetches go to the same node (M10.2).
+     */
+    public String endpoint() {
+        return endpoint;
     }
 
     public SubscriptionTransport transport() {

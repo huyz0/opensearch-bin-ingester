@@ -154,9 +154,13 @@ class ThreeModesAgreeTest {
         @Override public AutoCloseable subscribe(RunKey key, Listener listener) {
             return hub.subscribe(key, SubscriptionHub.assembling(push -> {
                 modesSeen.add(push.via());
+                // ⚠️ AS THE WIRE CARRIES IT (M10.2): only `inline` has bytes.
+                // Handing a `proxy` delivery the assembled segment is what let
+                // this test pass while every HTTP consumer threw on one.
                 listener.onDelivery(new Delivery(push.key(), push.segmentKey(),
                         push.recordCount(), push.firstOffset(), push.via(),
-                        push.segment(), push.grant(), push.sequencerEpoch()));
+                        push.via() == FetchMode.INLINE ? push.segment() : new byte[0],
+                        push.grant(), push.sequencerEpoch()));
             }));
         }
     }
@@ -201,8 +205,13 @@ class ThreeModesAgreeTest {
                 return in.readAllBytes();
             }
         };
+        io.github.huyz0.os.biningester.client.ProxySource route = segmentKey -> {
+            try (InputStream in = store.get(segmentKey)) {
+                return in.readAllBytes();
+            }
+        };
         List<ConsumerRecord> got = new ArrayList<>();
-        try (ConsumerClient c = new ConsumerClient(bridge, KEY, 16, source)) {
+        try (ConsumerClient c = new ConsumerClient(bridge, KEY, 16, source, route)) {
             hub.publish(new CommitDelta(0, SEGMENT_KEY,
                             List.of(new RunCommit(KEY, 3, 500L))),
                     podHoldsBytes ? SEGMENT_KEY : "seg-some-other-pod-wrote",
@@ -306,8 +315,13 @@ class ThreeModesAgreeTest {
                 throw new AssertionError("direct must not be served at this fan-out");
             };
 
-            try (ConsumerClient one = new ConsumerClient(bridge, KEY, 16, neverCalled);
-                    ConsumerClient two = new ConsumerClient(bridge, KEY, 16, neverCalled)) {
+            io.github.huyz0.os.biningester.client.ProxySource route = segmentKey -> {
+                try (InputStream in = store.get(segmentKey)) {
+                    return in.readAllBytes();
+                }
+            };
+            try (ConsumerClient one = new ConsumerClient(bridge, KEY, 16, neverCalled, route);
+                    ConsumerClient two = new ConsumerClient(bridge, KEY, 16, neverCalled, route)) {
                 hub.publish(new CommitDelta(0, SEGMENT_KEY,
                                 List.of(new RunCommit(KEY, 3, 500L))),
                         "seg-some-other-pod-wrote", new byte[] {1},
