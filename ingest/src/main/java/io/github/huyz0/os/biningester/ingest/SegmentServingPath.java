@@ -87,6 +87,17 @@ final class SegmentServingPath {
 
     void publishSegment(SegmentCommit committed, byte[] heldBytes,
             SegmentServing serving, long sequencerEpoch, long chainSequence) {
+        // ⚠️ THE WRITER KEEPS WHAT IT WROTE, BEFORE ANYTHING ELSE (M10.15).
+        // ADR-0004 prices the writing AZ at zero GETs because this node still
+        // holds the segment; handing the bytes to its own subscribers and then
+        // dropping them made its first `/seg` read of every segment a GET
+        // (ADR-0073). Admitted before the no-subscriber return below, because
+        // the consumer that fetches it may poll another node's subscription.
+        // `SegmentCache.put` keeps its own ceiling: a segment above it is not
+        // admitted, and the route streams it from the store as before.
+        if (heldBytes != null) {
+            serving.proxy().cache().put(committed.segmentKey(), heldBytes);
+        }
         // ⚠️ LINKED, so delivery order follows first-subscription order rather
         // than a hash, which makes a failure reproducible run to run.
         //
