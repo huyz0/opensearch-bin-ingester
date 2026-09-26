@@ -100,13 +100,24 @@ public final class FrontDoor implements AutoCloseable {
     public static FrontDoor start(Assembly assembly, Clock clock,
             java.util.function.Consumer<String> journal,
             io.github.huyz0.os.biningester.binstore.CrossAzBytes crossAz) {
+        return start(assembly, clock, journal, crossAz, null);
+    }
+
+    /**
+     * Binds only {@code bindHost} rather than every interface (M10.21): several
+     * pods in one JVM, each at its own loopback address on the port they all
+     * name, the way pods of one Deployment share a container port.
+     */
+    static FrontDoor start(Assembly assembly, Clock clock,
+            java.util.function.Consumer<String> journal,
+            io.github.huyz0.os.biningester.binstore.CrossAzBytes crossAz, String bindHost) {
         Objects.requireNonNull(crossAz, "crossAz");
         Objects.requireNonNull(assembly, "assembly");
         Objects.requireNonNull(journal, "journal");
         Objects.requireNonNull(clock, "clock");
         ServerConfig config = assembly.config();
         DrainGate gate = new DrainGate(journal);
-        WebServer server = build(config, assembly, clock, gate, crossAz);
+        WebServer server = build(config, assembly, clock, gate, crossAz, bindHost);
         try {
             server.start();
         } catch (RuntimeException notBound) {
@@ -162,7 +173,8 @@ public final class FrontDoor implements AutoCloseable {
     }
 
     private static WebServer build(ServerConfig config, Assembly assembly, Clock clock,
-            DrainGate gate, io.github.huyz0.os.biningester.binstore.CrossAzBytes crossAz) {
+            DrainGate gate, io.github.huyz0.os.biningester.binstore.CrossAzBytes crossAz,
+            String bindHost) {
         HttpRouting.Builder routes = HttpRouting.builder()
                 // ⚠️ HELIDON'S OWN SHUTDOWN HOOK IS OFF. Left on, a `SIGTERM`
                 // runs it alongside `Main`'s, and it stops the listener while
@@ -202,8 +214,11 @@ public final class FrontDoor implements AutoCloseable {
         if (macroPath != null && !macroPath.isBlank()) {
             routes.register(new MacroCountsService(assembly, macroPath, crossAz));
         }
-        return WebServer.builder().shutdownHook(false).port(config.httpPort())
-                .routing(routes).build();
+        var server = WebServer.builder().shutdownHook(false).port(config.httpPort());
+        if (bindHost != null) {
+            server.host(bindHost);
+        }
+        return server.routing(routes).build();
     }
 
     private static final class MacroCountsService implements io.helidon.webserver.http.HttpService {

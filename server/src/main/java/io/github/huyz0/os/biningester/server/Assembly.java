@@ -174,11 +174,10 @@ public final class Assembly implements AutoCloseable {
 
     static Assembly openForTest(ServerConfig config, BinStore store,
             SequencerTransport transport, Clock clock, EndpointSliceView peerView,
-            CrossAzBytes crossAz, DurableSegmentSignalSender.PeerPost signalPost)
-            throws IOException {
+            CrossAzBytes crossAz, PeerPosts posts) throws IOException {
         return new Assembly(config, Objects.requireNonNull(store, "store"), false,
                 transport, clock, LeaseChallenge.NEVER, ChainBackfill::inBackground,
-                peerView, crossAz, signalPost);
+                peerView, crossAz, posts);
     }
 
     static Assembly openForTest(ServerConfig config, BinStore store,
@@ -207,17 +206,16 @@ public final class Assembly implements AutoCloseable {
     private Assembly(ServerConfig config, BinStore raw, boolean ownsStore,
             SequencerTransport transport, Clock clock, LeaseChallenge challenge,
             BackfillStarter backfillStarter, EndpointSliceView peerView, CrossAzBytes crossAz,
-            DurableSegmentSignalSender.PeerPost signalPost)
+            PeerPosts posts)
             throws IOException {
         this(config, raw, ownsStore, transport, clock, challenge, backfillStarter,
-                peerView, crossAz, signalPost, LeaseManager::new);
+                peerView, crossAz, posts, LeaseManager::new);
     }
 
     private Assembly(ServerConfig config, BinStore raw, boolean ownsStore,
             SequencerTransport transport, Clock clock, LeaseChallenge challenge,
             BackfillStarter backfillStarter, EndpointSliceView peerView, CrossAzBytes crossAz,
-            DurableSegmentSignalSender.PeerPost signalPost,
-            RetentionAssembly.LeaseManagerFactory leaseManagerFactory)
+            PeerPosts posts, RetentionAssembly.LeaseManagerFactory leaseManagerFactory)
             throws IOException {
         this.config = Objects.requireNonNull(config, "config");
         Objects.requireNonNull(transport, "transport");
@@ -248,7 +246,9 @@ public final class Assembly implements AutoCloseable {
         this.watermarks = new WatermarkTable(clock, kept.reportTimeout(), kept.copyExpiry(),
                 kept.minRetention());
 
-        this.delivery = new DeltaDelivery(config, crossAz, this.peerView, (epoch, sequence) ->
+        DurableSegmentSignalSender.PeerPost signalPost = posts == null ? null : posts.signal();
+        this.delivery = new DeltaDelivery(config, crossAz, this.peerView,
+                posts == null ? null : posts.delta(), (epoch, sequence) ->
                 io.github.huyz0.os.biningester.sequencer.DeltaReads.read(store,
                         config.prefix(), epoch, sequence));
         LeaseConfig leases = sequencerLeaseConfig(config);

@@ -95,7 +95,8 @@ class CrossAzBytesIT {
                 Map<String, Long> values = counters(Files.readString(counts,
                         StandardCharsets.UTF_8));
                 assertThat(values).containsKeys("crossAzBytes", "unknownPeerBytes", "proxyRead",
-                        "inlinePush", "consumerPoll", "commitForward", "inboxDrain");
+                        "inlinePush", "consumerPoll", "commitForward", "inboxDrain",
+                        "durableSegmentSignal", "deltaPush", "deltaHint");
                 assertThat(values.get("unknownPeerBytes")).isZero();
                 assertThat(values.get("crossAzBytes")).isPositive();
                 assertThat(values.get("inlinePush")).isPositive();
@@ -104,7 +105,8 @@ class CrossAzBytesIT {
                         .isGreaterThan(values.get("proxyRead"));
                 long byTransport = values.get("proxyRead") + values.get("inlinePush")
                         + values.get("consumerPoll") + values.get("commitForward")
-                        + values.get("inboxDrain");
+                        + values.get("inboxDrain") + values.get("durableSegmentSignal")
+                        + values.get("deltaPush") + values.get("deltaHint");
                 assertThat(byTransport).as("named transport counters must partition cross-AZ bytes")
                         .isEqualTo(values.get("crossAzBytes"));
                 assertThat(values.get("crossAzBytes") * 1_000L)

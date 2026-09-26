@@ -71,17 +71,17 @@ public final class CrossAzBytes {
      * spends the bytes" is answerable without a second instrument: the proxy
      * read path a consumer in another AZ takes (cost.md rules 10-11, the
      * largest term), {@code inline} push payloads, the commit forward, and the
-     * inbox drain.
+     * inbox drain -- extended by the durable-segment signal (ADR-0066) and the
+     * delta push and hint (ADR-0075). The named counters partition the total.
      */
     public enum Transport {
         /**
          * A segment served to a consumer in {@code proxy} mode.
          *
-         * <p>⚠️ **TODAY THIS IS THE EVENT FRAME, NOT THE SEGMENT.** A proxy
-         * push carries no inline bytes and no route yet serves the segment
-         * itself to a consumer, so what is counted here is the frame that
-         * names it. When that route lands its bytes are counted here, on the
-         * same socket, by the same call.
+         * <p>Two things, both on the way to a {@code proxy} consumer: the event
+         * frame that names the segment on a poll answer, and -- since M10.1 --
+         * the segment's own bytes, streamed by the ingester's {@code /seg}
+         * route. Comparing this with segment bytes alone is off by the frames.
          */
         PROXY_READ,
 

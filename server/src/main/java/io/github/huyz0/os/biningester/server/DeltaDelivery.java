@@ -38,6 +38,7 @@ final class DeltaDelivery implements AutoCloseable {
     private final CrossAzBytes crossAz;
     private final EndpointSliceView peers;
     private final DeltaRelay.Reader reader;
+    private final DeltaFanOut.PeerPost post;
     private final List<Held> pending = new ArrayList<>();
     private final AtomicLong droppedBeforeAttach = new AtomicLong();
     private ChainPublisher chain;
@@ -46,6 +47,13 @@ final class DeltaDelivery implements AutoCloseable {
 
     DeltaDelivery(ServerConfig config, CrossAzBytes crossAz, EndpointSliceView peers,
             DeltaRelay.Reader reader) {
+        this(config, crossAz, peers, null, reader);
+    }
+
+    /** @param post a sender in place of the pooled HTTP client, or null (see {@link PeerPosts}) */
+    DeltaDelivery(ServerConfig config, CrossAzBytes crossAz, EndpointSliceView peers,
+            DeltaFanOut.PeerPost post, DeltaRelay.Reader reader) {
+        this.post = post;
         this.config = Objects.requireNonNull(config, "config");
         this.crossAz = crossAz == null ? CrossAzBytes.untracked() : crossAz;
         this.peers = Objects.requireNonNull(peers, "peers");
@@ -65,8 +73,12 @@ final class DeltaDelivery implements AutoCloseable {
         }
         chain = publisher;
         if (config.httpPort() > 0) {
-            fanOut = new DeltaFanOut(config.podId(), config.az(), config.httpPort(), crossAz,
-                    peers::readyEndpoints, (delta, epoch) -> publisher.offer(epoch, delta));
+            fanOut = post == null
+                    ? new DeltaFanOut(config.podId(), config.az(), config.httpPort(), crossAz,
+                            peers::readyEndpoints, (delta, epoch) -> publisher.offer(epoch, delta))
+                    : new DeltaFanOut(config.podId(), config.az(), config.httpPort(), crossAz,
+                            peers::readyEndpoints, (delta, epoch) -> publisher.offer(epoch, delta),
+                            post, java.time.Duration.ofMillis(100));
             relay = new DeltaRelay(reader, fanOut::relayed);
         }
         for (Held h : pending) {
@@ -136,6 +148,18 @@ final class DeltaDelivery implements AutoCloseable {
             Runnable drain) {
         term.onCommitted(this::committed);
         drain.run();
+    }
+
+    /**
+     * Reader calls this pod's relay made, retries included -- on a healthy
+     * store one GET each (M10.21's "one read per delta and AZ").
+     */
+    long relayReads() {
+        DeltaRelay r;
+        synchronized (this) {
+            r = relay;
+        }
+        return r == null ? 0 : r.reads();
     }
 
     /** Deltas and hints that arrived before attach, or with nothing to take them. */

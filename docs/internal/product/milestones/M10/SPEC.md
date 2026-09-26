@@ -292,9 +292,12 @@ request.
     store request; a segment above the cache ceiling is still served, and K
     reads of it cost at most K + 1 GETs. (M10.15, M10.1)
 
-13. **Every pod's consumers receive every record.** Three assembled pods on
-    RustFS, labelled `az-a`, `az-b`, `az-c`, with membership from a fake
-    `EndpointSlice` API; writes spread across all three; one consumer per pod.
+13. **Every pod's consumers receive every record.** Assembled pods on
+    RustFS in three AZs, `az-a`, `az-b`, `az-c`, with at least one AZ holding
+    a second pod besides its relay (amended by M10.21: so the relay's onward
+    push is exercised; the rig runs five), and membership from `EndpointSlice`
+    watch events fed to the view every pod reads; writes spread across all
+    pods; one consumer per pod.
     Each consumer decodes **every** record written, in offset order, with zero
     gaps -- where before M10.16 each received only its own pod's third.
     **Counted:** `DELTA_PUSH` bytes are all same-AZ; `DELTA_HINT` bytes are
