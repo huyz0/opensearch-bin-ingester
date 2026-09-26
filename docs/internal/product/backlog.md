@@ -15,7 +15,28 @@ requires the subject to name a real task). M-1.2 carries the parser regression
 suite (M0.18), those tests are Java, and Java needs the build that M0.4 brings —
 so the build goes first.
 
-**Current milestone: M9 — cost and performance proof**, specified in [milestones/M9/SPEC.md](milestones/M9/SPEC.md) and decomposed into M9.0-M9.33 below, plus two M0 rows and the rows M8 handed over. ⚠️ **THE M0 AND M8 ROWS ARE NOT REPEATED HERE**: `M0.14` (`check-mutants.sh`) and `M0.27` (the L1 CI job) keep their rows in the M0 section, and `M8.24` including children `M8.24f`-`M8.24h`, `M8.56`, `M8.58`, `M8.82`, `M8.83` and `M8.60`-`M8.81` keep theirs in the M8 table below -- a second copy of a row is how a status goes stale one table over. ⚠️ The order to take them in is the SPEC's Tasks table, not the ID order.
+**Current milestone: M10 — proxy segment serving and the full NFR-5 proof**, specified in [milestones/M10/SPEC.md](milestones/M10/SPEC.md) and decomposed into M10.0-M10.15 below (M10.15 was added by M10.0's own review and runs right after M10.1). Take them in the SPEC's Tasks order.
+
+| ID | Task | Serves | State |
+|---|---|---|---|
+| M10.0 | This spec, the decomposition, and the roadmap amendment: M9 marked complete, the M10 row, priority lanes (FR-18) to M11 and fast mode (FR-17) to M12 on the user's decision of 2026-09-26 | — (planning) | **done** -- [milestones/M10/SPEC.md](milestones/M10/SPEC.md); roadmap rows M9-M12 amended |
+| M10.1 | An ADR and the ingester's `GET /seg` route: only this deployment's canonical segment keys, streamed through `SegmentProxy`, single-flight per key, 503 before the first byte, every body byte counted as `PROXY_READ` by the consumer's `az` | FR-6, NFR-4, NFR-5, NFR-6 | todo |
+| M10.15 | The writer admits its held segment bytes to its `SegmentCache` at publish, so the writing node serves `/seg` at zero GETs. ⚠️ Found by M10.0's review: `writeHeldBytesChunked` never admits, so the writer's first proxy fetch of every segment bought a GET ADR-0004 prices at zero | NFR-4, FR-6 | todo |
+| M10.2 | The consumer fetches `proxy` deliveries: a `ProxySource` seam, `HttpProxySource`, `ConsumerClient` dispatch, and per-(node, segment) coalescing in the plugin. ⚠️ Red first: an assembled server with default settings and a segment above the 256 KiB inline cap, which a consumer cannot decode today | FR-6, NFR-4 | todo |
+| M10.3 | The HTTP subscription stops assembling non-inline segments per session: no queue-budget charge and no segment-sized copy per session for a `proxy` or `direct` push | NFR-6 | todo |
+| M10.4 | The plugin reports its AZ (`binstore.ingester.az`) on the poll and the proxy fetch; unset keeps the conservative unknown-zone count | NFR-5 | todo |
+| M10.5 | NFR-5 on RustFS across three AZ labels with the proxy payload counted: same-AZ serving < 0.1% of producer bytes with each node's same-AZ `PROXY_READ` at least the segment bytes its consumers fetched through the route, a cross-AZ control run counting at least its delivered segment bytes, store GETs per segment within M9 criterion 5(a)'s (AZs − 1) + one cold GET per non-writer serving node, with the rate above AZs − 1 reported; `docs/internal/product/measurements/results/cross-az.csv` committed | NFR-5, NFR-4 | todo |
+| M10.6 | An ADR giving FR-21's refusing governor an owning milestone; roadmap amended | FR-21 | todo |
+| M10.7 | Harvest (5f7e242): the mutants gate's UNUSED-baseline inference false-refuses an edit elsewhere in a mutated method; the `CHECK_RANGE` case asserts its fixture index is non-empty | — (gate) | todo |
+| M10.8 | Harvest (34e4fcd): `DrainAskBytesTest` gets an expectation independent of production's constants; the http soak-test crash under `checkMutants` is dispositioned in writing | NFR-5 | todo |
+| M10.9 | Harvest (2cd990f): the partition chaos poll's `Thread.sleep(25)` becomes a bounded observation | NFR-7 | todo |
+| M10.10 | Harvest (872efb9): the curve generator refuses duplicate size-rate rows; zero-GET pricing is pinned | NFR-1 | todo |
+| M10.11 | Harvest (8a0e9ec, eef4d88, b65b9f9, bf8877b/c1d9f54): catch-up test gaps -- the legacy singleton default, an oversized end marker, partial overlaps, and no permit residue on the refusal path | FR-9 | todo |
+| M10.12 | Harvest (895710a, fb0f56b): Tier 3's reachability flip during the final segment GET is pinned; the Tier 2 monitor held over a bounded read is fixed or its bound recorded | FR-10 | todo |
+| M10.13 | Harvest (1ed333b, 355899e, ae5b4c4): nested-package coverage in the wired scan; the M9 test-plan tier label; testing.md's RustFS wording | — (gate, docs) | todo |
+| M10.14 | `VERIFIED.md`, `checkMilestoneVerified`, the milestone review, and the roadmap row marked complete | — | todo |
+
+**M9 (complete) — cost and performance proof**, specified in [milestones/M9/SPEC.md](milestones/M9/SPEC.md) and decomposed into M9.0-M9.33 below, plus two M0 rows and the rows M8 handed over. ⚠️ **THE M0 AND M8 ROWS ARE NOT REPEATED HERE**: `M0.14` (`check-mutants.sh`) and `M0.27` (the L1 CI job) keep their rows in the M0 section, and `M8.24` including children `M8.24f`-`M8.24h`, `M8.56`, `M8.58`, `M8.82`, `M8.83` and `M8.60`-`M8.81` keep theirs in the M8 table below -- a second copy of a row is how a status goes stale one table over. ⚠️ The order to take them in is the SPEC's Tasks table, not the ID order.
 
 | ID | Task | Serves | State |
 |---|---|---|---|
