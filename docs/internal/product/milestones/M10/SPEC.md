@@ -283,7 +283,7 @@ request.
 | M10.1 | T1 | `SegmentReadsTest#concurrentColdReadsOfOneSegmentCostOneGetAndEachGetsItWhole` | single-flight removed |
 | M10.1 | T1 | `SegmentReadsTest#theGateIsNotHeldWhileASinkIsWriting` | the gate spans a slow consumer's sink |
 | M10.1 | T1 | `SegmentReadsTest#aSegmentTooLargeToCacheCostsAtMostOneGetPerReadPlusTheFill` | an uncacheable segment re-filled per read |
-| M10.1 | T1 | `SegmentServiceTest#everyBodyByteIsCountedOnceAsProxyReadByConsumerAz` | payload not counted, or counted as cross-AZ for a same-AZ consumer |
+| M10.1 | T1 | `SegmentServiceTest#everyBodyByteIsCountedOnceAsProxyReadAgainstTheConsumersZone` | payload not counted, or counted as cross-AZ for a same-AZ consumer |
 | M10.1 | T1 | `SegmentReadsTest#aCachedSegmentIsServedWithoutAGetAndInChunks` | whole-segment write per request |
 | M10.15 | T1 | `WriterCacheAdmissionTest#theWriterServesItsOwnSegmentWithoutAGet` | held bytes handed to subscribers but not admitted |
 | M10.2 | T2 (assembled server, loopback) | `ProxyDeliveryOverHttpTest#aSegmentAboveTheInlineCapIsDecodedThroughTheProxyRoute` | `bytesOf` returns the delivery's empty array |

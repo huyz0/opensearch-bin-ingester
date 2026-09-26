@@ -8,6 +8,8 @@ import io.github.huyz0.os.biningester.http.HealthService;
 import io.github.huyz0.os.biningester.http.SubscriptionService;
 import io.github.huyz0.os.biningester.http.DurableSegmentSignalService;
 import io.github.huyz0.os.biningester.http.CatchUpService;
+import io.github.huyz0.os.biningester.http.SegmentService;
+import io.github.huyz0.os.biningester.ingest.SegmentReads;
 import io.github.huyz0.os.biningester.binstore.PutPurposeCounts;
 import io.github.huyz0.os.biningester.binstore.StoreCounts;
 import io.helidon.webserver.WebServer;
@@ -183,6 +185,11 @@ public final class FrontDoor implements AutoCloseable {
                 .register(new SubscriptionService(assembly.hub(), assembly.catalog(),
                         assembly.watermarks(), clock, assembly.floors(), gate, crossAz))
                 .register(new CatchUpService(assembly::respondCatchUp))
+                // ⚠️ ONE SegmentReads PER NODE, built here once: its single-
+                // flight gate only coalesces reads that share an instance
+                // (M10.1, ADR-0073).
+                .register(new SegmentService(new SegmentReads(assembly.segmentProxy())::serve,
+                        config.prefix(), crossAz))
                 .register(new DurableSegmentSignalService(assembly.peerView(),
                         assembly::prefetchDurableSegment));
         String macroPath = System.getProperty("binstore.macro.path");
