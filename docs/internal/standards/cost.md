@@ -67,19 +67,22 @@ if (run.isSizeTriggered()) {
     assertThat(meter.requestsPerMiBWritten(bytesWritten).orElseThrow()).isLessThan(0.30);
 } else {
     long intervals = ceil(run.elapsed(), run.intervalCeiling());
-    assertThat(run.counts().puts()).isLessThanOrEqualTo(2 * intervals + 2);
+    assertThat(run.purposePuts().dataPuts() + run.purposePuts().commitPuts())
+        .isLessThanOrEqualTo(2 * intervals + 2);
 }
 assertThat(store.counts().lists()).isZero();
 assertThat(runIdle(minutes(5), /*shards=*/1600).counts().total()).isZero();
 ```
 
-NFR-1 has two regimes ([ADR-0062](../product/decisions/0062-nfr-1-has-an-interval-bound-low-rate-regime.md)):
+NFR-1 has two regimes ([ADR-0072](../product/decisions/0072-attribute-low-rate-lease-put-cost.md)):
 the `< 0.30 requests/MiB` assertion applies only when flushes are
-size-triggered. Below that rate, assert at most two write requests per pod per
-interval ceiling (one data PUT and one commit PUT), never a converted
-per-second number. `LowRateWriteBudgetIT` pins both a 250 ms and a 5 s ceiling
-and asserts the interval form; its 250 ms point must not be judged by a
-2-requests-per-second threshold.
+size-triggered and applies to aggregate write requests. Below that rate, assert
+at most two segment-data plus commit-delta PUTs per pod per interval ceiling
+(one data PUT and one commit PUT), never a converted per-second number.
+Checkpoint and lease/control PUTs are classified separately and bounded by
+their own configured cadence, but remain in aggregate write-request and cost
+reports. `LowRateWriteBudgetIT` pins both a 250 ms and a 5 s ceiling; its
+250 ms point must not be judged by a 2-requests-per-second threshold.
 
 ⚠️ **`requestsPerMiBWritten` TAKES THE BYTES AND RETURNS AN `OptionalDouble`,
 AND NEITHER IS DECORATION.** The meter reads no clock and holds no store, so

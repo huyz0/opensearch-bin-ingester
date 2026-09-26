@@ -32,8 +32,8 @@ Methodology:
 | | |
 |---|---|
 | idle request count `== 0` | R3 — invisible to every functional test |
-| size-triggered requests per MiB `< 0.30` | NFR-1 / ADR-0062 |
-| low-rate write requests `≤ 2` per pod per interval ceiling | NFR-1 / ADR-0062 |
+| size-triggered aggregate requests per MiB `< 0.30` | NFR-1 / ADR-0072 |
+| low-rate segment-data plus commit-delta PUTs `≤ 2` per pod per interval ceiling; checkpoint and lease/control PUTs cadence-bounded separately and still included in aggregate cost | NFR-1 / ADR-0072 |
 | read requests scale with nodes, not shards | R5 |
 | **allocation per record (`gc.alloc.rate.norm`, B/op)** | the leading indicator of GC-driven collapse |
 | memory flat under 10× body size | NFR-6 |

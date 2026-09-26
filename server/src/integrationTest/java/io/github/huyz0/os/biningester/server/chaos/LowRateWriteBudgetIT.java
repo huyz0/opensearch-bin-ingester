@@ -20,13 +20,15 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 
-/** M9.18: low-rate writes are bounded per configured interval, not per second. */
+/** M9.56: low-rate data and commit writes are bounded per interval, not per second. */
 @Timeout(value = 1, unit = TimeUnit.HOURS, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
 class LowRateWriteBudgetIT {
 
     private static final Duration SHORT_CEILING = Duration.ofMillis(250);
     private static final Duration LONG_CEILING = Duration.ofSeconds(5);
-    private static final Pattern COUNT = Pattern.compile("\\\"(puts|gets|lists|stats|deletes)\\\":(\\d+)");
+    private static final Pattern COUNT = Pattern.compile("\\\"([A-Za-z]+)\\\":(\\d+)");
+    private static final Duration LEASE_RENEW_INTERVAL = Duration.ofSeconds(3);
+    private static final Duration CHECKPOINT_INTERVAL = Duration.ofSeconds(60);
 
     @TempDir
     Path directory;
@@ -34,12 +36,13 @@ class LowRateWriteBudgetIT {
     @Test
     void lowRateWritesStayWithinTwoPutsPerIntervalAtBothCeilings() throws Exception {
         assumeTrue(S3Fixture.dockerAvailable(), "no Docker daemon: this is a T3 suite");
-        Duration duration = Duration.parse(System.getProperty("m9.18.pointDuration",
-                System.getenv().getOrDefault("M9_18_POINT_DURATION", "PT5M")));
+        Duration duration = Duration.parse(System.getProperty("m9.56.pointDuration",
+                System.getenv().getOrDefault("M9_56_POINT_DURATION", "PT5M")));
 
         LowRateResult shortPoint = runPoint(SHORT_CEILING, duration);
         LowRateResult longPoint = runPoint(LONG_CEILING, duration);
 
+        System.out.println("M9.56 low-rate write points: " + List.of(shortPoint, longPoint));
         assertBoundedPerInterval(shortPoint);
         assertBoundedPerInterval(longPoint);
         assertThat(shortPoint.counts().lists()).as("250 ms low-rate LISTs").isZero();
@@ -51,7 +54,6 @@ class LowRateWriteBudgetIT {
                 .as("a per-second bound would reject correct 250 ms behaviour")
                 .isGreaterThan(2L * shortPoint.elapsed().toSeconds());
 
-        System.out.println("M9.18 low-rate write points: " + List.of(shortPoint, longPoint));
     }
 
     private LowRateResult runPoint(Duration ceiling, Duration duration) throws Exception {
@@ -60,13 +62,15 @@ class LowRateWriteBudgetIT {
             settings.put("producer.allowed-indices", "logs");
             settings.put("ingest.interval-floor", ceiling.toString());
             settings.put("ingest.interval-ceiling", ceiling.toString());
+            settings.put("lease.ttl", "PT10S");
+            settings.put("lease.renew-interval", LEASE_RENEW_INTERVAL.toString());
             NodeProcess node = null;
             try {
                 node = NodeProcess.start(directory, "pod" + ceiling.toMillis(), settings,
                         NodeProcess.Options.NONE,
                         directory.resolve("counts-" + ceiling.toMillis() + ".json"));
                 node.registerIndex("logs", java.util.UUID.randomUUID());
-                StoreCounts before = snapshot(node, directory.resolve("before-" + ceiling.toMillis()
+                StoreSnapshot before = snapshot(node, directory.resolve("before-" + ceiling.toMillis()
                         + ".json"));
                 long started = System.nanoTime();
                 int sequence = 0;
@@ -78,10 +82,12 @@ class LowRateWriteBudgetIT {
                             : node.write(id, 1);
                     assertThat(status).as("low-rate bulk status").isEqualTo(202);
                 }
+                StoreSnapshot after = snapshot(node,
+                        directory.resolve("after-" + ceiling.toMillis() + ".json"));
                 Duration elapsed = Duration.ofNanos(System.nanoTime() - started);
-                StoreCounts counts = minus(snapshot(node,
-                        directory.resolve("after-" + ceiling.toMillis() + ".json")), before);
-                return new LowRateResult(ceiling, elapsed, counts);
+                return new LowRateResult(ceiling, elapsed,
+                        minus(after.counts(), before.counts()),
+                        minus(after.purposePuts(), before.purposePuts()));
             } finally {
                 if (node != null) {
                     node.close();
@@ -93,22 +99,43 @@ class LowRateWriteBudgetIT {
     private static void assertBoundedPerInterval(LowRateResult result) {
         long intervals = (result.elapsed().toNanos() + result.ceiling().toNanos() - 1)
                 / result.ceiling().toNanos();
-        assertThat(result.counts().puts())
-                .as("puts=%d, ceiling=%s, elapsed=%s", result.counts().puts(),
+        assertThat(result.purposePuts().dataAndCommitPuts())
+                .as("data+commit puts=%d, total puts=%d, ceiling=%s, elapsed=%s",
+                        result.purposePuts().dataAndCommitPuts(), result.counts().puts(),
                         result.ceiling(), result.elapsed())
                 .isLessThanOrEqualTo(2L * intervals + 2);
+        long leaseRenewals = result.elapsed().toNanos()
+                / LEASE_RENEW_INTERVAL.toNanos() + 1;
+        assertThat(result.purposePuts().leasePuts())
+                .as("lease puts=%d, renew interval=%s, elapsed=%s",
+                        result.purposePuts().leasePuts(), LEASE_RENEW_INTERVAL, result.elapsed())
+                .isLessThanOrEqualTo(leaseRenewals);
+        long checkpointWindows = (result.elapsed().toNanos()
+                + CHECKPOINT_INTERVAL.toNanos() - 1) / CHECKPOINT_INTERVAL.toNanos();
+        assertThat(result.purposePuts().checkpointPuts())
+                .as("checkpoint puts=%d, checkpoint interval=%s, elapsed=%s",
+                        result.purposePuts().checkpointPuts(), CHECKPOINT_INTERVAL,
+                        result.elapsed())
+                .isLessThanOrEqualTo(2L * checkpointWindows + 2);
+        assertThat(result.purposePuts().total()).isEqualTo(result.counts().puts());
     }
 
-    private static StoreCounts snapshot(NodeProcess node, Path path) throws Exception {
+    private static StoreSnapshot snapshot(NodeProcess node, Path path) throws Exception {
         node.snapshotCounts(path);
         Map<String, Long> values = new HashMap<>();
         Matcher matcher = COUNT.matcher(Files.readString(path, StandardCharsets.UTF_8));
         while (matcher.find()) {
             values.put(matcher.group(1), Long.parseLong(matcher.group(2)));
         }
-        assertThat(values).containsKeys("puts", "gets", "lists", "stats", "deletes");
-        return new StoreCounts(values.get("puts"), values.get("gets"), values.get("lists"),
-                values.get("stats"), values.get("deletes"));
+        assertThat(values).containsKeys("puts", "gets", "lists", "stats", "deletes",
+                "dataPuts", "commitPuts", "checkpointPuts", "leasePuts", "otherPuts");
+        StoreCounts counts = new StoreCounts(values.get("puts"), values.get("gets"),
+                values.get("lists"), values.get("stats"), values.get("deletes"));
+        PutPurposeCounts purposePuts = new PutPurposeCounts(values.get("dataPuts"),
+                values.get("commitPuts"), values.get("checkpointPuts"),
+                values.get("leasePuts"), values.get("otherPuts"));
+        assertThat(purposePuts.total()).isEqualTo(counts.puts());
+        return new StoreSnapshot(counts, purposePuts);
     }
 
     private static StoreCounts minus(StoreCounts left, StoreCounts right) {
@@ -117,5 +144,26 @@ class LowRateWriteBudgetIT {
                 left.deletes() - right.deletes());
     }
 
-    private record LowRateResult(Duration ceiling, Duration elapsed, StoreCounts counts) {}
+    private static PutPurposeCounts minus(PutPurposeCounts left, PutPurposeCounts right) {
+        return new PutPurposeCounts(left.dataPuts() - right.dataPuts(),
+                left.commitPuts() - right.commitPuts(),
+                left.checkpointPuts() - right.checkpointPuts(),
+                left.leasePuts() - right.leasePuts(), left.otherPuts() - right.otherPuts());
+    }
+
+    private record StoreSnapshot(StoreCounts counts, PutPurposeCounts purposePuts) {}
+
+    private record PutPurposeCounts(long dataPuts, long commitPuts, long checkpointPuts,
+            long leasePuts, long otherPuts) {
+        long total() {
+            return dataPuts + commitPuts + checkpointPuts + leasePuts + otherPuts;
+        }
+
+        long dataAndCommitPuts() {
+            return dataPuts + commitPuts;
+        }
+    }
+
+    private record LowRateResult(Duration ceiling, Duration elapsed, StoreCounts counts,
+            PutPurposeCounts purposePuts) {}
 }

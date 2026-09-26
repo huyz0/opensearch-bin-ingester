@@ -10,19 +10,19 @@
 <text x="120" y="255">250 ms</text>
 <text x="420" y="255">1 s</text>
 <text x="720" y="255">5 s</text>
-<text x="32" y="300" class="title">Low-rate PUTs per interval vs ceiling (measured)</text>
+<text x="32" y="300" class="title">Low-rate data+commit PUTs per interval vs ceiling (measured)</text>
 <path class="grid" d="M100 350H820 M100 397H820 M100 445H820"/>
-<path class="low" d="M120,374.85 720,369"/>
-<circle cx="120" cy="374.85" r="5" fill="#d97706"/><text x="100" y="364.85">1.85</text><text x="95" y="465">250 ms</text>
-<circle cx="720" cy="369" r="5" fill="#d97706"/><text x="700" y="359">2.00</text><text x="695" y="465">5 s</text>
+<path class="low" d="M120,385.83 720,370.25"/>
+<circle cx="120" cy="385.83" r="5" fill="#d97706"/><text x="100" y="375.83">1.56</text><text x="95" y="465">250 ms</text>
+<circle cx="720" cy="370.25" r="5" fill="#d97706"/><text x="700" y="360.25">1.97</text><text x="695" y="465">5 s</text>
 <text x="32" y="515" class="title">Size-triggered write cost at 5 s configured ceiling</text>
 <path class="grid" d="M100 560H820 M100 615H820 M100 670H820"/>
-<path class="req" d="M120,622.92 420,616.32 720,621.16"/>
-<path class="cost" d="M120,624.93 420,619.16 720,623.39"/>
-<circle cx="120" cy="622.92" r="5" fill="#15803d"/><circle cx="120" cy="624.93" r="5" fill="#7c3aed"/><text x="128" y="615.92">0.2714 requests/MiB</text><text x="128" y="639.93">$1.4229/TiB</text><text x="95" y="705">40 MiB/s</text>
-<circle cx="420" cy="616.32" r="5" fill="#15803d"/><circle cx="420" cy="619.16" r="5" fill="#7c3aed"/><text x="428" y="609.32">0.2744 requests/MiB</text><text x="428" y="634.16">$1.4386/TiB</text><text x="395" y="705">80 MiB/s</text>
-<circle cx="720" cy="621.16" r="5" fill="#15803d"/><circle cx="720" cy="623.39" r="5" fill="#7c3aed"/><text x="728" y="614.16">0.2722 requests/MiB</text><text x="728" y="638.39">$1.4271/TiB</text><text x="695" y="705">160 MiB/s</text>
+<path class="req" d="M120,671.42 420,671.67 720,669.8"/>
+<path class="cost" d="M120,667.31 420,667.53 720,665.89"/>
+<circle cx="120" cy="671.42" r="5" fill="#15803d"/><circle cx="120" cy="667.31" r="5" fill="#7c3aed"/><text x="128" y="664.42">0.24935513908835705 requests/MiB</text><text x="128" y="682.31">$1.3073/TiB</text><text x="95" y="705">40 MiB/s</text>
+<circle cx="420" cy="671.67" r="5" fill="#15803d"/><circle cx="420" cy="667.53" r="5" fill="#7c3aed"/><text x="428" y="664.67">0.24924154530852677 requests/MiB</text><text x="428" y="682.53">$1.3067/TiB</text><text x="395" y="705">80 MiB/s</text>
+<circle cx="720" cy="669.8" r="5" fill="#15803d"/><circle cx="720" cy="665.89" r="5" fill="#7c3aed"/><text x="728" y="662.8">0.2500920594047511 requests/MiB</text><text x="728" y="680.89">$1.3112/TiB</text><text x="695" y="705">160 MiB/s</text>
 <line x1="120" y1="745" x2="150" y2="745" class="req"/><text x="158" y="750">requests/MiB measured</text><line x1="390" y1="745" x2="420" y2="745" class="cost"/><text x="428" y="750">USD/TiB modelled</text>
 <text x="32" y="780">Low-rate requests/MiB: N/A. Billed AWS dollars: NOT-RUN.</text>
-<text x="32" y="805">Size-triggered points: 5 s configured ceiling, 1 s floor, 5 s smoke runs.</text>
+<text x="32" y="805">Size-triggered points: 5 s configured ceiling, 1 s floor, five-minute measured runs.</text>
 </svg>

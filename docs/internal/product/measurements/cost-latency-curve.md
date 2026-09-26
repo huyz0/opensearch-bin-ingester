@@ -8,21 +8,21 @@ Counts are measured, dollar values are modelled from the AWS S3 Standard price t
 
 | Target rate (MiB/s) | Configured interval floor / ceiling | PUTs | Requests/MiB (measured) | USD/TiB (modelled) | Duration / evidence |
 |---:|---:|---:|---:|---:|---|
-| 40 | 1000 ms / 5000 ms | 35 | 0.2714 | $1.4229 | 5 s, smoke |
-| 80 | 1000 ms / 5000 ms | 35 | 0.2744 | $1.4386 | 5 s, smoke |
-| 160 | 1000 ms / 5000 ms | 35 | 0.2722 | $1.4271 | 5 s, smoke |
+| 40 | 1000 ms / 5000 ms | 2515 | 0.24935513908835705 | $1.3073 | 300 s, measured |
+| 80 | 1000 ms / 5000 ms | 2509 | 0.24924154530852677 | $1.3067 | 300 s, measured |
+| 160 | 1000 ms / 5000 ms | 2323 | 0.2500920594047511 | $1.3112 | 300 s, measured |
 
-USD/TiB uses binary 1,048,576 MiB/TiB and the measured PUTs/MiB multiplied by the published AWS PUT price. It is not a billed result. The M9.8 five-second points are smoke measurements; the full five-minute acceptance run remains outstanding.
-Source: M9.8's recorded RustFS smoke counts and [ADR-0062](../decisions/0062-nfr-1-has-an-interval-bound-low-rate-regime.md) for the low-rate interpretation.
+USD/TiB uses binary 1,048,576 MiB/TiB and the measured PUTs/MiB multiplied by the published AWS PUT price. It is not a billed result. All M9.8 points are measured for at least five minutes.
+Source: M9.8's recorded RustFS counts and [ADR-0072](../decisions/0072-attribute-low-rate-lease-put-cost.md) for the low-rate interpretation.
 
 ## Low-rate write budget
 
-The low-rate budget is measured PUTs per interval, not requests per MiB or dollars per TiB; dividing by low payload volume would price the workload rather than the flush policy.
+The low-rate budget is measured segment-data plus commit-delta PUTs per interval, not requests per MiB or dollars per TiB; checkpoint and lease/control PUTs are separately cadence-bounded but remain in aggregate totals.
 
-| Interval ceiling | PUTs observed | Elapsed | Ceiling windows | PUTs / interval (measured) | Requests/MiB and USD/TiB |
-|---:|---:|---:|---:|---:|---|
-| 0.25 s | 24 | 3.07 s | 13 | 1.8462 | N/A — low-rate requests/MiB is not a valid budget (smoke) |
-| 5 s | 4 | 5.05 s | 2 | 2 | N/A — low-rate requests/MiB is not a valid budget (smoke) |
+| Interval ceiling | Total PUTs | Data + commit PUTs | Checkpoint PUTs | Lease PUTs | Other PUTs | Elapsed | Ceiling windows | Data + commit / interval | Requests/MiB and USD/TiB |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| 0.25 s | 1980 | 1870 | 10 | 99 | 1 | 300.0924044 s | 1201 | 1.557 | N/A — low-rate requests/MiB is not a valid budget (measured) |
+| 5 s | 232 | 120 | 10 | 101 | 1 | 304.6528991 s | 61 | 1.9672 | N/A — low-rate requests/MiB is not a valid budget (measured) |
 
 ## Visibility latency by interval ceiling
 

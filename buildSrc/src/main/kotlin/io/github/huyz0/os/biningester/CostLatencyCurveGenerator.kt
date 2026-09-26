@@ -16,7 +16,9 @@ object CostLatencyCurveGenerator {
     private val sizeHeader = listOf(
         "rate_mib_s", "puts", "requests_per_mib", "duration_seconds",
         "interval_floor_ms", "interval_ceiling_ms", "status")
-    private val lowRateHeader = listOf("ceiling_ms", "puts", "elapsed_seconds", "status")
+    private val lowRateHeader = listOf(
+        "ceiling_ms", "total_puts", "data_puts", "commit_puts", "checkpoint_puts",
+        "lease_puts", "other_puts", "elapsed_seconds", "status")
     private val visibilityHeader = listOf(
         "ceiling_ms", "records", "p50_ms", "p99_ms", "max_ms", "bound_3x_ms", "status")
     private val codecHeader = listOf("block_bytes", "codec", "mib_per_s_core", "ratio", "bytes_per_op")
@@ -57,22 +59,27 @@ object CostLatencyCurveGenerator {
                 appendLine("| ${fmt(rate)} | ${row.value("interval_floor_ms")} ms / ${row.value("interval_ceiling_ms")} ms | ${row.value("puts")} | ${fmt(requestsPerMib)} | \$${fmt(dollars, 4)} | ${row.value("duration_seconds")} s, ${row.value("status")} |")
             }
             appendLine()
-            appendLine("USD/TiB uses binary 1,048,576 MiB/TiB and the measured PUTs/MiB multiplied by the published AWS PUT price. It is not a billed result. The M9.8 five-second points are smoke measurements; the full five-minute acceptance run remains outstanding.")
-            appendLine("Source: M9.8's recorded RustFS smoke counts and [ADR-0062](../decisions/0062-nfr-1-has-an-interval-bound-low-rate-regime.md) for the low-rate interpretation.")
+            val sizeProfileComplete = size.all {
+                it.value("status") == "measured"
+                    && it.decimal("duration_seconds") >= BigDecimal("300")
+            }
+            appendLine("USD/TiB uses binary 1,048,576 MiB/TiB and the measured PUTs/MiB multiplied by the published AWS PUT price. It is not a billed result. " + if (sizeProfileComplete) "All M9.8 points are measured for at least five minutes." else "The M9.8 five-minute acceptance run remains outstanding for any point labelled smoke or shorter than five minutes.")
+            appendLine("Source: M9.8's recorded RustFS counts and [ADR-0072](../decisions/0072-attribute-low-rate-lease-put-cost.md) for the low-rate interpretation.")
             appendLine()
             appendLine("## Low-rate write budget")
             appendLine()
-            appendLine("The low-rate budget is measured PUTs per interval, not requests per MiB or dollars per TiB; dividing by low payload volume would price the workload rather than the flush policy.")
+            appendLine("The low-rate budget is measured segment-data plus commit-delta PUTs per interval, not requests per MiB or dollars per TiB; checkpoint and lease/control PUTs are separately cadence-bounded but remain in aggregate totals.")
             appendLine()
-            appendLine("| Interval ceiling | PUTs observed | Elapsed | Ceiling windows | PUTs / interval (measured) | Requests/MiB and USD/TiB |")
-            appendLine("|---:|---:|---:|---:|---:|---|")
+            appendLine("| Interval ceiling | Total PUTs | Data + commit PUTs | Checkpoint PUTs | Lease PUTs | Other PUTs | Elapsed | Ceiling windows | Data + commit / interval | Requests/MiB and USD/TiB |")
+            appendLine("|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|")
             lowRate.forEach { row ->
                 val ceiling = row.long("ceiling_ms")
                 val elapsed = row.decimal("elapsed_seconds")
                 val windows = ceil(elapsed.toDouble() * 1000.0 / ceiling).toLong()
-                val putsPerInterval = row.long("puts").toBigDecimal()
+                val putsPerInterval = (row.long("data_puts") + row.long("commit_puts")).toBigDecimal()
                     .divide(windows.toBigDecimal(), 4, RoundingMode.HALF_UP)
-                appendLine("| ${fmt(ceiling.toBigDecimal().divide(BigDecimal("1000")))} s | ${row.value("puts")} | ${fmt(elapsed)} s | $windows | ${fmt(putsPerInterval)} | N/A — low-rate requests/MiB is not a valid budget (${row.value("status")}) |")
+                val dataAndCommit = row.long("data_puts") + row.long("commit_puts")
+                appendLine("| ${fmt(ceiling.toBigDecimal().divide(BigDecimal("1000")))} s | ${row.value("total_puts")} | $dataAndCommit | ${row.value("checkpoint_puts")} | ${row.value("lease_puts")} | ${row.value("other_puts")} | ${fmt(elapsed)} s | $windows | ${fmt(putsPerInterval)} | N/A — low-rate requests/MiB is not a valid budget (${row.value("status")}) |")
             }
             appendLine()
             appendLine("## Visibility latency by interval ceiling")
@@ -136,7 +143,7 @@ object CostLatencyCurveGenerator {
         val lowRatePoints = lowRate.sortedBy { it.long("ceiling_ms") }.mapIndexed { index, row ->
             val windows = ceil(row.decimal("elapsed_seconds").toDouble() * 1000.0
                 / row.long("ceiling_ms")).toLong()
-            val perInterval = row.long("puts").toDouble() / windows
+            val perInterval = (row.long("data_puts") + row.long("commit_puts")).toDouble() / windows
             Pair(120.0 + index * 600.0, 445.0 - perInterval / 2.5 * 95.0)
         }
         val costPoints = size.sortedBy { it.long("rate_mib_s") }.mapIndexed { index, row ->
@@ -161,14 +168,14 @@ object CostLatencyCurveGenerator {
             visibility.forEachIndexed { index, row ->
                 appendLine("<text x=\"${120 + index * 300}\" y=\"255\">${intervalLabel(row.long("ceiling_ms"))}</text>")
             }
-            appendLine("<text x=\"32\" y=\"300\" class=\"title\">Low-rate PUTs per interval vs ceiling (measured)</text>")
+            appendLine("<text x=\"32\" y=\"300\" class=\"title\">Low-rate data+commit PUTs per interval vs ceiling (measured)</text>")
             appendLine("<path class=\"grid\" d=\"M100 350H820 M100 397H820 M100 445H820\"/>")
             appendLine("<path class=\"low\" d=\"${polyline(lowRatePoints)}\"/>")
             lowRatePoints.forEachIndexed { index, point ->
                 val row = lowRate.sortedBy { it.long("ceiling_ms") }[index]
                 val windows = ceil(row.decimal("elapsed_seconds").toDouble() * 1000.0
                     / row.long("ceiling_ms")).toLong()
-                val value = row.long("puts").toDouble() / windows
+                val value = (row.long("data_puts") + row.long("commit_puts")).toDouble() / windows
                 appendLine("<circle cx=\"${coord(point.first)}\" cy=\"${coord(point.second)}\" r=\"5\" fill=\"#d97706\"/><text x=\"${coord(point.first - 20)}\" y=\"${coord(point.second - 10)}\">${fmt(BigDecimal.valueOf(value), 2)}</text><text x=\"${coord(point.first - 25)}\" y=\"465\">${intervalLabel(row.long("ceiling_ms"))}</text>")
             }
             appendLine("<text x=\"32\" y=\"515\" class=\"title\">Size-triggered write cost at 5 s configured ceiling</text>")
@@ -184,7 +191,11 @@ object CostLatencyCurveGenerator {
             }
             appendLine("<line x1=\"120\" y1=\"745\" x2=\"150\" y2=\"745\" class=\"req\"/><text x=\"158\" y=\"750\">requests/MiB measured</text><line x1=\"390\" y1=\"745\" x2=\"420\" y2=\"745\" class=\"cost\"/><text x=\"428\" y=\"750\">USD/TiB modelled</text>")
             appendLine("<text x=\"32\" y=\"780\">Low-rate requests/MiB: N/A. Billed AWS dollars: NOT-RUN.</text>")
-            appendLine("<text x=\"32\" y=\"805\">Size-triggered points: 5 s configured ceiling, 1 s floor, 5 s smoke runs.</text>")
+            val fullSizeProfile = size.all {
+                it.value("status") == "measured"
+                    && it.decimal("duration_seconds") >= BigDecimal("300")
+            }
+            appendLine("<text x=\"32\" y=\"805\">Size-triggered points: 5 s configured ceiling, 1 s floor, ${if (fullSizeProfile) "five-minute measured runs" else "smoke runs"}.</text>")
             appendLine("</svg>")
         }
     }
@@ -251,18 +262,27 @@ object CostLatencyCurveGenerator {
         require(lowRate.map { it.long("ceiling_ms") }.toSet().containsAll(setOf(250L, 5000L)))
         require(lowRate.all { row ->
             val ceilingMs = row.long("ceiling_ms")
-            val puts = row.long("puts")
+            val totalPuts = row.long("total_puts")
+            val dataPuts = row.long("data_puts")
+            val commitPuts = row.long("commit_puts")
+            val checkpointPuts = row.long("checkpoint_puts")
+            val leasePuts = row.long("lease_puts")
+            val otherPuts = row.long("other_puts")
             val elapsed = row.decimal("elapsed_seconds")
-            if (ceilingMs <= 0L || puts <= 0L || elapsed.signum() <= 0
+            if (ceilingMs <= 0L || totalPuts <= 0L || dataPuts < 0L || commitPuts < 0L
+                || checkpointPuts < 0L || leasePuts < 0L || otherPuts < 0L
+                || dataPuts + commitPuts + checkpointPuts + leasePuts + otherPuts != totalPuts
+                || elapsed.signum() <= 0
                 || row.value("status") !in setOf("smoke", "measured")) {
                 false
             } else {
                 val intervals = ceil(elapsed.toDouble() * 1000.0 / ceilingMs).toLong()
+                val dataAndCommit = BigDecimal.valueOf(dataPuts + commitPuts)
                 val maximumPuts = BigDecimal.valueOf(intervals)
                     .multiply(BigDecimal("2")).add(BigDecimal("2"))
-                intervals > 0L && BigDecimal.valueOf(puts).compareTo(maximumPuts) <= 0
+                intervals > 0L && dataAndCommit.compareTo(maximumPuts) <= 0
             }
-        }) { "low-rate results must be positive and within the per-interval PUT budget" }
+        }) { "low-rate PUT categories must reconcile and data+commit stay within the per-interval budget" }
         require(visibility.map { it.long("ceiling_ms") }.toSet().containsAll(setOf(250L, 1000L, 5000L)))
         require(visibility.all { row ->
             row.long("records") > 0L && row.decimal("p50_ms").signum() > 0

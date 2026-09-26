@@ -1,6 +1,6 @@
 # 0062. NFR-1 has an interval-bound low-rate regime
 
-Status: accepted
+Status: superseded by 0072 (2026-09-26)
 Date: 2026-09-22
 Requirements: NFR-1
 Research: docs/research/00-problem/02-cost-model.md; docs/internal/product/decisions/0017-every-pod-writes.md

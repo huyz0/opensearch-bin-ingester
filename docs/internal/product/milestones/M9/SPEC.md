@@ -160,9 +160,9 @@ count, sets the rate, so a per-MiB ratio measures the workload rather than the
 design; the bound there is **≤ 2 segment-data plus commit-delta PUTs per
 pod per INTERVAL CEILING** — one data PUT and one commit PUT per interval.
 Checkpoint and lease/control PUTs are separately attributed and cadence-bounded,
-but retained in aggregate cost results (the low-rate decision ADR). ⚠️ Never per second: a per-second number
+but retained in aggregate cost results (ADR-0072). ⚠️ Never per second: a per-second number
 describes the configured dial, not the code (criterion 3). NFR-1's text is amended
-to carry both (M9.18), because today it reads as one unconditional bound.
+to carry both (M9.56), because today it reads as one unconditional bound.
 
 **Tiers 2 and 3 read the object store from the plugin side, which nothing lets
 it do today.** M9.20 chooses how — architecture rule 2 keeps a cloud SDK out of
@@ -227,7 +227,7 @@ measured what a hand-copied number costs.
 | **M9.21's tiers 2 and 3** | ⚠️ **NEW READS, AND THEY ARE THE NODE-LOCAL READER'S**: tier 2 polls the next commit-chain delta; tier 3 resolves the newest checkpoint and replays its deltas. Both run only when NO ingester is reachable. Budget: tier 2 ≤ 1 GET for the current chain cursor per NODE per poll interval, including repeated 404s (R5 — never per shard); tier 3 is a bounded one-time recovery episode of at most 30 GETs total per node, including checkpoint, delta and missing-segment objects, plus at most 1 checkpoint-pointer STAT. If the window needs more, recovery stays visibly incomplete, delivers no records past the gap and leaves the consumer cursor unchanged until an ingester answers. Count GETs and STATs separately. Both tiers are counted rather than modelled, and their request rate returns to zero the moment an ingester answers. Automatic tiers 2/3 issue ZERO LISTs; the separate, explicit Tier 4 data-prefix scan is not implemented or entered by M9.21 |
 | **M9.52 reader-first lease rollout** | No change to request count: all normal writers retain the legacy lease bytes and the existing read/CAS request sequence. M8.58 later adds only the UID field to that existing lease object, increasing payload bytes by the UID and JSON field overhead without adding a store operation |
 | **M8.60 process metrics** | Zero object-store requests added. The ingester scrape reads in-memory watch/drain counters; the OpenSearch plugin scrape reads existing in-memory counters. Repeated assembled ingester scrapes must leave `CountingBinStore` request counts unchanged; no scrape scans the inbox or queries by index |
-| **NFR-1's low-rate bound** (M9.18) | No request change: ≤2 segment-data plus commit-delta PUTs per pod per interval ceiling; checkpoint and lease/control-plane PUTs are separately cadence-bounded but remain included in aggregate cost results |
+| **NFR-1's low-rate bound** (M9.56) | No request change: ≤2 segment-data plus commit-delta PUTs per pod per interval ceiling; checkpoint and lease/control-plane PUTs are separately cadence-bounded but remain included in aggregate cost results |
 | **Everything else** | None. Harness, meter, gates, ADRs and documents add no production requests |
 
 ## Acceptance criteria
@@ -273,7 +273,7 @@ the digest-pinned container in `docker-compose.test.yml`.
    Every flush, every commit, every read and every idle tick is asserted at
    **zero LIST**, counted by `CountingBinStore` and attributed by purpose, so a
    new LIST anywhere else is red rather than absorbed into an allowance.
-   ⚠️ Counts, so all of it holds on S3. (M9.8, then M9.18)
+   ⚠️ Counts, so all of it holds on S3. (M9.8, then M9.56)
 4. **NFR-2 stays zero, in CI, and the job's existence is SCRIPTED.**
    `IdlePodCostSoakTest` runs in a CI job — which does not exist today:
    `.github/workflows/ci.yml` runs L0 gates only and says the L1 job lands with
@@ -530,7 +530,7 @@ multiplied from a price table (criterion 16). Each is a named NOT-RUN in
 | M9.53 | T0 | `GradleGateWiringTest#fullMeasurementUsesTheExtendedIntegrationTestTimeout` red when the opt-in exists only in a YAML shell comment; workflow checker requires the opt-in on the executable Gradle command. `GradleGateWiringTest#fullMeasurementTimeoutAppliesOnlyToServerIntegrationTest` queries configured Gradle task timeouts and asserts server=60 min, plugin=10 min with the property enabled. After M9.54 supplied unique pod UIDs to spawned nodes, the final full RustFS profile passed locally in 25m41s; the separate nightly GitHub workflow remains NOT-RUN | comment spoof can leave the full run at 10 minutes, or a global override can extend unrelated test tasks |
 | M9.54 | T3 | `CrossAzBytesIT#crossAzDeliveryIsCountedAndStaysBelowTheProducerByteBudget` initially failed before application code was reached because the spawned node omitted required `pod.uid`; the updated test starts two nodes from the same conflicting caller setting, asserts each written value is a valid and distinct generated UUID, then confirms delivery and the byte-budget assertion. The missing-setting, override, and constant-UID failures were observed before their fixes | every RustFS-backed chaos suite's node refuses startup before binding, caller settings replace the generated UID, or a constant UID is shared across nodes |
 | M9.17 | script + milestone review | `check-milestone-verified.sh` green with a criterion's evidence line deleted | ⚠️ **THE SCRIPT FORCES ENUMERATION AND NOTHING MORE** — its own header says it cannot verify an evidence line is TRUE, its check is a regex, and M7.31 MEASURED six overstated lines all passing it. What catches an overstated line is the milestone review reading `VERIFIED.md` against the tree, as M8.19 did; this row's second half is that review, and its finding list is the record |
-| M9.55 | T0 | `CountingBinStorePutPurposeTest` fails for a wrong key-purpose grammar, missing aggregate reconciliation, a lost `putIfAbsent`/`putIfMatch` request omitted from its purpose, or any multipart initiation/part/complete/abort/implicit-close-abort request omitted from its purpose; `MacroCountsJsonTest#concurrentPutSnapshotAlwaysReportsAnAggregateEqualToItsPurposeBreakdown` fails when JSON samples an independent aggregate during concurrent writes; legacy untracked JSON remains byte-identical; `CostLatencyCurveGeneratorTest#generatedCurveLabelsMeasuredAndModelledValuesAndCheckRejectsStaleOutput` accepts equivalent LF and CRLF generated artifacts, while `checkCostLatencyCurve` validates the checked-in Windows checkout | billed PUTs vanish from the aggregate, an object class is misattributed, a losing CAS is treated as free, multipart cleanup is uncounted, or a valid Windows checkout falsely fails the curve gate |
+| M9.55 | T0 | `CountingBinStorePutPurposeTest` fails for a wrong key-purpose grammar, missing aggregate reconciliation, a lost `putIfAbsent`/`putIfMatch` request omitted from its purpose, or any multipart initiation/part/complete/abort/implicit-close-abort request omitted from its purpose; `MacroCountsJsonTest#concurrentPutSnapshotAlwaysReportsAnAggregateEqualToItsPurposeBreakdown` fails when JSON samples an independent aggregate during concurrent writes and `#macroCountSnapshotCarriesEveryCounter` fails when aggregate PUTs differ from the purpose sum; legacy untracked JSON remains byte-identical; `CostLatencyCurveGeneratorTest#generatedCurveLabelsMeasuredAndModelledValuesAndCheckRejectsStaleOutput` accepts equivalent LF and CRLF generated artifacts, while `checkCostLatencyCurve` validates the checked-in Windows checkout | billed PUTs vanish from the aggregate, an object class is misattributed, a losing CAS is treated as free, multipart cleanup is uncounted, the macro counter uses a stale aggregate instead of purpose totals, or a valid Windows checkout falsely fails the curve gate |
 | M9.56 | T3 + script | `LowRateWriteBudgetIT#lowRateWritesStayWithinTwoPutsPerIntervalAtBothCeilings` fails if data+commit PUTs exceed two per interval, checkpoint/lease cadence exceeds its bound, purpose counts fail to reconcile, or LIST occurs; full five-minute RustFS profile re-runs both low-rate points and all M9.8 size/read/cross-AZ points; generated curve `--check` is wired | checkpoint/lease maintenance is mistaken for flushes, a measured threshold moves silently, or control-plane PUTs disappear from reported cost |
 | M9.19 | doc | — (an ADR; `check-adr-refs.sh` and `check-links.sh` carry it) | a divisor nobody wrote down |
 | M9.20 | doc | — (an ADR; either branch of criterion 18) | a mechanism assumed buildable |
@@ -630,14 +630,14 @@ starts.**
 2. **NFR-1 is amended**: < 0.30 aggregate requests per MiB above the size-triggered
    rate, and **≤ 2 segment-data plus commit-delta PUTs per pod per INTERVAL
    CEILING** below it, with checkpoint and lease/control PUTs cadence-bounded and retained in
-   aggregate cost, documented by M9.56's decision ADR.
+   aggregate cost (ADR-0072).
    ⚠️ **THE PER-SECOND FORM IS REJECTED AND THE ADR MUST SAY WHY**: it
    describes the configured dial rather than the code, so at a 250 ms ceiling
    correct behaviour is 8 requests per pod per second and fails, while at a 5 s
    ceiling an implementation flushing five times too often passes. A bound that
    changes meaning when an operator turns a dial is unfalsifiable. The ADR is
    written from M9.8's measured counts, and moves `requirements.md`, cost.md
-   § Enforcement and performance.md's gate table in the same commit. → M9.18
+   § Enforcement and performance.md's gate table in the same commit. → M9.56
 3. **Ladder tiers 2 and 3 are built in M9**, on a third approach the ADR
    chooses, superseding ADR-0057 in part. → M9.20, then M9.21
 4. **M8.58 puts the pod UID in the lease** and matches `targetRef.uid` — a
@@ -689,7 +689,7 @@ the final assembly task and depends on both.
 | M9.7 | Measurement M2: block size and codec | NFR-1 |
 | M9.8 | NFR-1 counted on the assembled fleet: the < 0.30 bound asserted above the size-triggered rate, and the low-rate counts REPORTED | NFR-1 |
 | M9.55 | **PUT-PURPOSE COUNTERS, THE MACRO SNAPSHOT, AND PORTABLE VALIDATION**: classify every issued PUT as data, commit delta, checkpoint, lease or other; derive aggregate PUTs from the exhaustive purpose counters; preserve legacy untracked JSON; prove each multipart lifecycle request including explicit and implicit abort; ensure the generated curve gate accepts equivalent LF/CRLF artifacts on Windows. No wire format or object-store request behavior changes | NFR-1 |
-| M9.56 | **NFR-1 LOW-RATE AMENDMENT AND MEASURED CURVE UPDATE** (supersedes the unsplit M9.18 row): preserve ≤2 data+commit-delta PUTs per interval, separately cadence-bound checkpoint and lease/control PUTs while retaining aggregate cost, update `requirements.md`, cost.md § Enforcement, performance.md's gate table and the decision ADR, and persist every full five-minute point | NFR-1 |
+| M9.56 | **NFR-1 LOW-RATE AMENDMENT AND MEASURED CURVE UPDATE** (supersedes the unsplit M9.18 row): preserve ≤2 data+commit-delta PUTs per interval, separately cadence-bound checkpoint and lease/control PUTs while retaining aggregate cost, update `requirements.md`, cost.md § Enforcement, performance.md's gate table and ADR-0072, and persist every full five-minute point | NFR-1 |
 | M9.9 | NFR-4 counted: shards, nodes, AZs | NFR-4 |
 | M9.10 | NFR-5 counted | NFR-5 |
 | M9.19 | **NFR-7's DIVISOR**: the ADR fixing the flush window as the interval ceiling, and the endpoints | NFR-7 |

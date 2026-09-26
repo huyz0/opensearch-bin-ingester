@@ -26,9 +26,9 @@ class CostLatencyCurveGeneratorTest {
                 160,35,0.2722,5,1000,5000,smoke
                 """);
         Files.writeString(results.resolve("low-rate.csv"), """
-                ceiling_ms,puts,elapsed_seconds,status
-                250,24,3.07,smoke
-                5000,4,5.05,smoke
+                ceiling_ms,total_puts,data_puts,commit_puts,checkpoint_puts,lease_puts,other_puts,elapsed_seconds,status
+                250,24,9,10,1,2,2,3.07,smoke
+                5000,4,1,1,0,1,1,5.05,smoke
                 """);
         Files.writeString(results.resolve("visibility.csv"), """
                 ceiling_ms,records,p50_ms,p99_ms,max_ms,bound_3x_ms,status
@@ -69,10 +69,10 @@ class CostLatencyCurveGeneratorTest {
 
         assertThat(generated)
                 .contains("| 40 | 1000 ms / 5000 ms | 35 | 0.2714 | $1.4229 |")
-                .contains("| 0.25 s | 24 | 3.07 s | 13 | 1.8462 |")
-                .contains("| 5 s | 4 | 5.05 s | 2 | 2 |")
+                .contains("| 0.25 s | 24 | 19 | 1 | 2 | 2 | 3.07 s | 13 | 1.4615 |")
+                .contains("| 5 s | 4 | 2 | 0 | 1 | 1 | 5.05 s | 2 | 1 |")
                 .contains("| 11.395 ms |")
-                .contains("low-rate budget is measured PUTs per interval")
+                .contains("low-rate budget is measured segment-data plus commit-delta PUTs per interval")
                 .contains("NOT-RUN")
                 .contains("zstd-3")
                 .contains("Default direct threshold: **1**")
@@ -80,8 +80,9 @@ class CostLatencyCurveGeneratorTest {
         assertThat(chart)
                 .contains("<svg")
                 .contains("Visibility p99 vs configured interval ceiling")
-                .contains("Low-rate PUTs per interval")
-                .contains("<path class=\"low\" d=\"M120,374.85 720,369\"/>")
+                .contains("Low-rate data+commit PUTs per interval")
+                .contains("<path class=\"low\" d=\"M120,389.46 720,407\"/>")
+                .contains("data+commit")
                 .contains("USD/TiB modelled");
 
         Path generatedDocument = temporaryDirectory.resolve("cost-latency-curve.md");
@@ -146,6 +147,21 @@ class CostLatencyCurveGeneratorTest {
         Files.writeString(lowRateResults, validLowRateResults.replace("250,24,", "250,-1,"));
         assertThatThrownBy(() -> CostLatencyCurveGenerator.render(results))
                 .isInstanceOf(IllegalArgumentException.class);
+        Files.writeString(lowRateResults, validLowRateResults);
+
+        Files.writeString(lowRateResults,
+                validLowRateResults.replace("250,24,9,10,1,2,2,", "250,24,9,10,0,2,2,"));
+        assertThatThrownBy(() -> CostLatencyCurveGenerator.render(results))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("categories must reconcile");
+        Files.writeString(lowRateResults, validLowRateResults);
+
+        Files.writeString(lowRateResults,
+                validLowRateResults.replace("250,24,9,10,1,2,2,",
+                        "250,37,15,14,1,2,5,"));
+        assertThatThrownBy(() -> CostLatencyCurveGenerator.render(results))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("data+commit stay within the per-interval budget");
         Files.writeString(lowRateResults, validLowRateResults);
 
         Files.writeString(results.resolve("direct-threshold.csv"),

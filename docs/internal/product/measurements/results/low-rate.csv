@@ -1,3 +1,3 @@
-ceiling_ms,puts,elapsed_seconds,status
-250,24,3.07,smoke
-5000,4,5.05,smoke
+ceiling_ms,total_puts,data_puts,commit_puts,checkpoint_puts,lease_puts,other_puts,elapsed_seconds,status
+250,1980,935,935,10,99,1,300.0924044,measured
+5000,232,60,60,10,101,1,304.6528991,measured
