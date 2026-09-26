@@ -49,9 +49,20 @@ public final class NodeChannel implements AutoCloseable {
      */
     public static NodeChannel open(String endpoint, Duration retryFloor,
             Duration retryCeiling, Duration timeout) {
+        return open(endpoint, retryFloor, retryCeiling, timeout, "");
+    }
+
+    /**
+     * The same, declaring the zone this node runs in (M10.4, NFR-5). A blank
+     * zone declares none, and the ingester counts this node's bytes as
+     * cross-AZ -- the conservative direction.
+     */
+    public static NodeChannel open(String endpoint, Duration retryFloor,
+            Duration retryCeiling, Duration timeout, String az) {
         Objects.requireNonNull(endpoint, "endpoint");
+        String zone = Objects.requireNonNull(az, "az").trim();
         return new NodeChannel(reconnect -> new HttpSubscriptionTransport(endpoint,
-                reconnect, retryFloor, retryCeiling, timeout), timeout, endpoint);
+                reconnect, retryFloor, retryCeiling, timeout, zone), timeout, endpoint, zone);
     }
 
     /**
@@ -61,11 +72,13 @@ public final class NodeChannel implements AutoCloseable {
      * registrar".
      */
     public NodeChannel(TransportFactory factory) {
-        this(factory, null, null);
+        this(factory, null, null, "");
     }
 
-    private NodeChannel(TransportFactory factory, Duration connectTimeout, String endpoint) {
+    private NodeChannel(TransportFactory factory, Duration connectTimeout, String endpoint,
+            String az) {
         this.endpoint = endpoint;
+        this.az = az;
         Objects.requireNonNull(factory, "factory");
         this.transport = Objects.requireNonNull(factory.open(holder::onReconnect), "transport");
         this.connectTimeout = connectTimeout;
@@ -97,6 +110,14 @@ public final class NodeChannel implements AutoCloseable {
     }
 
     private final String endpoint;
+
+    /** The zone {@link #open} declared, or blank. */
+    private final String az;
+
+    /** The zone this channel's transport declares, blank when none (M10.4). */
+    public String az() {
+        return az;
+    }
 
     /**
      * The ingester endpoint this channel opened, or null for one built from a

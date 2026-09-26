@@ -281,6 +281,16 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport, A
     }
 
     /**
+     * The defaults, declaring the zone this consumer runs in (M10.4, NFR-5):
+     * what a plugin node configured with {@code binstore.ingester.az} builds.
+     */
+    public HttpSubscriptionTransport(String endpoint, Runnable onReconnect,
+            Duration retryFloor, Duration retryCeiling, Duration timeout, String az) {
+        this(endpoint, onReconnect, retryFloor, retryCeiling, timeout, DEFAULT_POLL_WAIT,
+                MAX_ANSWER_BYTES, az);
+    }
+
+    /**
      * The same, with the poll wait given.
      *
      * <p>⚠️ **INJECTABLE SO IT CAN BE ASSERTED**: at the 25 s default a test

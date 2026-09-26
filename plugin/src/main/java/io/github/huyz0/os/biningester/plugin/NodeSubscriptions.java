@@ -207,7 +207,8 @@ public final class NodeSubscriptions implements AutoCloseable {
                 new NodeSegmentSource(new io.github.huyz0.os.biningester.client.HttpSegmentSource(SEGMENT_FETCH_TIMEOUT),
                         channel.endpoint() == null ? null
                                 : new io.github.huyz0.os.biningester.client.HttpProxySource(
-                                        channel.endpoint(), SEGMENT_FETCH_TIMEOUT, null),
+                                        channel.endpoint(), SEGMENT_FETCH_TIMEOUT,
+                                        channel.az()),
                         holdBytes));
         built.channel = channel;
         return built;

@@ -55,6 +55,17 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
             org.opensearch.common.settings.Setting.simpleString("binstore.ingester.endpoint",
                     org.opensearch.common.settings.Setting.Property.NodeScope);
 
+    /**
+     * The zone this node runs in, declared on the poll and the proxy fetch so
+     * the ingester attributes its bytes by zone (M10.4, NFR-5).
+     *
+     * <p>⚠️ EMPTY BY DEFAULT, and empty declares nothing: the ingester then
+     * counts this node's bytes as cross-AZ, the conservative direction.
+     */
+    public static final org.opensearch.common.settings.Setting<String> INGESTER_AZ =
+            org.opensearch.common.settings.Setting.simpleString("binstore.ingester.az", "",
+                    org.opensearch.common.settings.Setting.Property.NodeScope);
+
     /** Optional authenticated node-local reader; its credential is never a setting value. */
     public static final org.opensearch.common.settings.Setting<String> READER_ENDPOINT =
             org.opensearch.common.settings.Setting.simpleString("binstore.reader.endpoint", "",
@@ -80,7 +91,8 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
 
     @Override
     public java.util.List<org.opensearch.common.settings.Setting<?>> getSettings() {
-        return java.util.List.of(PROGRESS_INTERVAL, INGESTER_ENDPOINT, READER_ENDPOINT,
+        return java.util.List.of(PROGRESS_INTERVAL, INGESTER_ENDPOINT, INGESTER_AZ,
+                READER_ENDPOINT,
                 READER_SECRET_FILE, STORE_BUCKET, STORE_PREFIX, TIER_TWO_INTERVAL);
     }
 
@@ -157,6 +169,7 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
         // keying two unnamed nodes together is the static this task removes,
         // wearing a default's clothes. Every real node has one.
         String endpoint = settings == null ? "" : INGESTER_ENDPOINT.get(settings);
+        String az = settings == null ? "" : INGESTER_AZ.get(settings);
         if (installed == null && !endpoint.isEmpty()) {
             // ⚠️ AN INSTALLED FACTORY WINS: a test cluster installs one because
             // its nodes share a JVM and a transport, and a setting it also
@@ -165,7 +178,7 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
                     NodeChannel.open(endpoint,
                             io.github.huyz0.os.biningester.client.HttpSubscriptionTransport.DEFAULT_RETRY_FLOOR,
                             io.github.huyz0.os.biningester.client.HttpSubscriptionTransport.DEFAULT_RETRY_CEILING,
-                            NodeSubscriptions.SUBSCRIPTION_CONNECT_TIMEOUT),
+                            NodeSubscriptions.SUBSCRIPTION_CONNECT_TIMEOUT, az),
                     QUEUE_CAPACITY, NodeSubscriptions.DEFAULT_SEGMENT_HOLD_BYTES);
         }
         this.subscriptions = installed == null || nodeName.isEmpty()
