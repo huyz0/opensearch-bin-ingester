@@ -29,7 +29,7 @@ import java.util.function.ObjLongConsumer;
  * <p>⚠️ **ONE READ PER (DELTA, REMOTE AZ)** is the cost NFR-5 buys the cross-AZ
  * saving with: this is the only pod of its AZ that reads the delta, and it
  * reads it once unless the store fails. A read is whatever the {@link Reader}
- * does -- {@code DeltaReader.ifWritten} is a stat and a GET -- and
+ * does -- {@code DeltaReads.read} is one GET, and a stat only when it fails -- and
  * {@link #reads} counts reader calls, not store requests. A hint not after the
  * last delta relayed (a sender's retry after a lost answer) is skipped
  * without a read.

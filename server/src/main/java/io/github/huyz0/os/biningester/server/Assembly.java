@@ -102,6 +102,7 @@ public final class Assembly implements AutoCloseable {
     private final EndpointSliceView peerView;
     private final SegmentPrefetcher prefetcher;
     private final RoutedIngest routed;
+    private final DeltaDelivery delivery;
     private final Deque<AutoCloseable> toClose = new ArrayDeque<>();
     private volatile boolean closed;
 
@@ -247,6 +248,9 @@ public final class Assembly implements AutoCloseable {
         this.watermarks = new WatermarkTable(clock, kept.reportTimeout(), kept.copyExpiry(),
                 kept.minRetention());
 
+        this.delivery = new DeltaDelivery(config, crossAz, this.peerView, (epoch, sequence) ->
+                io.github.huyz0.os.biningester.sequencer.DeltaReads.read(store,
+                        config.prefix(), epoch, sequence));
         LeaseConfig leases = sequencerLeaseConfig(config);
         LeaseManager manager = leaseManagerFactory.create(store, leases, clock, challenge);
         this.sequencer = new FleetSequencer(store, leases, transport,
@@ -264,9 +268,10 @@ public final class Assembly implements AutoCloseable {
                                         term.chain(), term::serving);
                             }
                             // ⚠️ M8.14a: the intents of pods that died deferring
-                            // have nobody else to ask for a drain.
-                            InboxDrain.inBackground(store, config.prefix(), term,
-                                    metrics::failedIntentBatch);
+                            // have nobody else to ask for a drain -- and M10.20a:
+                            // the hook goes on FIRST, or its commits reach no pod.
+                            delivery.hookThenDrain(term, () -> InboxDrain.inBackground(
+                                    store, config.prefix(), term, metrics::failedIntentBatch));
                             return new BatchingSequencer(term, COMMIT_WINDOW);
                         }), challenge, false, metrics::failedIntentBatch);
         // ⚠️ NOT PUSHED ONTO `toClose`, AND THAT IS NOT AN OMISSION.
@@ -295,6 +300,8 @@ public final class Assembly implements AutoCloseable {
                                     config.az(), segmentKey), this.peerView.readyEndpoints());
                         }
                     });
+            // ⚠️ M10.20a: this pod now publishes only what the chain hands it.
+            delivery.attach(ingest.publishThroughChain(config.ingest().maxQueuedPushBytes()));
             this.prefetcher = new SegmentPrefetcher(new EndpointMembership(config, this.peerView),
                     this.ingest.segmentProxy());
         } catch (RuntimeException | IOException failed) {
@@ -313,8 +320,10 @@ public final class Assembly implements AutoCloseable {
             // a backend that cannot sign (M5.43), as the memory and
             // local-filesystem backends cannot.
             closeQuietly(this.sequencer, failed);
+            closeQuietly(this.delivery, failed); // attached: its threads run
             throw failed;
         }
+        toClose.push(delivery); // after the ingest: its final flush commits through it
         toClose.push(this.ingest);
         // ⚠️ THE ROUTED PATH IS WHAT THE FRONT DOOR IS HANDED (M8.32, FR-13).
         // Plain `DefaultIngest` has no catalog: it refuses every routed write,
@@ -484,6 +493,10 @@ public final class Assembly implements AutoCloseable {
      */
     public BinStore store() {
         return backend;
+    }
+
+    DeltaDelivery delivery() {
+        return delivery;
     }
 
     EndpointSliceView peerView() {

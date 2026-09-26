@@ -107,9 +107,17 @@ class SegmentPrefetchAssemblyIT {
                 assertThat(writerBytes.crossAzBytes(CrossAzBytes.Transport.DURABLE_SEGMENT_SIGNAL))
                         .isEqualTo(frame.length)
                         .isLessThanOrEqualTo(DurableSegmentSignalFrame.MAX_FRAME_BYTES);
+                // ⚠️ M10.20a: the owner is also az-b's RELAY (its only ready pod),
+                // so the writer's commit reaches it as a 24-byte hint and it
+                // reads that delta once (ADR-0075) -- one GET besides the warm.
+                // Awaited, so the relay's read cannot land after `warmedGets`
+                // and be mistaken below for a consumer read missing the cache.
+                org.awaitility.Awaitility.await().atMost(Duration.ofSeconds(20))
+                        .until(() -> owner.storeCounts().gets() >= getsBefore + 2);
                 long warmedGets = owner.storeCounts().gets();
-                assertThat(warmedGets).as("one selected remote-AZ owner warms the segment")
-                        .isEqualTo(getsBefore + 1);
+                assertThat(warmedGets)
+                        .as("one remote-AZ owner warms the segment; its relay reads the delta")
+                        .isEqualTo(getsBefore + 2);
 
                 AtomicInteger bytesRead = new AtomicInteger();
                 owner.segmentProxy().streamTo(segmentKey, List.of(

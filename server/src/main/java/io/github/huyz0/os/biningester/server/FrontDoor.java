@@ -191,7 +191,13 @@ public final class FrontDoor implements AutoCloseable {
                 .register(new SegmentService(new SegmentReads(assembly.segmentProxy())::serve,
                         config.prefix(), crossAz))
                 .register(new DurableSegmentSignalService(assembly.peerView(),
-                        assembly::prefetchDurableSegment));
+                        assembly::prefetchDurableSegment))
+                // M10.20a, ADR-0075: every durable delta reaches every pod.
+                .register(new io.github.huyz0.os.biningester.http.DeltaPushService(
+                        assembly.peerView(), config.az(), assembly.delivery()::pushed))
+                .register(new io.github.huyz0.os.biningester.http.DeltaHintService(
+                        assembly.peerView(), config.podId(), config.az(),
+                        assembly.delivery()::hinted));
         String macroPath = System.getProperty("binstore.macro.path");
         if (macroPath != null && !macroPath.isBlank()) {
             routes.register(new MacroCountsService(assembly, macroPath, crossAz));

@@ -221,7 +221,7 @@ behaviour: bytes counted as unknown, which the counter treats as cross-AZ
 | Publish of a `proxy` segment on another serving node | 1 GET per (node, segment) on a miss, 0 on a hit -- bytes then discarded | unchanged; the GET now also warms the cache the route reads | R10, R11 |
 | Consumer fetch of a `proxy` segment | impossible (decode throws) | 0 on the writer and on a prefetched ring owner; ≤ 1 GET per (other serving node, segment) on a miss, single-flight; K + 1 for K reads of a segment above the cache ceiling | NFR-4 (M9 criterion 5(a)) |
 | Consumer-to-ingester requests | 0 | 1 per (consumer node, segment) | NFR-4 (M9 criterion 5(b)), may scale with nodes |
-| Delta delivery to other pods (M10.16-M10.20) | none (records missed) | within an AZ: the delta per ready pod, free; across AZs: a 24-byte hint per (delta, remote AZ); store: 1 GET per (delta, remote AZ) | NFR-5, R10, non-negotiable 6 |
+| Delta delivery to other pods (M10.16-M10.20) | none (records missed) | within an AZ: the delta per ready pod, free; across AZs: a 24-byte hint per (delta, remote AZ); store: 1 GET per (delta, remote AZ); a stat only when that GET fails (`DeltaReads.read`) | NFR-5, R10, non-negotiable 6 |
 | LIST | 0 | 0 | R2, NFR-3 |
 | Idle | 0 | 0 -- the route is request-driven | R3, NFR-2 |
 

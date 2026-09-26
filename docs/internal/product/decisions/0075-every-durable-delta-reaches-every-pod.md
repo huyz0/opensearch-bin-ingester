@@ -59,7 +59,9 @@ its own subscribers, and nothing else publishes in an assembled node.**
    no election and no registration.
 4. **Relay.** Hints are handled **one at a time, in arrival order**, on one
    queue: for each, it reads the delta object named by `(epoch, sequence)`
-   (`DeltaReader.ifWritten`) -- **one GET per (delta, remote AZ)** -- publishes
+   -- **one GET per (delta, remote AZ)**; a stat follows only when that GET
+   fails, to tell a missing delta from a failing store (M10.20a,
+   `DeltaReads.read`) -- publishes
    it locally, and pushes it to every other ready pod of its AZ as in (2).
    **A failed read is retried with bounded backoff (about 30 s) before the next
    hint is looked at**, so a transient store error delays the AZ rather than
