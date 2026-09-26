@@ -1,18 +1,22 @@
 # M9 evidence and checkpoint review
 
-This is a source-tree audit, not a claim that M9 is complete. The enumeration
-gate checks only that each numbered row exists and names evidence; the review
-below checks the claims against the current tree. NOT-RUN and OBSERVED-NOT are
-intentional results where the acceptance condition is outstanding or absent.
+This is the final M9 evidence and milestone review. The enumeration gate checks
+that each numbered row exists and names evidence; the review below checks the
+claims against the current tree. M9 closes under the amended roadmap gate with
+NFR-5 explicitly PARTIAL: all implemented cross-AZ transports are measured, but
+the planned proxy segment-fetch payload route is absent and its byte term is
+NOT-RUN. This is not a claim of full NFR-5 compliance; M10 owns that route and
+the complete measurement. AWS S3 latency, TTFB and billed dollars also remain
+NOT-RUN as already scoped by M9.22.
 
 ## Acceptance criteria
 
-1. `check-mutants.sh` is wired through `gates` and `checkMutants`; M0.14's checker tests pin seeded-mutant behavior. The full mutation suite was not rerun for this checkpoint.
+1. `MutantsGateTest#failsWhenSurvivorsPutTheScoreBelowTheEightyPercentFloor` and `#exactlyEightyPercentKilledPasses` run under `checkHarnessTests` and pin seeded-mutant scoring. The Gradle `checkMutants` task is manual-stage, not part of `gates`; the full mutation suite was NOT-RUN for this checkpoint.
 2. `CostMeterTest` and its T0 arithmetic tests cover requests/MiB, idle rate and price-table dollars; `:binstore-spi:test` evidence is in the M9.1 backlog row.
 3. `WriteRequestRateIT` full RustFS profile passed all three five-minute size-triggered points at 40/80/160 MiB/s: 2,515/2,509/2,323 aggregate PUTs, 0 LISTs, and 0.24936/0.24924/0.25009 requests/MiB. `LowRateWriteBudgetIT` passed the full profile at five minutes per 250 ms and 5 s point: 1,980/232 aggregate PUTs, partitioned by purpose in `measurements/results/low-rate.csv`; both had zero LISTs, and data+commit, checkpoint, and lease cadence bounds passed. The exact four-suite local profile took 26m; `check-cost-test-results.py --profile full` passed. The separate GitHub nightly workflow remains NOT-RUN.
 4. `IdlePodCostSoakTest` passed locally (301.862 s, recorded under M8.75); the measurement workflow statically asserts the nightly soak job through `check-measurement-workflow.py`.
 5. `ReadRequestRateIT` Test measured the current M8.56 prefetch path; see `m9.9-read-request-rate.md` and the M9.9 backlog evidence. Its result does not close the separate inherited catch-up and fallback work.
-6. PARTIAL: `CrossAzBytesIT` Test measured 0.0598% on its named current-build transports (M9.10). The proxy segment route is not wired and M8.83's prefetch signal is included only after its M8.56 integration; see the M9.10 caveat. This is not proof for transports that do not yet exist in the assembly.
+6. **PARTIAL — not full NFR-5 compliance.** `CrossAzBytesIT` measured 0.0598% on the implemented, named current-build transports (M9.10). The proxy segment-fetch payload route does not exist, so that term is NOT-RUN. Existing measurements do not establish the full design's byte budget. The unchanged NFR-5 requirement and full-route proof are assigned to M10 in the roadmap.
 7. `VisibilityLatencyIT` Test passed at 250 ms, 1 s and 5 s; p99 values and RustFS lower-bound limitation are recorded in `m9.11-visibility-latency.md`.
 8. `VisibilitySearchableIT` passed its 1-second `clusterTest` point; 537.919 ms is recorded in `m9.11-visibility-latency.md`.
 9. `PartitionVisibilityIT` Test passed the M=10 and M=1,000 drain bounds and audited visible durable-intent acknowledgements; see `m9.12-partition-visibility.md`.
@@ -67,20 +71,23 @@ Evidence references below point to the named backlog task's acceptance evidence 
 | M8.82–M8.85 | **done** — ready AZ-labelled membership, authenticated durable hint, assembled RustFS fetch, and multi-candidate deterministic ownership; the M8.85 adversarial mutation result is recorded in the backlog. |
 | M8.82 | `EndpointSliceViewTest` ready AZ-labelled peer snapshot; done. |
 | M8.83 | BPDS versioned frame golden/authentication/byte-count component tests; done, integrated signal use is M8.56. |
-| M9.42 | `NodeLocalStoreReaderKeyPolicyTest`, `NodeLocalStoreReaderTest`, `NodeLocalStoreReaderMainTest`, `NodeLocalStoreReaderProcessIT` including `--init-secret`, and POSIX secret-permission regression; `gates`, TDD, test-integrity, and diff-scoped mutation (111/138, 80.4%) passed. `check-coverage.sh` measured coverage below repository floors; Gradle `checkCoverage` could not parse missing JaCoCo `report.dtd`. Cost-meter gate is absent. M9.44–M9.45 and M9.21 remain open. |
+| M9.42 | `NodeLocalStoreReaderKeyPolicyTest`, `NodeLocalStoreReaderTest`, `NodeLocalStoreReaderMainTest`, `NodeLocalStoreReaderProcessIT` including `--init-secret`, and POSIX secret-permission regression; `gates`, TDD, test-integrity, and diff-scoped mutation (111/138, 80.4%) passed. `check-coverage.sh` measured coverage below repository floors; Gradle `checkCoverage` could not parse missing JaCoCo `report.dtd`. Cost-meter gate is absent. |
 | M9.43 | `TierTwoChainPollTest` with 16 distinct node subscriptions, identical and delayed cursors, repeated 404s, newly available deltas, one-time bounded handoff, no read after the last subscription closes, and rejection of a wrong-sequence delta; `TierTwoReleaseRaceTest` verifies a concurrent final release waits for an admitted read and prevents subsequent reads. Loopback plugin wiring asserts the canonical delta key and decoded delta. `CatchUpSchedulingWiringTest` asserts the node schedule invokes Tier 2. `:client:test :plugin:test` passed; repository gates passed; diff-scoped mutation killed 66/66 scorable mutants (100%). Automatic Tier 2 has one GET per node per 5 s interval only while subscriptions remain active, the cursor is unchanged, and no ingester answers; zero LIST/STAT capability and zero requests while idle or while an ingester answers. Cost-meter gate is absent. |
+| M9.44 | **done** — `TierThreeRecoveryTest`, `TierThreeRecoveryCoordinatorTest`, and bounded replay/error tests prove ordered checkpoint/delta/segment replay, the per-episode 30-GET and 64 MiB caps, zero LISTs, unchanged cursor on incomplete recovery, and stop-on-ingester-return; ADR-0064 records the cap and latency consequence. Repository gates, TDD, integrity, cost-latency and diff-scoped mutation passed; repository coverage remains below existing floors. |
+| M9.45 | **done** — RustFS `LadderStoreTiersIT` measured the canonical recovery at five GETs plus one checkpoint-pointer STAT, zero LISTs, one shared segment GET, contiguous offsets, and fallback cessation after ingester restoration; a second episode stopped local replay after six GETs and one STAT when an ingester returned. Full M9.8/M9.56 RustFS profile passed locally; separate GitHub nightly remains NOT-RUN. |
 
-## Milestone review at this checkpoint
+## Final milestone review
 
 ### Findings
 
-1. **The fetch-cost and cross-AZ results are bounded by currently wired routes.** The M9.10 narrative correctly excludes proxy segment bytes because no production proxy segment route exists. The M8.24/M9.13/M9.21 work remains outstanding, so the cost curve does not yet cover those recovery paths or claim their request costs.
-2. **The tier-2/3 decision exists without execution.** ADR-0064 makes M9.21 implementable; M8.24 is a prerequisite and `LadderStoreTiersIT` is absent. Do not report criterion 18 complete until the actual outage/gap paths and request counts execute.
-3. **FR-21's refusing half remains unowned after M9.** M9 explicitly excludes the production governor and delivers only counting. The next milestone needs an ownership decision and refusal design before production can be protected from a cost-budget breach.
-4. **Recorded minor findings carried forward:** M9.15-R4/T1 (duplicate size-rate rows accepted) and M9.15-T2 (zero GET pricing lacks an independent mutation pin); M9.14's chaos poll uses `Thread.sleep(25)`; M8.19 noted the RustFS commit-protocol wording distinction; inherited M8 commit-body minors include test expectations derived from production constants and the unused-baseline inference. These belong in the next milestone's review-harvest work, not as silent claims of closure here.
+1. **NFR-5 remains partial by explicit scope, not by measurement omission.** M9.10 measured the transports present and reports 0.0598%, but the proxy segment-fetch route and its potentially dominant payload bytes are absent. M10 owns implementing the planned same-AZ route and measuring the entire NFR-5 budget; do not claim full compliance before that evidence exists.
+2. **Fallback criteria are complete.** M8.24, M9.13 and M9.21 have executable local evidence, including `LadderStoreTiersIT` and the measured recovery counts; the separate nightly workflow remains NOT-RUN.
+3. **Mutation-gate wording is reconciled.** M0.14's checker behavior is tested and the Gradle task is wired, but `checkMutants` is manual-stage; `gates` does not execute the full mutation suite. M9 evidence no longer implies otherwise.
+4. **FR-21's refusing half remains unowned.** M9 delivers counting only; M10 must decide the governor design/ownership before production is protected from a cost-budget breach.
+5. **Minor review harvest for M10:** carry test/maintenance follow-ups for `5f7e242` (false-refusal baseline and empty `CHECK_RANGE` fixture), `34e4fcd` (independent byte expectation and mutation-run crash limitation), `2cd990f` (sleep-based chaos poll), `872efb9` (duplicate curve rows and zero-GET pricing pin), `8a0e9ec` (legacy singleton default), `eef4d88` (oversized end marker), `b65b9f9` (partial overlaps), `bf8877b`/`c1d9f54` (one consolidated refusal-permit assertion), `fb0f56b` (monitor held over bounded read), `895710a` (reachability change during final segment GET), `355899e` (test-plan tier label), and `1ed333b` (nested-package coverage). Keep `ae5b4c4`'s RustFS wording clarification. Explicitly drop stale scheduling/status notes in `3f141e6`, the M9.49 request-shape concern resolved by M9.50, the non-issue duplicate-table note in `d12d6ad`, and rationale-only/unspecified notes in `34e4fcd`/`3b696b7`.
 
 ### Re-plan
 
-M9 is not complete. Resume with the next unblocked task from the current backlog, while preserving the dependency order: finish M8.24 before M9.13 and M9.21; then execute the M9.21 no-ingester tiers and M9.13 reachable-ingester gap reread, and finish M8.58 plus the remaining M8.60–M8.80 harvest rows. The full M9.8/M9.56 profile has passed locally in 26m; the separate nightly workflow remains NOT-RUN. The next milestone must own FR-21's refusing half and the recorded review-harvest items. M9.22's roadmap amendment remains accurate: AWS S3 tail latency, M3 TTFB and billed dollars are NOT-RUN on this rig.
+M9 is complete under the amended roadmap gate, with the above partial explicitly retained. M10 starts with the proxy segment-serving route/full NFR-5 proof, FR-21 governor ownership and design, and the review-harvest items listed above. The full M9.8/M9.56 RustFS profile passed locally in 26m; the separate nightly workflow remains NOT-RUN. M9.22's roadmap amendment remains accurate: AWS S3 tail latency, M3 TTFB and billed dollars are NOT-RUN on this rig.
 
 No new research conclusion overturns the existing corpus. The checkpoint reinforces its distinction between backend-independent request counts and RustFS-only latency; the timeout is an execution-layer limitation, not evidence to change a cost threshold.

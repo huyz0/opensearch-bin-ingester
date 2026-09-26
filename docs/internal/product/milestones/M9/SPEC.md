@@ -50,10 +50,20 @@ curve document records which (criterion 16):
 | Fixed CPU governor | ❌ **cannot** — WSL2 does not expose it; run-to-run variance is measured instead and published beside every number |
 | No co-tenancy | ❌ **cannot** — one workstation runs Docker, RustFS and every JVM. So each latency is a lower bound carrying noise, never a clean p99 |
 
-⚠️ **NFR-1, NFR-4 and NFR-5 are counts, so M9 can MEASURE them.** NFR-7 is a
-latency, so M9 measures it on RustFS and says in the same sentence that S3's
-PUT tail is not in the number. What a production-cloud run would add is stated
-per criterion, and is § *What a cloud run adds*.
+⚠️ **NFR-1 and NFR-4 are counts, and M9 measures them. NFR-5 is measured only
+for transports implemented in M9; the missing proxy segment-fetch route remains
+PARTIAL under M9.58.** NFR-7 is a latency, so M9 measures it on RustFS and says
+in the same sentence that S3's PUT tail is not in the number. What a
+production-cloud run would add is stated per criterion, and is § *What a cloud
+run adds*.
+
+⚠️ **M9.58 AMENDS THE MILESTONE GATE, NOT NFR-5.** The cross-AZ measurement
+covers every cross-AZ transport that is implemented and executable in this
+tree. The planned proxy segment-fetch route does not exist, so its payload-byte
+term is NOT-RUN and criterion 6 remains PARTIAL. M9 may close only with that
+limitation explicit in `VERIFIED.md` and the roadmap assigning the complete
+proxy route and full NFR-5 proof to M10. This is not a claim that NFR-5 is met;
+no document may report full NFR-5 compliance before that follow-up is measured.
 
 ## Requirements
 
@@ -63,7 +73,7 @@ per criterion, and is § *What a cloud run adds*.
 | **NFR-2** (zero idle requests) | Already measured by M8's `IdlePodCostSoakTest`; M9 puts it in CI (M8.75) so it cannot regress unseen |
 | **NFR-3** (no LIST on the hot path) | Asserted in every macro run; M8.66 states the backfill's costs |
 | **NFR-4** (read rate scales with segments, AZs, nodes) | Measured at 16 vs 1,600 shards and 1 vs 3 vs 9 consumer nodes, with the prefetcher wired (M8.56, closed by M8.84 and M8.85) |
-| **NFR-5** (cross-AZ bytes < 0.1% of ingested) | Measured, which first needs pods to carry an AZ label and the peer sockets to count bytes by it (M9.2) |
+| **NFR-5** (cross-AZ bytes < 0.1% of ingested) | Existing cross-AZ transports measured by M9.2/M9.10. The planned proxy segment-fetch route is absent, so the full requirement remains PARTIAL/NOT-RUN until M10. |
 | **NFR-6** (memory bounded) | Not re-proved; the allocation gate (M9.6) is its leading indicator |
 | **NFR-7** (p99 < 3× the flush window) | Measured on RustFS, producer 202 to consumer-visible, at three windows; one point to searchable in OpenSearch |
 | **NFR-9**, **NFR-11**, **FR-9**, **FR-10**, **FR-11**, **FR-12**, **NFR-13** | Carried by the inherited M8 rows, each citing its own |
@@ -533,6 +543,7 @@ multiplied from a price table (criterion 16). Each is a named NOT-RUN in
 | M9.55 | T0 | `CountingBinStorePutPurposeTest` fails for a wrong key-purpose grammar, missing aggregate reconciliation, a lost `putIfAbsent`/`putIfMatch` request omitted from its purpose, or any multipart initiation/part/complete/abort/implicit-close-abort request omitted from its purpose; `MacroCountsJsonTest#concurrentPutSnapshotAlwaysReportsAnAggregateEqualToItsPurposeBreakdown` fails when JSON samples an independent aggregate during concurrent writes and `#macroCountSnapshotCarriesEveryCounter` fails when aggregate PUTs differ from the purpose sum; legacy untracked JSON remains byte-identical; `CostLatencyCurveGeneratorTest#generatedCurveLabelsMeasuredAndModelledValuesAndCheckRejectsStaleOutput` accepts equivalent LF and CRLF generated artifacts, while `checkCostLatencyCurve` validates the checked-in Windows checkout | billed PUTs vanish from the aggregate, an object class is misattributed, a losing CAS is treated as free, multipart cleanup is uncounted, the macro counter uses a stale aggregate instead of purpose totals, or a valid Windows checkout falsely fails the curve gate |
 | M9.56 | T3 + script | `LowRateWriteBudgetIT#lowRateWritesStayWithinTwoPutsPerIntervalAtBothCeilings` fails if data+commit PUTs exceed two per interval, checkpoint/lease cadence exceeds its bound, purpose counts fail to reconcile, or LIST occurs; full five-minute RustFS profile re-runs both low-rate points and all M9.8 size/read/cross-AZ points; generated curve `--check` is wired | checkpoint/lease maintenance is mistaken for flushes, a measured threshold moves silently, or control-plane PUTs disappear from reported cost |
 | M9.57 | documentation + review | `checkMilestoneVerified` covers all 19 criteria; inherited-row claims match the backlog; M8.62's 17 source commits map to regression/mutation evidence or an explicit disposition; M8.85's multi-candidate test fails under the ownership mutation and passes after restoration | stale evidence presents completed work as outstanding, or an inherited survivor disappears without a disposition |
+| M9.58 | documentation + milestone review | Roadmap and SPEC gate explicitly allow M9 closure only with existing cross-AZ transports measured, criterion 6 marked PARTIAL, the missing proxy segment payload term marked NOT-RUN and assigned to M10; the mutation checker is described as wired but manual-stage, not as executed by `gates`; `checkMilestoneVerified` covers all 19 lines | an unimplemented transport is silently treated as measured, a requirement is falsely declared met, or mutation-suite execution is overstated |
 | M9.19 | doc | — (an ADR; `check-adr-refs.sh` and `check-links.sh` carry it) | a divisor nobody wrote down |
 | M9.20 | doc | — (an ADR; either branch of criterion 18) | a mechanism assumed buildable |
 | M9.22 | doc | — **no test can fail first for a roadmap edit**; it changes one prose row and no code. `check-links.sh` and the M9.0 spec review carry it | a completion condition the milestone cannot meet |
@@ -693,9 +704,10 @@ the final assembly task and depends on both.
 | M9.55 | **PUT-PURPOSE COUNTERS, THE MACRO SNAPSHOT, AND PORTABLE VALIDATION**: classify every issued PUT as data, commit delta, checkpoint, lease or other; derive aggregate PUTs from the exhaustive purpose counters; preserve legacy untracked JSON; prove each multipart lifecycle request including explicit and implicit abort; ensure the generated curve gate accepts equivalent LF/CRLF artifacts on Windows. No wire format or object-store request behavior changes | NFR-1 |
 | M9.56 | **NFR-1 LOW-RATE AMENDMENT AND MEASURED CURVE UPDATE** (supersedes the unsplit M9.18 row): preserve ≤2 data+commit-delta PUTs per interval, separately cadence-bound checkpoint and lease/control PUTs while retaining aggregate cost, update `requirements.md`, cost.md § Enforcement, performance.md's gate table and ADR-0072, and persist every full five-minute point | NFR-1 |
 | M9.57 | **RECONCILE M9'S INHERITED EVIDENCE**: compare all 19 criterion lines and inherited M8/M9.13/M9.21 rows against current source, tests, backlog and measured artifacts; map the 17 M8.62 source commits to regression/mutation evidence or an explicit non-functional disposition; retain NOT-RUN cloud and deployment caveats. No production behavior or request budget changes | — (evidence) |
+| M9.58 | Amend the M9 completion gate only to make its evidence honest: measure all implemented cross-AZ transports, mark the absent proxy payload route NOT-RUN/PARTIAL, preserve NFR-5 unchanged, assign full route and proof to M10, and distinguish checker wiring from manual mutation-suite execution | NFR-5 |
 | M8.62f | **PRESERVE THE PRIMARY STARTUP FAILURE WHILE RETAINING STORE-CLOSE DIAGNOSTICS**: prove a close failure is suppressed on the original assembly failure, and that swallowing the close error makes the exact test fail. Test-only; no request-path change | — (tests) |
 | M9.9 | NFR-4 counted: shards, nodes, AZs | NFR-4 |
-| M9.10 | NFR-5 counted | NFR-5 |
+| M9.10 | T3; existing NFR-5 transports counted; full proxy segment payload term NOT-RUN | NFR-5 |
 | M9.19 | **NFR-7's DIVISOR**: the ADR fixing the flush window as the interval ceiling, and the endpoints | NFR-7 |
 | M9.11 | NFR-7 on the rig at three ceilings, and one point to searchable | NFR-7 |
 | M9.12 | NFR-7 on the ADR-0058 path: visibility bounded by the drain | NFR-7, FR-4 |
