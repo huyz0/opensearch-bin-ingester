@@ -425,6 +425,15 @@ The sequencer knows the moment offsets are assigned. It must fan out to subscrib
   catch up by reading the chain. **Dropping detail but never dropping the fact of progress** is the
   correct degradation.
 
+> ⚠️ **REVISION 2026-09-26 ([ADR-0075](../../internal/product/decisions/0075-every-durable-delta-reaches-every-pod.md)):
+> option (a) is built, but not as "metadata only, small" to every peer.** A delta is ~150 KiB at
+> scale, 7.7× the cross-AZ crossover (research 05 §5b), so the leaseholder pushes the whole delta
+> only to ready pods of its OWN AZ (`DeltaPushFrame`: `"BDPF"`, version 1, epoch, the chain's own
+> `CommitDelta` bytes), and sends each remote AZ's relay a fixed 24-byte `DeltaHintFrame`
+> (`"BDHF"`, version 1, epoch, sequence). The relay reads the delta from the store and pushes it
+> within its AZ. There is no interest registration: intra-AZ bytes are free and every pod's hub
+> filters to its own subscribers. An unknown version is refused, never folded.
+
 ## 5. End to end: what the client learns, when, and what it costs
 
 **Question this answers:** does the plugin learn about data it cares about
