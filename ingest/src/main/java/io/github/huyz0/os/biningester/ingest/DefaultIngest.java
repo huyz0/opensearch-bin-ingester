@@ -497,17 +497,34 @@ public final class DefaultIngest implements Ingest {
             // (M5.2, M5.32). `flushSeq++` stays inside this constructor call.
             CommitRequest request = new CommitRequest(podShortId, incarnationId, flushSeq++,
                     published.key(), published.recordCounts());
+            ChainPublisher chained = chain;
+            if (chained != null) {
+                // ⚠️ BEFORE THE COMMIT (ADR-0075): the push for it can arrive
+                // before this call returns, and must find the bytes.
+                chained.hold(published.key(), published.segment());
+            }
             CommitDelta delta;
             try {
                 delta = sequencer.commit(request);
             } catch (io.github.huyz0.os.biningester.sequencer.CommitDeferredException deferred) {
                 // ⚠️ INTENT DURABLE (ADR-0058): a 202, no offset, nothing to push.
+                if (chained != null) {
+                    chained.forget(published.key());
+                }
                 batch.forEach(p -> p.done().complete(AppendResult.deferred(p.count())));
                 return;
+            } catch (IOException | RuntimeException failed) {
+                if (chained != null) {
+                    chained.forget(published.key());
+                }
+                throw failed;
             }
 
             DurableSegmentAcknowledgement.complete(published, delta, batch,
                     durableSegmentListener);
+            if (chained != null) {
+                return; // the leaseholder's publication, not this flush, delivers it
+            }
             // ⚠️ Submitted only after BOTH objects are durable, and only after
             // the waiters are released: append promises DURABILITY, and a
             // consumer told about a segment it cannot GET would fail its read.
@@ -554,6 +571,21 @@ public final class DefaultIngest implements Ingest {
             throw e;
         }
     }
+
+    /**
+     * Stops this ingest publishing its own commits and returns the publisher
+     * that will, fed by the leaseholder in chain order (M10.18, ADR-0075).
+     * Holds at most {@code maxHeldBytes} of this pod's own segments; call once,
+     * before writes. The caller closes it, AFTER this ingest: the final flush
+     * still holds bytes for a push that may arrive.
+     */
+    public ChainPublisher publishThroughChain(long maxHeldBytes) {
+        ChainPublisher created = new ChainPublisher(hub, serving, maxHeldBytes);
+        chain = created;
+        return created;
+    }
+
+    private volatile ChainPublisher chain;
 
     /** The shared serving proxy, for the composition root's cache prefetcher. */
     public SegmentProxy segmentProxy() {
