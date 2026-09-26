@@ -19,13 +19,13 @@ intentional results where the acceptance condition is outstanding or absent.
 10. `m9.6-allocation-gate.md#noise-floor` records the `:bench:jmh` allocation gate and ten-fork noise-floor evidence; this is a leading indicator, not a new NFR-6 memory-flatness proof.
 11. `codec.csv#M9.7` and `m9.7-codec-comparison.md` record B3 codec/block measurements and the generated curve; the M9.7 run and repository gates passed.
 12. `DirectThresholdIT`, `m9.14-direct-threshold.md` and ADR-0067 establish the RustFS request-cost threshold at fan-out 1. S3 TTFB, the decisive latency term, is NOT-RUN.
-13. NOT-RUN: M8.24's `KillNodeMidBacklogIT` is absent; M8.24 parent remains todo after the protocol and component rows M8.24a-e. No catch-up starvation or T4 result is claimed.
-14. NOT-RUN: M9.13 `GapRereadIT` is absent and depends on unfinished M8.24. No reachable-ingester gap reread cost is claimed.
-15. PARTIAL: inherited-row evidence/status is enumerated below. The M8.60–64, M8.74, M8.77 and M8.80 rows remain open; M8.58 and M8.24 parent remain open (NOT-RUN). M8.64 is prose-only and explicitly excluded from automated criterion-line coverage by the spec; it is still an open review action, not silently treated as tested.
+13. `KillNodeMidBacklogIT` is the M8.24h evidence for the completed parent; the M8.24a–h rows record the protocol, server, consumer and T4 results. See their detailed evidence in the backlog. The separate full nightly workflow remains NOT-RUN.
+14. `GapRereadIT#gapReplayIsContiguousAndCostsOneGetPerUnindexedSegment` (M9.13) measures the reachable-ingester gap reread through catch-up and does not claim to price the no-ingester Tiers 2/3 path.
+15. PARTIAL: inherited evidence is enumerated below. M8.24, M8.56, M8.58 and M8.60–M8.81 are complete except M8.62f, whose cleanup-diagnostic test is specified but not yet implemented; the other 16 source commits map to the listed test/harvest evidence or the explicitly non-functional pool-cap disposition. M8.73/.78 children M8.76/.77 and M8.79/.80 are done; `DurableSignalRingOwnerTest#multipleReadyCandidatesInOneAzWarmOnlyTheDeterministicRingOwner` now closes M8.85. M8.64 is prose-only and excluded from automated criterion-line coverage by the spec; its review disposition is recorded in the backlog row.
 16. `gradlew generateCostLatencyCurve` generated the committed Markdown/SVG from the final measured M9.8/M9.56 CSVs; `checkCostLatencyCurve` is wired into `gates`. Full five-minute profile evidence is recorded in the inputs; other result files retain their own measured/smoke status.
 17. `measurement.yml`, the 60-second L1 subset and the `nightly-measurement` execution-layer docs are checked by `checkMeasurementWorkflow`. The complete full local profile passed in 26m; the separate nightly GitHub workflow remains NOT-RUN.
-18. NOT-RUN: ADR-0064 selects `NodeLocalStoreReader`, but M9.21 `LadderStoreTiersIT` and M8.24 are unfinished. Tiers 2 and 3 have not executed; their GET/STAT cost is not measured, and zero automatic-tier LISTs remain to be proven.
-19. NOT-RUN: M8.58's pod-UID lease wire-format change is absent; no lease format, readers/writers, fake or golden change is claimed.
+18. `LadderStoreTiersIT` and M9.21 are recorded done: the canonical Tier 3 episode measured five GETs plus one checkpoint-pointer STAT, with zero LISTs; the M8.24 replay path is complete. The test also covers a second episode where ingester service returns during recovery. See M9.21/M9.45 backlog evidence; the separate nightly workflow remains NOT-RUN.
+19. M8.58 is recorded done: required pod UID is written by normal and GC lease paths, persisted-byte and takeover tests pass, and lease goldens cover compatibility. Fleet rollout and a real cluster remain NOT-RUN; this criterion claims implementation and local test evidence, not deployment.
 
 **Explicit scope disposition:** FR-21's refusing half is owned by no milestone
 after M9. M9 delivers request counting only; it does not build a production
@@ -38,18 +38,16 @@ Evidence references below point to the named backlog task's acceptance evidence 
 | Row | Evidence / disposition |
 |---|---|
 | M8.24a | `ADR-0065`; protocol decision done. |
-| M8.24b | Bounded replay source/coordinator component tests; done, parent integration remains open. |
-| M8.24c | Versioned catch-up frames, golden and refusal tests; done, HTTP registration remains open. |
-| M8.24d | HTTP catch-up control seam tests; done, production replay wiring remains open. |
-| M8.24e | Durable responder tests; done, HTTP registration/T4 remain open. |
-| M8.24 | NOT-RUN: `KillNodeMidBacklogIT` absent; parent todo. |
-| M8.56 | `AssemblyBatchingTest`/prefetch assembly and real-RustFS peer-hint proof (M8.84/M8.85); done. |
-| M8.58 | NOT-RUN: pod UID is not yet in the lease; wire-format task todo. |
-| M8.60 | NOT-RUN: bounded-label runtime counters are not exported; todo. |
-| M8.61 | NOT-RUN: all ten enumerated chaos assertion mutations are not closed; todo. |
-| M8.62 | NOT-RUN: inherited surviving mutants remain; todo. |
-| M8.63 | NOT-RUN: inherited `Thread.sleep` polling/costly LIST loops remain; todo. |
-| M8.64 | OBSERVED-NOT: stale prose sweep is still todo; prose truth is reviewed, not asserted by a test. |
+| M8.24b | Bounded replay source/coordinator component tests; done, with the parent integration completed by M8.24f–h. |
+| M8.24c | Versioned catch-up frames, goldens and refusal tests; done and exercised through the registered route. |
+| M8.24d | HTTP catch-up control seam and production replay wiring; done. |
+| M8.24e | Durable responder, registered route and T4 integration; done. |
+| M8.24 | **done** — M8.24f/g/h and `KillNodeMidBacklogIT` complete; see the M8.24 backlog row for the full T4 evidence and conditions. |
+| M8.56 | `AssemblyBatchingTest` and M8.84/M8.85 assembly, RustFS and multi-candidate ownership evidence; done. M8.85's focused mutation/red and restored-green result is recorded in its backlog row. |
+| M8.58 | **done** — pod UID lease wire-format implementation and compatibility tests; fleet rollout and real-cluster execution remain NOT-RUN. |
+| M8.60–M8.61 | **done** — bounded metrics and the numbered chaos assertion children are recorded complete in their backlog rows; the platform-specific force-kill caveats remain explicit there. |
+| M8.62 | **OPEN pending M8.62f.** Source mapping: 15d0277 → M8.62a–d; 42738fa → M8.62e; a85e95c → `ChainGcAcrossEpochsTest`/`PointedDeltaPinnedTest`; f83e841 → `SubscriptionByteBudgetTest`; 5ebac33 → M8.67; c2b5a8b → M8.22 presign tests; 0514a53 → `CommitRequestTest#theCopiedRecordCountsAreImmutableNotMerelyUnaliased` (the mutable-map substitution was observed red); 252a1a8 → M8.69; 001b63d → M8.62f; a299c24 → M8.29; 7760f40/08cb808/a8a2df2 → M8.71; 21703bc → `ClusterCaTrustTest` and M8.60; 6824988 → M8.75; f78eb96 → M8.74. Its `MAX_POOLED_CLIENTS` numeric mutation is equivalent for the stated bounded-pool behavior: every positive fixed limit still bounds the pool, so a changed internal default is not a functional survivor. d5fc36b → M8.68 callback/shutdown classification tests. |
+| M8.63–M8.72 | **done** — completed child and task evidence is recorded in the backlog; includes the bounded polling, prose, lifecycle, callback classification and logging work. |
 | M8.65 | `InboxDrainRaceTest#aLocalAndBatchedDrainShareTheInnerTermLock`; done. |
 | M8.66 | `ChainBackfillTest` deposition/all-or-nothing cases, assembly wiring test, and cost.md budget; done. |
 | M8.67 | `NodeSegmentSourcePerKeyLockTest` proves independent keys progress and same-key fetch coalescing; done. |
@@ -58,15 +56,15 @@ Evidence references below point to the named backlog task's acceptance evidence 
 | M8.70 | `NodeShutdownTest#aDRAINDelaysBulkRefusalAfterReadinessFails`; done. |
 | M8.71 | `NodeProcessKillResumesPausedTest`, `RetryFloorCallerTest`, and assembly/positions ownership tests; done. |
 | M8.72 | `PluginLoggingIT` captures all three paths in OpenSearch Log4j; done. |
-| M8.73 | Split; M8.76 done, M8.77 remains todo (see both split rows). |
-| M8.74 | NOT-RUN: `BodyTooLargeException` response attribution remains todo. |
+| M8.73–M8.74 | **done** — M8.76 and M8.77 close the split gate work; M8.74's peer-response attribution tests and focused suites are complete. |
 | M8.75 | `IdlePodCostSoakTest` passed locally and `check-measurement-workflow.py` pins nightly `soakTest`; done. |
 | M8.76 | JVM and Python `check-wired` resolution tests; done. |
-| M8.77 | NOT-RUN: qualified nested construction case remains todo. |
-| M8.78 | Split; M8.79 done, M8.80 remains todo (see both split rows). |
+| M8.77 | **done** — qualified nested construction is pinned in both scanners. |
+| M8.78 | **done** — children M8.79 and M8.80 complete the split runner hardening. |
 | M8.79 | `test_tdd_scan.py` and `test_tdd_red.py` Windows path/selector tests; done. |
-| M8.80 | NOT-RUN: stale JUnit cleanup failure refusal remains todo. |
+| M8.80 | `test_tdd_scan.py` and `test_tdd_red.py` prove stale-report cleanup failure refuses before Gradle and cannot mint red evidence; done. |
 | M8.81 | `test_source_digest_uses_canonical_git_line_endings` plus `checkTdd`; done. |
+| M8.82–M8.85 | **done** — ready AZ-labelled membership, authenticated durable hint, assembled RustFS fetch, and multi-candidate deterministic ownership; the M8.85 adversarial mutation result is recorded in the backlog. |
 | M8.82 | `EndpointSliceViewTest` ready AZ-labelled peer snapshot; done. |
 | M8.83 | BPDS versioned frame golden/authentication/byte-count component tests; done, integrated signal use is M8.56. |
 | M9.42 | `NodeLocalStoreReaderKeyPolicyTest`, `NodeLocalStoreReaderTest`, `NodeLocalStoreReaderMainTest`, `NodeLocalStoreReaderProcessIT` including `--init-secret`, and POSIX secret-permission regression; `gates`, TDD, test-integrity, and diff-scoped mutation (111/138, 80.4%) passed. `check-coverage.sh` measured coverage below repository floors; Gradle `checkCoverage` could not parse missing JaCoCo `report.dtd`. Cost-meter gate is absent. M9.44–M9.45 and M9.21 remain open. |
