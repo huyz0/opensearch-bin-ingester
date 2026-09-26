@@ -15,6 +15,7 @@ import io.github.huyz0.os.biningester.security.Principal;
 import io.github.huyz0.os.biningester.sequencer.CommitRequest;
 import io.github.huyz0.os.biningester.sequencer.LeaseManager;
 import io.github.huyz0.os.biningester.sequencer.SequencerTransport;
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
@@ -418,6 +419,22 @@ class AssemblyTest {
                 .isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() -> Assembly.open(config("pod1"), noPeers(), null))
                 .isInstanceOf(NullPointerException.class);
+    }
+
+    @Test
+    void aStoreCloseFailureIsSuppressedOnThePrimaryAssemblyFailure() throws Exception {
+        IOException primary = new IOException("assembly failed");
+        IOException closeFailure = new IOException("store close failed");
+        AutoCloseable resource = () -> {
+            throw closeFailure;
+        };
+
+        var closeQuietly = Assembly.class.getDeclaredMethod(
+                "closeQuietly", AutoCloseable.class, Throwable.class);
+        closeQuietly.setAccessible(true);
+        closeQuietly.invoke(null, resource, primary);
+
+        assertThat(primary.getSuppressed()).containsExactly(closeFailure);
     }
 
     @Test
