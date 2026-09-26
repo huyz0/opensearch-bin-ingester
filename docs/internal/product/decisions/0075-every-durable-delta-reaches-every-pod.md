@@ -133,8 +133,9 @@ its own subscribers, and nothing else publishes in an assembled node.**
   fenced or closed before an ambiguous append is reconciled. The consumer then sees a gap, and gap repair (M8.24's catch-up)
   is served only by the leaseholder (`Assembly.respondCatchUp`: "this node has
   no serving committed chain"). A plugin consumer on a follower pauses live
-  delivery for a repair that cannot come. M10.22 carries catch-up served from
-  a follower; until it lands, this is a known failure mode, not a claim.
+  delivery for a repair that cannot come. Catch-up served on any pod is owned
+  by M11 (M10.22's written disposition); until it lands, this is a known
+  failure mode, not a claim.
 - Leaseholder loss pauses pushes until the next term; deltas committed by the
   old term before it lost the lease and not yet pushed are the same gap.
 - A relay change (a pod joins or leaves) can deliver a hint to a pod that is no

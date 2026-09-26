@@ -30,7 +30,7 @@ public record DeltaPushFrame(long epoch, CommitDelta delta) {
      * ({@code HttpSequencerTransport.MAX_REPLY_BYTES}, M4.7): a delta batches
      * many pods' commits, so it is legitimately larger than any one request.
      * ⚠️ A larger delta is durable and unpushable: only catch-up reaches it
-     * (M10.22 owns catch-up served off the leaseholder).
+     * (catch-up served off the leaseholder is owned by M11).
      */
     public static final int MAX_DELTA_BYTES = 8 << 20;
 

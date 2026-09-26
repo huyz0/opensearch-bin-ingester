@@ -611,7 +611,7 @@ public final class CommitLog {
      * to have landed. Recovery's {@code apply} of entries already in the chain
      * does not fire it. ⚠️ An ambiguous append its own term never reconciled
      * (it was fenced or closed first) is therefore reported by nobody: a gap
-     * only catch-up repairs (M10.22).
+     * only catch-up repairs (on any pod from M11; M10.22's disposition).
      *
      * <p>⚠️ **IT MUST NOT FAIL A COMMIT.** The delta is durable before the
      * listener runs, so a throw is logged and swallowed; the listener's job is

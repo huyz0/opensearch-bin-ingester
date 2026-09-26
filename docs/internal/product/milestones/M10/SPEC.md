@@ -366,7 +366,7 @@ the cross-AZ measurement.
 
 - **A lost push is not repaired on a follower** (ADR-0075): catch-up is served
   only by the leaseholder, so a plugin consumer on a follower that sees a gap
-  pauses for a repair that cannot come. M10.22.
+  pauses for a repair that cannot come. M10.22's disposition: owned by M11.
 - **The relay is a single pod per AZ** for hints: its loss, a membership
   change, or a store read failing past its retry budget drops deltas for that
   AZ -- the same gap.

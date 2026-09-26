@@ -21,7 +21,7 @@ import java.util.function.ObjLongConsumer;
  * backing off to {@link #MAX_BACKOFF}, up to {@link #READ_ATTEMPTS} times --
  * about 30 s -- before the next hint is looked at, so a transient store error
  * delays this AZ rather than reordering it. A read that still fails is a lost
- * delta for this AZ, counted: a gap only catch-up repairs until M10.22.
+ * delta for this AZ, counted: a gap only catch-up repairs, on the leaseholder until M11.
  *
  * <p>⚠️ **A HINT FOR A DELTA THAT DOES NOT EXIST ADVANCES NOTHING.** It is
  * stale or forged; it is counted and dropped, and nothing is published.

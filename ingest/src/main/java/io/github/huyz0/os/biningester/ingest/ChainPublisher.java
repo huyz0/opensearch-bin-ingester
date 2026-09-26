@@ -34,7 +34,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * metadata, but ~150 KiB of it at scale (ADR-0075), so a count alone would
  * let a stalled worker hold hundreds of MiB before the first drop. Offering
  * past either bound drops the delta and counts it -- a gap for this pod's
- * consumers, which only catch-up off the leaseholder repairs until M10.22
+ * consumers, which only catch-up off the leaseholder repairs until M11
  * (ADR-0075: a follower cannot serve it). Blocking instead
  * would put a slow subscriber on the commit path, which is the trade
  * {@code DefaultIngest}'s push queue already refuses for the same reason.

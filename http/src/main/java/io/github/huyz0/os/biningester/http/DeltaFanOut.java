@@ -41,7 +41,7 @@ import java.util.function.Supplier;
  * {@link #LANE_DEPTH} frames or {@link #LANE_BYTES}), a delta committed after
  * {@link #close}, and what close cannot deliver in time are dropped and
  * counted: a gap on that peer that only catch-up off the
- * leaseholder repairs until M10.22. Nothing here blocks the commit path.
+ * leaseholder repairs until M11. Nothing here blocks the commit path.
  *
  * <p>⚠️ **NOT WIRED INTO A NODE HERE.** M10.20a switches nodes to publish
  * through the chain, after the relay (M10.20) exists; switching first would
