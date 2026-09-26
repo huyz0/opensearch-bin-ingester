@@ -39,6 +39,21 @@ priority lanes to M10 too. They move to M11, and fast mode (FR-17) moves to
 M12. Which milestone owns FR-21's refusing governor is NOT decided here: M10.6's
 ADR decides it. No requirement changes; the order does.
 
+⚠️ **AMENDED BY M10.16 (user's decision, 2026-09-26): DELTA DELIVERY TO EVERY
+POD IS BUILT IN M10.** Exploring criterion 9's topology on RustFS -- three pods in
+three AZ labels, writes spread across them, a consumer per AZ served by its own
+pod -- found that **each consumer received only its own pod's 1,800 of 5,400
+records**: a pod publishes only the delta returned to its own flush, and the
+directed push [ADR-0012](../../decisions/0012-peer-mesh-without-gossip.md)
+decided on was never built. Criterion 9 cannot be measured on a deployment in
+which the consumers it describes miss two-thirds of the records, so the user
+chose to build it here rather than re-scope. ⚠️ **The shape was revised by
+M10.16's own review**: pushing whole deltas across AZs would spend ~3.6% of
+ingested bytes cross-AZ at the corpus's rate, 36× NFR-5, so deltas are pushed
+only within an AZ and only a key-sized hint crosses one, to a relay pod that
+reads the delta from the store. [ADR-0075](../../decisions/0075-every-durable-delta-reaches-every-pod.md)
+is the design; M10.16-M10.22 are the tasks; criterion 13 is the new evidence.
+
 ## Requirements
 
 | ID | What M10 does to it |
@@ -47,6 +62,7 @@ ADR decides it. No requirement changes; the order does.
 | **NFR-5** (cross-AZ bytes < 0.1% of ingested) | Measured with the proxy payload term counted -- the term M9 left NOT-RUN -- across three AZ labels, beside a deliberately cross-AZ run proving the counter is live |
 | **NFR-4** (read rate scales with segments, AZs, nodes) | The route issues at most one store GET per (serving node, segment) on a cache miss, single-flight; consumer-to-ingester requests are once per (consumer node, segment) |
 | **NFR-6** (ingester memory bounded, independent of request size) | The route streams in `SegmentProxy` chunks; the HTTP subscription stops assembling non-inline segments per session |
+| **FR-5** (push tail notifications to subscribers) | Every pod's subscribers receive every durable delta touching their streams, in chain order: pushed within an AZ, hinted across (ADR-0075) |
 | **FR-21** (cost governor) | Not built. Its refusing half gets an owning milestone by ADR (M10.6) |
 
 ## Scope
@@ -205,6 +221,7 @@ behaviour: bytes counted as unknown, which the counter treats as cross-AZ
 | Publish of a `proxy` segment on another serving node | 1 GET per (node, segment) on a miss, 0 on a hit -- bytes then discarded | unchanged; the GET now also warms the cache the route reads | R10, R11 |
 | Consumer fetch of a `proxy` segment | impossible (decode throws) | 0 on the writer and on a prefetched ring owner; ≤ 1 GET per (other serving node, segment) on a miss, single-flight; K + 1 for K reads of a segment above the cache ceiling | NFR-4 (M9 criterion 5(a)) |
 | Consumer-to-ingester requests | 0 | 1 per (consumer node, segment) | NFR-4 (M9 criterion 5(b)), may scale with nodes |
+| Delta delivery to other pods (M10.16-M10.20) | none (records missed) | within an AZ: the delta per ready pod, free; across AZs: a 24-byte hint per (delta, remote AZ); store: 1 GET per (delta, remote AZ) | NFR-5, R10, non-negotiable 6 |
 | LIST | 0 | 0 | R2, NFR-3 |
 | Idle | 0 | 0 -- the route is request-driven | R3, NFR-2 |
 
@@ -213,6 +230,8 @@ moves. The one new term is ingester-served HTTP, which is not an object-store
 request.
 
 ## Acceptance criteria
+
+⚠️ Criterion 13 was added by M10.16 with delta delivery to every pod.
 
 1. **A `proxy` delivery decodes end to end over HTTP.** An assembled ingester
    with default settings, a flush producing a segment larger than the 256 KiB
@@ -273,6 +292,18 @@ request.
     store request; a segment above the cache ceiling is still served, and K
     reads of it cost at most K + 1 GETs. (M10.15, M10.1)
 
+13. **Every pod's consumers receive every record.** Three assembled pods on
+    RustFS, labelled `az-a`, `az-b`, `az-c`, with membership from a fake
+    `EndpointSlice` API; writes spread across all three; one consumer per pod.
+    Each consumer decodes **every** record written, in offset order, with zero
+    gaps -- where before M10.16 each received only its own pod's third.
+    **Counted:** `DELTA_PUSH` bytes are all same-AZ; `DELTA_HINT` bytes are
+    cross-AZ, exactly 24 per (delta, remote AZ); store GETs for deltas are at
+    most one per (delta, remote AZ). **Idle:** over an interval with no writes,
+    zero pushes, zero hints and zero consumer store requests, and the ingester's
+    own requests stay within the M9 idle bound (lease and checkpoint cadence).
+    (M10.16-M10.21)
+
 ## Test plan
 
 | Task | Tier | Test that must fail first | Mutation it catches |
@@ -291,6 +322,11 @@ request.
 | M10.2 | T1 | `NodeSegmentSourceTest#kRunsOfOneSegmentCostOneProxyFetch` | per-run fetch |
 | M10.3 | T1 | `SubscriptionProxyBudgetTest#aProxyPushChargesNothingToTheQueueBudget` | per-session assembly restored |
 | M10.4 | T1 | `BinStorePluginAzTest#theConfiguredAzReachesPollAndProxyRequests` | setting read and dropped |
+| M10.17 | T0 | `DeltaPushFrameTest`, `DeltaHintFrameTest` (goldens, round trip, malformed input) | a field swapped or a bound dropped |
+| M10.18 | T1 | `ChainPublisherTest`, `DefaultIngestChainModeTest` | out-of-order or duplicate publication; bytes held after commit; a flush that still publishes itself |
+| M10.19 | T1 | `LocalSequencer` hook cases (fresh once, ambiguous-landed once, replay never); push/hint targeting from a view | a replay published; a hint sent to a non-relay; a whole delta sent cross-AZ |
+| M10.20 | T1 | relay cases (one GET per hint; hints handled serially in arrival order; a failed GET retried before the next hint, then counted as lost; a hint for a missing delta advances nothing; a non-relay drops hints) | a GET per pod; concurrent reads publishing out of order; a transient failure skipping a delta; a forged hint advancing the publisher |
+| M10.21 | T3 | `EveryPodReceivesEveryRecordIT` | criterion 13 on the assembled rig |
 | M10.5 | T3 (RustFS, three `NodeProcess`es) | `CrossAzBytesIT#threeAzProxyServingStaysBelowTheNfr5Budget`, `#aCrossAzProxyFetchCountsItsPayload` | payload not counted; same-AZ counted as cross-AZ; per-consumer GET |
 
 Coverage and mutation: diff-scoped `checkMutants` on `http`, `client` and
@@ -323,12 +359,22 @@ the cross-AZ measurement.
 - **The rig has one Docker host**, so AZs are labels, not networks -- as in
   M9, byte counts hold on a cloud to the extent labels match real zones.
 
+- **A lost push is not repaired on a follower** (ADR-0075): catch-up is served
+  only by the leaseholder, so a plugin consumer on a follower that sees a gap
+  pauses for a repair that cannot come. M10.22.
+- **The relay is a single pod per AZ** for hints: its loss, a membership
+  change, or a store read failing past its retry budget drops deltas for that
+  AZ -- the same gap.
+
 ## Decisions
 
 1. **Scope** (user, 2026-09-26): proxy + NFR-5 + FR-21 ownership + harvest;
    FR-18 to M11, FR-17 to M12. -> M10.0
 2. **The route's shape** -- an ADR, with M10.1.
 3. **FR-21's owner** -- an ADR, M10.6.
+4. **Delta delivery to every pod** -- [ADR-0075](../../decisions/0075-every-durable-delta-reaches-every-pod.md),
+   M10.16, revised by its own review from cross-AZ push to intra-AZ push plus
+   cross-AZ hint.
 
 ## Tasks
 
@@ -346,6 +392,13 @@ depend on the route.
 | M10.2 | The consumer fetches `proxy` deliveries: `ProxySource`, `HttpProxySource`, `ConsumerClient` dispatch, per-(node, segment) coalescing in the plugin | FR-6, NFR-4 |
 | M10.3 | The HTTP subscription stops assembling non-inline segments per session | NFR-6 |
 | M10.4 | The plugin reports its AZ on the poll and the proxy fetch | NFR-5 |
+| M10.16 | Amend this spec (criterion 13, M10.16-M10.22) and ADR-0075: every durable delta reaches every ready pod -- pushed within an AZ, hinted across to one relay per AZ that reads it from the store | FR-5, NFR-5 |
+| M10.17 | The push and hint frames (format, golden files, wire-format-change checklist) | FR-5 |
+| M10.18 | The ordered publisher: `(epoch, sequence)`-monotonic publication, held-segment bytes registered before commit, and a `DefaultIngest` switch that stops publishing its own commits | FR-5, NFR-4 |
+| M10.19 | The leaseholder side: `LocalSequencer`'s `onCommitted` hook (fresh and ambiguous-landed deltas), local publish, per-peer ordered retrying push senders to same-AZ pods, hints to each remote AZ's relay, `/ctl/push`, `DELTA_PUSH` and `DELTA_HINT` counting | FR-5, NFR-5 |
+| M10.20 | The relay: `/ctl/hint` accepted only by its AZ's relay, one GET of the named delta, local publish, push to the AZ's other ready pods | FR-5, NFR-4 |
+| M10.21 | T3 on RustFS: three pods, three AZ labels, fake `EndpointSlice`; every pod's consumer receives every record; counted and idle bounds (criterion 13) | FR-5, NFR-5, NFR-2 |
+| M10.22 | Catch-up served by a follower, so a consumer's gap repair works on any pod (ADR-0075's named gap) -- or its disposition, if it does not fit M10 | FR-9, FR-5 |
 | M10.5 | NFR-5 on RustFS across three AZ labels with the proxy payload counted, a cross-AZ control run, GETs per segment bounded; results committed | NFR-5, NFR-4 |
 | M10.6 | An ADR giving FR-21's refusing governor an owning milestone; roadmap amended | FR-21 |
 | M10.7 | Harvest (5f7e242): the mutants gate's UNUSED-baseline inference false-refuses an edit elsewhere in a mutated method; the `CHECK_RANGE` case must assert its fixture index is non-empty | — (gate) |
