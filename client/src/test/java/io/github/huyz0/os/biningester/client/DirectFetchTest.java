@@ -45,6 +45,14 @@ class DirectFetchTest {
     private static final Grant GRANT =
             new Grant("https://store.example/seg-the-one-granted", Instant.ofEpochMilli(60_000L));
 
+    /**
+     * ⚠️ ONE ATTEMPT, so a failure surfaces on the poll that met it (M10.23).
+     * The retry is {@code SegmentFetchRetryTest}'s; these cases pin which grant
+     * is fetched and that a spent failure reaches the caller, not the backoff.
+     */
+    private static final SegmentFetchRetry ONE_ATTEMPT = new SegmentFetchRetry(
+            Duration.ofSeconds(1), Duration.ofSeconds(1), 1, wait -> { });
+
     private static final class FakeTransport implements SubscriptionTransport {
         private final List<Listener> listeners = new CopyOnWriteArrayList<>();
 
@@ -194,7 +202,7 @@ class DirectFetchTest {
     void theSEAMIsHandedTheGrantFromTheDELIVERY() throws Exception {
         ServesOneUrl source = new ServesOneUrl(GRANT.url(), segmentOf("a"));
         FakeTransport transport = new FakeTransport();
-        try (ConsumerClient c = new ConsumerClient(transport, KEY, 16, source)) {
+        try (ConsumerClient c = new ConsumerClient(transport, KEY, 16, source, ONE_ATTEMPT)) {
             transport.push(direct(7, 1));
             assertThat(c.readNext(Duration.ofMillis(50))).isPresent();
 
@@ -216,7 +224,9 @@ class DirectFetchTest {
     }
 
     /**
-     * A fetch that fails PROPAGATES and emits NO records.
+     * A fetch that fails on the policy's LAST attempt PROPAGATES and emits NO
+     * records -- with {@code ONE_ATTEMPT}, on the poll that met it (M10.23;
+     * the retry before that is {@code SegmentFetchRetryTest}'s).
      *
      * <p>⚠️ ASSERTED, NOT STATED. Swallowing the failure and returning an empty
      * batch passes every other criterion on this row while the caller is told
@@ -229,7 +239,8 @@ class DirectFetchTest {
         ServesOneUrl servesSomethingElse =
                 new ServesOneUrl("https://store.example/a-different-object", segmentOf("a"));
         FakeTransport transport = new FakeTransport();
-        try (ConsumerClient c = new ConsumerClient(transport, KEY, 16, servesSomethingElse)) {
+        try (ConsumerClient c =
+                new ConsumerClient(transport, KEY, 16, servesSomethingElse, ONE_ATTEMPT)) {
             transport.push(direct(100, 1));
 
             assertThatThrownBy(() -> c.readNext(Duration.ofMillis(50)))

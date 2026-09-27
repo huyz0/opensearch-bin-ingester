@@ -120,6 +120,10 @@ final class CatchUpDeliveryLane {
         available.release();
     }
 
+    Delivery peek() {
+        return deliveries.peek();
+    }
+
     Delivery poll() {
         return deliveries.poll();
     }

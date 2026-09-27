@@ -1,0 +1,180 @@
+// SPDX-License-Identifier: Apache-2.0
+package io.github.huyz0.os.biningester.client;
+
+import io.github.huyz0.os.biningester.format.FetchMode;
+import java.io.IOException;
+import java.time.Duration;
+import java.util.Objects;
+
+/**
+ * One consumer's segment bytes, and the retry of a fetch that failed (M10.23).
+ *
+ * <p>⚠️ **THE POLICY: THE FAILED DELIVERY STAYS AT THE HEAD AND IS RETRIED BY
+ * A LATER {@code readNext}, ONCE ITS BACKOFF HAS BEEN WAITED OUT OF CALLERS'
+ * TIMEOUTS.** Retrying inside one call's deadline was the alternative, and it
+ * needs what this module may not have: the time remaining is a clock reading
+ * (non-negotiable 7), and a call that has already blocked on the queue and on
+ * a 30 s fetch has no honest remainder to retry in. Here time is counted in
+ * waits this class itself asked for, which is a LOWER bound on time passed --
+ * so the fetch rate is bounded without a clock, and:
+ * <ul>
+ *   <li>a call waits at most its own timeout, and never after a fetch it made;
+ *   <li>{@code readNext(ZERO)} neither waits nor fetches while a backoff is
+ *       owed, so {@code drain}'s zero-timeout reads cannot become a request loop;
+ *   <li>offsets stay in order: the queue keeps the failed delivery at its head
+ *       and returns its permits, and nothing behind it is read first.
+ * </ul>
+ * ⚠️ The cost of the choice, said rather than hidden: a caller that only ever
+ * polls with ZERO never serves a backoff and never retries. The shard
+ * consumer's first read of every batch carries the full poll timeout.
+ *
+ * <p>⚠️ **ONLY THE FETCH IS RETRIED.** A segment that arrived and will not
+ * decode is corrupt however often it is fetched, so that failure surfaces on
+ * the first attempt; and one delivery is one fetch per attempt, so a retry
+ * adds attempts per failed SEGMENT -- at most {@code maxAttempts} -- and never
+ * a request per record.
+ */
+final class SegmentFetcher {
+
+    private static final System.Logger LOG = System.getLogger(SegmentFetcher.class.getName());
+
+    /**
+     * A fetch that failed or is not yet due: the delivery stays queued and the
+     * poll answers empty. Never seen outside this package.
+     */
+    static final class Deferred extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+        private final boolean attempted;
+
+        Deferred(String message, Throwable cause, boolean attempted) {
+            super(message, cause, false, false);
+            this.attempted = attempted;
+        }
+
+        /** Whether this poll spent its time on a fetch, so owes the caller no wait. */
+        boolean attempted() {
+            return attempted;
+        }
+    }
+
+    private final SegmentSource source;
+    private final SegmentFetchRetry retry;
+    private int failures;
+    private Duration backoff;
+    private Duration owed = Duration.ZERO;
+
+    SegmentFetcher(SegmentSource source, SegmentFetchRetry retry) {
+        this.source = source;
+        this.retry = Objects.requireNonNull(retry, "retry");
+        this.backoff = retry.floor();
+    }
+
+    /**
+     * The segment's bytes: carried on the delivery, fetched by key from the
+     * ingester for an empty {@code proxy} delivery, or fetched under a grant.
+     *
+     * <p>⚠️ A FAILED FETCH IS NEVER AN EMPTY ARRAY. Returning one would have
+     * {@code readNext} report an ordinary empty poll while a whole window went
+     * missing. It is a {@link Deferred} while the policy has attempts left and
+     * the failure itself once it has none.
+     *
+     * <p>⚠️ AND NO SOURCE IS AN {@code IllegalStateException}, never retried:
+     * it is the mirror of {@code SubscriptionHub}'s null-issuer guard, and a
+     * pod that elects {@code direct} for a consumer built without a source is
+     * a misconfiguration an operator must see.
+     *
+     * @throws Deferred if the fetch failed and will be retried, or is not due
+     * @throws IOException if the fetch failed on its last attempt
+     */
+    byte[] bytesOf(Delivery delivery) throws IOException {
+        if (delivery.via() == FetchMode.PROXY && delivery.segment().length == 0) {
+            // ⚠️ M10.2, ADR-0073: A PROXY EVENT OVER HTTP CARRIES COORDINATES
+            // ONLY. Decoding its empty array was the pre-M10 behaviour, and a
+            // zero-length segment fails its footer check -- so every batch
+            // above the inline cap was lost to a consumer reached over HTTP.
+            // An in-process subscriber is handed the assembled bytes and is
+            // not fetched again.
+            requireSource(delivery, "proxy", "a consumer reached over HTTP fetches it from "
+                    + "its ingester (M10.2)");
+            return retried(delivery, () -> source.fetchSegment(delivery.segmentKey()));
+        }
+        if (delivery.via() != FetchMode.DIRECT) {
+            return delivery.segment();
+        }
+        requireSource(delivery, "direct", "a deployment enabling `direct` builds one (M5.45g)");
+        return retried(delivery, () -> source.fetch(delivery.grant()));
+    }
+
+    private void requireSource(Delivery delivery, String mode, String remedy) {
+        if (source == null) {
+            throw new IllegalStateException("segment " + delivery.segmentKey() + " was served `"
+                    + mode + "` to a consumer with no segment source; " + remedy);
+        }
+    }
+
+    @FunctionalInterface
+    private interface Fetch {
+        byte[] get() throws IOException;
+    }
+
+    private byte[] retried(Delivery delivery, Fetch fetch) throws IOException {
+        synchronized (this) {
+            if (owed.compareTo(Duration.ZERO) > 0) {
+                throw new Deferred("segment " + delivery.segmentKey() + " is backing off", null,
+                        false);
+            }
+        }
+        byte[] bytes;
+        try {
+            bytes = fetch.get();
+        } catch (IOException failed) {
+            throw failedAttempt(delivery, failed);
+        }
+        synchronized (this) {
+            failures = 0;
+            backoff = retry.floor();
+        }
+        return bytes;
+    }
+
+    private synchronized RuntimeException failedAttempt(Delivery delivery, IOException failed)
+            throws IOException {
+        failures++;
+        if (failures >= retry.maxAttempts()) {
+            // ⚠️ RESET AS IT SURFACES, so an operator's resume starts a fresh
+            // round of attempts at the same head rather than surfacing again
+            // on its first poll.
+            int attempts = failures;
+            failures = 0;
+            backoff = retry.floor();
+            throw new IOException("segment " + delivery.segmentKey() + " could not be fetched "
+                    + "(attempt " + attempts + " of " + attempts + "): " + failed.getMessage(),
+                    failed);
+        }
+        owed = Duration.ofMillis(HttpSubscriptionTransport.jitteredMillis(backoff));
+        backoff = HttpSubscriptionTransport.grow(backoff, retry.ceiling());
+        LOG.log(System.Logger.Level.WARNING, "segment {0} fetch attempt {1} of {2} failed, "
+                + "retrying in {3}: {4}", delivery.segmentKey(), failures, retry.maxAttempts(),
+                owed, failed.getMessage());
+        return new Deferred("segment " + delivery.segmentKey() + " fetch failed", failed, true);
+    }
+
+    /**
+     * Waits out as much of the owed backoff as {@code timeout} allows.
+     *
+     * <p>⚠️ NEVER LONGER THAN THE TIMEOUT, and not at all for a zero one.
+     */
+    void awaitBackoff(Duration timeout) throws InterruptedException {
+        Duration wait;
+        synchronized (this) {
+            wait = owed.compareTo(timeout) < 0 ? owed : timeout;
+        }
+        if (wait.compareTo(Duration.ZERO) <= 0) {
+            return;
+        }
+        retry.sleeper().sleep(wait);
+        synchronized (this) {
+            owed = owed.minus(wait).isNegative() ? Duration.ZERO : owed.minus(wait);
+        }
+    }
+}

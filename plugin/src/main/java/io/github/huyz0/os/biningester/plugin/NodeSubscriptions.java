@@ -58,6 +58,8 @@ public final class NodeSubscriptions implements AutoCloseable {
      */
     private final io.github.huyz0.os.biningester.client.SegmentSource nodeSegmentSource;
 
+    private final io.github.huyz0.os.biningester.client.SegmentFetchRetry fetchRetry;
+
     /**
      * ⚠️ ONE SUBSCRIBER FOR THE WHOLE NODE (M5.62), and the identity is the
      * point. {@code SubscriptionHub} groups by {@code Subscriber} IDENTITY, so
@@ -251,6 +253,18 @@ public final class NodeSubscriptions implements AutoCloseable {
      */
     public NodeSubscriptions(SubscriptionTransport transport, int queueCapacity,
             io.github.huyz0.os.biningester.client.SegmentSource nodeSegmentSource) {
+        this(transport, queueCapacity, nodeSegmentSource,
+                io.github.huyz0.os.biningester.client.SegmentFetchRetry.DEFAULT);
+    }
+
+    /**
+     * @param fetchRetry how every client on this node retries a failed segment
+     *     fetch (M10.23)
+     */
+    public NodeSubscriptions(SubscriptionTransport transport, int queueCapacity,
+            io.github.huyz0.os.biningester.client.SegmentSource nodeSegmentSource,
+            io.github.huyz0.os.biningester.client.SegmentFetchRetry fetchRetry) {
+        this.fetchRetry = Objects.requireNonNull(fetchRetry, "fetchRetry");
         this.transport = Objects.requireNonNull(transport, "transport");
         this.metrics = transport instanceof io.github.huyz0.os.biningester.client.HttpSubscriptionTransport http
                 ? http.metrics() : new io.github.huyz0.os.biningester.client.SubscriptionMetrics();
@@ -303,7 +317,8 @@ public final class NodeSubscriptions implements AutoCloseable {
             // ⚠️ THE FED CONSTRUCTOR, holding no subscription of its own:
             // `nodeListener` is what this node is subscribed with, and a client
             // that closed a subscription would close every other run's with it.
-            ConsumerClient client = new ConsumerClient(k, queueCapacity, nodeSegmentSource);
+            ConsumerClient client =
+                    new ConsumerClient(k, queueCapacity, nodeSegmentSource, fetchRetry);
             java.util.function.BiConsumer<RunKey,
                     io.github.huyz0.os.biningester.client.DeliveryGapException> handler = gapHandler;
             if (handler != null) {

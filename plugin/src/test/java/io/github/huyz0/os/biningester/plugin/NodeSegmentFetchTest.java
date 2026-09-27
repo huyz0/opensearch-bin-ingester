@@ -7,6 +7,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.github.huyz0.os.biningester.client.ConsumerClient;
 import io.github.huyz0.os.biningester.client.ConsumerRecord;
 import io.github.huyz0.os.biningester.client.Delivery;
+import io.github.huyz0.os.biningester.client.SegmentFetchRetry;
 import io.github.huyz0.os.biningester.client.SegmentSource;
 import io.github.huyz0.os.biningester.client.SubscriptionTransport;
 import io.github.huyz0.os.biningester.format.FetchMode;
@@ -351,8 +352,14 @@ class NodeSegmentFetchTest {
                 new IOException("the grant expired"));
         NodeSegmentSource nodeSource = new NodeSegmentSource(delegate, 1L << 20);
         OneListenerTransport transport = new OneListenerTransport();
+        // ⚠️ ONE ATTEMPT, so each run's failure surfaces on the poll that met
+        // it (M10.23): the retry is the client's own case, and this one pins
+        // that a failure fails every run rather than being held for them.
+        SegmentFetchRetry oneAttempt =
+                new SegmentFetchRetry(Duration.ofSeconds(1), Duration.ofSeconds(1), 1, wait -> { });
 
-        try (NodeSubscriptions node = new NodeSubscriptions(transport, 16, nodeSource)) {
+        try (NodeSubscriptions node =
+                new NodeSubscriptions(transport, 16, nodeSource, oneAttempt)) {
             List<ConsumerClient> clients = new ArrayList<>();
             for (RunKey key : keys) {
                 clients.add(node.clientFor(key));
@@ -373,5 +380,33 @@ class NodeSegmentFetchTest {
                 .as("a failure is not held, so each run tries again rather than inheriting an "
                         + "empty array -- %d runs, %d attempts", keys.size(), keys.size())
                 .isEqualTo(keys.size());
+    }
+
+    /**
+     * A node built WITHOUT a policy retries: its clients take
+     * {@code SegmentFetchRetry.DEFAULT}, so a failed fetch is an empty poll
+     * rather than the pause a one-attempt default would restore (M10.23).
+     *
+     * <p>⚠️ ZERO TIMEOUT, so nothing sleeps: the poll that fetched owes the
+     * caller no wait, and the one after it is due no retry yet.
+     */
+    @Test
+    void aDefaultConstructedNodeRetriesRatherThanSurfacingAFailedFetch() throws Exception {
+        RunKey key = runs(1).get(0);
+        CountingSource delegate = new CountingSource(Map.of(),
+                new IOException("the store answered 503"));
+        OneListenerTransport transport = new OneListenerTransport();
+
+        try (NodeSubscriptions node = new NodeSubscriptions(transport, 16,
+                new NodeSegmentSource(delegate, 1L << 20))) {
+            ConsumerClient client = node.clientFor(key);
+            transport.deliver(directDelivery(key, SEGMENT_KEY));
+
+            assertThat(client.readNext(Duration.ZERO)).as("retried, not surfaced").isEmpty();
+            assertThat(client.readNext(Duration.ZERO)).as("and not refetched before its backoff")
+                    .isEmpty();
+            assertThat(client.queuedDeliveries()).as("still at the head").isEqualTo(1);
+        }
+        assertThat(delegate.fetches()).isEqualTo(1);
     }
 }

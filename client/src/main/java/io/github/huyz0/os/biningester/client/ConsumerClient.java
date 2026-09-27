@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.client;
 
-import io.github.huyz0.os.biningester.format.FetchMode;
 import io.github.huyz0.os.biningester.format.RunEntry;
 import io.github.huyz0.os.biningester.format.RunKey;
 import io.github.huyz0.os.biningester.format.SegmentReader;
@@ -43,7 +42,7 @@ public final class ConsumerClient implements AutoCloseable {
     private final ConsumerDeliveryQueues deliveryQueues;
     private final AutoCloseable subscription;
     private final RunKey key;
-    private final SegmentSource segmentSource;
+    private final SegmentFetcher fetcher;
 
     /**
      * The offset the NEXT delivery must start at, or {@code -1} before the
@@ -119,7 +118,13 @@ public final class ConsumerClient implements AutoCloseable {
 
     public ConsumerClient(SubscriptionTransport transport, RunKey key, int queueCapacity,
             SegmentSource segmentSource) {
-        this(key, queueCapacity, segmentSource,
+        this(transport, key, queueCapacity, segmentSource, SegmentFetchRetry.DEFAULT);
+    }
+
+    /** A subscribing client whose failed segment fetches are retried under {@code retry}. */
+    public ConsumerClient(SubscriptionTransport transport, RunKey key, int queueCapacity,
+            SegmentSource segmentSource, SegmentFetchRetry retry) {
+        this(key, queueCapacity, segmentSource, retry,
                 client -> Objects.requireNonNull(transport, "transport")
                         .subscribe(key, client.listener()));
     }
@@ -142,12 +147,19 @@ public final class ConsumerClient implements AutoCloseable {
      * the owner's to do.
      */
     public ConsumerClient(RunKey key, int queueCapacity, SegmentSource segmentSource) {
-        this(key, queueCapacity, segmentSource, client -> () -> { });
+        this(key, queueCapacity, segmentSource, SegmentFetchRetry.DEFAULT);
+    }
+
+    /** A fed client whose failed segment fetches are retried under {@code retry} (M10.23). */
+    public ConsumerClient(RunKey key, int queueCapacity, SegmentSource segmentSource,
+            SegmentFetchRetry retry) {
+        this(key, queueCapacity, segmentSource, retry, client -> () -> { });
     }
 
     private ConsumerClient(RunKey key, int queueCapacity, SegmentSource segmentSource,
+            SegmentFetchRetry retry,
             java.util.function.Function<ConsumerClient, AutoCloseable> subscribe) {
-        this.segmentSource = segmentSource;
+        this.fetcher = new SegmentFetcher(segmentSource, retry);
         this.key = Objects.requireNonNull(key, "key");
         if (queueCapacity <= 0) {
             throw new IllegalArgumentException("queue capacity must be positive");
@@ -472,18 +484,61 @@ public final class ConsumerClient implements AutoCloseable {
      * The next record, or empty if none arrived within {@code pollTimeout}.
      *
      * <p>WARNING: blocks for the WHOLE timeout when nothing arrives.
+     *
+     * <p>⚠️ A FAILED SEGMENT FETCH IS AN EMPTY POLL, NOT A THROW (M10.23,
+     * research 02 §6): the delivery stays at the head and a later call retries
+     * it once its backoff is served -- see {@link SegmentFetcher} for why the
+     * retry is not made within this call's deadline. It throws only once the
+     * policy's attempts are spent, or for a segment that will not decode.
      */
     public Optional<ConsumerRecord> readNext(Duration pollTimeout) throws InterruptedException {
-        return deliveryQueues.readNext(pollTimeout);
+        try {
+            return deliveryQueues.readNext(pollTimeout);
+        } catch (SegmentFetcher.Deferred deferred) {
+            // ⚠️ A CALL THAT FETCHED WAITS NO FURTHER: it may already have
+            // blocked on the queue and on the fetch, and waiting out the new
+            // backoff on top could hold the caller past its timeout.
+            if (!deferred.attempted()) {
+                fetcher.awaitBackoff(pollTimeout);
+            }
+            return Optional.empty();
+        }
     }
 
     private boolean decodeAndReportGap(Delivery delivery, Deque<ConsumerRecord> out,
             boolean replay) {
+        // ⚠️ DECODED BEFORE ANY OFFSET IS COMMITTED (M10.23). `reportAnyGap`
+        // advances the expected offset, so a fetch failing after it would
+        // leave its retry looking like a duplicate of itself -- dropped, and
+        // the window with it. Decoding first leaves a throw touching nothing.
+        Deque<ConsumerRecord> decoded = null;
+        if (wouldDecode(delivery, replay)) {
+            decoded = new java.util.ArrayDeque<>();
+            decodeInto(delivery, decoded);
+        }
         boolean decode = reportAnyGap(delivery, replay);
         if (decode) {
-            decodeInto(delivery, out);
+            if (decoded == null) {
+                // ⚠️ NEVER A DECODE AFTER THE COMMIT: one that threw here would
+                // leave its retry reading as a duplicate -- the drop above.
+                throw new IllegalStateException("delivery at " + delivery.firstOffset()
+                        + " was decoded without being fetched first");
+            }
+            out.addAll(decoded);
         }
         return decode || !gapRepairPending;
+    }
+
+    /**
+     * Whether {@link #reportAnyGap} will decode this delivery, read without
+     * committing anything: first, in order, replayed, or a gap nobody repairs.
+     */
+    private boolean wouldDecode(Delivery delivery, boolean replay) {
+        long expected = expectedNextOffset;
+        if (replay || expected < 0 || delivery.firstOffset() == expected) {
+            return true;
+        }
+        return delivery.firstOffset() > expected && gapHandler == null;
     }
 
     /**
@@ -603,7 +658,7 @@ public final class ConsumerClient implements AutoCloseable {
 
     private void decodeInto(Delivery delivery, Deque<ConsumerRecord> out) {
         try {
-            SegmentReader reader = SegmentReader.open(bytesOf(delivery));
+            SegmentReader reader = SegmentReader.open(fetcher.bytesOf(delivery));
             RunEntry entry = reader.find(key).orElseThrow(
                     () -> new IOException("segment " + delivery.segmentKey()
                             + " carries no run for " + key));
@@ -619,48 +674,6 @@ public final class ConsumerClient implements AutoCloseable {
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
-    }
-
-    /**
-     * The segment's bytes: carried on the delivery, fetched by key from the
-     * ingester for an empty {@code proxy} delivery, or fetched under a grant.
-     *
-     * <p>⚠️ A FAILED FETCH PROPAGATES. Catching it and returning an empty array
-     * would have {@code readNext} report an ordinary empty poll while a whole
-     * window went missing -- the caller is told the stream is healthy and the
-     * records are simply gone. An expired grant and a 403 are the NORMAL
-     * failures on this path rather than the corrupt-segment case, so the quiet
-     * handling is the likely one and is what this method refuses.
-     *
-     * <p>⚠️ AND NO SOURCE IS AN {@code IllegalStateException}, not a silent
-     * empty stream: it is the mirror of {@code SubscriptionHub}'s null-issuer
-     * guard, and a pod that elects {@code direct} for a consumer built without
-     * a source is a misconfiguration an operator must see.
-     */
-    private byte[] bytesOf(Delivery delivery) throws IOException {
-        if (delivery.via() == FetchMode.PROXY && delivery.segment().length == 0) {
-            // ⚠️ M10.2, ADR-0073: A PROXY EVENT OVER HTTP CARRIES COORDINATES
-            // ONLY. Decoding its empty array was the pre-M10 behaviour, and a
-            // zero-length segment fails its footer check -- so every batch
-            // above the inline cap was lost to a consumer reached over HTTP.
-            // An in-process subscriber is handed the assembled bytes and is
-            // not fetched again.
-            if (segmentSource == null) {
-                throw new IllegalStateException("segment " + delivery.segmentKey()
-                        + " was served `proxy` to a consumer with no segment source; a "
-                        + "consumer reached over HTTP fetches it from its ingester (M10.2)");
-            }
-            return segmentSource.fetchSegment(delivery.segmentKey());
-        }
-        if (delivery.via() != FetchMode.DIRECT) {
-            return delivery.segment();
-        }
-        if (segmentSource == null) {
-            throw new IllegalStateException("segment " + delivery.segmentKey()
-                    + " was served `direct` to a consumer with no segment source; a deployment "
-                    + "enabling `direct` builds one (M5.45g)");
-        }
-        return segmentSource.fetch(delivery.grant());
     }
 
     /** How many deliveries are queued but not yet decoded. */

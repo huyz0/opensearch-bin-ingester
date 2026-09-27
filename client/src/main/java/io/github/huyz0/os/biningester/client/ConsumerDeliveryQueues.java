@@ -23,6 +23,7 @@ final class ConsumerDeliveryQueues {
     private final Semaphore gapReplayAvailable = new Semaphore(0);
     private final Object deliveryLock = new Object();
     private final Object liveDecodeLock = new Object();
+    private final Object catchUpDecodeLock = new Object();
     private final CatchUpDeliveryLane catchUp;
     private final Deque<ConsumerRecord> readyLive = new ArrayDeque<>();
     private final Deque<ConsumerRecord> readyCatchUp = new ArrayDeque<>();
@@ -225,7 +226,22 @@ final class ConsumerDeliveryQueues {
                     return false;
                 }
             }
-            boolean consumed = decoder.decode(delivery, readyLive, false);
+            boolean consumed;
+            try {
+                consumed = decoder.decode(delivery, readyLive, false);
+            } catch (RuntimeException failed) {
+                // ⚠️ M10.23, THE M10.2 REVIEW's R3: A THROWING DECODE RETURNS
+                // ITS PERMITS. The delivery is still at the head, and without
+                // them nothing could reach it again -- the next poll would be
+                // an ordinary empty poll over a queue that is not empty. So a
+                // fetch that will be retried, and a corrupt segment the caller
+                // resumes past the pause of, are both read again from here.
+                synchronized (deliveryLock) {
+                    liveAvailable.release();
+                    deliveryAvailable.release();
+                }
+                throw failed;
+            }
             synchronized (deliveryLock) {
                 if (consumed) {
                     if (live.poll() != delivery) {
@@ -243,6 +259,14 @@ final class ConsumerDeliveryQueues {
     }
 
     private boolean tryLoadCatchUp(boolean globalPermitHeld) {
+        // ⚠️ ONE DECODE OF THE HEAD AT A TIME, now that the head stays queued
+        // while it decodes: two readers would otherwise both peek it.
+        synchronized (catchUpDecodeLock) {
+            return loadCatchUpHead(globalPermitHeld);
+        }
+    }
+
+    private boolean loadCatchUpHead(boolean globalPermitHeld) {
         Delivery delivery;
         synchronized (deliveryLock) {
             if (!catchUp.tryAcquireDelivery()) {
@@ -252,7 +276,7 @@ final class ConsumerDeliveryQueues {
                 catchUp.restoreDeliveryPermit();
                 return false;
             }
-            delivery = catchUp.poll();
+            delivery = catchUp.peek();
             if (delivery == null) {
                 catchUp.restoreDeliveryPermit();
                 if (!globalPermitHeld) {
@@ -261,7 +285,23 @@ final class ConsumerDeliveryQueues {
                 return false;
             }
         }
-        decoder.decode(delivery, readyCatchUp, true);
+        // ⚠️ PEEKED, AND TAKEN ONLY ONCE IT DECODED (M10.23), as the live lane
+        // does: polled first, a replay delivery whose fetch failed was gone,
+        // and its records with it.
+        try {
+            decoder.decode(delivery, readyCatchUp, true);
+        } catch (RuntimeException failed) {
+            synchronized (deliveryLock) {
+                catchUp.restoreDeliveryPermit();
+                deliveryAvailable.release();
+            }
+            throw failed;
+        }
+        synchronized (deliveryLock) {
+            if (catchUp.poll() != delivery) {
+                throw new IllegalStateException("catch-up delivery queue head changed");
+            }
+        }
         return true;
     }
 }
