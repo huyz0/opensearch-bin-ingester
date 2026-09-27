@@ -37,6 +37,31 @@ public final class Accumulator {
     private long firstAppendMillis = -1;
     private double lastFillRatio;
 
+    /**
+     * ⚠️ M10.7; ADR-0074 decision 3: the OLDEST buffered record's append time
+     * PER BUFFERED LANE: {@code bufferedLanes[i]} was first appended at
+     * {@code oldestByLane[i]}, for the first {@code laneCount} slots. The
+     * oldest, never the latest, for the reason the class comment gives for
+     * {@link #firstAppendMillis}: a lane whose clock restarted on every append
+     * would never be due under a steady stream of that lane.
+     * ⚠️ ONLY THE LANES ACTUALLY BUFFERED, because both {@link #add} (through
+     * {@link #isFlushDue()}) and every flush-loop wake scan them under the
+     * ingest lock: a slot per possible {@code i8} made that 256 per RECORD. The
+     * active set is at most 8 (FR-18), so the scan is at most 8 and is over
+     * lanes, never over records, streams or indices; the arrays grow only for
+     * a caller that bypasses the active set.
+     */
+    private byte[] bufferedLanes = new byte[8];
+    private long[] oldestByLane = new long[8];
+    private int laneCount;
+
+    /**
+     * ⚠️ The highest lane buffered, {@link Byte#MIN_VALUE} when empty. VOLATILE
+     * for the same reason as {@link #currentInterval}: {@link #flushSpacing()}
+     * is read by the cost governor off the ingest lock (ADR-0075 §3).
+     */
+    private volatile byte highestLane = Byte.MIN_VALUE;
+
     // ⚠️ M3.3; ADR-0016 §2/§2b, carried forward by ADR-0017 -- see the M3
     // SPEC's own Design section for why "lengthen when sustained LOW,
     // shorten when HIGH" is the correct direction, not the reverse a naive
@@ -72,6 +97,10 @@ public final class Accumulator {
         if (firstAppendMillis < 0) {
             firstAppendMillis = now;
         }
+        noteLane(lane, now);
+        if (lane > highestLane) {
+            highestLane = lane;
+        }
         writer.add(key, record, now, lane);
         // ⚠️ An ESTIMATE of the framed size, not the payload length: the id, the
         // version and the length prefixes are bytes in the object too, and a
@@ -99,13 +128,83 @@ public final class Accumulator {
         if (bufferedBytes >= config.maxSegmentBytes()) {
             return true;
         }
-        Duration waited = Duration.ofMillis(clock.millis() - firstAppendMillis);
-        // ⚠️ `>= 0` on the comparison: at EXACTLY the interval the flush is due.
-        // Strictly-greater delays every flush by one clock tick, which at 250 ms
-        // is a latency floor nobody would find by reading the code.
-        // ⚠️ M3.3: this instance's OWN adapted interval, not the config's
-        // floor straight -- starts at the floor and moves per `adaptInterval`.
-        return waited.compareTo(currentInterval) >= 0;
+        // ⚠️ `<= 0` remaining, not `< 0`: at EXACTLY the deadline the flush is
+        // due. Strictly-greater delays every flush by one clock tick, which at
+        // 250 ms is a latency floor nobody would find by reading the code.
+        // ⚠️ M3.3: every deadline is taken from this instance's OWN adapted
+        // interval, not the config's floor straight (see `deadlineMillis`).
+        return millisUntilDue() <= 0;
+    }
+
+    /**
+     * ⚠️ M10.7; ADR-0074 decision 3: how long lane {@code lane}'s oldest record
+     * may wait. A lane-0-only buffer is due at the adaptive interval exactly as
+     * before M10 (ADR-0017), and every other lane is measured against the same
+     * adapted value:
+     * <ul>
+     * <li>{@code +l}: {@code max(floor, interval ÷ 2^l)} -- ⚠️ never the floor
+     *     straight, which ADR-0074 rejects at 20x NFR-1, and never below it;
+     * <li>{@code 0}: the adaptive interval;
+     * <li>negative: the CEILING, whatever the interval -- its anti-starvation
+     *     bound, and NFR-7's divisor (ADR-0063). A negative lane that waited
+     *     only for something else to flush would have no bound at all.
+     * </ul>
+     */
+    private long deadlineMillis(int lane) {
+        long interval = currentInterval.toMillis();
+        if (lane > 0) {
+            return Math.max(config.intervalFloor().toMillis(), interval >> lane);
+        }
+        return lane == 0 ? interval : config.intervalCeiling().toMillis();
+    }
+
+    /**
+     * The flush spacing this buffer is scheduled at, for the cost governor
+     * (ADR-0075 §3): {@code max(floor, adaptiveInterval ÷ 2^L)} where L is the
+     * highest POSITIVE lane buffered, and the adaptive interval when none is.
+     * ⚠️ A negative lane never shortens it: its deadline is the ceiling, so it
+     * never makes a flush sooner than lane 0 would.
+     */
+    public Duration flushSpacing() {
+        int l = Math.max(0, highestLane);
+        long floor = config.intervalFloor().toMillis();
+        return Duration.ofMillis(Math.max(floor, currentInterval.toMillis() >> l));
+    }
+
+    /**
+     * Millis on the injected clock until the EARLIEST buffered lane's deadline,
+     * {@code 0} once one has passed, {@link Long#MAX_VALUE} when empty -- what
+     * the flush loop waits for, so a +2 record wakes it at its own deadline
+     * rather than at the next poll. ⚠️ The size trigger is not in it: that one
+     * is checked by the append that crosses it.
+     */
+    public long millisUntilDue() {
+        if (isEmpty()) {
+            return Long.MAX_VALUE;
+        }
+        long now = clock.millis();
+        long earliest = Long.MAX_VALUE;
+        for (int i = 0; i < laneCount; i++) {
+            earliest = Math.min(earliest,
+                    oldestByLane[i] + deadlineMillis(bufferedLanes[i]) - now);
+        }
+        return Math.max(0, earliest);
+    }
+
+    /** Records {@code lane}'s first append at {@code now}; a later one keeps the oldest. */
+    private void noteLane(byte lane, long now) {
+        for (int i = 0; i < laneCount; i++) {
+            if (bufferedLanes[i] == lane) {
+                return;
+            }
+        }
+        if (laneCount == bufferedLanes.length) {
+            bufferedLanes = java.util.Arrays.copyOf(bufferedLanes, laneCount * 2);
+            oldestByLane = java.util.Arrays.copyOf(oldestByLane, laneCount * 2);
+        }
+        bufferedLanes[laneCount] = lane;
+        oldestByLane[laneCount] = now;
+        laneCount++;
     }
 
     /** This instance's own current flush interval -- the floor until fillRatio earns otherwise. */
@@ -157,6 +256,8 @@ public final class Accumulator {
         writer = new SegmentWriter();
         bufferedBytes = 0;
         firstAppendMillis = -1;
+        laneCount = 0;
+        highestLane = Byte.MIN_VALUE;
         return java.util.Optional.of(segment);
     }
 

@@ -100,6 +100,13 @@ public final class DefaultIngest implements Ingest {
     private final Condition work = lock.newCondition();
 
 
+    /**
+     * The spacing that governed the batch being flushed, {@link Long#MAX_VALUE}
+     * when none is (M10.7); see {@link #flushSpacingMillis()}. Written under
+     * {@link #lock}, read off it.
+     */
+    private volatile long inFlightSpacingMillis = Long.MAX_VALUE;
+
     /** Delivers durable segments to subscribers, in order, off {@link #lock}. */
     private final PushQueue pushQueue;
 
@@ -207,7 +214,10 @@ public final class DefaultIngest implements Ingest {
         // knows which epoch it may write to.
 
         this.flushes = new FlushCoordinator(lock, work, this::flushBatch,
-                batch -> accumulator.adoptAdaptiveStateFrom(batch.accumulator()));
+                batch -> {
+                    accumulator.adoptAdaptiveStateFrom(batch.accumulator());
+                    inFlightSpacingMillis = Long.MAX_VALUE;
+                });
         this.pushQueue = new PushQueue(hub, serving, config.maxQueuedPushBytes());
         this.flusher = Thread.ofVirtual().name("binstore-flush").start(this::flushLoop);
     }
@@ -388,11 +398,24 @@ public final class DefaultIngest implements Ingest {
                     enqueueFlushLocked();
                     continue;
                 }
+                // ⚠️ A quarter of the floor, so the trigger is noticed promptly
+                // without polling; an append signals this condition as well, so
+                // the wait is an upper bound rather than a poll. ⚠️ M10.7: and
+                // no later than the EARLIEST buffered lane's deadline, read off
+                // the INJECTED clock (ADR-0074 decision 3), so a +2 record wakes
+                // the loop at its own deadline. ⚠️ ONLY WHEN THE CHECK ABOVE
+                // COULD FLUSH, i.e. with a waiter and no flush queued; in any
+                // other state a past deadline answers 0 and the loop would spin
+                // at the 1 ms minimum doing nothing: behind a queued flush until
+                // it signals, and -- with NO waiter -- for ever, since records a
+                // throwing RecordSource left buffered have nobody to flush them.
+                long waitMillis = config.intervalFloor().toMillis() / 4;
+                if (!pending.isEmpty() && !flushes.isQueued()) {
+                    waitMillis = Math.min(waitMillis, accumulator.millisUntilDue());
+                }
                 try {
-                    // ⚠️ A quarter of the interval, so the trigger is noticed
-                    // promptly without polling; an append signals this condition
-                    // as well, so the wait is an upper bound rather than a poll.
-                    work.awaitNanos(Math.max(1_000_000L, config.intervalFloor().toNanos() / 4));
+                    work.awaitNanos(Math.max(1_000_000L,
+                            TimeUnit.MILLISECONDS.toNanos(waitMillis)));
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     return;
@@ -414,6 +437,10 @@ public final class DefaultIngest implements Ingest {
         bufferedPerStream.clear();
         Accumulator detached = accumulator;
         accumulator = accumulator.emptyCopy();
+        // ⚠️ TAKEN BEFORE THE DRAIN, which resets the detached buffer's lanes:
+        // the governor samples the spacing at this batch's data PUT, and by
+        // then both buffers would answer as if no +2 record had been written.
+        inFlightSpacingMillis = detached.flushSpacing().toMillis();
         return flushes.enqueue(batch, detached);
     }
 
@@ -461,14 +488,18 @@ public final class DefaultIngest implements Ingest {
 
     /**
      * The flush spacing in force, in millis, for the cost governor (M10.11,
-     * ADR-0075 §3): the ACTIVE buffer's adaptive interval, never below the floor.
-     * ⚠️ The active buffer's, not the detached one mid-flush, which has already
-     * adapted past the interval that made the flush due. ⚠️ No lane term yet:
-     * every record is lane 0 until M10.7's deadlines, which refine this.
+     * ADR-0075 §3): the ACTIVE buffer's {@code max(floor, adaptiveInterval ÷
+     * 2^L)}, L the highest positive lane it holds (M10.7), so a +2 trickle's
+     * four flushes per ceiling are expected rather than read as a regression.
+     * ⚠️ AND THE SMALLER OF THAT AND THE BATCH IN FLIGHT's, captured when it
+     * was detached: the governor samples this AT the data PUT, when the active
+     * buffer is empty and the detached one drained, so the active buffer alone
+     * answered the ceiling for every +2 flush (M10.7 review). Cleared when the
+     * flush completes. ⚠️ Not the detached buffer's LIVE interval, which has
+     * already adapted past the one that made the flush due.
      */
     public long flushSpacingMillis() {
-        return Math.max(config.intervalFloor().toMillis(),
-                accumulator.currentInterval().toMillis());
+        return Math.min(accumulator.flushSpacing().toMillis(), inFlightSpacingMillis);
     }
 
     /** The shared serving proxy, for the composition root's cache prefetcher. */

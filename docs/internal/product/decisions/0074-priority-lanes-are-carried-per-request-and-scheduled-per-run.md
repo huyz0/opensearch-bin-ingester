@@ -52,7 +52,12 @@ and what each pipeline stage does with it. Four facts constrain the answer:
    active lane may exceed `+2`, never more than 8. With no positive-lane traffic the bound stays at 2.
    An operator buys latency with PUTs knowingly, by enabling a lane.
 5. **Push** follows lanes: a flushed segment's runs are pushed to subscribers
-   highest lane first.
+   highest lane first, the lanes read from the segment's own directory.
+   ⚠️ **Stated in M10.7:** only for a segment the publishing pod HOLDS. A
+   batched delta also names other pods' segments, whose directories are in
+   the store; ordering those would cost a GET per foreign segment before any
+   sink opens, so their runs are pushed in key order: a segment is
+   lane-ordered by its writer's push, and not by another pod relaying it.
 6. **Admission** is weighted fair share with a floor over an in-flight budget
    (`ingest.admission.maxInFlightBulk`, default 256 concurrent `_bulk`
    requests). Lane `l`'s share is `budget × 2^l ÷ Σ_active 2^k`, its floor

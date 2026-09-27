@@ -98,7 +98,10 @@ final class SegmentServingPath {
         // other. So this is a choice about debuggability, not a pinned
         // property -- said plainly rather than dressed as a constraint.
         Map<ByIdentity, List<RunCommit>> byConsumer = new LinkedHashMap<>();
-        for (RunCommit run : committed.runs()) {
+        // ⚠️ HIGHEST LANE FIRST (M10.7; ADR-0074 decision 5). Grouping follows
+        // this order, so both the order of consumers and each consumer's own
+        // run list put a +2 run before a lane-0 one and a negative run last.
+        for (RunCommit run : laneOrdered(committed.runs(), heldBytes)) {
             for (Subscriber subscriber : hub.subscribersFor(run.key())) {
                 byConsumer.computeIfAbsent(new ByIdentity(subscriber), k -> new ArrayList<>())
                         .add(run);
@@ -179,6 +182,43 @@ final class SegmentServingPath {
             case DIRECT -> deliver(committed.segmentKey(), targets, FetchMode.DIRECT,
                     sinks -> { }, serving.issuer(), sequencerEpoch, chainSequence);
         }
+    }
+
+    /**
+     * A segment's runs, highest lane first, ties in directory (key) order.
+     *
+     * <p>⚠️ ONLY THE PUSH ORDER MOVES. The data blocks stay in key order --
+     * ADR-0074 rejects a lane-ordered layout -- and the lanes come from the
+     * segment's own DIRECTORY (M10.5), read from the bytes this pod already
+     * holds: parsing it checks one CRC over the directory and reads no record.
+     *
+     * <p>⚠️ A SEGMENT THIS POD DOES NOT HOLD STAYS IN KEY ORDER. Its directory
+     * is in the store, and the order must be known before any sink is opened,
+     * so ordering it would buy a GET per foreign segment per publish -- ahead
+     * of the one read that streams it -- for a delta this pod merely relays.
+     * ⚠️ And held bytes that do not parse fall back to key order rather than
+     * failing the push: lane order is a scheduling preference, and this is a
+     * commit that is already durable.
+     */
+    private static List<RunCommit> laneOrdered(List<RunCommit> runs, byte[] heldBytes) {
+        if (heldBytes == null || runs.size() < 2) {
+            return runs;
+        }
+        Map<io.github.huyz0.os.biningester.format.RunKey, Byte> lanes = new java.util.HashMap<>();
+        try {
+            for (io.github.huyz0.os.biningester.format.RunEntry e
+                    : io.github.huyz0.os.biningester.format.SegmentReader.open(heldBytes)
+                            .directory()) {
+                lanes.put(e.key(), e.lane());
+            }
+        } catch (IOException unreadable) {
+            return runs;
+        }
+        List<RunCommit> ordered = new ArrayList<>(runs);
+        // ⚠️ STABLE, so equal lanes keep the directory's key order.
+        ordered.sort(java.util.Comparator.comparingInt(
+                (RunCommit r) -> lanes.getOrDefault(r.key(), (byte) 0)).reversed());
+        return ordered;
     }
 
     /**
