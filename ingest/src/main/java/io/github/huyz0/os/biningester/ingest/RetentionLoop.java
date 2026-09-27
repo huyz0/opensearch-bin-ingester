@@ -91,6 +91,8 @@ import java.util.Set;
  */
 public final class RetentionLoop {
 
+    private static final System.Logger LOG = System.getLogger(RetentionLoop.class.getName());
+
     /** How often a node looks for something to collect. */
     public static final Duration DEFAULT_PASS_INTERVAL = Duration.ofMinutes(1);
 
@@ -351,6 +353,14 @@ public final class RetentionLoop {
                     // the inbox unread -- a governor refusal included, since the
                     // sweep's inbox read is discretionary (M10.11) -- so no hour is
                     // safe to sweep this tick, and none is advanced past
+                    if (unread instanceof io.github.huyz0.os.biningester.binstore.GovernorRefusedException) {
+                        // ⚠️ SAID, NOT SILENT (M10.27): a sweep deferred tick after
+                        // tick by a drained LIST bucket is storage growing, and
+                        // this is the only place that knows why.
+                        LOG.log(System.Logger.Level.WARNING, () -> "the orphan sweep's inbox "
+                                + "read was refused by the cost governor; no hour is swept "
+                                + "this tick and none is skipped");
+                    }
                     return;
                 }
                 // ⚠️ AND THE CHAIN AGAIN, AFTER THE INBOX (review R1): a drain

@@ -83,6 +83,7 @@ public final class Assembly implements AutoCloseable {
     private final BinStore store;
     private final CountingBinStore counting;
     private final CostGovernor governor;
+    private final GovernorMetrics governorMetrics;
     private final HealthTrackingBinStore health;
     private final IngesterMetrics metrics;
     private final BinStore backend;
@@ -229,6 +230,7 @@ public final class Assembly implements AutoCloseable {
         // refuses never reached the store and is never counted as a request.
         GovernorWiring.Spacing spacing = new GovernorWiring.Spacing(config);
         this.governor = governorFactory.create(config, clock, spacing);
+        this.governorMetrics = GovernorMetrics.bind(governor);
         this.health = new HealthTrackingBinStore(new GoverningBinStore(counting, governor), clock,
                 HealthTrackingBinStore.DEFAULT_STALL, HealthTrackingBinStore.DEFAULT_FAILURES);
         this.store = health;
@@ -458,6 +460,10 @@ public final class Assembly implements AutoCloseable {
 
     IngesterMetrics metrics() {
         return metrics;
+    }
+
+    GovernorMetrics governorMetrics() {
+        return governorMetrics;
     }
 
     public SubscriptionHub hub() {

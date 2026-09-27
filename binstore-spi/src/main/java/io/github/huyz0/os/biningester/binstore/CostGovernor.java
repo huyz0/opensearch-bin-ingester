@@ -77,6 +77,34 @@ public final class CostGovernor {
     public record Counts(long listRefusals, long discretionaryRefusals, long recoveryLists) {
     }
 
+    /**
+     * Told of each refusal as it happens, so a pod can export it (M10.27,
+     * cost.md rule 17): the counts alone are read only when asked.
+     *
+     * <p>⚠️ **CALLED WHILE THE GOVERNOR's MONITOR IS HELD** for a LIST refusal
+     * and a discretionary one alike, so an implementation must be quick and
+     * must not call back into the governor. Incrementing a counter is both.
+     */
+    public interface RefusalListener {
+        /** One undeclared LIST was refused. */
+        void listRefused();
+
+        /** One request to start discretionary work was refused. */
+        void discretionaryRefused();
+    }
+
+    private static final RefusalListener SILENT = new RefusalListener() {
+        @Override
+        public void listRefused() {
+        }
+
+        @Override
+        public void discretionaryRefused() {
+        }
+    };
+
+    private volatile RefusalListener refusals = SILENT;
+
     private final Settings settings;
     private final Clock clock;
     private final LongSupplier spacingMillis;
@@ -139,6 +167,7 @@ public final class CostGovernor {
                 return true;
             }
             listRefusals++;
+            refusals.listRefused();
             return false;
         }
     }
@@ -160,6 +189,7 @@ public final class CostGovernor {
         boolean allowed = !killed && !halted;
         if (!allowed) {
             discretionaryRefusals++;
+            refusals.discretionaryRefused();
         }
         return allowed;
     }
@@ -188,6 +218,11 @@ public final class CostGovernor {
         halted = false;
         alarmed = false;
         LOG.log(System.Logger.Level.WARNING, "cost governor reset: discretionary work resumes");
+    }
+
+    /** Replaces the listener told of each refusal; one per governor. */
+    public void onRefusal(RefusalListener listener) {
+        this.refusals = Objects.requireNonNull(listener, "listener");
     }
 
     public synchronized Counts counts() {

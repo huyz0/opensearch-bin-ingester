@@ -174,4 +174,27 @@ class OrphanSweepGovernorTest {
                 .as("and the deferred pass runs once the halt lifts: nothing was skipped")
                 .isEmpty();
     }
+
+    @Test
+    void aREFUSEDInboxReadIsLOGGEDNotSilent() throws Exception {
+        RetentionLoop loop = loop(new CommitLog(backing, PREFIX + "/ctl/log", 1), () -> true);
+        loop.tick(); // the term is first seen at 10:30, so the sweep may start at 12:00
+        String orphan = orphanAt("2026-09-17T12:10:00Z");
+        // ⚠️ THE BURST DRAINED, so the inbox read -- the sweep's first LIST -- is refused.
+        assertThat(governor.admitList()).isTrue();
+        assertThat(governor.admitList()).isTrue();
+
+        clock.set(Instant.parse("2026-09-17T14:00:01Z"));
+        String logged = LogCapture.capturing(loop::tick);
+
+        assertThat(governor.counts().listRefusals())
+                .as("the premise: the inbox read reached the governor and was refused")
+                .isEqualTo(1);
+        assertThat(logged)
+                .as("⚠️ BEFORE M10.27 THIS RETURNED SILENTLY: a sweep deferred tick after "
+                        + "tick is storage growing with nothing saying why")
+                .contains("WARNING the orphan sweep's inbox read was refused by the cost "
+                        + "governor");
+        assertThat(backing.stat(orphan)).as("and nothing was swept").isPresent();
+    }
 }

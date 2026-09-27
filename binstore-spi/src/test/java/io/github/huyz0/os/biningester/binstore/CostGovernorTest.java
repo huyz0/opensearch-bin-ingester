@@ -247,4 +247,41 @@ class CostGovernorTest {
         assertThat(g.killSwitchTripped()).as("sticky across idle windows too").isTrue();
         assertThat(g.discretionaryAllowed()).isFalse();
     }
+
+    @Test
+    void theRefusalListenerIsToldOfEachRefusalAsItHappensAndOfNothingElse() {
+        CostGovernor governor = governor(1);
+        java.util.List<String> told = new java.util.ArrayList<>();
+        governor.onRefusal(new CostGovernor.RefusalListener() {
+            @Override
+            public void listRefused() {
+                told.add("list");
+            }
+
+            @Override
+            public void discretionaryRefused() {
+                told.add("discretionary");
+            }
+        });
+
+        assertThat(governor.admitList()).isTrue();
+        assertThat(governor.discretionaryAllowed()).isTrue();
+        assertThat(told).as("an admitted LIST and an allowed start are not refusals").isEmpty();
+
+        assertThat(governor.admitList()).isFalse();
+        // ⚠️ 10x the expected data PUTs in one window halts discretionary work.
+        spacingMillis.set(60_000);
+        for (int i = 0; i < 10; i++) {
+            governor.recordDataPut(SMALL);
+        }
+        clock.advance(Duration.ofSeconds(60));
+        assertThat(governor.discretionaryAllowed()).isFalse();
+
+        assertThat(told)
+                .as("⚠️ TOLD AS IT HAPPENS, one call per refusal of its class (M10.27): an "
+                        + "exporter reading only the counts sees nothing until asked")
+                .containsExactly("list", "discretionary");
+        assertThat(governor.counts().listRefusals()).isEqualTo(1);
+        assertThat(governor.counts().discretionaryRefusals()).isEqualTo(1);
+    }
 }

@@ -67,10 +67,14 @@ GC pause distribution; virtual-thread pinning events.
 subscriber count · `consumer_lag_seconds` quantiles.
 
 **Cost** — `binstore_requests_total{op,purpose,domain}` ·
-`binstore_requests_ratio_to_expected{purpose}` ·
+`binstore_governor_ratio_to_expected` (data PUTs, the one series the governor
+acts on) with `binstore_governor_alarm` and `binstore_governor_kill_switch` ·
 `binstore_cross_az_bytes_total{direction}` ·
 `binstore_estimated_usd_per_hour{domain}` ·
-`binstore_governor_refusals_total{class}` (**must be zero in steady state**).
+`binstore_governor_refusals_total` (**must be zero in steady state**), the sum of
+`binstore_governor_list_refusals_total` and
+`binstore_governor_discretionary_refusals_total` — two names, because `class`
+is not on rule 1's allow-list (M10.27).
 
 ⚠️ The dollar metric is an **estimate** from a per-provider `CostTable` and must be
 labelled so. Request counts are exact; prices are a lookup that goes stale.
