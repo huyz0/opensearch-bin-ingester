@@ -308,7 +308,12 @@ public final class DefaultIngest implements Ingest {
             }
             mine = new Pending(stream, before, count[0], new CompletableFuture<>());
             pending.add(mine);
-            if (accumulator.isFlushDue()) {
+            // ⚠️ M10.32: NEVER BEHIND A QUEUED FLUSH. The coordinator admits one
+            // batch at a time and answers a second with the first's future, so
+            // detaching here while one is queued DROPPED this batch: records
+            // never written, producers blocked for ever. The flusher enqueues
+            // it instead, woken when the queued flush completes.
+            if (accumulator.isFlushDue() && !flushes.isQueued()) {
                 enqueueFlushLocked();
             } else {
                 // ⚠️ Wakes the flusher so it re-computes its deadline rather
