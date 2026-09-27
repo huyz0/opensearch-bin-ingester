@@ -83,6 +83,15 @@ import org.junit.jupiter.api.Timeout;
  * minutes. After that the offset never moves again, so the clock tracks real
  * time and the 5 s ceiling governs real cadence for the rest of the run.
  */
+// ⚠️ ONLY UNDER ITS OWN TASK (M10.8). The class is excluded from `test`, but
+// jzap's coverage phase discovers every class in the source set, with no
+// 256 MB heap and no task timeout. Its sibling MemoryFlatUnderTenXBodySizeTest
+// was measured hanging there and aborting the whole http mutation run
+// (exit 3); this class was not reached before that abort, so it is guarded
+// for the same shape rather than for an observed hang. The Gradle task that
+// owns it sets the property, and fails if the test is skipped.
+@org.junit.jupiter.api.condition.EnabledIfSystemProperty(
+        named = "binstore.memoryBoundTier", matches = "true")
 class MemoryFlatAtIntervalCeilingTest {
 
     private static final Principal PRINCIPAL =

@@ -57,6 +57,14 @@ import org.junit.jupiter.api.Timeout;
  * segment forever and make THIS FIXTURE the thing that runs out of heap,
  * not the code under test.
  */
+// ⚠️ ONLY UNDER ITS OWN TASK (M10.8). The class is excluded from `test`, but
+// jzap's coverage phase discovers every class in the source set and ran this
+// one with no 256 MB heap and no task timeout, where it hung and aborted the
+// whole http mutation run (exit 3). The Gradle task that owns it sets the
+// property, and fails if the test is skipped; anything else that discovers
+// it skips it rather than hanging.
+@org.junit.jupiter.api.condition.EnabledIfSystemProperty(
+        named = "binstore.memoryBoundTier", matches = "true")
 class MemoryFlatUnderTenXBodySizeTest {
 
     private static final Principal PRINCIPAL =

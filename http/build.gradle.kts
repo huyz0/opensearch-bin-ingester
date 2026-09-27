@@ -56,6 +56,9 @@ tasks.named<Test>("test") {
 }
 
 val memoryBoundTest = tasks.register<Test>("memoryBoundTest") {
+    // ⚠️ THE TEST RUNS ONLY WHERE THIS IS SET (M10.8): see the class's
+    // `@EnabledIfSystemProperty`, which is what keeps jzap from hanging on it.
+    systemProperty("binstore.memoryBoundTier", "true")
     group = "verification"
     description = "Criterion 8 (SPEC T12): 200 MB _bulk body under a 256 MB heap, no OOM."
     testClassesDirs = sourceSets.test.get().output.classesDirs
@@ -100,6 +103,9 @@ val memoryBoundTest = tasks.register<Test>("memoryBoundTest") {
 // out twice (at 8 and 20 minutes) still short of 200 MB. The concurrent shape
 // this task now runs restores ~1 MiB/s aggregate.
 val memoryBoundCeilingTest = tasks.register<Test>("memoryBoundCeilingTest") {
+    // ⚠️ THE TEST RUNS ONLY WHERE THIS IS SET (M10.8): see the class's
+    // `@EnabledIfSystemProperty`, which is what keeps jzap from hanging on it.
+    systemProperty("binstore.memoryBoundTier", "true")
     group = "verification"
     description = "Criterion 8 (SPEC T12) at the interval's ceiling (M3.5): 200 MB body, 256 MB heap, no OOM."
     testClassesDirs = sourceSets.test.get().output.classesDirs
@@ -127,4 +133,30 @@ val memoryBoundCeilingTest = tasks.register<Test>("memoryBoundCeilingTest") {
     // variance under a deliberately tight heap, and a slower machine.
     timeout.set(Duration.ofMinutes(20))
     extensions.configure<JacocoTaskExtension> { isEnabled = false }
+}
+
+// ⚠️ A SKIPPED PROOF FAILS ITS TASK (M10.8). Both classes run only where
+// `binstore.memoryBoundTier` is set, and that name is spelled in four places:
+// the two tasks above and the two classes' `@EnabledIfSystemProperty`. If one
+// drifts, JUnit reports the test SKIPPED, `isFailOnNoMatchingTests` still sees
+// a match, and the task goes green having proved nothing -- measured by
+// deleting the property line: BUILD SUCCESSFUL in 8 s, `skipped="1"`. So each
+// task reads its own JUnit report and refuses any skip.
+listOf(memoryBoundTest, memoryBoundCeilingTest).forEach { proof ->
+    proof.configure {
+        val results = reports.junitXml.outputLocation
+        doLast {
+            val skipped = results.get().asFile.walk()
+                .filter { it.isFile && it.name.endsWith(".xml") }
+                .sumOf { report ->
+                    Regex("<testsuite [^>]*skipped=\"(\\d+)\"").find(report.readText())
+                        ?.groupValues?.get(1)?.toInt() ?: 0
+                }
+            if (skipped > 0) {
+                throw GradleException("$name skipped $skipped test(s): the " +
+                    "binstore.memoryBoundTier property and the classes' " +
+                    "@EnabledIfSystemProperty no longer agree, so the NFR-6 proof did not run")
+            }
+        }
+    }
 }

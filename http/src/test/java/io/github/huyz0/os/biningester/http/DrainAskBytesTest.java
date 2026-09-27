@@ -19,8 +19,13 @@ import org.junit.jupiter.api.Test;
  */
 class DrainAskBytesTest {
 
-    private static final long TARGET = HttpSequencerTransport.DRAIN_PATH.length()
-            + HttpSequencerTransport.POD_PARAM.length();
+    // ⚠️ WRITTEN OUT, NOT BUILT FROM PRODUCTION's CONSTANTS (M10.8): an
+    // expectation computed from DRAIN_PATH and POD_PARAM follows a wrong
+    // constant anywhere, so a changed constant would move the cross-AZ figure
+    // and every case here with it. ⚠️ It pins the CONSTANTS, not the wire:
+    // the send site spells its query key separately, and renaming that key
+    // alone is not caught here.
+    private static final long TARGET = "/ctl/drain?pod=".length();
 
     @Test
     void theAskIsThePathTheParameterAndTheRequestersId() {
