@@ -7,7 +7,6 @@ import io.github.huyz0.os.biningester.binstore.Body;
 import io.github.huyz0.os.biningester.binstore.CountingBinStore;
 import io.github.huyz0.os.biningester.binstore.StoreCounts;
 import io.github.huyz0.os.biningester.binstore.CrossAzBytes;
-import io.github.huyz0.os.biningester.binstore.backend.MemoryBinStore;
 import io.github.huyz0.os.biningester.format.DurableSegmentSignalFrame;
 import io.github.huyz0.os.biningester.format.OpType;
 import io.github.huyz0.os.biningester.format.RunKey;
@@ -22,6 +21,7 @@ import io.github.huyz0.os.biningester.ingest.IngestConfig;
 import io.github.huyz0.os.biningester.ingest.Peer;
 import io.github.huyz0.os.biningester.ingest.PeerRing;
 import io.github.huyz0.os.biningester.sequencer.CommitRequest;
+import io.github.huyz0.os.biningester.sequencer.Inbox;
 import io.github.huyz0.os.biningester.sequencer.SequencerTransport;
 import java.time.Clock;
 import java.time.Duration;
@@ -43,7 +43,7 @@ class DurableSignalRingOwnerTest {
 
     @Test
     void multipleReadyCandidatesInOneAzWarmOnlyTheDeterministicRingOwner() throws Exception {
-        try (var raw = new MemoryBinStore()) {
+        try (var raw = new ObservedStore(Inbox.prefixFor(PREFIX))) {
             var store = new CountingBinStore(raw);
             StoredSegment segment = storeSegment(store);
             String segmentKey = segment.key();
@@ -60,6 +60,14 @@ class DurableSignalRingOwnerTest {
                         second::prefetchDurableSegment);
                 byte[] signal = new DurableSegmentSignalFrame(WRITER, WRITER_AZ, segmentKey)
                         .encode();
+                // ⚠️ M10.31: THE BASELINE WAITS FOR THE STARTUP INBOX DRAIN's LIST.
+                // The node that takes the term drains the inbox once on its own
+                // virtual thread (ADR-0058), and nothing in `open` waits for it; a
+                // total taken before that LIST lands counts it inside the window.
+                // MEASURED: holding that LIST until the baseline was taken failed
+                // the signal assertion below with lists=2 every time. One node holds the
+                // term, so there is exactly one such LIST.
+                raw.awaitInboxListed();
                 StoreCounts before = store.counts();
 
                 assertThat(firstReceiver.accept(WRITER, signal)).isTrue();
