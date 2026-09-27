@@ -41,7 +41,10 @@ Three things are known exactly at the moment a request is issued:
    10^6. The per-index totals therefore sum EXACTLY to the counted requests
    they apportion — a checkable invariant, not an approximation that drifts.
 3. **What is apportioned:** the data PUT and the commit PUT of every flush
-   (`purpose` data and commit), and **every GET of a data segment the ingester
+   (`purpose` data and commit) — ⚠️ **the commit half is corrected by M11.2's
+   spec amendment and decided in M11.22**: a commit PUT carries a batched delta
+   from any pod, not one flush, so it is apportioned where the delta is PUT,
+   by the delta's record counts — and **every GET of a data segment the ingester
    issues**, whoever issues it: `SegmentProxy`'s reads (the proxy route, the
    subscription path, the prefetcher) and `DurableCatchUpResponder`'s
    whole-segment reads, each split by the directory of the bytes it already

@@ -2,6 +2,7 @@
 package io.github.huyz0.os.biningester.ingest;
 
 import io.github.huyz0.os.biningester.binstore.BinStore;
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import io.github.huyz0.os.biningester.binstore.Capabilities;
 import io.github.huyz0.os.biningester.format.CommitDelta;
 import io.github.huyz0.os.biningester.format.RunKey;
@@ -54,6 +55,8 @@ public final class DefaultIngest implements Ingest {
     /** ⚠️ Volatile for {@link #flushSpacingMillis()}, read off-lock; writers hold it. */
     private volatile Accumulator accumulator;
     private final SegmentPublisher publisher;
+    /** Each index's share of this pod's store requests (M11.2, ADR-0077). */
+    private final IndexCostLedger costLedger = new IndexCostLedger();
     /**
      * ⚠️ THE INGESTER CHOOSES THE FETCH MODE, NOT THE CONSUMER (FR-6). It is
      * built here, from the backend's own prices, because this is where the
@@ -158,7 +161,7 @@ public final class DefaultIngest implements Ingest {
         this.accumulator = new Accumulator(config, Objects.requireNonNull(clock, "clock"));
         this.publisher = new SegmentPublisher(Objects.requireNonNull(store, "store"),
                 Objects.requireNonNull(prefix, "prefix"),
-                Objects.requireNonNull(podShortId, "podShortId"));
+                Objects.requireNonNull(podShortId, "podShortId"), costLedger);
         Capabilities storeCapabilities = store.capabilities();
         // ⚠️ THE STARTUP REFUSAL, AND M5.43 IS WHAT GAVE IT A CALLER. Criterion
         // 7 asks that a deployment wanting `direct` against a backend that
@@ -505,6 +508,11 @@ public final class DefaultIngest implements Ingest {
      */
     public long flushSpacingMillis() {
         return Math.min(accumulator.flushSpacing().toMillis(), inFlightSpacingMillis);
+    }
+
+    /** Each index's apportioned share of this pod's store requests (ADR-0077). */
+    public IndexCostLedger costLedger() {
+        return costLedger;
     }
 
     /** The shared serving proxy, for the composition root's cache prefetcher. */

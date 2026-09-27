@@ -2,6 +2,7 @@
 package io.github.huyz0.os.biningester.ingest;
 
 import io.github.huyz0.os.biningester.binstore.BinStore;
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import io.github.huyz0.os.biningester.binstore.Body;
 import io.github.huyz0.os.biningester.format.FilterCandidates;
 import io.github.huyz0.os.biningester.format.MembershipFilter;
@@ -11,6 +12,7 @@ import io.github.huyz0.os.biningester.format.RunKey;
 import io.github.huyz0.os.biningester.format.SegmentReader;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -51,8 +53,19 @@ public final class SegmentPublisher {
     private final String podShortId;
     private final IndexOrdinalRegistry ordinals;
     private final AtomicLong sequence = new AtomicLong();
+    private final IndexCostLedger ledger;
 
     public SegmentPublisher(BinStore store, String prefix, String podShortId) {
+        this(store, prefix, podShortId, new IndexCostLedger());
+    }
+
+    /**
+     * The same, apportioning each data PUT it issues across the segment's
+     * indices into {@code ledger} (M11.2, ADR-0077).
+     */
+    public SegmentPublisher(BinStore store, String prefix, String podShortId,
+            IndexCostLedger ledger) {
+        this.ledger = Objects.requireNonNull(ledger, "ledger");
         this.store = Objects.requireNonNull(store, "store");
         this.prefix = Objects.requireNonNull(prefix, "prefix");
         this.podShortId = Objects.requireNonNull(podShortId, "podShortId");
@@ -138,6 +151,17 @@ public final class SegmentPublisher {
         // conditional write here would buy nothing — the commit log is where
         // write-once matters (M1.10), because that is where two writers can
         // legitimately race for the same slot.
+        // ⚠️ APPORTIONED BEFORE THE PUT, NOT AFTER IT SUCCEEDS (M11.2,
+        // ADR-0077): the counting store counts the ATTEMPT, a failed PUT
+        // included, so a ledger charged only on success would sum to less than
+        // the requests it apportions. From the directory already in hand -- no
+        // request of its own.
+        Map<UUID, Long> runBytes = new HashMap<>();
+        for (var entry : directory) {
+            runBytes.merge(entry.key().indexId(), (long) entry.byteLen(), Long::sum);
+        }
+        ledger.apportion(IndexCostLedger.Charge.DATA_PUT, runBytes);
+        runBytes.forEach(ledger::bytesWritten);
         store.put(key, new Body(segment.length, () -> new ByteArrayInputStream(segment)));
 
         return Optional.of(new Published(key, segment, counts));

@@ -4,8 +4,8 @@
 
 The roadmap's M11 row, restated: **every store request the ingester issues is
 governed and counted, and the governor is exported; each index's share of the
-data PUTs, commit PUTs and segment GETs is apportioned by run bytes, summing
-exactly to the counted requests, and reaches an operator through
+data PUTs and segment GETs is apportioned by run bytes, and of the commit
+PUTs by the delta's record counts, summing exactly to the counted requests, and reaches an operator through
 `GET /admin/cost` and a top-K log event with zero per-index metric series;
 per-index quotas refuse with `429` and `Retry-After` before a body is read,
 and every `429` carries `Retry-After`; and M10's open rows and review harvest
@@ -72,12 +72,23 @@ digest-pinned RustFS. Only M10.34's K > 1 measurement and H14 need it.
 
 ### Attribution ([ADR-0077](../../decisions/0077-an-index-cost-is-apportioned-by-run-bytes-from-the-segment-directory.md))
 
-`IndexCostLedger` (in `ingest`) holds, per index id, `LongAdder`s of micro-
-requests (10^6 per request) by `(op, purpose)` and of bytes ingested, plus an
-`unattributed` bucket. `apportion(directory, op, purpose)` splits 10^6 across
-the directory's indices by run bytes with largest-remainder rounding, so the
-shares sum exactly. The flush path calls it once for the data PUT and once for
-the commit PUT with the drained segment's directory. On the read side EVERY
+`IndexCostLedger` (in `binstore-spi`, keyed by index id so it needs no
+format type) holds, per index id, `LongAdder`s of micro-requests (10^6 per
+request) by charge — `(op, purpose)` — and of bytes written, plus an
+`unattributed` bucket. `apportion(charge, weights)` splits 10^6 across the
+weights' indices with largest-remainder rounding, so the shares sum exactly.
+The publisher calls it for each data PUT with the drained segment's run bytes
+per index (M11.2).
+
+⚠️ **AMENDED BY M11.2: THE COMMIT PUT IS NOT PER FLUSH.** The leader batches
+commits into one delta per window (M8.50), from every pod, and a follower's
+commit is PUT by the leader, so "each flush's commit PUT" names a request that
+does not exist. The commit PUT is apportioned where it is ISSUED — the pod
+whose `CommitLog` PUTs the delta — across the delta's runs by their record
+counts, the only per-index weight a delta carries; a delta with no runs (a
+seal) is `unattributed`. That is M11.22, with ADR-0077 amended there.
+
+On the read side EVERY
 data-segment GET the ingester issues is apportioned: `SegmentProxy` for a
 whole segment it held, `DurableCatchUpResponder` for the segment it reads
 whole; one streamed without being held, or one that failed or did not decode,
@@ -145,11 +156,14 @@ NFR-1's bound and NFR-3's ceiling are unchanged. No budget moves.
    alarm are gauges reading the live governor; a refused retention-sweep inbox
    read logs one line. (M10.27)
 4. **Write-side apportionment is exact**, T0 and T1: one flushed segment's data
-   PUT and commit PUT are each split across its indices by run bytes to within
-   one micro-request, and each split sums to exactly 10^6; over a multi-index
-   workload through `DefaultIngest`, Σ per-index data-PUT shares equals the
-   counting store's data PUTs × 10^6, the same for commit PUTs, and per-index
-   bytes equal the directory's run bytes. (M11.2)
+   PUT is split across its indices by run bytes to within one micro-request,
+   and each split sums to exactly 10^6; over a multi-index workload through
+   `DefaultIngest`, Σ per-index data-PUT shares equals the counting store's
+   data PUTs × 10^6, and per-index bytes equal the directory's run bytes
+   (M11.2); every delta PUT a pod's commit log issues, lost races and seals
+   included, is split across the delta's runs by record count or charged to
+   `unattributed`, and Σ equals the counting store's commit PUTs × 10^6
+   (M11.22)
 5. **Read-side apportionment is exact**, T1: `CountingBinStore` counts
    data-segment GETs apart from other GETs; a held whole-segment GET through
    `SegmentProxy` and a catch-up read through `DurableCatchUpResponder` are
@@ -237,7 +251,8 @@ ADR lands with its task.
 | M11.1 | Split `Assembly` and `ConsumerClient` below ~600 lines, no behaviour change (H3) | — (structure) |
 | M10.26 | The front door through the governed node store (carried) | FR-21, NFR-3 |
 | M10.27 | Export the governor (carried) | FR-21, NFR-16 |
-| M11.2 | `IndexCostLedger` and write-side apportionment | FR-21 |
+| M11.2 | `IndexCostLedger` and data-PUT apportionment | FR-21 |
+| M11.22 | Commit-PUT apportionment where the delta is PUT, by record count (added by M11.2) | FR-21 |
 | M11.3 | Read-side apportionment: data-segment GETs counted apart; `SegmentProxy` and catch-up reads split | FR-21, NFR-4 |
 | M11.4 | `GET /admin/cost?by=index&top=N`, wired in the front door | FR-21 |
 | M11.5 | The periodic top-K cost log event | FR-21 |
