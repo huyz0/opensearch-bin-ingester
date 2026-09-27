@@ -85,10 +85,12 @@ project.
 - `scripts/check-module.sh <module>` green (⚠️ see AGENTS.md — does not exist until
   the build does; until then, say which commands you ran).
 - **Coverage ≥95% line / ≥90% branch** for the module, and **mutation score ≥80%**
-  on the changed code — `scripts/check-mutants.sh`, run here, before the commit
+  on the changed code — `./gradlew checkMutants`, run here, before the commit
   is offered for review. ⚠️ **Nothing else runs it**: it is wired at pre-commit's
   `manual` stage because one module costs ~40 s, so `git commit` does not fire it
-  and this line is the only thing that does. ⚠️ Coverage is a floor, not a
+  and this line is the only thing that does. ⚠️ **It REPORTS the score and does
+  not enforce the 80% floor** (testing.md rule 9): read the number, and say in
+  the commit body what it was. ⚠️ Coverage is a floor, not a
   measure: a line can execute without being constrained. Mutation score is the
   number that says whether the tests constrain anything.
 - **Both review passes run** — production, then tests — by one agent that did

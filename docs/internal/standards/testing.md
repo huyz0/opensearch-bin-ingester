@@ -52,10 +52,13 @@ at once makes the valuable one unrunnable.
    generated tests, and precisely what "the tests are green" hides.
 9. **Mutation score is the metric that measures whether tests constrain
    anything.** Floor: **80% killed** on changed code, scoped to the diff.
-   → `scripts/check-mutants.sh`. **A surviving mutant is killed or argued** in
-   `baselines/mutants.txt`. ⚠️ **Lands in M0.14**, as rule 6 lands in M0.13 — see
-   AGENTS.md § Gates, which is generated and true on the day you read it. Both floors are aspirations until
-   their scripts are in `scripts/`, and saying so is the same discipline as rule 3.
+   → `./gradlew checkMutants` (jzap's `mutationTestDiff` per module, ADR-0045).
+   **A surviving mutant is killed or argued** in `baselines/mutants.txt`.
+   ⚠️ **THE FLOOR IS REPORTED, NOT ENFORCED, since the Gradle migration** (M10.20a):
+   `checkMutants` prints the score and fails only if the run itself fails; the
+   80% floor and the baseline were applied by `scripts/check-mutants.sh` and
+   `mutants.py`, which are migration references no gate runs. Read the score
+   and act on it; a rule whose script is missing is a preference (AGENTS.md).
 10. ⚠️ **95% line coverage with a 40% mutation score is worse than 70% coverage
     with a 90% mutation score**, because the first number buys false confidence.
     Report both; treat mutation score as the one that matters.
@@ -84,8 +87,16 @@ at once makes the valuable one unrunnable.
     stand-in for S3's wire protocol, so tests need not hit AWS
     ([store SPI §2b](../../research/30-design-space/07-pluggable-store-abstraction.md)).
     Use it for signing, ranges, multipart, list pagination and error mapping.
-    **Do not run the commit-protocol simulation against it**: its conditional
-    writes are not stable enough to distinguish our bug from theirs.
+    **Do not run the commit-protocol simulation against it**: the simulation
+    needs faults, partitions and duplicated in-flight PUTs injected at will,
+    which a real server cannot give deterministically, and a failure there
+    could not distinguish our bug from theirs. ⚠️ This is NOT a doubt about
+    single-node CAS: the pinned RustFS passes the concurrent `putIfAbsent` and
+    `putIfMatch` conformance cases ([ADR-0060](../product/decisions/0060-rustfs-is-the-single-node-t3-object-store-fixture.md)),
+    so the conformance suite runs against it. Distributed conditional-write
+    semantics (a multi-endpoint deployment) need their own qualification,
+    still open per ADR-0060; the simulation's job is OUR protocol over an
+    injected faulty store, not a backend's CAS.
 19b. ⚠️ **Request counts are backend-independent; latency and dollars are not.**
     The cost gates (requests/MiB, zero LIST, **zero idle requests**) are fully
     meaningful against RustFS. Every latency figure measured there is **modelled,
