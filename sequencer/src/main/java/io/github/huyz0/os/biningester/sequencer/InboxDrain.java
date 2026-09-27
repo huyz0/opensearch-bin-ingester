@@ -2,6 +2,7 @@
 package io.github.huyz0.os.biningester.sequencer;
 
 import io.github.huyz0.os.biningester.binstore.BinStore;
+import io.github.huyz0.os.biningester.binstore.GovernorScope;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -88,7 +89,13 @@ public final class InboxDrain {
 
     private static int drainLocked(BinStore store, String prefix, Sequencer term,
             String requester, LongConsumer failedBatchSize) throws IOException {
-        List<Inbox.Pending> pending = Inbox.pending(store, prefix);
+        // ⚠️ DECLARED RECOVERY (ADR-0075), HERE AND NOT IN `Inbox.pending`: the
+        // orphan sweep reads the same inbox for its keep list, and that read is
+        // discretionary and governed. A refused DRAIN strands acked intents;
+        // it is bounded by its trigger, a heal or a takeover (ADR-0058). ⚠️
+        // Bound on the thread that lists: `inBackground` calls this on its own.
+        List<Inbox.Pending> pending = GovernorScope.recovery(
+                () -> Inbox.pending(store, prefix));
         Map<String, List<Inbox.Pending>> byPod = new LinkedHashMap<>();
         for (Inbox.Pending intent : pending) {
             String who = intent.request().podId() + "/" + intent.request().incarnationId();

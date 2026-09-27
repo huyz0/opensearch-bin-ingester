@@ -32,7 +32,8 @@ final class RetentionAssembly {
 
     static RetentionLoop create(ServerConfig config, BinStore store, Clock clock,
             RetentionLoop.Source source, WatermarkTable watermarks,
-            LeaseManagerFactory leaseManagerFactory) {
+            LeaseManagerFactory leaseManagerFactory,
+            java.util.function.BooleanSupplier discretionaryAllowed) {
         RetentionConfig kept = config.retention();
         LeaseConfig gcLease = new LeaseConfig(config.prefix() + "/gc", config.podId(),
                 config.endpoint(), config.podUid(), config.leaseTtl(),
@@ -52,6 +53,7 @@ final class RetentionAssembly {
                 alarm -> LOG.log(System.Logger.Level.WARNING, () -> "retention alarm "
                                 + alarm.kind() + " on " + alarm.stream() + ": " + alarm.detail()));
         return new RetentionLoop(source, leased, rule, observable, clock, config.prefix(),
-                kept.minRetention(), OrphanSweep.DEFAULT_GRACE, SegmentGc.DEFAULT_DELETE_BATCH);
+                kept.minRetention(), OrphanSweep.DEFAULT_GRACE, SegmentGc.DEFAULT_DELETE_BATCH,
+                discretionaryAllowed);
     }
 }

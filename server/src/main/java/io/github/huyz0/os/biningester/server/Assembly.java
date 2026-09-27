@@ -2,7 +2,9 @@
 package io.github.huyz0.os.biningester.server;
 
 import io.github.huyz0.os.biningester.binstore.BinStore;
+import io.github.huyz0.os.biningester.binstore.CostGovernor;
 import io.github.huyz0.os.biningester.binstore.CountingBinStore;
+import io.github.huyz0.os.biningester.binstore.GoverningBinStore;
 import io.github.huyz0.os.biningester.binstore.HealthTrackingBinStore;
 import io.github.huyz0.os.biningester.binstore.PutPurposeCounts;
 import io.github.huyz0.os.biningester.binstore.StoreCounts;
@@ -89,6 +91,7 @@ public final class Assembly implements AutoCloseable {
     private final ServerConfig config;
     private final BinStore store;
     private final CountingBinStore counting;
+    private final CostGovernor governor;
     private final HealthTrackingBinStore health;
     private final IngesterMetrics metrics;
     private final BinStore backend;
@@ -183,8 +186,16 @@ public final class Assembly implements AutoCloseable {
     static Assembly openForTest(ServerConfig config, BinStore store,
             SequencerTransport transport, Clock clock, BackfillStarter backfillStarter)
             throws IOException {
+        return openForTest(config, store, transport, clock, backfillStarter,
+                GovernorWiring.DEFAULT);
+    }
+
+    static Assembly openForTest(ServerConfig config, BinStore store,
+            SequencerTransport transport, Clock clock, BackfillStarter backfillStarter,
+            GovernorWiring.GovernorFactory governorFactory) throws IOException {
         return new Assembly(config, Objects.requireNonNull(store, "store"), false,
-                transport, clock, LeaseChallenge.NEVER, backfillStarter, null, null, null);
+                transport, clock, LeaseChallenge.NEVER, backfillStarter, null, null, null,
+                LeaseManager::new, governorFactory);
     }
 
     static Assembly openForTestWithLeaseManagerFactory(ServerConfig config, BinStore store,
@@ -193,14 +204,7 @@ public final class Assembly implements AutoCloseable {
             throws IOException {
         return new Assembly(config, Objects.requireNonNull(store, "store"), false,
                 transport, clock, LeaseChallenge.NEVER, ChainBackfill::inBackground,
-                null, null, null, leaseManagerFactory);
-    }
-
-    private Assembly(ServerConfig config, BinStore raw, boolean ownsStore,
-            SequencerTransport transport, Clock clock, LeaseChallenge challenge)
-            throws IOException {
-        this(config, raw, ownsStore, transport, clock, challenge, ChainBackfill::inBackground,
-                null, null, null);
+                null, null, null, leaseManagerFactory, GovernorWiring.DEFAULT);
     }
 
     private Assembly(ServerConfig config, BinStore raw, boolean ownsStore,
@@ -209,27 +213,32 @@ public final class Assembly implements AutoCloseable {
             DurableSegmentSignalSender.PeerPost signalPost)
             throws IOException {
         this(config, raw, ownsStore, transport, clock, challenge, backfillStarter,
-                peerView, crossAz, signalPost, LeaseManager::new);
+                peerView, crossAz, signalPost, LeaseManager::new, GovernorWiring.DEFAULT);
     }
 
     private Assembly(ServerConfig config, BinStore raw, boolean ownsStore,
             SequencerTransport transport, Clock clock, LeaseChallenge challenge,
             BackfillStarter backfillStarter, EndpointSliceView peerView, CrossAzBytes crossAz,
             DurableSegmentSignalSender.PeerPost signalPost,
-            RetentionAssembly.LeaseManagerFactory leaseManagerFactory)
-            throws IOException {
+            RetentionAssembly.LeaseManagerFactory leaseManagerFactory,
+            GovernorWiring.GovernorFactory governorFactory) throws IOException {
         this.config = Objects.requireNonNull(config, "config");
         Objects.requireNonNull(transport, "transport");
         Objects.requireNonNull(clock, "clock");
         Objects.requireNonNull(backfillStarter, "backfillStarter");
         Objects.requireNonNull(leaseManagerFactory, "leaseManagerFactory");
+        Objects.requireNonNull(governorFactory, "governorFactory");
         // ⚠️ EVERY STORE CALL THIS NODE MAKES GOES THROUGH THE HEALTH TRACKER
         // (M8.15), so readiness reflects the store without a request of its
         // own. The RAW store is what is closed: the tracker holds nothing.
         this.backend = raw;
         this.peerView = peerView == null ? new EndpointSliceView() : peerView;
         this.counting = new CountingBinStore(raw);
-        this.health = new HealthTrackingBinStore(counting, clock,
+        // ⚠️ THE GOVERNOR SITS ABOVE THE COUNTER (M10.11, ADR-0075), so a LIST it
+        // refuses never reached the store and is never counted as a request.
+        GovernorWiring.Spacing spacing = new GovernorWiring.Spacing(config);
+        this.governor = governorFactory.create(config, clock, spacing);
+        this.health = new HealthTrackingBinStore(new GoverningBinStore(counting, governor), clock,
                 HealthTrackingBinStore.DEFAULT_STALL, HealthTrackingBinStore.DEFAULT_FAILURES);
         this.store = health;
         this.metrics = new IngesterMetrics();
@@ -296,7 +305,7 @@ public final class Assembly implements AutoCloseable {
                         }
                     });
             this.prefetcher = new SegmentPrefetcher(new EndpointMembership(config, this.peerView),
-                    this.ingest.segmentProxy());
+                    this.ingest.segmentProxy(), governor::discretionaryAllowed);
         } catch (RuntimeException | IOException failed) {
             // ⚠️ THE TERM IS ALREADY TAKEN AT THIS POINT, and if this throws
             // nothing will ever hold a reference to the sequencer again.
@@ -315,6 +324,8 @@ public final class Assembly implements AutoCloseable {
             closeQuietly(this.sequencer, failed);
             throw failed;
         }
+        // ⚠️ FROM HERE the governor reads the ingest's spacing; until now, the floor.
+        spacing.attach(this.ingest);
         toClose.push(this.ingest);
         // ⚠️ THE ROUTED PATH IS WHAT THE FRONT DOOR IS HANDED (M8.32, FR-13).
         // Plain `DefaultIngest` has no catalog: it refuses every routed write,
@@ -324,7 +335,7 @@ public final class Assembly implements AutoCloseable {
                 PENDING_TIMEOUT, clock);
 
         this.retention = RetentionAssembly.create(config, store, clock, this::retentionTerm,
-                watermarks, leaseManagerFactory);
+                watermarks, leaseManagerFactory, governor::discretionaryAllowed);
         // ⚠️ THE FLOOR A CONSUMER IS TOLD, READ ON DEMAND (ADR-0056). The epoch
         // is the one this pod last committed under, known without a request;
         // below 1 there has been no lease and there is no chain to read.
@@ -466,6 +477,11 @@ public final class Assembly implements AutoCloseable {
         return config;
     }
 
+    /** The pod's one cost governor, which the store stack consults (M10.11). */
+    public CostGovernor governor() {
+        return governor;
+    }
+
     /**
      * Whether the store is answering the calls this node makes (M8.15). The
      * readiness probe fails when it is not, so the load balancer stops sending
@@ -484,6 +500,11 @@ public final class Assembly implements AutoCloseable {
      */
     public BinStore store() {
         return backend;
+    }
+
+    /** The store the graph itself uses: tracked, governed, then counted (M10.11). */
+    BinStore nodeStore() {
+        return store;
     }
 
     EndpointSliceView peerView() {

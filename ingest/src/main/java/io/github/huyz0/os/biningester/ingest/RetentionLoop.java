@@ -157,6 +157,7 @@ public final class RetentionLoop {
     private final Duration minRetention;
     private final Duration orphanGrace;
     private final int deleteBatch;
+    private final java.util.function.BooleanSupplier discretionaryAllowed;
 
     /** The term this loop last saw, by identity: a new term is a new chain. */
     private ChainMemory seen;
@@ -179,6 +180,27 @@ public final class RetentionLoop {
     public RetentionLoop(Source source, LeasedGc leased, RetentionRule rule,
             RetentionObservable observable, Clock clock, String prefix,
             Duration minRetention, Duration orphanGrace, int deleteBatch) {
+        this(source, leased, rule, observable, clock, prefix, minRetention, orphanGrace,
+                deleteBatch, () -> true);
+    }
+
+    /**
+     * The same loop, asking the cost governor before each pass (M10.11).
+     *
+     * @param discretionaryAllowed ⚠️ ASKED ONLY WHEN A PASS IS DUE, never on an
+     *     idle tick: {@code CostGovernor.discretionaryAllowed()} counts every
+     *     {@code false} as a refusal, and an idle tick refused nothing. A
+     *     {@code false} DEFERS the pass -- nothing advances, the next tick asks
+     *     again -- because retention and the orphan sweep are discretionary:
+     *     halted, GC falls behind and storage grows, which is the safe direction
+     *     (ADR-0075)
+     */
+    public RetentionLoop(Source source, LeasedGc leased, RetentionRule rule,
+            RetentionObservable observable, Clock clock, String prefix,
+            Duration minRetention, Duration orphanGrace, int deleteBatch,
+            java.util.function.BooleanSupplier discretionaryAllowed) {
+        this.discretionaryAllowed = Objects.requireNonNull(discretionaryAllowed,
+                "discretionaryAllowed");
         this.source = Objects.requireNonNull(source, "source");
         this.leased = Objects.requireNonNull(leased, "leased");
         this.rule = Objects.requireNonNull(rule, "rule");
@@ -296,6 +318,11 @@ public final class RetentionLoop {
             // coarse gate costs when something is past it and kept.
             return;
         }
+        if (!discretionaryAllowed.getAsBoolean()) {
+            // ⚠️ THE GOVERNOR HALTED DISCRETIONARY WORK (ADR-0075): deferred,
+            // not skipped -- no hour advances, so the next tick owes the same.
+            return;
+        }
 
         leased.runIfLeader(fenced -> {
             if (retentionDue && term.live().getAsBoolean()) {
@@ -321,7 +348,10 @@ public final class RetentionLoop {
                     // delta has not been written yet -- kept, never an orphan.
                     committed.addAll(io.github.huyz0.os.biningester.sequencer.Inbox.segmentsNamed(fenced, prefix));
                 } catch (java.io.IOException unread) {
-                    return; // the inbox unread: no hour is safe to sweep this tick
+                    // the inbox unread -- a governor refusal included, since the
+                    // sweep's inbox read is discretionary (M10.11) -- so no hour is
+                    // safe to sweep this tick, and none is advanced past
+                    return;
                 }
                 // ⚠️ AND THE CHAIN AGAIN, AFTER THE INBOX (review R1): a drain
                 // between the tick's snapshot and the inbox read commits an
@@ -338,10 +368,17 @@ public final class RetentionLoop {
                         // successor's. Nothing more is swept by this term.
                         return;
                     }
-                    sweep.sweep(SegmentKey.hourPrefix(prefix, hour), committed);
+                    if (sweep.sweep(SegmentKey.hourPrefix(prefix, hour), committed).deferred()) {
+                        // ⚠️ THE GOVERNOR REFUSED THE HOUR's LIST (M10.11): a
+                        // refusal says "not now", so the hour is NOT advanced
+                        // past and the next tick sweeps it again. Skipping it,
+                        // as a failed LIST is skipped below, would leave its
+                        // orphans for ever, since each hour is swept once.
+                        return;
+                    }
                     // ⚠️ ADVANCED PER HOUR, AFTER ITS SWEEP, so a lease lost
                     // half-way leaves the rest for the next tick. A LIST that
-                    // failed inside the sweep is NOT retried: the sweep reports
+                    // FAILED inside the sweep is NOT retried: the sweep reports
                     // it only in a log, and the cost is orphans left in that
                     // hour -- storage, the safe direction.
                     nextSweepHourMillis = hour + HOUR_MILLIS;

@@ -2,6 +2,7 @@
 package io.github.huyz0.os.biningester.ingest;
 
 import io.github.huyz0.os.biningester.binstore.BinStore;
+import io.github.huyz0.os.biningester.binstore.GovernorRefusedException;
 import io.github.huyz0.os.biningester.binstore.ListPage;
 import io.github.huyz0.os.biningester.binstore.ObjectStat;
 import io.github.huyz0.os.biningester.format.SegmentKey;
@@ -132,8 +133,14 @@ public final class OrphanSweep {
     private static final java.util.regex.Pattern HOUR_PREFIX =
             java.util.regex.Pattern.compile(".*/data/\\d{4}/\\d{2}/\\d{2}/\\d{2}/$");
 
-    /** What one pass over one hour-prefix did. */
-    public record Result(int deleted, int withinGrace, int committed, int unreadable) {
+    /**
+     * What one pass over one hour-prefix did.
+     *
+     * @param deferred the cost governor refused a LIST, so the hour was not
+     *     read to its end and is owed again (M10.11, ADR-0075)
+     */
+    public record Result(int deleted, int withinGrace, int committed, int unreadable,
+            boolean deferred) {
     }
 
     private final BinStore store;
@@ -188,10 +195,18 @@ public final class OrphanSweep {
         int committed = 0;
         int unreadable = 0;
         String startAfter = "";
+        boolean deferred = false;
         while (true) {
             ListPage page;
             try {
                 page = store.list(hourPrefix, startAfter, pageSize);
+            } catch (GovernorRefusedException refused) {
+                // ⚠️ NOT A FAILURE: the governor's LIST ceiling says "not now".
+                // The caller keeps the hour and asks again on its next pass.
+                LOG.log(Logger.Level.INFO, () -> "the orphan sweep of " + hourPrefix
+                        + " is deferred by the cost governor: " + refused.getMessage());
+                deferred = true;
+                break;
             } catch (IOException failed) {
                 LOG.log(Logger.Level.WARNING, () -> "the orphan sweep could not list "
                         + hourPrefix + "; the next pass tries again: " + failed);
@@ -225,7 +240,7 @@ public final class OrphanSweep {
             }
             startAfter = next.get();
         }
-        return new Result(deleteInBatches(doomed), withinGrace, committed, unreadable);
+        return new Result(deleteInBatches(doomed), withinGrace, committed, unreadable, deferred);
     }
 
     private int deleteInBatches(List<String> keys) {

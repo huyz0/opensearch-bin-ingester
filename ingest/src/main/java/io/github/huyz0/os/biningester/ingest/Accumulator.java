@@ -42,7 +42,8 @@ public final class Accumulator {
     // shorten when HIGH" is the correct direction, not the reverse a naive
     // reading of ADR-0016's own (withdrawn, writer-count) "scale up"/"scale
     // down" table would suggest.
-    private Duration currentInterval;
+    // ⚠️ VOLATILE: the cost governor reads it off the ingest lock (M10.11).
+    private volatile Duration currentInterval;
     private long lowStreakStartMillis = -1;
     private long highStreakStartMillis = -1;
 

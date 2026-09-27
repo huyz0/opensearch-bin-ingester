@@ -2,6 +2,7 @@
 package io.github.huyz0.os.biningester.sequencer;
 
 import io.github.huyz0.os.biningester.binstore.BinStore;
+import io.github.huyz0.os.biningester.binstore.GovernorScope;
 import io.github.huyz0.os.biningester.binstore.ListPage;
 import io.github.huyz0.os.biningester.binstore.ObjectStat;
 import io.github.huyz0.os.biningester.format.ChainEntry;
@@ -119,7 +120,11 @@ public final class ChainBackfill {
         String after = null;
         do {
             requireServing(serving);
-            ListPage page = store.list(listed, after, PAGE);
+            // ⚠️ DECLARED RECOVERY (ADR-0075), AND BOUND HERE, INSIDE THE WALK:
+            // `inBackground` runs this on its own virtual thread, and a
+            // ScopedValue bound around `Thread.start` does not cross into it.
+            String from = after;
+            ListPage page = GovernorScope.recovery(() -> store.list(listed, from, PAGE));
             requireServing(serving);
             for (ObjectStat object : page.objects()) {
                 Matcher m = DELTA.matcher(object.key());

@@ -64,6 +64,7 @@ public final class SegmentPrefetcher {
 
     private final Membership membership;
     private final SegmentProxy proxy;
+    private final java.util.function.BooleanSupplier discretionaryAllowed;
 
     /**
      * ⚠️ BOUNDED AND ACCESS-ORDERED, because an unbounded set of every segment
@@ -88,20 +89,33 @@ public final class SegmentPrefetcher {
                     });
 
     public SegmentPrefetcher(Membership membership, SegmentProxy proxy) {
+        this(membership, proxy, () -> true);
+    }
+
+    /**
+     * @param discretionaryAllowed the cost governor's halt (M10.11, ADR-0075):
+     *     ⚠️ ASKED ONLY WHEN THIS POD WOULD FETCH, since every {@code false} is
+     *     counted as a refused prefetch; while it is false no GET is issued
+     */
+    public SegmentPrefetcher(Membership membership, SegmentProxy proxy,
+            java.util.function.BooleanSupplier discretionaryAllowed) {
         this.membership = Objects.requireNonNull(membership, "membership");
         this.proxy = Objects.requireNonNull(proxy, "proxy");
+        this.discretionaryAllowed = Objects.requireNonNull(discretionaryAllowed,
+                "discretionaryAllowed");
     }
 
     /**
      * Fetches {@code segmentKey} into this pod's cache if this pod is the one
      * that should.
      *
-     * <p>⚠️ FIVE REASONS NOT TO FETCH, and each is a normal state rather than
+     * <p>⚠️ SIX REASONS NOT TO FETCH, and each is a normal state rather than
      * an error: this pod's AZ wrote the segment, this AZ has no ring at all
      * (ADR-0012's ladder then ends at the object store, which costs one extra
      * GET and is correct), this pod is not the owner, the proxy holds no cache
-     * so a fetch would read bytes nobody can serve from, or this pod has
-     * already prefetched this segment.
+     * so a fetch would read bytes nobody can serve from, the cost governor has
+     * halted discretionary work (M10.11), or this pod has already prefetched
+     * this segment.
      *
      * <p>⚠️ A SEGMENT THIS POD CANNOT CACHE IS STILL FETCHED ONCE, and that is
      * a deliberate cost rather than an oversight: the read warms nothing, so
@@ -147,6 +161,12 @@ public final class SegmentPrefetcher {
         // that then FAILS is that this pod does not retry it -- correct here,
         // because a prefetch is an optimisation and the read path falls back to
         // the object store, which is ADR-0012's last rung.
+        //
+        // ⚠️ ASKED BEFORE THE KEY IS RECORDED, so a halted signal is not
+        // remembered as fetched: the next signal after the halt lifts warms it.
+        if (!discretionaryAllowed.getAsBoolean()) {
+            return false;
+        }
         if (prefetched.putIfAbsent(segmentKey, Boolean.TRUE) != null) {
             return false;
         }

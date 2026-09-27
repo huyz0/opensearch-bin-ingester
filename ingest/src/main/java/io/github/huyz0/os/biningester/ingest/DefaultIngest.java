@@ -53,7 +53,8 @@ public final class DefaultIngest implements Ingest {
             System.getLogger(DefaultIngest.class.getName());
 
     private final IngestConfig config;
-    private Accumulator accumulator;
+    /** ⚠️ Volatile for {@link #flushSpacingMillis()}, read off-lock; writers hold it. */
+    private volatile Accumulator accumulator;
     private final SegmentPublisher publisher;
     /**
      * ⚠️ THE INGESTER CHOOSES THE FETCH MODE, NOT THE CONSUMER (FR-6). It is
@@ -575,6 +576,18 @@ public final class DefaultIngest implements Ingest {
             }
             throw e;
         }
+    }
+
+    /**
+     * The flush spacing in force, in millis, for the cost governor (M10.11,
+     * ADR-0075 §3): the ACTIVE buffer's adaptive interval, never below the floor.
+     * ⚠️ The active buffer's, not the detached one mid-flush, which has already
+     * adapted past the interval that made the flush due. ⚠️ No lane term yet:
+     * every record is lane 0 until M10.7's deadlines, which refine this.
+     */
+    public long flushSpacingMillis() {
+        return Math.max(config.intervalFloor().toMillis(),
+                accumulator.currentInterval().toMillis());
     }
 
     /** The shared serving proxy, for the composition root's cache prefetcher. */

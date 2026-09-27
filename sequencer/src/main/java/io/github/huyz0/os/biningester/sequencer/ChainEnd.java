@@ -2,6 +2,7 @@
 package io.github.huyz0.os.biningester.sequencer;
 
 import io.github.huyz0.os.biningester.binstore.BinStore;
+import io.github.huyz0.os.biningester.binstore.GovernorScope;
 import io.github.huyz0.os.biningester.binstore.ListPage;
 import io.github.huyz0.os.biningester.binstore.ObjectStat;
 import io.github.huyz0.os.biningester.format.ChainEntry;
@@ -41,7 +42,11 @@ final class ChainEnd {
         LogKeys keys = new LogKeys(prefix, epoch);
         String logPrefix = keys.logPrefix();
         while (true) {
-            ListPage page = store.list(logPrefix, startAfter, 1000);
+            // ⚠️ DECLARED RECOVERY (ADR-0075): a takeover that cannot find its
+            // predecessor's end cannot seal it, and cannot commit. Bounded by
+            // its trigger -- once per takeover -- instead of by the LIST bucket.
+            String after = startAfter;
+            ListPage page = GovernorScope.recovery(() -> store.list(logPrefix, after, 1000));
             for (ObjectStat stat : page.objects()) {
                 // ⚠️ SKIP, never STOP. A checkpoint sorts after every entry, so
                 // breaking here would be indistinguishable against one — but a

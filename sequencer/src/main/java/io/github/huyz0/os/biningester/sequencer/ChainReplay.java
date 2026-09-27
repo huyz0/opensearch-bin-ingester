@@ -2,6 +2,7 @@
 package io.github.huyz0.os.biningester.sequencer;
 
 import io.github.huyz0.os.biningester.binstore.BinStore;
+import io.github.huyz0.os.biningester.binstore.GovernorScope;
 import io.github.huyz0.os.biningester.binstore.ListPage;
 import io.github.huyz0.os.biningester.binstore.ObjectStat;
 import io.github.huyz0.os.biningester.format.ChainEntry;
@@ -547,7 +548,10 @@ final class ChainReplay {
         // skipping entries in the loop would leave that class untouched.
         String startAfter = hop.from() > 0 ? keys.keyFor(hop.from() - 1) : null;
         while (true) {
-            ListPage page = store.list(logPrefix, startAfter, 1000);
+            // ⚠️ DECLARED RECOVERY (ADR-0075): a replay refused mid-chain stalls
+            // the term it recovers. Once per takeover, never on a timer.
+            String after = startAfter;
+            ListPage page = GovernorScope.recovery(() -> store.list(logPrefix, after, 1000));
             for (ObjectStat stat : page.objects()) {
                 // ⚠️ NOT OURS, so not READ — the GET is skipped, not issued and
                 // its failure swallowed. Swallowing would be I3 and would also
