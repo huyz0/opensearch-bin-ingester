@@ -226,6 +226,37 @@ class DurableCatchUpResponderTest {
         assertThat(store.counts().lists()).isZero();
     }
 
+    /**
+     * ⚠️ THE END MARKER ON ITS OWN (M10.11, harvested from eef4d88's review
+     * M9.32-TEST-2). The per-frame case above covers an EVENT frame; an empty
+     * backlog answers with the end marker alone, which passes the same guard
+     * and had no case. One byte short of it is refused with nothing emitted,
+     * and exactly its size is emitted.
+     */
+    @Test
+    void anEndMarkerOverThePerFrameBudgetIsRefusedAndOneThatFitsIsEmitted()
+            throws Exception {
+        CountingBinStore store = new CountingBinStore(new MemoryBinStore());
+        CommittedDeltaSource empty = (key, offset, limit) -> List.of();
+        long endFramed = DurableCatchUpResponder.FRAME_PREFIX_BYTES
+                + new CatchUpEndFrame(REQUEST).encode().length;
+        var request = new CatchUpRequestFrame(REQUEST,
+                List.of(new CatchUpRequestFrame.Stream(KEY, 0)));
+
+        List<byte[]> refused = new ArrayList<>();
+        assertThatThrownBy(() -> new DurableCatchUpResponder(store, empty, () -> 9,
+                endFramed - 1).respond(request, refused::add))
+                .isInstanceOf(DurableCatchUpResponder.ResponseTooLargeException.class);
+        assertThat(refused).as("nothing, not a truncated answer").isEmpty();
+
+        List<byte[]> emitted = new ArrayList<>();
+        new DurableCatchUpResponder(store, empty, () -> 9, endFramed)
+                .respond(request, emitted::add);
+        assertThat(emitted).hasSize(1);
+        assertThat(CatchUpEndFrame.decode(emitted.get(0)).requestId()).isEqualTo(REQUEST);
+        assertThat(store.counts().gets()).as("an empty backlog reads nothing").isZero();
+    }
+
     @Test
     void emitsEveryRunAndRefusesAnAnswerOverItsAggregateBudget() throws Exception {
         byte[] first = segment(KEY, "one");

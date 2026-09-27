@@ -61,6 +61,27 @@ class CatchUpOfferTest {
         assertThat(lane.tryAcquireDelivery()).isFalse();
     }
 
+    /**
+     * ⚠️ THE SHARED PERMIT, NOT ONLY THE LANE's OWN (M10.11, harvested from
+     * bf8877b's M9.39-T2 and c1d9f54's M9.40-T2). The case above proves a
+     * refusal leaves no catch-up-only permit; the node-wide
+     * {@code deliveryAvailable} that live deliveries also signal is a second
+     * semaphore, and a permit left there by a refusal is a wake-up for a
+     * delivery that does not exist.
+     */
+    @Test
+    void refusingAFullLaneLeavesNoPermitOnTheSharedDeliverySignal() throws Exception {
+        UUID request = UUID.randomUUID();
+        Semaphore shared = new Semaphore(0);
+        CatchUpDeliveryLane lane = new CatchUpDeliveryLane(1, new Object(), shared);
+        lane.begin(request);
+
+        assertThat(lane.tryPut(request, delivery(2, 2))).isTrue();
+        assertThat(shared.availablePermits()).as("one accepted delivery, one signal").isOne();
+        assertThat(lane.tryPut(request, delivery(4, 2))).isFalse();
+        assertThat(shared.availablePermits()).as("the refusal signals nothing").isOne();
+    }
+
     private static Delivery delivery(long offset, int recordCount) throws Exception {
         SegmentWriter writer = new SegmentWriter();
         for (int i = 0; i < recordCount; i++) {

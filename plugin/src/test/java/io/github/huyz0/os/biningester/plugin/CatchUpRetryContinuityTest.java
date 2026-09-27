@@ -88,6 +88,49 @@ class CatchUpRetryContinuityTest {
         }
     }
 
+    /**
+     * ⚠️ A PARTIAL OVERLAP (M10.11, harvested from b65b9f9's review): a retry
+     * whose run STARTS inside what was already delivered and ends past it. A
+     * wholly repeated run is skipped and a forward gap is refused above; this
+     * straddling run is refused too -- delivering it would repeat offset 0,
+     * and trimming it silently would hide a server that answered wrongly --
+     * and the request stays open until a contiguous answer arrives.
+     */
+    @Test
+    void refusesARetryThatPartlyOverlapsWhatWasDeliveredAndResumesContiguously()
+            throws Exception {
+        FakeTransport transport = new FakeTransport();
+        transport.failOnce = true;
+        RunKey key = new RunKey(INDEX, 3);
+        transport.events = List.of(event(key, 0));
+        try (NodeSubscriptions clients = new NodeSubscriptions(transport, 4)) {
+            var client = clients.clientFor(key);
+            NodeCatchUpCoordinator coordinator = new NodeCatchUpCoordinator(transport, clients,
+                    () -> Optional.of(List.of(new CatchUpRequestFrame.Stream(key, 0))));
+
+            coordinator.attempt();
+            CatchUpRequestFrame original = transport.requests.getFirst();
+            assertThat(client.readNext(Duration.ZERO).orElseThrow().offset()).isZero();
+
+            transport.events = List.of(event(key, 0, 2));
+            coordinator.attempt();
+
+            assertThat(transport.requests).hasSize(2);
+            assertThat(client.readNext(Duration.ZERO))
+                    .as("neither offset 0 again nor offset 1 from the straddling run").isEmpty();
+            assertThat(client.catchUpComplete(original.requestId())).isFalse();
+
+            transport.events = List.of(event(key, 1));
+            coordinator.attempt();
+
+            assertThat(transport.requests).hasSize(3);
+            assertThat(transport.requests.get(2).requestId()).isEqualTo(original.requestId());
+            assertThat(client.readNext(Duration.ZERO).orElseThrow().offset()).isEqualTo(1);
+            assertThat(client.readNext(Duration.ZERO)).isEmpty();
+            assertThat(client.catchUpComplete(original.requestId())).isTrue();
+        }
+    }
+
     @Test
     void unsupportedCatchUpStillDeliversLiveSubscriptionEvents() throws Exception {
         FakeTransport transport = new FakeTransport();
@@ -110,6 +153,18 @@ class CatchUpRetryContinuityTest {
     private static SubscriptionEvent event(RunKey key, long offset) throws IOException {
         return new SubscriptionEvent("catch-up", 0, 1, key, "segment-" + offset,
                 offset, 1, FetchMode.INLINE, segment(key, offset));
+    }
+
+    /** One run of {@code count} records from {@code first}, in one segment. */
+    private static SubscriptionEvent event(RunKey key, long first, int count)
+            throws IOException {
+        SegmentWriter writer = new SegmentWriter();
+        for (long offset = first; offset < first + count; offset++) {
+            writer.add(key, new SegmentRecord("doc-" + offset, OpType.INDEX,
+                    OptionalLong.of(offset), "{}".getBytes(StandardCharsets.UTF_8)), offset);
+        }
+        return new SubscriptionEvent("catch-up", 0, 1, key, "segment-" + first + "-" + count,
+                first, count, FetchMode.INLINE, writer.toByteArray(11L));
     }
 
     private static byte[] segment(RunKey key, long offset) throws IOException {
