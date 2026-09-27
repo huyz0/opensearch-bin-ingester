@@ -8,8 +8,6 @@ import io.github.huyz0.os.biningester.binstore.GoverningBinStore;
 import io.github.huyz0.os.biningester.binstore.HealthTrackingBinStore;
 import io.github.huyz0.os.biningester.binstore.PutPurposeCounts;
 import io.github.huyz0.os.biningester.binstore.StoreCounts;
-import io.github.huyz0.os.biningester.format.IndexRegistration;
-import io.github.huyz0.os.biningester.format.RunKey;
 import io.github.huyz0.os.biningester.ingest.DefaultIngest;
 import io.github.huyz0.os.biningester.ingest.IndexCatalog;
 import io.github.huyz0.os.biningester.ingest.Ingest;
@@ -21,9 +19,6 @@ import io.github.huyz0.os.biningester.ingest.RetainedFloors;
 import io.github.huyz0.os.biningester.ingest.RetentionLoop;
 import io.github.huyz0.os.biningester.ingest.SegmentGc;
 import io.github.huyz0.os.biningester.ingest.WatermarkTable;
-import io.github.huyz0.os.biningester.ingest.Membership;
-import io.github.huyz0.os.biningester.ingest.Peer;
-import io.github.huyz0.os.biningester.ingest.AzPeers;
 import io.github.huyz0.os.biningester.ingest.SegmentPrefetcher;
 import io.github.huyz0.os.biningester.ingest.DurableCatchUpResponder;
 import io.github.huyz0.os.biningester.ingest.SnapshotCommittedDeltaSource;
@@ -53,10 +48,6 @@ import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.UUID;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 
 /**
@@ -287,17 +278,11 @@ public final class Assembly implements AutoCloseable {
         // lease is still released, because the writer releases it.
 
         try {
-            DurableSegmentSignalSender signalSender = peerView != null && config.httpPort() > 0
-                    ? signalPost == null
-                            ? new DurableSegmentSignalSender(
-                                    crossAz == null ? CrossAzBytes.untracked() : crossAz,
-                                    config.httpPort())
-                            : new DurableSegmentSignalSender(
-                                    crossAz == null ? CrossAzBytes.untracked() : crossAz,
-                                    config.httpPort(), signalPost)
-                    : null;
+            DurableSegmentSignalSender signalSender =
+                    EndpointMembership.signalSender(config, peerView, crossAz, signalPost);
             this.ingest = new DefaultIngest(config.ingest(), store, config.prefix(),
-                    config.podId(), this.sequencer, this.hub, clock, this::streamFor,
+                    config.podId(), this.sequencer, this.hub, clock,
+                    name -> CatalogStreams.streamFor(catalog, name),
                     segmentKey -> {
                         if (signalSender != null) {
                             signalSender.send(new DurableSegmentSignalFrame(config.podId(),
@@ -348,22 +333,7 @@ public final class Assembly implements AutoCloseable {
         // retention tick that ran while the writer was closing would read a
         // chain whose term is being released under it -- and take the GC lease
         // on the way, which the shutdown then has to wait out.
-        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(
-                Thread.ofVirtual().name("retention").factory());
-        long every = kept.passInterval().toNanos();
-        // ⚠️ FIXED DELAY, NOT FIXED RATE, AND THE FIRST TICK IS ONE INTERVAL
-        // IN. A slow pass must not queue a burst of catch-up passes behind it,
-        // and a node that has just started owns nothing old enough to collect.
-        scheduler.scheduleWithFixedDelay(this::tickQuietly, every, every, TimeUnit.NANOSECONDS);
-        toClose.push(() -> {
-            scheduler.shutdownNow();
-            // ⚠️ BOUNDED. A pass blocked on a store call is interrupted by
-            // `shutdownNow`; one that is not answers within the bound or is
-            // abandoned, because a shutdown that hung on GC would hold the
-            // SEQUENCER term too -- and that is the lease whose release this
-            // whole sequence exists to reach.
-            scheduler.awaitTermination(5, TimeUnit.SECONDS);
-        });
+        toClose.push(RetentionAssembly.schedule(retention, kept.passInterval()));
     }
 
     static LeaseConfig sequencerLeaseConfig(ServerConfig config) {
@@ -402,23 +372,6 @@ public final class Assembly implements AutoCloseable {
     }
 
     /**
-     * ⚠️ **A THROW OUT OF A SCHEDULED TASK CANCELS EVERY LATER RUN OF IT**, with
-     * nothing logged and nothing to notice: GC would stop on this node for good
-     * and storage would grow until someone looked at a bill. The loop already
-     * contains its own failures; this is the belt to that brace.
-     */
-    private void tickQuietly() {
-        try {
-            retention.tick();
-        } catch (RuntimeException failed) {
-            LOG.log(System.Logger.Level.WARNING, () -> "a retention tick failed; the next one "
-                    + "runs on schedule: " + failed);
-        }
-    }
-
-    private static final System.Logger LOG = System.getLogger(Assembly.class.getName());
-
-    /**
      * ⚠️ 8, the value every construction site in the tree passes — it bounds
      * how many ancestor seals one takeover will redrive before giving up.
      */
@@ -445,33 +398,6 @@ public final class Assembly implements AutoCloseable {
      */
     static final long PENDING_BYTES_PER_INDEX = IngestConfig.DEFAULT_MAX_SEGMENT_BYTES;
 
-    /**
-     * The stream an index name resolves to.
-     *
-     * <p>⚠️ **ONE MAPPING, AND IT IS THE PLUGIN'S.** The consumer derives its
-     * subscription key from the index UUID ({@code RunKey.ofIndexUuid}, M7.2);
-     * a root that made up its own — one per index NAME, say — would publish to
-     * a key nobody subscribes to. Two mappings that disagree do not throw. They
-     * make two streams for one index, and the consumer's never moves.
-     *
-     * @throws IllegalArgumentException if the index has not been registered.
-     *     ⚠️ **REFUSED RATHER THAN INVENTED**, which M8.32 replaces with FR-13's
-     *     pending pool: a made-up stream for an unregistered index accepts
-     *     records no consumer will ever subscribe to and returns 202 for them.
-     */
-    private UUID streamFor(String indexOrAlias) {
-        Optional<IndexRegistration> registration = catalog.resolve(indexOrAlias);
-        if (registration.isEmpty()) {
-            throw new IllegalArgumentException("index is not registered: " + indexOrAlias);
-        }
-        // ⚠️ THROUGH `RunKey.ofIndexUuid` RATHER THAN DECODING HERE, partition 0
-        // discarded. The partition is the caller's and only the index half is
-        // wanted, but routing the decode through the one method that owns it is
-        // exactly M7.2's rule: an index uuid is BASE64URL, `UUID.fromString`
-        // throws on every real one, and a second decoder that disagreed would
-        // not throw -- it would make two streams for one index.
-        return RunKey.ofIndexUuid(registration.get().indexUuid(), 0).indexId();
-    }
 
     public ServerConfig config() {
         return config;
@@ -518,36 +444,6 @@ public final class Assembly implements AutoCloseable {
     /** The same node-wide cache read path the subscription service serves from. */
     public io.github.huyz0.os.biningester.ingest.SegmentProxy segmentProxy() {
         return ingest.segmentProxy();
-    }
-
-    private static final class EndpointMembership implements Membership {
-        private final ServerConfig config;
-        private final EndpointSliceView view;
-
-        private EndpointMembership(ServerConfig config, EndpointSliceView view) {
-            this.config = config;
-            this.view = view;
-        }
-
-        @Override
-        public Peer self() {
-            return new Peer(config.podId(), config.endpoint(), config.az());
-        }
-
-        @Override
-        public AzPeers localAz() {
-            return new AzPeers(config.az(), view.readyEndpoints().stream()
-                    .filter(endpoint -> config.az().equals(endpoint.az()))
-                    .map(endpoint -> new Peer(endpoint.podId(), peerUri(endpoint.address(),
-                            config.httpPort()), endpoint.az()))
-                    .toList());
-        }
-
-        private static String peerUri(String address, int port) {
-            String host = address.indexOf(':') >= 0 && !address.startsWith("[")
-                    ? "[" + address + "]" : address;
-            return "http://" + host + ":" + port;
-        }
     }
 
     /** The requests issued by this node, including calls made by health checks. */

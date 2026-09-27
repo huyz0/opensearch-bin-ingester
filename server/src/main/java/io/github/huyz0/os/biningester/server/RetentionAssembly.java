@@ -14,7 +14,11 @@ import io.github.huyz0.os.biningester.sequencer.LeaseChallenge;
 import io.github.huyz0.os.biningester.sequencer.LeaseConfig;
 import io.github.huyz0.os.biningester.sequencer.LeaseManager;
 import java.time.Clock;
+import java.time.Duration;
 import java.util.Objects;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 /** Builds the retention loop and its independent, UID-bearing GC lease. */
 final class RetentionAssembly {
@@ -56,4 +60,48 @@ final class RetentionAssembly {
                 kept.minRetention(), OrphanSweep.DEFAULT_GRACE, SegmentGc.DEFAULT_DELETE_BATCH,
                 discretionaryAllowed);
     }
+
+    /**
+     * Runs the retention loop on its own virtual thread every
+     * {@code passInterval}, and returns what stops it (extracted from
+     * {@code Assembly} by M11.1, unchanged).
+     */
+    static AutoCloseable schedule(RetentionLoop retention, Duration passInterval) {
+        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(
+                Thread.ofVirtual().name("retention").factory());
+        long every = passInterval.toNanos();
+        // ⚠️ FIXED DELAY, NOT FIXED RATE, AND THE FIRST TICK IS ONE INTERVAL
+        // IN. A slow pass must not queue a burst of catch-up passes behind it,
+        // and a node that has just started owns nothing old enough to collect.
+        scheduler.scheduleWithFixedDelay(() -> tickQuietly(retention), every, every,
+                TimeUnit.NANOSECONDS);
+        return () -> {
+            scheduler.shutdownNow();
+            // ⚠️ BOUNDED. A pass blocked on a store call is interrupted by
+            // `shutdownNow`; one that is not answers within the bound or is
+            // abandoned, because a shutdown that hung on GC would hold the
+            // SEQUENCER term too -- and that is the lease whose release this
+            // whole sequence exists to reach.
+            scheduler.awaitTermination(5, TimeUnit.SECONDS);
+        };
+    }
+
+    /**
+     * ⚠️ **A THROW OUT OF A SCHEDULED TASK CANCELS EVERY LATER RUN OF IT**, with
+     * nothing logged and nothing to notice: GC would stop on this node for good
+     * and storage would grow until someone looked at a bill. The loop already
+     * contains its own failures; this is the belt to that brace.
+     */
+    private static void tickQuietly(RetentionLoop retention) {
+        try {
+            retention.tick();
+        } catch (RuntimeException failed) {
+            TICK_LOG.log(System.Logger.Level.WARNING, () -> "a retention tick failed; the next one "
+                    + "runs on schedule: " + failed);
+        }
+    }
+
+    // ⚠️ ASSEMBLY'S LOGGER, AS BEFORE M11.1 moved this here: an operator's
+    // filter on the logger name keeps matching.
+    private static final System.Logger TICK_LOG = System.getLogger(Assembly.class.getName());
 }
