@@ -110,7 +110,10 @@ invisible to every functional test and catastrophic in production.
     loss, and the bill is the lesser problem.
 15. **LIST has its own hard ceiling (~1/s sustained)**, independent of the ratio.
     It costs the same as a PUT, has the fewest legitimate uses, and is the runaway
-    with the worst blast radius.
+    with the worst blast radius. ⚠️ Four recovery paths are exempt by DECLARATION,
+    never by key prefix — chain-end recovery, chain replay, the takeover backfill
+    and the inbox drain — each bounded by its trigger instead
+    ([ADR-0075](../product/decisions/0075-the-cost-governor-refuses-discretionary-work-and-never-a-write.md)).
 16. **Count per index in memory; never export it as a metric label.** Attribution
     reaches an operator through top-K log events and `/admin/cost`, not through
     200,000 time series ([observability.md](observability.md) rules 1–2).

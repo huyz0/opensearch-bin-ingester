@@ -26,9 +26,9 @@ IDs are stable and cited by specs, tasks, and ADRs. Status is `agreed`,
 
 | ID | Requirement | Target | Status |
 |---|---|---|---|
-| NFR-1 | Write request rate | < 0.30 aggregate write requests per MiB above the size-triggered regime; at most 2 segment-data plus commit-delta PUTs per pod per interval ceiling below it; checkpoint and lease/control PUTs cadence-bounded separately and retained in aggregate cost | agreed (ADR-0072; supersedes ADR-0062) |
+| NFR-1 | Write request rate | < 0.30 aggregate write requests per MiB above the size-triggered regime; at most 2 segment-data plus commit-delta PUTs per pod per interval ceiling below it — ⚠️ at most 2 × 2^L while records of positive priority lane +L are buffered (ADR-0074) — checkpoint and lease/control PUTs cadence-bounded separately and retained in aggregate cost | agreed (ADR-0072, amended by ADR-0074; supersedes ADR-0062) |
 | NFR-2 | Idle cost | **zero** object-store requests from consumers | agreed |
-| NFR-3 | LIST on hot paths | zero, and a hard runtime ceiling of ~1/s sustained | agreed |
+| NFR-3 | LIST on hot paths | zero, and a hard runtime ceiling of ~1/s sustained — ⚠️ except the four declared recovery paths (chain-end recovery, chain replay, takeover backfill, inbox drain), each bounded by its trigger instead (ADR-0075) | agreed (amended by ADR-0075) |
 | NFR-16 | Governor refusals in steady state | zero | agreed |
 | NFR-4 | Read request rate | scales with segments, AZs, nodes — never with shards, partitions or indices | agreed |
 | NFR-5 | Cross-AZ bytes | < 0.1% of ingested bytes | agreed |

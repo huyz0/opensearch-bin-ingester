@@ -15,7 +15,29 @@ requires the subject to name a real task). M-1.2 carries the parser regression
 suite (M0.18), those tests are Java, and Java needs the build that M0.4 brings —
 so the build goes first.
 
-**Current milestone: M9 — cost and performance proof**, specified in [milestones/M9/SPEC.md](milestones/M9/SPEC.md) and decomposed into M9.0-M9.33 below, plus two M0 rows and the rows M8 handed over. ⚠️ **THE M0 AND M8 ROWS ARE NOT REPEATED HERE**: `M0.14` (`check-mutants.sh`) and `M0.27` (the L1 CI job) keep their rows in the M0 section, and `M8.24` including children `M8.24f`-`M8.24h`, `M8.56`, `M8.58`, `M8.82`, `M8.83` and `M8.60`-`M8.81` keep theirs in the M8 table below -- a second copy of a row is how a status goes stale one table over. ⚠️ The order to take them in is the SPEC's Tasks table, not the ID order.
+**Current milestone: M10 — proxy serving, priority lanes and the cost governor**, specified in [milestones/M10/SPEC.md](milestones/M10/SPEC.md) and decomposed into M10.0-M10.21 below, plus the inherited `M5.63` (concurrent cold reads of one segment coalesced), which keeps its row in the M5 table -- a second copy of a row is how a status goes stale one table over. M9 is complete per [milestones/M9/VERIFIED.md](milestones/M9/VERIFIED.md); its table follows this one unchanged. ⚠️ The order to take them in is the SPEC's Tasks table.
+
+| ID | Task | Serves | State |
+|---|---|---|---|
+| M10.0 | M10's spec and decomposition: [milestones/M10/SPEC.md](milestones/M10/SPEC.md), sixteen acceptance criteria, ADR-0073 (the proxy route), ADR-0074 (lane carriage and scheduling, amending ADR-0014 and NFR-1 with the lane cost), ADR-0075 (the governor, FR-21 partially served, NFR-3 amended to exempt four declared recovery paths), the roadmap's M10 row and its M11 re-homing of per-index attribution and quotas | — (planning) | **done** — spec, ADRs, NFR-1 amendment and roadmap rows committed; `./gradlew gates` green |
+| M10.1 | The ingester segment-fetch route `GET /seg`: the whole segment streamed through `SegmentProxy`, the key checked as this domain's data `SegmentKey` before any store I/O (`400`), `404` when absent and `502` when the store fails on an object that exists, bytes counted as `PROXY_READ` by the caller's `az`, registered in the front door | FR-6, NFR-4, NFR-5 | open |
+| M10.2 | The consumer resolves an empty `PROXY` delivery through `SegmentSource.fetchSegment(key)` over HTTP (a refusing default method); a consumer with no source fails loudly rather than decoding empty bytes | FR-6 | open |
+| M10.3 | The plugin fetches a proxied segment once per node, deduplicated by SEGMENT KEY (≥16 shard subscriptions, one fetch), and reports its AZ on polls and fetches (`binstore.node.az`) | FR-6, NFR-4, NFR-5 | open |
+| M10.4 | NFR-5 in full on a two-AZ RustFS fleet: an `az-b` consumer takes events from the `az-a` writer and payloads from the `az-b` proxy; cross-AZ bytes including proxy payloads < 0.1% of producer bytes; a misrouted control fetch is counted | NFR-5 | open |
+| M10.5 | The run entry's real lane: a run's lane is the max of its records'; all-zero segments byte-identical to the M9 golden; a mixed-lane golden | FR-18 | open |
+| M10.6 | The producer's `lane` parameter on `_bulk` (absent 0, `400` outside the active set or `i8`), the pod's active set (default `-2..2`, at most 8 lanes, none above `+2`) and the lane-carrying ingest seam | FR-18 | open |
+| M10.7 | Per-lane flush deadlines (`+l`: `max(floor, interval ÷ 2^l)`; 0: adaptive; negative: ceiling, the anti-starvation bound), the counted cost (a `+2` trickle ≤ 4 flushes per ceiling), and lane-ordered push | FR-18, NFR-1, NFR-7 | open |
+| M10.8 | Weighted fair-share lane admission: budget `ingest.admission.maxInFlightBulk` (default 256), share `budget × 2^l ÷ Σ2^k`, floor `max(1, ⌊share ÷ 2⌋)`, 429 only when saturated and at or above the floor | FR-18 | open |
+| M10.9 | A high lane is committed sooner end to end (T2, injected clock): a lane +2 append is acknowledged within `ceiling ÷ 4` while lane −1 records wait, which a lane-ignoring build fails | FR-18 | open |
+| M10.10 | `CostGovernor`, `GoverningBinStore` and `GovernorScope`: a token bucket (1/s, burst 300) on every LIST not run inside a declared recovery scope, whatever its prefix; never refusing PUT/GET/STAT/DELETE; ratio-to-expected against the flush spacing in force (alarm 3×, discretionary halt 10×, sticky kill switch 100× until `reset()`); refusals counted per class | FR-21, NFR-3 | open |
+| M10.11 | The governor wired into the assembly; `ChainEnd.of`, `ChainReplay`, `ChainBackfill` and the inbox drain declare recovery; refused sweep LISTs defer the pass; the prefetcher honours the discretionary halt; zero refusals in a steady-state run (NFR-16) | FR-21, NFR-3, NFR-16 | open |
+| M10.12 | Root-cause `RoutedIngestTest#aROUTEDWriteToAnUNREGISTEREDIndexWAITSAndIsRELEASED` failing under full-suite load (observed once on the M10 baseline, green alone) and fix the cause, not the timeout | — (quality) | open |
+| M10.20 | M9's review harvest ([M9/VERIFIED.md](milestones/M9/VERIFIED.md) finding 5): each item fixed by a named test or dropped here with its reason | — (quality) | open |
+| M10.21 | Close M10: `VERIFIED.md` with one evidence line per criterion, the roadmap row, and `checkMilestoneVerified`'s default milestone moved to M10 | — (evidence) | open |
+
+## M9 — cost and performance proof (complete)
+
+**Previous milestone: M9 — cost and performance proof**, specified in [milestones/M9/SPEC.md](milestones/M9/SPEC.md) and decomposed into M9.0-M9.33 below, plus two M0 rows and the rows M8 handed over. ⚠️ **THE M0 AND M8 ROWS ARE NOT REPEATED HERE**: `M0.14` (`check-mutants.sh`) and `M0.27` (the L1 CI job) keep their rows in the M0 section, and `M8.24` including children `M8.24f`-`M8.24h`, `M8.56`, `M8.58`, `M8.82`, `M8.83` and `M8.60`-`M8.81` keep theirs in the M8 table below -- a second copy of a row is how a status goes stale one table over. ⚠️ The order to take them in is the SPEC's Tasks table, not the ID order.
 
 | ID | Task | Serves | State |
 |---|---|---|---|
