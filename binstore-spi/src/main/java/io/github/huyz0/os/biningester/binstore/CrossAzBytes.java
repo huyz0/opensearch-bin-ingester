@@ -77,11 +77,12 @@ public final class CrossAzBytes {
         /**
          * A segment served to a consumer in {@code proxy} mode.
          *
-         * <p>⚠️ **TODAY THIS IS THE EVENT FRAME, NOT THE SEGMENT.** A proxy
-         * push carries no inline bytes and no route yet serves the segment
-         * itself to a consumer, so what is counted here is the frame that
-         * names it. When that route lands its bytes are counted here, on the
-         * same socket, by the same call.
+         * <p>⚠️ **BOTH HALVES OF A PROXY READ COUNT HERE** since M10.1: the
+         * event frame that names the segment, sent by the poll, and the
+         * segment's own bytes, sent by the proxy segment route
+         * ({@code SegmentFetchService}, ADR-0073) -- each against the zone the
+         * consumer named, so a payload fetched from a same-zone pod is
+         * same-AZ even when its event came from another zone.
          */
         PROXY_READ,
 

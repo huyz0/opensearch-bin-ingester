@@ -97,5 +97,20 @@ subscribes to.**
   closes with it; M5.64 (a short read that does not throw is cached) applies
   to it unchanged, and the consumer's `SegmentReader` refuses such a segment by
   its footer rather than indexing it.
+- **An unauthenticated route that reads the store can be made to spend
+  requests.** A well-formed key under this domain's prefix that does not exist
+  costs one GET and one STAT; the route remembers the last 1,024 absent keys, so
+  a consumer retrying a deleted segment costs nothing further, but a caller
+  inventing a fresh key per request buys two store requests each. That is a
+  request rate scaling with inbound requests rather than segments, reachable
+  only from inside the network the ingester serves; closing it is the same
+  authentication work deferred in the last alternative above. ⚠️ The memory
+  of absent keys is itself an exposure: a caller that asked for a key BEFORE
+  its segment was stored would have it remembered absent, and a consumer
+  asking afterwards answered `404` until 1,024 newer absences evict it. A
+  consumer only learns a key from an event sent after the segment is durable,
+  and a key carries a millisecond timestamp, a sequence, a header length and a
+  filter, so the key would have to be predicted; accepted on that basis, and
+  closed by the same authentication.
 - Serving capacity is ADR-0004's figure: ~33 MiB/s in and out per pod at
   100 MiB/s ingest, now actually exercised.

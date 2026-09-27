@@ -8,6 +8,7 @@ import io.github.huyz0.os.biningester.http.HealthService;
 import io.github.huyz0.os.biningester.http.SubscriptionService;
 import io.github.huyz0.os.biningester.http.DurableSegmentSignalService;
 import io.github.huyz0.os.biningester.http.CatchUpService;
+import io.github.huyz0.os.biningester.http.SegmentFetchService;
 import io.github.huyz0.os.biningester.binstore.PutPurposeCounts;
 import io.github.huyz0.os.biningester.binstore.StoreCounts;
 import io.helidon.webserver.WebServer;
@@ -183,6 +184,13 @@ public final class FrontDoor implements AutoCloseable {
                 .register(new SubscriptionService(assembly.hub(), assembly.catalog(),
                         assembly.watermarks(), clock, assembly.floors(), gate, crossAz))
                 .register(new CatchUpService(assembly::respondCatchUp))
+                // ⚠️ M10.1, ADR-0073: the payload half of `proxy`. Read through
+                // the SAME proxy and node-wide cache the subscription path and
+                // the prefetcher fill -- so on the AZ's ring owner a fetch after
+                // a prefetch costs no store request -- and counted into the SAME
+                // per-pod NFR-5 counter.
+                .register(SegmentFetchService.over(
+                        config.prefix(), assembly.segmentProxy(), assembly.store(), crossAz))
                 .register(new DurableSegmentSignalService(assembly.peerView(),
                         assembly::prefetchDurableSegment));
         String macroPath = System.getProperty("binstore.macro.path");
