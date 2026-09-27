@@ -1,6 +1,6 @@
 # 0014. Priority lanes are scheduling priority, not offset reordering
 
-Status: accepted
+Status: accepted, amended by [ADR-0074](0074-priority-lanes-are-carried-per-request-and-scheduled-per-run.md) (no overtaking within a partition, no lane-ordered data layout, a per-pod active set, no client-queue stage)
 Date: 2026-08-30
 Requirements: FR-18
 Research: docs/research/20-opensearch/01-pull-based-ingestion-spi.md §1

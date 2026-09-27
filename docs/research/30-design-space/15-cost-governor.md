@@ -12,6 +12,18 @@ not a fixed number, because expected moves with load.
 
 ---
 
+> ⚠️ **REVISED 2026-09-27 (M10; [ADR-0075](../../internal/product/decisions/0075-the-cost-governor-refuses-discretionary-work-and-never-a-write.md)).**
+> The governor as built departs from this proposal in four ways: (1) expected
+> data PUTs are taken against the flush spacing IN FORCE (the adaptive interval
+> shortened by the highest buffered positive lane), not a fixed `flushInterval`;
+> (2) `writers` is 1, the governor being per pod; (3) the `1 ÷ commitInterval`
+> term is dropped, the governed series being data PUTs only; and (4) §3's LIST
+> ceiling exempts four DECLARED recovery callers (chain end, replay, backfill,
+> inbox drain), each bounded by its trigger, because refusing them stalls a
+> commit. An undeclared LIST is governed whatever its prefix. Where this page
+> and the ADR disagree, the ADR wins.
+
+
 ## 1. What a runaway actually costs
 
 | req/s | as GET | as PUT/LIST |
