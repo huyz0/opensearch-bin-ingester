@@ -105,6 +105,12 @@ request carries one SEGMENT of many indices, so an index's share is an
 apportionment model — segment bytes by run length — not a count, and quotas need
 that apportionment to enforce anything. M10 serves FR-21 partially and says so.
 
+⚠️ **Amended by [ADR-0077](0077-an-index-cost-is-apportioned-by-run-bytes-from-the-segment-directory.md) and
+[ADR-0078](0078-per-index-quotas-are-pod-local-token-buckets-on-admitted-bytes-and-records.md) (M11).** The
+apportionment is by run bytes; quotas bound admitted bytes and records rather
+than apportioned requests, because the cost of an admitted byte is known only
+after the flush that bills it.
+
 ## Consequences
 
 - A LIST regression anywhere, by any caller that did not declare recovery, is
