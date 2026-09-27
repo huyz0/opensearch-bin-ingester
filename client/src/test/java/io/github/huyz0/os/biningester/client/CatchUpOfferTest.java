@@ -61,6 +61,25 @@ class CatchUpOfferTest {
         assertThat(lane.tryAcquireDelivery()).isFalse();
     }
 
+    // M9.39-T2 / M9.40-T2: the SHARED deliveryAvailable signal is released only after a
+    // successful offer, so a refusal leaves no permit residue a reader could wake on.
+    @Test
+    void refusingAFullLaneLeavesNoSharedDeliveryAvailablePermit() throws Exception {
+        UUID request = UUID.randomUUID();
+        Semaphore deliveryAvailable = new Semaphore(0);
+        CatchUpDeliveryLane lane = new CatchUpDeliveryLane(1, new Object(), deliveryAvailable);
+        lane.begin(request);
+
+        assertThat(lane.tryPut(request, delivery(2, 2))).isTrue();
+        assertThat(deliveryAvailable.availablePermits()).isEqualTo(1);
+
+        assertThat(lane.tryPut(request, delivery(4, 2))).isFalse();
+        assertThat(lane.tryPut(request, delivery(4, 2))).isFalse();
+        assertThat(deliveryAvailable.availablePermits())
+                .as("refused offers release no shared deliveryAvailable permit")
+                .isEqualTo(1);
+    }
+
     private static Delivery delivery(long offset, int recordCount) throws Exception {
         SegmentWriter writer = new SegmentWriter();
         for (int i = 0; i < recordCount; i++) {

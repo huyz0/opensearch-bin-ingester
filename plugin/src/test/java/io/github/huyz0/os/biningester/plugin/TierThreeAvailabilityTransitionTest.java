@@ -10,6 +10,7 @@ import io.github.huyz0.os.biningester.format.RunCommit;
 import io.github.huyz0.os.biningester.format.RunKey;
 import io.github.huyz0.os.biningester.format.SegmentRecord;
 import io.github.huyz0.os.biningester.format.SegmentWriter;
+import io.github.huyz0.os.biningester.format.SubscriptionEvent;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.util.ArrayList;
@@ -22,21 +23,47 @@ import org.junit.jupiter.api.Test;
 
 class TierThreeAvailabilityTransitionTest {
 
+    private static final RunKey KEY = new RunKey(new UUID(0, 1), 0);
+    private static final String POINTER = "prefix/ctl/log/0/0000000000000004/ckpt/LATEST";
+    private static final String DELTA = "prefix/ctl/log/0/0000000000000004/0000000000000000.delta";
+    private static final String SEGMENT = "prefix/data/segment.bseg";
+
     @Test
     void anIngesterReturningAfterPointerReadStopsFurtherFallbackGets() throws Exception {
-        RunKey key = new RunKey(new UUID(0, 1), 0);
-        String pointer = "prefix/ctl/log/0/0000000000000004/ckpt/LATEST";
-        String delta = "prefix/ctl/log/0/0000000000000004/0000000000000000.delta";
-        String segmentKey = "prefix/data/segment.bseg";
+        List<String> gets = new ArrayList<>();
+        List<SubscriptionEvent> delivered = new ArrayList<>();
+
+        boolean recovered = recoverFlippingReachabilityDuring(POINTER, gets, delivered);
+
+        assertThat(recovered).isFalse();
+        assertThat(gets).containsExactly(POINTER);
+    }
+
+    // M9.44 review: once the final segment GET has returned every byte the episode needs, no
+    // further GET remains to be refused, so only the pre-delivery guard stands between an
+    // ingester that returned DURING that GET and a fallback delivery racing the live path.
+    @Test
+    void anIngesterReturningDuringTheFinalSegmentGetDeliversNothing() throws Exception {
+        List<String> gets = new ArrayList<>();
+        List<SubscriptionEvent> delivered = new ArrayList<>();
+
+        boolean recovered = recoverFlippingReachabilityDuring(SEGMENT, gets, delivered);
+
+        assertThat(gets).containsExactly(POINTER, DELTA, SEGMENT);
+        assertThat(recovered).isFalse();
+        assertThat(delivered).isEmpty();
+    }
+
+    private static boolean recoverFlippingReachabilityDuring(String flipKey, List<String> gets,
+            List<SubscriptionEvent> delivered) throws Exception {
         byte[] checkpoint = new Checkpoint(0, Map.of(), Map.of()).encode();
         SegmentWriter writer = new SegmentWriter();
-        writer.add(key, new SegmentRecord("row", OpType.INDEX, OptionalLong.of(0),
+        writer.add(KEY, new SegmentRecord("row", OpType.INDEX, OptionalLong.of(0),
                 new byte[] {1}), 1L);
-        Map<String, byte[]> objects = Map.of(pointer, checkpoint,
-                delta, new CommitDelta(0, segmentKey, List.of(new RunCommit(key, 1, 0))).encode(),
-                segmentKey, writer.toByteArray(1L));
+        Map<String, byte[]> objects = Map.of(POINTER, checkpoint,
+                DELTA, new CommitDelta(0, SEGMENT, List.of(new RunCommit(KEY, 1, 0))).encode(),
+                SEGMENT, writer.toByteArray(1L));
         MutableTransport transport = new MutableTransport();
-        List<String> gets = new ArrayList<>();
         TierThreeRecovery.Reader reader = new TierThreeRecovery.Reader() {
             @Override
             public OptionalLong stat(String bucket, String prefix, String objectKey) {
@@ -47,7 +74,7 @@ class TierThreeAvailabilityTransitionTest {
             @Override
             public Optional<InputStream> get(String bucket, String prefix, String objectKey) {
                 gets.add(objectKey);
-                if (objectKey.equals(pointer)) {
+                if (objectKey.equals(flipKey)) {
                     transport.answers = true;
                 }
                 byte[] bytes = objects.get(objectKey);
@@ -56,15 +83,11 @@ class TierThreeAvailabilityTransitionTest {
             }
         };
 
-        boolean recovered;
         try (NodeSubscriptions subscriptions = new NodeSubscriptions(transport, 1)) {
             subscriptions.enableTierThree(new TierThreeRecovery("bucket", "prefix", reader));
-            recovered = subscriptions.recoverTierThree(4, 0,
-                    Map.of(key, new TierThreeRecovery.Gap(0, 1)), event -> true);
+            return subscriptions.recoverTierThree(4, 0,
+                    Map.of(KEY, new TierThreeRecovery.Gap(0, 1)), event -> delivered.add(event));
         }
-
-        assertThat(recovered).isFalse();
-        assertThat(gets).containsExactly(pointer);
     }
 
     private static final class MutableTransport

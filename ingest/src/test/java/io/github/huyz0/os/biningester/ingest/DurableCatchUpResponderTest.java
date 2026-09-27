@@ -226,6 +226,31 @@ class DurableCatchUpResponderTest {
         assertThat(store.counts().lists()).isZero();
     }
 
+    // M9.32-TEST-2: the end marker passes through the same per-frame guard as event frames,
+    // so a budget one byte short of the framed end marker refuses it on the streaming sink.
+    @Test
+    void rejectsAnOversizedEndMarkerOnTheStreamingSink() throws Exception {
+        CountingBinStore store = new CountingBinStore(new MemoryBinStore());
+        CommittedDeltaSource source = (key, offset, limit) -> List.of();
+        byte[] end = new CatchUpEndFrame(REQUEST).encode();
+        var request = new CatchUpRequestFrame(REQUEST,
+                List.of(new CatchUpRequestFrame.Stream(KEY, 0)));
+        List<byte[]> emitted = new ArrayList<>();
+
+        assertThatThrownBy(() -> new DurableCatchUpResponder(store, source, () -> 9,
+                4L + end.length - 1).respond(request, emitted::add))
+                .isInstanceOf(DurableCatchUpResponder.ResponseTooLargeException.class);
+        assertThat(emitted).isEmpty();
+
+        new DurableCatchUpResponder(store, source, () -> 9, 4L + end.length)
+                .respond(request, emitted::add);
+        assertThat(emitted).singleElement()
+                .satisfies(frame -> assertThat(CatchUpEndFrame.decode(frame).requestId())
+                        .isEqualTo(REQUEST));
+        assertThat(store.counts().gets()).isZero();
+        assertThat(store.counts().lists()).isZero();
+    }
+
     @Test
     void emitsEveryRunAndRefusesAnAnswerOverItsAggregateBudget() throws Exception {
         byte[] first = segment(KEY, "one");
