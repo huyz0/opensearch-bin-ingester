@@ -38,7 +38,7 @@ import org.junit.jupiter.api.io.TempDir;
 class MutantsGateTest {
 
   /** A scratch repository with the two scripts, lib.sh and a stub gradlew. */
-  private Path scratch(Path dir) throws Exception {
+  Path scratch(Path dir) throws Exception {
     return scratch(dir, "exit 0");
   }
 
@@ -47,7 +47,7 @@ class MutantsGateTest {
    *     publishing any staged fixtures -- {@code "exit 1"} to make the
    *     mutation run fail.
    */
-  private Path scratch(Path dir, String tail) throws Exception {
+  Path scratch(Path dir, String tail) throws Exception {
     Path repo = Path.of("..").toAbsolutePath().normalize();
     Files.createDirectories(dir.resolve("scripts"));
     for (String f : List.of("check-mutants.sh", "mutants.py", "lib.sh")) {
@@ -80,14 +80,14 @@ class MutantsGateTest {
   }
 
   /** A module with a committed build file and a production source. */
-  private void module(Path repo, String name) throws Exception {
+  void module(Path repo, String name) throws Exception {
     Files.createDirectories(repo.resolve(name + "/src/main/java/io/github/huyz0/os/biningester"));
     Files.writeString(repo.resolve(name).resolve("build.gradle.kts"), "// stub\n");
     Files.writeString(repo.resolve(name + "/src/main/java/io/github/huyz0/os/biningester/X.java"), "class X {}\n");
   }
 
   /** What the stub gradlew will publish as {@code name}'s diff report. */
-  private void fixture(Path repo, String name, String json) throws Exception {
+  void fixture(Path repo, String name, String json) throws Exception {
     Files.createDirectories(repo.resolve("fixtures"));
     Files.writeString(repo.resolve("fixtures").resolve(name + ".json"), json);
   }
@@ -100,7 +100,7 @@ class MutantsGateTest {
   }
 
   /** One mutant object, in jzap 0.1.1's own field names. */
-  private static String mutant(String key, String status) {
+  static String mutant(String key, String status) {
     String cls = key.substring(0, key.indexOf("::"));
     return "{\"key\":\"" + key + "\",\"class\":\"" + cls + "\",\"method\":\"f()J\","
         + "\"line\":33,\"mutator\":\"MATH\",\"ordinal\":0,"
@@ -116,7 +116,7 @@ class MutantsGateTest {
    * it excludes baselined mutants, which jzap knows nothing about, and it
    * pools several modules' reports, which no single report can express.
    */
-  private static String report(String... mutants) {
+  static String report(String... mutants) {
     return "{\"engine\":\"schemata\",\"scope\":\"changed lines between HEAD and -Local-\","
         + "\"testsDiscovered\":390,\"mutationScore\":0.0,\"testStrength\":0.0,"
         + "\"scoredMutants\":0,\"unscoredMutants\":0,\"coveredMutants\":0,"
@@ -124,7 +124,7 @@ class MutantsGateTest {
         + "\"mutants\":[" + String.join(",", mutants) + "],\"timings\":{}}\n";
   }
 
-  private void commit(Path repo) throws Exception {
+  void commit(Path repo) throws Exception {
     run(repo, "git init -q . && git config user.email t@e && git config user.name t"
         + " && git add -A && git commit -qm base");
   }
@@ -136,19 +136,19 @@ class MutantsGateTest {
     run(repo, "git add -A");
   }
 
-  private void run(Path repo, String cmd) throws Exception {
+  void run(Path repo, String cmd) throws Exception {
     Process p = ProcessSupport.builder("bash", "-c", "set -o pipefail; " + cmd)
         .directory(repo.toFile()).redirectErrorStream(true).start();
     String out = new String(p.getInputStream().readAllBytes());
     assertThat(p.waitFor()).as(out).isZero();
   }
 
-  private String gate(Path repo) throws Exception {
+  String gate(Path repo) throws Exception {
     return gate(repo, null);
   }
 
   /** Exit status on the first line, then the gate's output. */
-  private String gate(Path repo, String checkRange) throws Exception {
+  String gate(Path repo, String checkRange) throws Exception {
     ProcessBuilder pb =
         ProcessSupport.builder("bash", "scripts/check-mutants.sh").directory(repo.toFile());
     for (String v : List.of("GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE", "CHECK_RANGE",
@@ -333,15 +333,24 @@ class MutantsGateTest {
     Path repo = scratch(dir);
     module(repo, "format");
     fixture(repo, "format", report(mutant("io.github.huyz0.os.biningester.A::f()J::33::MATH#0", "KILLED")));
+    module(repo, "sequencer");
     commit(repo);
     stageProductionChange(repo, "format");
     run(repo, "git commit -qm change");
+    // ⚠️ AND A DIFFERENT CHANGE STAGED (M10.7): with an empty index, a gate
+    // that ignored CHECK_RANGE and read the index found nothing and exited 0
+    // too, so this case passed partly on its fixture. Now the index names
+    // another module, and only the range's may be built.
+    stageProductionChange(repo, "sequencer");
+    run(repo, "git diff --cached --quiet && exit 1 || exit 0");
 
     String out = gate(repo, "HEAD~1");
 
     assertThat(out).as("CHECK_RANGE selects the changed file too%n%s", out).startsWith("0");
     assertThat(invocations(repo)).as("without this, CI diffs nothing%n%s", out)
-        .contains("JZAP_FROM: HEAD~1");
+        .contains("JZAP_FROM: HEAD~1")
+        .contains(":format:mutationTestDiff")
+        .doesNotContain(":sequencer:");
   }
 
   /**
@@ -492,30 +501,6 @@ class MutantsGateTest {
 
     assertThat(out).as("the score is 100%% and the gate STILL refuses%n%s", out).startsWith("1");
     assertThat(out).as(out).contains("STALE").contains("io.github.huyz0.os.biningester.X::f()J::34::MATH#1");
-  }
-
-  /**
-   * ⚠️ The other way an entry stops describing anything, and the one the
-   * staleness check alone cannot see: the METHOD was edited, so every line
-   * number and ordinal in it moved and the recorded key matches no mutant at
-   * all. Kept, it is a standing excuse for whatever lands on that key next.
-   * The method IS mutated this run, which is what distinguishes it from an
-   * entry that is simply outside the diff.
-   */
-  @Test
-  void aBaselineEntryWhoseKeyHasMovedIsRefusedAsUnused(@TempDir Path dir) throws Exception {
-    Path repo = prepared(dir, report(
-        mutant("io.github.huyz0.os.biningester.X::f()J::41::MATH#0", "KILLED"),
-        mutant("io.github.huyz0.os.biningester.X::f()J::41::MATH#1", "KILLED")));
-    Files.createDirectories(repo.resolve("baselines"));
-    Files.writeString(repo.resolve("baselines/mutants.txt"),
-        "io.github.huyz0.os.biningester.X::f()J::34::MATH#1  equivalent mutant on a defensive branch; M8.62\n");
-    run(repo, "git add -A");
-
-    String out = gate(repo);
-
-    assertThat(out).as("the score is 100%% and the gate STILL refuses%n%s", out).startsWith("1");
-    assertThat(out).as(out).contains("UNUSED").contains("io.github.huyz0.os.biningester.X::f()J::34::MATH#1");
   }
 
   /**

@@ -37,6 +37,8 @@ reporting success while measuring nothing. So:
 """
 import json
 import os
+import re
+import subprocess
 import sys
 
 RED, GREEN, YEL = '\033[31m', '\033[32m', '\033[33m'
@@ -88,6 +90,67 @@ def read(path):
     return mutants if isinstance(mutants, list) else None
 
 
+def diff_hunks():
+    """{source path: [(old start, old count, new count)]} for this change.
+
+    The same scope `changed_files` uses: CHECK_RANGE..HEAD when set, else the
+    index. None if git cannot answer -- the caller then keeps refusing.
+    """
+    rng = os.environ.get('CHECK_RANGE')
+    # ⚠️ THE FORMAT IS PINNED, not left to the user's git config:
+    # diff.mnemonicPrefix prints `+++ i/`, diff.noprefix prints no prefix, and
+    # color or an external diff change every line -- each of which would find
+    # no path and quietly bring the false refusal back.
+    cmd = ['git', 'diff', '-U0', '--no-renames', '--no-color', '--no-ext-diff',
+           '--src-prefix=a/', '--dst-prefix=b/']
+    cmd += [rng, 'HEAD'] if rng else ['--cached']
+    try:
+        out = subprocess.run(cmd + ['--', '*/src/main/*.java'], capture_output=True,
+                             text=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    hunks, path = {}, None
+    for line in out.splitlines():
+        if line.startswith('+++ '):
+            path = line[6:] if line.startswith('+++ b/') else None
+            if path is not None:
+                hunks.setdefault(path, [])
+        elif line.startswith('@@ ') and path is not None:
+            m = re.match(r'@@ -(\d+)(?:,(\d+))? \+\d+(?:,(\d+))? @@', line)
+            if m:
+                hunks[path].append((int(m.group(1)),
+                                    int(m.group(2) if m.group(2) is not None else 1),
+                                    int(m.group(3) if m.group(3) is not None else 1)))
+    return hunks
+
+
+def line_moved(key):
+    """Whether this change touched or moved the baselined key's line.
+
+    ⚠️ True whenever it cannot be shown otherwise -- no diff, no source file for
+    the class, a key that does not parse -- so a doubt keeps the refusal.
+    """
+    try:
+        method_key, line, _ = key.rsplit('::', 2)
+        cls, line = method_key.split('::', 1)[0], int(line)
+    except ValueError:
+        return True
+    hunks = diff_hunks()
+    if hunks is None:
+        return True
+    source = '/src/main/java/' + cls.split('$', 1)[0].replace('.', '/') + '.java'
+    files = [f for f in hunks if f.endswith(source)]
+    if len(files) != 1:
+        return True
+    shift = 0
+    for start, removed, added in hunks[files[0]]:
+        if removed and start <= line < start + removed:
+            return True                           # the line itself changed
+        if (removed and start + removed - 1 < line) or (not removed and start < line):
+            shift += added - removed              # lines added or removed above it
+    return shift != 0
+
+
 def main(modules):
     skips, malformed = baselined()
     for n, key in malformed:
@@ -136,10 +199,18 @@ def main(modules):
     # would then match nothing and be silently kept, which is a standing excuse
     # for whatever mutant lands on that key next. Seeing the method but not the
     # key is exactly that state.
+    #
+    # ⚠️ BUT A MUTATED METHOD IS NOT PROOF THE KEY MOVED (M10.7, harvested
+    # from 5f7e242's review). A diff-scoped run mutates only the CHANGED lines, so an edit to
+    # another line of the method yields mutants in it without ever examining
+    # the baselined line -- and refusing that entry refused a correct excuse.
+    # The diff decides: the entry is UNUSED only when its line was itself
+    # changed, or moved because lines were added or removed above it.
     methods = {mu.get('key', '?').rsplit('::', 2)[0] for mu in mutants}
     present = {mu.get('key', '?') for mu in mutants}
     for key, reason in skips.items():
-        if key not in present and key.rsplit('::', 2)[0] in methods:
+        if key not in present and key.rsplit('::', 2)[0] in methods \
+                and line_moved(key):
             unused.append(key)
     for mu in mutants:
         key, status = mu.get('key', '?'), mu.get('status', '?')
