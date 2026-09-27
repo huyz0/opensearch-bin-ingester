@@ -99,15 +99,14 @@ concurrency.
 ### M5.63 — one in-flight read per key
 
 `SegmentProxy` keeps a per-key in-flight entry. The first caller of a cold key
-reads the store once; concurrent callers of the same key JOIN it and are handed
-the same bytes when it completes, rather than issuing their own GET. A joiner
-holds the whole segment — bounded by the cache's own admission ceiling, and a
-segment larger than that is read by each caller as today. ⚠️ So a joiner is
-BUFFERED, not streamed: the one stated exception to ADR-0073's "streamed", ~6 ms
-per 8 MiB for K−1 callers in exchange for K−1 store GETs. If the winner's read
-throws, every joiner fails with it: one store blip becomes K failed fetches,
-each of which the consumer retries, which is the cost of never issuing the
-duplicate GETs this row exists to remove.
+reads the store once; concurrent callers of the same key ATTACH to that read —
+handed the prefix already read, then each chunk as it arrives — rather than
+issuing their own GET, so they stream as the first caller's consumers do. A
+caller arriving after the segment outgrew the cache's admission ceiling reads
+for itself, without trying to admit it. If the read throws — an `Error`
+included — every attached caller fails with it: one store blip becomes K failed
+fetches, each of which the consumer retries, which is the cost of never issuing
+the duplicate GETs this row exists to remove.
 
 ### Lanes ([ADR-0074](../../decisions/0074-priority-lanes-are-carried-per-request-and-scheduled-per-run.md))
 
@@ -192,7 +191,9 @@ the spacing the controller reports; NFR-1's counted bound catches that one.
    route fetch. (M10.3)
 5. **Concurrent cold fetches of one segment cost one GET**, T1: K ≥ 8 callers
    racing on one cold key are served identical bytes from exactly one store
-   GET; when that GET throws, every joiner fails and nothing is cached. (M5.63)
+   GET, a segment larger than the cache included; when that GET throws —
+   or the first caller dies of an `Error` — every attached caller fails, nothing
+   is cached, and the next caller reads again. (M5.63)
 6. **NFR-5 IN FULL**, T3 on RustFS: pods in `az-a` and `az-b`; the producer
    writes to the `az-a` pod; an `az-b` consumer takes its events from the
    writer and its payloads from the `az-b` pod's proxy route. Cross-AZ bytes on
@@ -276,8 +277,9 @@ the spacing the controller reports; NFR-1's counted bound catches that one.
   requests per pod and a lane's floor, where before M10 requests queued on the
   accumulator without bound. Producers already retry 429 (OpenSearch bulk
   semantics).
-- **A joiner holds a whole segment (M5.63).** Bounded by the cache's admission
-  ceiling; a larger segment is read per caller as before.
+- **A joiner shares the first caller's pace (M5.63).** It attaches to the read
+  in flight, so a sink that blocks stalls every attached caller, and a late
+  joiner's catch-up from the prefix stalls the read while it is written.
 - **A positive lane spends PUTs.** Bounded at `2^L` flushes per ceiling and
   amended into NFR-1 with the number, rather than hidden.
 

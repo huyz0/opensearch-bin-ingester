@@ -24,9 +24,10 @@ import java.util.Objects;
  * fetch per object per NODE, shared by every shard on it". A repeat across
  * publishes now costs no GET: {@link SegmentCache} holds whole segments and
  * this class consults it, so one fan-out of 64 plus three LATE subscribers is
- * ONE read (M5.40b). ⚠️ WHAT IS STILL TWO READS is two publishes of the same
- * segment that OVERLAP IN TIME: admission happens when a read completes, so
- * both miss and both fetch. That is M5.63. ⚠️ And the per-AZ prefetch that
+ * ONE read (M5.40b). And two publishes of the same segment that OVERLAP IN
+ * TIME are one read too since M5.63: the second caller attaches to the first
+ * caller's read in flight rather than missing and fetching again. ⚠️ And the
+ * per-AZ prefetch that
  * makes one read serve a whole availability zone is M5.16's, which is a
  * different scope from either.
  *
@@ -112,6 +113,33 @@ public final class SegmentProxy {
         return cache;
     }
 
+    private final java.util.concurrent.ConcurrentHashMap<String, InFlightRead> inFlight =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * ⚠️ A TEST SEAM: runs between a caller's cache miss and its claim of the
+     * key, the one window in which a previous winner can fill the cache and
+     * leave. Package-private and a no-op in production.
+     */
+    volatile Runnable betweenMissAndClaim = () -> { };
+
+    /** ⚠️ A TEST SEAM: between a claim and its re-check of the cache. No-op in production. */
+    volatile Runnable betweenClaimAndRecheck = () -> { };
+
+    /** ⚠️ A TEST SEAM: between a read's completion and its entry's removal. No-op in production. */
+    volatile Runnable betweenCompleteAndRemove = () -> { };
+
+    /** How many callers are waiting on the read of {@code segmentKey} now. */
+    int joinersOf(String segmentKey) {
+        InFlightRead read = inFlight.get(segmentKey);
+        return read == null ? 0 : read.joiners();
+    }
+
+    /** Whether a read of {@code segmentKey} is registered as in flight. */
+    boolean inFlight(String segmentKey) {
+        return inFlight.containsKey(segmentKey);
+    }
+
     /** The largest slice any consumer is handed. */
     public int chunkBytes() {
         return chunkBytes;
@@ -146,10 +174,12 @@ public final class SegmentProxy {
      * a consumer that received half a segment has no way to tell that from a
      * whole one.
      *
-     * <p>⚠️ ONE CALL IS ONE READ, SO THE CALLER OWNS THE GRANULARITY. This
-     * method makes no attempt to recognise that two calls name the same
-     * segment, so a caller looping the per-{@code RunKey} subscriber map would
-     * issue one GET per SHARD per flush -- ~1,600 for a single 8 MiB segment.
+     * <p>⚠️ THE CALLER STILL OWNS THE GRANULARITY. Since M5.63 two calls that
+     * OVERLAP on one cold key share one read, but two that follow each other
+     * are one read only while the cache holds the segment, so a caller looping
+     * the per-{@code RunKey} subscriber map would still issue one GET per SHARD
+     * per flush for any segment the cache cannot hold -- ~1,600 for a single
+     * 8 MiB segment.
      * Call it ONCE PER SEGMENT with every interested sink, not once per run.
      * ⚠️ AND ONE ENTRY PER CONSUMER, not one per subscription: a node
      * subscribed to several runs of the same segment is ONE sink, not several.
@@ -221,6 +251,69 @@ public final class SegmentProxy {
             return live.size();
         }
 
+        // ⚠️ M5.63: ONE IN-FLIGHT READ PER KEY. A second caller of a cold key
+        // ATTACHES to the first read instead of issuing its own GET -- the
+        // normal case for the proxy segment route, where every node of an AZ
+        // asks for a fresh segment at once (research 10 §4). See InFlightRead for
+        // how a joiner streams. With caching off (capacity 0) nothing is
+        // shared, which keeps the pre-M5.40b behaviour exact.
+        if (cache.capacityBytes() == 0) {
+            readThrough(segmentKey, live, null, false);
+            return live.size();
+        }
+        betweenMissAndClaim.run();
+        InFlightRead mine = new InFlightRead();
+        InFlightRead leader = inFlight.putIfAbsent(segmentKey, mine);
+        if (leader != null) {
+            int served = leader.join(live, chunkBytes);
+            if (served >= 0) {
+                return served;
+            }
+            // ⚠️ TOO LARGE TO SHARE, and the winner has already shown it will
+            // not fit: read for this caller alone, and do not try to admit it,
+            // or K late callers each grow a cache-sized buffer to discard.
+            readThrough(segmentKey, live, null, false);
+            return live.size();
+        }
+        Throwable failure = null;
+        try {
+            // ⚠️ RE-CHECKED AFTER CLAIMING: the previous winner may have filled
+            // the cache and left between this caller's miss and its claim.
+            betweenClaimAndRecheck.run();
+            byte[] late = cache.get(segmentKey);
+            if (late != null) {
+                for (int offset = 0; offset < late.length; offset += chunkBytes) {
+                    int length = Math.min(chunkBytes, late.length - offset);
+                    mine.relay(late, offset, length, late, offset + length);
+                }
+                writeChunked(late, live);
+                return live.size();
+            }
+            // ⚠️ THE CACHE IS FILLED INSIDE, BEFORE THIS RETURNS -- and so
+            // before the entry is removed below: a caller arriving between the
+            // two finds one or the other, never neither.
+            readThrough(segmentKey, live, mine, true);
+            return live.size();
+        } catch (Throwable anyFailure) {
+            // ⚠️ ANY THROWABLE, AN `Error` INCLUDED: a joiner waits without a
+            // timeout, so a read that ended without completing its entry would
+            // hold every joiner's consumers for ever.
+            failure = anyFailure;
+            throw anyFailure;
+        } finally {
+            mine.complete(failure);
+            betweenCompleteAndRemove.run();
+            inFlight.remove(segmentKey, mine);
+        }
+    }
+
+    /**
+     * One caller's read of a cold key: streamed to {@code live}, relayed to
+     * {@code shared}'s joiners when there is one, and admitted to the cache
+     * when {@code admit} and it fits.
+     */
+    private void readThrough(String segmentKey, List<SegmentSink> live, InFlightRead shared,
+            boolean admit) throws IOException {
         byte[] buffer = new byte[chunkBytes];
 
         // ⚠️ GROWN, NOT DOUBLED WITHOUT A LIMIT, and abandoned the moment the
@@ -235,7 +328,7 @@ public final class SegmentProxy {
         // Growth is clamped to the ceiling here and the trim below copies once,
         // so the peak is the accumulator plus one copy rather than an unbounded
         // double-and-copy -- stated because `bytesHeld()` cannot show it.
-        byte[] admitting = cache.capacityBytes() > 0 ? new byte[0] : null;
+        byte[] admitting = admit && cache.capacityBytes() > 0 ? new byte[0] : null;
         int admitted = 0;
 
         try (InputStream in = store.get(segmentKey)) {
@@ -277,6 +370,9 @@ public final class SegmentProxy {
                         live.remove(i);
                     }
                 }
+                if (shared != null) {
+                    shared.relay(buffer, 0, read, admitting, admitted);
+                }
             }
         }
         // ⚠️ ADMITTED ONLY AFTER THE READ COMPLETED, so a stream that THREW
@@ -295,7 +391,6 @@ public final class SegmentProxy {
                     ? admitting
                     : java.util.Arrays.copyOf(admitting, admitted));
         }
-        return live.size();
     }
 
     /**

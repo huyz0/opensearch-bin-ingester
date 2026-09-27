@@ -43,11 +43,14 @@ subscribes to.**
    of that AZ the first fetch is one cold GET. Concurrent cold fetches of one
    key JOIN a single in-flight read (M5.63, pulled into M10 for this route),
    so the bound is **≤ 1 GET per segment per serving ingester**, concurrency
-   included. ⚠️ **THE ONE EXCEPTION TO "STREAMED":** a joiner of an in-flight
-   read is handed the complete bytes when the winner's read finishes, so the
-   K−1 concurrent callers pay research 10's buffered penalty (~6 ms per 8 MiB)
-   to save K−1 store GETs. The hold is bounded by the cache's admission
-   ceiling; a segment larger than that is read by each caller, streamed.
+   included. A joiner ATTACHES to the read in flight: it is handed the prefix
+   already read -- the cache-bound accumulator the first caller is filling --
+   and then each chunk as it is read, so it streams like the first caller's own
+   consumers and is never buffered until the end. A caller arriving after the
+   segment outgrew the cache's admission ceiling has no prefix to take and
+   reads for itself. ⚠️ The cost of sharing one read: a sink that BLOCKS stalls
+   every attached caller, exactly as it already stalls the other consumers of
+   one call.
 3. **The key is checked before any I/O.** It must parse as a data
    `SegmentKey` under this deployment's own trust-domain prefix. Anything else —
    a commit-log key, a lease, another domain's prefix, a traversal — is `400`
