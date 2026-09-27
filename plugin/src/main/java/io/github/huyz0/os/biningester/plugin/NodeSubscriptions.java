@@ -313,7 +313,34 @@ public final class NodeSubscriptions implements AutoCloseable {
      * call for the same key opens a FRESH subscription rather than handing
      * back one that is already dead.
      */
-    public synchronized void release(RunKey key) {
+    public void release(RunKey key) {
+        // ⚠️ M10.22: ONLY THE RELEASE THAT EMPTIES THE NODE WAITS for an
+        // admitted Tier-2 read. M9.43's ordering is that a read admitted while
+        // clients exist finishes before the node goes idle; a shard relocating
+        // off a node that still holds another stream has nothing to order
+        // against it, and under the node-wide monitor it blocked behind a
+        // stalled read for as long as the read lasted. Lock order is always
+        // tierTwoLock, then this.
+        synchronized (this) {
+            if (!emptiesTheNode(key)) {
+                releaseHeld(key);
+                return;
+            }
+        }
+        synchronized (tierTwoLock) {
+            synchronized (this) {
+                releaseHeld(key);
+            }
+        }
+    }
+
+    /** Whether releasing {@code key} now would leave this node holding nothing. */
+    private boolean emptiesTheNode(RunKey key) {
+        Entry entry = clients.get(key);
+        return entry != null && clients.size() == 1 && entry.refCount <= 1;
+    }
+
+    private void releaseHeld(RunKey key) {
         clients.computeIfPresent(key, (k, entry) -> {
             synchronized (entry.client) {
                 entry.refCount--;
@@ -402,13 +429,28 @@ public final class NodeSubscriptions implements AutoCloseable {
         tierTwoPoller = new TierTwoChainPoller(-1, -1, reader, ingesterReachable, consumer);
     }
 
-    /** One scheduled node-wide tick, regardless of the number of clients or shards. */
-    synchronized void pollTierTwo(long interval) {
-        TierTwoChainPoller poller = tierTwoPoller;
-        if (poller != null && !clients.isEmpty() && pendingTierTwoDelta.get() == null) {
+    /**
+     * One scheduled node-wide tick, regardless of the number of clients or shards.
+     *
+     * <p>⚠️ THE READ RUNS UNDER {@code tierTwoLock}, NOT THE NODE MONITOR
+     * (M10.22): admitted under both, it holds only the Tier-2 lock while the
+     * reader answers, so only an emptying {@link #release} waits for it.
+     */
+    void pollTierTwo(long interval) {
+        synchronized (tierTwoLock) {
+            TierTwoChainPoller poller;
+            synchronized (this) {
+                poller = tierTwoPoller;
+                if (poller == null || clients.isEmpty() || pendingTierTwoDelta.get() != null) {
+                    return;
+                }
+            }
             poller.poll(interval);
         }
     }
+
+    /** Serialises Tier-2 reads against the release that empties the node. */
+    private final Object tierTwoLock = new Object();
 
     /** Holds the one fetched delta for M9.44 recovery; never silently discard it. */
     void offerTierTwoDelta(CommitDelta delta) {

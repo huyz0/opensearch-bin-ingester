@@ -19,6 +19,7 @@ public final class NodeLocalStoreReaderClient implements AutoCloseable {
     private final URI endpoint;
     private final String authorization;
     private final long maxBytes;
+    private final Duration bodyDeadline;
 
     /** Composition-root helper that keeps URI and filesystem types out of the plugin module. */
     public static NodeLocalStoreReaderClient open(String endpoint, String secretFile,
@@ -27,8 +28,30 @@ public final class NodeLocalStoreReaderClient implements AutoCloseable {
                 maxBytes);
     }
 
+    /**
+     * ⚠️ M10.22: THE REQUEST TIMEOUT BOUNDS THE HEADERS ONLY. A reader that
+     * answers 200 and then stalls mid-body would hold its caller -- a Tier-2
+     * read, and whatever lock it runs under -- for as long as the loopback
+     * socket stays open. So the body has its own deadline, counted from the
+     * request, past which the body is closed and its next read fails.
+     */
+    static final Duration DEFAULT_BODY_DEADLINE = Duration.ofSeconds(30);
+
+    private static final java.util.concurrent.ScheduledExecutorService DEADLINES =
+            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(runnable -> {
+                Thread thread = new Thread(runnable, "node-local-reader-deadline");
+                thread.setDaemon(true);
+                return thread;
+            });
+
     public NodeLocalStoreReaderClient(URI endpoint, Path secretFile, Duration timeout,
             long maxBytes) throws IOException {
+        this(endpoint, secretFile, timeout, maxBytes, DEFAULT_BODY_DEADLINE);
+    }
+
+    /** The same, with the body's own deadline. */
+    public NodeLocalStoreReaderClient(URI endpoint, Path secretFile, Duration timeout,
+            long maxBytes, Duration bodyDeadline) throws IOException {
         if (!"http".equals(endpoint.getScheme()) || !"127.0.0.1".equals(endpoint.getHost())
                 || endpoint.getUserInfo() != null || endpoint.getRawQuery() != null
                 || endpoint.getFragment() != null || endpoint.getPort() < 1
@@ -43,6 +66,10 @@ public final class NodeLocalStoreReaderClient implements AutoCloseable {
         this.authorization = "Bearer " + Base64.getUrlEncoder().withoutPadding().encodeToString(secret);
         java.util.Arrays.fill(secret, (byte) 0);
         this.maxBytes = maxBytes;
+        this.bodyDeadline = java.util.Objects.requireNonNull(bodyDeadline, "bodyDeadline");
+        if (bodyDeadline.isNegative() || bodyDeadline.isZero()) {
+            throw new IllegalArgumentException("a body deadline is positive");
+        }
         this.client = HttpClient.newBuilder().connectTimeout(timeout).build();
     }
 
@@ -65,11 +92,47 @@ public final class NodeLocalStoreReaderClient implements AutoCloseable {
                 response.body().close();
                 throw new IOException("node-local reader answered HTTP " + response.statusCode());
             }
-            return Optional.of(new LimitedInputStream(response.body(), maxBytes));
+            return Optional.of(new LimitedInputStream(deadlined(response.body()), maxBytes));
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
             throw new IOException("node-local reader request interrupted");
         }
+    }
+
+    /** {@code body}, closed underneath its reader once {@code bodyDeadline} has passed. */
+    private InputStream deadlined(InputStream body) {
+        java.util.concurrent.atomic.AtomicBoolean expired =
+                new java.util.concurrent.atomic.AtomicBoolean();
+        java.util.concurrent.ScheduledFuture<?> timer = DEADLINES.schedule(() -> {
+            expired.set(true);
+            try {
+                body.close();
+            } catch (IOException ignored) {
+                // closing is the whole action; a failure to close leaves the read to fail
+            }
+        }, bodyDeadline.toNanos(), java.util.concurrent.TimeUnit.NANOSECONDS);
+        return new java.io.FilterInputStream(body) {
+            @Override public int read() throws IOException {
+                return check(super.read());
+            }
+
+            @Override public int read(byte[] bytes, int offset, int length) throws IOException {
+                return check(super.read(bytes, offset, length));
+            }
+
+            private int check(int result) throws IOException {
+                if (expired.get()) {
+                    throw new IOException("node-local reader body exceeded its " + bodyDeadline
+                            + " deadline");
+                }
+                return result;
+            }
+
+            @Override public void close() throws IOException {
+                timer.cancel(false);
+                super.close();
+            }
+        };
     }
 
     static Optional<InputStream> missingResponse(InputStream body) throws IOException {
