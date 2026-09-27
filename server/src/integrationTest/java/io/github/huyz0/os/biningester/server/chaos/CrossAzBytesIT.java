@@ -45,6 +45,13 @@ class CrossAzBytesIT {
      */
     private static final int PROXIED_RECORDS = 200;
     private static final int PROXIED_BATCHES = 2;
+
+    /**
+     * ⚠️ ~230 KB a bulk, one stream: under the 256 KiB inline cap and above
+     * the event floor for K = 1 (~166 KB; it is K x 166 KB for K streams).
+     */
+    private static final int SUB_CAP_RECORDS = 110;
+    private static final int SUB_CAP_BATCHES = 3;
     private static final Pattern COUNTER = Pattern.compile("\\\"([A-Za-z]+)\\\":(\\d+)");
 
     @TempDir
@@ -70,7 +77,12 @@ class CrossAzBytesIT {
                 }
                 assertThat(nodeSettings.getProperty("pod.uid")).isNotEqualTo("caller-supplied");
                 assertThat(UUID.fromString(nodeSettings.getProperty("pod.uid"))).isNotNull();
-                secondNode = NodeProcess.start(directory, "podb", settings);
+                // ⚠️ THE SECOND POD IS THE CONSUMER'S OWN ZONE (M10.33): since
+                // ADR-0076 an az-b consumer is served `proxy`, never inline,
+                // so it needs an az-b route to fetch its payload from.
+                Map<String, String> zoneB = new HashMap<>(settings);
+                zoneB.put("pod.az", "az-b");
+                secondNode = NodeProcess.start(directory, "podb", zoneB);
                 var secondNodeSettings = new java.util.Properties();
                 try (var input = Files.newInputStream(directory.resolve("podb.properties"))) {
                     secondNodeSettings.load(input);
@@ -88,7 +100,10 @@ class CrossAzBytesIT {
                         "http://localhost:" + node.port(), () -> { }, Duration.ofMillis(50),
                         Duration.ofSeconds(1), Duration.ofSeconds(30), Duration.ofSeconds(2),
                         32 * 1024 * 1024, "az-b");
-                try (ConsumerClient consumer = new ConsumerClient(transport, key, 16)) {
+                DeliveredSegments delivered = new DeliveredSegments(new HttpSegmentSource(
+                        Duration.ofSeconds(30), "http://localhost:" + secondNode.port(), "az-b"));
+                try (ConsumerClient consumer = new ConsumerClient(transport, key, 16,
+                        delivered)) {
                     assertThat(node.write(List.of(firstId))).isEqualTo(202);
                     assertThat(consumer.readNext(Duration.ofSeconds(30))).isPresent();
                 } finally {
@@ -113,10 +128,15 @@ class CrossAzBytesIT {
                         "inlinePush", "consumerPoll", "commitForward", "inboxDrain");
                 assertThat(values.get("unknownPeerBytes")).isZero();
                 assertThat(values.get("crossAzBytes")).isPositive();
-                assertThat(values.get("inlinePush")).isPositive();
                 assertThat(values.get("inlinePush"))
-                        .as("the deliberately small delivered segment is inline, not proxy")
-                        .isGreaterThan(values.get("proxyRead"));
+                        .as("a consumer in another zone is never inlined (ADR-0076)")
+                        .isZero();
+                assertThat(values.get("proxyRead"))
+                        .as("the small delivered segment is proxy: its event frame crossed")
+                        .isPositive();
+                assertThat(delivered.fetches())
+                        .as("and its payload came from the az-b pod's route")
+                        .isPositive();
                 long byTransport = values.get("proxyRead") + values.get("inlinePush")
                         + values.get("consumerPoll") + values.get("commitForward")
                         + values.get("inboxDrain");
@@ -126,9 +146,6 @@ class CrossAzBytesIT {
                         .as("cross-AZ bytes=%d, producer bytes=%d", values.get("crossAzBytes"),
                                 accepted)
                         .isLessThan(accepted);
-                assertThat(values.get("proxyRead"))
-                        .as("proxy-read is the event frame until its segment route is wired")
-                        .isGreaterThanOrEqualTo(0L);
                 System.out.println("M9.10 cross-AZ bytes: producer=" + accepted
                         + ", counters=" + values);
             } finally {
@@ -275,6 +292,124 @@ class CrossAzBytesIT {
                         .as("a misrouted fetch adds exactly its size to cross-AZ PROXY_READ")
                         .isEqualTo(control.length);
                 assertThat(after.get("sameAzProxyRead")).isEqualTo(a.get("sameAzProxyRead"));
+            } finally {
+                if (writer != null) {
+                    writer.close();
+                }
+                if (sameZone != null) {
+                    sameZone.close();
+                }
+            }
+        }
+    }
+
+    /**
+     * M10.33, ADR-0076: NFR-5 BELOW THE INLINE CAP, the case M10.4 sized past.
+     *
+     * <p>⚠️ **EACH BULK IS SUB-CAP**, ~230 KB against the writer's 256 KiB
+     * inline cap, and every delivered segment is asserted under it -- so the
+     * writer's size policy answers {@code inline} for every one. Before
+     * ADR-0076 that answer went to the az-b consumer too, payload included,
+     * and its cross-AZ bytes equalled its payload bytes (M10 review F1). Now
+     * the writer tells it {@code proxy} with no bytes and the payload comes
+     * from the az-b pod's {@code /seg}.
+     *
+     * <p>⚠️ **NOT A SMALL BULK, AND THAT IS THE MEASUREMENT, NOT A DODGE.**
+     * What still crosses is ~166 B of event PER STREAM SESSION per segment
+     * (499 B over 3 segments here), because one event goes to each
+     * {@code id@RunKey} session. So 0.1% holds only above ~K x 166 KB, where K
+     * is the number of cross-zone-served streams in the segment: an 8 MiB
+     * segment of 400 such streams sends ~66 KB of events, 0.79%, about 8x
+     * NFR-5. ⚠️ THIS CASE HAS ONE STREAM, K = 1, and proves the payload term
+     * only; the per-stream floor is not closed by ADR-0076. The size is chosen
+     * to sit between the K = 1 floor and the cap, which is the band F1 broke.
+     */
+    @Test
+    void nfr5HoldsBelowTheInlineCap() throws Exception {
+        assumeTrue(S3Fixture.dockerAvailable(), "no Docker daemon: this is a T3 suite");
+        try (ChaosBucket bucket = ChaosBucket.create()) {
+            Map<String, String> common = new HashMap<>(bucket.nodeSettings());
+            common.put("producer.allowed-indices", INDEX);
+            Map<String, String> zoneA = new HashMap<>(common);
+            zoneA.put("pod.az", "az-a");
+            Map<String, String> zoneB = new HashMap<>(common);
+            zoneB.put("pod.az", "az-b");
+            Path writerCounts = directory.resolve("subcap-writer.json");
+            Path proxyCounts = directory.resolve("subcap-proxy.json");
+            NodeProcess writer = null;
+            NodeProcess sameZone = null;
+            try {
+                writer = NodeProcess.start(directory, "poda", zoneA, NodeProcess.Options.NONE,
+                        writerCounts);
+                sameZone = NodeProcess.start(directory, "podb", zoneB,
+                        NodeProcess.Options.NONE, proxyCounts);
+                UUID stream = UUID.randomUUID();
+                writer.registerIndex(INDEX, stream);
+                RunKey key = new RunKey(stream, 0);
+
+                long consumed = 0;
+                int written = 0;
+                DeliveredSegments delivered = new DeliveredSegments(new HttpSegmentSource(
+                        Duration.ofSeconds(30), "http://localhost:" + sameZone.port(), "az-b"));
+                HttpSubscriptionTransport transport = new HttpSubscriptionTransport(
+                        "http://localhost:" + writer.port(), () -> { }, Duration.ofMillis(50),
+                        Duration.ofSeconds(1), Duration.ofSeconds(30), Duration.ofSeconds(2),
+                        32 * 1024 * 1024, "az-b");
+                try (ConsumerClient consumer = new ConsumerClient(transport, key, 16,
+                        delivered)) {
+                    for (int batch = 0; batch < SUB_CAP_BATCHES; batch++) {
+                        List<String> ids = new ArrayList<>();
+                        for (int i = 0; i < SUB_CAP_RECORDS; i++) {
+                            ids.add("sub-cap-" + batch + "-" + i);
+                        }
+                        assertThat(writer.write(ids)).isEqualTo(202);
+                        written += ids.size();
+                    }
+                    java.util.Set<String> seen = new java.util.HashSet<>();
+                    for (int read = 0; read < written; read++) {
+                        var record = consumer.readNext(Duration.ofSeconds(30));
+                        assertThat(record)
+                                .as("record %d of %d reached the az-b consumer", read, written)
+                                .isPresent();
+                        String id = record.get().record().id();
+                        assertThat(seen.add(id)).as("record %s consumed once", id).isTrue();
+                        consumed += bodyBytes(List.of(id));
+                    }
+                } finally {
+                    transport.close();
+                }
+
+                writer.snapshotCounts(writerCounts);
+                sameZone.snapshotCounts(proxyCounts);
+                Map<String, Long> a = counters(Files.readString(writerCounts,
+                        StandardCharsets.UTF_8));
+                Map<String, Long> b = counters(Files.readString(proxyCounts,
+                        StandardCharsets.UTF_8));
+                System.out.println("M10.33 sub-cap NFR-5: consumed=" + consumed + ", delivered="
+                        + delivered.bytes() + " in " + delivered.fetches() + " fetches "
+                        + delivered.sizes + ", az-a=" + a + ", az-b=" + b);
+                // (1) the payloads came from the az-b pod, and every one was sub-cap.
+                assertThat(delivered.fetches())
+                        .as("the az-b consumer fetched its payloads over the az-b /seg")
+                        .isPositive();
+                assertThat(delivered.sizes.values())
+                        .as("every delivered segment is under the 256 KiB inline cap")
+                        .allSatisfy(size -> assertThat(size).isLessThan(256 * 1024));
+                assertThat(b.get("sameAzProxyRead"))
+                        .as("same-AZ proxy payload bytes against segment bytes delivered")
+                        .isGreaterThanOrEqualTo(delivered.bytes());
+                for (Map<String, Long> pod : List.of(a, b)) {
+                    assertThat(pod.get("unknownPeerBytes")).isZero();
+                }
+                assertThat(a.get("inlinePush"))
+                        .as("the writer inlined nothing ACROSS the zone")
+                        .isZero();
+                // (2) NFR-5 against what the consumer read.
+                long crossAz = a.get("crossAzBytes") + b.get("crossAzBytes");
+                assertThat(crossAz * 1_000L)
+                        .as("cross-AZ bytes=%d (az-a %d, az-b %d), consumed producer bytes=%d",
+                                crossAz, a.get("crossAzBytes"), b.get("crossAzBytes"), consumed)
+                        .isLessThan(consumed);
             } finally {
                 if (writer != null) {
                     writer.close();

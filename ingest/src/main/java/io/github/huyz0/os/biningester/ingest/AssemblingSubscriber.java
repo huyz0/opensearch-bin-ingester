@@ -39,8 +39,18 @@ final class AssemblingSubscriber {
      * SERVICE's, and this adapter is the consumer.
      */
     static SubscriptionHub.Subscriber of(Consumer<SubscriptionHub.Push> onSegment) {
+        return of(onSegment, null);
+    }
+
+    /** The same, for a consumer that declared {@code az} (M10.33, ADR-0076). */
+    static SubscriptionHub.Subscriber of(Consumer<SubscriptionHub.Push> onSegment, String az) {
         Objects.requireNonNull(onSegment, "onSegment");
         return new SubscriptionHub.Subscriber() {
+            @Override
+            public String az() {
+                return az;
+            }
+
             @Override
             public SegmentSink open(List<SubscriptionHub.Push> pushes) {
                 return new AssemblingSink();

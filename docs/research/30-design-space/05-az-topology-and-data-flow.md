@@ -9,6 +9,14 @@ reasoning about where bytes travel.
 byte of record data moves only along free paths (compute ↔ object store, same region); the only
 cross-AZ traffic is commit metadata.
 
+> ⚠️ **Revised 2026-09-27.** Until [ADR-0076](../../internal/product/decisions/0076-a-cross-az-subscriber-is-served-proxy-never-inline.md)
+> this was false below the 256 KiB inline cap: a sub-cap segment was pushed inline, payload and
+> all, to a consumer in another AZ (M10 review F1; measured 98.7% of consumed bytes cross-AZ).
+> It holds again for a consumer that declares its zone. Measured after the fix: 499 B of event
+> frames over 694,650 consumed bytes (0.072%) for sub-cap segments, and 335 B over 842,180 B
+> (0.040%) above the cap (M10.4), both with ONE stream per segment. The event frame is
+> per stream, so a segment of K cross-zone streams needs roughly K x 166 KB to meet 0.1%.
+
 ---
 
 ## 1. The cost topology

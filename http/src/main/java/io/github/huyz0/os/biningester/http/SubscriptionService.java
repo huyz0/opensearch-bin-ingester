@@ -129,11 +129,13 @@ public final class SubscriptionService implements HttpService {
      * {@link #MAX_SESSIONS}) and no zone crosses it any other way. So a
      * consumer that claims THIS ingester's zone moves its bytes out of NFR-5's
      * numerator — a mislabelled pod understates the measurement, and a
-     * malicious one can zero it. That is tolerable for exactly one reason: the
-     * value reaches a COUNTER and nothing else. It routes no request, gates no
-     * fetch, authorises nothing, and is never compared for a placement
-     * decision. ⚠️ If a zone ever decides where bytes GO, this parameter is not
-     * the source it may come from -- membership is (ADR-0012, ADR-0040).
+     * malicious one can zero it. ⚠️ **SINCE ADR-0076 IT ALSO WITHHOLDS BYTES**:
+     * a zone that differs from this pod's is served {@code proxy}, never
+     * {@code inline}. That is tolerable because it can only take a payload
+     * AWAY -- a liar gets what an honest consumer got before, or less. It
+     * routes no request, gates no fetch and authorises nothing. ⚠️ If a zone
+     * ever decides where bytes GO, this parameter is not the source it may
+     * come from -- membership is (ADR-0012, ADR-0040).
      */
     public static final String AZ_PARAM = HttpSubscriptionTransport.AZ_PARAM;
 
@@ -322,13 +324,15 @@ public final class SubscriptionService implements HttpService {
         /** Guarded by this session's monitor, with {@link #offer} and {@link #release}. */
         private boolean released;
 
-        Session(SubscriptionHub hub, RunKey key, long nowMillis) {
+        Session(SubscriptionHub hub, RunKey key, long nowMillis, String consumerAz) {
             // ⚠️ `offer`, NOT `put`: `put` BLOCKS THE HUB'S PUBLISHING THREAD,
             // which is shared by every subscriber on this node -- so one
             // consumer that stopped polling would stop deliveries to all of
             // them. A full queue drops, and the consumer resumes from its own
             // committed position.
-            this.subscription = hub.subscribe(key, SubscriptionHub.assembling(this::offer));
+            // ⚠️ THE ZONE IS THE ONE THE CREATING POLL DECLARED (ADR-0076), fixed
+            // for the session's life: a consumer's transport sends one zone.
+            this.subscription = hub.subscribe(key, SubscriptionHub.assembling(this::offer, consumerAz));
             this.lastPolledMillis = nowMillis;
         }
 
@@ -442,7 +446,10 @@ public final class SubscriptionService implements HttpService {
                     .send("this ingester holds " + maxSessions + " subscriptions already");
             return;
         }
-        Session session = sessionFor(sessionKey, key);
+        // ⚠️ THE CONSUMER'S OWN WORD FOR ITS ZONE -- see AZ_PARAM. Absent is
+        // counted as cross-AZ, unattributed, and keeps the size policy.
+        String consumerAz = request.query().first(AZ_PARAM).orElse(null);
+        Session session = sessionFor(sessionKey, key, consumerAz);
         try {
             java.io.ByteArrayOutputStream body = new java.io.ByteArrayOutputStream();
             // ⚠️ THE FLOOR GOES FIRST, TO ANY POLL THAT ASKS (ADR-0056). An
@@ -453,10 +460,6 @@ public final class SubscriptionService implements HttpService {
             // for at most `ConsumerClient.MAX_FLOOR_ASKS` polls, so the cost is
             // a cache lookup on those polls -- and the cache, not the poll, is
             // what reads the store.
-            // ⚠️ THE CONSUMER'S OWN WORD FOR ITS ZONE, unverified and used for
-            // accounting only -- see AZ_PARAM. Absent is counted as cross-AZ
-            // and reported as unattributed rather than dropped.
-            String consumerAz = request.query().first(AZ_PARAM).orElse(null);
             if (request.query().first(FLOOR_PARAM).map("1"::equals).orElse(false)) {
                 java.util.OptionalLong floor = floors.floorOf(key);
                 if (floor.isPresent()) {
@@ -525,9 +528,9 @@ public final class SubscriptionService implements HttpService {
     }
 
     /** The standing session under {@code sessionKey}, opened if new, marked polled now. */
-    Session sessionFor(String sessionKey, RunKey key) {
+    Session sessionFor(String sessionKey, RunKey key, String consumerAz) {
         Session session = sessions.computeIfAbsent(sessionKey,
-                unused -> new Session(hub, key, clock.millis()));
+                unused -> new Session(hub, key, clock.millis(), consumerAz));
         session.lastPolledMillis = clock.millis();
         return session;
     }

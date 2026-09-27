@@ -154,8 +154,8 @@ final class SegmentServingPath {
                         serving.capabilities());
 
         switch (via) {
-            case INLINE -> deliver(committed.segmentKey(), targets, FetchMode.INLINE,
-                    sinks -> writeHeldBytes(heldBytes, sinks), null, sequencerEpoch, chainSequence);
+            case INLINE -> inlineWithinTheZone(committed.segmentKey(), targets, heldBytes,
+                    sequencerEpoch, chainSequence);
             // ⚠️ FROM THE HELD ARRAY WHEN WE HAVE ONE, and only from the store
             // when we do not. `proxy` names how the bytes reach the CONSUMER;
             // it is never a reason to buy a GET for bytes this pod is already
@@ -182,6 +182,63 @@ final class SegmentServingPath {
             case DIRECT -> deliver(committed.segmentKey(), targets, FetchMode.DIRECT,
                     sinks -> { }, serving.issuer(), sequencerEpoch, chainSequence);
         }
+    }
+
+    /**
+     * An {@code inline} segment, split by ZONE: inline to every subscriber
+     * that may take the payload, {@code proxy} WITHOUT BYTES to every one
+     * declared in another zone (M10.33, ADR-0076).
+     *
+     * <p>⚠️ THE SIZE POLICY IS ASKED ONCE, THE ZONE PER TARGET. The
+     * segment-level answer applied the 256 KiB same-AZ cap to every subscriber,
+     * so a sub-cap segment went across the zone payload and all -- cross-AZ
+     * bytes equal to payload bytes for that consumer, where NFR-5 allows 0.1%
+     * (M10 review F1). Deciding per target is a string comparison: no store
+     * request, no extra pass over the bytes.
+     *
+     * <p>⚠️ THE PROXY GROUP IS OPENED AND COMPLETED EMPTY, like {@code direct}.
+     * Its consumer fetches the segment from its own zone's {@code /seg}
+     * (ADR-0073), and a payload written here would only be assembled into the
+     * session's queue, charged to the shared byte budget, and dropped at the
+     * wire by {@code SubscriptionService.eventFor}.
+     *
+     * <p>⚠️ SO THE CROSS-ZONE GROUP IS SERVED FIRST, then the same-zone one,
+     * not in lane order across both. Two groups are two hand-offs; within each
+     * the highest-lane-first order of {@link #publishSegment} holds. The
+     * cross-zone group writes no bytes, so serving it first costs the inline
+     * group only the opening and completing of those sinks, whereas serving it
+     * second would make it wait behind every inline subscriber's whole payload.
+     */
+    private void inlineWithinTheZone(String segmentKey, List<Target> targets, byte[] heldBytes,
+            long sequencerEpoch, long chainSequence) {
+        List<Target> inline = new ArrayList<>(targets.size());
+        List<Target> across = new ArrayList<>();
+        for (Target t : targets) {
+            (inAnotherZone(t.subscriber()) ? across : inline).add(t);
+        }
+        if (!across.isEmpty()) {
+            deliver(segmentKey, across, FetchMode.PROXY, sinks -> { }, null, sequencerEpoch,
+                    chainSequence);
+        }
+        if (!inline.isEmpty()) {
+            deliver(segmentKey, inline, FetchMode.INLINE,
+                    sinks -> writeHeldBytes(heldBytes, sinks), null, sequencerEpoch, chainSequence);
+        }
+    }
+
+    /**
+     * Whether {@code subscriber} DECLARED a zone and it is not this pod's.
+     *
+     * <p>⚠️ UNKNOWN IS NOT "ELSEWHERE", on either side. A consumer that names
+     * no zone may have no segment source to fetch a {@code proxy} segment
+     * with (ADR-0073: it fails loudly), so it keeps the size policy and its
+     * bytes stay counted as unattributed cross-AZ, as before. A hub that does
+     * not know its own zone cannot call anyone remote, so it does the same.
+     */
+    private boolean inAnotherZone(Subscriber subscriber) {
+        String here = hub.az();
+        String there = subscriber.az();
+        return here != null && there != null && !there.isBlank() && !here.equals(there.trim());
     }
 
     /**

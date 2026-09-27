@@ -1,6 +1,6 @@
 # 0073. The proxy route is a whole-segment GET on the consumer's own endpoint
 
-Status: accepted
+Status: accepted; 2026-09-27: a cross-AZ subscriber is now served `proxy` for a sub-cap segment too ([ADR-0076](0076-a-cross-az-subscriber-is-served-proxy-never-inline.md)), so a consumer that declares a zone must have the `SegmentSource` of decision 5
 Date: 2026-09-27
 Requirements: FR-6, NFR-4, NFR-5
 Research: docs/research/30-design-space/10-client-library-and-fetch-modes.md §1, §5, §7

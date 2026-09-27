@@ -296,6 +296,12 @@ event.
   100 MiB/s cross-AZ would be ~$340/day. ⚠️ **The refined rule is a size test, not a blanket ban**:
   a trickle index's 8 KiB batch is 0.4× a GET and is worth inlining even cross-AZ, while anything
   past ~20 KiB is not.
+
+  > ⚠️ **Revised 2026-09-27 by [ADR-0076](../../internal/product/decisions/0076-a-cross-az-subscriber-is-served-proxy-never-inline.md).**
+  > A subscriber in another AZ is now never inlined, at any size. NFR-5 is a byte ratio, so an
+  > inlined 8 KiB batch is 100% of that consumer's payload cross-AZ, and an event is per stream, so
+  > the payload crosses once per subscribed shard while the `proxy` fetch is one per node from its
+  > own AZ. A consumer that names no zone keeps this rule.
 - Always send coordinates alongside `inline`, so a subscriber that drops or distrusts the inline
   payload can fetch normally. The inline field is an accelerator, never the source of truth
   (consistent with §6's best-effort push decision).

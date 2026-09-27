@@ -184,6 +184,34 @@ public final class SubscriptionHub {
      */
     private final SegmentServingPath servingPath = new SegmentServingPath(this);
 
+    /**
+     * This pod's zone label, or null when it is not known (M10.33, ADR-0076).
+     *
+     * <p>⚠️ NULL KEEPS EVERY SUBSCRIBER ON THE SIZE POLICY ALONE, which is
+     * the behaviour before this field existed: a hub that cannot say where it
+     * is cannot say that a consumer is somewhere else.
+     */
+    private final String az;
+
+    /** A hub whose pod's zone is not known; see {@link #SubscriptionHub(String)}. */
+    public SubscriptionHub() {
+        this(null);
+    }
+
+    /**
+     * @param az this pod's zone label ({@code pod.az}), or null or blank when
+     *     not known. It is compared with each subscriber's
+     *     {@link Subscriber#az()} to keep a sub-cap segment from being inlined
+     *     ACROSS a zone (ADR-0076).
+     */
+    public SubscriptionHub(String az) {
+        this.az = az == null || az.isBlank() ? null : az.trim();
+    }
+
+    /** This pod's zone label, or null; read by {@link SegmentServingPath}. */
+    String az() {
+        return az;
+    }
 
     public int subscriberCount(RunKey key) {
         var list = subscribers.get(key);
@@ -250,6 +278,21 @@ public final class SubscriptionHub {
          */
         default void complete(List<Push> pushes, SegmentSink sink) throws IOException {
         }
+
+        /**
+         * The zone this subscriber's consumer declared, or null when it
+         * declared none (M10.33, ADR-0076).
+         *
+         * <p>⚠️ A SELF-REPORT, AND IT CAN ONLY TAKE BYTES AWAY. A zone that is
+         * known and differs from the hub's is served {@code proxy} rather than
+         * {@code inline}; any other answer keeps the size policy. So a
+         * subscriber that lies gets at most what it got before this method
+         * existed, and a consumer declaring a zone must be able to fetch a
+         * {@code proxy} segment from its own zone's route.
+         */
+        default String az() {
+            return null;
+        }
     }
 
     /**
@@ -263,6 +306,14 @@ public final class SubscriptionHub {
      */
     public static Subscriber assembling(Consumer<Push> onSegment) {
         return AssemblingSubscriber.of(onSegment);
+    }
+
+    /**
+     * The same, for a consumer that declared the zone {@code az}, or null for
+     * none; see {@link Subscriber#az()} (M10.33, ADR-0076).
+     */
+    public static Subscriber assembling(Consumer<Push> onSegment, String az) {
+        return AssemblingSubscriber.of(onSegment, az);
     }
 
     /**

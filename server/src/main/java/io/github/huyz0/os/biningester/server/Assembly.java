@@ -250,7 +250,7 @@ public final class Assembly implements AutoCloseable {
         if (ownsStore) {
             toClose.push(raw);
         }
-        this.hub = new SubscriptionHub();
+        this.hub = new SubscriptionHub(config.az());
         this.catalog = new IndexCatalog();
         RetentionConfig kept = config.retention();
         this.watermarks = new WatermarkTable(clock, kept.reportTimeout(), kept.copyExpiry(),

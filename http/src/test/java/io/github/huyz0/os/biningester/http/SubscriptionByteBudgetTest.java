@@ -128,8 +128,8 @@ class SubscriptionByteBudgetTest {
         // which is a race and not a wedge.
         SubscriptionHub hub = new SubscriptionHub();
         SubscriptionService service = service(hub, new HandClock(), BUDGET);
-        service.sessionFor("w1@" + STREAM, STREAM);
-        service.sessionFor("w2@" + STREAM, STREAM);
+        service.sessionFor("w1@" + STREAM, STREAM, null);
+        service.sessionFor("w2@" + STREAM, STREAM, null);
 
         // ⚠️ 2 sessions x 10 segments x 1,000 B = 20,000 B unbounded, well
         // inside 64 pushes each: a bound in pushes would hold every byte.
@@ -151,7 +151,7 @@ class SubscriptionByteBudgetTest {
         // segments leaks a segment of budget per push past the 64th.
         SubscriptionHub hub = new SubscriptionHub();
         SubscriptionService service = service(hub, new HandClock(), Long.MAX_VALUE / 2);
-        service.sessionFor("w1@" + STREAM, STREAM);
+        service.sessionFor("w1@" + STREAM, STREAM, null);
 
         for (int i = 0; i < SubscriptionService.QUEUE_DEPTH + 6; i++) {
             publish(hub, "seg-" + i, i);
@@ -168,7 +168,7 @@ class SubscriptionByteBudgetTest {
         SubscriptionHub hub = new SubscriptionHub();
         HandClock clock = new HandClock();
         SubscriptionService service = service(hub, clock, BUDGET);
-        service.sessionFor("w1@" + STREAM, STREAM);
+        service.sessionFor("w1@" + STREAM, STREAM, null);
         publish(hub, "seg-0", 0);
         publish(hub, "seg-1", 1);
         assertThat(service.queuedBytes()).as("the premise: it holds bytes").isPositive();
@@ -190,7 +190,7 @@ class SubscriptionByteBudgetTest {
         // its drain. Counted then, those bytes would never come back.
         SubscriptionHub hub = new SubscriptionHub();
         SubscriptionService service = service(hub, new HandClock(), BUDGET);
-        SubscriptionService.Session session = service.sessionFor("w1@" + STREAM, STREAM);
+        SubscriptionService.Session session = service.sessionFor("w1@" + STREAM, STREAM, null);
         session.release();
 
         session.offer(new SubscriptionHub.Push(STREAM, "seg-late", 1, 0,
