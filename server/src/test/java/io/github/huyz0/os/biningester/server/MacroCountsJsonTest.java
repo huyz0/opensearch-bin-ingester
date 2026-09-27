@@ -109,4 +109,21 @@ class MacroCountsJsonTest {
                 .contains("\"leasePuts\":23")
                 .contains("\"crossAzBytes\":41");
     }
+
+    /**
+     * M10.4: NFR-5's full proof reads the SAME-AZ proxy bytes, so the snapshot
+     * carries them -- apart from the cross-AZ ones, which a same-AZ byte must
+     * never inflate.
+     */
+    @Test
+    void macroCountSnapshotCarriesSameAzProxyReadApartFromCrossAz() {
+        CrossAzBytes crossAz = new CrossAzBytes("az-b");
+        crossAz.sent(CrossAzBytes.Transport.PROXY_READ, "az-b", 17);
+        crossAz.sent(CrossAzBytes.Transport.PROXY_READ, "az-a", 5);
+        crossAz.sent(CrossAzBytes.Transport.INLINE_PUSH, "az-b", 3);
+        assertThat(FrontDoor.macroCountsJson("pod", new StoreCounts(0, 0, 0, 0, 0), crossAz))
+                .contains("\"sameAzProxyRead\":17")
+                .contains("\"proxyRead\":5")
+                .contains("\"crossAzBytes\":5");
+    }
 }

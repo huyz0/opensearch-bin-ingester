@@ -264,6 +264,12 @@ public final class FrontDoor implements AutoCloseable {
                 + ",\"unknownPeerBytes\":" + crossAz.unknownPeerBytes()
                 + ",\"proxyRead\":" + crossAz.crossAzBytes(
                         io.github.huyz0.os.biningester.binstore.CrossAzBytes.Transport.PROXY_READ)
+                // ⚠️ THE ONE SAME-AZ READING, because NFR-5's full proof (M10.4)
+                // must show proxy payloads were served IN the consumer's zone,
+                // not merely that few crossed: a route that counted nothing at
+                // all would pass a cross-AZ budget too.
+                + ",\"sameAzProxyRead\":" + crossAz.sameAzBytes(
+                        io.github.huyz0.os.biningester.binstore.CrossAzBytes.Transport.PROXY_READ)
                 + ",\"inlinePush\":" + crossAz.crossAzBytes(
                         io.github.huyz0.os.biningester.binstore.CrossAzBytes.Transport.INLINE_PUSH)
                 + ",\"consumerPoll\":" + crossAz.crossAzBytes(
