@@ -28,9 +28,16 @@
 # clock and the subprocess are a HAND-NAMED list, exactly as complete as its
 # enumeration and no more.
 #
-# ⚠️ ONE MODULE AND TWO FILES ARE EXEMPT, ALL THREE NAMED RATHER THAN DERIVED.
+# ⚠️ ONE MODULE AND SIX FILES ARE EXEMPT, ALL NAMED RATHER THAN DERIVED, and
+# the six are the JVM gate's list (`RepositoryGateChecks.ioSeam`, AGENTS.md
+# non-negotiable 7), which is the enforced one; this script is a migration
+# reference and must not disagree with it. Four were added after this comment
+# was first written: `NodeLocalStoreReaderMain` (the reader process's secret and
+# loopback socket), `HttpCatchUpExchange` (the JDK streaming response for
+# catch-up), `InstallationSecret` (the owner-only secret file) and
+# `NodeLocalStoreReaderClient` (the loopback HTTP adapter).
 #
-# The two files are the composition root's edge: `server/.../Main.java` reaches
+# The first two files are the composition root's edge: `server/.../Main.java` reaches
 # for the real clock and `server/.../ConfigFile.java` reads the settings file.
 # That is what a composition root IS -- the I/O and the clock become real in
 # exactly ONE place -- and it is the reason eight milestones of tests can move
@@ -77,7 +84,11 @@ hdr "check-io-seam"
 FOUND=$(scoped_files '*/src/main/java/io/github/huyz0/os/biningester/*.java' \
   | { grep -v '^binstore-backends/' || true; } \
   | { grep -vxF -e 'server/src/main/java/io/github/huyz0/os/biningester/server/Main.java' \
-                -e 'server/src/main/java/io/github/huyz0/os/biningester/server/ConfigFile.java' || true; } \
+                -e 'server/src/main/java/io/github/huyz0/os/biningester/server/ConfigFile.java' \
+                -e 'server/src/main/java/io/github/huyz0/os/biningester/server/NodeLocalStoreReaderMain.java' \
+                -e 'client/src/main/java/io/github/huyz0/os/biningester/client/HttpCatchUpExchange.java' \
+                -e 'client/src/main/java/io/github/huyz0/os/biningester/client/InstallationSecret.java' \
+                -e 'client/src/main/java/io/github/huyz0/os/biningester/client/NodeLocalStoreReaderClient.java' || true; } \
   | python3 scripts/io_seam_scan.py)
 RC=$?
 [ "$RC" -eq 0 ] || { fail "the scanner failed"; echo "$FOUND"; finish; }

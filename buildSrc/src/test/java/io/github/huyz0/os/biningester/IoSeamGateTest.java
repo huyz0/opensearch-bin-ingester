@@ -446,6 +446,13 @@ class IoSeamGateTest {
     run(repo, "git", "add", "-A");
     Assumptions.assumeTrue(f.toFile().setReadable(false),
         "this platform cannot make a file unreadable for the scanner");
+    // ⚠️ AND IT MUST ACTUALLY BE UNREADABLE. Under root (uid 0, as in a
+    // container) `setReadable(false)` succeeds and the file stays readable, so
+    // the scanner reads it cleanly and the case failed on an environment, not
+    // on the gate. The assumption above already names this intent; this is
+    // the half of it that `setReadable`'s return value cannot tell.
+    Assumptions.assumeFalse(Files.isReadable(f),
+        "running as a user who can read a mode-000 file (root)");
 
     Run r = run(repo, GATE);
     f.toFile().setReadable(true);

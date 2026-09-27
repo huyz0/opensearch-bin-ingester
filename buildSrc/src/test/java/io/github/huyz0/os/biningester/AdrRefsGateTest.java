@@ -107,10 +107,19 @@ class AdrRefsGateTest {
     try (var files = Files.list(ROOT.resolve(DECISIONS))) {
       records = files.filter(f -> f.getFileName().toString().endsWith(".md")).count();
     }
+    // ⚠️ CITATIONS ARE COUNTED HERE, NOT ASSUMED EQUAL TO RECORDS. An earlier
+    // version asserted "N citations against N records", which holds only while
+    // every record is cited as ADR-N somewhere -- no rule of this repository,
+    // and false once ADR-0061, -0068, -0070 and -0071 were cited only by path.
+    // The count is taken independently, from `git grep` over the same tracked
+    // files, so a counter stuck at 0 still fails.
+    Run grep = run(ROOT, "git", "grep", "-IhoE", PREFIX + "[0-9]{1,4}");
+    long cited = grep.out().lines().filter(l -> !l.isBlank()).distinct().count();
+    assertThat(cited).as("the repository cites at least one decision record").isPositive();
     assertThat(r.out())
         .as("the gate must report the work it did -- a counter stuck at 0 prints a clean "
             + "line over a tree it never read%n%s", r.out())
-        .contains(records + " citation(s) all resolve, against " + records + " records");
+        .contains(cited + " citation(s) all resolve, against " + records + " records");
   }
 
   /**

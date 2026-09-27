@@ -315,7 +315,16 @@ class ReviewPacketCostTest {
   void executableModeChangeInvalidatesTheCache(@TempDir Path dir) throws Exception {
     scratch(dir);
     packet(dir);
-    run(dir, "chmod 744 scripts/check-counter.sh");
+    // ⚠️ A MODE CHANGE THAT IS A CHANGE WHATEVER THE UMASK. `chmod 744` was a
+    // no-op under umask 022, where the fixture's `setExecutable(true)` already
+    // leaves 744 -- the cache then correctly stayed valid and the case failed.
+    // Toggling group-execute always changes the mode.
+    Path hook = dir.resolve("scripts/check-counter.sh");
+    var mode = java.util.EnumSet.copyOf(Files.getPosixFilePermissions(hook));
+    if (!mode.remove(java.nio.file.attribute.PosixFilePermission.GROUP_EXECUTE)) {
+      mode.add(java.nio.file.attribute.PosixFilePermission.GROUP_EXECUTE);
+    }
+    Files.setPosixFilePermissions(hook, mode);
     packet(dir);
 
     assertThat(Files.readAllLines(dir.resolve(".harness/invocations")))

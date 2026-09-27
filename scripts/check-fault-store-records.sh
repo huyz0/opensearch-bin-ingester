@@ -52,7 +52,7 @@ if [ ! -f "$TARGET" ]; then
   finish
 fi
 
-RAW=$(python3 - "$TARGET" <<'PY'
+RAW=$("${PYTHON3:-python3}" - "$TARGET" <<'PY'
 import sys
 
 src = open(sys.argv[1], encoding='utf-8').read().splitlines()
