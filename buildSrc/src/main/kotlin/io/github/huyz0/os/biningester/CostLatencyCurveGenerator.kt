@@ -247,8 +247,10 @@ object CostLatencyCurveGenerator {
         direct: List<Row>,
         rig: Properties,
     ) {
-        require(size.map { it.long("rate_mib_s") }.toSet() == setOf(40L, 80L, 160L)) {
-            "the committed M9.8 result set must contain the 40, 80, and 160 MiB/s points"
+        // A LIST, NOT A SET (M10.10): a set comparison let a duplicated rate
+        // through, and the curve then plotted two values for one point.
+        require(size.map { it.long("rate_mib_s") }.sorted() == listOf(40L, 80L, 160L)) {
+            "the committed M9.8 result set must contain the 40, 80, and 160 MiB/s points exactly once"
         }
         require(size.all { row ->
             row.long("puts") > 0L

@@ -141,6 +141,13 @@ class CostLatencyCurveGeneratorTest {
                 "aws_put_usd_per_1000=-0.005"));
         assertThatThrownBy(() -> CostLatencyCurveGenerator.render(results))
                 .isInstanceOf(IllegalArgumentException.class);
+        // ⚠️ RESTORED HERE (M10.10), so every later case starts from a valid
+        // rig. Left negative, the price check -- run last -- refused every
+        // later fixture anyway, so a case below that asserts no message could
+        // not notice its own check being deleted (measured: removing the
+        // `proxy_ingester_bytes` clause stayed green), and the free-GET case
+        // would be refused for the PUT price under the same message.
+        Files.writeString(rig, validRig);
 
         Path lowRateResults = results.resolve("low-rate.csv");
         String validLowRateResults = Files.readString(lowRateResults);
@@ -169,5 +176,25 @@ class CostLatencyCurveGeneratorTest {
                         .replace("1,1,1,65536,0,0,1,direct", "1,1,1,0,0,0,1,direct"));
         assertThatThrownBy(() -> CostLatencyCurveGenerator.render(results))
                 .isInstanceOf(IllegalArgumentException.class);
+        Files.writeString(results.resolve("direct-threshold.csv"), direct.toString());
+
+        // ⚠️ M10.10: A DUPLICATED POINT IS REFUSED. The rate set compared as a
+        // set, so a second 40 MiB/s row passed and the curve plotted two
+        // values for one point.
+        Files.writeString(sizeResults, validSizeResults + "40,36,0.2800,5,1000,5000,smoke\n");
+        assertThatThrownBy(() -> CostLatencyCurveGenerator.render(results))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("exactly once");
+        Files.writeString(sizeResults, validSizeResults);
+
+        // ⚠️ M10.10: A FREE GET IS REFUSED ON ITS OWN, not only beside a free
+        // PUT -- every read-side dollar in the report multiplies by it.
+        Files.writeString(rig, validRig.replace("aws_get_usd_per_1000=0.0004",
+                "aws_get_usd_per_1000=0"));
+        assertThatThrownBy(() -> CostLatencyCurveGenerator.render(results))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("prices must be positive");
+        Files.writeString(rig, validRig);
+        CostLatencyCurveGenerator.render(results);
     }
 }
