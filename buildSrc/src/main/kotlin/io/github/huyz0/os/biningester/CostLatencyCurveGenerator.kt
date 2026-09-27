@@ -247,6 +247,11 @@ object CostLatencyCurveGenerator {
         direct: List<Row>,
         rig: Properties,
     ) {
+        // ⚠️ The set and containsAll checks below alone accept a repeated key,
+        // which would render one measurement as two table rows and two chart points.
+        requireDistinct(size, "rate_mib_s", "size-triggered")
+        requireDistinct(lowRate, "ceiling_ms", "low-rate")
+        requireDistinct(visibility, "ceiling_ms", "visibility")
         require(size.map { it.long("rate_mib_s") }.toSet() == setOf(40L, 80L, 160L)) {
             "the committed M9.8 result set must contain the 40, 80, and 160 MiB/s points"
         }
@@ -324,6 +329,11 @@ object CostLatencyCurveGenerator {
             && rig.getProperty("aws_get_usd_per_1000").toBigDecimal().signum() > 0) {
             "AWS request prices must be positive"
         }
+    }
+
+    private fun requireDistinct(rows: List<Row>, column: String, file: String) {
+        val duplicates = rows.groupBy { it.long(column) }.filterValues { it.size > 1 }.keys
+        require(duplicates.isEmpty()) { "$file results contain duplicate $column rows: $duplicates" }
     }
 
     private fun csv(path: Path, header: List<String>): List<Row> {

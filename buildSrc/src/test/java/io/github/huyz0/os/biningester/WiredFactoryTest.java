@@ -79,4 +79,22 @@ class WiredFactoryTest {
 
     assertThat(scan()).isEqualTo(1);
   }
+
+  /**
+   * ⚠️ MULTI-SEGMENT package on purpose (M10.20): with a one-segment
+   * {@code pkg.} the qualified-prefix repetition could be narrowed from
+   * {@code *} to {@code ?} and every case would still pass.
+   */
+  @Test
+  void aMULTISEGMENTQualifiedNestedConstructionDoesNotConstructItsOuterType()
+      throws Exception {
+    scratch();
+    write("a/src/main/java/io/pkg/Widget.java",
+        "package io.pkg; class Widget { static class Nested {} "
+            + "static Widget create() { return new Widget(); } }\n");
+    write("b/src/main/java/other/Root.java",
+        "package other; class Root { Object value = new io.pkg.Widget.Nested(); }\n");
+
+    assertThat(scan()).isEqualTo(1);
+  }
 }

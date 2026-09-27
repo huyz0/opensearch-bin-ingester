@@ -128,3 +128,34 @@ val memoryBoundCeilingTest = tasks.register<Test>("memoryBoundCeilingTest") {
     timeout.set(Duration.ofMinutes(20))
     extensions.configure<JacocoTaskExtension> { isEnabled = false }
 }
+
+// ⚠️ M10.20b: KEEP THE TWO SMALL-HEAP SOAK TESTS OUT OF JZAP'S RUNS, AND ONLY
+// JZAP'S. jzap's coverage phase runs every class in `testClassPaths`, and these
+// two exist to fill a deliberately tight heap -- under jzap's own JVM they
+// crash it rather than fail an assertion, which aborted the whole run and left
+// `checkMutants` unable to finish for :http (the JVM-crash blind spot AGENTS.md
+// documents). jzap 0.1.1's `excludeClasses` scopes which PRODUCTION classes are
+// mutated, not which tests run, so the only seam is the task's `testClassPaths`:
+// point it at a copy of the compiled tests without them. The `test` task already
+// excludes them (above), and `memoryBoundTest`/`memoryBoundCeilingTest` still
+// run them from the real class directories -- this narrows mutation scoring,
+// never the proof itself. A mutant only these two would kill therefore
+// survives, which is the honest reading: they are not in the mutation suite.
+// ⚠️ NOT COVERED: the plugin's root aggregate, `mutationTestAll`, builds its
+// module list from each module's source sets rather than from these tasks, so
+// this override does not reach it. The root does not apply the plugin today;
+// if it ever does, `mutationTestAll` re-includes both soak tests and aborts the
+// same way.
+val jzapTestClasses = tasks.register<Sync>("jzapTestClasses") {
+    description = "The compiled test classes jzap runs: all but the small-heap soak tests."
+    from(sourceSets.test.get().output.classesDirs)
+    exclude("**/MemoryFlatUnderTenXBodySizeTest*.class")
+    exclude("**/MemoryFlatAtIntervalCeilingTest*.class")
+    into(layout.buildDirectory.dir("jzap-test-classes"))
+}
+listOf("mutationTest", "mutationTestDiff").forEach { name ->
+    tasks.named<io.github.huyz0.jzap.gradle.JzapTask>(name) {
+        dependsOn(jzapTestClasses)
+        testClassPaths.setFrom(jzapTestClasses)
+    }
+}

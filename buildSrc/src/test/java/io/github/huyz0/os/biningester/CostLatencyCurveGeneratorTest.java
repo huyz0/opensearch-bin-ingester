@@ -17,52 +17,8 @@ class CostLatencyCurveGeneratorTest {
     @Test
     void generatedCurveLabelsMeasuredAndModelledValuesAndCheckRejectsStaleOutput()
             throws Exception {
-        Path results = temporaryDirectory.resolve("docs/internal/product/measurements/results");
-        Files.createDirectories(results);
-        Files.writeString(results.resolve("size-triggered.csv"), """
-                rate_mib_s,puts,requests_per_mib,duration_seconds,interval_floor_ms,interval_ceiling_ms,status
-                40,35,0.2714,5,1000,5000,smoke
-                80,35,0.2744,5,1000,5000,smoke
-                160,35,0.2722,5,1000,5000,smoke
-                """);
-        Files.writeString(results.resolve("low-rate.csv"), """
-                ceiling_ms,total_puts,data_puts,commit_puts,checkpoint_puts,lease_puts,other_puts,elapsed_seconds,status
-                250,24,9,10,1,2,2,3.07,smoke
-                5000,4,1,1,0,1,1,5.05,smoke
-                """);
-        Files.writeString(results.resolve("visibility.csv"), """
-                ceiling_ms,records,p50_ms,p99_ms,max_ms,bound_3x_ms,status
-                250,10000,0.942,11.395,11.428,750,measured
-                1000,10000,0.864,13.681,13.705,3000,measured
-                5000,10000,0.892,3.396,3.426,15000,measured
-                """);
-        StringBuilder codecs = new StringBuilder(
-                "block_bytes,codec,mib_per_s_core,ratio,bytes_per_op\n");
-        for (int block : new int[] {65_536, 262_144, 1_048_576}) {
-            for (String codec : new String[] {"zstd-1", "zstd-3", "zstd-6", "lz4", "none"}) {
-                codecs.append(block).append(',').append(codec).append(",1,1,1\n");
-            }
-        }
-        Files.writeString(results.resolve("codec.csv"), codecs);
-        StringBuilder direct = new StringBuilder(
-                "fanout,proxy_gets,direct_gets,proxy_ingester_bytes,direct_ingester_bytes,proxy_cpu_ns,direct_cpu_ns,default_mode\n");
-        for (int fanout = 1; fanout <= 16; fanout++) {
-            direct.append(fanout).append(",1,").append(fanout).append(',')
-                    .append(65_536L * fanout).append(",0,0,1,")
-                    .append(fanout == 1 ? "direct" : "proxy").append('\n');
-        }
-        Files.writeString(results.resolve("direct-threshold.csv"), direct);
-        Files.writeString(results.resolve("rig.properties"), """
-                os=Windows 11 Pro build 26200
-                jdk=Temurin 25.0.4.1+1-LTS
-                cpu=Intel Core i5-13600KF; 14 physical / 20 logical cores
-                container_engine=Linux Docker Desktop; 20 vCPU; 31.35 GiB engine memory
-                rustfs_limits=256 MiB memory; no CPU quota or cpuset restriction
-                rustfs=1.0.0; sha256:8cc9801755448b71a786705ce76692c77e14936cccd87fc2f31842e58f4d1ff
-                cpu_governor=Not exposed by WSL2
-                aws_put_usd_per_1000=0.005
-                aws_get_usd_per_1000=0.0004
-                """);
+        Path results = writeValidResults();
+        String direct = Files.readString(results.resolve("direct-threshold.csv"));
 
         String generated = CostLatencyCurveGenerator.render(results);
         String chart = CostLatencyCurveGenerator.renderSvg(results);
@@ -169,5 +125,122 @@ class CostLatencyCurveGeneratorTest {
                         .replace("1,1,1,65536,0,0,1,direct", "1,1,1,0,0,0,1,direct"));
         assertThatThrownBy(() -> CostLatencyCurveGenerator.render(results))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void duplicateSizeTriggeredRateRowsAreRejected() throws Exception {
+        Path results = writeValidResults();
+        Path sizeResults = results.resolve("size-triggered.csv");
+        CostLatencyCurveGenerator.render(results);
+
+        // ⚠️ A repeated rate still satisfies the {40, 80, 160} SET check, and would
+        // render as two table rows and two chart points for one measurement.
+        Files.writeString(sizeResults, Files.readString(sizeResults)
+                + "40,36,0.2800,5,1000,5000,smoke\n");
+        assertThatThrownBy(() -> CostLatencyCurveGenerator.render(results))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("size-triggered results")
+                .hasMessageContaining("duplicate rate_mib_s");
+    }
+
+    @Test
+    void zeroGetPriceIsRejectedIndependentlyOfThePutPrice() throws Exception {
+        Path results = writeValidResults();
+        Path rig = results.resolve("rig.properties");
+        String validRig = Files.readString(rig);
+        CostLatencyCurveGenerator.render(results);
+
+        // The PUT price stays valid, so only the GET term of the price check can refuse.
+        Files.writeString(rig, validRig.replace("aws_get_usd_per_1000=0.0004",
+                "aws_get_usd_per_1000=0"));
+        assertThatThrownBy(() -> CostLatencyCurveGenerator.render(results))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("AWS request prices must be positive");
+    }
+
+    @Test
+    void duplicateVisibilityCeilingRowsAreRejected() throws Exception {
+        Path results = writeValidResults();
+        Path visibility = results.resolve("visibility.csv");
+        CostLatencyCurveGenerator.render(results);
+
+        // ⚠️ Still satisfies containsAll({250, 1000, 5000}), and would draw a
+        // fourth p99 point for a ceiling measured once. Every column but
+        // ceiling_ms differs from every other row (status has one legal value),
+        // so a check keyed on any other column finds no duplicate.
+        Files.writeString(visibility, Files.readString(visibility)
+                + "250,20000,0.950,11.500,11.600,800,measured\n");
+        assertThatThrownBy(() -> CostLatencyCurveGenerator.render(results))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("visibility results")
+                .hasMessageContaining("duplicate ceiling_ms");
+    }
+
+    @Test
+    void duplicateLowRateCeilingRowsAreRejected() throws Exception {
+        Path results = writeValidResults();
+        Path lowRate = results.resolve("low-rate.csv");
+        CostLatencyCurveGenerator.render(results);
+
+        // ⚠️ Still satisfies containsAll({250, 5000}) and its own row's checks:
+        // 2+3+3+4+3 = 15 reconciles, and 5 data+commit PUTs over ceil(6.1/5) = 2
+        // intervals stay within 2*2+2. Every column but ceiling_ms differs from
+        // every other row, so a check keyed on any other column finds no duplicate.
+        Files.writeString(lowRate, Files.readString(lowRate)
+                + "5000,15,2,3,3,4,3,6.1,measured\n");
+        assertThatThrownBy(() -> CostLatencyCurveGenerator.render(results))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("low-rate results")
+                .hasMessageContaining("duplicate ceiling_ms");
+    }
+
+    private Path writeValidResults() throws Exception {
+        Path results = temporaryDirectory.resolve("results");
+        Files.createDirectories(results);
+        Files.writeString(results.resolve("size-triggered.csv"), """
+                rate_mib_s,puts,requests_per_mib,duration_seconds,interval_floor_ms,interval_ceiling_ms,status
+                40,35,0.2714,5,1000,5000,smoke
+                80,35,0.2744,5,1000,5000,smoke
+                160,35,0.2722,5,1000,5000,smoke
+                """);
+        Files.writeString(results.resolve("low-rate.csv"), """
+                ceiling_ms,total_puts,data_puts,commit_puts,checkpoint_puts,lease_puts,other_puts,elapsed_seconds,status
+                250,24,9,10,1,2,2,3.07,smoke
+                5000,4,1,1,0,1,1,5.05,smoke
+                """);
+        Files.writeString(results.resolve("visibility.csv"), """
+                ceiling_ms,records,p50_ms,p99_ms,max_ms,bound_3x_ms,status
+                250,10000,0.942,11.395,11.428,750,measured
+                1000,10000,0.864,13.681,13.705,3000,measured
+                5000,10000,0.892,3.396,3.426,15000,measured
+                """);
+        StringBuilder codecs = new StringBuilder(
+                "block_bytes,codec,mib_per_s_core,ratio,bytes_per_op\n");
+        for (int block : new int[] {65_536, 262_144, 1_048_576}) {
+            for (String codec : new String[] {"zstd-1", "zstd-3", "zstd-6", "lz4", "none"}) {
+                codecs.append(block).append(',').append(codec).append(",1,1,1\n");
+            }
+        }
+        Files.writeString(results.resolve("codec.csv"), codecs);
+        StringBuilder direct = new StringBuilder(
+                "fanout,proxy_gets,direct_gets,proxy_ingester_bytes,direct_ingester_bytes,proxy_cpu_ns,direct_cpu_ns,default_mode\n");
+        for (int fanout = 1; fanout <= 16; fanout++) {
+            direct.append(fanout).append(",1,").append(fanout).append(',')
+                    .append(65_536L * fanout).append(",0,0,1,")
+                    .append(fanout == 1 ? "direct" : "proxy").append('\n');
+        }
+        Files.writeString(results.resolve("direct-threshold.csv"), direct);
+        Files.writeString(results.resolve("rig.properties"), """
+                os=Windows 11 Pro build 26200
+                jdk=Temurin 25.0.4.1+1-LTS
+                cpu=Intel Core i5-13600KF; 14 physical / 20 logical cores
+                container_engine=Linux Docker Desktop; 20 vCPU; 31.35 GiB engine memory
+                rustfs_limits=256 MiB memory; no CPU quota or cpuset restriction
+                rustfs=1.0.0; sha256:8cc9801755448b71a786705ce76692c77e14936cccd87fc2f31842e58f4d1ff
+                cpu_governor=Not exposed by WSL2
+                aws_put_usd_per_1000=0.005
+                aws_get_usd_per_1000=0.0004
+                """);
+        return results;
     }
 }

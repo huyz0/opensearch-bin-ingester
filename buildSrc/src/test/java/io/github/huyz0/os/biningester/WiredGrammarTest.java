@@ -81,6 +81,27 @@ class WiredGrammarTest {
         .hasMessageContaining("M1.1: unwired");
   }
 
+  /**
+   * ⚠️ MULTI-SEGMENT package on purpose (M10.20): with a one-segment
+   * {@code pkg.} the qualified-prefix repetition could be narrowed from
+   * {@code *} to {@code ?} and every case would still pass.
+   */
+  @Test
+  void aMultiSegmentQualifiedNestedConstructionDoesNotWireItsOuterType() throws Exception {
+    WiredGateTask task = task("`new Widget`");
+    source("a/src/main/java/io/pkg/Widget.java", "package io.pkg; class Widget {\n"
+        + " static class Nested {}\n"
+        + " static Widget create() { return new Widget(); }\n"
+        + "}\n");
+    source("b/src/main/java/other/Root.java", "package other; class Root {\n"
+        + " Object value = new io.pkg.Widget.Nested();\n"
+        + "}\n");
+
+    assertThatThrownBy(task::verify)
+        .isInstanceOf(GradleException.class)
+        .hasMessageContaining("M1.1: unwired");
+  }
+
   private WiredGateTask task(String predicate) throws Exception {
     Path spec = repo.resolve("docs/internal/product/milestones/M8/SPEC.md");
     Files.createDirectories(spec.getParent());
