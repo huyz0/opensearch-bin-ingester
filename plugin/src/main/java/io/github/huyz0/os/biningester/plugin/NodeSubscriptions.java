@@ -202,12 +202,37 @@ public final class NodeSubscriptions implements AutoCloseable {
      */
     public static NodeSubscriptions fetching(NodeChannel channel, int queueCapacity,
             long holdBytes) {
+        return fetching(channel, queueCapacity, holdBytes, null, null);
+    }
+
+    /**
+     * The same, able to fetch {@code proxy} segments by key from
+     * {@code ingesterEndpoint}'s segment route and naming this node's zone on
+     * each fetch (M10.3, ADR-0073, NFR-5).
+     *
+     * <p>⚠️ **THE ROUTE FETCH GOES THROUGH THE SAME PER-NODE HOLD** as a
+     * grant's GET, deduplicated by segment KEY: every shard subscription on
+     * this node reading one segment costs the ingester one fetch, not one per
+     * shard.
+     *
+     * @param ingesterEndpoint this node's own ingester, or {@code null} for a
+     *     node that fetches only under grants
+     * @param az this node's zone, or {@code null}/blank for none -- which the
+     *     ingester counts as cross-AZ
+     */
+    public static NodeSubscriptions fetching(NodeChannel channel, int queueCapacity,
+            long holdBytes, String ingesterEndpoint, String az) {
         NodeSubscriptions built = new NodeSubscriptions(
                 Objects.requireNonNull(channel, "channel").transport(), queueCapacity,
-                new NodeSegmentSource(new io.github.huyz0.os.biningester.client.HttpSegmentSource(SEGMENT_FETCH_TIMEOUT),
-                        holdBytes));
+                new NodeSegmentSource(new io.github.huyz0.os.biningester.client.HttpSegmentSource(
+                        SEGMENT_FETCH_TIMEOUT, ingesterEndpoint, az), holdBytes));
         built.channel = channel;
         return built;
+    }
+
+    /** The one segment source every client on this node shares, or {@code null}. */
+    io.github.huyz0.os.biningester.client.SegmentSource segmentSource() {
+        return nodeSegmentSource;
     }
 
     /** Whether a {@code direct} delivery has something on this node to fetch it with. */

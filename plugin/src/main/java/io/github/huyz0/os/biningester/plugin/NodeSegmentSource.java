@@ -11,7 +11,9 @@ import java.util.Objects;
 
 /**
  * One fetch per (node, segment), shared by every run this node holds
- * (M5.45h, FR-6, cost.md R5, non-negotiable 6).
+ * (M5.45h, FR-6, cost.md R5, non-negotiable 6) -- under a grant for
+ * {@code direct}, and by segment key from the ingester's route for
+ * {@code proxy} (M10.3).
  *
  * <p>⚠️ THE SHARING UNIT IS THE NODE, AND NO TYPE IN {@code client}
  * REPRESENTS ONE. A node gets one {@code Delivery} per RUN, each carrying the
@@ -86,7 +88,42 @@ public final class NodeSegmentSource implements SegmentSource {
     @Override
     public byte[] fetch(Grant grant) throws IOException {
         Objects.requireNonNull(grant, "grant");
-        String key = grant.url();
+        return held(GRANT + grant.url(), () -> delegate.fetch(grant));
+    }
+
+    /**
+     * A {@code proxy} segment's bytes, fetched from the ingester's segment
+     * route at most once per (node, segment KEY) while the hold keeps them
+     * (M10.3, ADR-0073).
+     *
+     * <p>⚠️ THE SAME HOLD AND THE SAME PER-KEY GATE AS {@link #fetch}, which is
+     * the point: a {@code proxy} event over HTTP carries coordinates only, and
+     * each run of a segment gets its own, so K shard subscriptions reading one
+     * segment would otherwise be K route fetches -- the ingester's request
+     * rate scaling with shards, which non-negotiable 6 forbids by name. The
+     * byte ceiling and the failure rule are {@link #fetch}'s unchanged.
+     */
+    @Override
+    public byte[] fetchSegment(String segmentKey) throws IOException {
+        Objects.requireNonNull(segmentKey, "segmentKey");
+        return held(SEGMENT + segmentKey, () -> delegate.fetchSegment(segmentKey));
+    }
+
+    /**
+     * ⚠️ TWO NAMESPACES IN ONE HOLD. A grant's url and a segment key are
+     * different sources that could in principle be spelled alike; prefixing
+     * each keeps one from answering for the other, while both share the one
+     * byte ceiling an operator sizes the heap against.
+     */
+    private static final String GRANT = "grant ";
+    private static final String SEGMENT = "segment ";
+
+    @FunctionalInterface
+    private interface Load {
+        byte[] bytes() throws IOException;
+    }
+
+    private byte[] held(String key, Load load) throws IOException {
         KeyGate gate = acquire(key);
         try {
             synchronized (gate) {
@@ -100,7 +137,7 @@ public final class NodeSegmentSource implements SegmentSource {
                 synchronized (cacheLock) {
                     fetches++;
                 }
-                byte[] bytes = delegate.fetch(grant);
+                byte[] bytes = load.bytes();
                 synchronized (cacheLock) {
                     admit(key, bytes);
                 }

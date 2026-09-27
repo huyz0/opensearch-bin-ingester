@@ -98,7 +98,7 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport, A
      * the server was about to write to, and the push it was about to receive
      * waits for the next poll.
      */
-    static final Duration DEFAULT_POLL_WAIT = Duration.ofSeconds(25);
+    public static final Duration DEFAULT_POLL_WAIT = Duration.ofSeconds(25);
 
     /**
      * The first retry's backoff, for a deployment that sets none (M8.16).

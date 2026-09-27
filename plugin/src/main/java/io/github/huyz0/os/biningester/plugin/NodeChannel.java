@@ -49,9 +49,25 @@ public final class NodeChannel implements AutoCloseable {
      */
     public static NodeChannel open(String endpoint, Duration retryFloor,
             Duration retryCeiling, Duration timeout) {
+        return open(endpoint, retryFloor, retryCeiling, timeout, "");
+    }
+
+    /**
+     * The same, naming this node's zone on every poll (M10.3, NFR-5).
+     *
+     * <p>⚠️ **A BLANK ZONE IS SENT AS NOTHING** ({@code azParam}), which the
+     * ingester counts as cross-AZ: an unconfigured node is reported as what
+     * it might be rather than as what it claims.
+     *
+     * @param az this node's zone, or blank for none
+     */
+    public static NodeChannel open(String endpoint, Duration retryFloor,
+            Duration retryCeiling, Duration timeout, String az) {
         Objects.requireNonNull(endpoint, "endpoint");
+        String zone = az == null ? "" : az;
         return new NodeChannel(reconnect -> new HttpSubscriptionTransport(endpoint, reconnect,
-                retryFloor, retryCeiling, timeout), timeout);
+                retryFloor, retryCeiling, timeout, HttpSubscriptionTransport.DEFAULT_POLL_WAIT,
+                HttpSubscriptionTransport.MAX_ANSWER_BYTES, zone), timeout);
     }
 
     /**
