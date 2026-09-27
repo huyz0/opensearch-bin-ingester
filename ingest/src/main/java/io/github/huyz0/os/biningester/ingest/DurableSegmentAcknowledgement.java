@@ -19,7 +19,8 @@ final class DurableSegmentAcknowledgement {
     }
 
     static void complete(SegmentPublisher.Published published, CommitDelta delta,
-            List<DefaultIngest.Pending> batch, DurableSegmentListener listener) {
+            List<DefaultIngest.Pending> batch, DurableSegmentListener listener,
+            java.util.function.Consumer<Runnable> settle) {
         // Pair runs with their segment: a forwarded delta can contain another pod's
         // runs for the same stream, and accepting those offsets would acknowledge
         // records this pod did not commit.
@@ -35,16 +36,18 @@ final class DurableSegmentAcknowledgement {
         for (DefaultIngest.Pending pending : batch) {
             Long base = firstOffsets.get(pending.stream());
             if (base == null) {
-                pending.done().completeExceptionally(new IOException(
+                IOException missing = new IOException(
                         "the commit carried no run for the stream this append wrote, "
                         + "under segment " + published.key() + " -- the delta names "
-                        + delta.segments().size() + " segment(s)"));
+                        + delta.segments().size() + " segment(s)");
+                settle.accept(() -> pending.done().completeExceptionally(missing));
                 continue;
             }
             // Each caller receives its own slice of a batched stream run.
             long first = base + pending.offsetWithinRun();
-            pending.done().complete(new AppendResult(pending.count(), first,
-                    first + pending.count() - 1));
+            AppendResult result = new AppendResult(pending.count(), first,
+                    first + pending.count() - 1);
+            settle.accept(() -> pending.done().complete(result));
         }
         if (!firstOffsets.isEmpty()) {
             try {

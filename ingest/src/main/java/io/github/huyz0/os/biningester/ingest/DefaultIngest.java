@@ -346,6 +346,30 @@ public final class DefaultIngest implements Ingest {
         }
     }
 
+    /**
+     * Runs {@code onRelease} when the {@code index}-th waiting caller is
+     * released, for M10.13's test that no producer is released while its
+     * batch is still queued; {@link #flushQueued()} is what it reads.
+     */
+    void whenReleased(int index, Runnable onRelease) {
+        lock.lock();
+        try {
+            pending.get(index).done().whenComplete((result, failure) -> onRelease.run());
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /** Whether a detached batch is still queued or in flight. */
+    boolean flushQueued() {
+        lock.lock();
+        try {
+            return flushes.isQueued();
+        } finally {
+            lock.unlock();
+        }
+    }
+
     /** How many callers are waiting for the next flush. */
     int pendingAppends() {
         lock.lock();
@@ -410,22 +434,26 @@ public final class DefaultIngest implements Ingest {
                 delta = sequencer.commit(request);
             } catch (io.github.huyz0.os.biningester.sequencer.CommitDeferredException deferred) {
                 // ⚠️ INTENT DURABLE (ADR-0058): a 202, no offset, nothing to push.
-                batch.forEach(p -> p.done().complete(AppendResult.deferred(p.count())));
+                batch.forEach(p -> queued.settle(
+                        () -> p.done().complete(AppendResult.deferred(p.count()))));
                 return;
             }
 
             DurableSegmentAcknowledgement.complete(published, delta, batch,
-                    durableSegmentListener);
+                    durableSegmentListener, queued::settle);
             // ⚠️ Submitted only after BOTH objects are durable, and only after
             // the waiters are released: append promises DURABILITY, and a
             // consumer told about a segment it cannot GET would fail its read.
             // ⚠️ AT FLUSH TIME, not at push time: the pusher runs off this lock
             // and can lag, so reading it there labels a push with the chain's
-            // LATER epoch (M5.15d).
-            pushQueue.offer(delta, published.key(), published.segment(), sequencer.epoch());
+            // LATER epoch (M5.15d). READ HERE and handed to the settlement,
+            // which runs after the acks (M10.13), so the offer cannot re-read it.
+            long epoch = sequencer.epoch();
+            queued.settle(() -> pushQueue.offer(delta, published.key(), published.segment(),
+                    epoch));
         } catch (IOException | RuntimeException e) {
             for (Pending p : batch) {
-                p.done().completeExceptionally(e);
+                queued.settle(() -> p.done().completeExceptionally(e));
             }
             throw e;
         }

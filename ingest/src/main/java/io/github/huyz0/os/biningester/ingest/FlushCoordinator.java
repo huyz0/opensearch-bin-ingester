@@ -12,9 +12,19 @@ import java.util.concurrent.locks.ReentrantLock;
 
 /** Detaches active ingest buffers and serializes their ordered store work. */
 final class FlushCoordinator {
+    private static final System.Logger LOG =
+            System.getLogger(FlushCoordinator.class.getName());
 
     record Batch(List<DefaultIngest.Pending> pending, Accumulator accumulator,
-            CompletableFuture<Void> done) {
+            CompletableFuture<Void> done, List<Runnable> settlements) {
+        /**
+         * ⚠️ Defers a waiter's release until this batch is no longer queued
+         * (M10.13): a producer woken inside the handler found it still queued,
+         * so its next flushNow() -- close()'s -- re-threw the same failure.
+         */
+        void settle(Runnable settlement) {
+            settlements.add(settlement);
+        }
     }
 
     @FunctionalInterface
@@ -22,7 +32,7 @@ final class FlushCoordinator {
         void flush(Batch batch) throws IOException;
     }
 
-    private static final Batch POISON = new Batch(null, null, null);
+    private static final Batch POISON = new Batch(null, null, null, null);
     private final ReentrantLock lock;
     private final Condition work;
     private final Handler handler;
@@ -55,7 +65,8 @@ final class FlushCoordinator {
         if (queued) {
             return current.done();
         }
-        Batch batch = new Batch(pending, accumulator, new CompletableFuture<>());
+        Batch batch = new Batch(pending, accumulator, new CompletableFuture<>(),
+                new java.util.ArrayList<>());
         current = batch;
         queued = true;
         queue.add(batch);
@@ -74,12 +85,20 @@ final class FlushCoordinator {
             if (batch == POISON) {
                 return;
             }
+            boolean flushed = false;
+            Throwable failure = null;
             try {
                 handler.flush(batch);
-                batch.done().complete(null);
+                flushed = true;
             } catch (IOException | RuntimeException e) {
-                batch.done().completeExceptionally(e);
+                failure = e;
             } finally {
+                // ⚠️ M10.13: SETTLED AND COMPLETED ONLY ONCE NO LONGER QUEUED.
+                // Waking a waiter first -- a producer or a flushNow() caller --
+                // let its next flushNow(), close()'s typically, find this batch
+                // still queued and re-throw its outcome: the same exception
+                // twice, which try-with-resources cannot suppress into itself.
+                // A preempted worker opened that window, so only load did.
                 lock.lock();
                 try {
                     afterFlush.accept(batch);
@@ -88,7 +107,31 @@ final class FlushCoordinator {
                     work.signalAll();
                 } finally {
                     lock.unlock();
+                    try {
+                        settle(batch);
+                    } finally {
+                        if (flushed) {
+                            batch.done().complete(null);
+                        } else if (failure != null) {
+                            batch.done().completeExceptionally(failure);
+                        }
+                    }
                 }
+            }
+        }
+    }
+
+    /**
+     * Runs every settlement, each on its own: one that throws must not strand
+     * the producers behind it, nor the batch's own future.
+     */
+    private static void settle(Batch batch) {
+        for (Runnable settlement : batch.settlements()) {
+            try {
+                settlement.run();
+            } catch (RuntimeException failed) {
+                LOG.log(System.Logger.Level.WARNING,
+                        "a flush settlement failed; the others still run", failed);
             }
         }
     }
