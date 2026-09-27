@@ -452,7 +452,7 @@ class CountingBinStoreTest extends io.github.huyz0.os.biningester.binstore.BinSt
     }
 
     /** A stand-in for the first backend that can sign, which neither shipping one can. */
-    private static final class CapableStore implements BinStore {
+    static final class CapableStore implements BinStore {
         private final BinStore delegate = new MemoryBinStore();
         private String lastKey;
         private java.time.Duration lastTtl;

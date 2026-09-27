@@ -62,11 +62,20 @@ public final class CountingBinStore implements BinStore {
         } else if (hasPathSegment(key, "/ctl/lease/", "ctl/lease/")
                 && key.endsWith(".json")) {
             leasePuts.increment();
-        } else if (hasPathSegment(key, "/data/", "data/") && key.endsWith(".bseg")) {
+        } else if (isDataSegment(key)) {
             dataPuts.increment();
         } else {
             otherPuts.increment();
         }
+    }
+
+    /**
+     * Whether {@code key} names a data segment -- the one classifier this
+     * meter and {@code GoverningBinStore} share, so the governed series and
+     * the counted one cannot drift apart.
+     */
+    static boolean isDataSegment(String key) {
+        return hasPathSegment(key, "/data/", "data/") && key.endsWith(".bseg");
     }
 
     private static boolean hasPathSegment(String key, String nested, String root) {
