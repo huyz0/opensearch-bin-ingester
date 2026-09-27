@@ -152,6 +152,58 @@ class LadderExecutionTest {
     }
 
     @Test
+    void STREAMSSharingATransportNeverFailAPollTheIngesterANSWERED() throws Exception {
+        // ⚠️ M10.35: THE LADDER COUNTED A FALL NOBODY CAUSED. Helidon 4.3.0's
+        // connection cache returns a kept-alive connection to its shared queue
+        // BEFORE it starts the idle monitor that reads one byte to detect a
+        // close, so a SECOND reader could take the connection in between, send
+        // its poll, and lose the answer's first byte to the monitor --
+        // "Protocol is not HTTP: TTP", counted UNREACHABLE and entered as a
+        // RECONNECT on a stream whose ingester had answered 200. MEASURED: the
+        // flake behind ONESubscriptionDown...'s "expected 1 but was 2".
+        int streams = 16;
+        java.util.concurrent.atomic.AtomicInteger answered =
+                new java.util.concurrent.atomic.AtomicInteger();
+        server.removeContext("/");
+        server.createContext("/", exchange -> {
+            answered.incrementAndGet();
+            exchange.sendResponseHeaders(200, -1);
+            exchange.close();
+        });
+        HttpSubscriptionTransport transport = new HttpSubscriptionTransport(
+                "http://127.0.0.1:" + server.getAddress().getPort(), () -> { },
+                Duration.ofMillis(20), Duration.ofMillis(100), Duration.ofSeconds(2),
+                Duration.ofMillis(50));
+        java.util.List<AutoCloseable> subscriptions = new java.util.ArrayList<>();
+        try {
+            for (int i = 0; i < streams; i++) {
+                subscriptions.add(transport.subscribe(new RunKey(UUID.randomUUID(), i),
+                        (SubscriptionTransport.Listener) delivery -> { }));
+            }
+            // ⚠️ THOUSANDS OF POLLS, because the window is a few instructions
+            // wide: one pair of streams on an idle machine rarely hits it.
+            await("many answered polls", () -> answered.get() >= 20_000);
+            for (HttpSubscriptionTransport.PollFailure kind
+                    : HttpSubscriptionTransport.PollFailure.values()) {
+                assertThat(transport.pollFailures(kind))
+                        .as("every poll was answered 200, so none failed as %s", kind)
+                        .isZero();
+            }
+            assertThat(transport.tierEntries(FallbackLadder.AutomaticTier.RECONNECT))
+                    .as("⚠️ NO STREAM FELL DOWN THE LADDER: the ingester never went away")
+                    .isZero();
+            assertThat(transport.tierEntries(FallbackLadder.AutomaticTier.PUSH))
+                    .as("each stream entered PUSH once, on its first answer")
+                    .isEqualTo(streams);
+        } finally {
+            for (AutoCloseable subscription : subscriptions) {
+                subscription.close();
+            }
+            transport.close();
+        }
+    }
+
+    @Test
     void aTRANSPORTThatHasNeverAnsweredIsNOTInPUSH() {
         HttpSubscriptionTransport transport = new HttpSubscriptionTransport(
                 "http://127.0.0.1:" + server.getAddress().getPort(), () -> { },

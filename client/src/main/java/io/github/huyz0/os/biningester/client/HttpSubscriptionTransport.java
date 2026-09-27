@@ -85,7 +85,10 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport, A
     /** {@code POST} target for a node's consumer progress (ADR-0049). */
     public static final String PROGRESS_PATH = "/ctl/progress";
 
+    /** The registration and progress posts' client; each reader polls on its own. */
     private final WebClient client;
+    private final String endpoint;
+    private final Duration timeout;
     private final HttpCatchUpExchange catchUpExchange;
     private final String az;
     private final Runnable onReconnect;
@@ -335,7 +338,32 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport, A
                     + "ceiling: " + retryFloor + " / " + retryCeiling);
         }
         this.catchUpExchange = new HttpCatchUpExchange(endpoint, timeout, pollWait);
-        this.client = WebClient.builder()
+        this.endpoint = endpoint;
+        this.timeout = timeout;
+        this.client = newClient();
+    }
+
+    /**
+     * A client over a connection cache of ITS OWN.
+     *
+     * <p>⚠️ **ONE PER SUBSCRIPTION READER, NEVER SHARED ACROSS THEM** (M10.35).
+     * Helidon 4.3.0's {@code Http1ConnectionCache.finishRequest} offers a
+     * kept-alive connection back to its queue BEFORE it starts the idle
+     * monitor that reads one byte to notice a close. A second thread polling
+     * that queue in between sends its request on the connection and reads
+     * the socket directly, while the monitor, started after, takes the
+     * answer's first byte: "Protocol is not HTTP: TTP". On a shared cache
+     * every reader of the node was that second thread, so a poll the
+     * ingester ANSWERED 200 was counted UNREACHABLE, entered as a RECONNECT
+     * and re-ran {@code onReconnect} -- MEASURED at 56 in 20 000 polls across
+     * 16 streams. A cache only its own reader thread touches is returned and
+     * re-taken by that one thread, in order, so the window cannot open.
+     * ⚠️ AND {@code shareConnectionCache(false)} IS WHAT MAKES IT ITS OWN:
+     * Helidon's default is one cache per JVM, so a client per reader alone
+     * would still share every connection with every other client in it.
+     */
+    private WebClient newClient() {
+        return WebClient.builder()
                 .baseUri(endpoint)
                 .connectTimeout(timeout)
                 // ⚠️ THE READ TIMEOUT MUST EXCEED THE POLL WAIT, or every idle
@@ -344,6 +372,7 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport, A
                 // answers within its own 30 s ceiling; this leaves headroom
                 // over that rather than over the 25 s asked for.
                 .readTimeout(pollWait.plusSeconds(20))
+                .shareConnectionCache(false)
                 .build();
     }
 
@@ -395,15 +424,17 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport, A
     private void readForever(RunKey key, String id, Listener listener, AtomicBoolean stopped) {
         Ladder ladder = new Ladder();
         ladders.put(id, ladder);
+        WebClient polls = newClient();
         try {
-            readForever(key, id, listener, stopped, ladder);
+            readForever(key, id, listener, stopped, ladder, polls);
         } finally {
             ladders.remove(id);
+            polls.closeResource();
         }
     }
 
     private void readForever(RunKey key, String id, Listener listener, AtomicBoolean stopped,
-            Ladder ladder) {
+            Ladder ladder, WebClient polls) {
 
         Duration backoff = retryFloor;
         boolean connected = false;
@@ -416,7 +447,7 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport, A
             // `onReconnect`, which must fire before the node's registrations
             // are missed for that long.
             Duration wait = connected ? pollWait : HANDSHAKE_WAIT;
-            try (HttpClientResponse response = client.get(path(key))
+            try (HttpClientResponse response = polls.get(path(key))
                     .queryParam("wait", String.valueOf(wait.toMillis()))
                     .queryParam("sub", id)
                     // ⚠️ ASKED PER POLL OF THE LISTENER, which asks only while
