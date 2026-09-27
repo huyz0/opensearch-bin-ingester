@@ -83,9 +83,16 @@ at once makes the valuable one unrunnable.
 19a. ⚠️ **RustFS is a test fixture, not a supported backend** — a local Docker
     stand-in for S3's wire protocol, so tests need not hit AWS
     ([store SPI §2b](../../research/30-design-space/07-pluggable-store-abstraction.md)).
-    Use it for signing, ranges, multipart, list pagination and error mapping.
-    **Do not run the commit-protocol simulation against it**: its conditional
-    writes are not stable enough to distinguish our bug from theirs.
+    Use it for signing, ranges, multipart, list pagination and error mapping,
+    and for the store SPI's conformance suite -- including the concurrent
+    `putIfAbsent` and `putIfMatch` cases, which its single pinned endpoint
+    passes ([ADR-0060](../product/decisions/0060-rustfs-is-the-single-node-t3-object-store-fixture.md)).
+    ⚠️ **That qualifies one endpoint, not the protocol**: it says nothing of
+    conditional writes across several RustFS endpoints, and a pass there does
+    not tell our bug from theirs. **Do not run the commit-protocol simulation
+    against it** -- that is rule 20's deterministic simulation, and it stays
+    there; T3 chaos runs on RustFS are evidence about the wiring over a real
+    wire, not the protocol's proof.
 19b. ⚠️ **Request counts are backend-independent; latency and dollars are not.**
     The cost gates (requests/MiB, zero LIST, **zero idle requests**) are fully
     meaningful against RustFS. Every latency figure measured there is **modelled,

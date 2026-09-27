@@ -63,7 +63,23 @@ abstract class WiredGateTask : DefaultTask() {
         val cells = it.substring(1).split('|').map(String::trim)
         if (cells.size > 2 && !cells.last().startsWith("done")) cells.first() else null
     }.toSet()
-    private fun codeOnly(text: String): String = text.replace(Regex("(?s)/\\*.*?\\*/"), " ").replace(Regex("(?m)//[^\\r\\n]*"), " ").replace(Regex("\"(?:\\\\.|[^\"\\\\])*\""), " ")
+    /**
+     * Comments and literals, found in ONE left-to-right pass so whichever
+     * starts first wins (M10.13): stripping comments first let `"http://"`
+     * eat the rest of its line, and a string holding a block-comment opener
+     * eat everything up to the next closer.
+     * ⚠️ The string alternative is an unrolled loop and stops at a line end:
+     * `(?:\\.|[^"\\])*` recursed once per character and overflowed the stack on
+     * a long literal, and unbounded by lines it could run to the end of file.
+     */
+    private val lexemes = Regex(
+        "(?s)/\\*.*?\\*/" +
+            "|//[^\\r\\n]*" +
+            "|\"\"\".*?\"\"\"" +
+            "|\"[^\"\\\\\\r\\n]*+(?:\\\\.[^\"\\\\\\r\\n]*+)*+\"" +
+            "|'(?:\\\\.|[^'\\\\\\r\\n])[^'\\r\\n]{0,5}'"
+    )
+    private fun codeOnly(text: String): String = lexemes.replace(text, " ")
     private fun predicates(cell: String): List<Pair<String, String>> {
         val spans = Regex("`([^`]+)`").findAll(cell).map { it.groupValues[1].trim() }.toList()
         val accepted = mutableListOf<Pair<String, String>>()

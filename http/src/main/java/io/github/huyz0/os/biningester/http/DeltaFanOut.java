@@ -465,7 +465,7 @@ public final class DeltaFanOut implements AutoCloseable {
         }
     }
 
-    /** Placed last: the wired gate's string scan mis-reads "//" in a literal (M10.13). */
+    /** The peer's base URI; an IPv6 literal is bracketed. */
     private static String uriOf(String address, int port) {
         String host = address.indexOf(':') >= 0 && !address.startsWith("[")
                 ? "[" + address + "]" : address;
