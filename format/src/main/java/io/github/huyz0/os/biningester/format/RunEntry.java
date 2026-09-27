@@ -10,8 +10,9 @@ package io.github.huyz0.os.biningester.format;
  * alone, with no data read at all.
  *
  * <p>⚠️ {@code lane} (M3; ADR-0025) is a {@link SegmentFormat#VERSION}-only
- * field, reserved and always {@code 0} until M10 starts writing a real
- * value — a {@link SegmentFormat#VERSION_0} entry has no lane byte at all,
+ * field, reserved at M3 and written with the run's real priority lane since
+ * M10 (ADR-0074: the maximum of its records') — a
+ * {@link SegmentFormat#VERSION_0} entry has no lane byte at all,
  * and {@link SegmentReader} synthesises {@code 0} for one rather than
  * leaving this field's meaning depend on which version was actually read.
  */

@@ -32,10 +32,25 @@ public final class SegmentWriter {
     private final Map<RunKey, List<SegmentRecord>> runs = new TreeMap<>();
     private final Map<RunKey, Long> minTimestamps = new TreeMap<>();
 
-    /** Adds one record to a run, creating the run on first use. */
+    private final Map<RunKey, Byte> lanes = new TreeMap<>();
+
+    /** Adds one lane-0 record to a run, creating the run on first use. */
     public void add(RunKey key, SegmentRecord record, long timestampMillis) {
+        add(key, record, timestampMillis, (byte) 0);
+    }
+
+    /**
+     * Adds one record of priority lane {@code lane} (FR-18, ADR-0074).
+     *
+     * <p>⚠️ THE RUN'S LANE IS THE MAXIMUM OF ITS RECORDS'. One partition has one
+     * offset space and one run per segment, so a lane never splits a run and
+     * never reorders it: records keep arrival order, and the run is scheduled
+     * at its most urgent member's pace.
+     */
+    public void add(RunKey key, SegmentRecord record, long timestampMillis, byte lane) {
         runs.computeIfAbsent(key, k -> new ArrayList<>()).add(record);
         minTimestamps.merge(key, timestampMillis, Math::min);
+        lanes.merge(key, lane, (a, b) -> (byte) Math.max(a, b));
     }
 
     public boolean isEmpty() {
@@ -107,10 +122,10 @@ public final class SegmentWriter {
             dir.putInt(block.length);
             dir.putLong(minTimestamps.get(k));
             dir.putInt(SegmentFormat.CODEC_NONE);
-            // ⚠️ M3; ADR-0025: reserved, always 0 -- no caller has a real
-            // lane to pass yet (RunKey itself gains no lane component until
-            // M10 wires the concept in above this layer).
-            dir.put((byte) 0);
+            // ⚠️ M10.5; ADR-0074: the run's real lane (ADR-0025 reserved the
+            // byte at M3). Written in the DIRECTORY only -- data blocks stay in
+            // key order, because every reader fetches the whole object.
+            dir.put(lanes.get(k));
             byteStart += block.length;
         }
         byte[] directory = dir.array();

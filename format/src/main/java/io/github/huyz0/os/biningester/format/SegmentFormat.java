@@ -25,8 +25,9 @@ package io.github.huyz0.os.biningester.format;
  * <p>⚠️ TWO VERSIONS, BOTH READABLE (M3; ADR-0025; the {@code
  * wire-format-change} skill's own rule: "a reader must handle the old shape
  * until every possible writer of it has aged out"). {@code v0}'s 48-byte
- * directory entry has no lane byte; {@code v1} appends one, always {@code 0}
- * for now -- M10 is what starts writing a real value. {@link #VERSION} is
+ * directory entry has no lane byte; {@code v1} appends one, written as the
+ * run's real priority lane since M10 (ADR-0074) -- a value change, not a
+ * layout change, so no version bump. {@link #VERSION} is
  * what {@link SegmentWriter} emits; {@code v0} exists only for {@link
  * SegmentReader} to keep parsing segments an earlier build already wrote. A
  * new field on a versioned struct is NOT a contract change per the skill's
