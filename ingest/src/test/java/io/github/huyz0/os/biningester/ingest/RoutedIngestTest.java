@@ -184,10 +184,22 @@ class RoutedIngestTest {
         // ⚠️ SPUN ON, NOT SLEPT THROUGH: the point is that the record is
         // HELD, and a sleep would assert only that this test is slower than
         // the pool.
+        // ⚠️ M10.12: SPUN UNTIL THE WRITE IS OBSERVED WAITING, and no longer
+        // until it is done. The old exit condition -- done, or written --
+        // never becomes true when the code is RIGHT, so the loop always burned
+        // its full 10 s; the write's own registration wait is also 10 s, so
+        // `register` below raced the write's deadline and, under full-suite
+        // load, lost: RegistrationTimeoutException after 10.009 s, measured on
+        // the M10 baseline. Waiting for `pendingBatches() == 1` asserts the
+        // hold directly and leaves the whole 10 s for the release.
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-        while (!write.isDone() && delegate.ids.isEmpty() && System.nanoTime() < deadline) {
+        while (!write.isDone() && routed.pendingBatches() == 0
+                && System.nanoTime() < deadline) {
             Thread.onSpinWait();
         }
+        assertThat(routed.pendingBatches())
+                .as("PREMISE: the write is held in the pool, waiting")
+                .isEqualTo(1);
         assertThat(delegate.ids)
                 .as("PREMISE: nothing is written while the index is unknown -- a pool that "
                         + "let the write through would place it by a shard count nobody "
