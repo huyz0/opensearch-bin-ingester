@@ -73,8 +73,10 @@ a footer duplicate of the directory offsets guards against truncation.
 
 ⚠️ **REVISED 2026-09-02 (M3; ADR-0025).** The `RunEntry` above is
 `formatVersion` 0. `formatVersion` 1 appends one more field, `i8 lane` (1 B,
-always `0` until M10 wires a real value — see [ADR-0014](../../internal/product/decisions/0014-priority-lanes.md)
-for what the field will eventually mean) — 49 B per entry, not 48. A reader
+written as `0` until M10 and, since M10, as the run's priority lane: the
+MAXIMUM of its records' lanes, one run per partition as before —
+[ADR-0074](../../internal/product/decisions/0074-priority-lanes-are-carried-per-request-and-scheduled-per-run.md),
+refining [ADR-0014](../../internal/product/decisions/0014-priority-lanes.md)) — 49 B per entry, not 48. A reader
 accepts BOTH versions; a v0 segment an earlier build already wrote has no
 lane byte at all and is never rewritten. This diagram predates the field and
 is left describing v0's shape as originally designed; the current wire

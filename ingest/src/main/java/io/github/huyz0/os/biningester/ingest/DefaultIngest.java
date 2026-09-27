@@ -279,7 +279,24 @@ public final class DefaultIngest implements Ingest {
     @Override
     public AppendResult append(Principal principal, String index, int partition,
             RecordSource records) throws IOException {
+        return append(principal, index, partition, (byte) 0, records);
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>⚠️ THE LANE IS CHECKED BEFORE ANYTHING IS BUFFERED, against this pod's
+     * active set (ADR-0074): a refusal after the first record was added would
+     * leak the refused records into the next flush.
+     */
+    @Override
+    public AppendResult append(Principal principal, String index, int partition, byte lane,
+            RecordSource records) throws IOException {
         Objects.requireNonNull(principal, "principal");
+        if (!acceptsLane(lane)) {
+            throw new PlacementRefusedException("lane " + lane + " is not active on this "
+                    + "ingester; the active lanes are " + config.lanes());
+        }
         Objects.requireNonNull(index, "index");
         Objects.requireNonNull(records, "records");
         if (closed) {
@@ -329,7 +346,7 @@ public final class DefaultIngest implements Ingest {
             // THIS append when that happens: it has already failed, so nothing
             // should be waiting on a future for it.
             records.forEachRecord(record -> {
-                accumulator.add(stream, record);
+                accumulator.add(stream, record, lane);
                 count[0]++;
                 bufferedPerStream.put(stream, before + count[0]);
             });
@@ -366,6 +383,11 @@ public final class DefaultIngest implements Ingest {
             }
             throw e;
         }
+    }
+
+    @Override
+    public boolean acceptsLane(byte lane) {
+        return config.lanes().contains(lane);
     }
 
     /** Flushes whatever is buffered, whether or not the trigger says it is due. */

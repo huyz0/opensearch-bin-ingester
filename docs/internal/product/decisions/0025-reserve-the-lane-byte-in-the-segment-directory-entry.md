@@ -83,6 +83,12 @@ change to `BulkParser`'s `_bulk` action-line parsing or the in-process
   record flags byte is a different structure serving a different purpose
   (op type, version-presence) and conflating the two would make a future
   reader hunt across two unrelated byte layouts for "where lane lives."
+  ⚠️ **ANSWERED BY [ADR-0074](0074-priority-lanes-are-carried-per-request-and-scheduled-per-run.md)
+  (M10), and NOT by the grouping this paragraph called most plausible.**
+  Runs stay grouped on `(index, partition)` and the byte holds the MAXIMUM of
+  the run's records' lanes: two runs of one partition in one segment would
+  need a rule for which receives the lower offsets, and a composite directory
+  key would be a wire-format change.
 - **Widen the entry without a version bump**, accepting that pre-M3 segments
   become unreadable. Rejected outright: this project has not shipped, so no
   real segment exists yet that this would strand — but the discipline is

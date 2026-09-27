@@ -123,6 +123,31 @@ public final class RoutedIngest implements Ingest {
     @Override
     public AppendResult append(Principal principal, String index, int partition,
             RecordSource records) throws IOException {
+        return append(principal, index, partition, (byte) 0, records);
+    }
+
+    @Override
+    public boolean acceptsLane(byte lane) {
+        return delegate.acceptsLane(lane);
+    }
+
+    /**
+     * ⚠️ REFUSED BEFORE ANY WORK, and above all before the pending pool: a
+     * pooled write of an inactive lane would hold pool space for the whole
+     * registration timeout and end in a 503 the producer retries for ever.
+     */
+    private void requireLane(byte lane) {
+        if (!delegate.acceptsLane(lane)) {
+            throw new PlacementRefusedException("lane " + lane + " is not active on this "
+                    + "ingester");
+        }
+    }
+
+    /** ⚠️ THE LANE TRAVELS WITH THE RECORDS, on every path (ADR-0074). */
+    @Override
+    public AppendResult append(Principal principal, String index, int partition, byte lane,
+            RecordSource records) throws IOException {
+        requireLane(lane);
         Optional<IndexRegistration> known = catalog.resolve(index);
         if (known.isPresent() && partition >= known.get().numShards()) {
             throw new PlacementRefusedException("partition " + partition + " does not exist in "
@@ -135,24 +160,31 @@ public final class RoutedIngest implements Ingest {
         // through would make `(indexUUID, partition)` depend on which name the
         // producer happened to use.
         String concrete = known.map(IndexRegistration::indexName).orElse(index);
-        return delegate.append(principal, concrete, partition, records);
+        return delegate.append(principal, concrete, partition, lane, records);
     }
 
     @Override
     public AppendResult appendRouted(Principal principal, String indexOrAlias, String routing,
             RecordSource records) throws IOException {
+        return appendRouted(principal, indexOrAlias, routing, (byte) 0, records);
+    }
+
+    @Override
+    public AppendResult appendRouted(Principal principal, String indexOrAlias, String routing,
+            byte lane, RecordSource records) throws IOException {
         Objects.requireNonNull(routing, "routing");
+        requireLane(lane);
         Optional<IndexRegistration> known = catalog.resolveForRouting(indexOrAlias);
         if (known.isPresent()) {
-            return place(principal, known.get(), routing, records);
+            return place(principal, known.get(), routing, lane, records);
         }
-        return waitForRegistration(principal, indexOrAlias, routing, records);
+        return waitForRegistration(principal, indexOrAlias, routing, lane, records);
     }
 
     private AppendResult place(Principal principal, IndexRegistration index, String routing,
-            RecordSource records) throws IOException {
+            byte lane, RecordSource records) throws IOException {
         int partition = RoutingPartitioner.partitionFor(index, routing);
-        return delegate.append(principal, index.indexName(), partition, records);
+        return delegate.append(principal, index.indexName(), partition, lane, records);
     }
 
     /**
@@ -167,7 +199,7 @@ public final class RoutedIngest implements Ingest {
      * moves the same memory into the HTTP layer where nothing bounds it.
      */
     private AppendResult waitForRegistration(Principal principal, String indexOrAlias,
-            String routing, RecordSource records) throws IOException {
+            String routing, byte lane, RecordSource records) throws IOException {
         // ⚠️ ONE BATCH PER REQUEST, which is the ownership boundary M6.6's
         // round-1 review measured the absence of: with the pool keyed on the
         // index alone, the first waiter to wake drained EVERY request's
@@ -190,7 +222,8 @@ public final class RoutedIngest implements Ingest {
             if (!any[0]) {
                 throw new IllegalArgumentException("a write of no records is not a write");
             }
-            AppendResult result = placeWhenRegistered(principal, indexOrAlias, routing, batch);
+            AppendResult result = placeWhenRegistered(principal, indexOrAlias, routing, lane,
+                    batch);
             settled = true;
             return result;
         } finally {
@@ -209,7 +242,7 @@ public final class RoutedIngest implements Ingest {
     }
 
     private AppendResult placeWhenRegistered(Principal principal, String indexOrAlias,
-            String routing, PendingPool.Batch batch) throws IOException {
+            String routing, byte lane, PendingPool.Batch batch) throws IOException {
         Optional<IndexRegistration> arrived = awaitRegistration(indexOrAlias);
         List<SegmentRecord> mine = batch.take();
         if (arrived.isEmpty() || mine.isEmpty()) {
@@ -224,7 +257,7 @@ public final class RoutedIngest implements Ingest {
         }
         IndexRegistration index = arrived.get();
         int partition = RoutingPartitioner.partitionFor(index, routing);
-        return delegate.append(principal, index.indexName(), partition, mine::forEach);
+        return delegate.append(principal, index.indexName(), partition, lane, mine::forEach);
     }
 
     private Optional<IndexRegistration> awaitRegistration(String indexOrAlias) {

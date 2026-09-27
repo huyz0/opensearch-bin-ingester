@@ -62,11 +62,16 @@ public final class Accumulator {
      * @return true when a flush is now due
      */
     public boolean add(RunKey key, SegmentRecord record) {
+        return add(key, record, (byte) 0);
+    }
+
+    /** Buffers one record of priority lane {@code lane} (ADR-0074). */
+    public boolean add(RunKey key, SegmentRecord record, byte lane) {
         long now = clock.millis();
         if (firstAppendMillis < 0) {
             firstAppendMillis = now;
         }
-        writer.add(key, record, now);
+        writer.add(key, record, now, lane);
         // ⚠️ An ESTIMATE of the framed size, not the payload length: the id, the
         // version and the length prefixes are bytes in the object too, and a
         // trigger that counted only payloads would overshoot the segment size by

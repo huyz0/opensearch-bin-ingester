@@ -67,7 +67,20 @@ import java.util.Objects;
 public record IngestConfig(Duration intervalFloor, long maxSegmentBytes, String trustDomain,
         long maxQueuedPushBytes, Duration intervalCeiling, double fillRatioLowThreshold,
         double fillRatioHighThreshold, Duration intervalLengthenDelay,
-        Duration intervalShortenDelay, boolean directEnabled) {
+        Duration intervalShortenDelay, boolean directEnabled, LaneSet lanes) {
+
+    /**
+     * Every field but {@code lanes}, which defaults to ADR-0074's active set
+     * {@code -2..2} -- so no existing construction had to name one.
+     */
+    public IngestConfig(Duration intervalFloor, long maxSegmentBytes, String trustDomain,
+            long maxQueuedPushBytes, Duration intervalCeiling, double fillRatioLowThreshold,
+            double fillRatioHighThreshold, Duration intervalLengthenDelay,
+            Duration intervalShortenDelay, boolean directEnabled) {
+        this(intervalFloor, maxSegmentBytes, trustDomain, maxQueuedPushBytes, intervalCeiling,
+                fillRatioLowThreshold, fillRatioHighThreshold, intervalLengthenDelay,
+                intervalShortenDelay, directEnabled, LaneSet.defaults());
+    }
 
     /**
      * Every field but {@code directEnabled}, which defaults to OFF.
@@ -128,6 +141,7 @@ public record IngestConfig(Duration intervalFloor, long maxSegmentBytes, String 
         Objects.requireNonNull(intervalCeiling, "intervalCeiling");
         Objects.requireNonNull(intervalLengthenDelay, "intervalLengthenDelay");
         Objects.requireNonNull(intervalShortenDelay, "intervalShortenDelay");
+        Objects.requireNonNull(lanes, "lanes");
         if (trustDomain.isBlank()) {
             throw new IllegalArgumentException("a trust domain is never blank");
         }

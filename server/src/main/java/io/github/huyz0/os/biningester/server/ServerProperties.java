@@ -2,6 +2,7 @@
 package io.github.huyz0.os.biningester.server;
 
 import io.github.huyz0.os.biningester.ingest.IngestConfig;
+import io.github.huyz0.os.biningester.ingest.LaneSet;
 import java.time.Duration;
 import java.time.format.DateTimeParseException;
 import java.util.LinkedHashSet;
@@ -85,6 +86,8 @@ public final class ServerProperties {
     public static final String INTERVAL_CEILING = "ingest.interval-ceiling";
     /** Optional: the segment size that forces a flush. */
     public static final String MAX_SEGMENT_BYTES = "ingest.max-segment-bytes";
+    /** Optional: the pod's active priority lanes, comma-separated (ADR-0074). */
+    public static final String LANES_ACTIVE = "ingest.lanes.active";
     /** Optional: whether consumers may fetch with signed URLs. */
     public static final String DIRECT_ENABLED = "ingest.direct-enabled";
     /** Optional: the retention floor -- NFR-13's consumer outage budget. */
@@ -133,12 +136,25 @@ public final class ServerProperties {
             STORE_ROOT, STORE_ENDPOINT, STORE_REGION, STORE_BUCKET, STORE_PATH_STYLE,
             ENDPOINT, HTTP_PORT, PRODUCER_SUBJECT, PRODUCER_ALLOWED_INDICES,
             LEASE_TTL, LEASE_RENEW, INTERVAL_FLOOR, INTERVAL_CEILING, MAX_SEGMENT_BYTES,
-            DIRECT_ENABLED,
+            DIRECT_ENABLED, LANES_ACTIVE,
             RETENTION_MIN, RETENTION_MAX, RETENTION_REPORT_TIMEOUT, RETENTION_COPY_EXPIRY,
             RETENTION_PASS_INTERVAL, MEMBERSHIP_API, MEMBERSHIP_NAMESPACE, MEMBERSHIP_SERVICE,
             MEMBERSHIP_TOKEN_FILE, MEMBERSHIP_CA_FILE);
 
     private ServerProperties() {
+    }
+
+    /** The active lane set; its rules live in {@code LaneSet}, and a breach names the key. */
+    private static LaneSet lanes(Map<String, String> settings) {
+        String raw = settings.get(LANES_ACTIVE);
+        if (raw == null) {
+            return LaneSet.defaults();
+        }
+        try {
+            return LaneSet.parse(raw);
+        } catch (IllegalArgumentException refused) {
+            throw new ConfigurationException(LANES_ACTIVE + ": " + refused.getMessage());
+        }
     }
 
     /**
@@ -177,7 +193,8 @@ public final class ServerProperties {
                     IngestConfig.DEFAULT_FILL_RATIO_HIGH_THRESHOLD,
                     IngestConfig.DEFAULT_INTERVAL_LENGTHEN_DELAY,
                     IngestConfig.DEFAULT_INTERVAL_SHORTEN_DELAY,
-                    bool(settings, DIRECT_ENABLED, false));
+                    bool(settings, DIRECT_ENABLED, false),
+                    lanes(settings));
 
             StoreConfig store = new StoreConfig(required(settings, STORE_KIND),
                     optionalText(settings, STORE_ROOT),

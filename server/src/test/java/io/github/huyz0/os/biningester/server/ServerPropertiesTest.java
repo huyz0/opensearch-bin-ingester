@@ -342,7 +342,8 @@ class ServerPropertiesTest {
     void theKNOWNKeysAreREPORTABLEForAUsageMessage() {
         assertThat(ServerProperties.knownKeys())
                 .contains(ServerProperties.POD_ID, ServerProperties.ENDPOINT,
-                        ServerProperties.STORE_KIND, ServerProperties.INTERVAL_CEILING)
-                .hasSize(31);
+                        ServerProperties.STORE_KIND, ServerProperties.INTERVAL_CEILING,
+                        ServerProperties.LANES_ACTIVE)
+                .hasSize(32);
     }
 }

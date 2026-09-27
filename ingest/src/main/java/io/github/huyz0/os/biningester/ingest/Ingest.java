@@ -112,6 +112,49 @@ public interface Ingest extends AutoCloseable {
                 + "partition, or deploy the plugin that registers index shapes (FR-16)");
     }
 
+    /**
+     * Appends records of priority lane {@code lane} (FR-18, ADR-0074).
+     *
+     * <p>⚠️ THE DEFAULT REFUSES ANY LANE BUT 0, as a placement refusal (a 400
+     * at the HTTP layer), rather than dropping it: an implementation that
+     * schedules no lanes and accepted a {@code +2} write as lane 0 would demote
+     * it silently while returning 202.
+     *
+     * @throws PlacementRefusedException if {@code lane} is not 0 and this
+     *     implementation schedules no lanes
+     */
+    default AppendResult append(Principal principal, String index, int partition, byte lane,
+            RecordSource records) throws IOException {
+        refuseLane(lane);
+        return append(principal, index, partition, records);
+    }
+
+    /** The routed form of {@link #append(Principal, String, int, byte, RecordSource)}. */
+    default AppendResult appendRouted(Principal principal, String indexOrAlias, String routing,
+            byte lane, RecordSource records) throws IOException {
+        refuseLane(lane);
+        return appendRouted(principal, indexOrAlias, routing, records);
+    }
+
+    /**
+     * Whether this ingester schedules records of {@code lane} (ADR-0074).
+     *
+     * <p>⚠️ A QUERY, SO A WRAPPER CAN REFUSE BEFORE IT DOES ANY WORK: a routed
+     * write to an unregistered index would otherwise be pooled and held for
+     * the whole registration timeout, then answered 503 -- which a producer
+     * retries for ever -- for a lane that was never going to be accepted.
+     */
+    default boolean acceptsLane(byte lane) {
+        return lane == 0;
+    }
+
+    private static void refuseLane(byte lane) {
+        if (lane != 0) {
+            throw new PlacementRefusedException("lane " + lane + " was asked for, and this "
+                    + "ingester schedules no priority lanes");
+        }
+    }
+
     /** Flushes anything buffered and releases resources. */
     @Override
     void close() throws IOException;

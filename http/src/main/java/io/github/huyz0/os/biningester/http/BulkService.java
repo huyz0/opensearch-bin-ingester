@@ -322,9 +322,10 @@ public final class BulkService implements HttpService {
             List<SegmentRecord> chunk) {
         try {
             return placement.routing() == null
-                    ? ingest.append(principal, index, placement.partition(), chunk::forEach)
+                    ? ingest.append(principal, index, placement.partition(), placement.lane(),
+                            chunk::forEach)
                     : ingest.appendRouted(principal, index, placement.routing(),
-                            chunk::forEach);
+                            placement.lane(), chunk::forEach);
         } catch (IOException e) {
             throw new ChunkAppendException(e);
         }
@@ -340,7 +341,11 @@ public final class BulkService implements HttpService {
      * this adapter, and an adapter that resolved it here would be a second
      * implementation of the one thing M6 exists to get exactly right.
      */
-    record Placement(Integer partition, String routing) {
+    record Placement(Integer partition, String routing, byte lane) {
+
+        Placement(Integer partition, String routing) {
+            this(partition, routing, (byte) 0);
+        }
 
         /**
          * ⚠️ EXACTLY ONE, ENFORCED BY THE TYPE. {@code placementOf} refuses
@@ -365,6 +370,36 @@ public final class BulkService implements HttpService {
      * happens to read first.
      */
     private static Placement placementOf(ServerRequest request) {
+        Placement placed = placeOf(request);
+        return new Placement(placed.partition(), placed.routing(), laneOf(request));
+    }
+
+    /**
+     * The request's priority lane (FR-18, ADR-0074): absent is 0.
+     *
+     * <p>⚠️ ONLY ITS SYNTAX IS CHECKED HERE -- an integer that fits {@code i8}.
+     * Whether it is ACTIVE is the ingester's decision, made before anything is
+     * buffered and answered as a placement refusal; this adapter owns no
+     * decision (ADR-0019).
+     */
+    private static byte laneOf(ServerRequest request) {
+        var raw = request.query().first("lane");
+        if (raw.isEmpty()) {
+            return 0;
+        }
+        int lane;
+        try {
+            lane = Integer.parseInt(raw.get());
+        } catch (NumberFormatException e) {
+            throw new BulkParseException("'lane' is an integer");
+        }
+        if (lane < Byte.MIN_VALUE || lane > Byte.MAX_VALUE) {
+            throw new BulkParseException("'lane' is a signed byte, -128 to 127");
+        }
+        return (byte) lane;
+    }
+
+    private static Placement placeOf(ServerRequest request) {
         var rawPartition = request.query().first("partition");
         var routing = request.query().first("routing");
         if (rawPartition.isPresent() && routing.isPresent()) {
