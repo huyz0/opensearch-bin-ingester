@@ -16,10 +16,11 @@ import java.util.function.LongSupplier;
  * including one not yet written, is governed by construction rather than by
  * remembering to ask.
  *
- * <p>⚠️ **NOT EVERY CALLER IS HANDED IT.** {@code Assembly.store()} returns the
- * RAW backend, and {@code FrontDoor} passes that to the commit route's inbox
- * drain and to the segment-fetch route's GETs: those requests are neither
- * governed nor counted. Routing them through the node's store is M10.26.
+ * <p>⚠️ **{@code Assembly.store()} IS STILL THE RAW BACKEND**, for callers
+ * outside the node's own call path. Since M10.26 the front door hands the
+ * node's store, not that one, to the commit route's inbox drain and to the
+ * segment-fetch route's absent-key {@code stat}, so both are counted and
+ * governed.
  */
 final class GovernorWiring {
 

@@ -187,8 +187,11 @@ public final class FrontDoor implements AutoCloseable {
                         .register(new BulkService(assembly.ingest(), config.principal(), gate,
                                 admission))
                         .register(new CommitService(assembly::heldTerm,
+                                // ⚠️ THE NODE's STORE, NOT THE RAW BACKEND (M10.26):
+                                // the drain's LIST is declared recovery, so it is
+                                // counted and never refused, as at a takeover.
                                 (term, pod) -> io.github.huyz0.os.biningester.sequencer.InboxDrain.drain(
-                                        assembly.store(), config.prefix(), term, pod,
+                                        assembly.nodeStore(), config.prefix(), term, pod,
                                         assembly.metrics()::failedIntentBatch)))
                 .register(new SubscriptionService(assembly.hub(), assembly.catalog(),
                         assembly.watermarks(), clock, assembly.floors(), gate, crossAz))
@@ -197,9 +200,10 @@ public final class FrontDoor implements AutoCloseable {
                 // the SAME proxy and node-wide cache the subscription path and
                 // the prefetcher fill -- so on the AZ's ring owner a fetch after
                 // a prefetch costs no store request -- and counted into the SAME
-                // per-pod NFR-5 counter.
+                // per-pod NFR-5 counter. ⚠️ AND ITS ABSENT-KEY `stat` THROUGH
+                // THE NODE's STORE (M10.26), so it is counted like the GETs.
                 .register(SegmentFetchService.over(
-                        config.prefix(), assembly.segmentProxy(), assembly.store(), crossAz))
+                        config.prefix(), assembly.segmentProxy(), assembly.nodeStore(), crossAz))
                 .register(new DurableSegmentSignalService(assembly.peerView(),
                         assembly::prefetchDurableSegment));
         String macroPath = System.getProperty("binstore.macro.path");
