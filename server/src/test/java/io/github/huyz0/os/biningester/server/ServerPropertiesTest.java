@@ -344,6 +344,6 @@ class ServerPropertiesTest {
                 .contains(ServerProperties.POD_ID, ServerProperties.ENDPOINT,
                         ServerProperties.STORE_KIND, ServerProperties.INTERVAL_CEILING,
                         ServerProperties.LANES_ACTIVE)
-                .hasSize(32);
+                .hasSize(33);
     }
 }

@@ -4,6 +4,8 @@ package io.github.huyz0.os.biningester.http;
 import io.github.huyz0.os.biningester.format.SegmentRecord;
 import io.github.huyz0.os.biningester.ingest.AppendResult;
 import io.github.huyz0.os.biningester.ingest.Ingest;
+import io.github.huyz0.os.biningester.ingest.LaneAdmission;
+import io.github.huyz0.os.biningester.ingest.LaneSet;
 import io.github.huyz0.os.biningester.ingest.PlacementRefusedException;
 import io.github.huyz0.os.biningester.ingest.RegistrationTimeoutException;
 import io.github.huyz0.os.biningester.security.Principal;
@@ -126,12 +128,29 @@ public final class BulkService implements HttpService {
      * close.
      */
     public BulkService(Ingest ingest, Principal principal, DrainGate gate) {
-        this.ingest = Objects.requireNonNull(ingest, "ingest");
-        this.principal = Objects.requireNonNull(principal, "principal");
-        this.gate = Objects.requireNonNull(gate, "gate");
+        this(ingest, principal, gate, new LaneAdmission(
+                LaneAdmission.DEFAULT_MAX_IN_FLIGHT_BULK, LaneSet.defaults()));
     }
 
     private final DrainGate gate;
+
+    /**
+     * The same, admitting each request through the lanes' fair share of the
+     * pod's in-flight budget (M10.8, ADR-0074 decision 6).
+     *
+     * <p>⚠️ **THE CONSTRUCTORS ABOVE GET THE DEFAULT BUDGET OVER THE DEFAULT
+     * LANES**, whatever set the ingest behind them schedules. Only the
+     * composition root builds one from the pod's own configuration.
+     */
+    public BulkService(Ingest ingest, Principal principal, DrainGate gate,
+            LaneAdmission admission) {
+        this.ingest = Objects.requireNonNull(ingest, "ingest");
+        this.principal = Objects.requireNonNull(principal, "principal");
+        this.gate = Objects.requireNonNull(gate, "gate");
+        this.admission = Objects.requireNonNull(admission, "admission");
+    }
+
+    private final LaneAdmission admission;
 
     @Override
     public void routing(HttpRules rules) {
@@ -196,6 +215,38 @@ public final class BulkService implements HttpService {
             return;
         }
 
+        // ⚠️ ADMITTED AFTER THE LANE IS KNOWN AND BEFORE THE BODY IS OPENED
+        // (M10.8, ADR-0074 decision 6): a refused request costs the pod no
+        // parse and no buffer. 429 and NEVER a 5xx -- nothing failed, the pod
+        // is busy, and a producer already retries 429 (OpenSearch bulk
+        // semantics). ⚠️ THE PERMIT IS RETURNED IN THE FINALLY, so a store
+        // failure, a bad body and a defect escaping as a 500 all give it back:
+        // a leaked permit is a pod that answers 429 for ever.
+        // ⚠️ THE INGESTER IS ASKED FIRST WHETHER THE LANE IS ACTIVE (review
+        // round 1): an inactive lane is the producer's permanent mistake, and
+        // answering it 429 on a saturated pod would have it retried until the
+        // pod was idle enough to say 400. The ingester still decides; this
+        // only asks it before spending a permit.
+        if (!ingest.acceptsLane(placement.lane())) {
+            response.status(Status.BAD_REQUEST_400).send("lane " + placement.lane()
+                    + " is not active on this ingester");
+            return;
+        }
+        var permit = admission.tryAcquire(placement.lane());
+        if (permit.isEmpty()) {
+            response.status(Status.TOO_MANY_REQUESTS_429).send("this ingester is at its "
+                    + "in-flight budget and lane " + placement.lane() + " holds its share; retry");
+            return;
+        }
+        try {
+            append(request, response, index, placement);
+        } finally {
+            permit.get().release();
+        }
+    }
+
+    private void append(ServerRequest request, ServerResponse response, String index,
+            Placement placement) {
         try {
             // ⚠️ Each CHUNK's append blocks until ITS segment and commit delta
             // are durable (criterion 1); the 202 below means every chunk landed

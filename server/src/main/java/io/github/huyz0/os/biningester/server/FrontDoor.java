@@ -4,6 +4,7 @@ package io.github.huyz0.os.biningester.server;
 import io.github.huyz0.os.biningester.http.BulkService;
 import io.github.huyz0.os.biningester.http.CommitService;
 import io.github.huyz0.os.biningester.http.DrainGate;
+import io.github.huyz0.os.biningester.ingest.LaneAdmission;
 import io.github.huyz0.os.biningester.http.HealthService;
 import io.github.huyz0.os.biningester.http.SubscriptionService;
 import io.github.huyz0.os.biningester.http.DurableSegmentSignalService;
@@ -54,12 +55,14 @@ public final class FrontDoor implements AutoCloseable {
     private final WebServer server;
     private final DrainGate gate;
     private final java.util.function.Consumer<String> journal;
+    private final LaneAdmission admission;
 
     private FrontDoor(WebServer server, DrainGate gate,
-            java.util.function.Consumer<String> journal) {
+            java.util.function.Consumer<String> journal, LaneAdmission admission) {
         this.server = server;
         this.gate = gate;
         this.journal = journal;
+        this.admission = admission;
     }
 
     /**
@@ -105,7 +108,11 @@ public final class FrontDoor implements AutoCloseable {
         Objects.requireNonNull(clock, "clock");
         ServerConfig config = assembly.config();
         DrainGate gate = new DrainGate(journal);
-        WebServer server = build(config, assembly, clock, gate, crossAz);
+        // ⚠️ ONE PER POD (M10.8, ADR-0074 decision 6): the budget is the
+        // pod's, and a node starts one front door, so this is where it lives.
+        LaneAdmission admission = new LaneAdmission(config.ingest().maxInFlightBulk(),
+                config.ingest().lanes());
+        WebServer server = build(config, assembly, clock, gate, crossAz, admission);
         try {
             server.start();
         } catch (RuntimeException notBound) {
@@ -144,7 +151,7 @@ public final class FrontDoor implements AutoCloseable {
             throw new IllegalStateException("the front door did not bind port "
                     + config.httpPort() + " -- it is already in use");
         }
-        return new FrontDoor(server, gate, journal);
+        return new FrontDoor(server, gate, journal, admission);
     }
 
     /**
@@ -161,7 +168,8 @@ public final class FrontDoor implements AutoCloseable {
     }
 
     private static WebServer build(ServerConfig config, Assembly assembly, Clock clock,
-            DrainGate gate, io.github.huyz0.os.biningester.binstore.CrossAzBytes crossAz) {
+            DrainGate gate, io.github.huyz0.os.biningester.binstore.CrossAzBytes crossAz,
+            LaneAdmission admission) {
         HttpRouting.Builder routes = HttpRouting.builder()
                 // ⚠️ HELIDON'S OWN SHUTDOWN HOOK IS OFF. Left on, a `SIGTERM`
                 // runs it alongside `Main`'s, and it stops the listener while
@@ -176,7 +184,8 @@ public final class FrontDoor implements AutoCloseable {
                         // make a producer wait, so it asks not to be sent any.
                         .register(new HealthService(
                                 () -> gate.ready() && assembly.storeHealthy()))
-                        .register(new BulkService(assembly.ingest(), config.principal(), gate))
+                        .register(new BulkService(assembly.ingest(), config.principal(), gate,
+                                admission))
                         .register(new CommitService(assembly::heldTerm,
                                 (term, pod) -> io.github.huyz0.os.biningester.sequencer.InboxDrain.drain(
                                         assembly.store(), config.prefix(), term, pod,
@@ -339,6 +348,14 @@ public final class FrontDoor implements AutoCloseable {
      */
     public DrainGate gate() {
         return gate;
+    }
+
+    /**
+     * The pod's ONE lane admission, over its configured in-flight budget and
+     * active lanes, that {@code _bulk} is admitted through (M10.8).
+     */
+    public LaneAdmission laneAdmission() {
+        return admission;
     }
 
     /**

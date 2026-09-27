@@ -88,6 +88,8 @@ public final class ServerProperties {
     public static final String MAX_SEGMENT_BYTES = "ingest.max-segment-bytes";
     /** Optional: the pod's active priority lanes, comma-separated (ADR-0074). */
     public static final String LANES_ACTIVE = "ingest.lanes.active";
+    /** Optional: the pod's concurrent {@code _bulk} budget shared by the lanes (ADR-0074). */
+    public static final String MAX_IN_FLIGHT_BULK = "ingest.admission.maxInFlightBulk";
     /** Optional: whether consumers may fetch with signed URLs. */
     public static final String DIRECT_ENABLED = "ingest.direct-enabled";
     /** Optional: the retention floor -- NFR-13's consumer outage budget. */
@@ -136,7 +138,7 @@ public final class ServerProperties {
             STORE_ROOT, STORE_ENDPOINT, STORE_REGION, STORE_BUCKET, STORE_PATH_STYLE,
             ENDPOINT, HTTP_PORT, PRODUCER_SUBJECT, PRODUCER_ALLOWED_INDICES,
             LEASE_TTL, LEASE_RENEW, INTERVAL_FLOOR, INTERVAL_CEILING, MAX_SEGMENT_BYTES,
-            DIRECT_ENABLED, LANES_ACTIVE,
+            DIRECT_ENABLED, LANES_ACTIVE, MAX_IN_FLIGHT_BULK,
             RETENTION_MIN, RETENTION_MAX, RETENTION_REPORT_TIMEOUT, RETENTION_COPY_EXPIRY,
             RETENTION_PASS_INTERVAL, MEMBERSHIP_API, MEMBERSHIP_NAMESPACE, MEMBERSHIP_SERVICE,
             MEMBERSHIP_TOKEN_FILE, MEMBERSHIP_CA_FILE);
@@ -155,6 +157,35 @@ public final class ServerProperties {
         } catch (IllegalArgumentException refused) {
             throw new ConfigurationException(LANES_ACTIVE + ": " + refused.getMessage());
         }
+    }
+
+    /**
+     * The in-flight {@code _bulk} budget (ADR-0074 decision 6).
+     *
+     * <p>⚠️ **ZERO IS REFUSED HERE, NAMING THE KEY**, not left to
+     * {@code IngestConfig}'s guard: a budget that admits nothing past the
+     * floors answers 429 to every producer, and the operator should learn
+     * which line of the manifest did it.
+     */
+    private static int maxInFlightBulk(Map<String, String> settings) {
+        String value = settings.get(MAX_IN_FLIGHT_BULK);
+        if (value == null) {
+            return io.github.huyz0.os.biningester.ingest.LaneAdmission.DEFAULT_MAX_IN_FLIGHT_BULK;
+        }
+        if (value.isBlank()) {
+            throw blankSetting(MAX_IN_FLIGHT_BULK);
+        }
+        int parsed;
+        try {
+            parsed = Integer.parseInt(value.trim());
+        } catch (NumberFormatException notANumber) {
+            throw new ConfigurationException(MAX_IN_FLIGHT_BULK + " is not a whole number of "
+                    + "requests: " + value, notANumber);
+        }
+        if (parsed < 1) {
+            throw new ConfigurationException(MAX_IN_FLIGHT_BULK + " must be positive: " + value);
+        }
+        return parsed;
     }
 
     /**
@@ -194,7 +225,8 @@ public final class ServerProperties {
                     IngestConfig.DEFAULT_INTERVAL_LENGTHEN_DELAY,
                     IngestConfig.DEFAULT_INTERVAL_SHORTEN_DELAY,
                     bool(settings, DIRECT_ENABLED, false),
-                    lanes(settings));
+                    lanes(settings),
+                    maxInFlightBulk(settings));
 
             StoreConfig store = new StoreConfig(required(settings, STORE_KIND),
                     optionalText(settings, STORE_ROOT),

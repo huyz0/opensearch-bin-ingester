@@ -63,11 +63,30 @@ import java.util.Objects;
  * @param directEnabled whether this DEPLOYMENT wants the {@code direct} fetch
  *     mode; on it, a pod whose backend cannot presign refuses to START
  *     rather than failing the first consumer that asks for a grant
+ * @param lanes the pod's active priority lanes (ADR-0074)
+ * @param maxInFlightBulk the pod's in-flight {@code _bulk} budget that
+ *     {@link LaneAdmission} shares between the lanes (ADR-0074 decision 6)
  */
 public record IngestConfig(Duration intervalFloor, long maxSegmentBytes, String trustDomain,
         long maxQueuedPushBytes, Duration intervalCeiling, double fillRatioLowThreshold,
         double fillRatioHighThreshold, Duration intervalLengthenDelay,
-        Duration intervalShortenDelay, boolean directEnabled, LaneSet lanes) {
+        Duration intervalShortenDelay, boolean directEnabled, LaneSet lanes,
+        int maxInFlightBulk) {
+
+    /**
+     * Every field but {@code maxInFlightBulk}, which defaults to ADR-0074's
+     * 256 concurrent {@code _bulk} requests -- so no existing construction had
+     * to name one.
+     */
+    public IngestConfig(Duration intervalFloor, long maxSegmentBytes, String trustDomain,
+            long maxQueuedPushBytes, Duration intervalCeiling, double fillRatioLowThreshold,
+            double fillRatioHighThreshold, Duration intervalLengthenDelay,
+            Duration intervalShortenDelay, boolean directEnabled, LaneSet lanes) {
+        this(intervalFloor, maxSegmentBytes, trustDomain, maxQueuedPushBytes, intervalCeiling,
+                fillRatioLowThreshold, fillRatioHighThreshold, intervalLengthenDelay,
+                intervalShortenDelay, directEnabled, lanes,
+                LaneAdmission.DEFAULT_MAX_IN_FLIGHT_BULK);
+    }
 
     /**
      * Every field but {@code lanes}, which defaults to ADR-0074's active set
@@ -142,6 +161,12 @@ public record IngestConfig(Duration intervalFloor, long maxSegmentBytes, String 
         Objects.requireNonNull(intervalLengthenDelay, "intervalLengthenDelay");
         Objects.requireNonNull(intervalShortenDelay, "intervalShortenDelay");
         Objects.requireNonNull(lanes, "lanes");
+        if (maxInFlightBulk < 1) {
+            // ⚠️ Zero admits nothing past the floors, so a pod would answer
+            // 429 to every request the moment each lane held one.
+            throw new IllegalArgumentException(
+                    "maxInFlightBulk must be positive: " + maxInFlightBulk);
+        }
         if (trustDomain.isBlank()) {
             throw new IllegalArgumentException("a trust domain is never blank");
         }
