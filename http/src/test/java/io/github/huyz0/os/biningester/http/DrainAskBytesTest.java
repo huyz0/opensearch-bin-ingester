@@ -19,8 +19,15 @@ import org.junit.jupiter.api.Test;
  */
 class DrainAskBytesTest {
 
-    private static final long TARGET = HttpSequencerTransport.DRAIN_PATH.length()
-            + HttpSequencerTransport.POD_PARAM.length();
+    /**
+     * ⚠️ A LITERAL, DERIVED BY HAND, NOT READ FROM PRODUCTION'S CONSTANTS: an
+     * expectation built from {@code DRAIN_PATH.length() + POD_PARAM.length()}
+     * follows a wrong constant and stays green. The request target the drain
+     * ask sends is {@code /ctl/drain?pod=<requester>}:
+     * {@code /ctl/drain} is 10 characters (/ c t l / d r a i n) and
+     * {@code ?pod=} is 5 (? p o d =), so the fixed part is 15.
+     */
+    private static final long TARGET = 15;
 
     @Test
     void theAskIsThePathTheParameterAndTheRequestersId() {

@@ -2,6 +2,7 @@
 package io.github.huyz0.os.biningester.server.chaos;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import io.github.huyz0.os.biningester.binstore.backend.S3Fixture;
@@ -16,6 +17,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import org.awaitility.core.ConditionTimeoutException;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -96,8 +98,15 @@ class PartitionVisibilityIT {
                 long bound = Math.max(2, (inboxSize + 99) / 100);
                 long deadline = healedAt + (bound * INTERVAL.toNanos())
                         + TimeUnit.SECONDS.toNanos(5);
-                while (!intentKeys(bucket).isEmpty() && System.nanoTime() < deadline) {
-                    Thread.sleep(25);
+                // ⚠️ Awaitility, not Thread.sleep: the inbox is a real external
+                // system (testing.md). A timeout is left to the assertion below,
+                // which names what remained and carries the leader's log.
+                try {
+                    await().pollDelay(Duration.ZERO).pollInterval(Duration.ofMillis(25))
+                            .atMost(Duration.ofNanos(Math.max(1, deadline - System.nanoTime())))
+                            .until(() -> intentKeys(bucket).isEmpty());
+                } catch (ConditionTimeoutException drainNotFinished) {
+                    // reported by the assertions below
                 }
                 long elapsed = System.nanoTime() - healedAt;
                 List<String> remaining = intentKeys(bucket);
