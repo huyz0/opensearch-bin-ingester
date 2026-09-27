@@ -24,10 +24,45 @@ class TierThreeAvailabilityTransitionTest {
 
     @Test
     void anIngesterReturningAfterPointerReadStopsFurtherFallbackGets() throws Exception {
+        List<String> gets = new ArrayList<>();
+        List<Object> delivered = new ArrayList<>();
+        boolean recovered = recoverFlippingOn(POINTER, gets, delivered);
+
+        assertThat(recovered).isFalse();
+        assertThat(gets).containsExactly(POINTER);
+    }
+
+    /**
+     * ⚠️ THE PRE-DELIVERY GUARD (M10.12, harvested from 895710a's review):
+     * the ingester answers again DURING the final segment GET, after every
+     * object was read. Recovery must still hand no event to a consumer -- the
+     * live path owns the stream again -- which only the check made just before
+     * the first delivery can catch.
+     */
+    @Test
+    void anIngesterReturningDuringTheFinalSegmentReadDeliversNothing() throws Exception {
+        List<String> gets = new ArrayList<>();
+        List<Object> delivered = new ArrayList<>();
+        boolean recovered = recoverFlippingOn(SEGMENT, gets, delivered);
+
+        assertThat(gets).as("the premise: every object was read").containsExactly(
+                POINTER, DELTA, SEGMENT);
+        assertThat(recovered).isFalse();
+        assertThat(delivered).as("no event after the ingester returned").isEmpty();
+    }
+
+    private static final String POINTER = "prefix/ctl/log/0/0000000000000004/ckpt/LATEST";
+    private static final String DELTA =
+            "prefix/ctl/log/0/0000000000000004/0000000000000000.delta";
+    private static final String SEGMENT = "prefix/data/segment.bseg";
+
+    /** One Tier 3 recovery whose ingester starts answering during the GET of {@code flipOn}. */
+    private static boolean recoverFlippingOn(String flipOn, List<String> gets,
+            List<Object> delivered) throws Exception {
         RunKey key = new RunKey(new UUID(0, 1), 0);
-        String pointer = "prefix/ctl/log/0/0000000000000004/ckpt/LATEST";
-        String delta = "prefix/ctl/log/0/0000000000000004/0000000000000000.delta";
-        String segmentKey = "prefix/data/segment.bseg";
+        String pointer = POINTER;
+        String delta = DELTA;
+        String segmentKey = SEGMENT;
         byte[] checkpoint = new Checkpoint(0, Map.of(), Map.of()).encode();
         SegmentWriter writer = new SegmentWriter();
         writer.add(key, new SegmentRecord("row", OpType.INDEX, OptionalLong.of(0),
@@ -36,7 +71,6 @@ class TierThreeAvailabilityTransitionTest {
                 delta, new CommitDelta(0, segmentKey, List.of(new RunCommit(key, 1, 0))).encode(),
                 segmentKey, writer.toByteArray(1L));
         MutableTransport transport = new MutableTransport();
-        List<String> gets = new ArrayList<>();
         TierThreeRecovery.Reader reader = new TierThreeRecovery.Reader() {
             @Override
             public OptionalLong stat(String bucket, String prefix, String objectKey) {
@@ -47,7 +81,7 @@ class TierThreeAvailabilityTransitionTest {
             @Override
             public Optional<InputStream> get(String bucket, String prefix, String objectKey) {
                 gets.add(objectKey);
-                if (objectKey.equals(pointer)) {
+                if (objectKey.equals(flipOn)) {
                     transport.answers = true;
                 }
                 byte[] bytes = objects.get(objectKey);
@@ -56,15 +90,11 @@ class TierThreeAvailabilityTransitionTest {
             }
         };
 
-        boolean recovered;
         try (NodeSubscriptions subscriptions = new NodeSubscriptions(transport, 1)) {
             subscriptions.enableTierThree(new TierThreeRecovery("bucket", "prefix", reader));
-            recovered = subscriptions.recoverTierThree(4, 0,
-                    Map.of(key, new TierThreeRecovery.Gap(0, 1)), event -> true);
+            return subscriptions.recoverTierThree(4, 0,
+                    Map.of(key, new TierThreeRecovery.Gap(0, 1)), event -> delivered.add(event));
         }
-
-        assertThat(recovered).isFalse();
-        assertThat(gets).containsExactly(pointer);
     }
 
     private static final class MutableTransport

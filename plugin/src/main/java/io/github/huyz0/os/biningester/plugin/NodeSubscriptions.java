@@ -414,7 +414,18 @@ public final class NodeSubscriptions implements AutoCloseable {
         tierTwoPoller = new TierTwoChainPoller(-1, -1, reader, ingesterReachable, consumer);
     }
 
-    /** One scheduled node-wide tick, regardless of the number of clients or shards. */
+    /**
+     * One scheduled node-wide tick, regardless of the number of clients or shards.
+     *
+     * <p>⚠️ THE NODE MONITOR IS HELD OVER THE READ, deliberately: it orders a
+     * final {@link #release} after a node-wide read already admitted (M9.43,
+     * {@code TierTwoReleaseRaceTest}). ⚠️ AND THAT READ IS NOT BOUNDED once the
+     * node-local reader has sent its headers (M10.12, measured): the client's
+     * 30 s request timeout stops at the headers, and a body that stalls after
+     * them held a {@code BodyHandlers.ofInputStream()} read for as long as the
+     * server stalled (20 s against a 2 s timeout). So a stalled reader holds
+     * release and relocation with it. Bounding the body read is M10.25.
+     */
     synchronized void pollTierTwo(long interval) {
         TierTwoChainPoller poller = tierTwoPoller;
         if (poller != null && !clients.isEmpty() && pendingTierTwoDelta.get() == null) {
