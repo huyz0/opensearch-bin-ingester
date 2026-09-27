@@ -23,6 +23,14 @@ class RepositoryGateChecksTest {
     }
 
     @Test
+    void theGlossaryIsExemptFromTheTerminologyGateOnEitherPathSeparator() {
+        assertThat(RepositoryGatesTask.Companion.terminologyExempt("docs/internal/standards/glossary.md")).isTrue();
+        assertThat(RepositoryGatesTask.Companion.terminologyExempt("docs\\internal\\standards\\glossary.md")).isTrue();
+        assertThat(RepositoryGatesTask.Companion.terminologyExempt("docs/internal/standards/testing.md")).isFalse();
+        assertThat(RepositoryGatesTask.Companion.terminologyExempt("docs/glossary.md")).isFalse();
+    }
+
+    @Test
     void nativeHarnessKeepsTheMeasurementWorkflowWiringTestIncluded() throws Exception {
         String build = Files.readString(Path.of("build.gradle.kts"));
         assertThat(build).contains("includeTestsMatching(\"io.github.huyz0.os.biningester.GradleGateWiringTest\")");

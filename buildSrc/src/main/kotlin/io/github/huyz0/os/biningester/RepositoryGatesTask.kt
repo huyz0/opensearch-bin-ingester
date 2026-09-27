@@ -88,6 +88,12 @@ abstract class RepositoryGatesTask : DefaultTask() {
             return contentMatches("fixture.txt", staged, working)
         }
 
+        fun terminologyExempt(path: String): Boolean {
+            val normalized = path.replace('\\', '/')
+            return normalized.endsWith("docs/internal/standards/glossary.md") ||
+                normalized.contains("scripts") || normalized.substringAfterLast('/') == "RepositoryGatesTask.kt"
+        }
+
         fun contentMatches(path: String, staged: ByteArray, working: ByteArray): Boolean {
             val text = path.substringAfterLast('.').lowercase() in setOf("java", "kt", "kts", "gradle", "md", "sh", "py", "yaml", "yml", "json", "txt", "properties", "sha1", "toml", "csv", "svg") ||
                 path.substringAfterLast('/').lowercase() in setOf(".gitignore", "license", "notice", "gradlew", "gradlew.bat")
@@ -142,8 +148,7 @@ abstract class RepositoryGatesTask : DefaultTask() {
             "collector" to "one of the six roles"
         )
         files.filter { it.extension in setOf("java", "kt", "kts", "md") }.forEach { file ->
-            if (file.toString().contains("docs\\internal\\standards\\glossary.md") ||
-                file.toString().contains("scripts") || file.fileName.toString() == "RepositoryGatesTask.kt") return@forEach
+            if (terminologyExempt(file.toString())) return@forEach
             file.readText().lineSequence().forEachIndexed { line, text ->
                 if (!text.trimStart().startsWith("//") && !text.trimStart().startsWith("<!--") &&
                     deprecated.any { Regex("\\b${Regex.escape(it.first)}\\b", RegexOption.IGNORE_CASE).containsMatchIn(text) })
