@@ -622,7 +622,8 @@ public final class ConsumerClient implements AutoCloseable {
     }
 
     /**
-     * The segment's bytes: carried on the delivery, or fetched under a grant.
+     * The segment's bytes: carried on the delivery, fetched by key from the
+     * ingester for an empty {@code proxy} delivery, or fetched under a grant.
      *
      * <p>⚠️ A FAILED FETCH PROPAGATES. Catching it and returning an empty array
      * would have {@code readNext} report an ordinary empty poll while a whole
@@ -637,6 +638,20 @@ public final class ConsumerClient implements AutoCloseable {
      * a source is a misconfiguration an operator must see.
      */
     private byte[] bytesOf(Delivery delivery) throws IOException {
+        if (delivery.via() == FetchMode.PROXY && delivery.segment().length == 0) {
+            // ⚠️ M10.2, ADR-0073: A PROXY EVENT OVER HTTP CARRIES COORDINATES
+            // ONLY. Decoding its empty array was the pre-M10 behaviour, and a
+            // zero-length segment fails its footer check -- so every batch
+            // above the inline cap was lost to a consumer reached over HTTP.
+            // An in-process subscriber is handed the assembled bytes and is
+            // not fetched again.
+            if (segmentSource == null) {
+                throw new IllegalStateException("segment " + delivery.segmentKey()
+                        + " was served `proxy` to a consumer with no segment source; a "
+                        + "consumer reached over HTTP fetches it from its ingester (M10.2)");
+            }
+            return segmentSource.fetchSegment(delivery.segmentKey());
+        }
         if (delivery.via() != FetchMode.DIRECT) {
             return delivery.segment();
         }

@@ -5,7 +5,9 @@ import io.github.huyz0.os.biningester.format.Grant;
 import java.io.IOException;
 
 /**
- * Where a {@code direct} consumer gets a segment's bytes (M5.45g, FR-6).
+ * Where a consumer gets a segment's bytes when its delivery does not carry
+ * them: under a grant for {@code direct} (M5.45g, FR-6), or by key from the
+ * ingester's segment route for {@code proxy} (M10.2).
  *
  * <p>⚠️ NOT A {@code BinStore}, AND THAT IS THE WHOLE REASON THIS TYPE EXISTS.
  * ADR-0023 keeps {@code io.github.huyz0.os.biningester.binstore} out of {@code client} and
@@ -52,4 +54,21 @@ public interface SegmentSource {
      * @throws IOException if the bytes could not be fetched
      */
     byte[] fetch(Grant grant) throws IOException;
+
+    /**
+     * The whole segment named by {@code segmentKey}, from the ingester's proxy
+     * segment route (M10.2, ADR-0073) -- how a {@code proxy} delivery's bytes
+     * reach a consumer over HTTP, where the event carries only coordinates.
+     *
+     * <p>⚠️ THE DEFAULT REFUSES, and never answers an empty array: a source
+     * built only for grants handed a proxied segment must say so, or
+     * {@code ConsumerClient} decodes nothing and advances past a window.
+     *
+     * @throws IOException if the bytes could not be fetched, or this source
+     *     cannot fetch by key at all
+     */
+    default byte[] fetchSegment(String segmentKey) throws IOException {
+        throw new IOException("this segment source fetches only under grants, so it cannot "
+                + "fetch proxied segment " + segmentKey);
+    }
 }
