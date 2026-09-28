@@ -366,8 +366,18 @@ public final class ConsumerClient implements AutoCloseable {
             if (decoded == null) {
                 // ⚠️ NEVER A DECODE AFTER THE COMMIT: one that threw here would
                 // leave its retry reading as a duplicate -- the drop above.
-                throw new IllegalStateException("delivery at " + delivery.firstOffset()
-                        + " was decoded without being fetched first");
+                // ⚠️ REACHED ONLY BY A RACE (M11.13, H8; M10.23 review R4): the
+                // catch-up lane committed up to this delivery between
+                // `wouldDecode` and `reportAnyGap`, which then took its one
+                // committing branch the check did not foresee --
+                // `firstOffset == expected`. So the commit is undone to
+                // `firstOffset` -- not to a value sampled before it, which the
+                // racing commit may have moved (review R1) -- and the delivery
+                // stays at the head, NOT CONSUMED: the next poll decodes it in
+                // order. Throwing would pause the shard for a state that is not
+                // unrecoverable (research 02 §6; review R2).
+                expectedNextOffset = delivery.firstOffset();
+                return false;
             }
             out.addAll(decoded);
         }

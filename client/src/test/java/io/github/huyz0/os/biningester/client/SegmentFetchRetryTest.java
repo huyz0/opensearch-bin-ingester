@@ -360,13 +360,17 @@ class SegmentFetchRetryTest {
 
     /**
      * The DEPLOYED default retries: a client built without a policy answers a
-     * 502 with an empty poll, and reads the records once the real backoff --
-     * one jittered second, slept for real -- has passed.
+     * 502 with an empty poll, not a pause, and owes a backoff before it asks
+     * again.
      *
      * <p>⚠️ THE DEFAULT PATH, NOT {@code DEFAULT}'s FIELDS: production builds
      * clients through these constructors, and a default of one attempt would
      * restore the pause on every 502 while every injected-policy case stayed
-     * green.
+     * green. ⚠️ AND NOTHING SLEEPS (M11.13, H8; M10.23 review T8): the default
+     * sleeper sleeps for real, so this case polls with {@code ZERO}, which
+     * neither waits nor fetches while a backoff is owed; that the backoff is
+     * then served and the records read is {@link
+     * #aTransient502ThenSuccessYieldsTheRecordsInOrder}'s, on an injected sleeper.
      */
     @Test
     void aDefaultConstructedClientRetriesATransientFailure() throws Exception {
@@ -376,12 +380,11 @@ class SegmentFetchRetryTest {
 
             assertThat(c.readNext(Duration.ZERO)).as("a 502 is an empty poll, not a pause")
                     .isEmpty();
-            Optional<ConsumerRecord> got = Optional.empty();
-            for (int poll = 0; poll < 10 && got.isEmpty(); poll++) {
-                got = c.readNext(Duration.ofSeconds(2));
+            for (int poll = 0; poll < 5; poll++) {
+                assertThat(c.readNext(Duration.ZERO))
+                        .as("a backoff is owed: no second fetch yet").isEmpty();
             }
-            assertThat(got).map(ConsumerRecord::offset).contains(40L);
         }
-        assertThat(source.attempts).hasValue(2);
+        assertThat(source.attempts).as("intentional: one fetch, its retry owed").hasValue(1);
     }
 }
