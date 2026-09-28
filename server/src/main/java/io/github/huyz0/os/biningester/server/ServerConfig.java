@@ -57,12 +57,25 @@ import java.util.Set;
  *     early lease challenge, or empty for none (M8.13)
  * @param costTopKInterval how often the top-K cost line is logged; zero for
  *     never (M11.5)
+ * @param quotas the per-index admission quotas; none by default (M11.8)
  */
 public record ServerConfig(String podId, String az, String trustDomain, String prefix,
         StoreConfig store, Duration leaseTtl, Duration leaseRenewInterval, String endpoint, IngestConfig ingest,
         int httpPort, String producerSubject, Set<String> allowedIndices,
         RetentionConfig retention, java.util.Optional<MembershipConfig> membership,
-        String podUid, Duration costTopKInterval) {
+        String podUid, Duration costTopKInterval,
+        io.github.huyz0.os.biningester.ingest.IndexQuotas.Config quotas) {
+
+    /** The same, with no per-index quota (before M11.8). */
+    public ServerConfig(String podId, String az, String trustDomain, String prefix,
+            StoreConfig store, Duration leaseTtl, Duration leaseRenewInterval, String endpoint,
+            IngestConfig ingest, int httpPort, String producerSubject, Set<String> allowedIndices,
+            RetentionConfig retention, java.util.Optional<MembershipConfig> membership,
+            String podUid, Duration costTopKInterval) {
+        this(podId, az, trustDomain, prefix, store, leaseTtl, leaseRenewInterval, endpoint, ingest,
+                httpPort, producerSubject, allowedIndices, retention, membership, podUid,
+                costTopKInterval, io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none());
+    }
 
     /** The same, logging the top-K cost line at its default interval (before M11.5). */
     public ServerConfig(String podId, String az, String trustDomain, String prefix,
@@ -141,6 +154,7 @@ public record ServerConfig(String podId, String az, String trustDomain, String p
         Objects.requireNonNull(retention, "retention");
         Objects.requireNonNull(membership, "membership");
         Objects.requireNonNull(costTopKInterval, "costTopKInterval");
+        Objects.requireNonNull(quotas, "quotas");
         if (costTopKInterval.isNegative()) {
             throw new IllegalArgumentException("costTopKInterval is never negative: "
                     + costTopKInterval);

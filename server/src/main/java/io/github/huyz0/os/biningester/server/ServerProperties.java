@@ -260,7 +260,8 @@ public final class ServerProperties {
                     membership(settings), required(settings, POD_UID),
                     offOrPositive(settings, COST_TOP_K_INTERVAL,
                             io.github.huyz0.os.biningester.ingest.CostTopKReporter
-                                    .DEFAULT_INTERVAL));
+                                    .DEFAULT_INTERVAL),
+                    QuotaProperties.parse(settings));
         } catch (IllegalArgumentException refused) {
             // ⚠️ `ConfigurationException` IS AN `IllegalArgumentException`, so
             // one already carrying a key's name lands here too and is returned
@@ -294,7 +295,7 @@ public final class ServerProperties {
                 // avoid handing them.
                 throw new ConfigurationException("a setting has no name (an empty key)");
             }
-            if (!KNOWN.contains(key)) {
+            if (!KNOWN.contains(key) && !QuotaProperties.isQuotaKey(key)) {
                 unknown.add(key);
             }
         }

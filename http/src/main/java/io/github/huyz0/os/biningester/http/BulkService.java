@@ -3,6 +3,7 @@ package io.github.huyz0.os.biningester.http;
 
 import io.github.huyz0.os.biningester.format.SegmentRecord;
 import io.github.huyz0.os.biningester.ingest.AppendResult;
+import io.github.huyz0.os.biningester.ingest.IndexQuotas;
 import io.github.huyz0.os.biningester.ingest.Ingest;
 import io.github.huyz0.os.biningester.ingest.LaneAdmission;
 import io.github.huyz0.os.biningester.ingest.LaneSet;
@@ -144,13 +145,27 @@ public final class BulkService implements HttpService {
      */
     public BulkService(Ingest ingest, Principal principal, DrainGate gate,
             LaneAdmission admission) {
+        this(ingest, principal, gate, admission, IndexQuotas.none());
+    }
+
+    /**
+     * The same, admitting each request through its index's quota as well
+     * (M11.8, ADR-0078).
+     *
+     * <p>⚠️ **THE CONSTRUCTORS ABOVE REFUSE NOTHING BY QUOTA**; only the
+     * composition root builds quotas from the pod's configuration.
+     */
+    public BulkService(Ingest ingest, Principal principal, DrainGate gate,
+            LaneAdmission admission, IndexQuotas quotas) {
         this.ingest = Objects.requireNonNull(ingest, "ingest");
         this.principal = Objects.requireNonNull(principal, "principal");
         this.gate = Objects.requireNonNull(gate, "gate");
         this.admission = Objects.requireNonNull(admission, "admission");
+        this.quotas = Objects.requireNonNull(quotas, "quotas");
     }
 
     private final LaneAdmission admission;
+    private final IndexQuotas quotas;
 
     @Override
     public void routing(HttpRules rules) {
@@ -241,7 +256,19 @@ public final class BulkService implements HttpService {
                     + "in-flight budget and lane " + placement.lane() + " holds its share; retry");
             return;
         }
-        Admitted held = new Admitted(permit.get(), placement.lane());
+        // ⚠️ THE INDEX's QUOTA, AFTER THE LANE AND BEFORE THE BODY (M11.8,
+        // ADR-0078): a refused request costs no parse and no buffer, and hands
+        // its lane permit straight back.
+        // ⚠️ BY THE CONCRETE INDEX, never the alias the path names (review P2):
+        // an alias and its index are one index, with one bucket and one cap.
+        IndexQuotas.Admission quota = quotas.admit(ingest.concreteIndex(index));
+        if (quota.refusal().isPresent()) {
+            permit.get().release();
+            tooManyRequests(response, quota.refusal().get().retryAfterSeconds(),
+                    quota.refusal().get().reason());
+            return;
+        }
+        Admitted held = new Admitted(permit.get(), placement.lane(), quota.ticket().get());
         try {
             append(request, response, index, placement, held);
         } finally {
@@ -251,7 +278,8 @@ public final class BulkService implements HttpService {
 
     /**
      * The request's admission permit, given back while it waits for
-     * durability and taken again for its next chunk (M11.7, M10 review F2).
+     * durability and taken again for its next chunk (M11.7, M10 review F2),
+     * and its index's quota slot, held until the request ends (M11.8).
      *
      * <p>⚠️ THE PERMIT BOUNDS LOAD, NOT WAITING. Held across the durable-ack
      * wait, a budget of 256 capped a pod at 256 producers parked on a flush --
@@ -265,14 +293,24 @@ public final class BulkService implements HttpService {
      * share instead ({@link LaneAdmission#acquire}). The permit for a chunk
      * is taken before the chunk's first record is held, so a request waiting
      * for its permit holds no parsed records.
+     *
+     * <p>⚠️ THE INDEX's SLOT IS NOT GIVEN BACK AT BUFFERED (M11.8 review P1).
+     * It is what bounds a quota'd index's debt: a request admitted with tokens
+     * is never cut off, so the debt concurrent admission can build is at most
+     * {@code maxInFlightPerIndex} bodies only while the cap counts every
+     * request not yet finished (ADR-0078 decision 2a). Returned at buffered,
+     * it would count only the requests parsing at one instant, and an index
+     * could be admitted thousands of bodies deep.
      */
     private final class Admitted {
         private final byte lane;
+        private final IndexQuotas.Ticket quota;
         private LaneAdmission.Permit current;
 
-        Admitted(LaneAdmission.Permit first, byte lane) {
+        Admitted(LaneAdmission.Permit first, byte lane, IndexQuotas.Ticket quota) {
             this.current = first;
             this.lane = lane;
+            this.quota = quota;
         }
 
         void holdForNextChunk() throws InterruptedException {
@@ -281,11 +319,23 @@ public final class BulkService implements HttpService {
             }
         }
 
-        void release() {
+        /** Charges a chunk to the index's quota as it is appended (ADR-0078 decision 2). */
+        void charge(List<SegmentRecord> chunk) {
+            quota.charge(chunk);
+        }
+
+        /** A chunk is buffered: the pod's permit goes back, the index's slot does not. */
+        void buffered() {
             if (current != null) {
                 current.release();
                 current = null;
             }
+        }
+
+        /** The request has ended, however: everything it holds goes back. */
+        void release() {
+            buffered();
+            quota.release();
         }
     }
 
@@ -446,8 +496,11 @@ public final class BulkService implements HttpService {
      */
     private AppendResult appendChunk(String index, Placement placement,
             List<SegmentRecord> chunk, Admitted held) {
-        Runnable buffered = held == null ? () -> { } : held::release;
+        Runnable buffered = held == null ? () -> { } : held::buffered;
         try {
+            if (held != null) {
+                held.charge(chunk);
+            }
             return placement.routing() == null
                     ? ingest.append(principal, index, placement.partition(), placement.lane(),
                             chunk::forEach, buffered)

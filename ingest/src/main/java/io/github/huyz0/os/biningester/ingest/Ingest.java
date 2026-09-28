@@ -178,6 +178,15 @@ public interface Ingest extends AutoCloseable {
         return lane == 0;
     }
 
+    /**
+     * The concrete index {@code indexOrAlias} names now, or itself when this
+     * ingester cannot say (M11.8 review P2): a per-index quota is charged to
+     * the index, so a write through its alias spends the same bucket.
+     */
+    default String concreteIndex(String indexOrAlias) {
+        return indexOrAlias;
+    }
+
     private static void refuseLane(byte lane) {
         if (lane != 0) {
             throw new PlacementRefusedException("lane " + lane + " was asked for, and this "

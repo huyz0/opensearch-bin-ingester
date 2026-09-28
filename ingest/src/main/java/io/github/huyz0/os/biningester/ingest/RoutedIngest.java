@@ -131,6 +131,13 @@ public final class RoutedIngest implements Ingest {
         return delegate.acceptsLane(lane);
     }
 
+    /** ⚠️ THE CATALOG's CONCRETE NAME: an alias and its write index share one quota. */
+    @Override
+    public String concreteIndex(String indexOrAlias) {
+        return catalog.resolve(indexOrAlias).map(IndexRegistration::indexName)
+                .orElse(indexOrAlias);
+    }
+
     /**
      * ⚠️ REFUSED BEFORE ANY WORK, and above all before the pending pool: a
      * pooled write of an inactive lane would hold pool space for the whole

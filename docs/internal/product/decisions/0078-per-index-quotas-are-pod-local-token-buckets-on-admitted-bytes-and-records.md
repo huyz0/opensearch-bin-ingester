@@ -38,20 +38,28 @@ Two facts constrain the mechanism:
    the prefix already appended would be durable-bound and the producer's retry
    would have to re-send it.
 2a. **A quota'd index holds at most `maxInFlight` admitted requests at once**
-   (`ingest.quota.maxInFlightPerIndex`, default 8), because decision 2 alone
+   (`ingest.quota.max-in-flight-per-index`, default 8), because decision 2 alone
    bounds nothing under concurrency: every request arriving while the bucket is
    still non-negative passes the check before any of them is charged, so 256
    concurrent bodies — the pod's whole in-flight budget — could all be
    admitted into one index's debt. With the cap, an index's debt is at most
-   `maxInFlight` request bodies past a non-negative balance, and it holds at
-   most `maxInFlight` of the pod's admission permits. An index with no quota
-   configured has no cap, as before M11.
+   `maxInFlight` request bodies past a non-negative balance. ⚠️ **The slot is
+   held until the request ENDS**, durable wait included -- not given back when
+   a chunk is buffered, which is when the pod's lane permit goes back since
+   M11.7 (ADR-0079). Amended by M11.8's review (P1): a slot returned at
+   buffered counts only the requests parsing at one instant, and an index
+   could be admitted thousands of bodies into debt before the first refusal.
+   An index with no quota configured has no cap, as before M11. The index is
+   the CONCRETE one: a write through an alias spends its index's bucket and
+   slot (M11.8 review P2).
 3. **Refused with `429` and `Retry-After` = the seconds until the deeper
    bucket's debt is repaid, rounded up, at least 1.** The same one place that
    answers every other `429` sets the header (M11's H2).
 4. **Configured per pod**: a default applied to every index
-   (`ingest.quota.default.bytesPerSecond`, `…recordsPerSecond`), overridden per
-   index by name (`ingest.quota.index.<name>.bytesPerSecond`, …). **0 means
+   (`ingest.quota.default.bytes-per-second`, `…records-per-second`), overridden
+   per index by name (`ingest.quota.index.<name>.bytes-per-second`, …; the name
+   keeps its dots, and a rate the override leaves unset is the default's).
+   **0 means
    unlimited, and is the default**, so a pod configured with nothing behaves
    exactly as before M11.
 5. **The rate is per POD.** A fleet of N pods admits up to N times the
@@ -103,3 +111,9 @@ Two facts constrain the mechanism:
   of bytes admitted past the quota before every further request is refused
   until it is repaid. A tighter bound needs a smaller cap or a producer that
   sends smaller bulks; the ADR states the real number rather than a better one.
+- Because the slot is held across the durable wait, a quota'd index has at most
+  `maxInFlight` requests in flight per pod however high its rate: at the
+  defaults, 8 bodies per flush-and-commit latency. An index whose configured
+  rate needs more concurrency than that needs a larger cap; the cap is a
+  per-index concurrency limit as well as a debt bound, and only for an index
+  that has a quota.
