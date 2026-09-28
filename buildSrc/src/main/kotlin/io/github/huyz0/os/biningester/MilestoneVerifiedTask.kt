@@ -9,7 +9,6 @@ import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
 import java.nio.file.Files
-import java.nio.file.Path
 
 /** Ensures every numbered acceptance criterion has an evidence line. */
 abstract class MilestoneVerifiedTask : DefaultTask() {
@@ -23,19 +22,15 @@ abstract class MilestoneVerifiedTask : DefaultTask() {
         val spec = dir.resolve("SPEC.md")
         val verified = dir.resolve("VERIFIED.md")
         if (!Files.isRegularFile(spec)) throw GradleException("missing $spec")
-        val specText = Files.readString(spec)
-        val section = Regex("(?ms)^## Acceptance criteria\\s*(.*?)(?=^## )").find(specText)?.groupValues?.get(1)
-            ?: throw GradleException("$spec has no Acceptance criteria section")
-        val criteria = Regex("(?m)^\\s*(-?\\d+)\\.\\s+(.+)$").findAll(section).toList()
-        if (criteria.isEmpty()) throw GradleException("$spec has no numbered acceptance criteria")
         if (!Files.isRegularFile(verified)) throw GradleException("missing $verified")
-        val evidence = Files.readString(verified)
-        val failures = criteria.mapNotNull { match ->
-            val number = match.groupValues[1]
-            val line = Regex("(?m)^\\s*${Regex.escape(number)}\\.\\s+(.+)$").find(evidence)?.groupValues?.get(1)
-            if (line == null || !Regex("(#|\\.sh|\\bgradlew\\b|Test\\b|NOT-RUN|OBSERVED-NOT)").containsMatchIn(line)) number else null
+        val specText = Files.readString(spec)
+        val failures = try {
+            MilestoneEvidence.unevidenced(specText, Files.readString(verified))
+        } catch (malformed: IllegalArgumentException) {
+            throw GradleException("$spec: ${malformed.message}")
         }
         if (failures.isNotEmpty()) throw GradleException("criteria without evidence: ${failures.joinToString()}")
-        logger.lifecycle("milestone evidence covers ${criteria.size} criteria")
+        val criteria = MilestoneEvidence.criteriaCount(specText)
+        logger.lifecycle("milestone evidence covers $criteria criteria")
     }
 }
