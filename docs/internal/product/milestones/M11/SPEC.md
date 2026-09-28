@@ -267,6 +267,7 @@ ADR lands with its task.
 | M11.8 | Per-index quotas | FR-21 |
 | M10.30 | Unregistered index on the explicit-partition path answers `503` (carried) | FR-13, FR-16 |
 | M10.25 | Count the plugin's re-fetch fall-back (carried) | FR-6, NFR-4 |
+| M10.28a | A segment fetch answered from a node's held failure is not the run's attempt (split from M10.28 at its third review round, review.md rule 12) | FR-6, NFR-4 |
 | M10.28 | A failed segment fetch retried once per node, not per run (carried) | FR-6, NFR-4 |
 | M10.36 | Close Helidon's connection-return race on the other shared clients (carried) | FR-10 |
 | M10.24 | Root-cause `SubscriptionChannelTest` under jzap (carried) | — (quality) |

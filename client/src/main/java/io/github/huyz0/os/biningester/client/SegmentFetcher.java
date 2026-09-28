@@ -62,6 +62,14 @@ final class SegmentFetcher {
     private int failures;
     private Duration backoff;
     private Duration owed = Duration.ZERO;
+    /**
+     * The node's fetch count BEFORE this run's first held answer of the round,
+     * or -1 (M10.28 review F4): a run pauses after the node has failed
+     * {@code maxAttempts} times SINCE it started waiting, not at a count the
+     * node reached before -- so a resumed or newly assigned run gets its own
+     * round, as a run fetching for itself does.
+     */
+    private int heldBaseline = -1;
 
     SegmentFetcher(SegmentSource source, SegmentFetchRetry retry) {
         this.source = source;
@@ -127,14 +135,49 @@ final class SegmentFetcher {
         byte[] bytes;
         try {
             bytes = fetch.get();
+        } catch (SegmentFetchHeldException held) {
+            throw heldAnswer(delivery, held);
         } catch (IOException failed) {
             throw failedAttempt(delivery, failed);
         }
         synchronized (this) {
             failures = 0;
             backoff = retry.floor();
+            heldBaseline = -1;
         }
         return bytes;
+    }
+
+    /**
+     * A node's held failure (M10.28): not this run's attempt, so neither
+     * counted nor grown -- the run waits out what is left of the hold and
+     * asks again. ⚠️ SURFACED ONCE THE NODE HAS FAILED THE BUDGET's WORTH OF
+     * FETCHES SINCE THIS RUN STARTED WAITING, which is the run's own rule
+     * applied to the one schedule the node's runs share: a run that is only
+     * ever answered from the hold still pauses, and a resumed one gets a
+     * fresh round rather than pausing again on its first poll (review F4).
+     */
+    private synchronized RuntimeException heldAnswer(Delivery delivery,
+            SegmentFetchHeldException held) throws IOException {
+        // ⚠️ THE FAILURE THAT STARTED THE HOLD IS THIS RUN's ROUND's FIRST, so
+        // the baseline is one below the count first seen; and a count that
+        // fell below it -- the node's own reset after an old outage -- starts
+        // a new round rather than one that can never end.
+        if (heldBaseline < 0 || held.nodeAttempts() <= heldBaseline) {
+            heldBaseline = held.nodeAttempts() - 1;
+        }
+        int sinceWaiting = held.nodeAttempts() - heldBaseline;
+        if (sinceWaiting >= retry.maxAttempts()) {
+            failures = 0;
+            backoff = retry.floor();
+            heldBaseline = -1;
+            throw new IOException("segment " + delivery.segmentKey() + " could not be fetched "
+                    + "(this node's attempt " + sinceWaiting + " of " + retry.maxAttempts()
+                    + " since this run began waiting): " + held.getMessage(), held);
+        }
+        owed = held.remaining().isZero() ? Duration.ofMillis(1) : held.remaining();
+        return new Deferred("segment " + delivery.segmentKey() + " is held failed on this node",
+                held, false);
     }
 
     private synchronized RuntimeException failedAttempt(Delivery delivery, IOException failed)
@@ -147,6 +190,7 @@ final class SegmentFetcher {
             int attempts = failures;
             failures = 0;
             backoff = retry.floor();
+            heldBaseline = -1;
             throw new IOException("segment " + delivery.segmentKey() + " could not be fetched "
                     + "(attempt " + attempts + " of " + attempts + "): " + failed.getMessage(),
                     failed);
