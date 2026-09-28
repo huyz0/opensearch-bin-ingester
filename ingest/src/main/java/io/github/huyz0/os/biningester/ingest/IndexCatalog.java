@@ -174,6 +174,22 @@ public final class IndexCatalog {
         return found;
     }
 
+    /**
+     * Each registered index's NAME by its stream id, as read now: what a cost
+     * report prints for an id the ledger holds (M11.4). ⚠️ A snapshot, taken
+     * once per report, so a report over many indices does one pass here and
+     * not one per row. The id is derived through {@code RunKey.ofIndexUuid},
+     * the one decoder the write path uses (M7.2).
+     */
+    public Map<java.util.UUID, String> namesById() {
+        Map<java.util.UUID, String> names = new java.util.HashMap<>();
+        byName.values().forEach(registration -> names.put(
+                io.github.huyz0.os.biningester.format.RunKey.ofIndexUuid(
+                        registration.indexUuid(), 0).indexId(),
+                registration.indexName()));
+        return names;
+    }
+
     /** How many concrete indices this catalog has been told about. */
     public int size() {
         return byName.size();

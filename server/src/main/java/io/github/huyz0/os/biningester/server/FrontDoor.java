@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.server;
 
+import io.github.huyz0.os.biningester.http.AdminCostService;
+import io.github.huyz0.os.biningester.ingest.IndexCostReport;
 import io.github.huyz0.os.biningester.http.BulkService;
 import io.github.huyz0.os.biningester.http.CommitService;
 import io.github.huyz0.os.biningester.http.DrainGate;
@@ -205,7 +207,10 @@ public final class FrontDoor implements AutoCloseable {
                 .register(SegmentFetchService.over(
                         config.prefix(), assembly.segmentProxy(), assembly.nodeStore(), crossAz))
                 .register(new DurableSegmentSignalService(assembly.peerView(),
-                        assembly::prefetchDurableSegment));
+                        assembly::prefetchDurableSegment))
+                // ⚠️ M11.4, ADR-0077: each index's share of THIS pod's requests,
+                // from the ledger its stores charge. No request of its own.
+                .register(new AdminCostService(top -> costReport(assembly, top)));
         String macroPath = System.getProperty("binstore.macro.path");
         if (macroPath != null && !macroPath.isBlank()) {
             routes.register(new MacroCountsService(assembly, macroPath, crossAz));
@@ -235,6 +240,15 @@ public final class FrontDoor implements AutoCloseable {
             response.send(macroCountsJson(assembly.config().podId(), assembly.storeCounts(),
                     assembly.putPurposeCounts(), crossAz));
         }
+    }
+
+    /** The pod's {@code /admin/cost} answer for its {@code top} indices (M11.4). */
+    static String costReport(Assembly assembly, int top) {
+        return IndexCostReport.json(assembly.config().podId(), assembly.costLedger().snapshot(),
+                new IndexCostReport.PodTotals(assembly.storeCounts(),
+                        assembly.putPurposeCounts(), assembly.dataSegmentGets()),
+                assembly.store().capabilities().costs(), assembly.catalog().namesById()::get,
+                top);
     }
 
     static String macroCountsJson(String podId, StoreCounts counts) {
