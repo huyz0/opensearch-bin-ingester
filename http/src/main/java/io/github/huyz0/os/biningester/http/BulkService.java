@@ -234,7 +234,10 @@ public final class BulkService implements HttpService {
         }
         var permit = admission.tryAcquire(placement.lane());
         if (permit.isEmpty()) {
-            response.status(Status.TOO_MANY_REQUESTS_429).send("this ingester is at its "
+            // ⚠️ ONE SECOND: a saturated pod frees a permit as soon as any
+            // request in flight completes, which is well under a second at
+            // any rate this refusal is reached.
+            tooManyRequests(response, ADMISSION_RETRY_AFTER_SECONDS, "this ingester is at its "
                     + "in-flight budget and lane " + placement.lane() + " holds its share; retry");
             return;
         }
@@ -243,6 +246,25 @@ public final class BulkService implements HttpService {
         } finally {
             permit.get().release();
         }
+    }
+
+    /** What a lane-admission {@code 429} tells a producer to wait, in seconds (M11.6). */
+    static final long ADMISSION_RETRY_AFTER_SECONDS = 1;
+
+    /**
+     * Answers {@code 429} with {@code Retry-After} (M11.6, research 14 §3,
+     * ADR-0010): ⚠️ **THE ONE PLACE A 429 IS SENT**, so no refusal can leave
+     * without the header a producer is told to honour -- a bare 429 is
+     * retried at whatever rate the producer's own loop runs, which is the
+     * load the refusal existed to shed.
+     *
+     * @param retryAfterSeconds rounded up to at least 1: {@code Retry-After: 0}
+     *     is an instruction to retry immediately
+     */
+    static void tooManyRequests(ServerResponse response, long retryAfterSeconds, String why) {
+        response.status(Status.TOO_MANY_REQUESTS_429)
+                .header("Retry-After", Long.toString(Math.max(1, retryAfterSeconds)))
+                .send(why);
     }
 
     private void append(ServerRequest request, ServerResponse response, String index,
