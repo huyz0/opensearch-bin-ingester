@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.huyz0.os.biningester.binstore.BinStore;
@@ -86,7 +87,7 @@ class UnflushedBytesCeilingTest {
         try (DefaultIngest ingest = new DefaultIngest(
                 IngestTestSupport.pinnedIntervalConfig(Duration.ofMillis(20), SEGMENT), store,
                 IngestTestSupport.PREFIX, "pod1", IngestTestSupport.sequencer(store, "pod1"),
-                new SubscriptionHub(), Clock.systemUTC(), index -> IngestTestSupport.LOGS)) {
+                new SubscriptionHub(), Clock.systemUTC(), index -> IngestTestSupport.LOGS, ignored -> { }, new IndexCostLedger())) {
             // 1.5 segments: due at once, flushed, and held at its data PUT.
             appends.add(append(ingest, SEGMENT * 3 / 2, buffered));
             await(buffered, 1);

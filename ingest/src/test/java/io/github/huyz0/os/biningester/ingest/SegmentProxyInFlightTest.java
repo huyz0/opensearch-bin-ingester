@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.huyz0.os.biningester.binstore.BinStore;
@@ -126,7 +127,7 @@ class SegmentProxyInFlightTest {
         CountDownLatch release = new CountDownLatch(1);
         AtomicInteger gets = new AtomicInteger();
         SegmentProxy proxy = new SegmentProxy(gated(memory, release, gets, new AtomicBoolean()),
-                1024, SegmentCache.forSegmentsOf(1 << 20));
+                1024, SegmentCache.forSegmentsOf(1 << 20), new IndexCostLedger());
 
         List<CompletableFuture<Collecting>> calls = race(proxy, CALLERS);
         awaitJoiners(proxy, CALLERS - 1);
@@ -150,7 +151,7 @@ class SegmentProxyInFlightTest {
         AtomicInteger gets = new AtomicInteger();
         AtomicBoolean fail = new AtomicBoolean(true);
         SegmentProxy proxy = new SegmentProxy(gated(memory, release, gets, fail), 1024,
-                SegmentCache.forSegmentsOf(1 << 20));
+                SegmentCache.forSegmentsOf(1 << 20), new IndexCostLedger());
 
         List<CompletableFuture<Collecting>> calls = race(proxy, CALLERS);
         awaitJoiners(proxy, CALLERS - 1);
@@ -184,7 +185,7 @@ class SegmentProxyInFlightTest {
         memory.put(KEY, Body.ofBytes(segment));
         AtomicInteger gets = new AtomicInteger();
         SegmentProxy proxy = new SegmentProxy(gated(memory, new CountDownLatch(0), gets,
-                new AtomicBoolean()), 1024, SegmentCache.forSegmentsOf(1 << 20));
+                new AtomicBoolean()), 1024, SegmentCache.forSegmentsOf(1 << 20), new IndexCostLedger());
         AtomicBoolean once = new AtomicBoolean();
         // ⚠️ THE WINDOW, BUILT: this caller has missed the cache; before it
         // claims the key, another read runs to completion, fills the cache
@@ -217,7 +218,7 @@ class SegmentProxyInFlightTest {
         CountDownLatch release = new CountDownLatch(1);
         AtomicInteger gets = new AtomicInteger();
         SegmentProxy proxy = new SegmentProxy(gated(memory, release, gets, new AtomicBoolean()),
-                1024, new SegmentCache(4_096));
+                1024, new SegmentCache(4_096), new IndexCostLedger());
 
         List<CompletableFuture<Collecting>> calls = race(proxy, CALLERS);
         awaitJoiners(proxy, CALLERS - 1);
@@ -240,7 +241,7 @@ class SegmentProxyInFlightTest {
         CountDownLatch release = new CountDownLatch(1);
         AtomicInteger gets = new AtomicInteger();
         SegmentProxy proxy = new SegmentProxy(gated(memory, release, gets, new AtomicBoolean()),
-                1024, SegmentCache.forSegmentsOf(1 << 20));
+                1024, SegmentCache.forSegmentsOf(1 << 20), new IndexCostLedger());
         SegmentSink erring = (buffer, offset, length) -> {
             throw new AssertionError("an Error, which no sink loop catches");
         };
@@ -368,7 +369,7 @@ class SegmentProxyInFlightTest {
         CountDownLatch resume = new CountDownLatch(1);
         AtomicInteger gets = new AtomicInteger();
         SegmentProxy proxy = new SegmentProxy(pausing(memory, 3_072, paused, resume, gets), 1024,
-                SegmentCache.forSegmentsOf(1 << 20));
+                SegmentCache.forSegmentsOf(1 << 20), new IndexCostLedger());
         int[] writes = {0};
         SegmentSink diesOnItsFifthWrite = (buffer, offset, length) -> {
             // ⚠️ THE FIFTH WRITE: the prefix is three chunks, so this sink is
@@ -402,7 +403,7 @@ class SegmentProxyInFlightTest {
         CountDownLatch release = new CountDownLatch(1);
         AtomicInteger gets = new AtomicInteger();
         SegmentProxy proxy = new SegmentProxy(gated(memory, release, gets, new AtomicBoolean()),
-                1024, SegmentCache.forSegmentsOf(1 << 20));
+                1024, SegmentCache.forSegmentsOf(1 << 20), new IndexCostLedger());
         var firstThread = new java.util.concurrent.atomic.AtomicReference<Thread>();
         var lateThread = new java.util.concurrent.atomic.AtomicReference<Thread>();
         CountDownLatch completed = new CountDownLatch(1);
@@ -450,7 +451,7 @@ class SegmentProxyInFlightTest {
         memory.put(KEY, Body.ofBytes(segment));
         AtomicInteger gets = new AtomicInteger();
         SegmentProxy proxy = new SegmentProxy(gated(memory, new CountDownLatch(0), gets,
-                new AtomicBoolean()), 1024, SegmentCache.forSegmentsOf(1 << 20));
+                new AtomicBoolean()), 1024, SegmentCache.forSegmentsOf(1 << 20), new IndexCostLedger());
         var claimant = new java.util.concurrent.atomic.AtomicReference<Thread>();
         var joiner = new java.util.concurrent.atomic.AtomicReference<Thread>();
         CountDownLatch joinerMissed = new CountDownLatch(1);
@@ -509,7 +510,7 @@ class SegmentProxyInFlightTest {
         CountDownLatch resume = new CountDownLatch(1);
         AtomicInteger gets = new AtomicInteger();
         SegmentProxy proxy = new SegmentProxy(pausing(memory, 5_120, paused, resume, gets), 1024,
-                new SegmentCache(4_096));
+                new SegmentCache(4_096), new IndexCostLedger());
 
         CompletableFuture<Outcome> first = callOn(proxy, null, null);
         await(paused);
@@ -532,7 +533,7 @@ class SegmentProxyInFlightTest {
         CountDownLatch resume = new CountDownLatch(1);
         AtomicInteger gets = new AtomicInteger();
         SegmentProxy proxy = new SegmentProxy(pausing(memory, 2_048, paused, resume, gets), 1024,
-                SegmentCache.forSegmentsOf(1 << 20));
+                SegmentCache.forSegmentsOf(1 << 20), new IndexCostLedger());
         var joinerThread = new java.util.concurrent.atomic.AtomicReference<Thread>();
 
         CompletableFuture<Outcome> first = callOn(proxy, null, null);

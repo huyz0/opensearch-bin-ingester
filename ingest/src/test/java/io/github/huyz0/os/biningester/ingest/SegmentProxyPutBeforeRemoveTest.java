@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.huyz0.os.biningester.binstore.Body;
@@ -26,7 +27,7 @@ class SegmentProxyPutBeforeRemoveTest {
         byte[] segment = new byte[10_001];
         new Random(14).nextBytes(segment);
         memory.put(KEY, Body.ofBytes(segment));
-        SegmentProxy proxy = new SegmentProxy(memory, 1024, SegmentCache.forSegmentsOf(1 << 20));
+        SegmentProxy proxy = new SegmentProxy(memory, 1024, SegmentCache.forSegmentsOf(1 << 20), new IndexCostLedger());
         AtomicReference<byte[]> cachedAtRemoval = new AtomicReference<>();
         proxy.betweenCompleteAndRemove = () -> cachedAtRemoval.set(proxy.cache().get(KEY));
         ByteArrayOutputStream got = new ByteArrayOutputStream();

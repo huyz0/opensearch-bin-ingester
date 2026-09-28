@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static io.github.huyz0.os.biningester.ingest.IngestTestSupport.appendAsync;
 import static io.github.huyz0.os.biningester.ingest.IngestTestSupport.appendOnce;
 import static io.github.huyz0.os.biningester.ingest.IngestTestSupport.awaitPending;
@@ -187,7 +188,7 @@ class DefaultIngestTest {
                                 8L << 20, Long.MAX_VALUE / 4),
                         sizer, IngestTestSupport.PREFIX, "pod1",
                         IngestTestSupport.sequencer(sizer, "pod1"), sizerHub, Clock.systemUTC(),
-                        index -> IngestTestSupport.LOGS)) {
+                        index -> IngestTestSupport.LOGS, ignored -> { }, new IndexCostLedger())) {
             appendOnce(probe, "logs", 0, 2);
             awaitPush(measured);
             segmentBytes = measured.get(0).segment().length;
@@ -205,7 +206,7 @@ class DefaultIngestTest {
                         IngestTestSupport.pinnedIntervalConfig(IngestTestSupport.NEVER, 8L << 20, budget),
                         store, IngestTestSupport.PREFIX, "pod1",
                         IngestTestSupport.sequencer(store, "pod1"), hub, Clock.systemUTC(),
-                        index -> IngestTestSupport.LOGS)) {
+                        index -> IngestTestSupport.LOGS, ignored -> { }, new IndexCostLedger())) {
             appendOnce(ingest, "logs", 0, 2);
             sink.awaitEntered();
 
@@ -380,7 +381,7 @@ class DefaultIngestTest {
         try (DefaultIngest ingest = new DefaultIngest(
                 IngestTestSupport.pinnedIntervalConfig(IngestTestSupport.NEVER, 4096L), store,
                 IngestTestSupport.PREFIX, "pod1", IngestTestSupport.sequencer(store, "pod1"),
-                new SubscriptionHub(), Clock.systemUTC(), index -> IngestTestSupport.LOGS)) {
+                new SubscriptionHub(), Clock.systemUTC(), index -> IngestTestSupport.LOGS, ignored -> { }, new IndexCostLedger())) {
             long base = store.counts().total();
             AppendResult result = ingest.append(IngestTestSupport.PRINCIPAL, "logs", 0, docs(400)::forEach);
 

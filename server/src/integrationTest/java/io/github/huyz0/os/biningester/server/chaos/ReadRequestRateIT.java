@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.server.chaos;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
@@ -90,7 +91,7 @@ class ReadRequestRateIT {
                     new FetchPolicy(new FetchPolicyConfig(Long.MAX_VALUE, Long.MAX_VALUE, 0,
                             false)),
                     store.capabilities(),
-                    new SegmentProxy(store, 1024, new SegmentCache(segmentBytes().length))));
+                    new SegmentProxy(store, 1024, new SegmentCache(segmentBytes().length), new IndexCostLedger())));
             runsByServingNode.add(new ArrayList<>());
         }
         List<AutoCloseable> subscriptions = new ArrayList<>();

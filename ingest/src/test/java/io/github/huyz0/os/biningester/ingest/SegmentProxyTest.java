@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static io.github.huyz0.os.biningester.ingest.SegmentProxyFixtures.KEY;
 import static io.github.huyz0.os.biningester.ingest.SegmentProxyFixtures.RecordingSink;
 import static io.github.huyz0.os.biningester.ingest.SegmentProxyFixtures.SEGMENT_BYTES;
@@ -54,7 +55,7 @@ class SegmentProxyTest {
         for (int k : new int[] {1, 64}) {
             CountingBinStore store = storeHolding(segment());
             long before = store.counts().gets();
-            new SegmentProxy(store).streamTo(KEY, sinks(k));
+            new SegmentProxy(store, SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger()).streamTo(KEY, sinks(k));
             assertThat(store.counts().gets() - before)
                     .as("K=%d consumers, and proxy is priced at ONE GET however many there are", k)
                     .isEqualTo(1);
@@ -73,7 +74,7 @@ class SegmentProxyTest {
     @Test
     void noConsumerIsEverHandedMoreThanONECHUNK() throws Exception {
         CountingBinStore store = storeHolding(segment());
-        SegmentProxy proxy = new SegmentProxy(store);
+        SegmentProxy proxy = new SegmentProxy(store, SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger());
         List<SegmentProxyFixtures.RecordingSink> consumers = sinks(8);
         proxy.streamTo(KEY, consumers);
         for (SegmentProxyFixtures.RecordingSink c : consumers) {
@@ -110,7 +111,7 @@ class SegmentProxyTest {
         long[] readWhenFirstDelivered = {-1};
         long[] readSoFar = {0};
         SegmentProxyFixtures.StubStore counting = new SegmentProxyFixtures.StubStore(expected, readSoFar, 0);
-        SegmentProxy proxy = new SegmentProxy(counting);
+        SegmentProxy proxy = new SegmentProxy(counting, SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger());
         SegmentSink watcher = (buf, off, len) -> {
             if (readWhenFirstDelivered[0] < 0) {
                 readWhenFirstDelivered[0] = readSoFar[0];
@@ -162,7 +163,7 @@ class SegmentProxyTest {
     void aChunkThatDoesNOTDivideTheSegmentDeliversTheShortFinalREAD() throws Exception {
         byte[] expected = segment();
         CountingBinStore store = storeHolding(expected);
-        SegmentProxy proxy = new SegmentProxy(store, 7000);
+        SegmentProxy proxy = new SegmentProxy(store, 7000, new SegmentCache(0), new IndexCostLedger());
         assertThat(proxy.chunkBytes())
                 .as("the constructor must USE its argument, not ignore it")
                 .isEqualTo(7000);
@@ -207,7 +208,7 @@ class SegmentProxyTest {
         store.put("seg/wanted", Body.ofBytes(wanted));
 
         SegmentProxyFixtures.RecordingSink sink = new SegmentProxyFixtures.RecordingSink();
-        new SegmentProxy(store).streamTo("seg/wanted", List.of(sink));
+        new SegmentProxy(store, SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger()).streamTo("seg/wanted", List.of(sink));
         assertThat(sink.received.toByteArray())
                 .as("a proxy ignoring its key serves whichever object it happens to name")
                 .isEqualTo(wanted);
@@ -230,7 +231,7 @@ class SegmentProxyTest {
         long[] readSoFar = {0};
         SegmentProxyFixtures.StubStore awkward = new SegmentProxyFixtures.StubStore(expected, readSoFar, 5);
         List<SegmentProxyFixtures.RecordingSink> consumers = sinks(3);
-        int served = new SegmentProxy(awkward).streamTo(KEY, consumers);
+        int served = new SegmentProxy(awkward, SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger()).streamTo(KEY, consumers);
         assertThat(served).isEqualTo(3);
         for (SegmentProxyFixtures.RecordingSink c : consumers) {
             assertThat(c.received.toByteArray())
@@ -273,14 +274,14 @@ class SegmentProxyTest {
         CountingBinStore one = storeHolding(segment());
         List<SegmentProxyFixtures.RecordingSink> single = sinks(1);
         long oneBefore = one.counts().gets();
-        new SegmentProxy(one).streamTo(KEY, single);
+        new SegmentProxy(one, SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger()).streamTo(KEY, single);
         long oneGets = one.counts().gets() - oneBefore;
         int onePeak = single.get(0).largestHandOff;
 
         CountingBinStore many = storeHolding(segment());
         List<SegmentProxyFixtures.RecordingSink> sixtyFour = sinks(64);
         long manyBefore = many.counts().gets();
-        new SegmentProxy(many).streamTo(KEY, sixtyFour);
+        new SegmentProxy(many, SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger()).streamTo(KEY, sixtyFour);
         long manyGets = many.counts().gets() - manyBefore;
         int manyPeak = sixtyFour.stream().mapToInt(s -> s.largestHandOff).max().orElseThrow();
 
@@ -312,7 +313,7 @@ class SegmentProxyTest {
     void ONEArrayServesEveryHandOffToEveryConsumer() throws Exception {
         CountingBinStore store = storeHolding(segment());
         List<SegmentProxyFixtures.RecordingSink> consumers = sinks(16);
-        new SegmentProxy(store).streamTo(KEY, consumers);
+        new SegmentProxy(store, SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger()).streamTo(KEY, consumers);
         java.util.Set<Integer> all = new java.util.HashSet<>();
         for (SegmentProxyFixtures.RecordingSink c : consumers) {
             assertThat(c.arrayIdentities)
@@ -338,7 +339,7 @@ class SegmentProxyTest {
         byte[] expected = segment();
         CountingBinStore store = storeHolding(expected);
         List<SegmentProxyFixtures.RecordingSink> consumers = sinks(64);
-        int served = new SegmentProxy(store).streamTo(KEY, consumers);
+        int served = new SegmentProxy(store, SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger()).streamTo(KEY, consumers);
         assertThat(served).isEqualTo(64);
         for (SegmentProxyFixtures.RecordingSink c : consumers) {
             assertThat(c.received.toByteArray())
@@ -379,7 +380,7 @@ class SegmentProxyTest {
     @Test
     void aSinkThatBLOCKSIsDroppedAndTheOthersAreServedWHOLE() throws Exception {
         byte[] bytes = segment();
-        SegmentProxy proxy = new SegmentProxy(storeHolding(bytes));
+        SegmentProxy proxy = new SegmentProxy(storeHolding(bytes), SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger());
         BlockingSegmentSink stalled = new BlockingSegmentSink();
         RecordingSink first = new RecordingSink();
         RecordingSink second = new RecordingSink();
@@ -428,7 +429,7 @@ class SegmentProxyTest {
     @Test
     void aSinkThatIGNORESInterruptionDoesNotHoldTheCall() throws Exception {
         byte[] bytes = segment();
-        SegmentProxy proxy = new SegmentProxy(storeHolding(bytes));
+        SegmentProxy proxy = new SegmentProxy(storeHolding(bytes), SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger());
         UninterruptibleSegmentSink deaf = new UninterruptibleSegmentSink();
         RecordingSink live = new RecordingSink();
 
@@ -468,7 +469,7 @@ class SegmentProxyTest {
     @Test
     void TWODroppedSinksComeBackInSUPPLYOrder() throws Exception {
         byte[] bytes = segment();
-        SegmentProxy proxy = new SegmentProxy(storeHolding(bytes));
+        SegmentProxy proxy = new SegmentProxy(storeHolding(bytes), SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger());
         BlockingSegmentSink firstStalled = new BlockingSegmentSink();
         RecordingSink live = new RecordingSink();
         BlockingSegmentSink secondStalled = new BlockingSegmentSink();
@@ -518,7 +519,7 @@ class SegmentProxyTest {
     @Test
     void aSinkIsDroppedByIDENTITYNotByEQUALS() throws Exception {
         byte[] bytes = segment();
-        SegmentProxy proxy = new SegmentProxy(storeHolding(bytes));
+        SegmentProxy proxy = new SegmentProxy(storeHolding(bytes), SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger());
         EqualToEveryOtherSink stalled = new EqualToEveryOtherSink(true);
         EqualToEveryOtherSink healthy = new EqualToEveryOtherSink(false);
 

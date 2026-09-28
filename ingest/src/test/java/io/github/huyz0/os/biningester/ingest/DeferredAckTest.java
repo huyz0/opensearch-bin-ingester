@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static io.github.huyz0.os.biningester.ingest.IngestTestSupport.LOGS;
 import static io.github.huyz0.os.biningester.ingest.IngestTestSupport.PREFIX;
 import static io.github.huyz0.os.biningester.ingest.IngestTestSupport.PRINCIPAL;
@@ -62,7 +63,7 @@ class DeferredAckTest {
                 });
                 DefaultIngest ingest = new DefaultIngest(
                         pinnedIntervalConfig(Duration.ofMillis(20), 8L << 20), store, PREFIX,
-                        "pod1", sequencer, hub, Clock.systemUTC(), index -> LOGS)) {
+                        "pod1", sequencer, hub, Clock.systemUTC(), index -> LOGS, ignored -> { }, new IndexCostLedger())) {
             AppendResult result = ingest.append(PRINCIPAL, "logs", 0,
                     sink -> docs(5).forEach(sink));
 

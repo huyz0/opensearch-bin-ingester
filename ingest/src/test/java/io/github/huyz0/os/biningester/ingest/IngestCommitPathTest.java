@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static io.github.huyz0.os.biningester.ingest.IngestTestSupport.appendOnce;
 import static io.github.huyz0.os.biningester.ingest.IngestTestSupport.docs;
 import static io.github.huyz0.os.biningester.ingest.IngestTestSupport.ingest;
@@ -94,7 +95,7 @@ class IngestCommitPathTest {
         try (DefaultIngest ingest = new DefaultIngest(
                 IngestTestSupport.pinnedIntervalConfig(IngestTestSupport.NEVER, 8L << 20),
                 store, IngestTestSupport.PREFIX, "pod7", first, new SubscriptionHub(),
-                Clock.systemUTC(), index -> IngestTestSupport.LOGS)) {
+                Clock.systemUTC(), index -> IngestTestSupport.LOGS, ignored -> { }, new IndexCostLedger())) {
             appendOnce(ingest, "logs", 0, 2);
             appendOnce(ingest, "logs", 0, 3);
         }
@@ -111,7 +112,7 @@ class IngestCommitPathTest {
         try (DefaultIngest ingest = new DefaultIngest(
                 IngestTestSupport.pinnedIntervalConfig(IngestTestSupport.NEVER, 8L << 20),
                 store, IngestTestSupport.PREFIX, "pod7", second, new SubscriptionHub(),
-                Clock.systemUTC(), index -> IngestTestSupport.LOGS)) {
+                Clock.systemUTC(), index -> IngestTestSupport.LOGS, ignored -> { }, new IndexCostLedger())) {
             appendOnce(ingest, "logs", 0, 4);
         }
         assertThat(second.seen).isNotEmpty();
@@ -136,7 +137,7 @@ class IngestCommitPathTest {
         try (DefaultIngest ingest = new DefaultIngest(
                 IngestTestSupport.pinnedIntervalConfig(IngestTestSupport.NEVER, 8L << 20),
                 store, IngestTestSupport.PREFIX, "pod7", recorder, new SubscriptionHub(),
-                Clock.systemUTC(), index -> IngestTestSupport.LOGS)) {
+                Clock.systemUTC(), index -> IngestTestSupport.LOGS, ignored -> { }, new IndexCostLedger())) {
             appendOnce(ingest, "logs", 0, 2);
             appendOnce(ingest, "logs", 0, 3);
         }

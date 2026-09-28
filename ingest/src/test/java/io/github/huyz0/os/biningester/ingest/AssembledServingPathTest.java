@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.huyz0.os.biningester.binstore.Body;
@@ -488,7 +489,7 @@ class AssembledServingPathTest {
 
         hub.publish(oneRun("seg-streamed", key, 3, 10), null, null,
                 new SegmentServing(proxyAlways(), store.capabilities(),
-                        new SegmentProxy(store, 7000)));
+                        new SegmentProxy(store, 7000, new SegmentCache(0), new IndexCostLedger())));
         for (AutoCloseable h : handles) {
             h.close();
         }
@@ -611,12 +612,12 @@ class AssembledServingPathTest {
     }
 
     private static SegmentServing servingWith(CountingBinStore store, FetchPolicy policy) {
-        return new SegmentServing(policy, store.capabilities(), new SegmentProxy(store));
+        return new SegmentServing(policy, store.capabilities(), new SegmentProxy(store, SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger()));
     }
 
     private static SegmentServing servingWith(CountingBinStore store, FetchPolicy policy,
             int chunkBytes) {
         return new SegmentServing(policy, store.capabilities(),
-                new SegmentProxy(store, chunkBytes));
+                new SegmentProxy(store, chunkBytes, new SegmentCache(0), new IndexCostLedger()));
     }
 }

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.plugin;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static org.opensearch.index.query.QueryBuilders.matchAllQuery;
 
 import io.github.huyz0.os.biningester.binstore.backend.LocalFsBinStore;
@@ -104,7 +105,7 @@ public class DeleteAndVersionIT extends OpenSearchSingleNodeTestCase {
         ingest = new DefaultIngest(
                 new IngestConfig(Duration.ofMillis(250), 8L << 20, "cluster-a"),
                 store, "bins/cluster-a", "pod1", TestSequencers.leased(store, "bins/cluster-a", "pod1"), HUB, Clock.systemUTC(),
-                index -> stream);
+                index -> stream, ignored -> { }, new IndexCostLedger());
     }
 
     private void append(String id, OpType op, long version, String body) throws Exception {

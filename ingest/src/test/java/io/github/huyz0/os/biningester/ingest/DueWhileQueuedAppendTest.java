@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static io.github.huyz0.os.biningester.ingest.IngestTestSupport.appendAsync;
 import static io.github.huyz0.os.biningester.ingest.IngestTestSupport.awaitPending;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -91,7 +92,7 @@ class DueWhileQueuedAppendTest {
         try (DefaultIngest ingest = new DefaultIngest(
                 IngestTestSupport.pinnedIntervalConfig(Duration.ofDays(1), 1),
                 store, IngestTestSupport.PREFIX, "pod1", sequencer, new SubscriptionHub(),
-                Clock.systemUTC(), index -> IngestTestSupport.LOGS)) {
+                Clock.systemUTC(), index -> IngestTestSupport.LOGS, ignored -> { }, new IndexCostLedger())) {
             CompletableFuture<AppendResult> first = appendAsync(ingest, "logs", 0, 2);
             assertThat(sequencer.entered.await(10, TimeUnit.SECONDS))
                     .as("the first flush is queued, its commit held").isTrue();

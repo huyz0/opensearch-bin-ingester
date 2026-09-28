@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static io.github.huyz0.os.biningester.ingest.IngestTestSupport.appendOnce;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -73,7 +74,7 @@ class SequencerEpochOnThePushTest {
                         IngestTestSupport.pinnedIntervalConfig(IngestTestSupport.NEVER, 8L << 20),
                         store, IngestTestSupport.PREFIX, "pod1",
                         new AtEpoch(IngestTestSupport.sequencer(store, "pod1"), 37L), hub,
-                        Clock.systemUTC(), index -> IngestTestSupport.LOGS)) {
+                        Clock.systemUTC(), index -> IngestTestSupport.LOGS, segmentKey -> { }, new IndexCostLedger())) {
             appendOnce(ingest, "logs", 0, 2);
             long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10);
             while (watching.seen.isEmpty() && System.nanoTime() < deadline) {
@@ -189,7 +190,7 @@ class SequencerEpochOnThePushTest {
         // picks between them.
         SegmentServing serving = new SegmentServing(
                 new FetchPolicy(new FetchPolicyConfig(1L, 1L, direct ? 1 : 1000, direct)),
-                store.capabilities(), new SegmentProxy(store),
+                store.capabilities(), new SegmentProxy(store, SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger()),
                 direct ? new GrantIssuer(store) : null);
 
         try (var ignored = hub.subscribe(LOGS_0, watching)) {
@@ -216,6 +217,6 @@ class SequencerEpochOnThePushTest {
     private static SegmentServing serving(CountingBinStore store) {
         return new SegmentServing(
                 new FetchPolicy(FetchPolicyConfig.defaultsFor(store.capabilities().costs())),
-                store.capabilities(), new SegmentProxy(store));
+                store.capabilities(), new SegmentProxy(store, SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger()));
     }
 }

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static io.github.huyz0.os.biningester.ingest.IngestTestSupport.LOGS;
 import static io.github.huyz0.os.biningester.ingest.IngestTestSupport.PREFIX;
 import static io.github.huyz0.os.biningester.ingest.IngestTestSupport.appendAsync;
@@ -53,7 +54,7 @@ class DefaultIngestErrorTest {
         };
         try (DefaultIngest ingest = new DefaultIngest(
                 pinnedIntervalConfig(Duration.ofDays(1), 8L << 20), store, PREFIX, "pod1",
-                failingOnce, new SubscriptionHub(), Clock.systemUTC(), index -> LOGS)) {
+                failingOnce, new SubscriptionHub(), Clock.systemUTC(), index -> LOGS, ignored -> { }, new IndexCostLedger())) {
             CompletableFuture<AppendResult> first = appendAsync(ingest, "logs", 0, 2);
             awaitPending(ingest, 1);
             try {

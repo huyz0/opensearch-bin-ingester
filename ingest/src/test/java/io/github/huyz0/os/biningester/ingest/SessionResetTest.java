@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -309,6 +310,6 @@ class SessionResetTest {
     private static SegmentServing serving(CountingBinStore store) {
         return new SegmentServing(
                 new FetchPolicy(FetchPolicyConfig.defaultsFor(store.capabilities().costs())),
-                store.capabilities(), new SegmentProxy(store));
+                store.capabilities(), new SegmentProxy(store, SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger()));
     }
 }

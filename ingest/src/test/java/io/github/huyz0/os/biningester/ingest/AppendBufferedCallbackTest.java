@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -52,7 +53,7 @@ class AppendBufferedCallbackTest {
         try (DefaultIngest ingest = new DefaultIngest(
                 IngestTestSupport.pinnedIntervalConfig(Duration.ofMillis(20), 8L << 20), store,
                 IngestTestSupport.PREFIX, "pod1", IngestTestSupport.sequencer(store, "pod1"),
-                new SubscriptionHub(), Clock.systemUTC(), index -> IngestTestSupport.LOGS)) {
+                new SubscriptionHub(), Clock.systemUTC(), index -> IngestTestSupport.LOGS, ignored -> { }, new IndexCostLedger())) {
             CompletableFuture<AppendResult> append = CompletableFuture.supplyAsync(() -> {
                 try {
                     return ingest.append(IngestTestSupport.PRINCIPAL, "logs", 0, (byte) 0,

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.huyz0.os.biningester.binstore.backend.MemoryBinStore;
@@ -63,7 +64,7 @@ class PushQueuePinsTest {
         MemoryBinStore store = new MemoryBinStore();
         return new SegmentServing(
                 new FetchPolicy(FetchPolicyConfig.defaultsFor(store.capabilities().costs())),
-                store.capabilities(), new SegmentProxy(store));
+                store.capabilities(), new SegmentProxy(store, SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger()));
     }
 
     private static void offer(PushQueue queue, long sequence, int bytes) {

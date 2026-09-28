@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.huyz0.os.biningester.binstore.CountingBinStore;
@@ -30,7 +31,7 @@ class DurableSegmentListenerFailureTest {
                     var ingest = new DefaultIngest(IngestTestSupport.pinnedIntervalConfig(
                             Duration.ofDays(1), 8L << 20), store, IngestTestSupport.PREFIX,
                             "pod1", sequencer, hub, Clock.systemUTC(), index -> IngestTestSupport.LOGS,
-                            key -> { throw new IllegalStateException("hint unavailable"); })) {
+                            key -> { throw new IllegalStateException("hint unavailable"); }, new IndexCostLedger())) {
                 var append = IngestTestSupport.appendAsync(ingest, "logs", 0, 1);
                 IngestTestSupport.awaitPending(ingest, 1);
 

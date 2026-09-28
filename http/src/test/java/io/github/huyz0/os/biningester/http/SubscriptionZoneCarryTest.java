@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.http;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
+import io.github.huyz0.os.biningester.ingest.SegmentCache;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.huyz0.os.biningester.binstore.Body;
@@ -86,7 +88,7 @@ class SubscriptionZoneCarryTest {
                         "seg-zoned", bytes, new SegmentServing(
                                 new FetchPolicy(new FetchPolicyConfig(
                                         Long.MAX_VALUE, Long.MAX_VALUE, 1, false)),
-                                store.capabilities(), new SegmentProxy(store)));
+                                store.capabilities(), new SegmentProxy(store, SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger())));
             }
             await(() -> !got.isEmpty(), "the delivery");
         }

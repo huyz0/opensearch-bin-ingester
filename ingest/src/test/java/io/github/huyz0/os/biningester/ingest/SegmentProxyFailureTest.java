@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static io.github.huyz0.os.biningester.ingest.SegmentProxyFixtures.KEY;
 import static io.github.huyz0.os.biningester.ingest.SegmentProxyFixtures.segment;
 import static io.github.huyz0.os.biningester.ingest.SegmentProxyFixtures.sinks;
@@ -56,7 +57,7 @@ class SegmentProxyFailureTest {
         SegmentSink poisoned = (buf, off, len) -> {
             throw new IOException("this consumer is gone");
         };
-        int served = new SegmentProxy(store).streamTo(KEY, List.of(poisoned, healthy));
+        int served = new SegmentProxy(store, SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger()).streamTo(KEY, List.of(poisoned, healthy));
         assertThat(served).as("the dead one is dropped, the live one counted").isEqualTo(1);
         assertThat(healthy.received.toByteArray())
                 .as("and the survivor gets the WHOLE segment, not a truncated one")
@@ -85,7 +86,7 @@ class SegmentProxyFailureTest {
                 throw new IOException("gone at the third chunk");
             }
         };
-        int served = new SegmentProxy(store).streamTo(KEY, List.of(first, diesLater, last));
+        int served = new SegmentProxy(store, SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger()).streamTo(KEY, List.of(first, diesLater, last));
         assertThat(served).isEqualTo(2);
         assertThat(first.received.toByteArray()).isEqualTo(expected);
         assertThat(last.received.toByteArray())
@@ -119,7 +120,7 @@ class SegmentProxyFailureTest {
         SegmentSink unchecked = (buf, off, len) -> {
             throw new IllegalStateException("this sink's encoder blew up");
         };
-        int served = new SegmentProxy(store).streamTo(KEY, List.of(unchecked, healthy));
+        int served = new SegmentProxy(store, SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger()).streamTo(KEY, List.of(unchecked, healthy));
         assertThat(served).isEqualTo(1);
         assertThat(healthy.received.toByteArray())
                 .as("an unchecked failure must not truncate everyone else's stream")
@@ -149,11 +150,11 @@ class SegmentProxyFailureTest {
         long[] ignored = {0};
 
         SegmentProxyFixtures.StubStore healthy = new SegmentProxyFixtures.StubStore(expected, ignored, 0);
-        new SegmentProxy(healthy).streamTo(KEY, sinks(4));
+        new SegmentProxy(healthy, SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger()).streamTo(KEY, sinks(4));
         assertThat(healthy.streamClosed).as("closed after a clean serve").isTrue();
 
         SegmentProxyFixtures.StubStore breaks = new SegmentProxyFixtures.StubStore(expected, ignored, 0, 3);
-        assertThatThrownBy(() -> new SegmentProxy(breaks).streamTo(KEY, sinks(4)))
+        assertThatThrownBy(() -> new SegmentProxy(breaks, SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger()).streamTo(KEY, sinks(4)))
                 .isInstanceOf(IOException.class);
         assertThat(breaks.streamClosed)
                 .as("a leaked connection per FAILED serve exhausts the pool just as surely")
@@ -182,7 +183,7 @@ class SegmentProxyFailureTest {
         SegmentProxyFixtures.StubStore breaks = new SegmentProxyFixtures.StubStore(expected, ignored, 0, 3);
         List<SegmentProxyFixtures.RecordingSink> consumers = sinks(8);
 
-        assertThatThrownBy(() -> new SegmentProxy(breaks).streamTo(KEY, consumers))
+        assertThatThrownBy(() -> new SegmentProxy(breaks, SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger()).streamTo(KEY, consumers))
                 .as("silently returning a count here is a report of 8 served and 8 truncated")
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("mid-segment");
@@ -203,7 +204,7 @@ class SegmentProxyFailureTest {
     @Test
     void aSTOREFailureIsRaisedRatherThanCountedAsAServe() throws Exception {
         CountingBinStore store = new CountingBinStore(new MemoryBinStore());
-        assertThatThrownBy(() -> new SegmentProxy(store).streamTo("seg/absent", sinks(4)))
+        assertThatThrownBy(() -> new SegmentProxy(store, SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger()).streamTo("seg/absent", sinks(4)))
                 .isInstanceOf(IOException.class);
     }
 
@@ -223,7 +224,7 @@ class SegmentProxyFailureTest {
         List<SegmentSink> withNull = new ArrayList<>();
         withNull.add(new SegmentProxyFixtures.RecordingSink());
         withNull.add(null);
-        assertThatThrownBy(() -> new SegmentProxy(store).streamTo(KEY, withNull))
+        assertThatThrownBy(() -> new SegmentProxy(store, SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger()).streamTo(KEY, withNull))
                 .isInstanceOf(NullPointerException.class)
                 .hasMessageContaining("caller error");
     }
@@ -232,12 +233,12 @@ class SegmentProxyFailureTest {
     @Test
     void aNONPOSITIVEChunkIsREFUSED() {
         CountingBinStore store = new CountingBinStore(new MemoryBinStore());
-        assertThatThrownBy(() -> new SegmentProxy(store, 0))
+        assertThatThrownBy(() -> new SegmentProxy(store, 0, new SegmentCache(0), new IndexCostLedger()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("streams nothing");
-        assertThatThrownBy(() -> new SegmentProxy(store, -1))
+        assertThatThrownBy(() -> new SegmentProxy(store, -1, new SegmentCache(0), new IndexCostLedger()))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new SegmentProxy(null))
+        assertThatThrownBy(() -> new SegmentProxy(null, SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger()))
                 .isInstanceOf(NullPointerException.class).hasMessage("store");
     }
 
@@ -254,7 +255,7 @@ class SegmentProxyFailureTest {
     void anEMPTYFanOutStillREADSAndServesNobody() throws Exception {
         CountingBinStore store = storeHolding(segment());
         long before = store.counts().gets();
-        assertThat(new SegmentProxy(store).streamTo(KEY, List.of())).isZero();
+        assertThat(new SegmentProxy(store, SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger()).streamTo(KEY, List.of())).isZero();
         // ⚠️ THE READ IS THE ASSERTION, not the zero. An early return on an
         // empty list also answers zero, so a count of nobody served does not
         // separate the two -- and that branch, reused for "every consumer
@@ -295,7 +296,7 @@ class SegmentProxyFailureTest {
             throw new IOException("gone on the first chunk");
         };
 
-        assertThatThrownBy(() -> new SegmentProxy(breaks)
+        assertThatThrownBy(() -> new SegmentProxy(breaks, SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger())
                         .streamTo(KEY, List.of(diesAtOnce, diesAtOnce)))
                 .as("nobody left to serve is not a reason to stop noticing the store is broken")
                 .isInstanceOf(IOException.class)

@@ -87,26 +87,17 @@ public final class SegmentProxy {
     private final SegmentCache cache;
     private final IndexCostLedger ledger;
 
-    public SegmentProxy(BinStore store) {
-        this(store, DEFAULT_CHUNK_BYTES);
-    }
-
-    public SegmentProxy(BinStore store, int chunkBytes) {
-        this(store, chunkBytes, new SegmentCache(0));
-    }
-
     /**
+     * Charges each store GET it issues to the indices of the segment it read,
+     * into {@code ledger} (M11.3, ADR-0077).
+     *
+     * <p>⚠️ THE ONLY CONSTRUCTOR, AND IT TAKES THE LEDGER (M12.1, M11 review
+     * F2): an overload that made its own charged a ledger nothing reads, so a
+     * path built with it issued requests no report could see.
+     *
      * @param cache repeats across publishes are served from here rather than
      *     from a GET; a capacity of {@code 0} turns caching off and restores
      *     the pre-M5.40b behaviour exactly
-     */
-    public SegmentProxy(BinStore store, int chunkBytes, SegmentCache cache) {
-        this(store, chunkBytes, cache, new IndexCostLedger());
-    }
-
-    /**
-     * The same, charging each store GET it issues to the indices of the
-     * segment it read, into {@code ledger} (M11.3, ADR-0077).
      */
     public SegmentProxy(BinStore store, int chunkBytes, SegmentCache cache,
             IndexCostLedger ledger) {

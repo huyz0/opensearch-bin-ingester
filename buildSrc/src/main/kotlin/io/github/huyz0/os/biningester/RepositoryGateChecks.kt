@@ -209,6 +209,33 @@ object RepositoryGateChecks {
         if (lines >= ceiling) "$path has $lines lines (split ceiling $ceiling, M11.24): " +
             "split it again rather than raise the ceiling" else null
 
+    /**
+     * M12.1 (M11 review F2): the one production source that makes the pod's
+     * cost ledger. Every other class is HANDED it.
+     *
+     * ⚠️ A CLASS THAT MAKES ITS OWN charges a ledger nothing reads: a read path
+     * built with one issues requests no report can see, and "the shares sum to
+     * the counted requests" breaks with no signal. Four production constructors
+     * did exactly that until M12.1 removed them.
+     */
+    const val LEDGER_OWNER = "server/src/main/java/io/github/huyz0/os/biningester/server/StoreStack.java"
+
+    // ⚠️ EVERY SPELLING (M12.1 review P1): the short name, a package-qualified
+    // one -- the form five test call sites use, one copy away from production --
+    // and a constructor reference.
+    private val newLedger = Regex("""new\s+(?:\w+\s*\.\s*)*IndexCostLedger\s*\(|\bIndexCostLedger\s*::\s*new\b""")
+
+    fun ledgerOwnership(root: Path, files: List<Path>, failures: MutableList<String>) {
+        files.filter { it.extension() == "java" }
+            .map { it to normalized(root.relativize(it)) }
+            .filter { (_, relative) -> relative.contains("/src/main/") && relative != LEDGER_OWNER }
+            .filter { (file, _) -> newLedger.containsMatchIn(stripJavaNoise(file.readText())) }
+            .forEach { (_, relative) ->
+                failures += "$relative makes an IndexCostLedger (M12.1): only $LEDGER_OWNER may; " +
+                    "take the pod's ledger as a parameter instead"
+            }
+    }
+
     private fun stripJavaNoise(text: String): String = text
         .replace(Regex("(?s)/\\*.*?\\*/"), "")
         .replace(Regex("//.*"), "")

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.server.chaos;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
@@ -111,7 +112,7 @@ class DirectThresholdMeasurementIT {
                     new FetchPolicy(policyConfig),
                     store.capabilities(),
                     new SegmentProxy(store, 1024,
-                            new SegmentCache(SEGMENT_BYTES.length)),
+                            new SegmentCache(SEGMENT_BYTES.length), new IndexCostLedger()),
                     new GrantIssuer(store));
             StoreCounts beforeWarmup = store.counts();
             hub.publish(new CommitDelta((long) repetition * CPU_DELIVERIES_PER_SAMPLE,

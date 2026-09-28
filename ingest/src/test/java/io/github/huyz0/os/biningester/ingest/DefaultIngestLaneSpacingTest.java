@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static io.github.huyz0.os.biningester.ingest.IngestTestSupport.appendOnce;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -105,7 +106,7 @@ class DefaultIngestLaneSpacingTest {
         try (DefaultIngest ingest = new DefaultIngest(lengtheningConfig(Duration.ofSeconds(2)),
                 store, IngestTestSupport.PREFIX, "pod1",
                 IngestTestSupport.sequencer(counted, "pod1"), new SubscriptionHub(), clock,
-                index -> IngestTestSupport.LOGS)) {
+                index -> IngestTestSupport.LOGS, ignored -> { }, new IndexCostLedger())) {
             pod.set(ingest);
             appendOnce(ingest, "logs", 0, 1);
             awaitSpacing(ingest, 2_000);
@@ -145,7 +146,7 @@ class DefaultIngestLaneSpacingTest {
         CountingBinStore store = new CountingBinStore(new MemoryBinStore());
         try (DefaultIngest ingest = new DefaultIngest(config, store, IngestTestSupport.PREFIX,
                 "pod1", IngestTestSupport.sequencer(store, "pod1"), new SubscriptionHub(),
-                Clock.systemUTC(), index -> IngestTestSupport.LOGS)) {
+                Clock.systemUTC(), index -> IngestTestSupport.LOGS, ignored -> { }, new IndexCostLedger())) {
             appendOnce(ingest, "logs", 0, 1);
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
             while (ingest.flushSpacingMillis() != 3_600_000 && System.nanoTime() < deadline) {

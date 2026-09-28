@@ -78,7 +78,7 @@ class DefaultIngestAttributionTest {
                 IngestTestSupport.PREFIX, "pod1", IngestTestSupport.sequencer(store, "pod1"),
                 new SubscriptionHub(), Clock.systemUTC(),
                 index -> index.equals("logs") ? LOGS : METRICS,
-                written::add)) {
+                written::add, new IndexCostLedger())) {
             long dataPutsBefore = store.putPurposeCounts().dataPuts();
             StoreCounts before = null;
             for (int flush = 0; flush < 4; flush++) {

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.huyz0.os.biningester.binstore.CountingBinStore;
@@ -119,7 +120,7 @@ class RetentionIdleCostTest {
         IngestConfig config = IngestConfig.defaults("cluster-a");
         Accumulator accumulator = new Accumulator(config, clock);
         CountingBinStore store = new CountingBinStore(new MemoryBinStore());
-        SegmentPublisher publisher = new SegmentPublisher(store, "bins/cluster-a", "pod1");
+        SegmentPublisher publisher = new SegmentPublisher(store, "bins/cluster-a", "pod1", new IndexCostLedger());
         GrantIssuer grants = new GrantIssuer(new StoreFakes.CanPresign());
         SubscriptionHub hub = new SubscriptionHub();
         AtomicLong delivered = new AtomicLong();

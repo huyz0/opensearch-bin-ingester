@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.http;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.huyz0.os.biningester.binstore.BinStore;
@@ -124,7 +125,7 @@ class AdmissionDurableWaitTest {
                 new IngestConfig(Duration.ofMillis(30), 8L << 20, "cluster-a"), store,
                 "bins/cluster-a", "pod1",
                 TestSequencers.leased(store, "bins/cluster-a", "pod1"), new SubscriptionHub(),
-                Clock.systemUTC(), index -> LOGS)) {
+                Clock.systemUTC(), index -> LOGS, ignored -> { }, new IndexCostLedger())) {
             CountingBuffered counting = new CountingBuffered(ingest);
             server = WebServer.builder().port(0)
                     .routing(HttpRouting.builder().register(new BulkService(counting, PRINCIPAL,
@@ -159,7 +160,7 @@ class AdmissionDurableWaitTest {
                 new IngestConfig(Duration.ofMillis(30), 8L << 20, "cluster-a"), store,
                 "bins/cluster-a", "pod1",
                 TestSequencers.leased(store, "bins/cluster-a", "pod1"), new SubscriptionHub(),
-                Clock.systemUTC(), index -> LOGS)) {
+                Clock.systemUTC(), index -> LOGS, ignored -> { }, new IndexCostLedger())) {
             CountingBuffered counting = new CountingBuffered(ingest);
             server = WebServer.builder().port(0)
                     .routing(HttpRouting.builder().register(new BulkService(counting, PRINCIPAL,

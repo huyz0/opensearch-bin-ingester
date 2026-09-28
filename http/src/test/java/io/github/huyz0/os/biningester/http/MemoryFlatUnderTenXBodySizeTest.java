@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.http;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.huyz0.os.biningester.binstore.backend.LocalFsBinStore;
@@ -86,7 +87,7 @@ class MemoryFlatUnderTenXBodySizeTest {
 
         try (DefaultIngest ingest = new DefaultIngest(IngestConfig.defaults("cluster-a"),
                 store, "bins/cluster-a", "pod1", TestSequencers.leased(store, "bins/cluster-a", "pod1"), hub, Clock.systemUTC(),
-                index -> logs)) {
+                index -> logs, ignored -> { }, new IndexCostLedger())) {
             server = WebServer.builder().port(0)
                     .routing(HttpRouting.builder().register(new BulkService(ingest, PRINCIPAL)))
                     .build().start();

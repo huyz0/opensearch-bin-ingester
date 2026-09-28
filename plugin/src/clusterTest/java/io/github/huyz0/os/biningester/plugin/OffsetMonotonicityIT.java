@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.plugin;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import io.github.huyz0.os.biningester.binstore.backend.LocalFsBinStore;
 import io.github.huyz0.os.biningester.client.Delivery;
 import io.github.huyz0.os.biningester.client.SubscriptionTransport;
@@ -107,7 +108,7 @@ public class OffsetMonotonicityIT extends OpenSearchSingleNodeTestCase {
         try (DefaultIngest ingest = new DefaultIngest(
                 new IngestConfig(Duration.ofMillis(250), 8L << 20, "cluster-a"),
                 store, "bins/cluster-a", "pod1", TestSequencers.leased(store, "bins/cluster-a", "pod1"), HUB, Clock.systemUTC(),
-                index -> stream)) {
+                index -> stream, ignored -> { }, new IndexCostLedger())) {
 
             // ---- flush 1: two documents
             ingest.append(PRINCIPAL, "logs", 0, docs("a", 2)::forEach);

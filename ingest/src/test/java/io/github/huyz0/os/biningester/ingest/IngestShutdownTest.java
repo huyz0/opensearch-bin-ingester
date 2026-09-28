@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static io.github.huyz0.os.biningester.ingest.IngestTestSupport.appendAsync;
 import static io.github.huyz0.os.biningester.ingest.IngestTestSupport.awaitPending;
 import static io.github.huyz0.os.biningester.ingest.IngestTestSupport.ingest;
@@ -111,7 +112,7 @@ class IngestShutdownTest {
                 store, IngestTestSupport.PREFIX, "pod1",
                 TestSequencers.leased(store, IngestTestSupport.PREFIX, "pod1", frozen),
                 new SubscriptionHub(), Clock.systemUTC(),
-                index -> IngestTestSupport.LOGS)) {
+                index -> IngestTestSupport.LOGS, ignored -> { }, new IndexCostLedger())) {
 
             // ⚠️ THE ANTI-VACUITY HALF, and without it the assertion after close()
             // is worthless: "pod2 acquired" is also what a store holding NO lease

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.huyz0.os.biningester.binstore.Body;
@@ -42,7 +43,7 @@ class SegmentPrefetchTest {
             // shared cache would make the second AZ's fetch a hit and the case
             // would count one GET while claiming to have measured two.
             SegmentProxy proxy = new SegmentProxy(store, 64 * 1024,
-                    SegmentCache.forSegmentsOf(1L << 20));
+                    SegmentCache.forSegmentsOf(1L << 20), new IndexCostLedger());
             pods.add(new Pod(self,
                     new SegmentPrefetcher(new StaticMembership(self, all), proxy)));
         }
@@ -149,7 +150,7 @@ class SegmentPrefetchTest {
         // one.
         Peer restarted = new Peer(ownerId, "http://" + ownerId + "-NEW:9000", "az-b");
         SegmentProxy proxy = new SegmentProxy(store, 64 * 1024,
-                SegmentCache.forSegmentsOf(1L << 20));
+                SegmentCache.forSegmentsOf(1L << 20), new IndexCostLedger());
         SegmentPrefetcher prefetcher = new SegmentPrefetcher(
                 new StaticMembership(restarted, asTheFleetSeesThem), proxy);
 
@@ -202,7 +203,7 @@ class SegmentPrefetchTest {
         CountingBinStore store = new CountingBinStore(new MemoryBinStore());
         store.put(SEGMENT, Body.ofBytes(new byte[8192]));
         Peer self = new Peer("az-b-pod0", "http://b:9000", "az-b");
-        SegmentProxy tiny = new SegmentProxy(store, 1024, new SegmentCache(4096));
+        SegmentProxy tiny = new SegmentProxy(store, 1024, new SegmentCache(4096), new IndexCostLedger());
         SegmentPrefetcher prefetcher = new SegmentPrefetcher(
                 new StaticMembership(self, List.of(self)), tiny);
         long before = store.counts().gets();
@@ -227,7 +228,7 @@ class SegmentPrefetchTest {
         store.put(SEGMENT, Body.ofBytes(new byte[8192]));
         Peer self = new Peer("lonely", "http://lonely:9000", "az-b");
         SegmentProxy proxy = new SegmentProxy(store, 64 * 1024,
-                SegmentCache.forSegmentsOf(1L << 20));
+                SegmentCache.forSegmentsOf(1L << 20), new IndexCostLedger());
         // ⚠️ A FLEET THIS POD IS NOT IN, which is the post-restart shape: the
         // list still holds the OLD address, so `localAz` is non-empty and the
         // owner it names is not this pod by `Peer` equality -- but ownership is
@@ -250,7 +251,7 @@ class SegmentPrefetchTest {
         CountingBinStore store = new CountingBinStore(new MemoryBinStore());
         store.put(SEGMENT, Body.ofBytes(new byte[8192]));
         Peer self = new Peer("az-b-pod0", "http://b:9000", "az-b");
-        SegmentProxy noCache = new SegmentProxy(store, 64 * 1024, new SegmentCache(0));
+        SegmentProxy noCache = new SegmentProxy(store, 64 * 1024, new SegmentCache(0), new IndexCostLedger());
         SegmentPrefetcher prefetcher = new SegmentPrefetcher(
                 new StaticMembership(self, List.of(self)), noCache);
         long before = store.counts().gets();
@@ -281,7 +282,7 @@ class SegmentPrefetchTest {
             throws Exception {
         CountingBinStore store = new CountingBinStore(new MemoryBinStore());
         Peer self = new Peer("az-b-pod0", "http://b:9000", "az-b");
-        SegmentProxy proxy = new SegmentProxy(store, 1024, new SegmentCache(4096));
+        SegmentProxy proxy = new SegmentProxy(store, 1024, new SegmentCache(4096), new IndexCostLedger());
         SegmentPrefetcher prefetcher = new SegmentPrefetcher(
                 new StaticMembership(self, List.of(self)), proxy);
         // ⚠️ ONE POD IN THE AZ, so the ring names it for every key and the case

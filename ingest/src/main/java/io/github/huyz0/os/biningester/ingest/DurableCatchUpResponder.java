@@ -43,25 +43,19 @@ public final class DurableCatchUpResponder {
     private final LongSupplier epoch;
     private final long maxResponseBytes;
 
-    public DurableCatchUpResponder(BinStore store, CommittedDeltaSource source,
-            LongSupplier epoch) {
-        this(store, source, epoch, DEFAULT_MAX_RESPONSE_BYTES);
-    }
-
     /** The default budget, charging its segment GETs into {@code ledger} (M11.3). */
     public DurableCatchUpResponder(BinStore store, CommittedDeltaSource source,
             LongSupplier epoch, IndexCostLedger ledger) {
         this(store, source, epoch, DEFAULT_MAX_RESPONSE_BYTES, ledger);
     }
 
-    public DurableCatchUpResponder(BinStore store, CommittedDeltaSource source,
-            LongSupplier epoch, long maxResponseBytes) {
-        this(store, source, epoch, maxResponseBytes, new IndexCostLedger());
-    }
-
     /**
      * The same, charging each segment GET it issues to the indices of the
      * segment it read, into {@code ledger} (M11.3, ADR-0077).
+     *
+     * <p>⚠️ BOTH CONSTRUCTORS TAKE THE LEDGER (M12.1, M11 review F2): an
+     * overload that made its own charged a ledger nothing reads, so a path
+     * built with it issued requests no report could see.
      */
     public DurableCatchUpResponder(BinStore store, CommittedDeltaSource source,
             LongSupplier epoch, long maxResponseBytes, IndexCostLedger ledger) {

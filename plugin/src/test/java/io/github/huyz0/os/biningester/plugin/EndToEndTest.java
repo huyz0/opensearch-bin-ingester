@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.plugin;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.huyz0.os.biningester.binstore.CountingBinStore;
@@ -80,7 +81,7 @@ class EndToEndTest {
         CountingBinStore store = new CountingBinStore(new LocalFsBinStore(dir.resolve("bucket")));
         SubscriptionHub hub = new SubscriptionHub();
         CommitLog log = new CommitLog(store, "bins/cluster-a", 0);
-        SegmentPublisher publisher = new SegmentPublisher(store, "bins/cluster-a", "pod1");
+        SegmentPublisher publisher = new SegmentPublisher(store, "bins/cluster-a", "pod1", new IndexCostLedger());
         Accumulator accumulator =
                 new Accumulator(new IngestConfig(Duration.ofMillis(250), 8L << 20, "cluster-a"),
                         clock);
@@ -172,7 +173,7 @@ class EndToEndTest {
         CountingBinStore store = new CountingBinStore(new LocalFsBinStore(dir.resolve("b")));
         SubscriptionHub hub = new SubscriptionHub();
         CommitLog log = new CommitLog(store, "p", 0);
-        SegmentPublisher publisher = new SegmentPublisher(store, "p", "pod1");
+        SegmentPublisher publisher = new SegmentPublisher(store, "p", "pod1", new IndexCostLedger());
         Accumulator accumulator =
                 new Accumulator(new IngestConfig(Duration.ofMillis(250), 8L << 20, "c"), clock);
         RunKey stream = new RunKey(INDEX, 0);
@@ -229,7 +230,10 @@ class EndToEndTest {
                         new io.github.huyz0.os.biningester.ingest.FetchPolicy(
                                 new io.github.huyz0.os.biningester.ingest.FetchPolicyConfig(
                                         Long.MAX_VALUE, Long.MAX_VALUE, 1, false)),
-                        store.capabilities(), new io.github.huyz0.os.biningester.ingest.SegmentProxy(store)));
+                        store.capabilities(), new io.github.huyz0.os.biningester.ingest.SegmentProxy(store,
+                        io.github.huyz0.os.biningester.ingest.SegmentProxy.DEFAULT_CHUNK_BYTES,
+                        new io.github.huyz0.os.biningester.ingest.SegmentCache(0),
+                        new io.github.huyz0.os.biningester.binstore.IndexCostLedger())));
         return segment;
     }
 }

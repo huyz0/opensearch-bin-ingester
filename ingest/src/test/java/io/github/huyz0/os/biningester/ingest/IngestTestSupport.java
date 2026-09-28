@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import io.github.huyz0.os.biningester.binstore.BinStore;
 import io.github.huyz0.os.biningester.binstore.CountingBinStore;
 import io.github.huyz0.os.biningester.binstore.backend.MemoryBinStore;
@@ -66,7 +67,7 @@ final class IngestTestSupport {
             Duration flushInterval) throws IOException {
         return new DefaultIngest(pinnedIntervalConfig(flushInterval, 8L << 20),
                 store, PREFIX, "pod1", sequencer(store, "pod1"), hub, Clock.systemUTC(),
-                index -> LOGS);
+                index -> LOGS, ignored -> { }, new IndexCostLedger());
     }
 
     /**
@@ -131,7 +132,7 @@ final class IngestTestSupport {
             throws IOException {
         return new DefaultIngest(pinnedIntervalConfig(Duration.ofDays(1), 8L << 20),
                 store, PREFIX, "pod1", sequencer, new SubscriptionHub(), Clock.systemUTC(),
-                index -> LOGS);
+                index -> LOGS, ignored -> { }, new IndexCostLedger());
     }
 
     static DefaultIngest ingest(CountingBinStore store) throws IOException {

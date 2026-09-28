@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.plugin;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
+import io.github.huyz0.os.biningester.ingest.SegmentCache;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.huyz0.os.biningester.binstore.BinStore;
@@ -176,9 +178,9 @@ class ThreeModesAgreeTest {
                 fanOutThreshold, directEnabled);
         return directEnabled
                 ? new SegmentServing(new FetchPolicy(config), store.capabilities(),
-                        new SegmentProxy(store), new GrantIssuer(store))
+                        new SegmentProxy(store, SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger()), new GrantIssuer(store))
                 : new SegmentServing(new FetchPolicy(config), store.capabilities(),
-                        new SegmentProxy(store));
+                        new SegmentProxy(store, SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger()));
     }
 
     /**

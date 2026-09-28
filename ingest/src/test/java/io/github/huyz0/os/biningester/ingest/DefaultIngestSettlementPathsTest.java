@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static io.github.huyz0.os.biningester.ingest.IngestTestSupport.LOGS;
 import static io.github.huyz0.os.biningester.ingest.IngestTestSupport.PREFIX;
 import static io.github.huyz0.os.biningester.ingest.IngestTestSupport.appendAsync;
@@ -73,7 +74,7 @@ class DefaultIngestSettlementPathsTest {
     private static DefaultIngest ingest(CountingBinStore store, Sequencer sequencer,
             SubscriptionHub hub) throws IOException {
         return new DefaultIngest(pinnedIntervalConfig(Duration.ofDays(1), 8L << 20), store,
-                PREFIX, "pod1", sequencer, hub, Clock.systemUTC(), index -> LOGS);
+                PREFIX, "pod1", sequencer, hub, Clock.systemUTC(), index -> LOGS, ignored -> { }, new IndexCostLedger());
     }
 
     private static Boolean queuedAtRelease(DefaultIngest ingest) throws Exception {
@@ -226,7 +227,7 @@ class DefaultIngestSettlementPathsTest {
         // longer than the case: only the failed flush's signal can wake it.
         try (DefaultIngest ingest = new DefaultIngest(
                 pinnedIntervalConfig(Duration.ofDays(1), 1), store, PREFIX, "pod1",
-                sequencer, new SubscriptionHub(), Clock.systemUTC(), index -> LOGS)) {
+                sequencer, new SubscriptionHub(), Clock.systemUTC(), index -> LOGS, ignored -> { }, new IndexCostLedger())) {
             CompletableFuture<AppendResult> first = appendAsync(ingest, "logs", 0, 2);
             assertThat(entered.await(10, TimeUnit.SECONDS)).as("the first flush is queued")
                     .isTrue();

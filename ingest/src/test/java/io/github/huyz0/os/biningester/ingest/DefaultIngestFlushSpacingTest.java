@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static io.github.huyz0.os.biningester.ingest.IngestTestSupport.appendOnce;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -36,7 +37,7 @@ class DefaultIngestFlushSpacingTest {
         CountingBinStore store = new CountingBinStore(new MemoryBinStore());
         try (DefaultIngest ingest = new DefaultIngest(config, store, IngestTestSupport.PREFIX,
                 "pod1", IngestTestSupport.sequencer(store, "pod1"), new SubscriptionHub(),
-                Clock.systemUTC(), index -> IngestTestSupport.LOGS)) {
+                Clock.systemUTC(), index -> IngestTestSupport.LOGS, ignored -> { }, new IndexCostLedger())) {
             assertThat(ingest.flushSpacingMillis())
                     .as("every pod starts at the floor (ADR-0017)").isEqualTo(250);
 

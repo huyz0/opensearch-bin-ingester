@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.plugin;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import io.github.huyz0.os.biningester.binstore.backend.LocalFsBinStore;
 import io.github.huyz0.os.biningester.client.Delivery;
 import io.github.huyz0.os.biningester.client.SubscriptionTransport;
@@ -249,7 +250,7 @@ public class AliasRolloverIT extends OpenSearchSingleNodeTestCase {
                 TestSequencers.leased(store, "bins/cluster-a", "pod1"), HUB, Clock.systemUTC(),
                 // ⚠️ RESOLVED PER CONCRETE INDEX NAME, which is what makes the
                 // two indices two stream sets rather than one.
-                index -> STREAMS.get(index));
+                index -> STREAMS.get(index), segmentKey -> { }, new IndexCostLedger());
     }
 
     private long hits(String index) {

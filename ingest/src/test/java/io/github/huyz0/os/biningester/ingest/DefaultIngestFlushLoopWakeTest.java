@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.huyz0.os.biningester.binstore.CountingBinStore;
@@ -141,7 +142,7 @@ class DefaultIngestFlushLoopWakeTest {
         CountingBinStore store = new CountingBinStore(new MemoryBinStore());
         try (DefaultIngest ingest = new DefaultIngest(config(), store, IngestTestSupport.PREFIX,
                 "pod1", IngestTestSupport.sequencer(store, "pod1"), new SubscriptionHub(),
-                clock, index -> IngestTestSupport.LOGS)) {
+                clock, index -> IngestTestSupport.LOGS, ignored -> { }, new IndexCostLedger())) {
             // ⚠️ ONE RECORD BUFFERED AND NOBODY WAITING: the source throws after
             // it, so the append fails and registers no Pending.
             Assertions.assertThatThrownBy(() -> ingest.append(IngestTestSupport.PRINCIPAL,
@@ -165,7 +166,7 @@ class DefaultIngestFlushLoopWakeTest {
         CountDownLatch release = new CountDownLatch(1);
         try (DefaultIngest ingest = new DefaultIngest(config(), store, IngestTestSupport.PREFIX,
                 "pod1", new Held(IngestTestSupport.sequencer(store, "pod1"), release),
-                new SubscriptionHub(), clock, index -> IngestTestSupport.LOGS)) {
+                new SubscriptionHub(), clock, index -> IngestTestSupport.LOGS, ignored -> { }, new IndexCostLedger())) {
             CompletableFuture<AppendResult> first = appendAsync(ingest, 0);
             IngestTestSupport.awaitPending(ingest, 1);
             CompletableFuture<Void> flushing = CompletableFuture.runAsync(() -> {

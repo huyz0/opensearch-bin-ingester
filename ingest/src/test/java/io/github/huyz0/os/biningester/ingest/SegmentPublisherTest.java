@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.huyz0.os.biningester.binstore.CountingBinStore;
@@ -50,7 +51,7 @@ class SegmentPublisherTest {
         TestClock clock = new TestClock();
         CountingBinStore store = new CountingBinStore(
                 new io.github.huyz0.os.biningester.binstore.backend.MemoryBinStore());
-        SegmentPublisher publisher = new SegmentPublisher(store, "bins/c", "pod7");
+        SegmentPublisher publisher = new SegmentPublisher(store, "bins/c", "pod7", new IndexCostLedger());
         Accumulator acc = accumulator(clock);
 
         // three streams, two indices, many records -- still one object
@@ -102,10 +103,10 @@ class SegmentPublisherTest {
         CountingBinStore store = new CountingBinStore(
                 new io.github.huyz0.os.biningester.binstore.backend.MemoryBinStore());
         assertThat(org.assertj.core.api.Assertions.catchThrowable(
-                () -> new SegmentPublisher(store, "bins/c", "pod-0123456789abcdef-h5")))
+                () -> new SegmentPublisher(store, "bins/c", "pod-0123456789abcdef-h5", new IndexCostLedger())))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThat(org.assertj.core.api.Assertions.catchThrowable(
-                () -> new SegmentPublisher(store, "bins/c", "pod/7")))
+                () -> new SegmentPublisher(store, "bins/c", "pod/7", new IndexCostLedger())))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -113,7 +114,7 @@ class SegmentPublisherTest {
     void nothingBufferedMeansNoRequestAtAll() throws Exception {
         CountingBinStore store = new CountingBinStore(
                 new io.github.huyz0.os.biningester.binstore.backend.MemoryBinStore());
-        SegmentPublisher publisher = new SegmentPublisher(store, "bins/c", "pod7");
+        SegmentPublisher publisher = new SegmentPublisher(store, "bins/c", "pod7", new IndexCostLedger());
         Accumulator acc = accumulator(new TestClock());
 
         assertThat(publisher.publish(acc)).isEmpty();
@@ -128,7 +129,7 @@ class SegmentPublisherTest {
         TestClock clock = new TestClock();
         CountingBinStore store = new CountingBinStore(
                 new io.github.huyz0.os.biningester.binstore.backend.MemoryBinStore());
-        SegmentPublisher publisher = new SegmentPublisher(store, "bins/c", "pod7");
+        SegmentPublisher publisher = new SegmentPublisher(store, "bins/c", "pod7", new IndexCostLedger());
         Accumulator acc = accumulator(clock);
         acc.add(new RunKey(A, 0), record("1"));
         acc.add(new RunKey(B, 3), record("2"));
@@ -156,7 +157,7 @@ class SegmentPublisherTest {
         TestClock clock = new TestClock();
         CountingBinStore store = new CountingBinStore(
                 new io.github.huyz0.os.biningester.binstore.backend.MemoryBinStore());
-        SegmentPublisher publisher = new SegmentPublisher(store, "bins/c", "pod7");
+        SegmentPublisher publisher = new SegmentPublisher(store, "bins/c", "pod7", new IndexCostLedger());
         Accumulator acc = accumulator(clock);
         acc.add(new RunKey(A, 0), record("1"));
         acc.add(new RunKey(B, 3), record("2"));
@@ -180,7 +181,7 @@ class SegmentPublisherTest {
         TestClock clock = new TestClock();
         CountingBinStore store = new CountingBinStore(
                 new io.github.huyz0.os.biningester.binstore.backend.MemoryBinStore());
-        SegmentPublisher publisher = new SegmentPublisher(store, "bins/c", "pod7");
+        SegmentPublisher publisher = new SegmentPublisher(store, "bins/c", "pod7", new IndexCostLedger());
 
         // ⚠️ Register a THIRD index first, via a segment that does not touch
         // A or B at all -- so a LATER segment touching only A and B is
@@ -244,7 +245,7 @@ class SegmentPublisherTest {
         TestClock clock = new TestClock();
         CountingBinStore store = new CountingBinStore(
                 new io.github.huyz0.os.biningester.binstore.backend.MemoryBinStore());
-        SegmentPublisher publisher = new SegmentPublisher(store, "bins/c", "pod7");
+        SegmentPublisher publisher = new SegmentPublisher(store, "bins/c", "pod7", new IndexCostLedger());
         Accumulator acc = accumulator(clock);
         acc.add(new RunKey(A, 0), record("1"));
         long firstAppend = clock.millis();
@@ -261,7 +262,7 @@ class SegmentPublisherTest {
         TestClock clock = new TestClock();
         CountingBinStore store = new CountingBinStore(
                 new io.github.huyz0.os.biningester.binstore.backend.MemoryBinStore());
-        SegmentPublisher publisher = new SegmentPublisher(store, "bins/c", "pod7");
+        SegmentPublisher publisher = new SegmentPublisher(store, "bins/c", "pod7", new IndexCostLedger());
         Accumulator acc = accumulator(clock);
 
         acc.add(new RunKey(A, 0), record("1"));
@@ -284,7 +285,7 @@ class SegmentPublisherTest {
         TestClock clock = new TestClock();
         CountingBinStore store = new CountingBinStore(
                 new io.github.huyz0.os.biningester.binstore.backend.MemoryBinStore());
-        SegmentPublisher publisher = new SegmentPublisher(store, "bins/c", "pod7");
+        SegmentPublisher publisher = new SegmentPublisher(store, "bins/c", "pod7", new IndexCostLedger());
 
         Accumulator one = accumulator(clock);
         one.add(new RunKey(A, 0), record("1"));

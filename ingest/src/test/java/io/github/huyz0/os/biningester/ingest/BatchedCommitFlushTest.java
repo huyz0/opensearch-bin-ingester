@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static io.github.huyz0.os.biningester.ingest.IngestTestSupport.appendOnce;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -52,7 +53,7 @@ class BatchedCommitFlushTest {
         try (DefaultIngest ingest = new DefaultIngest(
                 IngestTestSupport.pinnedIntervalConfig(IngestTestSupport.NEVER, 8L << 20),
                 store, IngestTestSupport.PREFIX, "pod1", batching, new SubscriptionHub(),
-                Clock.systemUTC(), index -> IngestTestSupport.LOGS)) {
+                Clock.systemUTC(), index -> IngestTestSupport.LOGS, ignored -> { }, new IndexCostLedger())) {
 
             AppendResult result = appendOnce(ingest, "logs", 0, 2);
 

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.huyz0.os.biningester.binstore.Body;
@@ -23,7 +24,7 @@ class SegmentPrefetchAccessOrderTest {
         Peer self = new Peer("az-b-pod0", "http://b:9000", "az-b");
         SegmentPrefetcher prefetcher = new SegmentPrefetcher(
                 new StaticMembership(self, List.of(self)),
-                new SegmentProxy(store, 1024, new SegmentCache(4096)));
+                new SegmentProxy(store, 1024, new SegmentCache(4096), new IndexCostLedger()));
         int n = SegmentPrefetcher.KEYS_REMEMBERED;
         for (int i = 0; i <= n; i++) {
             store.put("bins/seg-" + i, Body.ofBytes(new byte[64]));

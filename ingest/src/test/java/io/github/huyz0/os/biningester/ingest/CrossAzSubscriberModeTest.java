@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.huyz0.os.biningester.binstore.CountingBinStore;
@@ -75,7 +76,7 @@ class CrossAzSubscriberModeTest {
         hub.publish(new CommitDelta(1, "seg-sub-cap", List.of(new RunCommit(key, 3, 10))),
                 "seg-sub-cap", segment, new SegmentServing(
                         new FetchPolicy(FetchPolicyConfig.defaultsFor(store.capabilities().costs())),
-                        store.capabilities(), new SegmentProxy(store)));
+                        store.capabilities(), new SegmentProxy(store, SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger())));
         for (AutoCloseable handle : handles) {
             handle.close();
         }
@@ -119,7 +120,7 @@ class CrossAzSubscriberModeTest {
                     "seg-padded", segment, new SegmentServing(
                             new FetchPolicy(FetchPolicyConfig.defaultsFor(
                                     store.capabilities().costs())),
-                            store.capabilities(), new SegmentProxy(store)));
+                            store.capabilities(), new SegmentProxy(store, SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger())));
         }
 
         assertThat(sameZone.completed).extracting(SubscriptionHub.Push::via)

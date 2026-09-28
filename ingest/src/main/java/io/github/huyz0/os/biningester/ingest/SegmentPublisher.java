@@ -54,13 +54,13 @@ public final class SegmentPublisher {
     private final AtomicLong sequence = new AtomicLong();
     private final IndexCostLedger ledger;
 
-    public SegmentPublisher(BinStore store, String prefix, String podShortId) {
-        this(store, prefix, podShortId, new IndexCostLedger());
-    }
-
     /**
-     * The same, apportioning each data PUT it issues across the segment's
-     * indices into {@code ledger} (M11.2, ADR-0077).
+     * Apportions each data PUT it issues across the segment's indices into
+     * {@code ledger} (M11.2, ADR-0077).
+     *
+     * <p>⚠️ THE ONLY CONSTRUCTOR, AND IT TAKES THE LEDGER (M12.1, M11 review
+     * F2): an overload that made its own charged a ledger nothing reads, so a
+     * path built with it issued requests no report could see.
      */
     public SegmentPublisher(BinStore store, String prefix, String podShortId,
             IndexCostLedger ledger) {

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.http;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.huyz0.os.biningester.binstore.BinStore;
@@ -66,7 +67,7 @@ class SegmentFetchServiceTest {
 
     private String start(BinStore store, CrossAzBytes counter) {
         SegmentProxy proxy = new SegmentProxy(store, 4096,
-                SegmentCache.forSegmentsOf(1 << 20));
+                SegmentCache.forSegmentsOf(1 << 20), new IndexCostLedger());
         server = WebServer.builder().port(0)
                 .routing(HttpRouting.builder().register(
                         SegmentFetchService.over(PREFIX, proxy, store, counter)))

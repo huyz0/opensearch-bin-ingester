@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.huyz0.os.biningester.binstore.CountingBinStore;
@@ -32,13 +33,13 @@ class DirectServingTest {
             CountingBinStore store, int threshold) {
         return new SegmentServing(
                 new FetchPolicy(new FetchPolicyConfig(1L, 1L, threshold, true)),
-                store.capabilities(), new SegmentProxy(store), new GrantIssuer(store));
+                store.capabilities(), new SegmentProxy(store, SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger()), new GrantIssuer(store));
     }
 
     private static SegmentServing directServing(CountingBinStore store, int threshold) {
         return new SegmentServing(
                 new FetchPolicy(new FetchPolicyConfig(1L, 1L, threshold, true)),
-                store.capabilities(), new SegmentProxy(store), new GrantIssuer(store));
+                store.capabilities(), new SegmentProxy(store, SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger()), new GrantIssuer(store));
     }
 
     /** A cold publish: this pod holds a DIFFERENT segment, so `held` is null. */
@@ -129,7 +130,7 @@ class DirectServingTest {
                 java.util.Collections.synchronizedList(new ArrayList<>());
         SegmentServing maxCaps = new SegmentServing(
                 new FetchPolicy(new FetchPolicyConfig(Long.MAX_VALUE, Long.MAX_VALUE, 1, false)),
-                store.capabilities(), new SegmentProxy(store));
+                store.capabilities(), new SegmentProxy(store, SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger()));
 
         try (var ignored = hub.subscribe(new RunKey(INDEX, 0), pushes -> {
             seen.addAll(pushes);
@@ -453,7 +454,7 @@ class DirectServingTest {
         SubscriptionHub hub = new SubscriptionHub();
         SegmentServing noIssuer = new SegmentServing(
                 new FetchPolicy(new FetchPolicyConfig(1L, 1L, 1, true)),
-                store.capabilities(), new SegmentProxy(store));
+                store.capabilities(), new SegmentProxy(store, SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger()));
 
         try (var ignored = hub.subscribe(new RunKey(INDEX, 0), pushes ->
                 (buffer, offset, length) -> { })) {
@@ -538,7 +539,7 @@ class DirectServingTest {
 
         try (DefaultIngest pod = new DefaultIngest(enabled, capable, IngestTestSupport.PREFIX,
                 "pod1", IngestTestSupport.sequencer(capable, "pod1"), hub,
-                java.time.Clock.systemUTC(), index -> IngestTestSupport.LOGS)) {
+                java.time.Clock.systemUTC(), index -> IngestTestSupport.LOGS, ignored -> { }, new IndexCostLedger())) {
             assertThat(pod.serving().issuer())
                     .as("enabled, so the pod holds one")
                     .isNotNull();
@@ -551,7 +552,7 @@ class DirectServingTest {
                 IngestTestSupport.pinnedIntervalConfig(IngestTestSupport.NEVER, 8L << 20),
                 plain, IngestTestSupport.PREFIX, "pod1",
                 IngestTestSupport.sequencer(plain, "pod1"), hub2,
-                java.time.Clock.systemUTC(), index -> IngestTestSupport.LOGS)) {
+                java.time.Clock.systemUTC(), index -> IngestTestSupport.LOGS, ignored -> { }, new IndexCostLedger())) {
             assertThat(pod.serving().issuer())
                     .as("not asked for, so none -- and a backend that cannot sign has none to give")
                     .isNull();

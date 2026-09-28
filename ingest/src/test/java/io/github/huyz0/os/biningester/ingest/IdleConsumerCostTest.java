@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.huyz0.os.biningester.binstore.CountingBinStore;
@@ -167,7 +168,7 @@ class IdleConsumerCostTest {
         IngestConfig config = IngestConfig.defaults("cluster-a");
         Accumulator accumulator = new Accumulator(config, clock);
         CountingBinStore store = new CountingBinStore(new MemoryBinStore());
-        SegmentPublisher publisher = new SegmentPublisher(store, "bins/cluster-a", "pod1");
+        SegmentPublisher publisher = new SegmentPublisher(store, "bins/cluster-a", "pod1", new IndexCostLedger());
         // ⚠️ A PRESIGN-CAPABLE STORE, because `MemoryBinStore` refuses at
         // construction (ADR-0041) -- the grant counter cannot be asserted at
         // zero by a deployment that could not have issued one anyway.
@@ -253,7 +254,7 @@ class IdleConsumerCostTest {
         IngestConfig config = IngestConfig.defaults("cluster-a");
         Accumulator accumulator = new Accumulator(config, clock);
         CountingBinStore store = new CountingBinStore(new StoreFakes.CanPresign());
-        SegmentPublisher publisher = new SegmentPublisher(store, "bins/cluster-a", "pod1");
+        SegmentPublisher publisher = new SegmentPublisher(store, "bins/cluster-a", "pod1", new IndexCostLedger());
         SubscriptionHub hub = new SubscriptionHub();
         GrantIssuer grants = new GrantIssuer(store);
         AtomicLong delivered = new AtomicLong();
@@ -268,7 +269,7 @@ class IdleConsumerCostTest {
         // varies.
         SegmentServing serving = new SegmentServing(
                 new FetchPolicy(new FetchPolicyConfig(1L, 1L, CONSUMERS, true)),
-                store.capabilities(), new SegmentProxy(store), grants);
+                store.capabilities(), new SegmentProxy(store, SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger()), grants);
 
         driveOneActiveStream(accumulator, publisher, hub, clock, config, serving, true);
 
@@ -357,7 +358,7 @@ class IdleConsumerCostTest {
         IngestConfig config = IngestConfig.defaults("cluster-a");
         Accumulator accumulator = new Accumulator(config, clock);
         CountingBinStore store = new CountingBinStore(new MemoryBinStore());
-        SegmentPublisher publisher = new SegmentPublisher(store, "bins/cluster-a", "pod1");
+        SegmentPublisher publisher = new SegmentPublisher(store, "bins/cluster-a", "pod1", new IndexCostLedger());
         SubscriptionHub hub = new SubscriptionHub();
         AtomicLong delivered = new AtomicLong();
         List<AutoCloseable> handles = subscribeAll(hub, consumers, delivered);
@@ -368,7 +369,7 @@ class IdleConsumerCostTest {
         SegmentServing serving = new SegmentServing(
                 new FetchPolicy(new FetchPolicyConfig(
                         Long.MAX_VALUE, Long.MAX_VALUE, 1, false)),
-                store.capabilities(), new SegmentProxy(store));
+                store.capabilities(), new SegmentProxy(store, SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger()));
         long before = store.counts().total();
 
         driveOneActiveStream(accumulator, publisher, hub, clock, config, serving, false);
@@ -467,7 +468,7 @@ class IdleConsumerCostTest {
         IngestConfig config = IngestConfig.defaults("cluster-a");
         Accumulator accumulator = new Accumulator(config, clock);
         CountingBinStore store = new CountingBinStore(new MemoryBinStore());
-        SegmentPublisher publisher = new SegmentPublisher(store, "bins/cluster-a", "pod1");
+        SegmentPublisher publisher = new SegmentPublisher(store, "bins/cluster-a", "pod1", new IndexCostLedger());
         GrantIssuer grants = new GrantIssuer(new StoreFakes.CanPresign());
         SubscriptionHub hub = new SubscriptionHub();
         AtomicLong delivered = new AtomicLong();

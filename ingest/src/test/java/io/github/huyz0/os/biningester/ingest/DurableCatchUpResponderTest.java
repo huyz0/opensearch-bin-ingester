@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -50,7 +51,7 @@ class DurableCatchUpResponderTest {
         CommittedDeltaSource source = source(exclusives,
                 new CommittedDeltaSource.CommittedRun(KEY, "segments/one", 1, 41, 73));
 
-        var responder = new DurableCatchUpResponder(store, source, () -> 9);
+        var responder = new DurableCatchUpResponder(store, source, () -> 9, new IndexCostLedger());
         var request = new CatchUpRequestFrame(REQUEST,
                 List.of(new CatchUpRequestFrame.Stream(KEY, 41)));
 
@@ -108,7 +109,7 @@ class DurableCatchUpResponderTest {
             }
         };
 
-        var responder = new DurableCatchUpResponder(store, source, () -> 9);
+        var responder = new DurableCatchUpResponder(store, source, () -> 9, new IndexCostLedger());
         var request = new CatchUpRequestFrame(REQUEST, List.of(
                 new CatchUpRequestFrame.Stream(KEY, 0),
                 new CatchUpRequestFrame.Stream(OTHER, 0)));
@@ -167,7 +168,7 @@ class DurableCatchUpResponderTest {
                 List.of(new CatchUpRequestFrame.Stream(KEY, 0),
                         new CatchUpRequestFrame.Stream(OTHER, 0)));
         List<byte[]> emitted = new ArrayList<>();
-        var responder = new DurableCatchUpResponder(store, source, () -> 9);
+        var responder = new DurableCatchUpResponder(store, source, () -> 9, new IndexCostLedger());
 
         responder.respond(request, frame -> {
             emitted.add(frame);
@@ -200,7 +201,7 @@ class DurableCatchUpResponderTest {
         CountingBinStore store = new CountingBinStore(new MemoryBinStore());
         store.put("segments/one", Body.ofBytes(segment(KEY, "zero")));
 
-        new DurableCatchUpResponder(store, source, () -> 9).respond(
+        new DurableCatchUpResponder(store, source, () -> 9, new IndexCostLedger()).respond(
                 new CatchUpRequestFrame(REQUEST,
                         List.of(new CatchUpRequestFrame.Stream(KEY, 0))));
 
@@ -214,7 +215,7 @@ class DurableCatchUpResponderTest {
         CommittedDeltaSource source = (key, offset, limit) -> offset < 0
                 ? List.of(new CommittedDeltaSource.CommittedRun(key, "segments/frame", 1, 0))
                 : List.of();
-        var responder = new DurableCatchUpResponder(store, source, () -> 9, 64);
+        var responder = new DurableCatchUpResponder(store, source, () -> 9, 64, new IndexCostLedger());
         List<byte[]> emitted = new ArrayList<>();
 
         assertThatThrownBy(() -> responder.respond(new CatchUpRequestFrame(REQUEST,
@@ -238,11 +239,11 @@ class DurableCatchUpResponderTest {
         List<byte[]> emitted = new ArrayList<>();
 
         assertThatThrownBy(() -> new DurableCatchUpResponder(store, source, () -> 9,
-                4L + end.length - 1).respond(request, emitted::add))
+                4L + end.length - 1, new IndexCostLedger()).respond(request, emitted::add))
                 .isInstanceOf(DurableCatchUpResponder.ResponseTooLargeException.class);
         assertThat(emitted).isEmpty();
 
-        new DurableCatchUpResponder(store, source, () -> 9, 4L + end.length)
+        new DurableCatchUpResponder(store, source, () -> 9, 4L + end.length, new IndexCostLedger())
                 .respond(request, emitted::add);
         assertThat(emitted).singleElement()
                 .satisfies(frame -> assertThat(CatchUpEndFrame.decode(frame).requestId())
@@ -274,7 +275,7 @@ class DurableCatchUpResponderTest {
             }
         };
 
-        List<byte[]> frames = new DurableCatchUpResponder(store, source, () -> 9)
+        List<byte[]> frames = new DurableCatchUpResponder(store, source, () -> 9, new IndexCostLedger())
                 .respond(new CatchUpRequestFrame(REQUEST,
                         List.of(new CatchUpRequestFrame.Stream(KEY, 0))));
 
@@ -290,12 +291,12 @@ class DurableCatchUpResponderTest {
         long oneEventBudget = 4L + oneEvent.length + 4L + end.length;
         long cumulativeBudget = oneEventBudget + 4L + oneEvent.length - 1;
         assertThatThrownBy(() -> new DurableCatchUpResponder(store, source, () -> 9,
-                cumulativeBudget).respond(new CatchUpRequestFrame(REQUEST,
+                cumulativeBudget, new IndexCostLedger()).respond(new CatchUpRequestFrame(REQUEST,
                         List.of(new CatchUpRequestFrame.Stream(KEY, 0)))))
                 .isInstanceOf(DurableCatchUpResponder.ResponseTooLargeException.class);
 
         List<byte[]> streamed = new java.util.ArrayList<>();
-        new DurableCatchUpResponder(store, source, () -> 9, cumulativeBudget).respond(
+        new DurableCatchUpResponder(store, source, () -> 9, cumulativeBudget, new IndexCostLedger()).respond(
                 new CatchUpRequestFrame(REQUEST,
                         List.of(new CatchUpRequestFrame.Stream(KEY, 0))), streamed::add);
         assertThat(streamed).hasSize(3);
@@ -308,7 +309,7 @@ class DurableCatchUpResponderTest {
                     (key, offset, limit) -> offset < 0 ? List.of(
                             new CommittedDeltaSource.CommittedRun(key, "too-large", 1, 0))
                             : List.of(),
-                    () -> 9, 64).respond(new CatchUpRequestFrame(REQUEST,
+                    () -> 9, 64, new IndexCostLedger()).respond(new CatchUpRequestFrame(REQUEST,
                             List.of(new CatchUpRequestFrame.Stream(KEY, 0)))))
                     .isInstanceOf(IOException.class);
         }
@@ -319,7 +320,7 @@ class DurableCatchUpResponderTest {
                     (key, offset, limit) -> offset < 0 ? List.of(
                             new CommittedDeltaSource.CommittedRun(key, "too-large", 1, 0))
                             : List.of(),
-                    () -> 9, 64).respond(new CatchUpRequestFrame(REQUEST,
+                    () -> 9, 64, new IndexCostLedger()).respond(new CatchUpRequestFrame(REQUEST,
                             List.of(new CatchUpRequestFrame.Stream(KEY, 0)))))
                     .isInstanceOf(DurableCatchUpResponder.ResponseTooLargeException.class);
         }

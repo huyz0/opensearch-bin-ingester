@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.huyz0.os.biningester.binstore.CountingBinStore;
@@ -61,7 +62,7 @@ class SubscriptionHubTest {
                 new SegmentServing(
                         new FetchPolicy(new FetchPolicyConfig(
                                 Long.MAX_VALUE, Long.MAX_VALUE, 1, false)),
-                        store.capabilities(), new SegmentProxy(store)));
+                        store.capabilities(), new SegmentProxy(store, SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger())));
     }
 
 

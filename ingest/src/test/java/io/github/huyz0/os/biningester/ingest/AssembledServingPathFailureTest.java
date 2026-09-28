@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -130,7 +131,7 @@ class AssembledServingPathFailureTest {
 
         hub.publish(oneRun("seg-chunked", key, 3, 10), null, null,
                 new SegmentServing(new FetchPolicy(new FetchPolicyConfig(1, 0, 1, false)),
-                        store.capabilities(), new SegmentProxy(store, 7000)));
+                        store.capabilities(), new SegmentProxy(store, 7000, new SegmentCache(0), new IndexCostLedger())));
         for (AutoCloseable h : handles) {
             h.close();
         }
@@ -348,7 +349,7 @@ class AssembledServingPathFailureTest {
 
         hub.publish(oneRun("seg-order", key, 3, 10), "seg-order", segment,
                 new SegmentServing(new FetchPolicy(new FetchPolicyConfig(1, 0, 1, false)),
-                        store.capabilities(), new SegmentProxy(store, 7000)));
+                        store.capabilities(), new SegmentProxy(store, 7000, new SegmentCache(0), new IndexCostLedger())));
         for (AutoCloseable h : handles) {
             h.close();
         }
@@ -408,7 +409,7 @@ class AssembledServingPathFailureTest {
         CountingBinStore store = new CountingBinStore(new MemoryBinStore());
         FetchPolicy policy = new FetchPolicy(
                 FetchPolicyConfig.defaultsFor(store.capabilities().costs()));
-        SegmentProxy proxy = new SegmentProxy(store);
+        SegmentProxy proxy = new SegmentProxy(store, SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger());
 
         assertThatThrownBy(() -> new SegmentServing(policy, store.capabilities(), null))
                 .isInstanceOf(NullPointerException.class).hasMessageContaining("proxy");
@@ -471,7 +472,7 @@ class AssembledServingPathFailureTest {
 
         hub.publish(oneRun("seg-held", key, 3, 10), "seg-held", segment,
                 new SegmentServing(new FetchPolicy(new FetchPolicyConfig(1, 0, 1, false)),
-                        store.capabilities(), new SegmentProxy(store, 7000)));
+                        store.capabilities(), new SegmentProxy(store, 7000, new SegmentCache(0), new IndexCostLedger())));
         for (AutoCloseable h : handles) {
             h.close();
         }
@@ -538,6 +539,6 @@ class AssembledServingPathFailureTest {
     private static SegmentServing serving(CountingBinStore store) {
         return new SegmentServing(
                 new FetchPolicy(FetchPolicyConfig.defaultsFor(store.capabilities().costs())),
-                store.capabilities(), new SegmentProxy(store));
+                store.capabilities(), new SegmentProxy(store, SegmentProxy.DEFAULT_CHUNK_BYTES, new SegmentCache(0), new IndexCostLedger()));
     }
 }

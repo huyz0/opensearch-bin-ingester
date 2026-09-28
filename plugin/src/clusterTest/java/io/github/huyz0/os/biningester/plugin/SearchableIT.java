@@ -225,6 +225,9 @@ public class SearchableIT extends OpenSearchSingleNodeTestCase {
                         new io.github.huyz0.os.biningester.ingest.FetchPolicy(
                                 new io.github.huyz0.os.biningester.ingest.FetchPolicyConfig(
                                         Long.MAX_VALUE, Long.MAX_VALUE, 1, false)),
-                        store.capabilities(), new io.github.huyz0.os.biningester.ingest.SegmentProxy(store)));
+                        store.capabilities(), new io.github.huyz0.os.biningester.ingest.SegmentProxy(store,
+                        io.github.huyz0.os.biningester.ingest.SegmentProxy.DEFAULT_CHUNK_BYTES,
+                        new io.github.huyz0.os.biningester.ingest.SegmentCache(0),
+                        new io.github.huyz0.os.biningester.binstore.IndexCostLedger())));
     }
 }

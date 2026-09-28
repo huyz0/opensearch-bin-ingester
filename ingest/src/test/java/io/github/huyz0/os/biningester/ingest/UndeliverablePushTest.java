@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static io.github.huyz0.os.biningester.ingest.IngestTestSupport.appendOnce;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -253,6 +254,6 @@ class UndeliverablePushTest {
         return new DefaultIngest(IngestTestSupport.pinnedIntervalConfig(
                         IngestTestSupport.NEVER, 8L << 20),
                 store, IngestTestSupport.PREFIX, "pod1", widening, hub,
-                Clock.systemUTC(), index -> IngestTestSupport.LOGS);
+                Clock.systemUTC(), index -> IngestTestSupport.LOGS, ignored -> { }, new IndexCostLedger());
     }
 }

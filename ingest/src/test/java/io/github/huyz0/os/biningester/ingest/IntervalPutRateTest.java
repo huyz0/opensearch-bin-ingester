@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.withinPercentage;
 
@@ -91,7 +92,7 @@ class IntervalPutRateTest {
         IngestConfig config = IngestConfig.defaults("cluster-a");
         Accumulator accumulator = new Accumulator(config, clock);
         CountingBinStore store = new CountingBinStore(new MemoryBinStore());
-        SegmentPublisher publisher = new SegmentPublisher(store, "bins/cluster-a", "pod1");
+        SegmentPublisher publisher = new SegmentPublisher(store, "bins/cluster-a", "pod1", new IndexCostLedger());
         RunKey stream = new RunKey(INDEX, 0);
 
         long startMillis = clock.millis();

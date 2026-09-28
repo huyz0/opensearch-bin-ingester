@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.huyz0.os.biningester.binstore.Body;
@@ -26,7 +27,7 @@ class SegmentPrefetchAsksTest {
         CountingBinStore store = new CountingBinStore(new MemoryBinStore());
         store.put(SEGMENT, Body.ofBytes(new byte[8192]));
         return new SegmentPrefetcher(new StaticMembership(self, az),
-                new SegmentProxy(store, 64 * 1024, new SegmentCache(cacheBytes)),
+                new SegmentProxy(store, 64 * 1024, new SegmentCache(cacheBytes), new IndexCostLedger()),
                 () -> {
                     asked.incrementAndGet();
                     return true;

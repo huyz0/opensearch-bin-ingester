@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.http;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.huyz0.os.biningester.binstore.BinStore;
@@ -120,7 +121,7 @@ class AdmissionPermitReturnTest {
                 new IngestConfig(Duration.ofMillis(20), 8L << 20, "cluster-a"), store,
                 "bins/cluster-a", "pod1",
                 TestSequencers.leased(store, "bins/cluster-a", "pod1"), new SubscriptionHub(),
-                Clock.systemUTC(), index -> LOGS)) {
+                Clock.systemUTC(), index -> LOGS, ignored -> { }, new IndexCostLedger())) {
             CountingBuffered counting = new CountingBuffered(ingest);
             WebClient client = serve(counting, admission);
             StringBuilder body = new StringBuilder();
@@ -163,7 +164,7 @@ class AdmissionPermitReturnTest {
                 new IngestConfig(Duration.ofMillis(20), 8L << 20, "cluster-a"),
                 new MemoryBinStore(), "bins/cluster-a", "pod1",
                 TestSequencers.leased(new MemoryBinStore(), "bins/cluster-a", "pod1"),
-                new SubscriptionHub(), Clock.systemUTC(), index -> LOGS)) {
+                new SubscriptionHub(), Clock.systemUTC(), index -> LOGS, ignored -> { }, new IndexCostLedger())) {
             WebClient client = serve(ingest, admission);
 
             try (HttpClientResponse empty = client.post("/logs/_bulk")

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -37,7 +38,7 @@ class DirectEnablementTest {
             SubscriptionHub hub) throws java.io.IOException {
         return new DefaultIngest(config, store, IngestTestSupport.PREFIX, "pod1",
                 IngestTestSupport.sequencer(store, "pod1"), hub, Clock.systemUTC(),
-                index -> IngestTestSupport.LOGS);
+                index -> IngestTestSupport.LOGS, ignored -> { }, new IndexCostLedger());
     }
 
     /**

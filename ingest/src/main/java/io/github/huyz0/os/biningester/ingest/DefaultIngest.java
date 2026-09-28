@@ -143,23 +143,14 @@ public final class DefaultIngest implements Ingest {
         return pushQueue.dropped();
     }
 
-    public DefaultIngest(IngestConfig config, BinStore store, String prefix, String podShortId,
-            Sequencer sequencer, SubscriptionHub hub, Clock clock, StreamResolver streams)
-            throws IOException {
-        this(config, store, prefix, podShortId, sequencer, hub, clock, streams, ignored -> { });
-    }
-
-    public DefaultIngest(IngestConfig config, BinStore store, String prefix, String podShortId,
-            Sequencer sequencer, SubscriptionHub hub, Clock clock, StreamResolver streams,
-            DurableSegmentListener durableSegmentListener) throws IOException {
-        this(config, store, prefix, podShortId, sequencer, hub, clock, streams,
-                durableSegmentListener, new IndexCostLedger());
-    }
-
     /**
-     * The same, charging this pod's data PUTs and segment GETs into
-     * {@code costLedger} -- the one the composition root also hands its
-     * commit-charging store (M11.22), so a pod has one ledger.
+     * Charges this pod's data PUTs and segment GETs into {@code costLedger} --
+     * the one the composition root also hands its commit-charging store
+     * (M11.22), so a pod has one ledger.
+     *
+     * <p>⚠️ THE ONLY CONSTRUCTOR, AND IT TAKES THE LEDGER (M12.1, M11 review
+     * F2): an overload that made its own charged a ledger nothing reads, so a
+     * path built with it issued requests no report could see.
      */
     public DefaultIngest(IngestConfig config, BinStore store, String prefix, String podShortId,
             Sequencer sequencer, SubscriptionHub hub, Clock clock, StreamResolver streams,

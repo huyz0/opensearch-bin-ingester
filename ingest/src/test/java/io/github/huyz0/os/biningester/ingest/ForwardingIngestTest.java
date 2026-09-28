@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static io.github.huyz0.os.biningester.ingest.IngestTestSupport.LOGS;
 import static io.github.huyz0.os.biningester.ingest.IngestTestSupport.PREFIX;
 import static io.github.huyz0.os.biningester.ingest.IngestTestSupport.appendOnce;
@@ -84,7 +85,7 @@ class ForwardingIngestTest {
         // two pods rather than a stated order.
         return new DefaultIngest(pinnedIntervalConfig(Duration.ofDays(1), 8L << 20),
                 store, PREFIX, podShortId, sequencer, new SubscriptionHub(),
-                Clock.systemUTC(), index -> LOGS);
+                Clock.systemUTC(), index -> LOGS, ignored -> { }, new IndexCostLedger());
     }
 
     @Test

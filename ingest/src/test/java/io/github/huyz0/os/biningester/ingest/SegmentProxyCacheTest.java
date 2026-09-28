@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -70,7 +71,7 @@ class SegmentProxyCacheTest {
         byte[] other = nonRepeatingBytes(2048);
         store.put("seg-a", Body.ofBytes(SEGMENT));
         store.put("seg-b", Body.ofBytes(other));
-        SegmentProxy proxy = new SegmentProxy(store, 1024, new SegmentCache(1 << 20));
+        SegmentProxy proxy = new SegmentProxy(store, 1024, new SegmentCache(1 << 20), new IndexCostLedger());
 
         List<byte[]> firstA = new ArrayList<>();
         proxy.streamTo("seg-a", sinks(1, firstA));
@@ -109,7 +110,7 @@ class SegmentProxyCacheTest {
     @Test
     void aConsumerThatTHROWSOnAHitIsDroppedAndTheOthersAreSERVED() throws Exception {
         CountingBinStore store = storeHolding("seg-hot");
-        SegmentProxy proxy = new SegmentProxy(store, 1024, new SegmentCache(1 << 20));
+        SegmentProxy proxy = new SegmentProxy(store, 1024, new SegmentCache(1 << 20), new IndexCostLedger());
         proxy.streamTo("seg-hot", sinks(1, new ArrayList<>()));
 
         java.io.ByteArrayOutputStream healthy = new java.io.ByteArrayOutputStream();
@@ -158,7 +159,7 @@ class SegmentProxyCacheTest {
     @Test
     void aFanOutOfSIXTYFOURPlusThreeLATESubscribersIsONEGetNotFOUR() throws Exception {
         CountingBinStore store = storeHolding("seg-hot");
-        SegmentProxy proxy = new SegmentProxy(store, 1024, new SegmentCache(1 << 20));
+        SegmentProxy proxy = new SegmentProxy(store, 1024, new SegmentCache(1 << 20), new IndexCostLedger());
         long before = store.counts().gets();
 
         List<byte[]> firstWave = new ArrayList<>();
@@ -190,7 +191,7 @@ class SegmentProxyCacheTest {
     @Test
     void aHITIsHandedOverACHUNKAtATimeAndNotInONEWrite() throws Exception {
         CountingBinStore store = storeHolding("seg-hot");
-        SegmentProxy proxy = new SegmentProxy(store, 1024, new SegmentCache(1 << 20));
+        SegmentProxy proxy = new SegmentProxy(store, 1024, new SegmentCache(1 << 20), new IndexCostLedger());
         proxy.streamTo("seg-hot", sinks(1, new ArrayList<>()));
 
         List<Integer> sliceSizes = new ArrayList<>();
@@ -223,7 +224,7 @@ class SegmentProxyCacheTest {
     void aSegmentEXACTLYTheSizeOfTheCeilingIsCACHED() throws Exception {
         CountingBinStore store = storeHolding("seg-exact");
         SegmentCache cache = new SegmentCache(SEGMENT.length);
-        SegmentProxy proxy = new SegmentProxy(store, 1024, cache);
+        SegmentProxy proxy = new SegmentProxy(store, 1024, cache, new IndexCostLedger());
 
         proxy.streamTo("seg-exact", sinks(1, new ArrayList<>()));
         List<byte[]> second = new ArrayList<>();
@@ -250,7 +251,7 @@ class SegmentProxyCacheTest {
                 new StoreFakes.ReadThrowsPartWayThrough(new MemoryBinStore(), 2048));
         store.put("seg-torn", Body.ofBytes(SEGMENT));
         SegmentCache cache = new SegmentCache(1 << 20);
-        SegmentProxy proxy = new SegmentProxy(store, 1024, cache);
+        SegmentProxy proxy = new SegmentProxy(store, 1024, cache, new IndexCostLedger());
 
         assertThatThrownBy(() -> proxy.streamTo("seg-torn", sinks(1, new ArrayList<>())))
                 .isInstanceOf(IOException.class);
@@ -273,7 +274,7 @@ class SegmentProxyCacheTest {
     @Test
     void withTheCacheOFFEveryPublishReadsAGAIN() throws Exception {
         CountingBinStore store = storeHolding("seg-cold");
-        SegmentProxy proxy = new SegmentProxy(store, 1024, new SegmentCache(0));
+        SegmentProxy proxy = new SegmentProxy(store, 1024, new SegmentCache(0), new IndexCostLedger());
         long before = store.counts().gets();
 
         for (int publish = 0; publish < 4; publish++) {
@@ -292,8 +293,8 @@ class SegmentProxyCacheTest {
      *
      * <p>⚠️ WITHOUT THIS, THE WHOLE ROW IS OPT-IN AND NOBODY OPTS IN. Every
      * other case here builds its own {@code SegmentProxy} with a cache handed
-     * to it, so reverting {@code DefaultIngest} to {@code new SegmentProxy(store)}
-     * -- the one-argument constructor, whose ceiling is zero -- leaves all of
+     * to it, so reverting {@code DefaultIngest} to a proxy built with
+     * {@code new SegmentCache(0)} -- a cache whose ceiling is zero -- leaves all of
      * them green while production issues a fresh GET for every repeat read.
      * That is the same shape as M5.40a, whose hub contract production does not
      * yet use (M5.62); this row does not repeat it.
@@ -312,7 +313,7 @@ class SegmentProxyCacheTest {
                                 IngestTestSupport.NEVER, configuredSegmentBytes),
                         store, IngestTestSupport.PREFIX, "pod1",
                         IngestTestSupport.sequencer(store, "pod1"), hub,
-                        java.time.Clock.systemUTC(), index -> IngestTestSupport.LOGS)) {
+                        java.time.Clock.systemUTC(), index -> IngestTestSupport.LOGS, ignored -> { }, new IndexCostLedger())) {
             // ⚠️ 64 MiB WRITTEN OUT, NOT `DEFAULT_SEGMENTS_HELD * configured`.
             // Review measured the self-referential form surviving
             // `DEFAULT_SEGMENTS_HELD = 4` -> `= 1`: both sides of the equality
@@ -336,7 +337,7 @@ class SegmentProxyCacheTest {
     void aSegmentTOOBIGForTheCeilingIsStillSERVEDAndNeverRESIDENT() throws Exception {
         CountingBinStore store = storeHolding("seg-huge");
         SegmentCache cache = new SegmentCache(100);
-        SegmentProxy proxy = new SegmentProxy(store, 1024, cache);
+        SegmentProxy proxy = new SegmentProxy(store, 1024, cache, new IndexCostLedger());
 
         List<byte[]> first = new ArrayList<>();
         proxy.streamTo("seg-huge", sinks(1, first));
