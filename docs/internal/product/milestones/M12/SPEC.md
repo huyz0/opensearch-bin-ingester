@@ -330,5 +330,6 @@ land anywhere.
 | M12.20 | H23: the doc and ADR text bundle | — (docs) |
 | M12.21 | H24: the flake and suite-time bundle | — (quality) |
 | M12.22 | H25: JVM gates — the ADR short form and io-seam exact-path anchoring | — (harness) |
+| M12.24 | The RustFS fixture's memory settled; `PartitionVisibilityIT` green 3 of 3 on M9's rig (opened by M11.23) | — (evidence) |
 | M11.25 | The `DefaultIngestTest` class timeout, with H17's thread dump (carried) | — (quality) |
 | M12.23 | Close M12: VERIFIED.md, the roadmap row, the milestone gate's default moved to M12, the milestone review | — (evidence) |

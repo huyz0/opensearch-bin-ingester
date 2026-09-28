@@ -81,18 +81,25 @@ class PartitionVisibilityIT {
                         .as("the premise: the leader owns the slot").isEqualTo("pod0");
 
                 leader.peers().cut();
+                long writesStartedAt = System.nanoTime();
                 Set<String> expected = writeDuringPartition(followers, inboxSize);
+                long writesMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - writesStartedAt);
                 List<String> intents = intentKeys(bucket);
                 assertThat(expected).as("every partitioned write was acked").hasSize(inboxSize);
                 assertThat(intents).as("one durable intent per flush").hasSize(inboxSize);
 
                 long healedAt = System.nanoTime();
+                // ⚠️ TIMED APART FROM THE DRAIN (M11.23): the bound's clock starts
+                // here, before heal() and the trigger write, so a slow trigger
+                // write's 202 would otherwise read as a slow drain.
+                long triggerMillis = -1;
                 if (!Boolean.getBoolean("m9.12.disableHealDrain")) {
                     leader.peers().heal();
                     assertThat(followers.get(0).write("after-heal-" + inboxSize, 1,
                             Duration.ofSeconds(60)))
                             .as("the first post-heal write triggers the drain")
                             .isEqualTo(202);
+                    triggerMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - healedAt);
                 }
 
                 long bound = Math.max(2, (inboxSize + 99) / 100);
@@ -110,6 +117,9 @@ class PartitionVisibilityIT {
                 }
                 long elapsed = System.nanoTime() - healedAt;
                 List<String> remaining = intentKeys(bucket);
+                System.out.printf("M11.23 inbox=%d writes=%d ms trigger202=%d ms drainEnd=%d ms"
+                        + " remaining=%d%n", inboxSize, writesMillis, triggerMillis,
+                        TimeUnit.NANOSECONDS.toMillis(elapsed), remaining.size());
                 assertThat(remaining)
                         .withFailMessage("inbox still contains %s; leader log:%n%s", remaining,
                                 leader.log())
@@ -149,7 +159,7 @@ class PartitionVisibilityIT {
         for (int node = 0; node < followers.size(); node++) {
             int followerIndex = node;
             NodeProcess follower = followers.get(node);
-            writers.add(Thread.ofVirtual().start(() -> {
+            writers.add(Thread.ofVirtual().name("writer-follower-" + node).start(() -> {
                 for (int sequence = followerIndex; sequence < count;
                         sequence += followers.size()) {
                     try {
@@ -168,9 +178,23 @@ class PartitionVisibilityIT {
                 }
             }));
         }
+        // ⚠️ ONE DEADLINE FOR ALL WRITERS, NOT 120 s PER JOIN (M11.23): each
+        // partitioned write waits out the 1 s TTL-bound forward before its
+        // intent, so a writer's 250 writes take ~255 s. Sequential 120 s joins
+        // returned while a writer whose join had already timed out was still
+        // writing, and its last ack surfaced as "expected 1000 but was 999".
+        // The deadline is the old joins' worst case, four times 120 s.
+        long writersDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(480);
         for (Thread writer : writers) {
-            writer.join(TimeUnit.SECONDS.toMillis(120));
+            long left = writersDeadline - System.nanoTime();
+            if (left > 0) {
+                writer.join(Duration.ofNanos(left));
+            }
         }
+        assertThat(writers.stream().filter(Thread::isAlive).map(Thread::getName).toList())
+                .as("partition writers still running at the deadline; acked %d of %d",
+                        acked.size(), count)
+                .isEmpty();
         assertThat(failures)
                 .withFailMessage("partition write failures: %s", failureReasons)
                 .as("partitioned writes must not fail instead of using the inbox")
