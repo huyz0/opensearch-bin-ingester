@@ -90,6 +90,9 @@ public final class Assembly implements AutoCloseable {
     private final SegmentPrefetcher prefetcher;
     private final RoutedIngest routed;
     private final Deque<AutoCloseable> toClose = new ArrayDeque<>();
+    /** The indices refused {@code 429} since the last top-K line (M12.5). */
+    private final io.github.huyz0.os.biningester.ingest.RefusedIndices refused =
+            new io.github.huyz0.os.biningester.ingest.RefusedIndices();
     private volatile boolean closed;
 
     /**
@@ -324,7 +327,7 @@ public final class Assembly implements AutoCloseable {
         // on the way, which the shutdown then has to wait out.
         toClose.push(RetentionAssembly.schedule(retention, kept.passInterval()));
         toClose.push(CostReporting.scheduleTopK(costLedger, catalog,
-                raw.capabilities().costs(), config.costTopKInterval(), clock));
+                raw.capabilities().costs(), config.costTopKInterval(), clock, refused));
     }
 
     static LeaseConfig sequencerLeaseConfig(ServerConfig config) {
@@ -444,6 +447,11 @@ public final class Assembly implements AutoCloseable {
     /** The data-segment GETs this node issued: the read side's denominator (M11.3). */
     long dataSegmentGets() {
         return stack.counting().dataSegmentGets();
+    }
+
+    /** The indices refused since the last top-K line, which the front door records into. */
+    io.github.huyz0.os.biningester.ingest.RefusedIndices refusedIndices() {
+        return refused;
     }
 
     GovernorMetrics governorMetrics() {

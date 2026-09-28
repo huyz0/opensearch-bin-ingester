@@ -193,7 +193,8 @@ public final class FrontDoor implements AutoCloseable {
                         .register(new HealthService(
                                 () -> gate.ready() && assembly.storeHealthy()))
                         .register(new BulkService(assembly.ingest(), config.principal(), gate,
-                                admission, quotas))
+                                admission, quotas,
+                                new RefusalMetrics(assembly.refusedIndices())))
                         .register(new CommitService(assembly::heldTerm,
                                 // ⚠️ THE NODE's STORE, NOT THE RAW BACKEND (M10.26):
                                 // the drain's LIST is declared recovery, so it is

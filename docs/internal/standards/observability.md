@@ -74,7 +74,10 @@ acts on) with `binstore_governor_alarm` and `binstore_governor_kill_switch` ·
 `binstore_governor_refusals_total` (**must be zero in steady state**), the sum of
 `binstore_governor_list_refusals_total` and
 `binstore_governor_discretionary_refusals_total` — two names, because `class`
-is not on rule 1's allow-list (M10.27).
+is not on rule 1's allow-list (M10.27) · `binstore_ingest_admission_refusals_total`
+and `binstore_ingest_quota_refusals_total`, the front door's `429`s by cause, two
+names and no `index` label; which indices a quota refused is said by the top-K
+cost log line, bounded to eight names per interval (M12.5).
 
 ⚠️ The dollar metric is an **estimate** from a per-provider `CostTable` and must be
 labelled so. Request counts are exact; prices are a lookup that goes stale.

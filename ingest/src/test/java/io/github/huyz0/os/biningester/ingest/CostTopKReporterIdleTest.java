@@ -48,7 +48,7 @@ class CostTopKReporterIdleTest {
         IndexCostLedger ledger = new IndexCostLedger();
         List<String> lines = new ArrayList<>();
         CostTopKReporter reporter = new CostTopKReporter(ledger, () -> Map.of(A, "alpha"),
-                CostTable.awsS3Standard(), INTERVAL, clock, lines::add);
+                CostTable.awsS3Standard(), INTERVAL, clock, lines::add, new RefusedIndices());
 
         ledger.apportion(Charge.DATA_PUT, Map.of(A, 1L));
         now[0] = now[0].plus(INTERVAL);

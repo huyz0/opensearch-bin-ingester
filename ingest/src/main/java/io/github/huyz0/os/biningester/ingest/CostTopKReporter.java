@@ -48,6 +48,7 @@ public final class CostTopKReporter {
     private final Duration interval;
     private final Clock clock;
     private final Consumer<String> sink;
+    private final RefusedIndices refused;
     /** One index's cost: estimated dollars and apportioned micro-requests. */
     private record Spent(UUID index, double usd, long micros) {
     }
@@ -61,7 +62,9 @@ public final class CostTopKReporter {
      * @throws IllegalArgumentException if {@code interval} is negative
      */
     public CostTopKReporter(IndexCostLedger ledger, Supplier<Map<UUID, String>> names,
-            CostTable prices, Duration interval, Clock clock, Consumer<String> sink) {
+            CostTable prices, Duration interval, Clock clock, Consumer<String> sink,
+            RefusedIndices refused) {
+        this.refused = java.util.Objects.requireNonNull(refused, "refused");
         this.ledger = Objects.requireNonNull(ledger, "ledger");
         this.names = Objects.requireNonNull(names, "names");
         this.prices = Objects.requireNonNull(prices, "prices");
@@ -130,6 +133,15 @@ public final class CostTopKReporter {
                         .append(" requests)");
             }
             line.append(" (estimated; see /admin/cost)");
+        }
+        // ⚠️ THE INDICES REFUSED 429 IN THIS INTERVAL (M12.5): a pod-level counter
+        // says how many, and this line -- never a label -- says which.
+        RefusedIndices.Drained refusedNow = refused.drain();
+        if (!refusedNow.names().isEmpty()) {
+            line.append(" -- refused 429: ").append(String.join(", ", refusedNow.names()));
+            if (refusedNow.more() > 0) {
+                line.append(" and ").append(refusedNow.more()).append(" more");
+            }
         }
         sink.accept(line.toString());
         return true;

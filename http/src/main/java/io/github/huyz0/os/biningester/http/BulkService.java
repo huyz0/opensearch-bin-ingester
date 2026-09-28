@@ -157,6 +157,33 @@ public final class BulkService implements HttpService {
      */
     public BulkService(Ingest ingest, Principal principal, DrainGate gate,
             LaneAdmission admission, IndexQuotas quotas) {
+        this(ingest, principal, gate, admission, quotas, RefusalListener.UNCOUNTED);
+    }
+
+    /** Told of each {@code 429} as it is sent (M12.5). */
+    public interface RefusalListener {
+        /** Counts nothing: what every constructor above uses. */
+        RefusalListener UNCOUNTED = new RefusalListener() {
+            @Override
+            public void admissionRefused() {
+            }
+
+            @Override
+            public void quotaRefused(String index) {
+            }
+        };
+
+        /** The pod's in-flight budget refused a request (lane admission). */
+        void admissionRefused();
+
+        /** {@code index}'s quota refused a request. */
+        void quotaRefused(String index);
+    }
+
+    /** The same, telling {@code refusals} of each {@code 429} it sends (M12.5). */
+    public BulkService(Ingest ingest, Principal principal, DrainGate gate,
+            LaneAdmission admission, IndexQuotas quotas, RefusalListener refusals) {
+        this.refusals = Objects.requireNonNull(refusals, "refusals");
         this.ingest = Objects.requireNonNull(ingest, "ingest");
         this.principal = Objects.requireNonNull(principal, "principal");
         this.gate = Objects.requireNonNull(gate, "gate");
@@ -166,6 +193,7 @@ public final class BulkService implements HttpService {
 
     private final LaneAdmission admission;
     private final IndexQuotas quotas;
+    private final RefusalListener refusals;
 
     @Override
     public void routing(HttpRules rules) {
@@ -249,6 +277,7 @@ public final class BulkService implements HttpService {
         }
         var permit = admission.tryAcquire(placement.lane());
         if (permit.isEmpty()) {
+            refusals.admissionRefused();
             // ⚠️ ONE SECOND: a saturated pod frees a permit as soon as any
             // request in flight completes, which is well under a second at
             // any rate this refusal is reached.
@@ -261,9 +290,11 @@ public final class BulkService implements HttpService {
         // its lane permit straight back.
         // ⚠️ BY THE CONCRETE INDEX, never the alias the path names (review P2):
         // an alias and its index are one index, with one bucket and one cap.
-        IndexQuotas.Admission quota = quotas.admit(ingest.concreteIndex(index));
+        String concrete = ingest.concreteIndex(index);
+        IndexQuotas.Admission quota = quotas.admit(concrete);
         if (quota.refusal().isPresent()) {
             permit.get().release();
+            refusals.quotaRefused(concrete);
             tooManyRequests(response, quota.refusal().get().retryAfterSeconds(),
                     quota.refusal().get().reason());
             return;

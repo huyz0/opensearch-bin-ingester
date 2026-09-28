@@ -5,6 +5,7 @@ import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import io.github.huyz0.os.biningester.binstore.CostTable;
 import io.github.huyz0.os.biningester.ingest.CostTopKReporter;
 import io.github.huyz0.os.biningester.ingest.IndexCatalog;
+import io.github.huyz0.os.biningester.ingest.RefusedIndices;
 import java.time.Clock;
 import java.util.Objects;
 import java.util.concurrent.Executors;
@@ -34,9 +35,9 @@ final class CostReporting {
      * M11.24b).
      */
     static AutoCloseable scheduleTopK(IndexCostLedger costLedger, IndexCatalog catalog,
-            CostTable costs, java.time.Duration interval, Clock clock) {
+            CostTable costs, java.time.Duration interval, Clock clock, RefusedIndices refused) {
         return schedule(new CostTopKReporter(costLedger, catalog::namesById, costs, interval,
-                clock, line -> COST_LOG.log(System.Logger.Level.INFO, line)), interval);
+                clock, line -> COST_LOG.log(System.Logger.Level.INFO, line), refused), interval);
     }
 
     /** Ticks {@code reporter} every interval; what it returns stops it. A disabled one costs no thread. */
