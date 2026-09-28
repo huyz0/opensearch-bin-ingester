@@ -164,6 +164,15 @@ public final class SegmentPrefetcher {
         //
         // ⚠️ ASKED BEFORE THE KEY IS RECORDED, so a halted signal is not
         // remembered as fetched: the next signal after the halt lifts warms it.
+        // ⚠️ AND AFTER A CHEAP "ALREADY FETCHED" (M11.11, H6): the governor
+        // counts every `false` as a refusal, and a repeat signal for a segment
+        // already warmed refused nothing -- asked first, a halted pod counted
+        // one per repeat. ⚠️ `get`, NOT `containsKey`: on this access-ordered
+        // map only `get` is an access, so a repeat must still refresh its key
+        // or eviction falls back to insertion order (review R1).
+        if (prefetched.get(segmentKey) != null) {
+            return false;
+        }
         if (!discretionaryAllowed.getAsBoolean()) {
             return false;
         }

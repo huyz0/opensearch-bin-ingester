@@ -133,6 +133,19 @@ class RetentionLoopTest {
                 SegmentGc.DEFAULT_DELETE_BATCH);
     }
 
+    /** The same loop, asking {@code governor} before each pass. */
+    private RetentionLoop loopAsking(AtomicReference<CommitLog> term, RetentionRule rule,
+            GcLease lease, java.util.function.BooleanSupplier governor) {
+        RetentionObservable observable = new RetentionObservable(clock, MIN, MAX,
+                Duration.ofMinutes(1), alarm -> { });
+        return new RetentionLoop(
+                () -> Optional.ofNullable(term.get())
+                        .map(log -> new RetentionLoop.Term(log.chain(), reported::add,
+                                () -> true)),
+                new LeasedGc(lease, store), rule, observable, clock, PREFIX, MIN, GRACE,
+                SegmentGc.DEFAULT_DELETE_BATCH, governor);
+    }
+
     private String segment(Instant writtenAt, long sequence) {
         return new SegmentKey(PREFIX, writtenAt.toEpochMilli(), "poda", sequence, 12).key();
     }
@@ -479,5 +492,26 @@ class RetentionLoopTest {
                         + "no longer the chain's writer")
                 .isPresent();
         assertThat(store.counts().deletes() - before.deletes()).isZero();
+    }
+
+    @Test
+    void anIdleTickNeverAsksTheGovernorAndADuePassAsksOnce() throws Exception {
+        // ⚠️ M11.11, H6 (M10.11 review T4): the governor counts every `false` as a
+        // refusal, so a check moved above the idle return would count one per
+        // idle tick on a halted pod that refused nothing.
+        CommitLog log = new CommitLog(store, PREFIX + "/ctl/log", 1);
+        AtomicInteger asked = new AtomicInteger();
+        RetentionLoop loop = loopAsking(new AtomicReference<>(log), readToTheEnd(),
+                new TestLease(true), () -> {
+                    asked.incrementAndGet();
+                    return true;
+                });
+        loop.tick();
+        loop.tick();
+        assertThat(asked).as("⚠️ TWO IDLE TICKS: the governor is not asked").hasValue(0);
+
+        committed(log, clock.instant().minus(Duration.ofHours(7)), 1);
+        loop.tick();
+        assertThat(asked).as("a pass due: asked once, before it").hasValue(1);
     }
 }

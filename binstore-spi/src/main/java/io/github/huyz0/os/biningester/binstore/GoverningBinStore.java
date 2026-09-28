@@ -86,8 +86,11 @@ public final class GoverningBinStore implements BinStore {
         return new MultipartWriter() {
             // ⚠️ PER PART NUMBER, LAST WRITE WINS, as the store assembles it: a
             // retried part counted twice would inflate the expected rate and
-            // hide a real regression behind its own bytes.
-            private final java.util.Map<Integer, Long> parts = new java.util.HashMap<>();
+            // hide a real regression behind its own bytes. ⚠️ CONCURRENT
+            // (M11.11, H6): parts may be uploaded in parallel, and a HashMap
+            // written from two threads can lose an entry.
+            private final java.util.Map<Integer, Long> parts =
+                    new java.util.concurrent.ConcurrentHashMap<>();
 
             @Override public void uploadPart(int partNumber, Body body) throws IOException {
                 writer.uploadPart(partNumber, body);
