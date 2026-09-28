@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.server;
 
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
+import io.github.huyz0.os.biningester.binstore.CostTable;
 import io.github.huyz0.os.biningester.ingest.CostTopKReporter;
+import io.github.huyz0.os.biningester.ingest.IndexCatalog;
+import java.time.Clock;
 import java.util.Objects;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -18,7 +22,21 @@ final class CostReporting {
 
     private static final System.Logger LOG = System.getLogger(CostReporting.class.getName());
 
+    /** Where the top-K cost line is logged: its own name, so it can be routed. */
+    private static final System.Logger COST_LOG = System.getLogger("binstore.cost");
+
     private CostReporting() {
+    }
+
+    /**
+     * M11.5: the pod's top-K cost line, from the ledger this pod's stores
+     * charge, scheduled at {@code interval} (moved out of {@code Assembly} by
+     * M11.24b).
+     */
+    static AutoCloseable scheduleTopK(IndexCostLedger costLedger, IndexCatalog catalog,
+            CostTable costs, java.time.Duration interval, Clock clock) {
+        return schedule(new CostTopKReporter(costLedger, catalog::namesById, costs, interval,
+                clock, line -> COST_LOG.log(System.Logger.Level.INFO, line)), interval);
     }
 
     /** Ticks {@code reporter} every interval; what it returns stops it. A disabled one costs no thread. */

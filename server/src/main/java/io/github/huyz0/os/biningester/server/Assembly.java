@@ -3,14 +3,9 @@ package io.github.huyz0.os.biningester.server;
 
 import io.github.huyz0.os.biningester.binstore.BinStore;
 import io.github.huyz0.os.biningester.binstore.CostGovernor;
-import io.github.huyz0.os.biningester.binstore.CountingBinStore;
-import io.github.huyz0.os.biningester.binstore.GoverningBinStore;
-import io.github.huyz0.os.biningester.binstore.HealthTrackingBinStore;
 import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import io.github.huyz0.os.biningester.binstore.PutPurposeCounts;
 import io.github.huyz0.os.biningester.binstore.StoreCounts;
-import io.github.huyz0.os.biningester.ingest.CommitChargingBinStore;
-import io.github.huyz0.os.biningester.ingest.CostTopKReporter;
 import io.github.huyz0.os.biningester.ingest.DefaultIngest;
 import io.github.huyz0.os.biningester.ingest.IndexCatalog;
 import io.github.huyz0.os.biningester.ingest.Ingest;
@@ -20,11 +15,8 @@ import io.github.huyz0.os.biningester.ingest.RoutedIngest;
 import io.github.huyz0.os.biningester.ingest.SubscriptionHub;
 import io.github.huyz0.os.biningester.ingest.RetainedFloors;
 import io.github.huyz0.os.biningester.ingest.RetentionLoop;
-import io.github.huyz0.os.biningester.ingest.SegmentGc;
 import io.github.huyz0.os.biningester.ingest.WatermarkTable;
 import io.github.huyz0.os.biningester.ingest.SegmentPrefetcher;
-import io.github.huyz0.os.biningester.ingest.DurableCatchUpResponder;
-import io.github.huyz0.os.biningester.ingest.SnapshotCommittedDeltaSource;
 import io.github.huyz0.os.biningester.format.DurableSegmentSignalFrame;
 import io.github.huyz0.os.biningester.format.CatchUpRequestFrame;
 import io.github.huyz0.os.biningester.http.CatchUpService;
@@ -36,7 +28,6 @@ import io.github.huyz0.os.biningester.sequencer.BatchingSequencer;
 import io.github.huyz0.os.biningester.sequencer.ChainBackfill;
 import io.github.huyz0.os.biningester.sequencer.ChainMemory;
 import io.github.huyz0.os.biningester.sequencer.InboxDrain;
-import io.github.huyz0.os.biningester.sequencer.ChainCollector;
 import io.github.huyz0.os.biningester.sequencer.FleetSequencer;
 import io.github.huyz0.os.biningester.sequencer.LeaseConfig;
 import io.github.huyz0.os.biningester.sequencer.LeaseChallenge;
@@ -84,11 +75,8 @@ public final class Assembly implements AutoCloseable {
 
     private final ServerConfig config;
     private final BinStore store;
-    private final CountingBinStore counting;
-    private final CostGovernor governor;
-    private final IndexCostLedger costLedger;
-    private final GovernorMetrics governorMetrics;
-    private final HealthTrackingBinStore health;
+    /** The counter, governor, ledger and health tracker the graph's store is (M11.24b). */
+    private final StoreStack stack;
     private final IngesterMetrics metrics;
     private final BinStore backend;
     private final SubscriptionHub hub;
@@ -229,19 +217,10 @@ public final class Assembly implements AutoCloseable {
         // own. The RAW store is what is closed: the tracker holds nothing.
         this.backend = raw;
         this.peerView = peerView == null ? new EndpointSliceView() : peerView;
-        this.counting = new CountingBinStore(raw);
-        // ⚠️ THE GOVERNOR SITS ABOVE THE COUNTER (M10.11, ADR-0075), so a LIST it
-        // refuses never reached the store and is never counted as a request.
-        GovernorWiring.Spacing spacing = new GovernorWiring.Spacing(config);
-        this.governor = governorFactory.create(config, clock, spacing);
-        this.governorMetrics = GovernorMetrics.bind(governor);
-        // ⚠️ THE COMMIT CHARGE SITS ON THE COUNTER (M11.22): every commit-log
-        // PUT this pod counts is charged to the indices of the delta it carries.
-        this.costLedger = new IndexCostLedger();
-        this.health = new HealthTrackingBinStore(new GoverningBinStore(
-                new CommitChargingBinStore(counting, costLedger), governor), clock,
-                HealthTrackingBinStore.DEFAULT_STALL, HealthTrackingBinStore.DEFAULT_FAILURES);
-        this.store = health;
+        this.stack = StoreStack.over(raw, config, clock, governorFactory);
+        CostGovernor governor = stack.governor();
+        IndexCostLedger costLedger = stack.costLedger();
+        this.store = stack.health();
         this.metrics = new IngesterMetrics();
         // ⚠️ `raw` IS NAMED SO THAT NOTHING BELOW CAN USE IT BY ACCIDENT: an
         // earlier draft kept the parameter called `store`, which shadowed the
@@ -320,7 +299,7 @@ public final class Assembly implements AutoCloseable {
             throw failed;
         }
         // ⚠️ FROM HERE the governor reads the ingest's spacing; until now, the floor.
-        spacing.attach(this.ingest);
+        stack.spacing().attach(this.ingest);
         toClose.push(this.ingest);
         // ⚠️ THE ROUTED PATH IS WHAT THE FRONT DOOR IS HANDED (M8.32, FR-13).
         // Plain `DefaultIngest` has no catalog: it refuses every routed write,
@@ -344,15 +323,9 @@ public final class Assembly implements AutoCloseable {
         // chain whose term is being released under it -- and take the GC lease
         // on the way, which the shutdown then has to wait out.
         toClose.push(RetentionAssembly.schedule(retention, kept.passInterval()));
-        // ⚠️ M11.5: the top-K cost line, from the ledger this pod's stores charge.
-        toClose.push(CostReporting.schedule(new CostTopKReporter(costLedger, catalog::namesById,
-                raw.capabilities().costs(), config.costTopKInterval(), clock,
-                line -> COST_LOG.log(System.Logger.Level.INFO, line)),
-                config.costTopKInterval()));
+        toClose.push(CostReporting.scheduleTopK(costLedger, catalog,
+                raw.capabilities().costs(), config.costTopKInterval(), clock));
     }
-
-    /** Where the top-K cost line is logged: its own name, so it can be routed. */
-    private static final System.Logger COST_LOG = System.getLogger("binstore.cost");
 
     static LeaseConfig sequencerLeaseConfig(ServerConfig config) {
         return new LeaseConfig(config.prefix(), config.podId(), config.endpoint(),
@@ -360,34 +333,18 @@ public final class Assembly implements AutoCloseable {
     }
 
     /**
-     * The term the retention loop works on, if this node serves one.
-     *
-     * <p>⚠️ {@code serving()}, NOT MERELY {@code instanceof}: a term this node
-     * still HOLDS may already have been fenced by a takeover, and its frozen
-     * chain as a keep list deletes the successor's committed segments. Package-
-     * private so a case can drive the chain GC this wires (M8.39).
+     * The term the retention loop works on, if this node serves one; see
+     * {@link ServingTerm#retention}. Package-private so a case can drive the
+     * chain GC this wires (M8.39).
      */
     Optional<RetentionLoop.Term> retentionTerm() {
-        return LocalSequencer.underneath(sequencer.heldTerm()).filter(LocalSequencer::serving)
-                .map(local -> new RetentionLoop.Term(local.chain(), local::observeRetained,
-                        local::serving, fenced -> new ChainCollector(local, config.prefix())
-                                .collect(fenced, SegmentGc.DEFAULT_DELETE_BATCH)));
+        return ServingTerm.retention(sequencer, config.prefix());
     }
 
     /** Responds from this node's currently-served committed chain without electing a term. */
     void respondCatchUp(CatchUpRequestFrame request, CatchUpService.FrameSink sink)
             throws IOException {
-        LocalSequencer local = LocalSequencer.underneath(sequencer.heldTerm())
-                .filter(LocalSequencer::serving)
-                .orElseThrow(() -> new IOException("this node has no serving committed chain"));
-        ChainMemory.Snapshot snapshot = local.chain().snapshot();
-        if (!snapshot.complete()) {
-            throw new IOException("the committed chain is incomplete and cannot replay safely");
-        }
-        new DurableCatchUpResponder(store,
-                new SnapshotCommittedDeltaSource(() -> snapshot), local::epoch,
-                costLedger)
-                .respond(request, sink::write);
+        ServingTerm.respondCatchUp(sequencer, store, stack.costLedger(), request, sink);
     }
 
     /**
@@ -424,7 +381,7 @@ public final class Assembly implements AutoCloseable {
 
     /** The pod's one cost governor, which the store stack consults (M10.11). */
     public CostGovernor governor() {
-        return governor;
+        return stack.governor();
     }
 
     /**
@@ -433,7 +390,7 @@ public final class Assembly implements AutoCloseable {
      * writes that could only wait.
      */
     public boolean storeHealthy() {
-        return health.healthy();
+        return stack.health().healthy();
     }
 
     /**
@@ -467,12 +424,12 @@ public final class Assembly implements AutoCloseable {
 
     /** The requests issued by this node, including calls made by health checks. */
     public StoreCounts storeCounts() {
-        return counting.counts();
+        return stack.counting().counts();
     }
 
     /** PUT counts partitioned by object-key purpose; all categories remain in storeCounts().puts(). */
     public PutPurposeCounts putPurposeCounts() {
-        return counting.putPurposeCounts();
+        return stack.counting().putPurposeCounts();
     }
 
     IngesterMetrics metrics() {
@@ -481,16 +438,16 @@ public final class Assembly implements AutoCloseable {
 
     /** Each index's apportioned share of this pod's store requests (ADR-0077). */
     public IndexCostLedger costLedger() {
-        return costLedger;
+        return stack.costLedger();
     }
 
     /** The data-segment GETs this node issued: the read side's denominator (M11.3). */
     long dataSegmentGets() {
-        return counting.dataSegmentGets();
+        return stack.counting().dataSegmentGets();
     }
 
     GovernorMetrics governorMetrics() {
-        return governorMetrics;
+        return stack.governorMetrics();
     }
 
     public SubscriptionHub hub() {
