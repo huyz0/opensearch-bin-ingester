@@ -32,17 +32,36 @@ public final class NodeLocalStoreReaderClient implements AutoCloseable {
      * ⚠️ M10.22: THE REQUEST TIMEOUT BOUNDS THE HEADERS ONLY. A reader that
      * answers 200 and then stalls mid-body would hold its caller -- a Tier-2
      * read, and whatever lock it runs under -- for as long as the loopback
-     * socket stays open. So the body has its own deadline, counted from the
-     * request, past which the body is closed and its next read fails.
+     * socket stays open. So the body has its own deadline, past which the
+     * body is closed and its next read fails. ⚠️ COUNTED FROM THE HEADERS, not
+     * the request (M11.12, H7; M10.22 review R2): the worst case is the request
+     * timeout for the headers plus this for the body -- about 60 s at the
+     * defaults.
      */
     static final Duration DEFAULT_BODY_DEADLINE = Duration.ofSeconds(30);
 
-    private static final java.util.concurrent.ScheduledExecutorService DEADLINES =
-            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(runnable -> {
-                Thread thread = new Thread(runnable, "node-local-reader-deadline");
-                thread.setDaemon(true);
-                return thread;
-            });
+    /**
+     * ⚠️ REMOVE-ON-CANCEL (M11.12, H7; M10.22 review R4): a body closed in
+     * time cancels its timer, and a cancelled timer left queued for its full
+     * delay is one more object per read held for 30 s.
+     */
+    private static final java.util.concurrent.ScheduledThreadPoolExecutor DEADLINES =
+            deadlines();
+
+    private static java.util.concurrent.ScheduledThreadPoolExecutor deadlines() {
+        var executor = new java.util.concurrent.ScheduledThreadPoolExecutor(1, runnable -> {
+            Thread thread = new Thread(runnable, "node-local-reader-deadline");
+            thread.setDaemon(true);
+            return thread;
+        });
+        executor.setRemoveOnCancelPolicy(true);
+        return executor;
+    }
+
+    /** Body deadlines scheduled and not yet run or cancelled. */
+    static int pendingDeadlines() {
+        return DEADLINES.getQueue().size();
+    }
 
     public NodeLocalStoreReaderClient(URI endpoint, Path secretFile, Duration timeout,
             long maxBytes) throws IOException {
@@ -113,19 +132,42 @@ public final class NodeLocalStoreReaderClient implements AutoCloseable {
         }, bodyDeadline.toNanos(), java.util.concurrent.TimeUnit.NANOSECONDS);
         return new java.io.FilterInputStream(body) {
             @Override public int read() throws IOException {
-                return check(super.read());
+                try {
+                    return check(super.read());
+                } catch (IOException failed) {
+                    throw expiredOr(failed);
+                }
             }
 
             @Override public int read(byte[] bytes, int offset, int length) throws IOException {
-                return check(super.read(bytes, offset, length));
+                try {
+                    return check(super.read(bytes, offset, length));
+                } catch (IOException failed) {
+                    throw expiredOr(failed);
+                }
             }
 
             private int check(int result) throws IOException {
                 if (expired.get()) {
-                    throw new IOException("node-local reader body exceeded its " + bodyDeadline
-                            + " deadline");
+                    throw deadline(null);
                 }
                 return result;
+            }
+
+            /**
+             * ⚠️ THE DEADLINE BY NAME (M11.12, H7; M10.22 review R3): a read
+             * blocked when the timer closes the body fails with the JDK's
+             * "closed", which says nothing of why.
+             */
+            private IOException expiredOr(IOException failed) {
+                String message = failed.getMessage();
+                return expired.get() && (message == null || !message.contains(" deadline"))
+                        ? deadline(failed) : failed;
+            }
+
+            private IOException deadline(IOException cause) {
+                return new IOException("node-local reader body exceeded its " + bodyDeadline
+                        + " deadline", cause);
             }
 
             @Override public void close() throws IOException {

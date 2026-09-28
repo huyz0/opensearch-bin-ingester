@@ -47,20 +47,34 @@ final class TierTwoChainPoller {
         }
     }
 
-    /** Runs at most one GET for a node and interval, including when it returns 404. */
-    synchronized void poll(long interval) {
-        if (interval <= lastInterval) {
-            return;
+    /**
+     * Runs at most one GET for a node and interval, including when it returns 404.
+     *
+     * <p>⚠️ THE READ RUNS OUTSIDE THIS MONITOR (M11.12, H7; M10.22 review R1).
+     * {@link #observeCursor} takes it, and it is called by a catch-up delivery
+     * holding a client's monitor -- which a non-emptying release needs -- so a
+     * read stalled under it held that release for as long as the read lasted.
+     * ⚠️ AND A DELTA THE CURSOR MOVED PAST WHILE IT WAS READ IS DROPPED: a
+     * delivery already carried it, and handing it on would replay it.
+     */
+    void poll(long interval) {
+        long readEpoch;
+        long nextSequence;
+        synchronized (this) {
+            if (interval <= lastInterval) {
+                return;
+            }
+            lastInterval = interval;
+            if (epoch < 0 || ingesterReachable.getAsBoolean()
+                    || currentSequence == Long.MAX_VALUE) {
+                return;
+            }
+            readEpoch = epoch;
+            nextSequence = currentSequence + 1;
         }
-        lastInterval = interval;
-        if (epoch < 0 || ingesterReachable.getAsBoolean()
-                || currentSequence == Long.MAX_VALUE) {
-            return;
-        }
-        long nextSequence = currentSequence + 1;
         Optional<CommitDelta> found;
         try {
-            found = reader.get(epoch, nextSequence);
+            found = reader.get(readEpoch, nextSequence);
         } catch (IOException unavailable) {
             return;
         }
@@ -71,7 +85,12 @@ final class TierTwoChainPoller {
         if (delta.sequence() != nextSequence) {
             throw new IllegalStateException("node-local reader returned the wrong chain delta");
         }
-        consumer.accept(delta);
-        currentSequence = nextSequence;
+        synchronized (this) {
+            if (epoch != readEpoch || currentSequence != nextSequence - 1) {
+                return;
+            }
+            consumer.accept(delta);
+            currentSequence = nextSequence;
+        }
     }
 }
