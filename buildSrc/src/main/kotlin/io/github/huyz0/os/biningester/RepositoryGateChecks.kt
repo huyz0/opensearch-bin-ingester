@@ -175,6 +175,40 @@ object RepositoryGateChecks {
         }
     }
 
+    /**
+     * M11.24: the files fast mode lands in, each refused at its split ceiling
+     * rather than the global 700. M11's splits grew back past 600 within the
+     * milestone that made them (M11 criterion 1), so a split is kept by a gate,
+     * not by a promise.
+     *
+     * ⚠️ NAMED, NOT GLOBAL: a global 600 would fail the dozen files M12 does not
+     * split. ⚠️ And a named file that is moved or deleted FAILS rather than
+     * passing silently, so the ceiling moves with the file or is dropped on
+     * purpose.
+     */
+    val SPLIT_CEILINGS: Map<String, Int> = mapOf(
+        "ingest/src/main/java/io/github/huyz0/os/biningester/ingest/DefaultIngest.java" to 600,
+        "server/src/main/java/io/github/huyz0/os/biningester/server/Assembly.java" to 600,
+        "http/src/main/java/io/github/huyz0/os/biningester/http/BulkService.java" to 600,
+    )
+
+    fun splitCeilings(root: Path, failures: MutableList<String>) {
+        SPLIT_CEILINGS.forEach { (path, ceiling) ->
+            val file = root.resolve(path)
+            if (!Files.isRegularFile(file)) {
+                failures += "$path is named by the split ceiling (M11.24) but does not exist: " +
+                    "move its entry in RepositoryGateChecks.SPLIT_CEILINGS with the file"
+            } else {
+                ceilingFailure(path, Files.readAllLines(file).size, ceiling)?.let { failures += it }
+            }
+        }
+    }
+
+    /** Counted as the global size gate counts, by `Files.readAllLines`. */
+    fun ceilingFailure(path: String, lines: Int, ceiling: Int): String? =
+        if (lines >= ceiling) "$path has $lines lines (split ceiling $ceiling, M11.24): " +
+            "split it again rather than raise the ceiling" else null
+
     private fun stripJavaNoise(text: String): String = text
         .replace(Regex("(?s)/\\*.*?\\*/"), "")
         .replace(Regex("//.*"), "")

@@ -13,6 +13,12 @@
    `check-file-size.sh` and the reason is not. At the time of the change no
    tracked source file exceeded 500 lines; the largest was 496.
    → `scripts/check-file-size.sh`
+   ⚠️ **Three files are held below 600, not 700** (M11.24): `DefaultIngest`,
+   `Assembly` and `BulkService`, the files fast mode lands in, split by
+   M11.24a-c after M11's splits grew back past 600 within one milestone. The
+   list is named, not global, and a named file that moves or disappears fails
+   the gate rather than lapsing.
+   → `./gradlew gates` (`RepositoryGateChecks.SPLIT_CEILINGS`)
 2. **A method is at most ~50 lines.** No gate.
 3. **Business logic touches no socket, clock, or object store directly.** It
    takes a seam. If it needs I/O to test, it is in the wrong layer.
