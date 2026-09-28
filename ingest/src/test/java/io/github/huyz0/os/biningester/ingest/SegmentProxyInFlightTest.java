@@ -370,7 +370,7 @@ class SegmentProxyInFlightTest {
         SegmentProxy proxy = new SegmentProxy(pausing(memory, 3_072, paused, resume, gets), 1024,
                 SegmentCache.forSegmentsOf(1 << 20));
         int[] writes = {0};
-        SegmentSink diesOnItsThirdChunk = (buffer, offset, length) -> {
+        SegmentSink diesOnItsFifthWrite = (buffer, offset, length) -> {
             // ⚠️ THE FIFTH WRITE: the prefix is three chunks, so this sink is
             // ATTACHED when it dies and is dropped by the relay, which is the
             // count the identity comparison exists for.
@@ -381,7 +381,7 @@ class SegmentProxyInFlightTest {
 
         CompletableFuture<Outcome> first = callOn(proxy, null, null);
         await(paused);
-        CompletableFuture<Outcome> joiner = callOn(proxy, diesOnItsThirdChunk, null);
+        CompletableFuture<Outcome> joiner = callOn(proxy, diesOnItsFifthWrite, null);
         awaitJoiners(proxy, 1);
         resume.countDown();
 

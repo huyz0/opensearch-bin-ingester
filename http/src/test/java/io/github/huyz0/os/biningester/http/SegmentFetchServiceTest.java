@@ -300,24 +300,28 @@ class SegmentFetchServiceTest {
             }
             sink.write(chunk, 0, chunk.length);
         }, new CrossAzBytes(HERE));
-        HttpResponse<java.io.InputStream> answer = http.send(
+        // ⚠️ THE HEADER WAIT IS BOUNDED TOO (M11.14, H9): a server that buffers
+        // before answering holds the headers as well as the first chunk, and
+        // an unbounded `send` would wait on the latch released below for ever.
+        var answer = http.sendAsync(
                 HttpRequest.newBuilder(uri(endpoint, segmentKey(PREFIX, 8))).GET().build(),
                 HttpResponse.BodyHandlers.ofInputStream());
-        java.io.InputStream in = answer.body();
+        java.io.InputStream in = null;
         byte[] got;
         try {
+            java.io.InputStream body = answer.get(10, java.util.concurrent.TimeUnit.SECONDS)
+                    .body();
+            in = body;
             var first = java.util.concurrent.CompletableFuture.supplyAsync(() -> {
                 try {
-                    return in.readNBytes(chunk.length);
+                    return body.readNBytes(chunk.length);
                 } catch (IOException e) {
                     throw new java.io.UncheckedIOException(e);
                 }
             });
-            try {
-                got = first.get(10, java.util.concurrent.TimeUnit.SECONDS);
-            } catch (java.util.concurrent.TimeoutException buffered) {
-                got = null;
-            }
+            got = first.get(10, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (java.util.concurrent.TimeoutException buffered) {
+            got = null;
         } finally {
             // ⚠️ RELEASED BEFORE THE STREAM IS CLOSED: closing waits for the
             // handler, and the handler waits for this latch.
