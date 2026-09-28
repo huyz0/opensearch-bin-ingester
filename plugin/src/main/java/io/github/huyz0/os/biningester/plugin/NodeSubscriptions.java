@@ -232,6 +232,16 @@ public final class NodeSubscriptions implements AutoCloseable {
         return built;
     }
 
+    /**
+     * Gives this node's segment hold the host's clock, so it holds a failed
+     * fetch per key for a backoff (M10.28); a node with no hold ignores it.
+     */
+    void holdFailuresWith(java.util.function.LongSupplier relativeMillis) {
+        if (nodeSegmentSource instanceof NodeSegmentSource hold) {
+            hold.holdFailures(relativeMillis);
+        }
+    }
+
     /** The one segment source every client on this node shares, or {@code null}. */
     io.github.huyz0.os.biningester.client.SegmentSource segmentSource() {
         return nodeSegmentSource;

@@ -68,6 +68,33 @@ public final class NodeSegmentSource implements SegmentSource {
             return size() > EVICTED_KEYS_REMEMBERED;
         }
     };
+
+    /**
+     * The first hold of a failed fetch: the consumer's own retry floor, so the
+     * node fetches a failing segment about as often as ONE run's client would
+     * retry it (M10.28).
+     */
+    static final java.time.Duration FAILURE_HOLD_FLOOR =
+            io.github.huyz0.os.biningester.client.HttpSubscriptionTransport.DEFAULT_RETRY_FLOOR;
+
+    /** How long the doubling hold may grow: the consumer's retry ceiling. */
+    static final java.time.Duration FAILURE_HOLD_CEILING =
+            io.github.huyz0.os.biningester.client.HttpSubscriptionTransport.DEFAULT_RETRY_CEILING;
+
+    /** A failed fetch this node answers without the delegate until {@code untilMillis}. */
+    private record Failed(IOException cause, long untilMillis, int consecutive) {
+    }
+
+    /** Held failures, bounded as the evicted keys are; cleared by the key's next success. */
+    private final Map<String, Failed> failed = new LinkedHashMap<>(16, 0.75f, false) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, Failed> eldest) {
+            return size() > EVICTED_KEYS_REMEMBERED;
+        }
+    };
+
+    /** The host's relative clock in millis, or {@code null}: then no failure is held. */
+    private volatile java.util.function.LongSupplier failureClock;
     private final Map<String, KeyGate> keyGates = new HashMap<>();
 
     /**
@@ -95,10 +122,13 @@ public final class NodeSegmentSource implements SegmentSource {
      * The segment's bytes, fetched at most once per (node, segment) while the
      * hold keeps them.
      *
-     * <p>⚠️ A FAILURE IS NOT HELD AND NOT SWALLOWED. Nothing is put in the map
-     * on a throw, so the next run's read tries again rather than inheriting an
-     * empty array -- and the throw reaches every one of the K runs, which is
-     * M5.40a's all-or-none rule arriving where an operator sees it. Returning
+     * <p>⚠️ A FAILURE IS NEVER HELD AS BYTES AND NEVER SWALLOWED. Nothing is
+     * put in the byte map on a throw, so no run inherits an empty array -- and
+     * the throw reaches every one of the K runs, which is M5.40a's all-or-none
+     * rule arriving where an operator sees it. With the host's clock installed
+     * (M10.28, {@link #holdFailures}) the failure itself is held for a
+     * backoff and answered as a {@code SegmentFetchHeldException}; without it
+     * the next run's read fetches again. Returning
      * an empty array instead would advance K offsets past records nobody read:
      * silent data loss, and the failure mode M5.45g's criterion 5 names one
      * layer down.
@@ -146,11 +176,27 @@ public final class NodeSegmentSource implements SegmentSource {
         try {
             synchronized (gate) {
                 byte[] hit;
+                Failed failure;
                 synchronized (cacheLock) {
                     hit = held.get(key);
+                    failure = failed.get(key);
                 }
                 if (hit != null) {
                     return hit;
+                }
+                java.util.function.LongSupplier clock = failureClock;
+                long now = clock == null ? 0 : clock.getAsLong();
+                if (failure != null && clock != null && now < failure.untilMillis()) {
+                    // ⚠️ STILL A FAILURE, never an empty array (the rule above),
+                    // but a HELD one, which a run's retry does not count as its
+                    // attempt (review F1): it waits out the rest of the hold,
+                    // and surfaces once the node's own fetches reach its budget.
+                    throw new io.github.huyz0.os.biningester.client.SegmentFetchHeldException(
+                            "segment " + key + " failed on this node and is held for its "
+                                    + "backoff: " + failure.cause().getMessage(),
+                            failure.cause(),
+                            java.time.Duration.ofMillis(failure.untilMillis() - now),
+                            failure.consecutive());
                 }
                 boolean refetch;
                 synchronized (cacheLock) {
@@ -164,9 +210,28 @@ public final class NodeSegmentSource implements SegmentSource {
                     count(io.github.huyz0.os.biningester.client.SubscriptionMetrics.Counter
                             .SEGMENT_HOLD_REFETCHES_AFTER_EVICTION);
                 }
-                byte[] bytes = load.bytes();
+                byte[] bytes;
+                try {
+                    bytes = load.bytes();
+                } catch (IOException fetchFailed) {
+                    if (clock != null) {
+                        // ⚠️ A FAILURE LONG PAST STARTS A NEW RUN OF THEM (review
+                        // F3): one that expired more than a ceiling ago is not
+                        // this outage's, and continuing its count would start
+                        // the next at the 30 s ceiling rather than the floor.
+                        boolean continuing = failure != null && now
+                                < failure.untilMillis() + FAILURE_HOLD_CEILING.toMillis();
+                        int consecutive = continuing ? failure.consecutive() + 1 : 1;
+                        synchronized (cacheLock) {
+                            failed.put(key, new Failed(fetchFailed,
+                                    clock.getAsLong() + holdMillis(consecutive), consecutive));
+                        }
+                    }
+                    throw fetchFailed;
+                }
                 boolean oversize;
                 synchronized (cacheLock) {
+                    failed.remove(key);
                     oversize = !admit(key, bytes);
                     if (oversize) {
                         oversizeFetches++;
@@ -181,6 +246,30 @@ public final class NodeSegmentSource implements SegmentSource {
         } finally {
             release(key, gate);
         }
+    }
+
+    /** floor x 2^(n-1), at most the ceiling. */
+    static long holdMillis(int consecutive) {
+        long floor = FAILURE_HOLD_FLOOR.toMillis();
+        long ceiling = FAILURE_HOLD_CEILING.toMillis();
+        int doublings = Math.min(consecutive - 1, 30);
+        return Math.min(ceiling, floor << doublings);
+    }
+
+    /**
+     * Holds each failed fetch for a backoff, per node and key (M10.28),
+     * reading {@code relativeMillis} -- the host's clock, injected because this
+     * module may not read one (non-negotiable 7).
+     *
+     * <p>⚠️ WITHOUT IT A FAILED SEGMENT IS FETCHED ONCE PER RUN: the hold keeps
+     * only successes, and each run's client retries on its own backoff, so K
+     * runs of one failing segment were K x {@code maxAttempts} requests -- a
+     * rate scaling with shards, which non-negotiable 6 forbids by name. With
+     * it, the node fetches the key once per hold, the hold doubling from the
+     * consumer's retry floor to its ceiling, as one client's retries would.
+     */
+    void holdFailures(java.util.function.LongSupplier relativeMillis) {
+        this.failureClock = Objects.requireNonNull(relativeMillis, "relativeMillis");
     }
 
     private KeyGate acquire(String key) {

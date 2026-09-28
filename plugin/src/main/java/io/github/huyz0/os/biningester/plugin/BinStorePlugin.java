@@ -394,6 +394,11 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
         installRegistrar(subscriptions, clusterService::addListener,
                 threadPool.generic());
         if (subscriptions != null) {
+            // ⚠️ THE HOST's CLOCK FOR THE NODE HOLD (M10.28): a failed segment
+            // fetch is held per key for a backoff, so the node's runs of one
+            // failing segment are not one fetch each. This module reads no
+            // clock of its own (non-negotiable 7); OpenSearch's is the one.
+            subscriptions.holdFailuresWith(threadPool::relativeTimeInMillis);
             // ⚠️ ON THE GENERIC POOL: a report is a network call, and
             // `ProgressReporter.report` contains its own failures, so a bad
             // interval cannot cancel the schedule (M8.43).
