@@ -59,11 +59,20 @@ final class FlushCoordinator {
         return current.done();
     }
 
-    /** Caller holds the ingest lock. */
+    /**
+     * Caller holds the ingest lock.
+     *
+     * @throws IllegalStateException if a batch is already queued (M11.10, H5):
+     *     answering the second with the first's future dropped the second's
+     *     records while its waiters were told the first's outcome. Every caller
+     *     checks {@link #isQueued()} first; this says so loudly if one ever
+     *     does not.
+     */
     CompletableFuture<Void> enqueue(List<DefaultIngest.Pending> pending,
             Accumulator accumulator) {
         if (queued) {
-            return current.done();
+            throw new IllegalStateException("a flush is already queued; a second batch "
+                    + "would be dropped behind it");
         }
         Batch batch = new Batch(pending, accumulator, new CompletableFuture<>(),
                 new java.util.ArrayList<>());
@@ -91,6 +100,14 @@ final class FlushCoordinator {
                 handler.flush(batch);
                 flushed = true;
             } catch (IOException | RuntimeException e) {
+                failure = e;
+            } catch (Error e) {
+                // ⚠️ AN ERROR FAILS ITS BATCH, NOT THE WORKER (M11.10, H5). Let
+                // through, it ended this thread silently: the batch's waiters
+                // hung on a future nobody would complete, and no later batch
+                // was ever flushed. Logged, since nothing else will say it.
+                LOG.log(System.Logger.Level.ERROR,
+                        "a flush failed with an Error; its batch fails, the worker goes on", e);
                 failure = e;
             } finally {
                 // ⚠️ M10.13: SETTLED AND COMPLETED ONLY ONCE NO LONGER QUEUED.

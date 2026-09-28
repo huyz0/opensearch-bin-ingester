@@ -363,8 +363,8 @@ public final class DefaultIngest implements Ingest {
             mine = new Pending(stream, before, count[0], new CompletableFuture<>());
             pending.add(mine);
             // ⚠️ M10.32: NEVER BEHIND A QUEUED FLUSH. The coordinator admits one
-            // batch at a time and answers a second with the first's future, so
-            // detaching here while one is queued DROPPED this batch: records
+            // batch at a time and REFUSES a second (M11.10) -- it once answered it
+            // with the first's future, so detaching here DROPPED this batch: records
             // never written, producers blocked for ever. The flusher enqueues
             // it instead, woken when the queued flush completes.
             if (accumulator.isFlushDue() && !flushes.isQueued()) {
@@ -528,6 +528,9 @@ public final class DefaultIngest implements Ingest {
         if (pending.isEmpty()) {
             return CompletableFuture.completedFuture(null);
         }
+        if (flushes.isQueued()) { // ⚠️ BEFORE the detach, which would lose them (H5)
+            throw new IllegalStateException("a flush is already queued");
+        }
         List<Pending> batch = List.copyOf(pending);
         pending.clear();
         bufferedPerStream.clear();
@@ -588,7 +591,7 @@ public final class DefaultIngest implements Ingest {
             long epoch = sequencer.epoch();
             queued.settle(() -> pushQueue.offer(delta, published.key(), published.segment(),
                     epoch));
-        } catch (IOException | RuntimeException e) {
+        } catch (IOException | RuntimeException | Error e) { // an Error strands no producer
             for (Pending p : batch) {
                 queued.settle(() -> p.done().completeExceptionally(e));
             }
