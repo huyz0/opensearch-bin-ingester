@@ -56,7 +56,7 @@ public final class DefaultIngest implements Ingest {
     private volatile Accumulator accumulator;
     private final SegmentPublisher publisher;
     /** Each index's share of this pod's store requests (M11.2, ADR-0077). */
-    private final IndexCostLedger costLedger = new IndexCostLedger();
+    private final IndexCostLedger costLedger;
     /**
      * ⚠️ THE INGESTER CHOOSES THE FETCH MODE, NOT THE CONSUMER (FR-6). It is
      * built here, from the backend's own prices, because this is where the
@@ -157,6 +157,20 @@ public final class DefaultIngest implements Ingest {
     public DefaultIngest(IngestConfig config, BinStore store, String prefix, String podShortId,
             Sequencer sequencer, SubscriptionHub hub, Clock clock, StreamResolver streams,
             DurableSegmentListener durableSegmentListener) throws IOException {
+        this(config, store, prefix, podShortId, sequencer, hub, clock, streams,
+                durableSegmentListener, new IndexCostLedger());
+    }
+
+    /**
+     * The same, charging this pod's data PUTs and segment GETs into
+     * {@code costLedger} -- the one the composition root also hands its
+     * commit-charging store (M11.22), so a pod has one ledger.
+     */
+    public DefaultIngest(IngestConfig config, BinStore store, String prefix, String podShortId,
+            Sequencer sequencer, SubscriptionHub hub, Clock clock, StreamResolver streams,
+            DurableSegmentListener durableSegmentListener, IndexCostLedger costLedger)
+            throws IOException {
+        this.costLedger = Objects.requireNonNull(costLedger, "costLedger");
         this.config = Objects.requireNonNull(config, "config");
         this.accumulator = new Accumulator(config, Objects.requireNonNull(clock, "clock"));
         this.publisher = new SegmentPublisher(Objects.requireNonNull(store, "store"),

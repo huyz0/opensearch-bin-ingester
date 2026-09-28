@@ -74,8 +74,7 @@ public final class CountingBinStore implements BinStore {
                 && hasPathSegment(key, "/ckpt/", "ckpt/")
                 && (key.endsWith(".ckpt") || key.endsWith("/LATEST"))) {
             checkpointPuts.increment();
-        } else if (hasPathSegment(key, "/ctl/log/", "ctl/log/")
-                && key.endsWith(".delta")) {
+        } else if (isCommitLogDelta(key)) {
             commitPuts.increment();
         } else if (hasPathSegment(key, "/ctl/lease/", "ctl/lease/")
                 && key.endsWith(".json")) {
@@ -85,6 +84,16 @@ public final class CountingBinStore implements BinStore {
         } else {
             otherPuts.increment();
         }
+    }
+
+    /**
+     * Whether {@code key} names a commit-log entry -- a delta, a CONTINUE or a
+     * seal -- i.e. a PUT this meter counts as {@code commitPuts}: the one
+     * classifier the meter and the per-index commit apportionment share
+     * (M11.22), so the charged series and the counted one cannot drift apart.
+     */
+    public static boolean isCommitLogDelta(String key) {
+        return hasPathSegment(key, "/ctl/log/", "ctl/log/") && key.endsWith(".delta");
     }
 
     /**

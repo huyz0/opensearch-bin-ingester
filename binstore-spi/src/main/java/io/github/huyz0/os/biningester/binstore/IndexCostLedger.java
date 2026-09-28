@@ -44,6 +44,11 @@ public final class IndexCostLedger {
     public enum Charge {
         /** A data-segment PUT ({@code op} put, {@code purpose} data). */
         DATA_PUT,
+        /**
+         * A commit-log PUT ({@code op} put_if_absent, {@code purpose} commit),
+         * weighted by the delta's record counts (M11.22).
+         */
+        COMMIT_PUT,
         /** A data-segment GET ({@code op} get, {@code purpose} data). */
         DATA_GET
     }

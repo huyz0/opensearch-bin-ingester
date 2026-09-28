@@ -78,7 +78,8 @@ request) by charge — `(op, purpose)` — and of bytes written, plus an
 `unattributed` bucket. `apportion(charge, weights)` splits 10^6 across the
 weights' indices with largest-remainder rounding, so the shares sum exactly.
 The publisher calls it for each data PUT with the drained segment's run bytes
-per index (M11.2).
+per index (M11.2). `CommitChargingBinStore`, between the governor and the
+counter, charges every commit-log PUT by the delta's record counts (M11.22).
 
 ⚠️ **AMENDED BY M11.2: THE COMMIT PUT IS NOT PER FLUSH.** The leader batches
 commits into one delta per window (M8.50), from every pod, and a follower's

@@ -9,6 +9,7 @@ import io.github.huyz0.os.biningester.binstore.HealthTrackingBinStore;
 import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import io.github.huyz0.os.biningester.binstore.PutPurposeCounts;
 import io.github.huyz0.os.biningester.binstore.StoreCounts;
+import io.github.huyz0.os.biningester.ingest.CommitChargingBinStore;
 import io.github.huyz0.os.biningester.ingest.DefaultIngest;
 import io.github.huyz0.os.biningester.ingest.IndexCatalog;
 import io.github.huyz0.os.biningester.ingest.Ingest;
@@ -84,6 +85,7 @@ public final class Assembly implements AutoCloseable {
     private final BinStore store;
     private final CountingBinStore counting;
     private final CostGovernor governor;
+    private final IndexCostLedger costLedger;
     private final GovernorMetrics governorMetrics;
     private final HealthTrackingBinStore health;
     private final IngesterMetrics metrics;
@@ -232,7 +234,11 @@ public final class Assembly implements AutoCloseable {
         GovernorWiring.Spacing spacing = new GovernorWiring.Spacing(config);
         this.governor = governorFactory.create(config, clock, spacing);
         this.governorMetrics = GovernorMetrics.bind(governor);
-        this.health = new HealthTrackingBinStore(new GoverningBinStore(counting, governor), clock,
+        // ⚠️ THE COMMIT CHARGE SITS ON THE COUNTER (M11.22): every commit-log
+        // PUT this pod counts is charged to the indices of the delta it carries.
+        this.costLedger = new IndexCostLedger();
+        this.health = new HealthTrackingBinStore(new GoverningBinStore(
+                new CommitChargingBinStore(counting, costLedger), governor), clock,
                 HealthTrackingBinStore.DEFAULT_STALL, HealthTrackingBinStore.DEFAULT_FAILURES);
         this.store = health;
         this.metrics = new IngesterMetrics();
@@ -291,7 +297,7 @@ public final class Assembly implements AutoCloseable {
                             signalSender.send(new DurableSegmentSignalFrame(config.podId(),
                                     config.az(), segmentKey), this.peerView.readyEndpoints());
                         }
-                    });
+                    }, costLedger);
             this.prefetcher = new SegmentPrefetcher(new EndpointMembership(config, this.peerView),
                     this.ingest.segmentProxy(), governor::discretionaryAllowed);
         } catch (RuntimeException | IOException failed) {
@@ -371,7 +377,7 @@ public final class Assembly implements AutoCloseable {
         }
         new DurableCatchUpResponder(store,
                 new SnapshotCommittedDeltaSource(() -> snapshot), local::epoch,
-                ingest.costLedger())
+                costLedger)
                 .respond(request, sink::write);
     }
 
@@ -466,7 +472,7 @@ public final class Assembly implements AutoCloseable {
 
     /** Each index's apportioned share of this pod's store requests (ADR-0077). */
     public IndexCostLedger costLedger() {
-        return ingest.costLedger();
+        return costLedger;
     }
 
     /** The data-segment GETs this node issued: the read side's denominator (M11.3). */

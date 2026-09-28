@@ -10,8 +10,9 @@ Research: docs/research/30-design-space/15-cost-governor.md §4
 FR-21's attribution is `(op, purpose, domain, index)`. M10 shipped the first
 three ([ADR-0075](0075-the-cost-governor-refuses-discretionary-work-and-never-a-write.md))
 and re-homed the index half to M11, because a store request carries one
-SEGMENT holding many indices: the ingester issues one data PUT, one commit PUT
-and, on the read side, one GET per segment, never one per index (cost.md rule
+SEGMENT holding many indices: the ingester issues one data PUT per segment,
+one commit PUT per commit WINDOW (the leader batches every pod's commits into
+one delta, M8.50) and, on the read side, one GET per segment, never one per index (cost.md rule
 1, non-negotiable 6). An index's "share" of such a request is therefore not a
 count that exists anywhere; it is a model, and it has to be chosen.
 
@@ -40,11 +41,13 @@ Three things are known exactly at the moment a request is issued:
    by **largest remainder**, so the shares of one request sum to exactly
    10^6. The per-index totals therefore sum EXACTLY to the counted requests
    they apportion — a checkable invariant, not an approximation that drifts.
-3. **What is apportioned:** the data PUT and the commit PUT of every flush
-   (`purpose` data and commit) — ⚠️ **the commit half is corrected by M11.2's
-   spec amendment and decided in M11.22**: a commit PUT carries a batched delta
-   from any pod, not one flush, so it is apportioned where the delta is PUT,
-   by the delta's record counts — and **every GET of a data segment the ingester
+3. **What is apportioned:** the data PUT of every flush (`purpose` data); every
+   commit-log PUT the pod issues (`purpose` commit) — appends, CONTINUEs, seals
+   and lost races alike, charged where it is ISSUED by a store decorator on the
+   counter, **by the record counts of the delta it carries** (amended by
+   M11.22: a delta names each run's record count and no byte length, and it
+   batches many segments from any pod, so no segment directory describes it);
+   and **every GET of a data segment the ingester
    issues**, whoever issues it: `SegmentProxy`'s reads (the proxy route, the
    subscription path, the prefetcher) and `DurableCatchUpResponder`'s
    whole-segment reads, each split by the directory of the bytes it already
@@ -71,10 +74,13 @@ Three things are known exactly at the moment a request is issued:
 
 ## Alternatives considered
 
-- **Apportion by record count.** Rejected: a PUT is billed per request and a
-  segment is sized by bytes (the size trigger), so bytes are what fill a
-  segment and bring the next PUT forward; one index of 1 MiB documents and one
-  of 100 B documents with equal record counts would read as equal cost.
+- **Apportion by record count.** Rejected for data PUTs and GETs: a PUT is
+  billed per request and a segment is sized by bytes (the size trigger), so
+  bytes are what fill a segment and bring the next PUT forward; one index of
+  1 MiB documents and one of 100 B documents with equal record counts would
+  read as equal cost. ⚠️ **Accepted for the commit PUT alone** (M11.22): the
+  delta is what that request wrote, it carries record counts and no bytes, and
+  recovering bytes would mean a GET of every segment it names.
 - **Apportion equally among the indices in a segment.** Rejected: a trickle
   index sharing a segment with a firehose would read as half the bill, which
   sends the operator to the wrong index — the failure research 15 §4 exists
