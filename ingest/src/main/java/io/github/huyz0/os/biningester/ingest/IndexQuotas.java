@@ -3,11 +3,13 @@ package io.github.huyz0.os.biningester.ingest;
 
 import io.github.huyz0.os.biningester.format.SegmentRecord;
 import java.time.Clock;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Predicate;
 
 /**
  * Per-index admission quotas (M11.8, ADR-0078, ADR-0010 mechanism 1): two debt
@@ -51,15 +53,31 @@ public final class IndexQuotas {
     /** ADR-0078 decision 2a's default cap on one quota'd index's admitted requests. */
     public static final int DEFAULT_MAX_IN_FLIGHT_PER_INDEX = 8;
 
-    /** The pod's quota configuration: a default, per-index overrides, the in-flight cap. */
-    public record Config(Limit defaults, Map<String, Limit> perIndex, int maxInFlightPerIndex) {
+    /** How long an index's bucket may sit idle and full before it is dropped (M12.4). */
+    public static final Duration DEFAULT_IDLE_EXPIRY = Duration.ofMinutes(5);
+
+    /**
+     * The pod's quota configuration: a default, per-index overrides, the
+     * in-flight cap, and how long an idle bucket is kept (M12.4).
+     */
+    public record Config(Limit defaults, Map<String, Limit> perIndex, int maxInFlightPerIndex,
+            Duration idleExpiry) {
 
         /** No quota anywhere: the default. */
         public static Config none() {
             return new Config(Limit.UNLIMITED, Map.of(), DEFAULT_MAX_IN_FLIGHT_PER_INDEX);
         }
 
+        /** The same, keeping an idle bucket for {@link #DEFAULT_IDLE_EXPIRY}. */
+        public Config(Limit defaults, Map<String, Limit> perIndex, int maxInFlightPerIndex) {
+            this(defaults, perIndex, maxInFlightPerIndex, DEFAULT_IDLE_EXPIRY);
+        }
+
         public Config {
+            Objects.requireNonNull(idleExpiry, "idleExpiry");
+            if (idleExpiry.isNegative() || idleExpiry.isZero()) {
+                throw new IllegalArgumentException("idleExpiry is positive: " + idleExpiry);
+            }
             Objects.requireNonNull(defaults, "defaults");
             perIndex = Map.copyOf(Objects.requireNonNull(perIndex, "perIndex"));
             if (maxInFlightPerIndex < 1) {
@@ -104,17 +122,45 @@ public final class IndexQuotas {
 
     private final Config config;
     private final Clock clock;
+    private final Predicate<String> known;
     private final Map<String, Bucket> buckets = new ConcurrentHashMap<>();
+    /** When idle buckets were last swept; at most one sweep per idle expiry (M12.4). */
+    private volatile long sweptAt = Long.MIN_VALUE;
 
     /** Quotas that refuse nothing: what a front door built without a configuration uses. */
     public static IndexQuotas none() {
         return new IndexQuotas(Config.none(),
-                Clock.fixed(java.time.Instant.EPOCH, java.time.ZoneOffset.UTC));
+                Clock.fixed(java.time.Instant.EPOCH, java.time.ZoneOffset.UTC), name -> false);
     }
 
-    public IndexQuotas(Config config, Clock clock) {
+    /**
+     * Quotas over the indices {@code known} names (M12.4, M11 review F6).
+     *
+     * <p>⚠️ ONLY A KNOWN INDEX GETS A BUCKET: with a default quota, a bucket per
+     * name a producer sends -- and none ever removed -- grew with the names an
+     * unauthenticated producer cared to invent (security.md rule 5).
+     *
+     * <p>⚠️ A NAME UNKNOWN AT ADMISSION IS BOUND ONCE IT IS KNOWN, not waved
+     * through (M12.4 review P1): a routed write may wait for its index's
+     * registration (ADR-0015) and then stream its whole body. ⚠️ AND ITS FIRST
+     * CHUNK IS CHARGED BEFORE THAT WAIT (review round 2): {@code BulkService}
+     * charges a chunk, then appends it, and the wait is inside the append. So
+     * the ticket tallies what it is charged while unbound; the first charge
+     * after registration binds it -- a slot in the index's bucket, past the
+     * cap if need be, since the request cannot be refused mid-body -- and
+     * charges the tally with it; and a request whose only chunk came before
+     * the wait binds at its release and is charged then. A name never
+     * registered charges nothing, and is refused downstream.
+     */
+    public IndexQuotas(Config config, Clock clock, Predicate<String> known) {
         this.config = Objects.requireNonNull(config, "config");
         this.clock = Objects.requireNonNull(clock, "clock");
+        this.known = Objects.requireNonNull(known, "known");
+    }
+
+    /** How many indices hold a bucket: bounded by the known indices (M12.4). */
+    public int bucketCount() {
+        return buckets.size();
     }
 
     /**
@@ -128,9 +174,54 @@ public final class IndexQuotas {
         if (limit.unlimited()) {
             return new Admission(Optional.of(FREE), Optional.empty());
         }
-        Bucket bucket = buckets.computeIfAbsent(index, name -> new Bucket(limit,
-                config.maxInFlightPerIndex(), clock.millis()));
-        return bucket.admit(index, clock.millis());
+        if (!known.test(index)) {
+            return new Admission(Optional.of(new DeferredTicket(index, limit)), Optional.empty());
+        }
+        long now = clock.millis();
+        sweepIdle(now);
+        while (true) {
+            Bucket bucket = buckets.computeIfAbsent(index, name -> new Bucket(limit,
+                    config.maxInFlightPerIndex(), now));
+            Admission admitted = bucket.admit(index, now);
+            if (admitted != null) {
+                return admitted;
+            }
+            buckets.remove(index, bucket); // swept while we held it: take a fresh one
+        }
+    }
+
+    /** A slot in {@code index}'s bucket without the cap's check, for a request already admitted. */
+    private BucketTicket enterAdmitted(String index, Limit limit) {
+        long now = clock.millis();
+        while (true) {
+            Bucket bucket = buckets.computeIfAbsent(index, name -> new Bucket(limit,
+                    config.maxInFlightPerIndex(), now));
+            if (bucket.enterUnchecked(now)) {
+                return new BucketTicket(bucket);
+            }
+            buckets.remove(index, bucket); // swept while we held it: take a fresh one
+        }
+    }
+
+    /**
+     * Drops the buckets idle for the configured expiry, at most once per expiry.
+     *
+     * <p>⚠️ ONLY A FULL ONE, with nothing in flight: a fresh bucket starts full,
+     * so dropping a full bucket loses nothing, and dropping one in debt would
+     * forgive the debt.
+     */
+    private void sweepIdle(long now) {
+        long idle = config.idleExpiry().toMillis();
+        long last = sweptAt;
+        if (last != Long.MIN_VALUE && now - last < idle) {
+            return;
+        }
+        sweptAt = now;
+        buckets.forEach((name, bucket) -> {
+            if (bucket.expireIfIdle(now, idle)) {
+                buckets.remove(name, bucket);
+            }
+        });
     }
 
     /** Exactly one of a ticket and a refusal. */
@@ -149,6 +240,9 @@ public final class IndexQuotas {
         private double records;
         private long refilledAt;
         private int inFlight;
+        private long usedAt;
+        /** Swept: an admission that finds it so takes a fresh bucket instead. */
+        private boolean expired;
 
         Bucket(Limit limit, int maxInFlight, long now) {
             this.limit = limit;
@@ -157,6 +251,16 @@ public final class IndexQuotas {
             this.bytes = limit.bytesPerSecond();
             this.records = limit.recordsPerSecond();
             this.refilledAt = now;
+            this.usedAt = now;
+        }
+
+        synchronized boolean expireIfIdle(long now, long idle) {
+            refill(now);
+            if (inFlight == 0 && now - usedAt >= idle && bytes >= limit.bytesPerSecond()
+                    && records >= limit.recordsPerSecond()) {
+                expired = true;
+            }
+            return expired;
         }
 
         private void refill(long now) {
@@ -167,7 +271,23 @@ public final class IndexQuotas {
                     records + seconds * limit.recordsPerSecond());
         }
 
+        /** Takes a slot for a request already admitted; false if this bucket was swept. */
+        synchronized boolean enterUnchecked(long now) {
+            if (expired) {
+                return false;
+            }
+            usedAt = now;
+            refill(now);
+            inFlight++;
+            return true;
+        }
+
+        /** The admission, or {@code null} if this bucket was swept. */
         synchronized Admission admit(String index, long now) {
+            if (expired) {
+                return null;
+            }
+            usedAt = now;
             refill(now);
             if (inFlight >= maxInFlight) {
                 // ⚠️ ONE SECOND: a slot frees as soon as one of the index's
@@ -187,21 +307,83 @@ public final class IndexQuotas {
         }
 
         synchronized void charge(List<SegmentRecord> charged) {
-            refill(clock.millis());
-            long size = 0;
-            for (SegmentRecord record : charged) {
-                size += Accumulator.estimatedFramedBytes(record);
-            }
+            charge(framedBytes(charged), charged.size());
+        }
+
+        synchronized void charge(long size, long count) {
+            usedAt = clock.millis();
+            refill(usedAt);
             if (limit.bytesPerSecond() > 0) {
                 bytes -= size;
             }
             if (limit.recordsPerSecond() > 0) {
-                records -= charged.size();
+                records -= count;
             }
         }
 
         synchronized void releaseSlot() {
+            usedAt = Math.max(usedAt, clock.millis());
             inFlight--;
+        }
+    }
+
+    private static long framedBytes(List<SegmentRecord> records) {
+        long size = 0;
+        for (SegmentRecord record : records) {
+            size += Accumulator.estimatedFramedBytes(record);
+        }
+        return size;
+    }
+
+    /**
+     * A ticket for a name unknown at admission, bound once the name is known;
+     * what it is charged before that is tallied and charged on binding (M12.4).
+     */
+    private final class DeferredTicket implements Ticket {
+        private final String index;
+        private final Limit limit;
+        private BucketTicket bound;
+        private boolean released;
+        private long owedBytes;
+        private long owedRecords;
+
+        DeferredTicket(String index, Limit limit) {
+            this.index = index;
+            this.limit = limit;
+        }
+
+        @Override
+        public synchronized void charge(List<SegmentRecord> records) {
+            if (released) {
+                return;
+            }
+            owedBytes += framedBytes(records);
+            owedRecords += records.size();
+            bindIfKnown();
+        }
+
+        @Override
+        public synchronized void release() {
+            if (released) {
+                return;
+            }
+            bindIfKnown(); // ⚠️ A ONE-CHUNK REQUEST's only charge came before its wait
+            released = true;
+            if (bound != null) {
+                bound.release();
+            }
+        }
+
+        /** Binds once the name is known, and charges everything owed so far; caller holds this. */
+        private void bindIfKnown() {
+            if (bound == null && known.test(index)) {
+                bound = enterAdmitted(index, limit);
+            }
+            if (bound != null && (owedBytes > 0 || owedRecords > 0)) {
+                bound.bucket.charge(owedBytes, owedRecords);
+                owedBytes = 0;
+                owedRecords = 0;
+            }
         }
     }
 

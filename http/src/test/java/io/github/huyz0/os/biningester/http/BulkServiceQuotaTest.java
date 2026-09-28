@@ -129,12 +129,83 @@ class BulkServiceQuotaTest {
         return body.toString();
     }
 
+    /**
+     * ⚠️ REGISTERED DURING ITS OWN APPEND (M12.4 review round 2): a routed write
+     * to an index not yet registered waits for it inside the append (ADR-0015),
+     * and the front door charged its only chunk BEFORE that append. Its records
+     * are still owed once the index is known, so the next request is refused.
+     */
+    @Test
+    void aOneChunkRequestWhoseIndexRegistersDuringItsAppendIsStillCharged() {
+        Set<String> known = java.util.concurrent.ConcurrentHashMap.newKeySet();
+        Recording recording = new Recording();
+        WebClient client = serve(new RegistersDuringAppend(recording, known), new IndexQuotas(
+                new IndexQuotas.Config(IndexQuotas.Limit.UNLIMITED,
+                        Map.of("logs", new IndexQuotas.Limit(0, 2)), 8),
+                FROZEN, known::contains));
+
+        try (HttpClientResponse first = client.post("/logs/_bulk").queryParam("partition", "0")
+                .submit(body(5))) {
+            assertThat(first.status().code()).isEqualTo(202);
+        }
+        assertThat(known).as("the premise: unknown at admission, known by the end")
+                .contains("logs");
+
+        try (HttpClientResponse refused = client.post("/logs/_bulk")
+                .queryParam("partition", "0").submit(body(1))) {
+            assertThat(refused.status().code()).as("its 5 records are owed at 2/s")
+                    .isEqualTo(429);
+        }
+    }
+
+    /** Registers the index inside its append, as a routed write's registration wait does. */
+    private static final class RegistersDuringAppend implements Ingest {
+        private final Recording delegate;
+        private final Set<String> known;
+
+        RegistersDuringAppend(Recording delegate, Set<String> known) {
+            this.delegate = delegate;
+            this.known = known;
+        }
+
+        @Override
+        public AppendResult append(Principal principal, String index, int partition,
+                RecordSource source) throws java.io.IOException {
+            known.add(index);
+            return delegate.append(principal, index, partition, source);
+        }
+
+        @Override
+        public AppendResult append(Principal principal, String index, int partition, byte lane,
+                RecordSource source, Runnable buffered) throws java.io.IOException {
+            known.add(index);
+            return delegate.append(principal, index, partition, lane, source, buffered);
+        }
+
+        @Override
+        public AppendResult appendRouted(Principal principal, String indexOrAlias,
+                String routing, byte lane, RecordSource records, Runnable buffered)
+                throws java.io.IOException {
+            return delegate.appendRouted(principal, indexOrAlias, routing, lane, records,
+                    buffered);
+        }
+
+        @Override
+        public String concreteIndex(String indexOrAlias) {
+            return indexOrAlias;
+        }
+
+        @Override
+        public void close() {
+        }
+    }
+
     @Test
     void anIndexInDebtIsRefusedBeforeItsBodyIsReadAndAnotherIndexIsAdmitted() {
         Recording ingest = new Recording();
         WebClient client = serve(ingest, new IndexQuotas(new IndexQuotas.Config(
                 IndexQuotas.Limit.UNLIMITED, Map.of("logs", new IndexQuotas.Limit(0, 2)), 8),
-                FROZEN));
+                FROZEN, name -> true));
 
         try (HttpClientResponse first = client.post("/logs/_bulk").queryParam("partition", "0")
                 .submit(body(5))) {
@@ -162,7 +233,7 @@ class BulkServiceQuotaTest {
         Recording ingest = new Recording();
         ingest.hold = new CountDownLatch(1);
         WebClient client = serve(ingest, new IndexQuotas(new IndexQuotas.Config(
-                new IndexQuotas.Limit(0, 1_000_000), Map.of(), 2), FROZEN));
+                new IndexQuotas.Limit(0, 1_000_000), Map.of(), 2), FROZEN, name -> true));
 
         List<CompletableFuture<Integer>> answers = new ArrayList<>();
         var executor = Executors.newVirtualThreadPerTaskExecutor();
@@ -197,7 +268,7 @@ class BulkServiceQuotaTest {
         LaneAdmission admission = new LaneAdmission(1, LaneSet.of((byte) 0));
         WebClient client = serve(ingest, new IndexQuotas(new IndexQuotas.Config(
                 IndexQuotas.Limit.UNLIMITED, Map.of("logs", new IndexQuotas.Limit(0, 3)), 1),
-                FROZEN), admission);
+                FROZEN, name -> true), admission);
 
         for (int i = 0; i < 2; i++) {
             try (HttpClientResponse answer = client.post("/logs/_bulk")
@@ -235,7 +306,7 @@ class BulkServiceQuotaTest {
                 List.of("logs"), 4, 4, 1, 1));
         WebClient client = serve(routed, new IndexQuotas(new IndexQuotas.Config(
                 IndexQuotas.Limit.UNLIMITED, Map.of("audit", new IndexQuotas.Limit(0, 2)), 8),
-                FROZEN));
+                FROZEN, name -> true));
 
         try (HttpClientResponse viaAlias = client.post("/logs/_bulk")
                 .queryParam("partition", "0").submit(body(5))) {

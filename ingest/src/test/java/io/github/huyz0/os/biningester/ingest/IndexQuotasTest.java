@@ -61,7 +61,8 @@ class IndexQuotasTest {
 
     private IndexQuotas quotas(IndexQuotas.Limit defaults, Map<String, IndexQuotas.Limit> perIndex,
             int cap) {
-        return new IndexQuotas(new IndexQuotas.Config(defaults, perIndex, cap), clock);
+        return new IndexQuotas(new IndexQuotas.Config(defaults, perIndex, cap), clock,
+                name -> true);
     }
 
     @Test

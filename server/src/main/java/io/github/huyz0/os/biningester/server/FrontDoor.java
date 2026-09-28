@@ -58,13 +58,16 @@ public final class FrontDoor implements AutoCloseable {
     private final DrainGate gate;
     private final java.util.function.Consumer<String> journal;
     private final LaneAdmission admission;
+    private final io.github.huyz0.os.biningester.ingest.IndexQuotas quotas;
 
     private FrontDoor(WebServer server, DrainGate gate,
-            java.util.function.Consumer<String> journal, LaneAdmission admission) {
+            java.util.function.Consumer<String> journal, LaneAdmission admission,
+            io.github.huyz0.os.biningester.ingest.IndexQuotas quotas) {
         this.server = server;
         this.gate = gate;
         this.journal = journal;
         this.admission = admission;
+        this.quotas = quotas;
     }
 
     /**
@@ -114,7 +117,10 @@ public final class FrontDoor implements AutoCloseable {
         // pod's, and a node starts one front door, so this is where it lives.
         LaneAdmission admission = new LaneAdmission(config.ingest().maxInFlightBulk(),
                 config.ingest().lanes());
-        WebServer server = build(config, assembly, clock, gate, crossAz, admission);
+        io.github.huyz0.os.biningester.ingest.IndexQuotas quotas = new io.github.huyz0.os.biningester.ingest.IndexQuotas(config.quotas(), clock,
+                // ⚠️ ONLY A REGISTERED INDEX GETS A BUCKET (M12.4)
+                name -> assembly.catalog().resolve(name).isPresent());
+        WebServer server = build(config, assembly, clock, gate, crossAz, admission, quotas);
         try {
             server.start();
         } catch (RuntimeException notBound) {
@@ -153,7 +159,7 @@ public final class FrontDoor implements AutoCloseable {
             throw new IllegalStateException("the front door did not bind port "
                     + config.httpPort() + " -- it is already in use");
         }
-        return new FrontDoor(server, gate, journal, admission);
+        return new FrontDoor(server, gate, journal, admission, quotas);
     }
 
     /**
@@ -171,7 +177,7 @@ public final class FrontDoor implements AutoCloseable {
 
     private static WebServer build(ServerConfig config, Assembly assembly, Clock clock,
             DrainGate gate, io.github.huyz0.os.biningester.binstore.CrossAzBytes crossAz,
-            LaneAdmission admission) {
+            LaneAdmission admission, io.github.huyz0.os.biningester.ingest.IndexQuotas quotas) {
         HttpRouting.Builder routes = HttpRouting.builder()
                 // ⚠️ HELIDON'S OWN SHUTDOWN HOOK IS OFF. Left on, a `SIGTERM`
                 // runs it alongside `Main`'s, and it stops the listener while
@@ -187,8 +193,7 @@ public final class FrontDoor implements AutoCloseable {
                         .register(new HealthService(
                                 () -> gate.ready() && assembly.storeHealthy()))
                         .register(new BulkService(assembly.ingest(), config.principal(), gate,
-                                admission, new io.github.huyz0.os.biningester.ingest.IndexQuotas(
-                                        config.quotas(), clock)))
+                                admission, quotas))
                         .register(new CommitService(assembly::heldTerm,
                                 // ⚠️ THE NODE's STORE, NOT THE RAW BACKEND (M10.26):
                                 // the drain's LIST is declared recovery, so it is
@@ -375,6 +380,11 @@ public final class FrontDoor implements AutoCloseable {
      */
     public LaneAdmission laneAdmission() {
         return admission;
+    }
+
+    /** The pod's per-index quotas, so a test can see which indices hold a bucket (M12.4). */
+    io.github.huyz0.os.biningester.ingest.IndexQuotas quotas() {
+        return quotas;
     }
 
     /**
