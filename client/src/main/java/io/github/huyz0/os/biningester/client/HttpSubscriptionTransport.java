@@ -340,7 +340,12 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport, A
         this.catchUpExchange = new HttpCatchUpExchange(endpoint, timeout, pollWait);
         this.endpoint = endpoint;
         this.timeout = timeout;
-        this.client = newClient();
+        // ⚠️ NO KEEP-ALIVE FOR THE TRANSPORT-WIDE CLIENT (M10.36): the
+        // registrar's and the reporter's threads both post on it, so it is
+        // exposed to the connection-return race each reader's own client is
+        // not (see newClient). A post is per cluster-state change or per
+        // progress interval, so a connect each costs nothing that matters.
+        this.client = newClient(false);
     }
 
     /**
@@ -363,7 +368,12 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport, A
      * would still share every connection with every other client in it.
      */
     private WebClient newClient() {
+        return newClient(true);
+    }
+
+    private WebClient newClient(boolean keepAlive) {
         return WebClient.builder()
+                .keepAlive(keepAlive)
                 .baseUri(endpoint)
                 .connectTimeout(timeout)
                 // ⚠️ THE READ TIMEOUT MUST EXCEED THE POLL WAIT, or every idle

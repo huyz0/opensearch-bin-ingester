@@ -91,9 +91,14 @@ public final class EndpointSliceWatch implements AutoCloseable {
         this.token = Objects.requireNonNull(token, "token");
         this.view = Objects.requireNonNull(view, "view");
         this.failureRecorder = Objects.requireNonNull(failureRecorder, "failureRecorder");
+        // ⚠️ NO KEEP-ALIVE (M10.36): one watch thread uses this client, but
+        // on Helidon's JVM-wide cache by default, where a re-queued connection
+        // is exposed to the connection-return race (M10.35). A watch is one
+        // long request per reconnect, so a connect each is free.
         var builder = WebClient.builder().baseUri(apiBase)
                 .connectTimeout(Duration.ofSeconds(5))
-                .readTimeout(READ_TIMEOUT);
+                .readTimeout(READ_TIMEOUT)
+                .keepAlive(false);
         if (!trust.isEmpty()) {
             builder.tls(io.helidon.common.tls.Tls.builder().trust(trust).build());
         }

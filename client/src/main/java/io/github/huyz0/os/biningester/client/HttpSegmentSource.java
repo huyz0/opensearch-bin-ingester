@@ -47,7 +47,15 @@ public final class HttpSegmentSource implements SegmentSource {
      */
     public HttpSegmentSource(Duration timeout, String ingesterEndpoint, String consumerAz) {
         Objects.requireNonNull(timeout, "timeout");
-        this.client = WebClient.builder().connectTimeout(timeout).readTimeout(timeout).build();
+        // ⚠️ NO KEEP-ALIVE (M10.36): this client is used from more than one
+        // thread, and Helidon 4.3.0 re-queues a kept-alive connection BEFORE
+        // it starts the idle monitor that reads one byte -- a second thread
+        // taking it in that window loses its answer's first byte ("Protocol
+        // is not HTTP: TTP", M10.35). A connection never re-queued cannot be
+        // taken there; the cost is one TCP connect per request, and every
+        // request here is per segment or per flush, never per record.
+        this.client = WebClient.builder().connectTimeout(timeout).readTimeout(timeout)
+                .keepAlive(false).build();
         // ⚠️ A TRAILING SLASH IS DROPPED: the subscription transport accepts
         // one through `baseUri`, and appending the route to it would ask for
         // `//seg`, a 404 while subscriptions kept working.

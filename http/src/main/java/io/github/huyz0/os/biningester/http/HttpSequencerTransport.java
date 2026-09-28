@@ -340,10 +340,18 @@ public final class HttpSequencerTransport implements SequencerTransport {
             // cannot grow without bound.
             clients.clear();
         }
+        // ⚠️ NO KEEP-ALIVE (M10.36): this client is used from more than one
+        // thread, and Helidon 4.3.0 re-queues a kept-alive connection BEFORE
+        // it starts the idle monitor that reads one byte -- a second thread
+        // taking it in that window loses its answer's first byte ("Protocol
+        // is not HTTP: TTP", M10.35). A connection never re-queued cannot be
+        // taken there; the cost is one TCP connect per request, and every
+        // request here is per segment or per flush, never per record.
         return clients.computeIfAbsent(endpoint, uri -> WebClient.builder()
                 .baseUri(URI.create(uri))
                 .connectTimeout(timeout)
                 .readTimeout(timeout)
+                .keepAlive(false)
                 .build());
     }
 

@@ -123,8 +123,11 @@ public final class DurableSegmentSignalSender {
             if (clients.size() >= MAX_POOLED_CLIENTS) {
                 clients.clear();
             }
+            // ⚠️ NO KEEP-ALIVE (M10.36): shared by every flushing thread, and
+            // exposed to Helidon 4.3.0's connection-return race (M10.35).
             return clients.computeIfAbsent(endpoint, uri -> WebClient.builder()
-                    .baseUri(URI.create(uri)).connectTimeout(TIMEOUT).readTimeout(TIMEOUT).build());
+                    .baseUri(URI.create(uri)).connectTimeout(TIMEOUT).readTimeout(TIMEOUT)
+                    .keepAlive(false).build());
         }
     }
 }
