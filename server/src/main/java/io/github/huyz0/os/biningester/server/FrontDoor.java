@@ -214,10 +214,14 @@ public final class FrontDoor implements AutoCloseable {
                 .register(SegmentFetchService.over(
                         config.prefix(), assembly.segmentProxy(), assembly.nodeStore(), crossAz))
                 .register(new DurableSegmentSignalService(assembly.peerView(),
-                        assembly::prefetchDurableSegment))
-                // ⚠️ M11.4, ADR-0077: each index's share of THIS pod's requests,
-                // from the ledger its stores charge. No request of its own.
-                .register(new AdminCostService(top -> costReport(assembly, top)));
+                        assembly::prefetchDurableSegment));
+        // ⚠️ M11.4, ADR-0077: each index's share of THIS pod's requests, from the
+        // ledger its stores charge. No request of its own. ⚠️ ONLY WHERE TURNED ON
+        // (M12.6, M11 review F7): it names indices on the producer port, which is
+        // unauthenticated until M1.7c -- off, the path is simply not a route.
+        if (config.adminCost()) {
+            routes.register(new AdminCostService(top -> costReport(assembly, top)));
+        }
         String macroPath = System.getProperty("binstore.macro.path");
         if (macroPath != null && !macroPath.isBlank()) {
             routes.register(new MacroCountsService(assembly, macroPath, crossAz));

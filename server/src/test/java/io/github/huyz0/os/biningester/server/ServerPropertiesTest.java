@@ -343,7 +343,8 @@ class ServerPropertiesTest {
         assertThat(ServerProperties.knownKeys())
                 .contains(ServerProperties.POD_ID, ServerProperties.ENDPOINT,
                         ServerProperties.STORE_KIND, ServerProperties.INTERVAL_CEILING,
-                        ServerProperties.LANES_ACTIVE, ServerProperties.COST_TOP_K_INTERVAL)
-                .hasSize(34);
+                        ServerProperties.LANES_ACTIVE, ServerProperties.COST_TOP_K_INTERVAL,
+                        ServerProperties.ADMIN_COST_ENABLED)
+                .hasSize(35);
     }
 }

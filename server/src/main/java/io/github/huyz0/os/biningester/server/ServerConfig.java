@@ -58,13 +58,27 @@ import java.util.Set;
  * @param costTopKInterval how often the top-K cost line is logged; zero for
  *     never (M11.5)
  * @param quotas the per-index admission quotas; none by default (M11.8)
+ * @param adminCost whether {@code GET /admin/cost} is served; off unless
+ *     configured (M12.6)
  */
 public record ServerConfig(String podId, String az, String trustDomain, String prefix,
         StoreConfig store, Duration leaseTtl, Duration leaseRenewInterval, String endpoint, IngestConfig ingest,
         int httpPort, String producerSubject, Set<String> allowedIndices,
         RetentionConfig retention, java.util.Optional<MembershipConfig> membership,
         String podUid, Duration costTopKInterval,
-        io.github.huyz0.os.biningester.ingest.IndexQuotas.Config quotas) {
+        io.github.huyz0.os.biningester.ingest.IndexQuotas.Config quotas, boolean adminCost) {
+
+    /** The same, not serving {@code /admin/cost} (before M12.6). */
+    public ServerConfig(String podId, String az, String trustDomain, String prefix,
+            StoreConfig store, Duration leaseTtl, Duration leaseRenewInterval, String endpoint,
+            IngestConfig ingest, int httpPort, String producerSubject, Set<String> allowedIndices,
+            RetentionConfig retention, java.util.Optional<MembershipConfig> membership,
+            String podUid, Duration costTopKInterval,
+            io.github.huyz0.os.biningester.ingest.IndexQuotas.Config quotas) {
+        this(podId, az, trustDomain, prefix, store, leaseTtl, leaseRenewInterval, endpoint, ingest,
+                httpPort, producerSubject, allowedIndices, retention, membership, podUid,
+                costTopKInterval, quotas, false);
+    }
 
     /** The same, with no per-index quota (before M11.8). */
     public ServerConfig(String podId, String az, String trustDomain, String prefix,

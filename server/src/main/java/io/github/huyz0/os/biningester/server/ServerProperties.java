@@ -106,6 +106,13 @@ public final class ServerProperties {
     /** How often the top-K cost line is logged, ISO-8601; {@code PT0S} turns it off (M11.5). */
     public static final String COST_TOP_K_INTERVAL = "cost.top-k-interval";
 
+    /**
+     * Whether {@code GET /admin/cost} is served; off by default (M12.6): it
+     * lists index names on the producer port, which is unauthenticated until
+     * M1.7c.
+     */
+    public static final String ADMIN_COST_ENABLED = "admin.cost.enabled";
+
     /** Optional: the Kubernetes API server the EndpointSlice watch reads (M8.13). */
     public static final String MEMBERSHIP_API = "membership.kube-api";
 
@@ -144,7 +151,7 @@ public final class ServerProperties {
             DIRECT_ENABLED, LANES_ACTIVE, MAX_IN_FLIGHT_BULK,
             RETENTION_MIN, RETENTION_MAX, RETENTION_REPORT_TIMEOUT, RETENTION_COPY_EXPIRY,
             RETENTION_PASS_INTERVAL, MEMBERSHIP_API, MEMBERSHIP_NAMESPACE, MEMBERSHIP_SERVICE,
-            MEMBERSHIP_TOKEN_FILE, MEMBERSHIP_CA_FILE, COST_TOP_K_INTERVAL);
+            MEMBERSHIP_TOKEN_FILE, MEMBERSHIP_CA_FILE, COST_TOP_K_INTERVAL, ADMIN_COST_ENABLED);
 
     private ServerProperties() {
     }
@@ -261,7 +268,7 @@ public final class ServerProperties {
                     offOrPositive(settings, COST_TOP_K_INTERVAL,
                             io.github.huyz0.os.biningester.ingest.CostTopKReporter
                                     .DEFAULT_INTERVAL),
-                    QuotaProperties.parse(settings));
+                    QuotaProperties.parse(settings), bool(settings, ADMIN_COST_ENABLED, false));
         } catch (IllegalArgumentException refused) {
             // ⚠️ `ConfigurationException` IS AN `IllegalArgumentException`, so
             // one already carrying a key's name lands here too and is returned
