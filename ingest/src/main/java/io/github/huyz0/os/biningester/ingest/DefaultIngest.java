@@ -12,7 +12,6 @@ import io.github.huyz0.os.biningester.sequencer.CommitRequest;
 import io.github.huyz0.os.biningester.sequencer.Sequencer;
 import java.io.IOException;
 import java.time.Clock;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -47,9 +46,6 @@ import java.util.concurrent.locks.ReentrantLock;
  * wait on their own future rather than on the flush lock.
  */
 public final class DefaultIngest implements Ingest {
-
-    private static final System.Logger LOG =
-            System.getLogger(DefaultIngest.class.getName());
 
     private final IngestConfig config;
     /** ⚠️ Volatile for {@link #flushSpacingMillis()}, read off-lock; writers hold it. */

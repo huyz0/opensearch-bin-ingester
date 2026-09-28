@@ -31,6 +31,13 @@ class WiredFactoryTest {
     Files.writeString(file, body);
   }
 
+  /**
+   * What the last {@link #scan()} printed. ⚠️ READ BY EVERY CASE (M11.18,
+   * H13): an exit code of 1 is also what a Python traceback returns, so a case
+   * asserting the code alone passed against a scanner that crashed.
+   */
+  private String output = "";
+
   private int scan() throws Exception {
     Process p = ProcessSupport.builder("python3", ROOT.resolve("scripts/wired_scan.py").toString(),
         repo.resolve("SPEC.md").toString(), repo.resolve("backlog.md").toString())
@@ -38,7 +45,7 @@ class WiredFactoryTest {
     try (var in = p.getOutputStream(); var files = Files.walk(repo)) {
       in.write(String.join("\n", files.map(Path::toString).toList()).getBytes());
     }
-    p.getInputStream().readAllBytes();
+    output = new String(p.getInputStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
     return p.waitFor();
   }
 
@@ -56,6 +63,7 @@ class WiredFactoryTest {
     write("b/src/main/java/x/Root.java", "class Root { Object w = Widget.make(); }\n");
 
     assertThat(scan()).isZero();
+    assertThat(output).contains("M1.1: WIRED");
   }
 
   @Test
@@ -66,6 +74,8 @@ class WiredFactoryTest {
     write("b/src/main/java/x/Root.java", "class Root { int n = Widget.answer(); }\n");
 
     assertThat(scan()).isEqualTo(1);
+    assertThat(output).as("unwired by the scan's verdict, not by a crash")
+        .contains("M1.1: UNWIRED");
   }
 
   @Test
@@ -78,6 +88,8 @@ class WiredFactoryTest {
         "package other; class Root { Object value = new pkg.Widget.Nested(); }\n");
 
     assertThat(scan()).isEqualTo(1);
+    assertThat(output).as("unwired by the scan's verdict, not by a crash")
+        .contains("M1.1: UNWIRED");
   }
 
   /**
@@ -96,5 +108,7 @@ class WiredFactoryTest {
         "package other; class Root { Object value = new io.pkg.Widget.Nested(); }\n");
 
     assertThat(scan()).isEqualTo(1);
+    assertThat(output).as("unwired by the scan's verdict, not by a crash")
+        .contains("M1.1: UNWIRED");
   }
 }

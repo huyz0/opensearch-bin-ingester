@@ -70,10 +70,10 @@ mode this skill exists to prevent.
 
 - Tasks completed, with IDs, one line each
 - Gates that ran, and **gates that did not and why** — ⚠️ never imply a gate
-  passed when it did not run. ⚠️ **`check-coverage`, `check-mutants` and
-  `check-module` do not exist until the Gradle build lands in M0.** Running a
-  milestone before M0 completes means running with the two strongest quality gates
-  absent, and the report must say so every time
+  passed when it did not run. ⚠️ **`./gradlew checkCoverage` and
+  `./gradlew checkMutants` are MANUAL**: no commit runs them, so a report
+  that does not name them has not run them. `checkMutants` reports a score
+  and enforces no floor (testing.md rule 9) -- state the score, not "passed"
 - Cost budget before and after, if the milestone touched the request path
 - What is now blocked, and what the next milestone should start with
 

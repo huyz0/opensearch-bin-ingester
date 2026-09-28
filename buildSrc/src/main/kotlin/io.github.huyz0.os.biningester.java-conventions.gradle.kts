@@ -214,11 +214,11 @@ tasks.named("check") {
 // (changed lines since a base ref, defaulting to `HEAD..-Local-` -- staged and
 // unstaged work, which is what a pre-commit gate wants for free) and, on the
 // root project only, `mutationTestAll` (one pass across every module, so a
-// test in one module can kill a mutant in another). `check-mutants.sh` is
-// still `todo` (M0.14): it will drive `mutationTestDiff` rather than
-// hand-rolling the `-PmutantTargets`/`--targetClasses` scoping the removed
-// `pitest` task needed, because the plugin's diff mode replaces that
-// machinery rather than sitting next to it.
+// test in one module can kill a mutant in another). `./gradlew checkMutants`
+// (root build.gradle.kts) drives `mutationTestDiff` for every module that
+// provides one, rather than hand-rolling the `-PmutantTargets` /
+// `--targetClasses` scoping the removed `pitest` task needed, because the
+// plugin's diff mode replaces that machinery rather than sitting next to it.
 jzap {
     // ⚠️ REQUIRED, NOT A DEFAULT OVERRIDE: the extension's own convention
     // falls back to `0.1.0-SNAPSHOT` when `project.version` is unset, which it
@@ -233,8 +233,7 @@ jzap {
 
     // No `threshold` or `failOnSurvivors` here, matching the removed PIT
     // task's own restraint (it had no `--mutationThreshold` either): pass/fail
-    // is `check-mutants.sh`'s decision to make from the report, not this
-    // task's, so the same build.gradle.kts serves a future gate that wants to
-    // read the JSON reporter and reason about it rather than trust an exit
-    // code alone.
+    // belongs to a gate that reads the JSON report and reasons about it, not
+    // to this task's exit code. ⚠️ NO SUCH GATE RUNS TODAY: `checkMutants`
+    // reports the score and enforces no floor (testing.md rule 9, M10.20a).
 }

@@ -134,8 +134,9 @@ that module. `ModuleSelectionTest` is the authority on this mapping.
 
 ⚠️ **Delta scope matters more for the gates that are coming than for this one.**
 Compile, JaCoCo and jzap (ADR-0045) scale with the code they examine, and
-`check-mutants.sh` is diff-scoped by design: a whole-tree mutation score is
-dominated by code nobody touched and moves too slowly to gate a commit.
+`./gradlew checkMutants` is diff-scoped by design (jzap's `mutationTestDiff`):
+a whole-tree mutation score is dominated by code nobody touched and moves too
+slowly to gate a commit.
 
 ## Execution layers — what runs when, and for how long
 
