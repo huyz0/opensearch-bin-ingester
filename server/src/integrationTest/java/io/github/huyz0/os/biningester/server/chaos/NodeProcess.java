@@ -361,6 +361,25 @@ public final class NodeProcess implements AutoCloseable {
         }
     }
 
+    /**
+     * Writes one bulk with exactly these document ids, each padded as
+     * {@link #write(List)}'s are, to {@code partition} of {@code logs}
+     * (M10.34: several streams in one segment).
+     *
+     * @return the status, which is 202 once the records are durable
+     */
+    public int write(int partition, List<String> ids) {
+        StringBuilder body = new StringBuilder();
+        for (String id : ids) {
+            body.append("{\"index\":{\"_id\":\"").append(id)
+                    .append("\",\"_version\":1}}\n{\"pad\":\"").append(PAD).append("\"}\n");
+        }
+        try (var response = producerClient().post("/logs/_bulk")
+                .queryParam("partition", String.valueOf(partition)).submit(body.toString())) {
+            return response.status().code();
+        }
+    }
+
     /** Writes a generated benchmark batch over the producer's real socket. */
     public int write(BulkBatch batch) {
         // The generator carries `_index` so the same body can be replayed by

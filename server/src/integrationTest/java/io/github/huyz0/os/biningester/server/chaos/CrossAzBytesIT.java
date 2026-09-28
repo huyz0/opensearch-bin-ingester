@@ -421,6 +421,160 @@ class CrossAzBytesIT {
         }
     }
 
+    /** M10.34: four cross-zone streams per segment. */
+    private static final int STREAMS = 4;
+
+    /** M10.34: bulks per stream, each ~230 KB, so a segment carries ~920 KB. */
+    private static final int K_BATCHES = 2;
+    private static final int K_RECORDS = 110;
+
+    /**
+     * ADR-0080's stated bound: cross-zone bytes per (segment, cross-zone
+     * stream) -- the per-stream event, ~166 B measured at K = 1 (ADR-0076).
+     */
+    private static final long EVENT_BOUND = 200;
+
+    private static List<String> ids(int batch, int partition) {
+        List<String> ids = new ArrayList<>();
+        for (int i = 0; i < K_RECORDS; i++) {
+            ids.add("k-" + batch + "-" + partition + "-" + i);
+        }
+        return ids;
+    }
+
+    /**
+     * M10.34, ADR-0080: NFR-5's per-stream EVENT floor, measured at K > 1.
+     *
+     * <p>⚠️ **SEVERAL CROSS-ZONE STREAMS SHARE EACH SEGMENT.** Four
+     * partitions' bulks are written together into a writer whose flush
+     * interval is held at one second, so a segment carries more than one run;
+     * four az-b consumers, one per partition, each hold their own session, and
+     * each is sent the event of every segment its stream is in. What crosses
+     * the zone is then one event per (segment, cross-zone stream) -- ADR-0076's
+     * floor, ~166 B each at K = 1 -- and the case asserts K > 1 happened and
+     * both halves of ADR-0080's stated bound: cross-AZ bytes at most
+     * {@link #EVENT_BOUND} per (segment, cross-zone stream), and under 0.1% of
+     * consumed bytes for segments above K x that bound x 1000. ⚠️ HOW MANY
+     * STREAMS A SEGMENT GETS is the writer's to decide; the measured run
+     * (ADR-0080) packed them two to a segment.
+     */
+    @Test
+    void theEventFloorIsPerCrossZoneStreamAtKOverOne() throws Exception {
+        assumeTrue(S3Fixture.dockerAvailable(), "no Docker daemon: this is a T3 suite");
+        try (ChaosBucket bucket = ChaosBucket.create()) {
+            Map<String, String> common = new HashMap<>(bucket.nodeSettings());
+            common.put("producer.allowed-indices", INDEX);
+            Map<String, String> zoneA = new HashMap<>(common);
+            zoneA.put("pod.az", "az-a");
+            // ⚠️ ONE SECOND, FLOOR AND CEILING: bulks sent together share a
+            // flush, so a segment carries several streams (asserted below).
+            zoneA.put("ingest.interval-floor", "PT1S");
+            zoneA.put("ingest.interval-ceiling", "PT1S");
+            Map<String, String> zoneB = new HashMap<>(common);
+            zoneB.put("pod.az", "az-b");
+            Path writerCounts = directory.resolve("k4-writer.json");
+            Path proxyCounts = directory.resolve("k4-proxy.json");
+            NodeProcess writer = null;
+            NodeProcess sameZone = null;
+            List<HttpSubscriptionTransport> transports = new ArrayList<>();
+            List<ConsumerClient> consumers = new ArrayList<>();
+            try {
+                writer = NodeProcess.start(directory, "poda", zoneA, NodeProcess.Options.NONE,
+                        writerCounts);
+                sameZone = NodeProcess.start(directory, "podb", zoneB,
+                        NodeProcess.Options.NONE, proxyCounts);
+                UUID stream = UUID.randomUUID();
+                writer.registerIndex(INDEX, stream);
+                DeliveredSegments delivered = new DeliveredSegments(new HttpSegmentSource(
+                        Duration.ofSeconds(30), "http://localhost:" + sameZone.port(), "az-b"));
+                for (int partition = 0; partition < STREAMS; partition++) {
+                    HttpSubscriptionTransport transport = new HttpSubscriptionTransport(
+                            "http://localhost:" + writer.port(), () -> { },
+                            Duration.ofMillis(50), Duration.ofSeconds(1), Duration.ofSeconds(30),
+                            Duration.ofSeconds(2), 32 * 1024 * 1024, "az-b");
+                    transports.add(transport);
+                    consumers.add(new ConsumerClient(transport, new RunKey(stream, partition), 16,
+                            delivered));
+                }
+
+                long consumed = 0;
+                int perStream = 0;
+                for (int batch = 0; batch < K_BATCHES; batch++) {
+                    NodeProcess target = writer;
+                    int b = batch;
+                    List<java.util.concurrent.CompletableFuture<Integer>> bulks =
+                            new ArrayList<>();
+                    for (int partition = 0; partition < STREAMS; partition++) {
+                        int p = partition;
+                        bulks.add(java.util.concurrent.CompletableFuture.supplyAsync(
+                                () -> target.write(p, ids(b, p))));
+                    }
+                    for (var bulk : bulks) {
+                        assertThat(bulk.get(60, TimeUnit.SECONDS)).isEqualTo(202);
+                    }
+                    perStream += K_RECORDS;
+                }
+                for (int partition = 0; partition < STREAMS; partition++) {
+                    java.util.Set<String> seen = new java.util.HashSet<>();
+                    for (int read = 0; read < perStream; read++) {
+                        var record = consumers.get(partition).readNext(Duration.ofSeconds(30));
+                        assertThat(record).as("partition %d, record %d", partition, read)
+                                .isPresent();
+                        String id = record.get().record().id();
+                        assertThat(seen.add(id)).isTrue();
+                        consumed += bodyBytes(List.of(id));
+                    }
+                }
+                for (ConsumerClient consumer : consumers) {
+                    consumer.close();
+                }
+                consumers.clear();
+
+                writer.snapshotCounts(writerCounts);
+                sameZone.snapshotCounts(proxyCounts);
+                Map<String, Long> a = counters(Files.readString(writerCounts,
+                        StandardCharsets.UTF_8));
+                Map<String, Long> b = counters(Files.readString(proxyCounts,
+                        StandardCharsets.UTF_8));
+                long servedStreams = delivered.fetches();
+                long crossAz = a.get("crossAzBytes") + b.get("crossAzBytes");
+                System.out.println("M10.34 K=" + STREAMS + " NFR-5: consumed=" + consumed
+                        + ", segments=" + delivered.sizes.size() + ", (segment, stream) "
+                        + "deliveries=" + servedStreams + ", crossAz=" + crossAz + " ("
+                        + (servedStreams == 0 ? 0 : crossAz / servedStreams) + " B each), az-a="
+                        + a + ", az-b=" + b);
+                assertThat(a.get("inlinePush")).as("nothing inlined across the zone").isZero();
+                assertThat(crossAz)
+                        .as("⚠️ ADR-0080's STATED BOUND: at most %d B per (segment, cross-zone "
+                                + "stream), %d deliveries", EVENT_BOUND, servedStreams)
+                        .isLessThanOrEqualTo(EVENT_BOUND * servedStreams);
+                assertThat(crossAz * 1_000L)
+                        .as("and NFR-5, the segments being above K x %d KB", EVENT_BOUND)
+                        .isLessThan(consumed);
+                // ⚠️ THE PREMISE LAST, so a payload served across the zone fails on
+                // the bound it breaks -- an inline delivery makes no fetch, and
+                // checked first this would report "K was 1" instead.
+                assertThat(servedStreams)
+                        .as("⚠️ THE PREMISE, K > 1: more (segment, stream) deliveries than "
+                                + "segments")
+                        .isGreaterThan(delivered.sizes.size());
+            } finally {
+                for (ConsumerClient consumer : consumers) {
+                    consumer.close();
+                }
+                for (HttpSubscriptionTransport transport : transports) {
+                    transport.close();
+                }
+                if (writer != null) {
+                    writer.close();
+                }
+                if (sameZone != null) {
+                    sameZone.close();
+                }
+            }
+        }
+    }
+
     /**
      * The consumer's payload source, recording what it was handed per key.
      *
