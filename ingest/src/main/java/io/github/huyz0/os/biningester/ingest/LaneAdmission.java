@@ -44,7 +44,10 @@ public final class LaneAdmission {
     private final int[] floors;
     private final int[] inLane;
     private final ReentrantLock lock = new ReentrantLock();
+    /** Signalled on every release, for a caller waiting in {@link #acquire}. */
+    private final java.util.concurrent.locks.Condition roomFreed = lock.newCondition();
     private int inFlight;
+    private int waiting;
 
     /**
      * @throws IllegalArgumentException if {@code budget} is below 1
@@ -92,17 +95,75 @@ public final class LaneAdmission {
         boolean active = slot >= 0 && slot < floors.length && floors[slot] > 0;
         lock.lock();
         try {
-            if (inFlight >= budget && (!active || inLane[slot] >= floors[slot])) {
+            if (!admissible(slot, active)) {
                 return Optional.empty();
             }
-            inFlight++;
-            if (active) {
-                inLane[slot]++;
-            }
+            take(slot, active);
         } finally {
             lock.unlock();
         }
-        return Optional.of(new Permit(active ? slot : -1));
+        // ⚠️ HOISTED FOR THE REASON `acquire` GIVES.
+        int held = active ? slot : -1;
+        return Optional.of(new Permit(held));
+    }
+
+    /**
+     * Admits one request of {@code lane}, WAITING for room rather than
+     * refusing (M11.7): for a request already admitted once, whose next chunk
+     * needs a permit again after it gave its first back while waiting for
+     * durability.
+     *
+     * <p>⚠️ NEVER THE FIRST ADMISSION. A request not yet admitted is refused
+     * with {@link #tryAcquire}, cheaply, before its body is read; one already
+     * part-way through its body cannot be refused -- the prefix it appended is
+     * durable-bound -- so it queues for a permit under the same rule instead.
+     *
+     * @throws InterruptedException if interrupted while waiting
+     */
+    public Permit acquire(byte lane) throws InterruptedException {
+        int slot = lane - lowest;
+        boolean active = slot >= 0 && slot < floors.length && floors[slot] > 0;
+        lock.lockInterruptibly();
+        try {
+            waiting++;
+            try {
+                while (!admissible(slot, active)) {
+                    roomFreed.await();
+                }
+            } finally {
+                waiting--;
+            }
+            take(slot, active);
+        } finally {
+            lock.unlock();
+        }
+        // ⚠️ THE SLOT IS COMPUTED BEFORE `new`: with the ternary inside the
+        // constructor call, jzap's instrumented JVM refuses this method
+        // (ClassFormatError, "bad offset for Uninitialized") and every test of
+        // the class drops out of mutation testing -- M10.24's failure shape.
+        int held = active ? slot : -1;
+        return new Permit(held);
+    }
+
+    private boolean admissible(int slot, boolean active) {
+        return inFlight < budget || (active && inLane[slot] < floors[slot]);
+    }
+
+    private void take(int slot, boolean active) {
+        inFlight++;
+        if (active) {
+            inLane[slot]++;
+        }
+    }
+
+    /** The callers parked in {@link #acquire} now, waiting for room. */
+    public int waiting() {
+        lock.lock();
+        try {
+            return waiting;
+        } finally {
+            lock.unlock();
+        }
     }
 
     /** The requests admitted and not yet released, across every lane. */
@@ -136,6 +197,7 @@ public final class LaneAdmission {
                 if (slot >= 0) {
                     inLane[slot]--;
                 }
+                roomFreed.signalAll();
             } finally {
                 lock.unlock();
             }

@@ -241,10 +241,51 @@ public final class BulkService implements HttpService {
                     + "in-flight budget and lane " + placement.lane() + " holds its share; retry");
             return;
         }
+        Admitted held = new Admitted(permit.get(), placement.lane());
         try {
-            append(request, response, index, placement);
+            append(request, response, index, placement, held);
         } finally {
-            permit.get().release();
+            held.release();
+        }
+    }
+
+    /**
+     * The request's admission permit, given back while it waits for
+     * durability and taken again for its next chunk (M11.7, M10 review F2).
+     *
+     * <p>⚠️ THE PERMIT BOUNDS LOAD, NOT WAITING. Held across the durable-ack
+     * wait, a budget of 256 capped a pod at 256 producers parked on a flush --
+     * at a low rate, where a flush is seconds away, that is a cap on
+     * concurrency with nothing to protect. So each chunk gives the permit back
+     * the moment its records are buffered.
+     *
+     * <p>⚠️ A LATER CHUNK WAITS FOR ONE RATHER THAN BEING REFUSED: the prefix
+     * already appended is durable-bound, so a mid-body {@code 429} would have
+     * the producer resend records that landed. It queues under the same fair
+     * share instead ({@link LaneAdmission#acquire}). The permit for a chunk
+     * is taken before the chunk's first record is held, so a request waiting
+     * for its permit holds no parsed records.
+     */
+    private final class Admitted {
+        private final byte lane;
+        private LaneAdmission.Permit current;
+
+        Admitted(LaneAdmission.Permit first, byte lane) {
+            this.current = first;
+            this.lane = lane;
+        }
+
+        void holdForNextChunk() throws InterruptedException {
+            if (current == null) {
+                current = admission.acquire(lane);
+            }
+        }
+
+        void release() {
+            if (current != null) {
+                current.release();
+                current = null;
+            }
         }
     }
 
@@ -268,13 +309,13 @@ public final class BulkService implements HttpService {
     }
 
     private void append(ServerRequest request, ServerResponse response, String index,
-            Placement placement) {
+            Placement placement, Admitted held) {
         try {
             // ⚠️ Each CHUNK's append blocks until ITS segment and commit delta
             // are durable (criterion 1); the 202 below means every chunk landed
             // durably, not that any one of them was merely accepted into a
             // buffer.
-            appendBulkBody(request.content().inputStream(), index, placement);
+            appendBulkBody(request.content().inputStream(), index, placement, held);
         } catch (PlacementRefusedException e) {
             // ⚠️ 400, AND ONLY FOR THIS TYPE. The comment above says why
             // catching IllegalArgumentException wholesale is worse than a 500:
@@ -338,6 +379,12 @@ public final class BulkService implements HttpService {
      */
     AppendResult appendBulkBody(InputStream body, String index, Placement placement)
             throws IOException {
+        return appendBulkBody(body, index, placement, null);
+    }
+
+    /** The same, giving {@code held}'s permit back as each chunk buffers (M11.7). */
+    private AppendResult appendBulkBody(InputStream body, String index, Placement placement,
+            Admitted held) throws IOException {
         List<SegmentRecord> chunk = new ArrayList<>(APPEND_CHUNK_RECORDS);
         int[] seen = {0};
         AppendResult[] last = {null};
@@ -347,9 +394,15 @@ public final class BulkService implements HttpService {
                     throw new BodyTooLargeException(
                             "the request exceeds " + MAX_RECORDS + " records");
                 }
+                if (chunk.isEmpty() && held != null) {
+                    // ⚠️ BEFORE THE CHUNK's FIRST RECORD IS HELD, so a request
+                    // waiting for its permit holds no parsed records, and every
+                    // chunk is parsed and buffered under one (M11.7 review P2).
+                    holdForNextChunk(held);
+                }
                 chunk.add(r);
                 if (chunk.size() >= APPEND_CHUNK_RECORDS) {
-                    last[0] = appendChunk(index, placement, chunk);
+                    last[0] = appendChunk(index, placement, chunk, held);
                     chunk.clear();
                 }
             });
@@ -362,7 +415,7 @@ public final class BulkService implements HttpService {
             // 500, found by BulkEndpointTest#theTwoOhTwoIsSentOnlyAfterAppendSucceeds
             // going 500 instead of 503.
             if (!chunk.isEmpty()) {
-                last[0] = appendChunk(index, placement, chunk);
+                last[0] = appendChunk(index, placement, chunk, held);
             }
         } catch (IOException e) {
             throw new BulkBodyReadException(e);
@@ -392,15 +445,28 @@ public final class BulkService implements HttpService {
      * {@code chunk} via {@code clear()} -- so no defensive copy is needed.
      */
     private AppendResult appendChunk(String index, Placement placement,
-            List<SegmentRecord> chunk) {
+            List<SegmentRecord> chunk, Admitted held) {
+        Runnable buffered = held == null ? () -> { } : held::release;
         try {
             return placement.routing() == null
                     ? ingest.append(principal, index, placement.partition(), placement.lane(),
-                            chunk::forEach)
+                            chunk::forEach, buffered)
                     : ingest.appendRouted(principal, index, placement.routing(),
-                            placement.lane(), chunk::forEach);
+                            placement.lane(), chunk::forEach, buffered);
         } catch (IOException e) {
             throw new ChunkAppendException(e);
+        }
+    }
+
+    private static void holdForNextChunk(Admitted held) {
+        try {
+            held.holdForNextChunk();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            // ⚠️ A STORE-SHAPED FAILURE, answered 503 and retried: the prefix
+            // already appended carries its external versions (ADR-0020).
+            throw new ChunkAppendException(new IOException(
+                    "interrupted while waiting to admit the next chunk"));
         }
     }
 

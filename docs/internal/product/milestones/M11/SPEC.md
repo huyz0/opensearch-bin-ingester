@@ -112,10 +112,15 @@ node's scheduler with an injected clock.
 
 One method in `BulkService` answers every `429`, and sets `Retry-After`. The
 lane admission permit is released once the request's records are BUFFERED,
-before the durable-ack wait: `Ingest` gains an append that returns once the
-records are buffered with a handle the caller then awaits, and the blocking
-append is that followed by the wait. So the in-flight budget bounds requests
-parsing and buffering — load — rather than producers parked on the flush.
+before the durable-ack wait: `Ingest.append` takes a `buffered` callback, run
+once the records are held and before the wait ⚠️ (amended by M11.7: a callback,
+not the "handle the caller awaits" first written here). The permit is taken
+again before a later chunk's first record is parsed, WAITING rather than
+refusing. So the in-flight budget bounds requests parsing and buffering --
+load -- rather than producers parked on the flush. ⚠️ And because the permit
+was also the only bound on buffered memory, `DefaultIngest` holds at most four
+segments' worth buffered and not yet durable, an append past it waiting for
+the flush in flight ([ADR-0079](../../decisions/0079-admission-bounds-load-and-an-unflushed-bytes-ceiling-bounds-memory.md)).
 
 `IndexQuotas` (in `ingest`) maps index name → two debt token buckets, lazily
 created from the default or the index's override; a request is admitted when

@@ -102,6 +102,27 @@ public final class DefaultIngest implements Ingest {
     /** ⚠️ Replaces a 1 ms poll that woke 1000x/s and took this lock each time. */
     private final Condition work = lock.newCondition();
 
+    /**
+     * How many segments' worth of records may be buffered and not yet durable
+     * on a pod before an append waits (M11.7, ADR-0079).
+     */
+    public static final int UNFLUSHED_SEGMENTS = 4;
+
+    /**
+     * The ceiling's floor: a segment budget of a few bytes still lets the
+     * next append buffer behind a flush in flight (ADR-0079).
+     */
+    public static final long MIN_UNFLUSHED_BYTES = 1L << 20;
+
+    /** {@link #UNFLUSHED_SEGMENTS} segments, at least {@link #MIN_UNFLUSHED_BYTES}. */
+    private final long maxUnflushedBytes;
+
+    /** The batch being flushed's buffered bytes, 0 when none; under {@link #lock}. */
+    private long inFlightBytes;
+
+    /** Signalled when a flush completes, for an append waiting for room. */
+    private final Condition roomToBuffer = lock.newCondition();
+
 
     /**
      * The spacing that governed the batch being flushed, {@link Long#MAX_VALUE}
@@ -173,6 +194,8 @@ public final class DefaultIngest implements Ingest {
         this.costLedger = Objects.requireNonNull(costLedger, "costLedger");
         this.config = Objects.requireNonNull(config, "config");
         this.accumulator = new Accumulator(config, Objects.requireNonNull(clock, "clock"));
+        this.maxUnflushedBytes = Math.max(MIN_UNFLUSHED_BYTES,
+                Math.multiplyExact(UNFLUSHED_SEGMENTS, config.maxSegmentBytes()));
         this.publisher = new SegmentPublisher(Objects.requireNonNull(store, "store"),
                 Objects.requireNonNull(prefix, "prefix"),
                 Objects.requireNonNull(podShortId, "podShortId"), costLedger);
@@ -255,6 +278,19 @@ public final class DefaultIngest implements Ingest {
     @Override
     public AppendResult append(Principal principal, String index, int partition, byte lane,
             RecordSource records) throws IOException {
+        return append(principal, index, partition, lane, records, () -> { });
+    }
+
+    /**
+     * ⚠️ {@code buffered} RUNS ONCE THE RECORDS ARE IN THE ACCUMULATOR AND THE
+     * LOCK IS RELEASED, before the durable wait (M11.7) -- and only then: an
+     * append refused before it buffered anything never runs it, and its caller
+     * releases what it holds on the way out.
+     */
+    @Override
+    public AppendResult append(Principal principal, String index, int partition, byte lane,
+            RecordSource records, Runnable buffered) throws IOException {
+        Objects.requireNonNull(buffered, "buffered");
         Objects.requireNonNull(principal, "principal");
         if (!acceptsLane(lane)) {
             throw new PlacementRefusedException("lane " + lane + " is not active on this "
@@ -291,6 +327,7 @@ public final class DefaultIngest implements Ingest {
             if (closed) {
                 throw new IOException("this ingester is closed");
             }
+            awaitRoomLocked();
             int before = bufferedPerStream.getOrDefault(stream, 0);
             // ⚠️ A one-element array, not a local: a lambda captures effectively
             // final variables only, and this is mutated once per record as
@@ -341,6 +378,7 @@ public final class DefaultIngest implements Ingest {
             lock.unlock();
         }
 
+        buffered.run();
         // ⚠️ Waited on OUTSIDE the lock, so a producer whose flush is not yet due
         // does not hold every other producer out of the accumulator.
         try {
@@ -449,6 +487,42 @@ public final class DefaultIngest implements Ingest {
     }
 
 
+    /**
+     * Waits while the pod holds {@link #maxUnflushedBytes} or more buffered and
+     * not yet durable; caller holds {@link #lock} (M11.7, ADR-0079).
+     *
+     * <p>⚠️ THIS IS WHAT BOUNDS MEMORY ONCE THE FRONT DOOR GIVES ITS ADMISSION
+     * PERMIT BACK AT BUFFERED: without it, a slow store lets every release
+     * admit another chunk behind the stalled flush, and the accumulator grows
+     * with the number of producers (NFR-6). It WAITS rather than refusing: the
+     * caller may be part-way through a body whose prefix is durable-bound.
+     *
+     * <p>⚠️ MEASURED FROM THE ACCUMULATORS THEMSELVES -- the active buffer and
+     * the detached one in flight -- never from a per-append tally, which a
+     * {@code RecordSource} throwing part-way would leave uncounted or never
+     * released.
+     *
+     * <p>⚠️ IT WAITS ONLY FOR A FLUSH THAT WILL COME: a batch in flight, or a
+     * waiter the flusher will flush for. Records a throwing source left
+     * buffered with no waiter have nobody to flush them, and waiting on those
+     * would wait for ever; the append proceeds, and its own records bring the
+     * flush.
+     */
+    private void awaitRoomLocked() throws IOException {
+        while (accumulator.bufferedBytes() + inFlightBytes >= maxUnflushedBytes && !closed
+                && (flushes.isQueued() || !pending.isEmpty())) {
+            try {
+                roomToBuffer.await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("interrupted while waiting for room to buffer", e);
+            }
+        }
+        if (closed) {
+            throw new IOException("this ingester is closed");
+        }
+    }
+
     /** Detaches the active buffer and queues its store work; caller holds {@link #lock}. */
     private CompletableFuture<Void> enqueueFlushLocked() {
         if (pending.isEmpty()) {
@@ -463,7 +537,21 @@ public final class DefaultIngest implements Ingest {
         // the governor samples the spacing at this batch's data PUT, and by
         // then both buffers would answer as if no +2 record had been written.
         inFlightSpacingMillis = detached.flushSpacing().toMillis();
-        return flushes.enqueue(batch, detached);
+        // ⚠️ TAKEN BEFORE THE DRAIN, which zeroes the detached buffer's count.
+        inFlightBytes = detached.bufferedBytes();
+        CompletableFuture<Void> done = flushes.enqueue(batch, detached);
+        // ⚠️ HOWEVER THE FLUSH ENDS, its bytes are no longer buffered here: a
+        // failed batch answered its waiters exceptionally and is not retried.
+        done.whenComplete((ignored, failure) -> {
+            lock.lock();
+            try {
+                inFlightBytes = 0;
+                roomToBuffer.signalAll();
+            } finally {
+                lock.unlock();
+            }
+        });
+        return done;
     }
 
     /** Runs without {@link #lock}; producers fill the replacement buffer. */
@@ -540,6 +628,7 @@ public final class DefaultIngest implements Ingest {
         try {
             closed = true;
             work.signalAll();
+            roomToBuffer.signalAll();
         } finally {
             lock.unlock();
         }

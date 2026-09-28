@@ -137,6 +137,36 @@ public interface Ingest extends AutoCloseable {
     }
 
     /**
+     * The lane form, running {@code buffered} once the records are held and
+     * BEFORE the wait for durability (M11.7): a caller holding a resource that
+     * bounds LOAD -- the front door's admission permit -- gives it back there,
+     * so a producer parked on a flush holds none.
+     *
+     * <p>⚠️ THE DEFAULT RUNS IT AFTER THE BLOCKING APPEND RETURNS, however it
+     * returns. An implementation that cannot tell buffered from durable keeps
+     * the resource for the whole call -- the behaviour before M11.7 -- rather
+     * than claiming a point it cannot see.
+     */
+    default AppendResult append(Principal principal, String index, int partition, byte lane,
+            RecordSource records, Runnable buffered) throws IOException {
+        try {
+            return append(principal, index, partition, lane, records);
+        } finally {
+            buffered.run();
+        }
+    }
+
+    /** The routed form of {@link #append(Principal, String, int, byte, RecordSource, Runnable)}. */
+    default AppendResult appendRouted(Principal principal, String indexOrAlias, String routing,
+            byte lane, RecordSource records, Runnable buffered) throws IOException {
+        try {
+            return appendRouted(principal, indexOrAlias, routing, lane, records);
+        } finally {
+            buffered.run();
+        }
+    }
+
+    /**
      * Whether this ingester schedules records of {@code lane} (ADR-0074).
      *
      * <p>⚠️ A QUERY, SO A WRAPPER CAN REFUSE BEFORE IT DOES ANY WORK: a routed
