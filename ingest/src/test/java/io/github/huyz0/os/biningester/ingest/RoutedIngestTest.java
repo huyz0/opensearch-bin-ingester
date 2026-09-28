@@ -172,7 +172,11 @@ class RoutedIngestTest {
     @Test
     void aROUTEDWriteToAnUNREGISTEREDIndexWAITSAndIsRELEASED() throws Exception {
         RecordingIngest delegate = new RecordingIngest();
-        RoutedIngest routed = routed(delegate, Duration.ofSeconds(10));
+        // ⚠️ THE POOL WAITS 60 s AND THE TEST 10 s (M11.15, H10; review R1): the
+        // margin runs this way round so a registration that never WAKES the
+        // write fails here, rather than the pool's own deadline releasing it --
+        // after which the write re-resolves, finds the index, and succeeds.
+        RoutedIngest routed = routed(delegate, Duration.ofSeconds(60));
         IndexRegistration logs = index("logs-000001", 8, "logs");
 
         CompletableFuture<AppendResult> write = CompletableFuture.supplyAsync(() -> {
@@ -277,7 +281,7 @@ class RoutedIngestTest {
     @Test
     void TWOConcurrentRoutedWritesKeepTheirOWNRecordsAndTheirOWNPartition() throws Exception {
         RecordingIngest delegate = new RecordingIngest();
-        RoutedIngest routed = routed(delegate, Duration.ofSeconds(10));
+        RoutedIngest routed = routed(delegate, Duration.ofSeconds(60));
         IndexRegistration logs = index("logs-000001", 8, "logs");
         String left = "tenant-a";
         String right = null;
@@ -433,9 +437,9 @@ class RoutedIngestTest {
     void anIndexThatRegistersUNPLACEABLEWhileAWriteWAITSReleasesItsRecords() throws Exception {
         RecordingIngest delegate = new RecordingIngest();
         IndexCatalog catalog = new IndexCatalog();
-        PendingPool pool = new PendingPool(Clock.systemUTC(), Duration.ofSeconds(10), 1 << 20);
+        PendingPool pool = new PendingPool(Clock.systemUTC(), Duration.ofSeconds(60), 1 << 20);
         RoutedIngest routed = new RoutedIngest(delegate, catalog, pool,
-                Duration.ofSeconds(10), Clock.systemUTC());
+                Duration.ofSeconds(60), Clock.systemUTC());
 
         CompletableFuture<AppendResult> write = CompletableFuture.supplyAsync(
                 () -> write(routed, "tenant-a", "doc-1"));

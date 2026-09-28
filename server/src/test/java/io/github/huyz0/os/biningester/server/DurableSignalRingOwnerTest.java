@@ -126,9 +126,15 @@ class DurableSignalRingOwnerTest {
                 + pod + "\"}}";
     }
 
+    /**
+     * ⚠️ A LEASE NO RENEWAL OF WHICH FALLS INSIDE THE TEST (M11.15, H10): the
+     * windows above compare STORE-WIDE counts, and a renewal every 3 s could
+     * land its PUT inside one. MEASURED that renewals do reach them: at a 20 ms
+     * renewal the signal window read puts=15 against 6, three runs of three.
+     */
     private static ServerConfig config(String podId, String az, StoreConfig store) {
-        return new ServerConfig(podId, az, "cluster-a", PREFIX, store, Duration.ofSeconds(10),
-                Duration.ofSeconds(3), "http://" + podId + ":8080", IngestConfig.defaults(
+        return new ServerConfig(podId, az, "cluster-a", PREFIX, store, Duration.ofHours(1),
+                Duration.ofMinutes(20), "http://" + podId + ":8080", IngestConfig.defaults(
                         "cluster-a"), 8080, "producer", Set.of("logs"));
     }
 
