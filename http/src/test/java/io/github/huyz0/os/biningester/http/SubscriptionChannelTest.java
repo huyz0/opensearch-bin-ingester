@@ -263,13 +263,40 @@ class SubscriptionChannelTest {
                 .routing(HttpRouting.builder().register(service)).build().start();
         String endpoint = "http://localhost:" + server.port();
         List<Delivery> got = new CopyOnWriteArrayList<>();
+        java.util.concurrent.CountDownLatch firstHeld = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch burstQueued =
+                new java.util.concurrent.CountDownLatch(1);
+        // ⚠️ THE READER IS HELD IN ITS FIRST CALLBACK WHILE THE REST OF THE
+        // BURST IS QUEUED (M10.24). The premise "everything already queued"
+        // was a race, lost whenever the publishing loop is slower than a poll
+        // round trip -- as under jzap's instrumented JVM (M10.20b): each push
+        // is answered before the next is queued. Reproduced on an ordinary JVM
+        // with 100 ms between publishes (seven polls); held, the same delay
+        // passes. A callback runs on the reader's own thread, so while it is
+        // held no poll is open.
+        io.github.huyz0.os.biningester.client.SubscriptionTransport.Listener listener =
+                delivery -> {
+                    got.add(delivery);
+                    if (got.size() == 1) {
+                        firstHeld.countDown();
+                        try {
+                            burstQueued.await();
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                    }
+                };
 
-        try (var ignored = connect(endpoint, () -> { }).subscribe(STREAM, got::add)) {
+        try (var ignored = connect(endpoint, () -> { }).subscribe(STREAM, listener)) {
             await(() -> transport.reconnects() > 0, "the stream to open");
             long pollsBefore = service.pollCount();
-            for (int i = 0; i < 6; i++) {
+            publish(hub, "seg-burst-0", 200, 1);
+            assertThat(firstHeld.await(10, java.util.concurrent.TimeUnit.SECONDS))
+                    .as("the premise: the reader is held on the first push").isTrue();
+            for (int i = 1; i < 6; i++) {
                 publish(hub, "seg-burst-" + i, 200 + i, 1);
             }
+            burstQueued.countDown();
             await(() -> got.size() >= 6, "the whole burst");
 
             assertThat(service.pollCount() - pollsBefore)
