@@ -80,6 +80,31 @@ class BulkRoutingParamTest {
             source.forEachRecord(r -> count[0]++);
             return new AppendResult(count[0], 0L, count[0] - 1L);
         }
+
+        @Override
+        public AppendResult append(Principal principal, String index, int partition, byte lane,
+                RecordSource records, Runnable buffered) throws IOException {
+            try { // the removed default's behaviour: buffered once the append returns (M12.2)
+                return append(principal, index, partition, lane, records);
+            } finally {
+                buffered.run();
+            }
+        }
+
+        @Override
+        public AppendResult appendRouted(Principal principal, String indexOrAlias, String routing,
+                byte lane, RecordSource records, Runnable buffered) throws IOException {
+            try { // the removed default's behaviour: buffered once the append returns (M12.2)
+                return appendRouted(principal, indexOrAlias, routing, lane, records);
+            } finally {
+                buffered.run();
+            }
+        }
+
+        @Override
+        public String concreteIndex(String indexOrAlias) {
+            return indexOrAlias; // no catalog in this double (M12.2)
+        }
     }
 
     private WebClient start(Ingest ingest) {
@@ -235,6 +260,32 @@ class BulkRoutingParamTest {
             public AppendResult appendRouted(Principal principal, String indexOrAlias,
                     String routing, RecordSource source) {
                 throw refusal;
+            }
+
+            @Override
+            public AppendResult append(Principal principal, String index, int partition,
+                    byte lane, RecordSource records, Runnable buffered) throws IOException {
+                try { // the removed default's behaviour: buffered once the append returns (M12.2)
+                    return append(principal, index, partition, lane, records);
+                } finally {
+                    buffered.run();
+                }
+            }
+
+            @Override
+            public AppendResult appendRouted(Principal principal, String indexOrAlias,
+                    String routing, byte lane, RecordSource records, Runnable buffered)
+                    throws IOException {
+                try { // the removed default's behaviour: buffered once the append returns (M12.2)
+                    return appendRouted(principal, indexOrAlias, routing, lane, records);
+                } finally {
+                    buffered.run();
+                }
+            }
+
+            @Override
+            public String concreteIndex(String indexOrAlias) {
+                return indexOrAlias; // no catalog in this double (M12.2)
             }
 
             @Override

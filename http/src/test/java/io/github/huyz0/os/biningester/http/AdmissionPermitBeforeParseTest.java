@@ -11,6 +11,7 @@ import io.github.huyz0.os.biningester.security.Principal;
 import io.helidon.webserver.WebServer;
 import io.helidon.webserver.http.HttpRouting;
 import java.io.BufferedReader;
+import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.Socket;
@@ -71,6 +72,21 @@ class AdmissionPermitBeforeParseTest {
 
         @Override
         public void close() {
+        }
+
+        @Override
+        public AppendResult appendRouted(Principal principal, String indexOrAlias, String routing,
+                byte lane, RecordSource records, Runnable buffered) throws IOException {
+            try { // the removed default's behaviour: buffered once the append returns (M12.2)
+                return appendRouted(principal, indexOrAlias, routing, lane, records);
+            } finally {
+                buffered.run();
+            }
+        }
+
+        @Override
+        public String concreteIndex(String indexOrAlias) {
+            return indexOrAlias; // no catalog in this double (M12.2)
         }
     }
 

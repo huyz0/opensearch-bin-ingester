@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
-import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.huyz0.os.biningester.binstore.BinStore;
 import io.github.huyz0.os.biningester.binstore.CountingBinStore;
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import io.github.huyz0.os.biningester.binstore.backend.MemoryBinStore;
 import io.github.huyz0.os.biningester.format.OpType;
 import io.github.huyz0.os.biningester.format.SegmentRecord;
 import io.github.huyz0.os.biningester.security.Principal;
+import java.io.IOException;
 import java.lang.reflect.Proxy;
 import java.time.Clock;
 import java.time.Duration;
@@ -24,8 +25,8 @@ import org.junit.jupiter.api.Timeout;
 
 /**
  * An append runs its {@code buffered} callback once its records are held and
- * before the durable wait -- and an implementation that cannot tell the two
- * apart runs it after (M11.7).
+ * before the durable wait (M11.7); a routed append {@code DefaultIngest}
+ * refuses still runs it, once (M12.2).
  */
 @Timeout(value = 60, unit = TimeUnit.SECONDS, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
 class AppendBufferedCallbackTest {
@@ -82,35 +83,42 @@ class AppendBufferedCallbackTest {
         }
     }
 
+    /**
+     * ⚠️ DEFAULT INGEST'S OWN ROUTED BUFFERED FORM (M12.2), replacing a case
+     * that pinned the interface default M12.2 removed: with the default gone,
+     * that case's double carried the default's body itself and constrained no
+     * production code (M12.2 review T1). This ingester has no catalog, so a
+     * routed append is refused as a placement -- and the caller's resource is
+     * still given back, exactly once.
+     */
     @Test
-    void anIngestThatCannotTellBufferedFromDurableRunsItAfterItsAppendHoweverItEnds() {
-        AtomicInteger order = new AtomicInteger();
-        int[] appendedAt = {-1};
-        int[] bufferedAt = {-1};
-        Ingest blocking = new Ingest() {
-            @Override
-            public AppendResult append(Principal principal, String index, int partition,
-                    RecordSource records) throws java.io.IOException {
-                appendedAt[0] = order.incrementAndGet();
-                throw new java.io.IOException("the store failed");
-            }
+    void defaultIngestRefusesARoutedBufferedAppendAndStillRunsBufferedOnce() throws Exception {
+        MemoryBinStore store = new MemoryBinStore();
+        AtomicInteger buffered = new AtomicInteger();
+        try (DefaultIngest ingest = new DefaultIngest(
+                IngestTestSupport.pinnedIntervalConfig(Duration.ofMillis(20), 8L << 20), store,
+                IngestTestSupport.PREFIX, "pod1", IngestTestSupport.sequencer(store, "pod1"),
+                new SubscriptionHub(), Clock.systemUTC(), index -> IngestTestSupport.LOGS,
+                segmentKey -> { }, new IndexCostLedger())) {
+            assertThatThrownBy(() -> ingest.appendRouted(IngestTestSupport.PRINCIPAL, "logs",
+                    "tenant-42", (byte) 0, sink -> sink.accept(DOC), buffered::incrementAndGet))
+                    .isInstanceOf(PlacementRefusedException.class);
 
-            @Override
-            public void close() {
-            }
-        };
+            assertThat(buffered).as("⚠️ GIVEN BACK EVEN WHEN REFUSED, AND ONCE").hasValue(1);
+        }
+    }
 
-        assertThatThrownBy(() -> blocking.append(IngestTestSupport.PRINCIPAL, "logs", 0,
-                (byte) 0, sink -> { }, () -> bufferedAt[0] = order.incrementAndGet()))
-                .isInstanceOf(java.io.IOException.class);
-        assertThatThrownBy(() -> blocking.appendRouted(IngestTestSupport.PRINCIPAL, "logs", "r",
-                (byte) 0, sink -> { }, () -> bufferedAt[0] = order.incrementAndGet()))
-                .isInstanceOf(PlacementRefusedException.class);
-
-        assertThat(appendedAt[0]).isEqualTo(1);
-        assertThat(bufferedAt[0])
-                .as("⚠️ AFTER THE APPEND, EVEN A FAILED ONE, AND FOR THE ROUTED FORM TOO: the "
-                        + "caller's resource is always given back")
-                .isEqualTo(3);
+    /** ⚠️ NO CATALOG, NO ALIAS (M12.2): every name is its own index, so a quota is charged to it. */
+    @Test
+    void defaultIngestNamesEveryIndexItself() throws Exception {
+        MemoryBinStore store = new MemoryBinStore();
+        try (DefaultIngest ingest = new DefaultIngest(
+                IngestTestSupport.pinnedIntervalConfig(Duration.ofMillis(20), 8L << 20), store,
+                IngestTestSupport.PREFIX, "pod1", IngestTestSupport.sequencer(store, "pod1"),
+                new SubscriptionHub(), Clock.systemUTC(), index -> IngestTestSupport.LOGS,
+                segmentKey -> { }, new IndexCostLedger())) {
+            assertThat(ingest.concreteIndex("logs-write")).isEqualTo("logs-write");
+            assertThat(ingest.concreteIndex("logs-000002")).isEqualTo("logs-000002");
+        }
     }
 }

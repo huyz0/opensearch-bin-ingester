@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.http;
 
-import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.huyz0.os.biningester.binstore.BinStore;
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import io.github.huyz0.os.biningester.binstore.backend.MemoryBinStore;
 import io.github.huyz0.os.biningester.ingest.AppendResult;
 import io.github.huyz0.os.biningester.ingest.DefaultIngest;
@@ -80,6 +80,21 @@ class AdmissionPermitReturnTest {
 
         @Override
         public void close() {
+        }
+
+        @Override
+        public AppendResult appendRouted(Principal principal, String indexOrAlias, String routing,
+                byte lane, RecordSource records, Runnable buffered) throws IOException {
+            try { // the removed default's behaviour: buffered once the append returns (M12.2)
+                return appendRouted(principal, indexOrAlias, routing, lane, records);
+            } finally {
+                buffered.run();
+            }
+        }
+
+        @Override
+        public String concreteIndex(String indexOrAlias) {
+            return indexOrAlias; // no catalog in this double (M12.2)
         }
     }
 

@@ -321,6 +321,27 @@ public final class DefaultIngest implements Ingest {
         }
     }
 
+    /**
+     * ⚠️ REFUSED AS THE PLAIN ROUTED FORM IS: this ingester has no catalog, so it
+     * cannot compute a partition from a routing value ({@link RoutedIngest} can).
+     * {@code buffered} runs after the refusal, as it always ran here (M12.2).
+     */
+    @Override
+    public AppendResult appendRouted(Principal principal, String indexOrAlias, String routing,
+            byte lane, RecordSource records, Runnable buffered) throws IOException {
+        try {
+            return appendRouted(principal, indexOrAlias, routing, lane, records);
+        } finally {
+            buffered.run();
+        }
+    }
+
+    /** No catalog, so no alias: every name is its own index (M12.2). */
+    @Override
+    public String concreteIndex(String indexOrAlias) {
+        return indexOrAlias;
+    }
+
     @Override
     public boolean acceptsLane(byte lane) {
         return config.lanes().contains(lane);

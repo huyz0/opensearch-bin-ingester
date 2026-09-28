@@ -13,6 +13,7 @@ import io.helidon.webclient.api.HttpClientResponse;
 import io.helidon.webclient.api.WebClient;
 import io.helidon.webserver.WebServer;
 import io.helidon.webserver.http.HttpRouting;
+import java.io.IOException;
 import java.util.Set;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -51,6 +52,31 @@ class BulkServiceRetryAfterTest {
 
         @Override
         public void close() {
+        }
+
+        @Override
+        public AppendResult append(Principal principal, String index, int partition, byte lane,
+                RecordSource records, Runnable buffered) throws IOException {
+            try { // the removed default's behaviour: buffered once the append returns (M12.2)
+                return append(principal, index, partition, lane, records);
+            } finally {
+                buffered.run();
+            }
+        }
+
+        @Override
+        public AppendResult appendRouted(Principal principal, String indexOrAlias, String routing,
+                byte lane, RecordSource records, Runnable buffered) throws IOException {
+            try { // the removed default's behaviour: buffered once the append returns (M12.2)
+                return appendRouted(principal, indexOrAlias, routing, lane, records);
+            } finally {
+                buffered.run();
+            }
+        }
+
+        @Override
+        public String concreteIndex(String indexOrAlias) {
+            return indexOrAlias; // no catalog in this double (M12.2)
         }
     }
 

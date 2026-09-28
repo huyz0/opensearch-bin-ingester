@@ -142,29 +142,21 @@ public interface Ingest extends AutoCloseable {
      * bounds LOAD -- the front door's admission permit -- gives it back there,
      * so a producer parked on a flush holds none.
      *
-     * <p>⚠️ THE DEFAULT RUNS IT AFTER THE BLOCKING APPEND RETURNS, however it
-     * returns. An implementation that cannot tell buffered from durable keeps
-     * the resource for the whole call -- the behaviour before M11.7 -- rather
-     * than claiming a point it cannot see.
+     * <p>⚠️ ABSTRACT, SO EVERY IMPLEMENTATION SAYS WHEN IT RUNS (M12.2, M11
+     * review F3). One that cannot tell buffered from durable runs it after the
+     * blocking append returns, however it returns -- keeping the resource for
+     * the whole call, the behaviour before M11.7 -- rather than claiming a point
+     * it cannot see; it states that choice rather than inheriting it.
      */
-    default AppendResult append(Principal principal, String index, int partition, byte lane,
-            RecordSource records, Runnable buffered) throws IOException {
-        try {
-            return append(principal, index, partition, lane, records);
-        } finally {
-            buffered.run();
-        }
-    }
+    AppendResult append(Principal principal, String index, int partition, byte lane,
+            RecordSource records, Runnable buffered) throws IOException;
 
-    /** The routed form of {@link #append(Principal, String, int, byte, RecordSource, Runnable)}. */
-    default AppendResult appendRouted(Principal principal, String indexOrAlias, String routing,
-            byte lane, RecordSource records, Runnable buffered) throws IOException {
-        try {
-            return appendRouted(principal, indexOrAlias, routing, lane, records);
-        } finally {
-            buffered.run();
-        }
-    }
+    /**
+     * The routed form of {@link #append(Principal, String, int, byte, RecordSource, Runnable)};
+     * abstract for the same reason (M12.2).
+     */
+    AppendResult appendRouted(Principal principal, String indexOrAlias, String routing,
+            byte lane, RecordSource records, Runnable buffered) throws IOException;
 
     /**
      * Whether this ingester schedules records of {@code lane} (ADR-0074).
@@ -182,10 +174,12 @@ public interface Ingest extends AutoCloseable {
      * The concrete index {@code indexOrAlias} names now, or itself when this
      * ingester cannot say (M11.8 review P2): a per-index quota is charged to
      * the index, so a write through its alias spends the same bucket.
+     *
+     * <p>⚠️ ABSTRACT (M12.2, M11 review F3): a default answering the name it was
+     * given is what let M11.8's round-1 quota be charged to the alias, and an
+     * implementation that can resolve aliases would inherit it silently.
      */
-    default String concreteIndex(String indexOrAlias) {
-        return indexOrAlias;
-    }
+    String concreteIndex(String indexOrAlias);
 
     private static void refuseLane(byte lane) {
         if (lane != 0) {
