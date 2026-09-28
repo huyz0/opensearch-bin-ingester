@@ -180,14 +180,42 @@ public final class IndexCatalog {
      * once per report, so a report over many indices does one pass here and
      * not one per row. The id is derived through {@code RunKey.ofIndexUuid},
      * the one decoder the write path uses (M7.2).
+     *
+     * <p>⚠️ A REGISTRATION WHOSE UUID DOES NOT DECODE IS LEFT OUT, not thrown
+     * (M12.8, M11.4 P1): the write path already fails only that index's writes,
+     * so it has no id the ledger could charge, and one bad registration must not
+     * take the whole report -- every other index's name -- with it. It is not
+     * hidden: {@link #undecodableUuids()} names it, and the report lists it.
      */
     public Map<java.util.UUID, String> namesById() {
         Map<java.util.UUID, String> names = new java.util.HashMap<>();
-        byName.values().forEach(registration -> names.put(
-                io.github.huyz0.os.biningester.format.RunKey.ofIndexUuid(
-                        registration.indexUuid(), 0).indexId(),
-                registration.indexName()));
+        for (IndexRegistration registration : byName.values()) {
+            try {
+                names.put(io.github.huyz0.os.biningester.format.RunKey.ofIndexUuid(
+                        registration.indexUuid(), 0).indexId(), registration.indexName());
+            } catch (IllegalArgumentException undecodable) {
+                // skipped: see above
+            }
+        }
         return names;
+    }
+
+    /**
+     * The raw index UUIDs of the registrations whose UUID does not decode, sorted
+     * (M12.8): what a cost report lists by id, since they have no stream id.
+     */
+    public java.util.List<String> undecodableUuids() {
+        java.util.List<String> undecodable = new java.util.ArrayList<>();
+        for (IndexRegistration registration : byName.values()) {
+            try {
+                io.github.huyz0.os.biningester.format.RunKey.ofIndexUuid(
+                        registration.indexUuid(), 0);
+            } catch (IllegalArgumentException refused) {
+                undecodable.add(registration.indexUuid());
+            }
+        }
+        undecodable.sort(null);
+        return undecodable;
     }
 
     /** How many concrete indices this catalog has been told about. */

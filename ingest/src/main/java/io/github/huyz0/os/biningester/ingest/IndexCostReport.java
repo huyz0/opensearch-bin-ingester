@@ -55,6 +55,18 @@ public final class IndexCostReport {
      */
     public static String json(String podId, IndexCostLedger.Snapshot snapshot,
             PodTotals totals, CostTable prices, Function<UUID, String> names, int top) {
+        return json(podId, snapshot, totals, prices, names, top, List.of());
+    }
+
+    /**
+     * The same, listing by raw id the registrations whose index UUID does not
+     * decode (M12.8): they have no stream id, so no row, and are named here
+     * rather than hidden.
+     */
+    public static String json(String podId, IndexCostLedger.Snapshot snapshot,
+            PodTotals totals, CostTable prices, Function<UUID, String> names, int top,
+            List<String> undecodable) {
+        Objects.requireNonNull(undecodable, "undecodable");
         Objects.requireNonNull(podId, "podId");
         Objects.requireNonNull(snapshot, "snapshot");
         Objects.requireNonNull(totals, "totals");
@@ -106,7 +118,16 @@ public final class IndexCostReport {
                     .append(String.format(Locale.ROOT, "%.9f", usd(cost.micros(), prices)))
                     .append('}');
         }
-        return out.append("]}").toString();
+        out.append(']');
+        // ⚠️ ONLY WHEN THERE ARE ANY, so a report with none is the one it always was.
+        if (!undecodable.isEmpty()) {
+            out.append(",\"undecodable\":[");
+            for (int i = 0; i < undecodable.size(); i++) {
+                out.append(i == 0 ? "" : ",").append(string(undecodable.get(i)));
+            }
+            out.append(']');
+        }
+        return out.append('}').toString();
     }
 
     /** What a set of apportioned shares costs, in dollars, at {@code prices}. */

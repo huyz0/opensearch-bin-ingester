@@ -259,7 +259,7 @@ public final class FrontDoor implements AutoCloseable {
                 new IndexCostReport.PodTotals(assembly.storeCounts(),
                         assembly.putPurposeCounts(), assembly.dataSegmentGets()),
                 assembly.store().capabilities().costs(), assembly.catalog().namesById()::get,
-                top);
+                top, assembly.catalog().undecodableUuids());
     }
 
     static String macroCountsJson(String podId, StoreCounts counts) {
