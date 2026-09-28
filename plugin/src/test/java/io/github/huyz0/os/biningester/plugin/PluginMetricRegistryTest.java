@@ -30,7 +30,9 @@ class PluginMetricRegistryTest {
             Map.entry("biningester_subscription_poll_failure_unreachable_total", 9.0),
             Map.entry("biningester_subscription_poll_failure_malformed_total", 10.0),
             Map.entry("biningester_subscription_poll_failure_callback_total", 11.0),
-            Map.entry("biningester_progress_push_failures_total", 12.0));
+            Map.entry("biningester_progress_push_failures_total", 12.0),
+            Map.entry("biningester_segment_hold_oversize_fetches_total", 13.0),
+            Map.entry("biningester_segment_hold_refetches_after_eviction_total", 14.0));
 
     @Test
     void exportsEveryFixedPluginCounterAndTheLiveTierGaugeWithoutTags() {

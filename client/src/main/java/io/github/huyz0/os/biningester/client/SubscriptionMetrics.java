@@ -21,7 +21,11 @@ public final class SubscriptionMetrics {
         POLL_FAILURE_UNREACHABLE,
         POLL_FAILURE_MALFORMED,
         POLL_FAILURE_CALLBACK,
-        PROGRESS_PUSH_FAILURES
+        PROGRESS_PUSH_FAILURES,
+        /** A segment too large for the node's hold, fetched (M10.25). */
+        SEGMENT_HOLD_OVERSIZE_FETCHES,
+        /** A segment the node's hold evicted, fetched again (M10.25). */
+        SEGMENT_HOLD_REFETCHES_AFTER_EVICTION
     }
 
     private final EnumMap<Counter, Long> values = new EnumMap<>(Counter.class);

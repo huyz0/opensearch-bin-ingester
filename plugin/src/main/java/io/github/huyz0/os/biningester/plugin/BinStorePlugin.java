@@ -472,6 +472,9 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
             case POLL_FAILURE_MALFORMED -> "biningester_subscription_poll_failure_malformed_total";
             case POLL_FAILURE_CALLBACK -> "biningester_subscription_poll_failure_callback_total";
             case PROGRESS_PUSH_FAILURES -> "biningester_progress_push_failures_total";
+            case SEGMENT_HOLD_OVERSIZE_FETCHES -> "biningester_segment_hold_oversize_fetches_total";
+            case SEGMENT_HOLD_REFETCHES_AFTER_EVICTION ->
+                    "biningester_segment_hold_refetches_after_eviction_total";
         };
     }
 

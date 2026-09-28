@@ -50,6 +50,24 @@ public final class NodeSegmentSource implements SegmentSource {
     private final Object cacheLock = new Object();
     private long fetches;
     private long bytesHeld;
+    private long oversizeFetches;
+    private long refetchesAfterEviction;
+    private volatile io.github.huyz0.os.biningester.client.SubscriptionMetrics metrics;
+
+    /**
+     * How many evicted keys are remembered, to tell a re-fetch from a first
+     * fetch. ⚠️ BOUNDED, like the hold: key strings, not bytes, dropped oldest
+     * first, so a re-fetch of a segment evicted more than this many evictions
+     * ago goes uncounted -- an undercount, never a memory leak.
+     */
+    static final int EVICTED_KEYS_REMEMBERED = 4_096;
+
+    private final Map<String, Boolean> evicted = new LinkedHashMap<>(16, 0.75f, false) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, Boolean> eldest) {
+            return size() > EVICTED_KEYS_REMEMBERED;
+        }
+    };
     private final Map<String, KeyGate> keyGates = new HashMap<>();
 
     /**
@@ -134,12 +152,29 @@ public final class NodeSegmentSource implements SegmentSource {
                 if (hit != null) {
                     return hit;
                 }
+                boolean refetch;
                 synchronized (cacheLock) {
                     fetches++;
+                    refetch = evicted.remove(key) != null;
+                    if (refetch) {
+                        refetchesAfterEviction++;
+                    }
+                }
+                if (refetch) {
+                    count(io.github.huyz0.os.biningester.client.SubscriptionMetrics.Counter
+                            .SEGMENT_HOLD_REFETCHES_AFTER_EVICTION);
                 }
                 byte[] bytes = load.bytes();
+                boolean oversize;
                 synchronized (cacheLock) {
-                    admit(key, bytes);
+                    oversize = !admit(key, bytes);
+                    if (oversize) {
+                        oversizeFetches++;
+                    }
+                }
+                if (oversize) {
+                    count(io.github.huyz0.os.biningester.client.SubscriptionMetrics.Counter
+                            .SEGMENT_HOLD_OVERSIZE_FETCHES);
                 }
                 return bytes;
             }
@@ -164,8 +199,12 @@ public final class NodeSegmentSource implements SegmentSource {
         }
     }
 
-    private void admit(String url, byte[] bytes) {
-        if (bytes == null || bytes.length > capacityBytes) {
+    /** @return whether the bytes were held; {@code false} only when too large to */
+    private boolean admit(String url, byte[] bytes) {
+        if (bytes == null) {
+            return true;
+        }
+        if (bytes.length > capacityBytes) {
             // ⚠️ TOO LARGE TO HOLD IS STILL SERVED -- the same array the
             // delegate returned, since nothing here copies. Holding it would
             // break the ceiling this class exists to keep; refusing to return
@@ -175,7 +214,9 @@ public final class NodeSegmentSource implements SegmentSource {
             // smaller than a segment -- and it is why the guard is here rather
             // than left to the eviction loop, which would admit the oversize
             // entry and evict EVERY held segment before dropping it again.
-            return;
+            // ⚠️ COUNTED, not remembered as evicted: every one of its fetches
+            // is the fall-back, and M10.25 reports each (oversizeFetches).
+            return false;
         }
         held.put(url, bytes);
         bytesHeld += bytes.length;
@@ -184,8 +225,46 @@ public final class NodeSegmentSource implements SegmentSource {
             // ⚠️ THE ITERATOR IS IN ACCESS ORDER, so this removes the LEAST
             // recently used first -- the entry just admitted is the most
             // recent and is the last thing that can go.
-            bytesHeld -= it.next().getValue().length;
+            Map.Entry<String, byte[]> dropped = it.next();
+            bytesHeld -= dropped.getValue().length;
+            evicted.put(dropped.getKey(), Boolean.TRUE);
             it.remove();
+        }
+        return true;
+    }
+
+    private void count(io.github.huyz0.os.biningester.client.SubscriptionMetrics.Counter c) {
+        var sink = metrics;
+        if (sink != null) {
+            sink.increment(c);
+        }
+    }
+
+    /**
+     * Reports this hold's re-fetch fall-backs into {@code metrics} from now on
+     * (M10.25): the node's own metrics, which the plugin exports.
+     */
+    void countInto(io.github.huyz0.os.biningester.client.SubscriptionMetrics metrics) {
+        this.metrics = Objects.requireNonNull(metrics, "metrics");
+    }
+
+    /**
+     * Fetches of a segment too large for the hold (M10.25): each reached the
+     * delegate, and every other run on this node reading it will again.
+     */
+    public long oversizeFetches() {
+        synchronized (cacheLock) {
+            return oversizeFetches;
+        }
+    }
+
+    /**
+     * Fetches of a segment this node held and evicted before a later run asked
+     * for it (M10.25): a hold smaller than the working set, as a number.
+     */
+    public long refetchesAfterEviction() {
+        synchronized (cacheLock) {
+            return refetchesAfterEviction;
         }
     }
 

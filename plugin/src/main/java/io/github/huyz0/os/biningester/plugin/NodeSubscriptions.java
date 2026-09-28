@@ -269,6 +269,12 @@ public final class NodeSubscriptions implements AutoCloseable {
         this.metrics = transport instanceof io.github.huyz0.os.biningester.client.HttpSubscriptionTransport http
                 ? http.metrics() : new io.github.huyz0.os.biningester.client.SubscriptionMetrics();
         this.nodeSegmentSource = nodeSegmentSource;
+        // ⚠️ THE HOLD's RE-FETCHES INTO THE NODE's METRICS, which the plugin
+        // exports (M10.25): otherwise a hold smaller than the working set is a
+        // request rate scaling with shards that nothing names.
+        if (nodeSegmentSource instanceof NodeSegmentSource hold) {
+            hold.countInto(metrics);
+        }
         if (queueCapacity <= 0) {
             throw new IllegalArgumentException("queue capacity must be positive");
         }

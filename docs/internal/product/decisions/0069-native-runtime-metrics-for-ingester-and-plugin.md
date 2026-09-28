@@ -51,6 +51,8 @@ The exact names are `biningester_fallback_current_tier`,
 `biningester_subscription_reconnects_total`,
 `biningester_subscription_poll_failure_{unavailable,refused,server_error,unreachable,malformed,callback}_total`,
 `biningester_progress_push_failures_total`,
+`biningester_segment_hold_{oversize_fetches,refetches_after_eviction}_total`
+(M10.25: the node hold's per-shard re-fetch fall-backs),
 `biningester_endpointslice_watch_failures_total`, and
 `biningester_inbox_stuck_intent_attempts_total`. The current-tier gauge reports
 the `AutomaticTier` ordinal (0–3); all other instruments are counters seeded
