@@ -2,6 +2,7 @@
 package io.github.huyz0.os.biningester.ingest;
 
 import io.github.huyz0.os.biningester.binstore.BinStore;
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import io.github.huyz0.os.biningester.format.CatchUpEndFrame;
 import io.github.huyz0.os.biningester.format.CatchUpEventFrame;
 import io.github.huyz0.os.biningester.format.CatchUpRequestFrame;
@@ -37,6 +38,7 @@ public final class DurableCatchUpResponder {
     static final long DEFAULT_MAX_RESPONSE_BYTES = 8L << 20;
 
     private final BinStore store;
+    private final IndexCostLedger ledger;
     private final CommittedDeltaSource source;
     private final LongSupplier epoch;
     private final long maxResponseBytes;
@@ -46,8 +48,24 @@ public final class DurableCatchUpResponder {
         this(store, source, epoch, DEFAULT_MAX_RESPONSE_BYTES);
     }
 
+    /** The default budget, charging its segment GETs into {@code ledger} (M11.3). */
+    public DurableCatchUpResponder(BinStore store, CommittedDeltaSource source,
+            LongSupplier epoch, IndexCostLedger ledger) {
+        this(store, source, epoch, DEFAULT_MAX_RESPONSE_BYTES, ledger);
+    }
+
     public DurableCatchUpResponder(BinStore store, CommittedDeltaSource source,
             LongSupplier epoch, long maxResponseBytes) {
+        this(store, source, epoch, maxResponseBytes, new IndexCostLedger());
+    }
+
+    /**
+     * The same, charging each segment GET it issues to the indices of the
+     * segment it read, into {@code ledger} (M11.3, ADR-0077).
+     */
+    public DurableCatchUpResponder(BinStore store, CommittedDeltaSource source,
+            LongSupplier epoch, long maxResponseBytes, IndexCostLedger ledger) {
+        this.ledger = Objects.requireNonNull(ledger, "ledger");
         this.store = Objects.requireNonNull(store, "store");
         this.source = Objects.requireNonNull(source, "source");
         this.epoch = Objects.requireNonNull(epoch, "epoch");
@@ -120,13 +138,20 @@ public final class DurableCatchUpResponder {
     }
 
     private byte[] readSegment(String key) throws IOException {
+        // ⚠️ ONE CHARGE PER STORE GET, HOWEVER IT ENDS (M11.3, ADR-0077): the
+        // bytes are whole in hand, so split by their directory; a read that
+        // threw or overran the budget was still billed, and is unattributed.
+        byte[] charged = null;
         try (InputStream in = store.get(key)) {
             byte[] bytes = in.readNBytes((int) maxResponseBytes + 1);
             if (bytes.length > maxResponseBytes) {
                 throw new ResponseTooLargeException("segment " + key + " cannot fit in the "
                         + maxResponseBytes + " byte catch-up response budget");
             }
+            charged = bytes;
             return bytes;
+        } finally {
+            SegmentCharges.chargeGet(ledger, charged);
         }
     }
 

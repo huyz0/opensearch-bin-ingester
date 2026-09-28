@@ -31,6 +31,7 @@ public final class CountingBinStore implements BinStore {
     private final LongAdder leasePuts = new LongAdder();
     private final LongAdder otherPuts = new LongAdder();
     private final LongAdder gets = new LongAdder();
+    private final LongAdder dataSegmentGets = new LongAdder();
     private final LongAdder lists = new LongAdder();
     private final LongAdder stats = new LongAdder();
     private final LongAdder deletes = new LongAdder();
@@ -43,6 +44,23 @@ public final class CountingBinStore implements BinStore {
     public StoreCounts counts() {
         return new StoreCounts(putPurposeCounts().total(), gets.sum(), lists.sum(), stats.sum(),
                 deletes.sum());
+    }
+
+    /**
+     * The GETs, ranged ones included, of DATA SEGMENTS -- a subset of
+     * {@link #counts()}'s GETs, by the same classifier the PUT purposes use
+     * (M11.3, ADR-0077 decision 4a): the requests the per-index read-side
+     * apportionment must sum to.
+     */
+    public long dataSegmentGets() {
+        return dataSegmentGets.sum();
+    }
+
+    private void countGet(String key) {
+        gets.increment();
+        if (isDataSegment(key)) {
+            dataSegmentGets.increment();
+        }
     }
 
     /** PUT counts by bounded object-key purpose; their sum equals {@link #counts()}'s PUTs. */
@@ -84,7 +102,7 @@ public final class CountingBinStore implements BinStore {
 
     @Override
     public InputStream get(String key) throws IOException {
-        gets.increment();
+        countGet(key);
         return delegate.get(key);
     }
 
@@ -93,7 +111,7 @@ public final class CountingBinStore implements BinStore {
         // ⚠️ A ranged read is a GET. Cost rule R4 is about not SPLITTING one
         // coalesced read into many; a range that replaces a whole-object read is
         // the same single request.
-        gets.increment();
+        countGet(key);
         return delegate.getRange(key, start, endIncl);
     }
 

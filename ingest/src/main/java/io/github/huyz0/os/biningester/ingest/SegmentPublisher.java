@@ -12,7 +12,6 @@ import io.github.huyz0.os.biningester.format.RunKey;
 import io.github.huyz0.os.biningester.format.SegmentReader;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -156,10 +155,7 @@ public final class SegmentPublisher {
         // included, so a ledger charged only on success would sum to less than
         // the requests it apportions. From the directory already in hand -- no
         // request of its own.
-        Map<UUID, Long> runBytes = new HashMap<>();
-        for (var entry : directory) {
-            runBytes.merge(entry.key().indexId(), (long) entry.byteLen(), Long::sum);
-        }
+        Map<UUID, Long> runBytes = SegmentCharges.runBytes(directory);
         ledger.apportion(IndexCostLedger.Charge.DATA_PUT, runBytes);
         runBytes.forEach(ledger::bytesWritten);
         store.put(key, new Body(segment.length, () -> new ByteArrayInputStream(segment)));

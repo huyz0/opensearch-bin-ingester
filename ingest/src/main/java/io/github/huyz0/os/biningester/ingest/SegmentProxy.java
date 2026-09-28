@@ -2,6 +2,7 @@
 package io.github.huyz0.os.biningester.ingest;
 
 import io.github.huyz0.os.biningester.binstore.BinStore;
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
@@ -84,6 +85,7 @@ public final class SegmentProxy {
     private final BinStore store;
     private final int chunkBytes;
     private final SegmentCache cache;
+    private final IndexCostLedger ledger;
 
     public SegmentProxy(BinStore store) {
         this(store, DEFAULT_CHUNK_BYTES);
@@ -99,6 +101,16 @@ public final class SegmentProxy {
      *     the pre-M5.40b behaviour exactly
      */
     public SegmentProxy(BinStore store, int chunkBytes, SegmentCache cache) {
+        this(store, chunkBytes, cache, new IndexCostLedger());
+    }
+
+    /**
+     * The same, charging each store GET it issues to the indices of the
+     * segment it read, into {@code ledger} (M11.3, ADR-0077).
+     */
+    public SegmentProxy(BinStore store, int chunkBytes, SegmentCache cache,
+            IndexCostLedger ledger) {
+        this.ledger = Objects.requireNonNull(ledger, "ledger");
         this.store = Objects.requireNonNull(store, "store");
         if (chunkBytes <= 0) {
             throw new IllegalArgumentException(
@@ -330,66 +342,75 @@ public final class SegmentProxy {
         // double-and-copy -- stated because `bytesHeld()` cannot show it.
         byte[] admitting = admit && cache.capacityBytes() > 0 ? new byte[0] : null;
         int admitted = 0;
+        // ⚠️ ONE CHARGE PER STORE GET, HOWEVER IT ENDS (M11.3, ADR-0077): split
+        // by the directory when the whole segment was held, else unattributed
+        // -- a GET that threw or was never held was still billed and counted.
+        byte[] charged = null;
 
-        try (InputStream in = store.get(segmentKey)) {
-            int read;
-            while ((read = in.read(buffer)) != -1) {
-                if (read == 0) {
-                    continue;
-                }
-                if (admitting != null) {
-                    // ⚠️ LONG ARITHMETIC. `admitted + read` in int overflows
-                    // against a ceiling above 2 GiB and turns a refusal into an
-                    // OutOfMemoryError mid-serve.
-                    if ((long) admitted + read > cache.capacityBytes()) {
-                        admitting = null;
-                    } else {
-                        if (admitted + read > admitting.length) {
-                            // ⚠️ LONG THROUGHOUT. `admitting.length * 2` and
-                            // `admitted + read` in int overflow negative above a
-                            // 2 GiB ceiling, turning a growth step into a
-                            // NegativeArraySizeException mid-serve.
-                            long want = Math.max((long) admitting.length * 2,
-                                    (long) admitted + read);
-                            admitting = java.util.Arrays.copyOf(admitting,
-                                    (int) Math.min(want, cache.capacityBytes()));
+        try {
+            try (InputStream in = store.get(segmentKey)) {
+                int read;
+                while ((read = in.read(buffer)) != -1) {
+                    if (read == 0) {
+                        continue;
+                    }
+                    if (admitting != null) {
+                        // ⚠️ LONG ARITHMETIC. `admitted + read` in int overflows
+                        // against a ceiling above 2 GiB and turns a refusal into an
+                        // OutOfMemoryError mid-serve.
+                        if ((long) admitted + read > cache.capacityBytes()) {
+                            admitting = null;
+                        } else {
+                            if (admitted + read > admitting.length) {
+                                // ⚠️ LONG THROUGHOUT. `admitting.length * 2` and
+                                // `admitted + read` in int overflow negative above a
+                                // 2 GiB ceiling, turning a growth step into a
+                                // NegativeArraySizeException mid-serve.
+                                long want = Math.max((long) admitting.length * 2,
+                                        (long) admitted + read);
+                                admitting = java.util.Arrays.copyOf(admitting,
+                                        (int) Math.min(want, cache.capacityBytes()));
+                            }
+                            System.arraycopy(buffer, 0, admitting, admitted, read);
+                            admitted += read;
                         }
-                        System.arraycopy(buffer, 0, admitting, admitted, read);
-                        admitted += read;
                     }
-                }
-                // ⚠️ CHUNK OUTER, CONSUMER INNER. Swapping these two loops is
-                // buffer-then-forward, and is the mutation this class exists
-                // to make fail.
-                for (int i = live.size() - 1; i >= 0; i--) {
-                    try {
-                        live.get(i).write(buffer, 0, read);
-                    } catch (IOException | RuntimeException slowOrDeadConsumer) {
-                        // ⚠️ Iterating BACKWARDS is what makes removal safe
-                        // here without a copy per chunk.
-                        live.remove(i);
+                    // ⚠️ CHUNK OUTER, CONSUMER INNER. Swapping these two loops is
+                    // buffer-then-forward, and is the mutation this class exists
+                    // to make fail.
+                    for (int i = live.size() - 1; i >= 0; i--) {
+                        try {
+                            live.get(i).write(buffer, 0, read);
+                        } catch (IOException | RuntimeException slowOrDeadConsumer) {
+                            // ⚠️ Iterating BACKWARDS is what makes removal safe
+                            // here without a copy per chunk.
+                            live.remove(i);
+                        }
                     }
-                }
-                if (shared != null) {
-                    shared.relay(buffer, 0, read, admitting, admitted);
+                    if (shared != null) {
+                        shared.relay(buffer, 0, read, admitting, admitted);
+                    }
                 }
             }
-        }
-        // ⚠️ ADMITTED ONLY AFTER THE READ COMPLETED, so a stream that THREW
-        // part way leaves by the exception above and its prefix is never handed
-        // to a later subscriber as a whole segment.
-        //
-        // ⚠️ A SHORT READ THAT DOES NOT THROW IS NOT COVERED BY THAT, and the
-        // cache makes it worse rather than better: an `InputStream` that ends
-        // early without an exception used to cost ONE truncated delivery, and
-        // now that truncation is admitted and served to every later subscriber
-        // for as long as the entry lives. Closing it needs the expected length,
-        // which this method does not have without a `stat` -- one request per
-        // segment, which is the thing this row exists to remove. M5.64.
-        if (admitting != null) {
-            cache.put(segmentKey, admitted == admitting.length
-                    ? admitting
-                    : java.util.Arrays.copyOf(admitting, admitted));
+            // ⚠️ ADMITTED ONLY AFTER THE READ COMPLETED, so a stream that THREW
+            // part way leaves by the exception above and its prefix is never handed
+            // to a later subscriber as a whole segment.
+            //
+            // ⚠️ A SHORT READ THAT DOES NOT THROW IS NOT COVERED BY THAT, and the
+            // cache makes it worse rather than better: an `InputStream` that ends
+            // early without an exception used to cost ONE truncated delivery, and
+            // now that truncation is admitted and served to every later subscriber
+            // for as long as the entry lives. Closing it needs the expected length,
+            // which this method does not have without a `stat` -- one request per
+            // segment, which is the thing this row exists to remove. M5.64.
+            if (admitting != null) {
+                charged = admitted == admitting.length
+                        ? admitting
+                        : java.util.Arrays.copyOf(admitting, admitted);
+                cache.put(segmentKey, charged);
+            }
+        } finally {
+            SegmentCharges.chargeGet(ledger, charged);
         }
     }
 
@@ -537,6 +558,8 @@ public final class SegmentProxy {
         // from `invokeAll` at 202 ms and from the try block at 4,011 ms. That
         // is the stall this method exists to remove, moved four lines down.
         var workers = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+        // ⚠️ NEVER HELD, SO NEVER SPLIT (M11.3): one unattributed charge per GET.
+        SegmentCharges.chargeGet(ledger, null);
         try (InputStream in = store.get(segmentKey)) {
             int read;
             while ((read = in.read(buffer)) != -1) {

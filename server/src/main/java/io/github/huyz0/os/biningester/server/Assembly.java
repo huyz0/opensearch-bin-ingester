@@ -6,6 +6,7 @@ import io.github.huyz0.os.biningester.binstore.CostGovernor;
 import io.github.huyz0.os.biningester.binstore.CountingBinStore;
 import io.github.huyz0.os.biningester.binstore.GoverningBinStore;
 import io.github.huyz0.os.biningester.binstore.HealthTrackingBinStore;
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import io.github.huyz0.os.biningester.binstore.PutPurposeCounts;
 import io.github.huyz0.os.biningester.binstore.StoreCounts;
 import io.github.huyz0.os.biningester.ingest.DefaultIngest;
@@ -369,7 +370,8 @@ public final class Assembly implements AutoCloseable {
             throw new IOException("the committed chain is incomplete and cannot replay safely");
         }
         new DurableCatchUpResponder(store,
-                new SnapshotCommittedDeltaSource(() -> snapshot), local::epoch)
+                new SnapshotCommittedDeltaSource(() -> snapshot), local::epoch,
+                ingest.costLedger())
                 .respond(request, sink::write);
     }
 
@@ -460,6 +462,16 @@ public final class Assembly implements AutoCloseable {
 
     IngesterMetrics metrics() {
         return metrics;
+    }
+
+    /** Each index's apportioned share of this pod's store requests (ADR-0077). */
+    public IndexCostLedger costLedger() {
+        return ingest.costLedger();
+    }
+
+    /** The data-segment GETs this node issued: the read side's denominator (M11.3). */
+    long dataSegmentGets() {
+        return counting.dataSegmentGets();
     }
 
     GovernorMetrics governorMetrics() {
