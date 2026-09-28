@@ -29,12 +29,26 @@ class RoutedIngestInactiveLaneTest {
     private static final Principal PRINCIPAL =
             new Principal("cluster-a", "producer-1", Set.of("logs"));
 
-    /** Schedules lanes -2..2 and records nothing: nothing should reach it. */
+    /**
+     * Schedules lanes -2..2 and records nothing: nothing should reach it.
+     *
+     * <p>⚠️ IT OVERRIDES THE LANE-TAKING APPEND, and takes any lane it is
+     * handed (M11.9, H4; M10.6 review T4): inheriting {@code Ingest}'s default,
+     * which refuses any lane but 0 itself, a {@code RoutedIngest} that dropped
+     * its own check was covered by the fake's.
+     */
     private static final class ActiveMinusTwoToTwo implements Ingest {
         int appends;
 
         @Override
         public AppendResult append(Principal principal, String index, int partition,
+                RecordSource records) {
+            appends++;
+            return new AppendResult(1, 0L, 0L);
+        }
+
+        @Override
+        public AppendResult append(Principal principal, String index, int partition, byte lane,
                 RecordSource records) {
             appends++;
             return new AppendResult(1, 0L, 0L);
@@ -59,7 +73,8 @@ class RoutedIngestInactiveLaneTest {
     void anInactiveLaneOnAnUnregisteredIndexIsRefusedAtOnceAndPoolsNothing() throws IOException {
         ActiveMinusTwoToTwo delegate = new ActiveMinusTwoToTwo();
         Duration longWait = Duration.ofSeconds(45);
-        RoutedIngest routed = new RoutedIngest(delegate, new IndexCatalog(),
+        IndexCatalog catalog = new IndexCatalog();
+        RoutedIngest routed = new RoutedIngest(delegate, catalog,
                 new PendingPool(Clock.systemUTC(), longWait, 1 << 20), longWait,
                 Clock.systemUTC());
 
@@ -73,8 +88,14 @@ class RoutedIngestInactiveLaneTest {
                 .isLessThan(Duration.ofSeconds(30));
         assertThat(routed.pendingBatches()).isZero();
 
-        assertThatThrownBy(() -> routed.append(PRINCIPAL, "logs", 1, (byte) -3, one()))
-                .isInstanceOf(PlacementRefusedException.class);
+        // ⚠️ A REGISTERED index for the explicit form: an unregistered one now
+        // waits for its registration (M10.30), and the lane must be the only
+        // reason left to refuse.
+        catalog.register(new io.github.huyz0.os.biningester.format.IndexRegistration(
+                "AAAAAAAAQACAAAAAAAAAqg", "metrics", java.util.List.of(), 4, 4, 1, 1));
+        assertThatThrownBy(() -> routed.append(PRINCIPAL, "metrics", 1, (byte) -3, one()))
+                .isInstanceOf(PlacementRefusedException.class)
+                .hasMessageContaining("lane -3");
         assertThat(delegate.appends).as("nothing reached the ingest").isZero();
         assertThat(routed.acceptsLane((byte) 2)).as("and the query is the delegate's").isTrue();
     }

@@ -50,8 +50,12 @@ import org.junit.jupiter.api.io.TempDir;
  * and carries the lane −1 records already buffered in the same flush.
  *
  * <p>⚠️ END TO END IS THE POINT. {@code AccumulatorLaneTest} (M10.7) proves the
- * deadline on the accumulator alone; a lane dropped anywhere between the query
- * parameter and {@code Accumulator.add} passes that test and fails this one.
+ * deadline on the accumulator alone; a lane dropped between the query
+ * parameter and {@code Accumulator.add} ON THIS PATH -- {@code BulkService},
+ * {@code DefaultIngest} -- passes that test and fails this one. ⚠️ Not on
+ * every path: {@code RoutedIngest} is not on this one, and a lane dropped
+ * there is {@code RoutedIngestLaneTest}'s to catch (M11.9, H4; M10.9 review
+ * T1).
  *
  * <p>⚠️ THE CLOCK IS FROZEN AND ADVANCED, never slept on. Nothing is due while
  * it stands still, so which records share a flush is decided by the test, not
@@ -111,8 +115,11 @@ class LaneOvertakeTest {
     }
 
     /**
-     * Passes every call through UNCHANGED, and says when a partition's records
-     * have all been handed to the accumulator: {@code DefaultIngest} consumes
+     * Passes the EXPLICIT-partition appends through unchanged, and says when a
+     * partition's records have all been handed to the accumulator. ⚠️ Routed
+     * appends are not forwarded -- they fall to {@code Ingest}'s defaults,
+     * which refuse -- and this test writes explicit partitions only (M11.9,
+     * H4; M10.9 review P1). {@code DefaultIngest} consumes
      * the source under its lock, record by record, into the active buffer, so
      * the source returning IS the records being buffered.
      *
