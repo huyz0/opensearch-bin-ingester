@@ -192,7 +192,7 @@ public final class BulkService implements HttpService {
         String index = request.path().pathParameters().get("index");
         Placement placement;
         try {
-            placement = placementOf(request);
+            placement = PlacementParser.placementOf(request);
         } catch (BulkParseException e) {
             response.status(Status.BAD_REQUEST_400).send(e.getMessage());
             return;
@@ -268,74 +268,12 @@ public final class BulkService implements HttpService {
                     quota.refusal().get().reason());
             return;
         }
-        Admitted held = new Admitted(permit.get(), placement.lane(), quota.ticket().get());
+        Admitted held = new Admitted(admission, permit.get(), placement.lane(),
+                quota.ticket().get());
         try {
             append(request, response, index, placement, held);
         } finally {
             held.release();
-        }
-    }
-
-    /**
-     * The request's admission permit, given back while it waits for
-     * durability and taken again for its next chunk (M11.7, M10 review F2),
-     * and its index's quota slot, held until the request ends (M11.8).
-     *
-     * <p>⚠️ THE PERMIT BOUNDS LOAD, NOT WAITING. Held across the durable-ack
-     * wait, a budget of 256 capped a pod at 256 producers parked on a flush --
-     * at a low rate, where a flush is seconds away, that is a cap on
-     * concurrency with nothing to protect. So each chunk gives the permit back
-     * the moment its records are buffered.
-     *
-     * <p>⚠️ A LATER CHUNK WAITS FOR ONE RATHER THAN BEING REFUSED: the prefix
-     * already appended is durable-bound, so a mid-body {@code 429} would have
-     * the producer resend records that landed. It queues under the same fair
-     * share instead ({@link LaneAdmission#acquire}). The permit for a chunk
-     * is taken before the chunk's first record is held, so a request waiting
-     * for its permit holds no parsed records.
-     *
-     * <p>⚠️ THE INDEX's SLOT IS NOT GIVEN BACK AT BUFFERED (M11.8 review P1).
-     * It is what bounds a quota'd index's debt: a request admitted with tokens
-     * is never cut off, so the debt concurrent admission can build is at most
-     * {@code maxInFlightPerIndex} bodies only while the cap counts every
-     * request not yet finished (ADR-0078 decision 2a). Returned at buffered,
-     * it would count only the requests parsing at one instant, and an index
-     * could be admitted thousands of bodies deep.
-     */
-    private final class Admitted {
-        private final byte lane;
-        private final IndexQuotas.Ticket quota;
-        private LaneAdmission.Permit current;
-
-        Admitted(LaneAdmission.Permit first, byte lane, IndexQuotas.Ticket quota) {
-            this.current = first;
-            this.lane = lane;
-            this.quota = quota;
-        }
-
-        void holdForNextChunk() throws InterruptedException {
-            if (current == null) {
-                current = admission.acquire(lane);
-            }
-        }
-
-        /** Charges a chunk to the index's quota as it is appended (ADR-0078 decision 2). */
-        void charge(List<SegmentRecord> chunk) {
-            quota.charge(chunk);
-        }
-
-        /** A chunk is buffered: the pod's permit goes back, the index's slot does not. */
-        void buffered() {
-            if (current != null) {
-                current.release();
-                current = null;
-            }
-        }
-
-        /** The request has ended, however: everything it holds goes back. */
-        void release() {
-            buffered();
-            quota.release();
         }
     }
 
@@ -552,77 +490,5 @@ public final class BulkService implements HttpService {
                         + "and a routing value, never neither and never both");
             }
         }
-    }
-
-    /**
-     * ⚠️ EXACTLY ONE OF THE TWO, AND NEITHER HAS A DEFAULT. Defaulting the
-     * partition to 0 funnels every producer that forgot the parameter into one
-     * shard while returning 202; accepting both and preferring one silently
-     * makes a producer's stated intent depend on which the implementation
-     * happens to read first.
-     */
-    private static Placement placementOf(ServerRequest request) {
-        Placement placed = placeOf(request);
-        return new Placement(placed.partition(), placed.routing(), laneOf(request));
-    }
-
-    /**
-     * The request's priority lane (FR-18, ADR-0074): absent is 0.
-     *
-     * <p>⚠️ ONLY ITS SYNTAX IS CHECKED HERE -- an integer that fits {@code i8}.
-     * Whether it is ACTIVE is the ingester's decision, made before anything is
-     * buffered and answered as a placement refusal; this adapter owns no
-     * decision (ADR-0019).
-     */
-    private static byte laneOf(ServerRequest request) {
-        var raw = request.query().first("lane");
-        if (raw.isEmpty()) {
-            return 0;
-        }
-        int lane;
-        try {
-            lane = Integer.parseInt(raw.get());
-        } catch (NumberFormatException e) {
-            throw new BulkParseException("'lane' is an integer");
-        }
-        if (lane < Byte.MIN_VALUE || lane > Byte.MAX_VALUE) {
-            throw new BulkParseException("'lane' is a signed byte, -128 to 127");
-        }
-        return (byte) lane;
-    }
-
-    private static Placement placeOf(ServerRequest request) {
-        var rawPartition = request.query().first("partition");
-        var routing = request.query().first("routing");
-        if (rawPartition.isPresent() && routing.isPresent()) {
-            throw new BulkParseException("'partition' and 'routing' are alternatives: the "
-                    + "first says where these records go, the second asks the ingester to "
-                    + "work it out. Send one");
-        }
-        if (routing.isPresent()) {
-            if (routing.get().isEmpty()) {
-                // ⚠️ AN EMPTY ROUTING VALUE IS REFUSED HERE, not placed. It
-                // hashes to a partition like any other string, so accepting it
-                // would send every producer that built its query string wrong
-                // to one shard -- indistinguishable from a working deployment
-                // until the shard is hot.
-                throw new BulkParseException("'routing' is not empty");
-            }
-            return new Placement(null, routing.get());
-        }
-        String raw = rawPartition.orElseThrow(() -> new BulkParseException(
-                "one of the 'partition' or 'routing' query parameters is required: there is "
-                        + "no default, because defaulting to partition 0 funnels every "
-                        + "producer that forgot it into one shard while returning 202"));
-        int partition;
-        try {
-            partition = Integer.parseInt(raw);
-        } catch (NumberFormatException e) {
-            throw new BulkParseException("'partition' is an integer");
-        }
-        if (partition < 0) {
-            throw new BulkParseException("'partition' is not negative");
-        }
-        return new Placement(partition, null);
     }
 }
