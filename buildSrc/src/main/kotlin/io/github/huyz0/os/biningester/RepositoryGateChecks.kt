@@ -236,6 +236,60 @@ object RepositoryGateChecks {
             }
     }
 
+    /**
+     * M12.7 (M11.6 P1): the one production source that sends a 429, from inside
+     * `BulkService.tooManyRequests` -- the one place that sets `Retry-After`. A
+     * second emitter is how a bare 429 comes back, retried at whatever rate the
+     * producer's own loop runs, which is the load the refusal existed to shed.
+     *
+     * ⚠️ ANY SPELLING (review P1): Helidon's `TOO_MANY_REQUESTS_429`, and a bare
+     * `429` in code, which is how the JDK server in `NodeLocalStoreReaderMain`
+     * sets its statuses. Comments and strings are stripped first, so prose and
+     * messages naming a 429 pass. ⚠️ AND THE METHOD, NOT MERELY THE FILE (review
+     * P2): the owner's one 429 must sit inside `tooManyRequests`'s body.
+     */
+    const val TOO_MANY_REQUESTS_OWNER = "http/src/main/java/io/github/huyz0/os/biningester/http/BulkService.java"
+
+    private val tooManyRequests = Regex("""TOO_MANY_REQUESTS|\b429\b""")
+    private val tooManyRequestsMethod = Regex("""\bvoid\s+tooManyRequests\s*\(""")
+
+    fun singleTooManyRequests(root: Path, files: List<Path>, failures: MutableList<String>) {
+        files.filter { it.extension() == "java" }
+            .map { it to normalized(root.relativize(it)) }
+            .filter { (_, relative) -> relative.contains("/src/main/") }
+            .forEach { (file, relative) ->
+                val code = stripJavaNoise(file.readText())
+                val found = tooManyRequests.findAll(code).toList()
+                if (relative != TOO_MANY_REQUESTS_OWNER) {
+                    if (found.isNotEmpty()) {
+                        failures += "$relative sends a 429 (M12.7): every 429 leaves through " +
+                            "BulkService.tooManyRequests, which sets Retry-After"
+                    }
+                } else if (found.size > 1) {
+                    failures += "$relative sends a 429 in ${found.size} places (M12.7): only " +
+                        "tooManyRequests may"
+                } else if (found.size == 1 && !insideTooManyRequests(code, found[0].range.first)) {
+                    failures += "$relative sends a 429 outside tooManyRequests (M12.7), " +
+                        "which is where Retry-After is set"
+                }
+            }
+    }
+
+    /** Whether `at` lies in the body of the `tooManyRequests` method declared in `code`. */
+    private fun insideTooManyRequests(code: String, at: Int): Boolean {
+        val declared = tooManyRequestsMethod.find(code) ?: return false
+        val open = code.indexOf('{', declared.range.last)
+        if (open < 0) return false
+        var depth = 0
+        for (i in open until code.length) {
+            when (code[i]) {
+                '{' -> depth++
+                '}' -> if (--depth == 0) return at in open..i
+            }
+        }
+        return false
+    }
+
     private fun stripJavaNoise(text: String): String = text
         .replace(Regex("(?s)/\\*.*?\\*/"), "")
         .replace(Regex("//.*"), "")

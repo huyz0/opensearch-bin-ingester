@@ -42,6 +42,7 @@ abstract class RepositoryGatesTask : DefaultTask() {
         checkFileSizes(root, files, failures)
         RepositoryGateChecks.splitCeilings(root, failures)
         RepositoryGateChecks.ledgerOwnership(root, files, failures)
+        RepositoryGateChecks.singleTooManyRequests(root, files, failures)
         checkMarkdownLinks(root, files, failures)
         checkAdrReferences(root, files, failures)
         checkTerminology(root, files, failures)
