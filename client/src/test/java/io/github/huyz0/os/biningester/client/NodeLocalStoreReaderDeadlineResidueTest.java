@@ -10,7 +10,6 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.URI;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
@@ -43,10 +42,10 @@ class NodeLocalStoreReaderDeadlineResidueTest {
 
     private Path secret() throws IOException {
         Path secret = dir.resolve("secret");
-        Files.write(secret, new byte[32]);
-        Files.setPosixFilePermissions(secret, java.util.EnumSet.of(
-                java.nio.file.attribute.PosixFilePermission.OWNER_READ,
-                java.nio.file.attribute.PosixFilePermission.OWNER_WRITE));
+        // ⚠️ THE PRODUCTION CREATOR, NOT A HAND-ROLLED POSIX CHMOD (M12.25): it
+        // falls back to an owner-only ACL where the file system has no POSIX
+        // view, which a direct setPosixFilePermissions throws on (NTFS).
+        InstallationSecret.create(secret);
         return secret;
     }
 
