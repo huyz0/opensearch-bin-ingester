@@ -23,6 +23,17 @@ not a fixed number, because expected moves with load.
 > commit. An undeclared LIST is governed whatever its prefix. Where this page
 > and the ADR disagree, the ADR wins.
 
+> ⚠️ **REVISED 2026-09-28 (M11; [ADR-0077](../../internal/product/decisions/0077-an-index-cost-is-apportioned-by-run-bytes-from-the-segment-directory.md), [ADR-0078](../../internal/product/decisions/0078-per-index-quotas-are-pod-local-token-buckets-on-admitted-bytes-and-records.md)).**
+> §4's per-index counters are built as an APPORTIONMENT, not counts: a data
+> PUT or GET is split by the segment directory's run bytes and a commit PUT by
+> the delta's record counts, with an `unattributed` bucket, the shares summing
+> exactly to the counted requests -- no per-index request exists to count.
+> §4's `binstore_governor_refusals_total{class}` is built as two unlabelled
+> names plus their sum, `class` not being on observability.md rule 1's
+> allow-list. §5.3's page naming the top three (purpose, index) pairs is NOT
+> built: the kill switch logs and exports a gauge, and the top-K cost line is
+> a separate periodic event.
+
 
 ## 1. What a runaway actually costs
 

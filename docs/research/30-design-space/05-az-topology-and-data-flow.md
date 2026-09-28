@@ -16,6 +16,14 @@ cross-AZ traffic is commit metadata.
 > frames over 694,650 consumed bytes (0.072%) for sub-cap segments, and 335 B over 842,180 B
 > (0.040%) above the cap (M10.4), both with ONE stream per segment. The event frame is
 > per stream, so a segment of K cross-zone streams needs roughly K x 166 KB to meet 0.1%.
+>
+> ⚠️ **Revised 2026-09-28 (M11; [ADR-0080](../../internal/product/decisions/0080-nfr5s-per-stream-event-floor-is-closed-by-one-compact-event-per-node-per-segment.md)).**
+> Measured at K > 1 (M10.34): the floor is about 166 B per (segment,
+> cross-zone stream) and grows linearly in K. ADR-0080's interim BOUND is
+> 200 B per such stream (the measured 166 B plus margin), so NFR-5 is claimed
+> only above about K x 200 KB per segment until ADR-0080's compact per-(node, segment) event
+> lands. Relaying events through the consumer's own-zone ingester was not
+> weighed by that ADR and is unevaluated.
 
 ---
 

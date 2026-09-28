@@ -234,7 +234,7 @@ tasks.register<RepositoryGatesTask>("checkCommitMessage") {
 tasks.register<MilestoneVerifiedTask>("checkMilestoneVerified") {
     group = "verification"
     description = "Verify every milestone acceptance criterion has evidence"
-    val milestonePath = project.findProperty("milestoneDir")?.toString() ?: "docs/internal/product/milestones/M10"
+    val milestonePath = project.findProperty("milestoneDir")?.toString() ?: "docs/internal/product/milestones/M11"
     milestone.set(layout.projectDirectory.dir(milestonePath))
 }
 

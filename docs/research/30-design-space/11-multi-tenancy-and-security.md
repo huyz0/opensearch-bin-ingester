@@ -13,6 +13,13 @@ scale nothing reaches the throughput that makes a dedicated stream free.
 
 This document closes the two gaps the corpus previously acknowledged (Q9, Q10).
 
+> ⚠️ **REVISED 2026-09-28 (M11; [ADR-0078](../../internal/product/decisions/0078-per-index-quotas-are-pod-local-token-buckets-on-admitted-bytes-and-records.md), [ADR-0079](../../internal/product/decisions/0079-admission-bounds-load-and-an-unflushed-bytes-ceiling-bounds-memory.md)).**
+> §2's mechanism 1 is built per POD, so a fleet of N pods admits N x an
+> index's rate (ADR-0078 decision 5), and a quota'd index's in-flight cap is
+> held across the durable wait, making it a per-index concurrency limit too.
+> §1's global `maxUnflushedBytes` is now ADR-0079's ceiling,
+> `max(1 MiB, 4 x maxSegmentBytes)`. Mechanisms 2 and 3 remain unbuilt.
+
 ---
 
 ## 1. What one noisy index can do
