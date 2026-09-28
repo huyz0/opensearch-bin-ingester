@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.ingest;
 
+import io.github.huyz0.os.biningester.binstore.BinStore;
 import io.github.huyz0.os.biningester.binstore.Capabilities;
+import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import java.util.Objects;
 
 /**
@@ -55,6 +57,50 @@ public record SegmentServing(FetchPolicy policy, Capabilities capabilities, Segm
         Objects.requireNonNull(policy, "policy");
         Objects.requireNonNull(capabilities, "capabilities");
         Objects.requireNonNull(proxy, "proxy");
+    }
+
+    /**
+     * The serving path a pod builds from its config and its backend's own
+     * prices and capabilities (moved out of {@code DefaultIngest} by M11.24a).
+     */
+    static SegmentServing forPod(IngestConfig config, BinStore store, IndexCostLedger costLedger) {
+        Capabilities storeCapabilities = store.capabilities();
+        // ⚠️ THE STARTUP REFUSAL, AND M5.43 IS WHAT GAVE IT A CALLER. Criterion
+        // 7 asks that a deployment wanting `direct` against a backend that
+        // cannot sign fail at STARTUP rather than at the first fetch, and until
+        // this line nothing expressed "this deployment wants direct" -- so the
+        // refusal `Capabilities.requirePresignedUrls` implements had no call
+        // site anywhere in the tree.
+        //
+        // ⚠️ CONDITIONAL, NECESSARILY. Calling it unconditionally fails every
+        // pod to start on both shipping backends, neither of which presigns;
+        // calling it lazily puts the refusal back at the first fetch, which is
+        // what it exists to prevent.
+        if (config.directEnabled()) {
+            storeCapabilities.requirePresignedUrls();
+        }
+        return new SegmentServing(
+                new FetchPolicy(FetchPolicyConfig.defaultsFor(
+                        storeCapabilities.costs(), config.directEnabled())),
+                storeCapabilities,
+                // ⚠️ THE CACHE IS ON IN PRODUCTION, which is what makes
+                // M5.40b a number rather than a capability. A repeat read
+                // across publishes -- a late subscriber, an AZ replaying a
+                // backlog -- costs no GET.
+                new SegmentProxy(store, SegmentProxy.DEFAULT_CHUNK_BYTES,
+                        // ⚠️ FROM THE CONFIG, NOT FROM THE DEFAULT CONSTANT.
+                        // A deployment that configures a larger segment than
+                        // the default would otherwise exceed a fixed ceiling
+                        // with EVERY segment, cache nothing, and say nothing.
+                        SegmentCache.forSegmentsOf(config.maxSegmentBytes()), costLedger),
+                // ⚠️ ONCE PER POD, NOT ONCE PER PUBLISH. An issuer per publish
+                // would allocate on the serving path for every flush, and it
+                // would put the TTL ceiling's configuration in a loop rather
+                // than at one site. ⚠️ AND NULL WHEN `direct` IS OFF, because
+                // the constructor REFUSES a backend that cannot presign -- so
+                // over a backend that cannot sign there is no issuer to hold, which
+                // is the same refusal the line above already made.
+                config.directEnabled() ? new GrantIssuer(store) : null);
     }
 
     /** How large a hand-off this serving path makes, in bytes. */

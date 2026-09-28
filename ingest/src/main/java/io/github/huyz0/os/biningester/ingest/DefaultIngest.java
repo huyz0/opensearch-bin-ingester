@@ -3,12 +3,9 @@ package io.github.huyz0.os.biningester.ingest;
 
 import io.github.huyz0.os.biningester.binstore.BinStore;
 import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
-import io.github.huyz0.os.biningester.binstore.Capabilities;
-import io.github.huyz0.os.biningester.format.CommitDelta;
 import io.github.huyz0.os.biningester.format.RunKey;
 import io.github.huyz0.os.biningester.format.SegmentRecord;
 import io.github.huyz0.os.biningester.security.Principal;
-import io.github.huyz0.os.biningester.sequencer.CommitRequest;
 import io.github.huyz0.os.biningester.sequencer.Sequencer;
 import java.io.IOException;
 import java.time.Clock;
@@ -68,22 +65,10 @@ public final class DefaultIngest implements Ingest {
      */
     private final SegmentServing serving;
     private final Sequencer sequencer;
-    private final String podShortId;
-    /**
-     * ⚠️ Half the idempotency key, with {@code podId} (M4.10). A plain
-     * {@code long}, not an atomic, because every increment happens inside the
-     * drain that the single {@link FlushCoordinator} already serialises.
-     */
-    private long flushSeq;
-    // ⚠️ ONCE PER INSTANCE, never per flush (ADR-0036). A new process is a new
-    // incarnation by construction -- no clock, no coordination -- which is what
-    // lets a replay be told from a restart when `flushSeq` restarts at 0 and
-    // `podShortId` does not. Minting this inside the flush worker keeps
-    // every sequencer-seam suite green, and makes dedup a no-op in production.
-    private final String incarnationId = java.util.UUID.randomUUID().toString();
+    /** The detached batch's store work, off {@link #lock}. */
+    private final BatchFlusher batchFlusher;
     private final SubscriptionHub hub;
     private final StreamResolver streams;
-    private final DurableSegmentListener durableSegmentListener;
 
     /**
      * ⚠️ Serializes active-buffer mutation and flush detachment. The detached
@@ -110,15 +95,8 @@ public final class DefaultIngest implements Ingest {
      */
     public static final long MIN_UNFLUSHED_BYTES = 1L << 20;
 
-    /** {@link #UNFLUSHED_SEGMENTS} segments, at least {@link #MIN_UNFLUSHED_BYTES}. */
-    private final long maxUnflushedBytes;
-
-    /** The batch being flushed's buffered bytes, 0 when none; under {@link #lock}. */
-    private long inFlightBytes;
-
-    /** Signalled when a flush completes, for an append waiting for room. */
-    private final Condition roomToBuffer = lock.newCondition();
-
+    /** The unflushed-bytes ceiling, under {@link #lock} (ADR-0079). */
+    private final UnflushedCeiling ceiling;
 
     /**
      * The spacing that governed the batch being flushed, {@link Long#MAX_VALUE}
@@ -190,59 +168,22 @@ public final class DefaultIngest implements Ingest {
         this.costLedger = Objects.requireNonNull(costLedger, "costLedger");
         this.config = Objects.requireNonNull(config, "config");
         this.accumulator = new Accumulator(config, Objects.requireNonNull(clock, "clock"));
-        this.maxUnflushedBytes = Math.max(MIN_UNFLUSHED_BYTES,
-                Math.multiplyExact(UNFLUSHED_SEGMENTS, config.maxSegmentBytes()));
+        this.ceiling = new UnflushedCeiling(Math.max(MIN_UNFLUSHED_BYTES,
+                Math.multiplyExact(UNFLUSHED_SEGMENTS, config.maxSegmentBytes())),
+                lock.newCondition());
         this.publisher = new SegmentPublisher(Objects.requireNonNull(store, "store"),
                 Objects.requireNonNull(prefix, "prefix"),
                 Objects.requireNonNull(podShortId, "podShortId"), costLedger);
-        Capabilities storeCapabilities = store.capabilities();
-        // ⚠️ THE STARTUP REFUSAL, AND M5.43 IS WHAT GAVE IT A CALLER. Criterion
-        // 7 asks that a deployment wanting `direct` against a backend that
-        // cannot sign fail at STARTUP rather than at the first fetch, and until
-        // this line nothing expressed "this deployment wants direct" -- so the
-        // refusal `Capabilities.requirePresignedUrls` implements had no call
-        // site anywhere in the tree.
-        //
-        // ⚠️ CONDITIONAL, NECESSARILY. Calling it unconditionally fails every
-        // pod to start on both shipping backends, neither of which presigns;
-        // calling it lazily puts the refusal back at the first fetch, which is
-        // what it exists to prevent.
-        if (config.directEnabled()) {
-            storeCapabilities.requirePresignedUrls();
-        }
-        this.serving = new SegmentServing(
-                new FetchPolicy(FetchPolicyConfig.defaultsFor(
-                        storeCapabilities.costs(), config.directEnabled())),
-                storeCapabilities,
-                // ⚠️ THE CACHE IS ON IN PRODUCTION, which is what makes
-                // M5.40b a number rather than a capability. A repeat read
-                // across publishes -- a late subscriber, an AZ replaying a
-                // backlog -- costs no GET.
-                new SegmentProxy(store, SegmentProxy.DEFAULT_CHUNK_BYTES,
-                        // ⚠️ FROM THE CONFIG, NOT FROM THE DEFAULT CONSTANT.
-                        // A deployment that configures a larger segment than
-                        // the default would otherwise exceed a fixed ceiling
-                        // with EVERY segment, cache nothing, and say nothing.
-                        SegmentCache.forSegmentsOf(config.maxSegmentBytes()), costLedger),
-                // ⚠️ ONCE PER POD, NOT ONCE PER PUBLISH. An issuer per publish
-                // would allocate on the serving path for every flush, and it
-                // would put the TTL ceiling's configuration in a loop rather
-                // than at one site. ⚠️ AND NULL WHEN `direct` IS OFF, because
-                // the constructor REFUSES a backend that cannot presign -- so
-                // over a backend that cannot sign there is no issuer to hold, which
-                // is the same refusal the line above already made.
-                config.directEnabled() ? new GrantIssuer(store) : null);
+        this.serving = SegmentServing.forPod(config, store, costLedger);
         // ⚠️ WRAPPED HERE, ONCE, so no flush path can reach the bare seam and
         // skip the resend -- M5.69 moved the policy out of this class and the
         // wrapping is what keeps it un-bypassable. `ResendOnceSequencer` says
         // what it costs and why it is exactly once.
         this.sequencer = new ResendOnceSequencer(
                 Objects.requireNonNull(sequencer, "sequencer"));
-        this.podShortId = podShortId;
         this.hub = Objects.requireNonNull(hub, "hub");
         this.streams = Objects.requireNonNull(streams, "streams");
-        this.durableSegmentListener = Objects.requireNonNull(
-                durableSegmentListener, "durableSegmentListener");
+        Objects.requireNonNull(durableSegmentListener, "durableSegmentListener");
 
         // ⚠️ NO RECOVERY HERE ANY MORE, and the startup-latency note that used
         // to sit here moved WITH the responsibility to `LocalSequencer.start`.
@@ -255,6 +196,8 @@ public final class DefaultIngest implements Ingest {
                     inFlightSpacingMillis = Long.MAX_VALUE;
                 });
         this.pushQueue = new PushQueue(hub, serving, config.maxQueuedPushBytes());
+        this.batchFlusher = new BatchFlusher(publisher, this.sequencer, podShortId,
+                durableSegmentListener, pushQueue);
         this.flusher = Thread.ofVirtual().name("binstore-flush").start(this::flushLoop);
     }
 
@@ -483,40 +426,10 @@ public final class DefaultIngest implements Ingest {
     }
 
 
-    /**
-     * Waits while the pod holds {@link #maxUnflushedBytes} or more buffered and
-     * not yet durable; caller holds {@link #lock} (M11.7, ADR-0079).
-     *
-     * <p>⚠️ THIS IS WHAT BOUNDS MEMORY ONCE THE FRONT DOOR GIVES ITS ADMISSION
-     * PERMIT BACK AT BUFFERED: without it, a slow store lets every release
-     * admit another chunk behind the stalled flush, and the accumulator grows
-     * with the number of producers (NFR-6). It WAITS rather than refusing: the
-     * caller may be part-way through a body whose prefix is durable-bound.
-     *
-     * <p>⚠️ MEASURED FROM THE ACCUMULATORS THEMSELVES -- the active buffer and
-     * the detached one in flight -- never from a per-append tally, which a
-     * {@code RecordSource} throwing part-way would leave uncounted or never
-     * released.
-     *
-     * <p>⚠️ IT WAITS ONLY FOR A FLUSH THAT WILL COME: a batch in flight, or a
-     * waiter the flusher will flush for. Records a throwing source left
-     * buffered with no waiter have nobody to flush them, and waiting on those
-     * would wait for ever; the append proceeds, and its own records bring the
-     * flush.
-     */
+    /** Waits for room under the unflushed ceiling; caller holds {@link #lock}. */
     private void awaitRoomLocked() throws IOException {
-        while (accumulator.bufferedBytes() + inFlightBytes >= maxUnflushedBytes && !closed
-                && (flushes.isQueued() || !pending.isEmpty())) {
-            try {
-                roomToBuffer.await();
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new IOException("interrupted while waiting for room to buffer", e);
-            }
-        }
-        if (closed) {
-            throw new IOException("this ingester is closed");
-        }
+        ceiling.awaitRoom(() -> accumulator.bufferedBytes(),
+                () -> flushes.isQueued() || !pending.isEmpty(), () -> closed);
     }
 
     /** Detaches the active buffer and queues its store work; caller holds {@link #lock}. */
@@ -537,15 +450,13 @@ public final class DefaultIngest implements Ingest {
         // then both buffers would answer as if no +2 record had been written.
         inFlightSpacingMillis = detached.flushSpacing().toMillis();
         // ⚠️ TAKEN BEFORE THE DRAIN, which zeroes the detached buffer's count.
-        inFlightBytes = detached.bufferedBytes();
+        ceiling.detached(detached.bufferedBytes());
         CompletableFuture<Void> done = flushes.enqueue(batch, detached);
-        // ⚠️ HOWEVER THE FLUSH ENDS, its bytes are no longer buffered here: a
-        // failed batch answered its waiters exceptionally and is not retried.
+        // ⚠️ HOWEVER THE FLUSH ENDS -- see UnflushedCeiling.flushEnded.
         done.whenComplete((ignored, failure) -> {
             lock.lock();
             try {
-                inFlightBytes = 0;
-                roomToBuffer.signalAll();
+                ceiling.flushEnded();
             } finally {
                 lock.unlock();
             }
@@ -553,46 +464,9 @@ public final class DefaultIngest implements Ingest {
         return done;
     }
 
-    /** Runs without {@link #lock}; producers fill the replacement buffer. */
+    /** Runs without {@link #lock}; see {@link BatchFlusher#flush}. */
     private void flushBatch(FlushCoordinator.Batch queued) throws IOException {
-        List<Pending> batch = queued.pending();
-        try {
-            SegmentPublisher.Published published = publisher.publish(queued.accumulator())
-                    .orElseThrow(() -> new IOException(
-                            "the accumulator produced no segment for a non-empty batch"));
-            // ⚠️ BUILT ONCE, SO A RETRY CARRIES THE SAME TRIPLE -- the only thing
-            // that lets the sequencer answer one instead of committing it twice
-            // (M5.2, M5.32). `flushSeq++` stays inside this constructor call.
-            CommitRequest request = new CommitRequest(podShortId, incarnationId, flushSeq++,
-                    published.key(), published.recordCounts());
-            CommitDelta delta;
-            try {
-                delta = sequencer.commit(request);
-            } catch (io.github.huyz0.os.biningester.sequencer.CommitDeferredException deferred) {
-                // ⚠️ INTENT DURABLE (ADR-0058): a 202, no offset, nothing to push.
-                batch.forEach(p -> queued.settle(
-                        () -> p.done().complete(AppendResult.deferred(p.count()))));
-                return;
-            }
-
-            DurableSegmentAcknowledgement.complete(published, delta, batch,
-                    durableSegmentListener, queued::settle);
-            // ⚠️ Submitted only after BOTH objects are durable, and only after
-            // the waiters are released: append promises DURABILITY, and a
-            // consumer told about a segment it cannot GET would fail its read.
-            // ⚠️ AT FLUSH TIME, not at push time: the pusher runs off this lock
-            // and can lag, so reading it there labels a push with the chain's
-            // LATER epoch (M5.15d). READ HERE and handed to the settlement,
-            // which runs after the acks (M10.13), so the offer cannot re-read it.
-            long epoch = sequencer.epoch();
-            queued.settle(() -> pushQueue.offer(delta, published.key(), published.segment(),
-                    epoch));
-        } catch (IOException | RuntimeException | Error e) { // an Error strands no producer
-            for (Pending p : batch) {
-                queued.settle(() -> p.done().completeExceptionally(e));
-            }
-            throw e;
-        }
+        batchFlusher.flush(queued);
     }
 
     /**
@@ -627,7 +501,7 @@ public final class DefaultIngest implements Ingest {
         try {
             closed = true;
             work.signalAll();
-            roomToBuffer.signalAll();
+            ceiling.wakeAll();
         } finally {
             lock.unlock();
         }
