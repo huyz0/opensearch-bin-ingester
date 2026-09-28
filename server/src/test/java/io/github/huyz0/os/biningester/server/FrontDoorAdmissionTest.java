@@ -4,6 +4,7 @@ package io.github.huyz0.os.biningester.server;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.huyz0.os.biningester.binstore.backend.MemoryBinStore;
+import io.github.huyz0.os.biningester.format.IndexRegistration;
 import io.github.huyz0.os.biningester.ingest.IngestConfig;
 import io.github.huyz0.os.biningester.ingest.LaneAdmission;
 import io.github.huyz0.os.biningester.ingest.LaneSet;
@@ -13,6 +14,7 @@ import io.helidon.webclient.api.HttpClientResponse;
 import io.helidon.webclient.api.WebClient;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
@@ -64,6 +66,10 @@ class FrontDoorAdmissionTest {
         try (var store = new MemoryBinStore();
                 var assembly = Assembly.open(config, store, noPeers, Clock.systemUTC());
                 var door = FrontDoor.start(assembly, Clock.systemUTC())) {
+            // ⚠️ REGISTERED, so the admitted write is written: an unregistered
+            // index now waits out PENDING_TIMEOUT and answers 503 (M10.30).
+            assembly.catalog().register(new IndexRegistration("AAAAAAAAQACAAAAAAAAAqg", "logs",
+                    List.of(), 4, 4, 1, 1));
             WebClient http = WebClient.builder().baseUri("http://127.0.0.1:" + door.port())
                     .build();
             LaneAdmission pod = door.laneAdmission();
@@ -74,10 +80,8 @@ class FrontDoorAdmissionTest {
 
             assertThat(post(http, 0)).as("the configured budget of 6 is saturated")
                     .isEqualTo(429);
-            // ⚠️ NOT 429 IS THE WHOLE CLAIM: past admission, an explicit write to
-            // an index nobody registered is answered 500 today (M10.30).
             assertThat(post(http, 1)).as("lane 1's configured floor is 2, and it holds 1")
-                    .isNotEqualTo(429);
+                    .isEqualTo(202);
         }
     }
 }

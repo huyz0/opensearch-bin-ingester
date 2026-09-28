@@ -9,6 +9,7 @@ import io.github.huyz0.os.biningester.format.IndexRegistration;
 import io.github.huyz0.os.biningester.format.Lease;
 import io.github.huyz0.os.biningester.format.RunKey;
 import io.github.huyz0.os.biningester.format.SegmentRecord;
+import io.github.huyz0.os.biningester.ingest.RegistrationTimeoutException;
 import io.github.huyz0.os.biningester.ingest.IngestConfig;
 import io.github.huyz0.os.biningester.ingest.SubscriptionHub;
 import io.github.huyz0.os.biningester.security.Principal;
@@ -297,11 +298,13 @@ class AssemblyTest {
         try (Assembly assembly = Assembly.open(config("pod1"), noPeers(), Clock.systemUTC())) {
             assertThatThrownBy(() -> assembly.ingest().append(PRINCIPAL, "never-registered", 0,
                     sink -> sink.accept(record("d"))))
-                    .as("⚠️ M8.32 gives this the pending pool FR-13 specifies. Until then "
-                            + "the honest behaviour is a refusal: a made-up stream for an "
-                            + "index nobody registered writes records no consumer will ever "
-                            + "subscribe to, and returns 202 for them")
-                    .isInstanceOf(IllegalArgumentException.class);
+                    .as("⚠️ A REFUSAL, after waiting PENDING_TIMEOUT for the registration "
+                            + "(M10.30): a made-up stream for an index nobody registered "
+                            + "writes records no consumer will ever subscribe to, and returns "
+                            + "202 for them -- and the refusal is the one the front door "
+                            + "answers 503, not the bare IllegalArgumentException it answered "
+                            + "500")
+                    .isInstanceOf(RegistrationTimeoutException.class);
         }
     }
 

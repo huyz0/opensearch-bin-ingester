@@ -151,17 +151,18 @@ class RoutedIngestTest {
     }
 
     @Test
-    void anEXPLICITWriteToAnUNKNOWNIndexIsPassedThroughRatherThanRefused() throws Exception {
+    void anEXPLICITWriteToAnUNKNOWNIndexWAITSForItsShapeRatherThanPassingThrough()
+            throws Exception {
         RecordingIngest delegate = new RecordingIngest();
-        RoutedIngest routed = routed(delegate, Duration.ofSeconds(5));
+        RoutedIngest routed = routed(delegate, Duration.ofMillis(50));
 
-        routed.append(PRINCIPAL, "metrics", 7, source("doc-1"));
-
-        assertThat(delegate.partitions)
-                .as("an unknown index is not an invalid partition: the producer may be ahead "
-                        + "of the plugin, and this is the explicit mode, which needs no shape "
-                        + "at all")
-                .containsExactly(7);
+        assertThatThrownBy(() -> routed.append(PRINCIPAL, "metrics", 7, source("doc-1")))
+                .as("an unknown index is not an invalid partition -- the producer may be "
+                        + "ahead of the plugin -- so it waits, and is refused 503-shaped when "
+                        + "the shape never comes (M10.30); passed through, the pod could name "
+                        + "no stream for it and answered 500")
+                .isInstanceOf(RegistrationTimeoutException.class);
+        assertThat(delegate.partitions).isEmpty();
     }
 
     /**

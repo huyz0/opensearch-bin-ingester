@@ -115,10 +115,12 @@ public final class RoutedIngest implements Ingest {
     }
 
     /**
-     * ⚠️ VALIDATED AGAINST THE REGISTERED SHARD COUNT WHEN THERE IS ONE, and
-     * passed through untouched when there is not. An unknown index is not an
-     * invalid partition -- the producer may be ahead of the plugin, and
-     * refusing would punish it for a race it cannot see.
+     * ⚠️ VALIDATED AGAINST THE REGISTERED SHARD COUNT, once there is one. An
+     * unknown index is not an invalid partition -- the producer may be ahead
+     * of the plugin, and refusing at once would punish it for a race it cannot
+     * see -- so the write WAITS for the registration as a routed one does, and
+     * is refused {@link RegistrationTimeoutException} when it does not come
+     * (M10.30).
      */
     @Override
     public AppendResult append(Principal principal, String index, int partition,
@@ -163,7 +165,21 @@ public final class RoutedIngest implements Ingest {
             RecordSource records, Runnable buffered) throws IOException {
         requireLane(lane);
         Optional<IndexRegistration> known = catalog.resolve(index);
-        if (known.isPresent() && partition >= known.get().numShards()) {
+        if (known.isEmpty()) {
+            // ⚠️ WAITED FOR, AS A ROUTED WRITE IS, and refused 503 when it does
+            // not come (M10.30): passed through, the composition root cannot
+            // name a stream for it and answers 500, which reads as this
+            // ingester's bug. The records are not consumed while it waits --
+            // the front door holds at most one parsed chunk -- so no pool.
+            known = awaitRegistration(index, catalog::resolve);
+            if (known.isEmpty()) {
+                throw new RegistrationTimeoutException("index " + index + " was still not "
+                        + "registered after " + pendingTimeout + " -- the plugin has not "
+                        + "pushed its shape, and records written for it now would land in a "
+                        + "stream no shard subscribes to");
+            }
+        }
+        if (partition >= known.get().numShards()) {
             throw new PlacementRefusedException("partition " + partition + " does not exist in "
                     + known.get().indexName() + ", which has " + known.get().numShards()
                     + " shards -- records written there land in a stream no shard polls, and "
@@ -173,7 +189,7 @@ public final class RoutedIngest implements Ingest {
         // lands in the same streams a routed one does. Passing the alias
         // through would make `(indexUUID, partition)` depend on which name the
         // producer happened to use.
-        String concrete = known.map(IndexRegistration::indexName).orElse(index);
+        String concrete = known.get().indexName();
         return delegate.append(principal, concrete, partition, lane, records, buffered);
     }
 
@@ -265,7 +281,8 @@ public final class RoutedIngest implements Ingest {
     private AppendResult placeWhenRegistered(Principal principal, String indexOrAlias,
             String routing, byte lane, PendingPool.Batch batch, Runnable buffered)
             throws IOException {
-        Optional<IndexRegistration> arrived = awaitRegistration(indexOrAlias);
+        Optional<IndexRegistration> arrived =
+                awaitRegistration(indexOrAlias, catalog::resolveForRouting);
         List<SegmentRecord> mine = batch.take();
         if (arrived.isEmpty() || mine.isEmpty()) {
             // ⚠️ EMPTY MEANS THE SWEEPER GOT THERE FIRST, which is the same
@@ -283,7 +300,8 @@ public final class RoutedIngest implements Ingest {
                 buffered);
     }
 
-    private Optional<IndexRegistration> awaitRegistration(String indexOrAlias) {
+    private Optional<IndexRegistration> awaitRegistration(String indexOrAlias,
+            java.util.function.Function<String, Optional<IndexRegistration>> resolver) {
         // ⚠️ THE INJECTED CLOCK, not `System.nanoTime` -- non-negotiable 7 and
         // `check-io-seam`, which went red on the first draft. The pool takes
         // one for exactly this reason and reintroducing the wall clock a layer
@@ -292,7 +310,7 @@ public final class RoutedIngest implements Ingest {
         lock.lock();
         try {
             while (true) {
-                Optional<IndexRegistration> known = catalog.resolveForRouting(indexOrAlias);
+                Optional<IndexRegistration> known = resolver.apply(indexOrAlias);
                 if (known.isPresent()) {
                     return known;
                 }
