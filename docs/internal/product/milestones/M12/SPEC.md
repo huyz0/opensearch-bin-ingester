@@ -199,7 +199,10 @@ NFR-1's bound and NFR-3's ceiling are unchanged. No budget moves.
    `concreteIndex` are abstract, pinned by `IngestHasNoDefaultsTest` (T0,
    reflection: none of the three is a `default` method); each implementation
    states them; the test doubles that relied on the default still pass.
-5. **The unflushed ceiling holds under overlapping flushes** (M12.3), T1: with
+5. **The unflushed ceiling holds under overlapping flushes** (M12.3), T0 and T1
+   (⚠️ amended by M12.3: T0 on `UnflushedCeiling`, split out by M11.24a, drives
+   the race in the order the completion can run; T1 on `DefaultIngest` pins the
+   guard, whose predicate is computed there): with
    flush A completing after flush B has been enqueued, the bytes buffered plus in
    flight never exceed the ceiling by more than one append, and B's in-flight bytes
    are still counted after A completes; both sides of the "a flush will come" guard
@@ -256,7 +259,7 @@ NFR-1's bound and NFR-3's ceiling are unchanged. No budget moves.
 | 2 | harness | `FileSizeCeilingTest` (the gate's case per file) | the gate reading the wrong limit, or skipping a named file |
 | 3 | harness | the gate predicate's case (`LedgerlessConstructorGateTest`) | a constructor restored with `new IndexCostLedger()` |
 | 4 | T0 | `IngestHasNoDefaultsTest` | a default body restored |
-| 5 | T1 | `UnflushedCeilingOverlapTest` | `inFlightBytes = 0` on any completion |
+| 5 | T0, T1 | `UnflushedCeilingOverlapTest`, `UnflushedCeilingGuardTest` | `inFlightBytes = 0` on any completion; the guard a constant |
 | 6 | T0 | `IndexQuotasBoundTest` | a bucket for any name; expiry never run |
 | 7 | T1 | `RefusalCountersTest` | one counter for both; a counter with an `index` label |
 | 8 | T1 | `AdminCostOptInTest` | the route registered unconditionally |

@@ -391,6 +391,16 @@ public final class DefaultIngest implements Ingest {
         }
     }
 
+    /** Whether an append is parked waiting for room under the unflushed ceiling (M12.3). */
+    boolean waitingForRoom() {
+        lock.lock();
+        try {
+            return ceiling.hasWaiters(lock);
+        } finally {
+            lock.unlock();
+        }
+    }
+
     /** How many callers are waiting for the next flush. */
     int pendingAppends() {
         lock.lock();
@@ -462,13 +472,13 @@ public final class DefaultIngest implements Ingest {
         // then both buffers would answer as if no +2 record had been written.
         inFlightSpacingMillis = detached.flushSpacing().toMillis();
         // ⚠️ TAKEN BEFORE THE DRAIN, which zeroes the detached buffer's count.
-        ceiling.detached(detached.bufferedBytes());
+        long generation = ceiling.detached(detached.bufferedBytes());
         CompletableFuture<Void> done = flushes.enqueue(batch, detached);
         // ⚠️ HOWEVER THE FLUSH ENDS -- see UnflushedCeiling.flushEnded.
         done.whenComplete((ignored, failure) -> {
             lock.lock();
             try {
-                ceiling.flushEnded();
+                ceiling.flushEnded(generation);
             } finally {
                 lock.unlock();
             }

@@ -3,6 +3,7 @@ package io.github.huyz0.os.biningester.ingest;
 
 import java.io.IOException;
 import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BooleanSupplier;
 import java.util.function.LongSupplier;
 
@@ -25,6 +26,9 @@ final class UnflushedCeiling {
 
     /** The batch being flushed's buffered bytes, 0 when none; under the lock. */
     private long inFlightBytes;
+
+    /** Which detached batch {@link #inFlightBytes} counts; under the lock (M12.3). */
+    private long generation;
 
     UnflushedCeiling(long maxUnflushedBytes, Condition roomToBuffer) {
         this.maxUnflushedBytes = maxUnflushedBytes;
@@ -72,9 +76,15 @@ final class UnflushedCeiling {
         }
     }
 
-    /** A batch of {@code bytes} was detached for flushing; caller holds the lock. */
-    void detached(long bytes) {
+    /**
+     * A batch of {@code bytes} was detached for flushing; caller holds the lock.
+     *
+     * @return the batch's generation, which its completion hands to
+     *     {@link #flushEnded}
+     */
+    long detached(long bytes) {
         inFlightBytes = bytes;
+        return ++generation;
     }
 
     /**
@@ -82,10 +92,24 @@ final class UnflushedCeiling {
      *
      * <p>⚠️ HOWEVER THE FLUSH ENDS, its bytes are no longer buffered here: a
      * failed batch answered its waiters exceptionally and is not retried.
+     *
+     * <p>⚠️ ONLY ITS OWN BYTES (M12.3, M11 review F4). A batch's completion can
+     * run after the NEXT batch was detached -- the coordinator admits the next
+     * one once this one is done, and this callback runs after that. Zeroing
+     * unconditionally then dropped the next batch's bytes, and the pod admitted
+     * about twice its ceiling. A stale generation releases nothing; it still
+     * signals, which costs a waiter one re-check.
      */
-    void flushEnded() {
-        inFlightBytes = 0;
+    void flushEnded(long ended) {
+        if (ended == generation) {
+            inFlightBytes = 0;
+        }
         roomToBuffer.signalAll();
+    }
+
+    /** Whether an append waits for room; caller holds {@code lock}, whose condition this is. */
+    boolean hasWaiters(ReentrantLock lock) {
+        return lock.hasWaiters(roomToBuffer);
     }
 
     /** Wakes every waiting append, so it can see the ingester closed. */
