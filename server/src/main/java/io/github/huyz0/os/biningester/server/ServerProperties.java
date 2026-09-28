@@ -103,6 +103,9 @@ public final class ServerProperties {
     /** Optional: how often the retention loop looks for work. */
     public static final String RETENTION_PASS_INTERVAL = "retention.pass-interval";
 
+    /** How often the top-K cost line is logged, ISO-8601; {@code PT0S} turns it off (M11.5). */
+    public static final String COST_TOP_K_INTERVAL = "cost.top-k-interval";
+
     /** Optional: the Kubernetes API server the EndpointSlice watch reads (M8.13). */
     public static final String MEMBERSHIP_API = "membership.kube-api";
 
@@ -141,7 +144,7 @@ public final class ServerProperties {
             DIRECT_ENABLED, LANES_ACTIVE, MAX_IN_FLIGHT_BULK,
             RETENTION_MIN, RETENTION_MAX, RETENTION_REPORT_TIMEOUT, RETENTION_COPY_EXPIRY,
             RETENTION_PASS_INTERVAL, MEMBERSHIP_API, MEMBERSHIP_NAMESPACE, MEMBERSHIP_SERVICE,
-            MEMBERSHIP_TOKEN_FILE, MEMBERSHIP_CA_FILE);
+            MEMBERSHIP_TOKEN_FILE, MEMBERSHIP_CA_FILE, COST_TOP_K_INTERVAL);
 
     private ServerProperties() {
     }
@@ -254,7 +257,10 @@ public final class ServerProperties {
                                     RetentionConfig.DEFAULT_COPY_EXPIRY),
                             duration(settings, RETENTION_PASS_INTERVAL,
                                     io.github.huyz0.os.biningester.ingest.RetentionLoop.DEFAULT_PASS_INTERVAL)),
-                    membership(settings), required(settings, POD_UID));
+                    membership(settings), required(settings, POD_UID),
+                    offOrPositive(settings, COST_TOP_K_INTERVAL,
+                            io.github.huyz0.os.biningester.ingest.CostTopKReporter
+                                    .DEFAULT_INTERVAL));
         } catch (IllegalArgumentException refused) {
             // ⚠️ `ConfigurationException` IS AN `IllegalArgumentException`, so
             // one already carrying a key's name lands here too and is returned
@@ -400,6 +406,32 @@ public final class ServerProperties {
         }
         if (parsed.isZero() || parsed.isNegative()) {
             throw new ConfigurationException(key + " must be positive: " + value);
+        }
+        return parsed;
+    }
+
+    /**
+     * A duration where {@code PT0S} means OFF (M11.5): the one kind of setting
+     * here for which zero is an answer rather than a typo.
+     */
+    private static Duration offOrPositive(Map<String, String> settings, String key,
+            Duration fallback) {
+        String value = settings.get(key);
+        if (value != null && !value.isBlank()) {
+            try {
+                if (Duration.parse(value.trim()).isZero()) {
+                    return Duration.ZERO;
+                }
+            } catch (DateTimeParseException notADuration) {
+                // falls through to the one message every duration gives
+            }
+        }
+        Duration parsed = duration(settings, key, fallback);
+        // ⚠️ A FLOOR OF ONE SECOND: under a millisecond every scheduler wake is
+        // due and the line floods its log (M11.5 review).
+        if (parsed.compareTo(Duration.ofSeconds(1)) < 0) {
+            throw new ConfigurationException(key + " is PT0S (off) or at least PT1S: "
+                    + settings.get(key));
         }
         return parsed;
     }

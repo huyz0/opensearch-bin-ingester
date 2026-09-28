@@ -55,12 +55,25 @@ import java.util.Set;
  * @param retention the floor, the ceiling and the loop's interval (M8.5)
  * @param membership where to watch the ingester Service's endpoints for the
  *     early lease challenge, or empty for none (M8.13)
+ * @param costTopKInterval how often the top-K cost line is logged; zero for
+ *     never (M11.5)
  */
 public record ServerConfig(String podId, String az, String trustDomain, String prefix,
         StoreConfig store, Duration leaseTtl, Duration leaseRenewInterval, String endpoint, IngestConfig ingest,
         int httpPort, String producerSubject, Set<String> allowedIndices,
         RetentionConfig retention, java.util.Optional<MembershipConfig> membership,
-        String podUid) {
+        String podUid, Duration costTopKInterval) {
+
+    /** The same, logging the top-K cost line at its default interval (before M11.5). */
+    public ServerConfig(String podId, String az, String trustDomain, String prefix,
+            StoreConfig store, Duration leaseTtl, Duration leaseRenewInterval, String endpoint,
+            IngestConfig ingest, int httpPort, String producerSubject, Set<String> allowedIndices,
+            RetentionConfig retention, java.util.Optional<MembershipConfig> membership,
+            String podUid) {
+        this(podId, az, trustDomain, prefix, store, leaseTtl, leaseRenewInterval, endpoint, ingest,
+                httpPort, producerSubject, allowedIndices, retention, membership, podUid,
+                io.github.huyz0.os.biningester.ingest.CostTopKReporter.DEFAULT_INTERVAL);
+    }
 
     /** Compatibility constructor for callers without a Kubernetes identity. */
     public ServerConfig(String podId, String az, String trustDomain, String prefix,
@@ -127,6 +140,11 @@ public record ServerConfig(String podId, String az, String trustDomain, String p
         Objects.requireNonNull(producerSubject, "producerSubject");
         Objects.requireNonNull(retention, "retention");
         Objects.requireNonNull(membership, "membership");
+        Objects.requireNonNull(costTopKInterval, "costTopKInterval");
+        if (costTopKInterval.isNegative()) {
+            throw new IllegalArgumentException("costTopKInterval is never negative: "
+                    + costTopKInterval);
+        }
         // ⚠️ COPIED, then the record hands it on to `Principal`, which copies
         // again. Belt and braces on purpose: an allow-list a caller can still
         // `add()` to is a privilege escalation with no code change at the call

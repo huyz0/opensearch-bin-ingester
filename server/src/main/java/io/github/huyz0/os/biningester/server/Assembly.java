@@ -10,6 +10,7 @@ import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import io.github.huyz0.os.biningester.binstore.PutPurposeCounts;
 import io.github.huyz0.os.biningester.binstore.StoreCounts;
 import io.github.huyz0.os.biningester.ingest.CommitChargingBinStore;
+import io.github.huyz0.os.biningester.ingest.CostTopKReporter;
 import io.github.huyz0.os.biningester.ingest.DefaultIngest;
 import io.github.huyz0.os.biningester.ingest.IndexCatalog;
 import io.github.huyz0.os.biningester.ingest.Ingest;
@@ -343,7 +344,15 @@ public final class Assembly implements AutoCloseable {
         // chain whose term is being released under it -- and take the GC lease
         // on the way, which the shutdown then has to wait out.
         toClose.push(RetentionAssembly.schedule(retention, kept.passInterval()));
+        // ⚠️ M11.5: the top-K cost line, from the ledger this pod's stores charge.
+        toClose.push(CostReporting.schedule(new CostTopKReporter(costLedger, catalog::namesById,
+                raw.capabilities().costs(), config.costTopKInterval(), clock,
+                line -> COST_LOG.log(System.Logger.Level.INFO, line)),
+                config.costTopKInterval()));
     }
+
+    /** Where the top-K cost line is logged: its own name, so it can be routed. */
+    private static final System.Logger COST_LOG = System.getLogger("binstore.cost");
 
     static LeaseConfig sequencerLeaseConfig(ServerConfig config) {
         return new LeaseConfig(config.prefix(), config.podId(), config.endpoint(),
