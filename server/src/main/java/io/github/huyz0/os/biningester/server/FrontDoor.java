@@ -119,7 +119,11 @@ public final class FrontDoor implements AutoCloseable {
                 config.ingest().lanes());
         io.github.huyz0.os.biningester.ingest.IndexQuotas quotas = new io.github.huyz0.os.biningester.ingest.IndexQuotas(config.quotas(), clock,
                 // ⚠️ ONLY A REGISTERED INDEX GETS A BUCKET (M12.4)
-                name -> assembly.catalog().resolve(name).isPresent());
+                name -> assembly.catalog().resolve(name).isPresent(),
+                // ⚠️ AN OVERRIDE NAMED BY AN ALIAS applies to its index (M12.13)
+                name -> assembly.catalog().resolve(name)
+                        .map(io.github.huyz0.os.biningester.format.IndexRegistration::aliases)
+                        .orElse(java.util.List.of()));
         WebServer server = build(config, assembly, clock, gate, crossAz, admission, quotas);
         try {
             server.start();

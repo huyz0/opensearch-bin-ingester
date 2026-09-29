@@ -85,10 +85,6 @@ public final class IndexQuotas {
                         + "request: " + maxInFlightPerIndex);
             }
         }
-
-        Limit limitFor(String index) {
-            return perIndex.getOrDefault(index, defaults);
-        }
     }
 
     /**
@@ -123,6 +119,7 @@ public final class IndexQuotas {
     private final Config config;
     private final Clock clock;
     private final Predicate<String> known;
+    private final java.util.function.Function<String, List<String>> aliases;
     private final Map<String, Bucket> buckets = new ConcurrentHashMap<>();
     /** When idle buckets were last swept; at most one sweep per idle expiry (M12.4). */
     private volatile long sweptAt = Long.MIN_VALUE;
@@ -153,9 +150,24 @@ public final class IndexQuotas {
      * registered charges nothing, and is refused downstream.
      */
     public IndexQuotas(Config config, Clock clock, Predicate<String> known) {
+        this(config, clock, known, index -> List.of());
+    }
+
+    /**
+     * The same, finding an override named by one of an index's ALIASES too
+     * (M12.13, M11.8 P5): the front door charges the concrete index, so an
+     * override an operator keyed by the alias they write through matched
+     * nothing, silently, and the index ran on the default.
+     *
+     * @param aliases the aliases naming a concrete index now; an override on
+     *     the concrete name wins, then the first alias in sorted order
+     */
+    public IndexQuotas(Config config, Clock clock, Predicate<String> known,
+            java.util.function.Function<String, List<String>> aliases) {
         this.config = Objects.requireNonNull(config, "config");
         this.clock = Objects.requireNonNull(clock, "clock");
         this.known = Objects.requireNonNull(known, "known");
+        this.aliases = Objects.requireNonNull(aliases, "aliases");
     }
 
     /** How many indices hold a bucket: bounded by the known indices (M12.4). */
@@ -170,7 +182,7 @@ public final class IndexQuotas {
      */
     public Admission admit(String index) {
         Objects.requireNonNull(index, "index");
-        Limit limit = config.limitFor(index);
+        Limit limit = limitFor(index);
         if (limit.unlimited()) {
             return new Admission(Optional.of(FREE), Optional.empty());
         }
@@ -188,6 +200,23 @@ public final class IndexQuotas {
             }
             buckets.remove(index, bucket); // swept while we held it: take a fresh one
         }
+    }
+
+    /** The concrete index's own override, else its aliases' in sorted order, else the default. */
+    private Limit limitFor(String index) {
+        Limit own = config.perIndex().get(index);
+        if (own != null) {
+            return own;
+        }
+        List<String> named = new java.util.ArrayList<>(aliases.apply(index));
+        named.sort(null);
+        for (String alias : named) {
+            Limit byAlias = config.perIndex().get(alias);
+            if (byAlias != null) {
+                return byAlias;
+            }
+        }
+        return config.defaults();
     }
 
     /** A slot in {@code index}'s bucket without the cap's check, for a request already admitted. */

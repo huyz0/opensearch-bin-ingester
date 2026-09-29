@@ -82,4 +82,53 @@ class FrontDoorQuotaTest {
             }
         }
     }
+
+    /**
+     * M12.13 (review T1): the front door looks an index's aliases up in its
+     * catalog, so an override keyed by the alias an operator writes through
+     * limits the concrete index the pod charges.
+     */
+    @Test
+    void anOverrideNamedByAnAliasReachesTheFrontDoor() throws Exception {
+        ServerConfig config = new ServerConfig("writera", "az-a", "cluster-a", PREFIX,
+                new StoreConfig("memory", Optional.empty()), Duration.ofSeconds(10),
+                Duration.ofSeconds(3), "http://writer-a:8080", IngestConfig.defaults("cluster-a"),
+                0, "producer", Set.of("logs"),
+                new RetentionConfig(Duration.ofMinutes(1), Duration.ofHours(2),
+                        Duration.ofSeconds(10), Duration.ofHours(3), Duration.ofDays(1)),
+                Optional.empty(), "", CostTopKReporter.DEFAULT_INTERVAL,
+                new IndexQuotas.Config(IndexQuotas.Limit.UNLIMITED,
+                        Map.of("logs-write", new IndexQuotas.Limit(0, 1)), 8));
+        SequencerTransport noPeers = new SequencerTransport() {
+            @Override
+            public io.github.huyz0.os.biningester.format.CommitDelta send(
+                    String endpoint, CommitRequest request) {
+                throw new AssertionError("unexpected peer commit");
+            }
+
+            @Override
+            public void close() {
+            }
+        };
+        try (var store = new MemoryBinStore();
+                var assembly = Assembly.open(config, store, noPeers, Clock.systemUTC());
+                var door = FrontDoor.start(assembly, Clock.systemUTC())) {
+            assembly.catalog().register(new IndexRegistration("AAAAAAAAQACAAAAAAAAAqg", "logs",
+                    List.of("logs-write"), 4, 4, 1, 1));
+            WebClient http = WebClient.builder().baseUri("http://127.0.0.1:" + door.port())
+                    .build();
+
+            try (HttpClientResponse first = http.post("/logs/_bulk")
+                    .queryParam("partition", "0").submit(body(10))) {
+                assertThat(first.status().code()).isEqualTo(202);
+            }
+            try (HttpClientResponse refused = http.post("/logs/_bulk")
+                    .queryParam("partition", "0").submit(body(1))) {
+                assertThat(refused.status().code())
+                        .as("⚠️ THE ALIAS's OVERRIDE LIMITS ITS INDEX AT THE NODE's FRONT DOOR")
+                        .isEqualTo(429);
+            }
+        }
+    }
+
 }

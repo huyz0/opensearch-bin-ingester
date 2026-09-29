@@ -59,7 +59,14 @@ Two facts constrain the mechanism:
    (`ingest.quota.default.bytes-per-second`, `…records-per-second`), overridden
    per index by name (`ingest.quota.index.<name>.bytes-per-second`, …; the name
    keeps its dots, and a rate the override leaves unset is the default's).
-   **0 means
+   ⚠️ **The name may be an alias** (amended by M12.13, M11.8 P5): an override
+   applies to the concrete index whose registration lists that alias, an
+   override on the concrete name winning over one on its alias, and the first
+   alias in sorted order over the rest. Before, an alias-named override matched
+   nothing, silently. ⚠️ A bucket's limit is fixed when the bucket is made: one
+   made before its index's registration was known -- a write that arrived
+   during the registration window -- keeps the limit it was made with until it
+   expires idle. **0 means
    unlimited, and is the default**, so a pod configured with nothing behaves
    exactly as before M11.
 5. **The rate is per POD.** A fleet of N pods admits up to N times the
