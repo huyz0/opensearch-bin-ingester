@@ -39,6 +39,12 @@ public final class CostTopKReporter {
     /** The interval a pod uses when its operator names none. */
     public static final Duration DEFAULT_INTERVAL = Duration.ofMinutes(5);
 
+    /**
+     * The longest interval a line may cover (M12.9, M11.5 P1b): past it the
+     * schedule's {@code toNanos} overflowed, with an error naming no key.
+     */
+    public static final Duration MAX_INTERVAL = Duration.ofDays(1);
+
     /** How many indices a line names. */
     public static final int TOP = 3;
 
@@ -55,6 +61,8 @@ public final class CostTopKReporter {
 
     private final Map<UUID, Spent> last = new HashMap<>();
     private long nextDueMillis;
+    /** When the last line was emitted, or this reporter made: a line's real window starts here. */
+    private long lastLineMillis;
 
     /**
      * @param interval how often a line is emitted; {@link Duration#ZERO} turns
@@ -75,7 +83,14 @@ public final class CostTopKReporter {
             throw new IllegalArgumentException("a negative interval is not a period: "
                     + interval);
         }
-        this.nextDueMillis = clock.millis() + interval.toMillis();
+        // ⚠️ THE FLOOR IS THE PARSER's (one second, M11.5); a test builds one
+        // shorter on purpose. The CEILING is here, where the overflow was.
+        if (interval.compareTo(MAX_INTERVAL) > 0) {
+            throw new IllegalArgumentException("the top-K cost interval is at most "
+                    + MAX_INTERVAL + ": " + interval);
+        }
+        this.lastLineMillis = clock.millis();
+        this.nextDueMillis = lastLineMillis + interval.toMillis();
     }
 
     /** Whether this reporter emits at all. */
@@ -99,6 +114,10 @@ public final class CostTopKReporter {
         // ⚠️ ONE LINE HOWEVER LATE THE TICK, and the next is one interval on
         // from NOW: a stalled scheduler does not owe a burst of catch-up lines.
         nextDueMillis = now + interval.toMillis();
+        // ⚠️ THE WINDOW THIS LINE COVERS, NOT THE CONFIGURED ONE (M12.9, M11.5 P3): a
+        // stalled scheduler's late line spans longer, and says so.
+        Duration window = Duration.ofMillis(now - lastLineMillis);
+        lastLineMillis = now;
         List<Spent> spent = new ArrayList<>();
         for (IndexCostLedger.IndexCost cost : ledger.snapshot().indices()) {
             Spent total = new Spent(cost.index(), IndexCostReport.usd(cost.micros(), prices),
@@ -117,7 +136,7 @@ public final class CostTopKReporter {
                 .thenComparing(Comparator.comparingLong(Spent::micros).reversed())
                 .thenComparing(s -> s.index().toString()));
         StringBuilder line = new StringBuilder("cost: top ").append(TOP)
-                .append(" indices by estimated USD over the last ").append(interval)
+                .append(" indices by estimated USD over the last ").append(window)
                 .append(':');
         if (spent.isEmpty()) {
             line.append(" none -- no index request was charged");

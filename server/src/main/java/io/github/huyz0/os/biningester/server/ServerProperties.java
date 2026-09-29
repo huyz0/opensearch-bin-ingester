@@ -265,9 +265,7 @@ public final class ServerProperties {
                             duration(settings, RETENTION_PASS_INTERVAL,
                                     io.github.huyz0.os.biningester.ingest.RetentionLoop.DEFAULT_PASS_INTERVAL)),
                     membership(settings), required(settings, POD_UID),
-                    offOrPositive(settings, COST_TOP_K_INTERVAL,
-                            io.github.huyz0.os.biningester.ingest.CostTopKReporter
-                                    .DEFAULT_INTERVAL),
+                    topKInterval(settings),
                     QuotaProperties.parse(settings), bool(settings, ADMIN_COST_ENABLED, false));
         } catch (IllegalArgumentException refused) {
             // ⚠️ `ConfigurationException` IS AN `IllegalArgumentException`, so
@@ -416,6 +414,21 @@ public final class ServerProperties {
             throw new ConfigurationException(key + " must be positive: " + value);
         }
         return parsed;
+    }
+
+    /**
+     * {@link #COST_TOP_K_INTERVAL}: off, or from one second (M11.5) to the
+     * reporter's ceiling (M12.9, M11.5 P1b: past it scheduling overflowed with an
+     * error naming no key).
+     */
+    private static Duration topKInterval(Map<String, String> settings) {
+        Duration interval = offOrPositive(settings, COST_TOP_K_INTERVAL,
+                io.github.huyz0.os.biningester.ingest.CostTopKReporter.DEFAULT_INTERVAL);
+        if (interval.compareTo(io.github.huyz0.os.biningester.ingest.CostTopKReporter.MAX_INTERVAL) > 0) {
+            throw new ConfigurationException(COST_TOP_K_INTERVAL + " is at most "
+                    + io.github.huyz0.os.biningester.ingest.CostTopKReporter.MAX_INTERVAL + ": " + interval);
+        }
+        return interval;
     }
 
     /**
