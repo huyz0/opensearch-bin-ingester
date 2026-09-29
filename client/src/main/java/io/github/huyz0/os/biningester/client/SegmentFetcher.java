@@ -45,10 +45,17 @@ final class SegmentFetcher {
     static final class Deferred extends RuntimeException {
         private static final long serialVersionUID = 1L;
         private final boolean attempted;
+        private final SegmentFetcher from;
 
-        Deferred(String message, Throwable cause, boolean attempted) {
+        Deferred(String message, Throwable cause, boolean attempted, SegmentFetcher from) {
             super(message, cause, false, false);
             this.attempted = attempted;
+            this.from = from;
+        }
+
+        /** The fetcher whose backoff this is -- one per lane since M12.12. */
+        SegmentFetcher from() {
+            return from;
         }
 
         /** Whether this poll spent its time on a fetch, so owes the caller no wait. */
@@ -129,7 +136,7 @@ final class SegmentFetcher {
         synchronized (this) {
             if (owed.compareTo(Duration.ZERO) > 0) {
                 throw new Deferred("segment " + delivery.segmentKey() + " is backing off", null,
-                        false);
+                        false, this);
             }
         }
         byte[] bytes;
@@ -177,7 +184,7 @@ final class SegmentFetcher {
         }
         owed = held.remaining().isZero() ? Duration.ofMillis(1) : held.remaining();
         return new Deferred("segment " + delivery.segmentKey() + " is held failed on this node",
-                held, false);
+                held, false, this);
     }
 
     private synchronized RuntimeException failedAttempt(Delivery delivery, IOException failed)
@@ -200,7 +207,8 @@ final class SegmentFetcher {
         LOG.log(System.Logger.Level.WARNING, "segment {0} fetch attempt {1} of {2} failed, "
                 + "retrying in {3}: {4}", delivery.segmentKey(), failures, retry.maxAttempts(),
                 owed, failed.getMessage());
-        return new Deferred("segment " + delivery.segmentKey() + " fetch failed", failed, true);
+        return new Deferred("segment " + delivery.segmentKey() + " fetch failed", failed, true,
+                this);
     }
 
     /**

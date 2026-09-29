@@ -41,7 +41,14 @@ public final class ConsumerClient implements AutoCloseable {
     private final ConsumerDeliveryQueues deliveryQueues;
     private final AutoCloseable subscription;
     private final RunKey key;
-    private final SegmentFetcher fetcher;
+    /**
+     * ⚠️ ONE PER LANE (M12.12, H13): the lanes interleave (a live-service
+     * quantum), so a catch-up segment failing would otherwise defer every live
+     * fetch behind its backoff. Each lane still gets {@code maxAttempts} per
+     * failing segment, as the one shared fetcher gave it.
+     */
+    private final SegmentFetcher liveFetcher;
+    private final SegmentFetcher catchUpFetcher;
 
     /**
      * The offset the NEXT delivery must start at, or {@code -1} before the
@@ -137,7 +144,8 @@ public final class ConsumerClient implements AutoCloseable {
     private ConsumerClient(RunKey key, int queueCapacity, SegmentSource segmentSource,
             SegmentFetchRetry retry,
             java.util.function.Function<ConsumerClient, AutoCloseable> subscribe) {
-        this.fetcher = new SegmentFetcher(segmentSource, retry);
+        this.liveFetcher = new SegmentFetcher(segmentSource, retry);
+        this.catchUpFetcher = new SegmentFetcher(segmentSource, retry);
         this.key = Objects.requireNonNull(key, "key");
         this.floor = new RetainedFloorTracker(key);
         if (queueCapacity <= 0) {
@@ -344,7 +352,7 @@ public final class ConsumerClient implements AutoCloseable {
             // blocked on the queue and on the fetch, and waiting out the new
             // backoff on top could hold the caller past its timeout.
             if (!deferred.attempted()) {
-                fetcher.awaitBackoff(pollTimeout);
+                deferred.from().awaitBackoff(pollTimeout);
             }
             return Optional.empty();
         }
@@ -359,7 +367,7 @@ public final class ConsumerClient implements AutoCloseable {
         Deque<ConsumerRecord> decoded = null;
         if (wouldDecode(delivery, replay)) {
             decoded = new java.util.ArrayDeque<>();
-            decodeInto(delivery, decoded);
+            decodeInto(delivery, decoded, replay ? catchUpFetcher : liveFetcher);
         }
         boolean decode = reportAnyGap(delivery, replay);
         if (decode) {
@@ -511,7 +519,8 @@ public final class ConsumerClient implements AutoCloseable {
         return Optional.ofNullable(lastGap);
     }
 
-    private void decodeInto(Delivery delivery, Deque<ConsumerRecord> out) {
+    private void decodeInto(Delivery delivery, Deque<ConsumerRecord> out,
+            SegmentFetcher fetcher) {
         try {
             SegmentReader reader = SegmentReader.open(fetcher.bytesOf(delivery));
             RunEntry entry = reader.find(key).orElseThrow(

@@ -231,9 +231,13 @@ NFR-1's bound and NFR-3's ceiling are unchanged. No budget moves.
 13. **The node failure hold is jittered and pinned** (M12.11, H12): `holdMillis`
     at 55 and 65 failures pinned; two nodes with the same failure count hold for
     different durations under different seeds.
-14. **Live and catch-up retry state** (M12.12, H13): separated, or a test that
-    fails if sharing them lets a catch-up failure delay a live fetch (the row
-    decides which).
+14. **Live and catch-up retry state** (M12.12, H13): separated, so a failing
+    catch-up segment's backoff does not defer a live fetch while live holds its
+    turn; each lane's failing segment still gets `maxAttempts`. ⚠️ Amended by
+    M12.12 (split at its first review round): once live's quantum is due, a
+    catch-up head that is backing off still takes live's turn -- a queue-ordering
+    defect that shared or separate state does not change, and whose fix needs a
+    time-based backoff so the catch-up is not starved; that is M12.26.
 15. **Quota overrides by alias** (M12.13, H14): an override named by an alias
     applies to its concrete index.
 16. **`checkMilestoneVerified` does not fail open** (M12.14, H15): a VERIFIED.md
@@ -333,6 +337,7 @@ land anywhere.
 | M12.20 | H23: the doc and ADR text bundle | — (docs) |
 | M12.21 | H24: the flake and suite-time bundle | — (quality) |
 | M12.22 | H25: JVM gates — the ADR short form and io-seam exact-path anchoring | — (harness) |
+| M12.26 | A backing-off catch-up head yields its quantum turn to live, on a time-based backoff so the catch-up is not starved (split from M12.12) | FR-6 |
 | M12.24 | The RustFS fixture's memory settled; `PartitionVisibilityIT` green 3 of 3 on M9's rig (opened by M11.23) | — (evidence) |
 | M12.25 | Two `:client` test classes portable to Windows, so the full suite can be green on M9's rig (opened by M11.24a) | — (quality) |
 | M11.25 | The `DefaultIngestTest` class timeout, with H17's thread dump (carried) | — (quality) |
