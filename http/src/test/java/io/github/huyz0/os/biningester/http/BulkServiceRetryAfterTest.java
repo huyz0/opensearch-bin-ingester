@@ -96,7 +96,10 @@ class BulkServiceRetryAfterTest {
             assertThat(refused.status().code()).as("the premise: saturated").isEqualTo(429);
             assertThat(refused.headers().first(HeaderNames.RETRY_AFTER))
                     .as("⚠️ A 429 WITH NO RETRY-AFTER IS RETRIED AT THE PRODUCER's OWN RATE")
-                    .hasValue(Long.toString(BulkService.ADMISSION_RETRY_AFTER_SECONDS));
+                    // ⚠️ THE LITERAL, NOT THE CONSTANT (M12.19a, M11.6 T2): read
+                    // from the constant, the test moved with any value it was
+                    // given. (0 is caught by tooManyRequests' clamp to 1, not here.)
+                    .hasValue("1");
         }
     }
 }

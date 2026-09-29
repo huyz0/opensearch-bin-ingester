@@ -88,8 +88,10 @@ class ExplicitPartitionUnregisteredTest {
         }
     }
 
+    private RoutedIngest routed;
+
     private WebClient serve(Ingest ingest, IndexCatalog catalog, Duration wait) {
-        RoutedIngest routed = new RoutedIngest(ingest, catalog,
+        routed = new RoutedIngest(ingest, catalog,
                 new PendingPool(Clock.systemUTC(), wait, 1 << 20), wait, Clock.systemUTC());
         server = WebServer.builder().port(0)
                 .routing(HttpRouting.builder().register(new BulkService(routed, PRINCIPAL)))
@@ -162,12 +164,18 @@ class ExplicitPartitionUnregisteredTest {
         };
         WebClient client = serve(ingest, catalog, Duration.ofSeconds(30));
 
+        // ⚠️ REGISTERED ONCE THE WRITE IS SEEN WAITING, not after a sleep
+        // (M12.19a, M10.30 T2; testing.md rule 15): a sleep only made it likely
+        // that the write arrived first, so a slow run tested the other order.
+        RoutedIngest waiting = routed;
+        java.util.concurrent.atomic.AtomicBoolean sawWaiting =
+                new java.util.concurrent.atomic.AtomicBoolean();
         Thread registrar = Thread.ofVirtual().start(() -> {
-            try {
-                Thread.sleep(200);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
+            long deadline = System.nanoTime() + Duration.ofSeconds(20).toNanos();
+            while (waiting.waitingForRegistration("logs") == 0 && System.nanoTime() < deadline) {
+                Thread.onSpinWait();
             }
+            sawWaiting.set(waiting.waitingForRegistration("logs") > 0);
             catalog.register(new IndexRegistration("AAAAAAAAQACAAAAAAAAAqg", "logs", List.of(),
                     4, 4, 1, 1));
         });
@@ -176,6 +184,8 @@ class ExplicitPartitionUnregisteredTest {
             assertThat(answer.status().code()).isEqualTo(202);
         }
         registrar.join();
+        assertThat(sawWaiting).as("⚠️ THE ORDER UNDER TEST: registered while the write waited")
+                .isTrue();
         assertThat(written).hasValue(1);
     }
 }
