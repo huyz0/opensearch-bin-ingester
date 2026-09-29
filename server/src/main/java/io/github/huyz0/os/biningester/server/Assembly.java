@@ -221,6 +221,7 @@ public final class Assembly implements AutoCloseable {
         this.backend = raw;
         this.peerView = peerView == null ? new EndpointSliceView() : peerView;
         this.stack = StoreStack.over(raw, config, clock, governorFactory);
+        toClose.push(stack.governorMetrics()); // closed last: unbinds the gauges (M12.16)
         CostGovernor governor = stack.governor();
         IndexCostLedger costLedger = stack.costLedger();
         this.store = stack.health();

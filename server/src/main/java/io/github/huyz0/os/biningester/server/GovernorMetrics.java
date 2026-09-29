@@ -22,10 +22,13 @@ import java.util.concurrent.atomic.AtomicReference;
  * is process-wide and hands a second registration the first meter, so a gauge
  * bound to one governor would read that governor for ever. A process runs one
  * pod, so "most recently bound" is "the pod's"; in a test JVM assembling
- * several pods it is the last one. The counters are shared and cumulative, as
+ * several pods it is the last one bound. A pod's close unbinds its own
+ * governor (M12.16), so a closed pod's alarm is never read -- and once the
+ * last-bound pod closes the gauges read zero, even while an earlier pod is
+ * still open. The counters are shared and cumulative, as
  * {@link IngesterMetrics}' are.
  */
-final class GovernorMetrics {
+final class GovernorMetrics implements AutoCloseable {
 
     static final String REFUSALS = "binstore_governor_refusals_total";
     static final String LIST_REFUSALS = "binstore_governor_list_refusals_total";
@@ -37,11 +40,13 @@ final class GovernorMetrics {
 
     private static final AtomicReference<CostGovernor> BOUND = new AtomicReference<>();
 
+    private final CostGovernor governor;
     private final Counter refusals;
     private final Counter listRefusals;
     private final Counter discretionaryRefusals;
 
-    private GovernorMetrics() {
+    private GovernorMetrics(CostGovernor governor) {
+        this.governor = governor;
         var registry = Metrics.globalRegistry();
         refusals = registry.getOrCreate(Counter.builder(REFUSALS)
                 .description("Cost governor refusals of every class; zero in steady state"));
@@ -65,7 +70,7 @@ final class GovernorMetrics {
      */
     static GovernorMetrics bind(CostGovernor governor) {
         Objects.requireNonNull(governor, "governor");
-        GovernorMetrics metrics = new GovernorMetrics();
+        GovernorMetrics metrics = new GovernorMetrics(governor);
         BOUND.set(governor);
         governor.onRefusal(new CostGovernor.RefusalListener() {
             @Override
@@ -81,6 +86,19 @@ final class GovernorMetrics {
             }
         });
         return metrics;
+    }
+
+    /**
+     * Unbinds this pod's governor, if it is still the one the gauges read,
+     * so they read zero rather than a closed pod's last window.
+     *
+     * <p>⚠️ COMPARE-AND-SET, NOT SET (M12.16, M10.27 P2): in a JVM assembling
+     * several pods, closing an earlier one must not unbind a later one's
+     * governor.
+     */
+    @Override
+    public void close() {
+        BOUND.compareAndSet(governor, null);
     }
 
     private static Double read(java.util.function.ToDoubleFunction<CostGovernor> gauge) {
