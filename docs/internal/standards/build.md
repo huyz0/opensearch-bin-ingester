@@ -18,11 +18,11 @@ lost session.**
 | Gradle daemon | 1 GiB | `org.gradle.jvmargs=-Xmx1g` in `gradle.properties` |
 | Java compile daemon | 512 MiB | `options.forkOptions.memoryMaximumSize` in the conventions plugin |
 | Test JVM | 512 MiB | `test { maxHeapSize = "512m" }` |
-| RustFS container | 256 MiB | `--memory=256m` |
+| RustFS container | 1 GiB | `mem_limit: 1g` in `docker-compose.test.yml` (M12.24: at 256 MiB `PartitionVisibilityIT` drained over its bound or the store went down; at 512 MiB one of five runs here drained over it) |
 | OpenSearch container | 1 GiB | `--memory=1g`, `OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m` |
 | Gateway under test | 512 MiB | `-Xmx512m` |
 | Headroom / page cache | 1 GiB | — |
-| **Total** | **5,888 MiB (5.75 GiB)** | of an 8 GiB budget |
+| **Total** | **6,656 MiB (6.5 GiB)** | of an 8 GiB budget |
 
 ⚠️ The compile-daemon and test-JVM rows are **per worker**, and
 `org.gradle.workers.max=2`, so each counts twice — which is what
@@ -48,8 +48,8 @@ below the ceiling.
 | Task | Tiers | Containers | Memory | When |
 |---|---|---|---|---|
 | `./gradlew test` | T0–T2 | **none** | ~2 GiB | every commit, the default |
-| `./gradlew integrationTest` | T3 | RustFS | ~2.8 GiB | on demand + CI |
-| `./gradlew clusterTest` | T4 | OpenSearch (+RustFS) | ~4.9 GiB | on demand + CI |
+| `./gradlew integrationTest` | T3 | RustFS | ~3.55 GiB | on demand + CI |
+| `./gradlew clusterTest` | T4 | OpenSearch (+RustFS) | ~5.65 GiB | on demand + CI |
 
 1. **The default task starts no container.** A developer, or an agent running
    `/milestone`, gets a fast light loop; the heavy tiers are explicit.

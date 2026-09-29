@@ -41,7 +41,15 @@ services:
       # testing.md rule 16: no fixed ports. 0 lets the kernel choose and the
       # test reads it back, so two concurrent sessions cannot collide.
       - "0:9000"
-    mem_limit: 256m
+    # ⚠️ 1g, NOT 256m (M12.24, opened by M11.23): one PartitionVisibilityIT
+    # run took RustFS to ~94% of 256m, fresh container or not, and there it
+    # drained over its bound or the store went down (M11.23; M11.19 saw
+    # OOM-kills on another machine). At 512m it ended every run at
+    # 84-93% and one of five complete runs drained over the bound; at 1g, 3 of
+    # 3 consecutive runs were green. ⚠️ Its usage GREW across those runs on one
+    # container (462, 685, 709 MiB), so 1g is measured, not shown to be a
+    # plateau. The configured limits sum to 4,096 MiB, inside build.md's 6 GiB.
+    mem_limit: 1g
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:9000/health"]
       interval: 2s
