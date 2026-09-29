@@ -75,6 +75,34 @@ object RepositoryGateChecks {
         }
     }
 
+    /**
+     * Every `ADR-N` citation names a decision record that exists, spelt as its
+     * zero-padded four-digit id.
+     *
+     * ⚠️ THE SHORT FORM IS REFUSED EVEN WHERE ITS RECORD EXISTS (M12.22, M10.37
+     * T3): the retired script padded it and let it resolve; this gate never
+     * did, and refusing is the stricter reading, so it is pinned rather than
+     * relaxed. Moved here from `RepositoryGatesTask` so a test can reach it.
+     */
+    fun adrReferences(root: Path, files: List<Path>, failures: MutableList<String>) {
+        val adrs = files.filter { normalized(it).contains("/decisions/") }
+            .mapNotNull { Regex("^(\\d+)-").find(it.fileName.toString())?.groupValues?.get(1) }
+            .map { "ADR-${it.padStart(4, '0')}" }.toSet()
+        val ref = Regex("ADR-(\\d+)")
+        files.filter { it.extension() in setOf("md", "java", "kt", "kts") }.forEach { file ->
+            ref.findAll(file.readText()).map { it.groupValues[1] }.distinct()
+                .filter { "ADR-$it" !in adrs }
+                .forEach { digits ->
+                    val padded = "ADR-${digits.padStart(4, '0')}"
+                    failures += if (padded in adrs) {
+                        "${root.relativize(file)} cites ADR-$digits: write the record's id, $padded"
+                    } else {
+                        "${root.relativize(file)} cites missing ADR-$digits"
+                    }
+                }
+        }
+    }
+
     fun ioSeam(root: Path, files: List<Path>, failures: MutableList<String>) {
         val packages = listOf("java.nio.file", "java.nio.channels", "java.io", "java.util.zip", "java.util.jar", "java.util.prefs", "java.util.logging", "java.sql", "javax.sql", "javax.naming", "java.net", "javax.net")
         val constructs = listOf(".now(", "currentTimeMillis(", "nanoTime(", "Clock.system", "Clock.tick", "new Date(", "new GregorianCalendar(", "Calendar.getInstance(", "new ProcessBuilder(", ".exec(", ".getResourceAsStream(", "getSystemResourceAsStream(", ".toURL(", ".openStream(", ".openConnection(")
@@ -290,10 +318,60 @@ object RepositoryGateChecks {
         return false
     }
 
-    private fun stripJavaNoise(text: String): String = text
-        .replace(Regex("(?s)/\\*.*?\\*/"), "")
-        .replace(Regex("//.*"), "")
-        .replace(Regex("(?s)\"(?:\\\\.|[^\"])*\""), "\"\"")
+    /**
+     * `text` with comments removed and every string, text block and character
+     * literal emptied, so a gate reads only code.
+     *
+     * ⚠️ ONE LEFT-TO-RIGHT SCAN, NOT THREE REGEXES (M12.22, M12.7 review P3):
+     * the regexes knew no character literals, so a `'"'` paired with the next
+     * string's opening quote and the code between was deleted as text; and
+     * each ran blind to the others, so a `//` inside a string ended the line.
+     * Whatever opens first is what the scan is in until it closes.
+     */
+    private fun stripJavaNoise(text: String): String {
+        val out = StringBuilder(text.length)
+        var i = 0
+        fun skipQuoted(quote: Char): Int {
+            var j = i + 1
+            while (j < text.length && text[j] != quote && text[j] != '\n') {
+                j += if (text[j] == '\\') 2 else 1
+            }
+            return minOf(j + 1, text.length)
+        }
+        while (i < text.length) {
+            when {
+                text.startsWith("//", i) -> {
+                    val end = text.indexOf('\n', i)
+                    i = if (end < 0) text.length else end
+                }
+                text.startsWith("/*", i) -> {
+                    val end = text.indexOf("*/", i + 2)
+                    i = if (end < 0) text.length else end + 2
+                }
+                text.startsWith("\"\"\"", i) -> {
+                    var j = i + 3
+                    while (j < text.length && !text.startsWith("\"\"\"", j)) {
+                        j += if (text[j] == '\\') 2 else 1
+                    }
+                    i = minOf(j + 3, text.length)
+                    out.append("\"\"")
+                }
+                text[i] == '"' -> {
+                    i = skipQuoted('"')
+                    out.append("\"\"")
+                }
+                text[i] == '\'' -> {
+                    i = skipQuoted('\'')
+                    out.append("''")
+                }
+                else -> {
+                    out.append(text[i])
+                    i++
+                }
+            }
+        }
+        return out.toString()
+    }
 
     private fun Path.extension(): String = fileName.toString().substringAfterLast('.', "")
     private fun normalized(path: Path): String = path.toString().replace('\\', '/')

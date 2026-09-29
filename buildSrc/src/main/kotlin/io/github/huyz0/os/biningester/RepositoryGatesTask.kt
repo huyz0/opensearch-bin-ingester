@@ -44,7 +44,7 @@ abstract class RepositoryGatesTask : DefaultTask() {
         RepositoryGateChecks.ledgerOwnership(root, files, failures)
         RepositoryGateChecks.singleTooManyRequests(root, files, failures)
         checkMarkdownLinks(root, files, failures)
-        checkAdrReferences(root, files, failures)
+        RepositoryGateChecks.adrReferences(root, files, failures)
         checkTerminology(root, files, failures)
         checkBuildWiring(root, failures)
         checkGeneratedIndexes(root, failures)
@@ -129,17 +129,6 @@ abstract class RepositoryGatesTask : DefaultTask() {
                 val resolved = file.parent.resolve(target).normalize()
                 if (!Files.exists(resolved)) failures += "${root.relativize(file)} -> $target"
             }
-        }
-    }
-
-    private fun checkAdrReferences(root: Path, files: List<Path>, failures: MutableList<String>) {
-        val adrs = files.filter { it.toString().contains("/decisions/") || it.toString().contains("\\decisions\\") }
-            .mapNotNull { Regex("^(\\d+)-").find(it.fileName.toString())?.groupValues?.get(1) }
-            .map { "ADR-${it.padStart(4, '0')}" }.toSet()
-        val ref = Regex("ADR-(\\d+)")
-        files.filter { it.extension in setOf("md", "java", "kt", "kts") }.forEach { file ->
-            ref.findAll(file.readText()).map { "ADR-${it.groupValues[1]}" }.filter { it !in adrs }
-                .distinct().forEach { failures += "${root.relativize(file)} cites missing $it" }
         }
     }
 
