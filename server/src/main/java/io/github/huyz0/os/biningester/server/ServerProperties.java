@@ -418,8 +418,9 @@ public final class ServerProperties {
 
     /**
      * {@link #COST_TOP_K_INTERVAL}: off, or from one second (M11.5) to the
-     * reporter's ceiling (M12.9, M11.5 P1b: past it scheduling overflowed with an
-     * error naming no key).
+     * reporter's ceiling of one day (M12.9, M11.5 P1b) -- a policy ceiling, not
+     * an overflow: {@code Duration.toNanos} overflows only past ~292 years
+     * (M12.20).
      */
     private static Duration topKInterval(Map<String, String> settings) {
         Duration interval = offOrPositive(settings, COST_TOP_K_INTERVAL,

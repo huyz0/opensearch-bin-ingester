@@ -29,9 +29,10 @@ import java.util.concurrent.ConcurrentHashMap;
  * interface says and this implementation must not quietly improve on: the lease
  * object is the truth about who holds it (ADR-0012, "a peer hint may
  * accelerate, never decide"), so a forwarding pod re-reads it every time. What
- * IS cached here is one {@link WebClient} per endpoint — a connection pool, not
- * a routing decision — because building one per commit would open a socket per
- * flush per pod.
+ * IS cached here is one {@link WebClient} per endpoint — a client cache, not
+ * a routing decision. ⚠️ It saves BUILDING a client per commit, and no longer a
+ * socket: since M10.36 the client runs without keep-alive, so every request
+ * opens its own connection either way (M12.20, M10.36 P1).
  *
  * <p>⚠️ **THE THREE OUTCOMES ARE DISTINGUISHED AT THE STATUS LINE, AND THE
  * DISTINCTION IS THE WHOLE POINT OF THIS CLASS**:
@@ -320,9 +321,9 @@ public final class HttpSequencerTransport implements SequencerTransport {
      * ingesters daily accumulates an entry per dead address, for ever.
      *
      * <p>⚠️ **WHAT THE BOUND SAVES IS THE MAP, NOT SOCKETS**, and an earlier
-     * version of this comment claimed file descriptors: Helidon keeps
-     * connections in a process-wide cache keyed by host and port, so neither
-     * this cap nor {@link #close()} releases one. 64 is far more than the peers
+     * version of this comment claimed file descriptors: the clients run
+     * without keep-alive (M10.36), so no connection outlives its request and
+     * there is none for this cap or {@link #close()} to release. 64 is far more than the peers
      * a real fleet has at once and far less than an unbounded map.
      */
     static final int MAX_POOLED_CLIENTS = 64;
@@ -361,7 +362,8 @@ public final class HttpSequencerTransport implements SequencerTransport {
      * <p>⚠️ **PACKAGE-PRIVATE AND FOR ONE TEST**, which is a cost worth naming:
      * without it the reuse case can only assert that five commits arrived,
      * which is equally true of five clients — and a client per commit is a
-     * socket per flush per node, which is what this pool exists to prevent.
+     * client BUILT per flush per node, which is what this cache prevents (not a
+     * socket: without keep-alive each request connects anyway, M10.36).
      */
     int pooledClients() {
         return clients.size();

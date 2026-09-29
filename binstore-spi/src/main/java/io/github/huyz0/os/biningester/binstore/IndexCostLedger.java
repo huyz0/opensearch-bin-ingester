@@ -45,8 +45,10 @@ public final class IndexCostLedger {
         /** A data-segment PUT ({@code op} put, {@code purpose} data). */
         DATA_PUT,
         /**
-         * A commit-log PUT ({@code op} put_if_absent, {@code purpose} commit),
-         * weighted by the delta's record counts (M11.22).
+         * A commit-log PUT ({@code purpose} commit), weighted by the delta's
+         * record counts (M11.22). ⚠️ EVERY PUT KIND the counter classifies as a
+         * commit -- {@code put_if_absent}, {@code put_if_match} and a plain
+         * {@code put} alike -- is charged (M12.20, M11.22 R1).
          */
         COMMIT_PUT,
         /** A data-segment GET ({@code op} get, {@code purpose} data). */

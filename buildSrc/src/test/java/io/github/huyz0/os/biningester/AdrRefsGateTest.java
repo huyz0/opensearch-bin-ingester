@@ -110,7 +110,8 @@ class AdrRefsGateTest {
     // ⚠️ CITATIONS ARE COUNTED HERE, NOT ASSUMED EQUAL TO RECORDS. An earlier
     // version asserted "N citations against N records", which holds only while
     // every record is cited as ADR-N somewhere -- no rule of this repository,
-    // and false once ADR-0061, -0068, -0070 and -0071 were cited only by path.
+    // and false since M10.37 found four records cited nowhere at all (M12.20
+    // corrected an earlier "cited only by path"; the ids stay unspelt here).
     // The count is taken independently, from `git grep` over the same tracked
     // files, so a counter stuck at 0 still fails.
     Run grep = run(ROOT, "git", "grep", "-IhoE", PREFIX + "[0-9]{1,4}");

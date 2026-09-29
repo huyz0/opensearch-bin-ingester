@@ -48,7 +48,7 @@ of which touch metric cardinality:
 |---|---|---|
 | Continuous trend | **metrics**, allow-list labels only | ~1,000 series |
 | "Who is doing this?" | **periodic structured log event** carrying top-K by request count, bytes and lag | one log line/minute |
-| Deep dive, right now | **`GET /admin/cost?by=index&top=50`** — exact, from in-memory counters | zero stored |
+| Deep dive, right now | **`GET /admin/cost?by=index&top=50`** — exact, from in-memory counters; opt-in, `admin.cost.enabled` (off by default since M12.6) | zero stored |
 | One slow request | **traces**, sampled, plus tail-sampling on error and on slow | bounded by sample rate |
 
 ⚠️ **In-memory per-index counters are fine.** A `LongAdder` per index is ~10,000
@@ -67,6 +67,8 @@ GC pause distribution; virtual-thread pinning events.
 subscriber count · `consumer_lag_seconds` quantiles.
 
 **Cost** — `binstore_requests_total{op,purpose,domain}` ·
+`binstore_requests_ratio_to_expected{purpose}` (every purpose against its
+expected rate, research 15 §4; ⚠️ not yet exported) beside
 `binstore_governor_ratio_to_expected` (data PUTs, the one series the governor
 acts on) with `binstore_governor_alarm` and `binstore_governor_kill_switch` ·
 `binstore_cross_az_bytes_total{direction}` ·

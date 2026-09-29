@@ -41,6 +41,10 @@ Three things are known exactly at the moment a request is issued:
    by **largest remainder**, so the shares of one request sum to exactly
    10^6. The per-index totals therefore sum EXACTLY to the counted requests
    they apportion — a checkable invariant, not an approximation that drifts.
+   ⚠️ Which is why a request is charged on its ATTEMPT, not its success
+   (stated here by M12.20, M11.2 T3; the publisher's comment said it alone): the
+   counting store counts a PUT or GET that fails, so a ledger charged only on
+   success would sum to less than the requests it apportions.
 3. **What is apportioned:** the data PUT of every flush (`purpose` data); every
    commit-log PUT the pod issues (`purpose` commit) — appends, CONTINUEs, seals
    and lost races alike, charged where it is ISSUED by a store decorator on the
@@ -70,7 +74,8 @@ Three things are known exactly at the moment a request is issued:
 6. **Priced by the pod's `CostTable`** (ADR-0075's `CostMeter`), and labelled an
    estimate: counts are exact, prices are a lookup.
 7. **Reported two ways, zero metric cardinality:** `GET /admin/cost?by=index&top=N`
-   on the ingester, and a periodic top-K log event.
+   on the ingester, and a periodic top-K log event. ⚠️ The route is OPT-IN since
+   M12.6: served only when `admin.cost.enabled` is set, and off by default.
 
 ## Alternatives considered
 

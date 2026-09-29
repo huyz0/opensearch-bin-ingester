@@ -49,8 +49,9 @@ public final class IndexCostReport {
     /**
      * The report as JSON.
      *
-     * @param names an index id to its name, or {@code null} when the pod has
-     *     none registered -- the id is printed instead
+     * @param names an index id to its name; never {@code null} itself, but
+     *     its RESULT is {@code null} when the pod has none registered for that
+     *     id -- the id is printed instead
      * @throws IllegalArgumentException if {@code top} is outside 1..{@value #MAX_TOP}
      */
     public static String json(String podId, IndexCostLedger.Snapshot snapshot,

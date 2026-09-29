@@ -421,10 +421,17 @@ class CrossAzBytesIT {
         }
     }
 
-    /** M10.34: four cross-zone streams per segment. */
+    /**
+     * M10.34: four cross-zone partitions WRITTEN together. ⚠️ Not four streams
+     * per segment: how many share a segment is the writer's to decide, and the
+     * measured run packed two (K = 2, ADR-0080; M12.20, M10.34 P1).
+     */
     private static final int STREAMS = 4;
 
-    /** M10.34: bulks per stream, each ~230 KB, so a segment carries ~920 KB. */
+    /**
+     * M10.34: bulks per stream, each ~230 KB; a measured segment carried ~460 KB,
+     * one bulk from each of two streams (M12.20, M10.34 P1).
+     */
     private static final int K_BATCHES = 2;
     private static final int K_RECORDS = 110;
 
@@ -538,7 +545,9 @@ class CrossAzBytesIT {
                         StandardCharsets.UTF_8));
                 long servedStreams = delivered.fetches();
                 long crossAz = a.get("crossAzBytes") + b.get("crossAzBytes");
-                System.out.println("M10.34 K=" + STREAMS + " NFR-5: consumed=" + consumed
+                System.out.println("M10.34 partitions=" + STREAMS + ", K (streams per segment)="
+                        + (delivered.sizes.isEmpty() ? 0 : servedStreams / delivered.sizes.size())
+                        + " NFR-5: consumed=" + consumed
                         + ", segments=" + delivered.sizes.size() + ", (segment, stream) "
                         + "deliveries=" + servedStreams + ", crossAz=" + crossAz + " ("
                         + (servedStreams == 0 ? 0 : crossAz / servedStreams) + " B each), az-a="

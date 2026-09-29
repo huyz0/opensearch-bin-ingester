@@ -53,7 +53,10 @@ Two facts constrain the mechanism:
    the CONCRETE one: a write through an alias spends its index's bucket and
    slot (M11.8 review P2).
 3. **Refused with `429` and `Retry-After` = the seconds until the deeper
-   bucket's debt is repaid, rounded up, at least 1.** The same one place that
+   bucket's debt is repaid, rounded up, at least 1** -- and **`Retry-After: 1`
+   for the in-flight cap's refusal** (decision 2a), because a slot frees as soon
+   as one of the index's admitted requests ends (named here by M12.20, M11.0
+   R4). The same one place that
    answers every other `429` sets the header (M11's H2).
 4. **Configured per pod**: a default applied to every index
    (`ingest.quota.default.bytes-per-second`, `…records-per-second`), overridden
@@ -88,7 +91,8 @@ Two facts constrain the mechanism:
   Deferred paragraph, which now points here.
 - **A fleet-wide quota coordinated through the store.** Rejected: a request per
   admission, or per interval per index, is a request rate that scales with
-  indices (non-negotiable 6), and ADR-0010 requires a map lookup.
+  indices (non-negotiable 6), and research 11 §2 requires a map lookup (the
+  requirement is research 11's, not ADR-0010's -- corrected by M12.20, M11.0 R3).
 - **Refuse a request part-way once its bucket empties.** Rejected (decision 2):
   the appended prefix is durable-bound and the retry duplicates it.
 - **Require `Content-Length` and charge it up front.** Rejected: producers that

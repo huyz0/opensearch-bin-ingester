@@ -40,8 +40,10 @@ public final class CostTopKReporter {
     public static final Duration DEFAULT_INTERVAL = Duration.ofMinutes(5);
 
     /**
-     * The longest interval a line may cover (M12.9, M11.5 P1b): past it the
-     * schedule's {@code toNanos} overflowed, with an error naming no key.
+     * The longest interval a line may cover (M12.9, M11.5 P1b). ⚠️ A POLICY
+     * CEILING, NOT AN ARITHMETIC ONE (M12.20): {@code Duration.toNanos}
+     * overflows only past ~292 years, so the day is a chosen bound, and the
+     * earlier javadoc's "past it toNanos overflowed" was false.
      */
     public static final Duration MAX_INTERVAL = Duration.ofDays(1);
 

@@ -314,6 +314,13 @@ public final class ConsumerClient implements AutoCloseable {
      * Refuses a position whose records have been collected; an unknown floor
      * refuses nothing, and the floor itself is fine.
      *
+     * <p>⚠️ CALL IT ON THE {@code readNext} PATH, NEVER FROM CONSUMER
+     * CONSTRUCTION (M12.20, M11.1 P1): an exception out of the poll path pauses
+     * the shard where an operator sees it in {@code _ingestion/_state}, while
+     * one thrown from {@code createShardConsumer} is caught, logged at WARN and
+     * retried for ever -- index green, nothing indexed. The reasons are on
+     * {@link RetainedFloorTracker}.
+     *
      * @throws IllegalArgumentException if {@code fromOffset} is negative
      * @throws PositionCollectedException if {@code fromOffset} is below the floor
      */
