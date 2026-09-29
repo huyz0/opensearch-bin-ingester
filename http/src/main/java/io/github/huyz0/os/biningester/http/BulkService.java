@@ -9,6 +9,7 @@ import io.github.huyz0.os.biningester.ingest.LaneAdmission;
 import io.github.huyz0.os.biningester.ingest.LaneSet;
 import io.github.huyz0.os.biningester.ingest.PlacementRefusedException;
 import io.github.huyz0.os.biningester.ingest.RegistrationTimeoutException;
+import io.github.huyz0.os.biningester.ingest.RegistrationWaitFullException;
 import io.github.huyz0.os.biningester.security.Principal;
 import io.helidon.http.Status;
 import io.helidon.webserver.http.HttpRules;
@@ -345,6 +346,13 @@ public final class BulkService implements HttpService {
             // the index does not have -- which is FR-13's defining clause, and
             // a 500 there is retried forever because 5xx reads as transient.
             response.status(Status.BAD_REQUEST_400).send(e.getMessage());
+            return;
+        } catch (RegistrationWaitFullException e) {
+            // ⚠️ A LOAD REFUSAL, THROUGH THE ONE EMITTER (M12.10): too many writes
+            // already wait for this index's registration. Counted as an
+            // admission refusal -- the pod's permits are what the cap protects.
+            refusals.admissionRefused();
+            tooManyRequests(response, e.retryAfterSeconds(), e.getMessage());
             return;
         } catch (RegistrationTimeoutException e) {
             // ⚠️ 503, NOT 400 AND NOT 500. The index's shape has not been

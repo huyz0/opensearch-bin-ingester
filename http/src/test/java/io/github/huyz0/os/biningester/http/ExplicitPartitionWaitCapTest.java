@@ -1,0 +1,150 @@
+// SPDX-License-Identifier: Apache-2.0
+package io.github.huyz0.os.biningester.http;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import io.github.huyz0.os.biningester.format.IndexRegistration;
+import io.github.huyz0.os.biningester.ingest.AppendResult;
+import io.github.huyz0.os.biningester.ingest.IndexCatalog;
+import io.github.huyz0.os.biningester.ingest.Ingest;
+import io.github.huyz0.os.biningester.ingest.PendingPool;
+import io.github.huyz0.os.biningester.ingest.RoutedIngest;
+import io.github.huyz0.os.biningester.security.Principal;
+import io.helidon.http.HeaderNames;
+import io.helidon.webclient.api.HttpClientResponse;
+import io.helidon.webclient.api.WebClient;
+import io.helidon.webserver.WebServer;
+import io.helidon.webserver.http.HttpRouting;
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.time.Clock;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Base64;
+import java.util.List;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+
+/**
+ * M12.10 (M10.30 P1): an explicit-partition write waiting for its index's
+ * registration holds a lane admission permit, and nothing capped how many
+ * waited per index -- a producer retrying a typo'd index could take lane share
+ * from every other index. Past {@link RoutedIngest#MAX_EXPLICIT_WAITERS_PER_INDEX}
+ * a write is refused {@code 429} with {@code Retry-After}, through the one
+ * emitter.
+ */
+@Timeout(value = 60, unit = TimeUnit.SECONDS, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
+class ExplicitPartitionWaitCapTest {
+
+    private static final Principal PRINCIPAL =
+            new Principal("cluster-a", "producer-1", Set.of("logs"));
+    private static final String BODY = "{\"index\":{\"_id\":\"a\"}}\n{\"f\":1}\n";
+    /** Virtual threads, never the ForkJoin common pool a busy suite can starve (M11.25). */
+    private static final java.util.concurrent.Executor VIRTUAL =
+            task -> Thread.ofVirtual().start(task);
+
+    private WebServer server;
+
+    @AfterEach
+    void stop() {
+        if (server != null) {
+            server.stop();
+        }
+    }
+
+    /** Accepts every append, once its index is registered and the write is placed. */
+    private static final class Accepting implements Ingest {
+        @Override
+        public AppendResult append(Principal principal, String index, int partition,
+                RecordSource records) throws IOException {
+            int[] n = {0};
+            records.forEachRecord(record -> n[0]++);
+            return new AppendResult(n[0], 0L, n[0] - 1L);
+        }
+
+        @Override
+        public AppendResult append(Principal principal, String index, int partition, byte lane,
+                RecordSource records, Runnable buffered) throws IOException {
+            try {
+                return append(principal, index, partition, records);
+            } finally {
+                buffered.run();
+            }
+        }
+
+        @Override
+        public AppendResult appendRouted(Principal principal, String indexOrAlias,
+                String routing, byte lane, RecordSource records, Runnable buffered) {
+            throw new UnsupportedOperationException("explicit partitions only");
+        }
+
+        @Override
+        public String concreteIndex(String indexOrAlias) {
+            return indexOrAlias;
+        }
+
+        @Override
+        public void close() {
+        }
+    }
+
+    @Test
+    void pastTheCapAWriteWaitingForItsIndexIsRefused429AndTheWaitersComplete() throws Exception {
+        IndexCatalog catalog = new IndexCatalog();
+        RoutedIngest routed = new RoutedIngest(new Accepting(), catalog,
+                new PendingPool(Clock.systemUTC(), Duration.ofSeconds(30), 1 << 20),
+                Duration.ofSeconds(30), Clock.systemUTC());
+        server = WebServer.builder().port(0)
+                .routing(HttpRouting.builder().register(new BulkService(routed, PRINCIPAL)))
+                .build().start();
+        WebClient client = WebClient.builder().baseUri("http://localhost:" + server.port())
+                .build();
+
+        List<CompletableFuture<Integer>> waiting = new ArrayList<>();
+        for (int i = 0; i < RoutedIngest.MAX_EXPLICIT_WAITERS_PER_INDEX; i++) {
+            waiting.add(post(client));
+        }
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (routed.waitingForRegistration("logs") < RoutedIngest.MAX_EXPLICIT_WAITERS_PER_INDEX
+                && System.nanoTime() < deadline) {
+            Thread.onSpinWait();
+        }
+        assertThat(routed.waitingForRegistration("logs")).as("the premise: the cap is waiting")
+                .isEqualTo(RoutedIngest.MAX_EXPLICIT_WAITERS_PER_INDEX);
+
+        try (HttpClientResponse refused = client.post("/logs/_bulk")
+                .queryParam("partition", "0").submit(BODY)) {
+            assertThat(refused.status().code()).as("one past the cap, refused at once")
+                    .isEqualTo(429);
+            assertThat(refused.headers().first(HeaderNames.RETRY_AFTER)).hasValue("1");
+        }
+
+        catalog.register(new IndexRegistration(base64Url(UUID.randomUUID()), "logs", List.of(),
+                4, 4, 1, 1));
+        for (CompletableFuture<Integer> write : waiting) {
+            assertThat(write.get(10, TimeUnit.SECONDS)).isEqualTo(202);
+        }
+        assertThat(routed.waitingForRegistration("logs")).as("every slot given back").isZero();
+    }
+
+    private static CompletableFuture<Integer> post(WebClient client) {
+        return CompletableFuture.supplyAsync(() -> {
+            try (HttpClientResponse response = client.post("/logs/_bulk")
+                    .queryParam("partition", "0").submit(BODY)) {
+                return response.status().code();
+            }
+        }, VIRTUAL);
+    }
+
+    private static String base64Url(UUID uuid) {
+        ByteBuffer b = ByteBuffer.allocate(16);
+        b.putLong(uuid.getMostSignificantBits());
+        b.putLong(uuid.getLeastSignificantBits());
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(b.array());
+    }
+}

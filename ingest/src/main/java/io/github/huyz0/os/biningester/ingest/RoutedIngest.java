@@ -43,6 +43,18 @@ public final class RoutedIngest implements Ingest {
     private final Ingest delegate;
     private final IndexCatalog catalog;
     private final PendingPool pending;
+    /** Explicit-partition writes waiting for each index's registration (M12.10). */
+    private final java.util.concurrent.ConcurrentHashMap<String, Integer> explicitWaiters =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * How many explicit-partition writes may wait for one index's registration
+     * (M12.10, M10.30 P1): each holds its lane admission permit while it waits,
+     * so without a cap a producer retrying a typo'd index takes lane share from
+     * every other index. The routed path's pool is bounded per index the same
+     * way, in bytes.
+     */
+    public static final int MAX_EXPLICIT_WAITERS_PER_INDEX = 8;
     private final Duration pendingTimeout;
 
     /**
@@ -171,7 +183,21 @@ public final class RoutedIngest implements Ingest {
             // name a stream for it and answers 500, which reads as this
             // ingester's bug. The records are not consumed while it waits --
             // the front door holds at most one parsed chunk -- so no pool.
-            known = awaitRegistration(index, catalog::resolve);
+            // ⚠️ THE SLOT IS TAKEN BEFORE THE WAIT AND REFUSED AT THE CAP, never
+            // queued: a load refusal (429 + Retry-After), not the 503 of a wait
+            // that ran out. The entry goes when its count does, so a name a
+            // producer invents leaves nothing behind.
+            if (explicitWaiters.merge(index, 1, Integer::sum) > MAX_EXPLICIT_WAITERS_PER_INDEX) {
+                explicitWaiters.computeIfPresent(index, (name, n) -> n == 1 ? null : n - 1);
+                throw new RegistrationWaitFullException("index " + index + " is not registered "
+                        + "and already has " + MAX_EXPLICIT_WAITERS_PER_INDEX + " writes waiting "
+                        + "for it; retry");
+            }
+            try {
+                known = awaitRegistration(index, catalog::resolve);
+            } finally {
+                explicitWaiters.computeIfPresent(index, (name, n) -> n == 1 ? null : n - 1);
+            }
             if (known.isEmpty()) {
                 throw new RegistrationTimeoutException("index " + index + " was still not "
                         + "registered after " + pendingTimeout + " -- the plugin has not "
@@ -335,6 +361,11 @@ public final class RoutedIngest implements Ingest {
         } finally {
             lock.unlock();
         }
+    }
+
+    /** How many explicit-partition writes wait for {@code index}'s registration now. */
+    public int waitingForRegistration(String index) {
+        return explicitWaiters.getOrDefault(index, 0);
     }
 
     @Override
