@@ -27,7 +27,7 @@ abstract class MilestoneVerifiedTask : DefaultTask() {
         val failures = try {
             MilestoneEvidence.unevidenced(specText, Files.readString(verified))
         } catch (malformed: IllegalArgumentException) {
-            throw GradleException("$spec: ${malformed.message}")
+            throw GradleException("$dir: ${malformed.message}")
         }
         if (failures.isNotEmpty()) throw GradleException("criteria without evidence: ${failures.joinToString()}")
         val criteria = MilestoneEvidence.criteriaCount(specText)

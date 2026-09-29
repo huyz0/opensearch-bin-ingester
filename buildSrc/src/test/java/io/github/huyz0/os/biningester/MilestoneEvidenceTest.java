@@ -2,6 +2,7 @@
 package io.github.huyz0.os.biningester;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -33,12 +34,38 @@ class MilestoneEvidenceTest {
         .containsExactly("2");
   }
 
+  /**
+   * ⚠️ M12.14 (H15): with no criteria heading the gate used to read the text
+   * before the first section as the criteria -- so a VERIFIED.md that lost its
+   * heading was judged on whatever preamble was left, and one whose evidence
+   * all sat below a differently-named heading answered for nothing it could
+   * see. Neither is a VERIFIED.md the gate can read; it refuses rather than
+   * guesses.
+   */
   @Test
-  void withoutACriteriaHeadingTheTextBeforeTheFirstSectionIsTheCriteria() {
+  void aVerifiedFileWithNoCriteriaSectionIsRefused() {
     String verified = "# M verified\n\n1. FirstTest#first proves it.\n\n"
         + "## The unwired set\n\n2. SecondTest#second, in another section.\n";
 
-    assertThat(MilestoneEvidence.INSTANCE.unevidenced(SPEC, verified)).containsExactly("2");
+    assertThatThrownBy(() -> MilestoneEvidence.INSTANCE.unevidenced(SPEC, verified))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("VERIFIED.md has no Acceptance criteria section");
+  }
+
+  /**
+   * ⚠️ M12.14 (H15): the first {@code N. } line answered for criterion N, so a
+   * second line numbered N -- a pasted row, a renumbering left half done -- was
+   * never read, and the criterion it was meant to answer for went unchecked.
+   */
+  @Test
+  void aCriterionNumberedTwiceInTheCriteriaSectionIsRefused() {
+    String verified = "## Acceptance criteria\n1. FirstTest#first.\n"
+        + "1. SecondTest#second, meant for criterion 2.\n"
+        + "2. NOT-RUN: needs a cluster.\n\n## Milestone review\n1. prose\n";
+
+    assertThatThrownBy(() -> MilestoneEvidence.INSTANCE.unevidenced(SPEC, verified))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("VERIFIED.md numbers criterion 1 more than once");
   }
 
   @Test
