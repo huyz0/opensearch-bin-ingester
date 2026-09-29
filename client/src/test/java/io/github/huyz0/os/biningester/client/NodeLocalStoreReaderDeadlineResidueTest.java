@@ -116,4 +116,44 @@ class NodeLocalStoreReaderDeadlineResidueTest {
                 .as("⚠️ CANCELLED AND GONE, not queued for the hour it was set for")
                 .isEqualTo(before);
     }
+
+    /**
+     * ⚠️ M12.17 (M11.12 R1): the deadline was recognised by its TEXT -- a
+     * failure whose message held " deadline" was taken for this client's own
+     * and passed through -- so after expiry any other IOException carrying
+     * that word (a socket's read deadline, a proxy's) surfaced unnamed. The
+     * type is the test now, not the text.
+     */
+    @Test
+    void anotherFailureMentioningADeadlineAfterExpiryIsStillNamedAsTheBodyDeadline()
+            throws Exception {
+        NodeLocalStoreReaderClient client = new NodeLocalStoreReaderClient(
+                URI.create("http://127.0.0.1:1"), secret(), Duration.ofSeconds(2), 1 << 20,
+                Duration.ofMillis(50));
+        CountDownLatch closed = new CountDownLatch(1);
+        InputStream body = new InputStream() {
+            @Override
+            public int read() throws IOException {
+                try {
+                    closed.await(10, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                throw new IOException("socket read deadline passed");
+            }
+
+            @Override
+            public void close() {
+                closed.countDown();
+            }
+        };
+
+        try (InputStream in = client.deadlined(body)) {
+            assertThatThrownBy(in::read)
+                    .as("⚠️ AFTER EXPIRY THE BODY DEADLINE IS NAMED, whatever the cause says")
+                    .isInstanceOf(NodeLocalStoreReaderClient.BodyDeadlineException.class)
+                    .hasMessageContaining("exceeded its PT0.05S deadline")
+                    .hasCauseInstanceOf(IOException.class);
+        }
+    }
 }

@@ -67,6 +67,27 @@ public final class ConsumerClient implements AutoCloseable {
     private long expectedNextOffset = -1;
 
     /**
+     * Guards {@link #expectedNextOffset} across the two lanes.
+     *
+     * <p>⚠️ ONE LOCK FOR BOTH LANES (M12.17, M11.13 R4). The live lane decodes
+     * under {@code liveDecodeLock} and the catch-up lane under
+     * {@code catchUpDecodeLock}, so neither excluded the other: the race
+     * guard's undo in {@link #decodeAndReportGap} wrote the offset in a window
+     * where a catch-up commit could land between the commit it undoes and the
+     * undo, and be overwritten. The commit and its undo are now one critical
+     * section. ⚠️ The gap handler is called AFTER it is released: it belongs
+     * to the node's coordinator, which takes its own monitor.
+     */
+    private final Object offsetLock = new Object();
+
+    /** A gap {@link #reportAnyGap} found, reported once {@link #offsetLock} is released. */
+    private record GapReport(java.util.function.Consumer<DeliveryGapException> handler,
+            DeliveryGapException gap) {
+    }
+
+    private GapReport pendingGapReport;
+
+    /**
      * Deliveries this consumer's queue was too full to take.
      *
      * <p>⚠️ IT IS WHAT TELLS THE TWO GAPS APART. A gap with a local drop behind
@@ -369,9 +390,13 @@ public final class ConsumerClient implements AutoCloseable {
             decoded = new java.util.ArrayDeque<>();
             decodeInto(delivery, decoded, replay ? catchUpFetcher : liveFetcher);
         }
-        boolean decode = reportAnyGap(delivery, replay);
-        if (decode) {
-            if (decoded == null) {
+        boolean decode;
+        GapReport report;
+        synchronized (offsetLock) {
+            decode = reportAnyGap(delivery, replay);
+            report = pendingGapReport;
+            pendingGapReport = null;
+            if (decode && decoded == null) {
                 // ⚠️ NEVER A DECODE AFTER THE COMMIT: one that threw here would
                 // leave its retry reading as a duplicate -- the drop above.
                 // ⚠️ REACHED ONLY BY A RACE (M11.13, H8; M10.23 review R4): the
@@ -384,9 +409,16 @@ public final class ConsumerClient implements AutoCloseable {
                 // stays at the head, NOT CONSUMED: the next poll decodes it in
                 // order. Throwing would pause the shard for a state that is not
                 // unrecoverable (research 02 §6; review R2).
+                // ⚠️ AND UNDER THE LOCK THE COMMIT TOOK (M12.17, M11.13 R4).
                 expectedNextOffset = delivery.firstOffset();
                 return false;
             }
+        }
+        if (report != null) {
+            deliveryQueues.pauseLiveForGap();
+            report.handler().accept(report.gap());
+        }
+        if (decode) {
             out.addAll(decoded);
         }
         return decode || !gapRepairPending;
@@ -397,7 +429,10 @@ public final class ConsumerClient implements AutoCloseable {
      * committing anything: first, in order, replayed, or a gap nobody repairs.
      */
     private boolean wouldDecode(Delivery delivery, boolean replay) {
-        long expected = expectedNextOffset;
+        long expected;
+        synchronized (offsetLock) {
+            expected = expectedNextOffset;
+        }
         if (replay || expected < 0 || delivery.firstOffset() == expected) {
             return true;
         }
@@ -483,8 +518,7 @@ public final class ConsumerClient implements AutoCloseable {
             return true;
         }
         gapRepairPending = true;
-        deliveryQueues.pauseLiveForGap();
-        handler.accept(gap);
+        pendingGapReport = new GapReport(handler, gap);
         // Keep the delivery that exposed the gap queued until replay reaches
         // this offset; decoding it now could make it impossible to suppress an
         // overlap if replay includes the same records.

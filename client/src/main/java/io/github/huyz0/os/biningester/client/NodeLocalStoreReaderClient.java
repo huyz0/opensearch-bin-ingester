@@ -118,8 +118,20 @@ public final class NodeLocalStoreReaderClient implements AutoCloseable {
         }
     }
 
+    /**
+     * A body that ran past its deadline. ⚠️ A TYPE, NOT A PHRASE (M12.17,
+     * M11.12 R1): {@code expiredOr} once recognised its own failure by the
+     * text " deadline", so any other failure carrying that word after expiry
+     * passed through unnamed.
+     */
+    static final class BodyDeadlineException extends IOException {
+        BodyDeadlineException(String message, IOException cause) {
+            super(message, cause);
+        }
+    }
+
     /** {@code body}, closed underneath its reader once {@code bodyDeadline} has passed. */
-    private InputStream deadlined(InputStream body) {
+    InputStream deadlined(InputStream body) {
         java.util.concurrent.atomic.AtomicBoolean expired =
                 new java.util.concurrent.atomic.AtomicBoolean();
         java.util.concurrent.ScheduledFuture<?> timer = DEADLINES.schedule(() -> {
@@ -160,13 +172,12 @@ public final class NodeLocalStoreReaderClient implements AutoCloseable {
              * "closed", which says nothing of why.
              */
             private IOException expiredOr(IOException failed) {
-                String message = failed.getMessage();
-                return expired.get() && (message == null || !message.contains(" deadline"))
+                return expired.get() && !(failed instanceof BodyDeadlineException)
                         ? deadline(failed) : failed;
             }
 
             private IOException deadline(IOException cause) {
-                return new IOException("node-local reader body exceeded its " + bodyDeadline
+                return new BodyDeadlineException("node-local reader body exceeded its " + bodyDeadline
                         + " deadline", cause);
             }
 
