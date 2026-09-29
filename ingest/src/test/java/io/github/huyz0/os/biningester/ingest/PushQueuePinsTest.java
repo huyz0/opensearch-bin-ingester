@@ -8,6 +8,7 @@ import io.github.huyz0.os.biningester.binstore.backend.MemoryBinStore;
 import io.github.huyz0.os.biningester.format.CommitDelta;
 import io.github.huyz0.os.biningester.format.RunCommit;
 import io.github.huyz0.os.biningester.format.RunKey;
+import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -121,5 +122,47 @@ class PushQueuePinsTest {
             queue.drain();
             assertThat(held.delivered).containsExactly(1L, 2L);
         }
+    }
+
+    /**
+     * ⚠️ M12.15 (M11.16 T1): when the drain's bound runs out the pusher is
+     * interrupted, and every push still queued behind the one in flight is
+     * never delivered. Those were lost UNCOUNTED -- neither {@code dropped()}
+     * (the budget) nor {@code undeliverable()} (a delivery that threw) saw
+     * them. The bound is injected so this is a state the test builds, not a
+     * five-second sleep: the first delivery is held and never released, so a
+     * 1 ms bound always runs out.
+     */
+    @Test
+    void pushesStillQueuedWhenTheDrainBoundRunsOutAreCountedAbandoned() throws Exception {
+        SubscriptionHub hub = new SubscriptionHub();
+        Held held = new Held();
+        try (var ignored = hub.subscribe(KEY, held)) {
+            PushQueue queue = new PushQueue(hub, serving(), 1 << 20, Duration.ofMillis(1));
+            offer(queue, 1, 10);
+            assertThat(held.entered.await(10, TimeUnit.SECONDS)).isTrue();
+            offer(queue, 2, 10);
+            offer(queue, 3, 10);
+
+            queue.drain();
+
+            assertThat(queue.abandoned())
+                    .as("⚠️ 2 and 3 were queued behind the held delivery and never delivered")
+                    .isEqualTo(2);
+            assertThat(held.delivered).as("only the delivery in flight finished")
+                    .doesNotContain(2L, 3L);
+            assertThat(queue.dropped()).isZero();
+            assertThat(queue.undeliverable()).isZero();
+        }
+    }
+
+    /**
+     * ⚠️ The production bound, pinned: under Kubernetes' default 30 s grace
+     * period with room for the final flush, and long enough that a subscriber
+     * one slow segment behind is not cut off at shutdown.
+     */
+    @Test
+    void theProductionDrainBoundIsFiveSeconds() {
+        assertThat(PushQueue.DRAIN_BOUND).isEqualTo(Duration.ofSeconds(5));
     }
 }

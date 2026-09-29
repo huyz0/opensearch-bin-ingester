@@ -3,6 +3,8 @@ package io.github.huyz0.os.biningester.ingest;
 
 import io.github.huyz0.os.biningester.format.CommitDelta;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -65,7 +67,23 @@ final class PushQueue {
     private static final PendingPush POISON =
             new PendingPush(null, null, new byte[0], 0, SubscriptionHub.EPOCH_UNKNOWN);
 
+    /**
+     * How long {@link #drain} waits for the queued pushes before it gives up
+     * on them. ⚠️ FIVE seconds, not thirty: the old wait exceeded Kubernetes'
+     * default grace period, so a slow subscriber turned a graceful drain into
+     * a SIGKILL -- for data that is already durable by this point.
+     */
+    static final Duration DRAIN_BOUND = Duration.ofSeconds(5);
+    private final Duration drainBound;
+    private final AtomicLong abandonedPushes = new AtomicLong();
+
     PushQueue(SubscriptionHub hub, SegmentServing serving, long maxQueuedPushBytes) {
+        this(hub, serving, maxQueuedPushBytes, DRAIN_BOUND);
+    }
+
+    PushQueue(SubscriptionHub hub, SegmentServing serving, long maxQueuedPushBytes,
+            Duration drainBound) {
+        this.drainBound = drainBound;
         this.hub = hub;
         this.serving = serving;
         this.maxQueuedPushBytes = maxQueuedPushBytes;
@@ -127,6 +145,19 @@ final class PushQueue {
      */
     long undeliverable() {
         return undeliverablePushes.get();
+    }
+
+    /**
+     * How many pushes {@link #drain} gave up on: still queued when its bound
+     * ran out, so never delivered.
+     *
+     * <p>⚠️ A THIRD CAUSE, beside {@link #dropped()} (the budget was full at
+     * offer time) and {@link #undeliverable()} (a delivery threw). Before
+     * M12.15 these were lost uncounted. The commits are durable; a consumer
+     * recovers them from the commit log, as it does a dropped push.
+     */
+    long abandoned() {
+        return abandonedPushes.get();
     }
 
     /** Delivers pushes in order, off the ingest lock. */
@@ -199,15 +230,43 @@ final class PushQueue {
         // so the sentinel always lands last and nothing is displaced.
         pushes.add(POISON);
         try {
-            // ⚠️ FIVE seconds, not thirty. The old wait exceeded Kubernetes'
-            // default grace period, so a slow subscriber turned a graceful drain
-            // into a SIGKILL -- for data that is already durable by this point.
-            if (!pusher.join(Duration.ofSeconds(5))) {
-                pusher.interrupt();
+            if (pusher.join(drainBound)) {
+                return;
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            pusher.interrupt();
+        }
+        pusher.interrupt();
+        abandonQueued();
+    }
+
+    /**
+     * Counts, releases and logs every push still queued once the pusher is
+     * interrupted -- the delivery in flight finishes or not, but nothing
+     * behind it is delivered.
+     *
+     * <p>⚠️ THE SENTINEL GOES BACK. A pusher whose subscriber swallowed the
+     * interrupt takes its next entry rather than exiting; with the queue
+     * emptied that would be a {@code take()} that never returns, a thread
+     * leaked for the life of the process.
+     */
+    private void abandonQueued() {
+        List<PendingPush> left = new ArrayList<>();
+        pushes.drainTo(left);
+        pushes.add(POISON);
+        long abandoned = 0;
+        for (PendingPush push : left) {
+            if (push != POISON) {
+                abandoned++;
+                queuedPushBytes.addAndGet(-push.bytes());
+            }
+        }
+        if (abandoned > 0) {
+            abandonedPushes.addAndGet(abandoned);
+            LOG.log(System.Logger.Level.WARNING,
+                    "push drain gave up after " + drainBound + " with " + abandoned
+                            + " push(es) undelivered; those commits are durable and "
+                            + "consumers recover them from the commit log");
         }
     }
 }
