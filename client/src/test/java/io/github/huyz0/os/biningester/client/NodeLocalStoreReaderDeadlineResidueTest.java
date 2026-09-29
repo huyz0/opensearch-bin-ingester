@@ -104,17 +104,30 @@ class NodeLocalStoreReaderDeadlineResidueTest {
     void aBodyReadAndClosedInTimeLeavesNoTimerQueued() throws Exception {
         NodeLocalStoreReaderClient client = new NodeLocalStoreReaderClient(serve(false),
                 secret(), Duration.ofSeconds(2), 1 << 20, Duration.ofHours(1));
-        int before = NodeLocalStoreReaderClient.pendingDeadlines();
+        // ⚠️ ONLY DEADLINES OVER HALF AN HOUR OUT ARE COUNTED (M12.21, M11.12 T2):
+        // the executor is JVM-wide, and another test's short timer running or
+        // cancelled between two reads moved an unfiltered count.
+        int before = NodeLocalStoreReaderClient.pendingDeadlines(Duration.ofMinutes(30));
+        // ⚠️ A SHORT TIMER QUEUED BETWEEN THE READS, as another test's would be
+        // (review T1): the filter is the fix, and without this nothing on the
+        // queue could tell a filtered count from the whole queue's.
+        NodeLocalStoreReaderClient shortLived = new NodeLocalStoreReaderClient(
+                URI.create("http://127.0.0.1:1"), dir.resolve("secret"), Duration.ofSeconds(2),
+                1 << 20, Duration.ofMinutes(1));
+        InputStream otherBody = shortLived.deadlined(new java.io.ByteArrayInputStream(new byte[0]));
 
-        try (InputStream in = client.get("bucket", "prefix", "prefix/ctl/log/0/x.delta")) {
-            assertThat(NodeLocalStoreReaderClient.pendingDeadlines())
-                    .as("the premise: the body's timer is queued").isEqualTo(before + 1);
+        try (otherBody; InputStream in = client.get("bucket", "prefix",
+                "prefix/ctl/log/0/x.delta")) {
+            assertThat(NodeLocalStoreReaderClient.pendingDeadlines(Duration.ofMinutes(30)))
+                    .as("the premise: the body's timer is queued, the short one not counted")
+                    .isEqualTo(before + 1);
             in.readAllBytes();
-        }
+            in.close();
 
-        assertThat(NodeLocalStoreReaderClient.pendingDeadlines())
-                .as("⚠️ CANCELLED AND GONE, not queued for the hour it was set for")
-                .isEqualTo(before);
+            assertThat(NodeLocalStoreReaderClient.pendingDeadlines(Duration.ofMinutes(30)))
+                    .as("⚠️ CANCELLED AND GONE, not queued for the hour it was set for")
+                    .isEqualTo(before);
+        }
     }
 
     /**

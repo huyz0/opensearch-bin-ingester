@@ -17,7 +17,6 @@ import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
@@ -128,7 +127,7 @@ class ConsumerRetryDefaultsTest {
     @Test
     void twoReadersNeverBothFetchTheCatchUpHead() throws Exception {
         List<String> fetched = new CopyOnWriteArrayList<>();
-        CyclicBarrier both = new CyclicBarrier(2);
+        Thread[] readers = new Thread[2];
         byte[] s0 = segmentOf("a", 0);
         byte[] s1 = segmentOf("b", 1);
         SegmentSource source = new SegmentSource() {
@@ -138,13 +137,8 @@ class ConsumerRetryDefaultsTest {
 
             @Override public byte[] fetchSegment(String segmentKey) {
                 fetched.add(segmentKey);
-                // ⚠️ WAITS FOR A SECOND FETCH, which only a second reader
-                // peeking the SAME head could start: with the lock it never
-                // comes and this times out, without it both meet here.
-                try {
-                    both.await(2, TimeUnit.SECONDS);
-                } catch (Exception alone) {
-                    // the expected outcome with the lock held
+                if (segmentKey.equals("s0")) {
+                    holdUntilTheOtherReaderIsBlockedOnMeOrFetching(readers, fetched);
                 }
                 return segmentKey.equals("s0") ? s0 : s1;
             }
@@ -162,8 +156,12 @@ class ConsumerRetryDefaultsTest {
                     failures.add(t);
                 }
             };
-            Thread first = Thread.ofPlatform().start(reader);
-            Thread second = Thread.ofPlatform().start(reader);
+            Thread first = Thread.ofPlatform().unstarted(reader);
+            Thread second = Thread.ofPlatform().unstarted(reader);
+            readers[0] = first;
+            readers[1] = second;
+            first.start();
+            second.start();
             first.join(10_000);
             second.join(10_000);
 
@@ -171,5 +169,36 @@ class ConsumerRetryDefaultsTest {
         }
         assertThat(fetched).as("⚠️ ONE DECODE OF THE HEAD AT A TIME: s0 once, then s1")
                 .containsExactly("s0", "s1");
+    }
+
+    /**
+     * Holds the head's fetch until the other reader is either BLOCKED on a
+     * monitor this thread owns -- the decode lock, with it held -- or has
+     * started a fetch of its own, which only a second reader peeking the SAME
+     * head could, without it.
+     *
+     * <p>⚠️ NOT A FIXED WAIT (M12.21, M11.13 T5): the barrier this replaced
+     * timed out after 2 s on EVERY passing run, because with the lock held the
+     * second fetch it waited for never comes. The other reader finishing
+     * without contending also releases it; 10 s is only the failure's bound.
+     */
+    private static void holdUntilTheOtherReaderIsBlockedOnMeOrFetching(Thread[] readers,
+            List<String> fetched) {
+        Thread me = Thread.currentThread();
+        Thread other = readers[0] == me ? readers[1] : readers[0];
+        java.lang.management.ThreadMXBean threads =
+                java.lang.management.ManagementFactory.getThreadMXBean();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (System.nanoTime() < deadline) {
+            if (fetched.size() >= 2 || other.getState() == Thread.State.TERMINATED) {
+                return;
+            }
+            java.lang.management.ThreadInfo info = threads.getThreadInfo(other.threadId());
+            if (info != null && info.getThreadState() == Thread.State.BLOCKED
+                    && info.getLockOwnerId() == me.threadId()) {
+                return;
+            }
+            Thread.onSpinWait();
+        }
     }
 }

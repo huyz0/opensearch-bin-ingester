@@ -58,9 +58,25 @@ public final class NodeLocalStoreReaderClient implements AutoCloseable {
         return executor;
     }
 
-    /** Body deadlines scheduled and not yet run or cancelled. */
-    static int pendingDeadlines() {
-        return DEADLINES.getQueue().size();
+    /**
+     * Body deadlines scheduled and not yet run or cancelled, and due more than
+     * {@code dueAfter} from now.
+     *
+     * <p>⚠️ FILTERED BY DUE TIME (M12.21, M11.12 T2): the executor is JVM-wide,
+     * so a count of its whole queue moved whenever another test's body timed
+     * out or was closed between two reads. A test that sets an hour-long
+     * deadline counts only deadlines that far out.
+     */
+    static int pendingDeadlines(java.time.Duration dueAfter) {
+        long after = dueAfter.toNanos();
+        int count = 0;
+        for (Runnable task : DEADLINES.getQueue()) {
+            if (task instanceof java.util.concurrent.Delayed delayed
+                    && delayed.getDelay(java.util.concurrent.TimeUnit.NANOSECONDS) > after) {
+                count++;
+            }
+        }
+        return count;
     }
 
     public NodeLocalStoreReaderClient(URI endpoint, Path secretFile, Duration timeout,
