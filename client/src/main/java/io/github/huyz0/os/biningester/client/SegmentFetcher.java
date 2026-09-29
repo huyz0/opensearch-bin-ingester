@@ -28,6 +28,13 @@ import java.util.Objects;
  * polls with ZERO never serves a backoff and never retries. The shard
  * consumer's first read of every batch carries the full poll timeout.
  *
+ * <p>⚠️ **WITH A CLOCK ON THE POLICY, AS THE PLUGIN RUNS (M12.26), THE BACKOFF
+ * IS A DUE TIME INSTEAD**, on the host's clock rather than one this module
+ * reads: a wait is what is left until due, never more; a ZERO-only caller
+ * does retry once due, still without a request loop before it; and a lane
+ * backing off can give its turn to the other ({@link #backingOff()}). The
+ * paragraph above describes the policy with no clock.
+ *
  * <p>⚠️ **ONLY THE FETCH IS RETRIED.** A segment that arrived and will not
  * decode is corrupt however often it is fetched, so that failure surfaces on
  * the first attempt; and one delivery is one fetch per attempt, so a retry
@@ -69,6 +76,13 @@ final class SegmentFetcher {
     private int failures;
     private Duration backoff;
     private Duration owed = Duration.ZERO;
+    /**
+     * With a clock on the policy (M12.26): when the backoff ends, on it. The
+     * backoff is then a DUE TIME, which passes whether or not anyone waits --
+     * so a catch-up that gives its turn to live is still retried once due --
+     * where without one it is a debt that only {@link #awaitBackoff} pays.
+     */
+    private long dueAtMillis = Long.MIN_VALUE;
     /**
      * The node's fetch count BEFORE this run's first held answer of the round,
      * or -1 (M10.28 review F4): a run pauses after the node has failed
@@ -134,7 +148,7 @@ final class SegmentFetcher {
 
     private byte[] retried(Delivery delivery, Fetch fetch) throws IOException {
         synchronized (this) {
-            if (owed.compareTo(Duration.ZERO) > 0) {
+            if (owesWait()) {
                 throw new Deferred("segment " + delivery.segmentKey() + " is backing off", null,
                         false, this);
             }
@@ -182,7 +196,7 @@ final class SegmentFetcher {
                     + "(this node's attempt " + sinceWaiting + " of " + retry.maxAttempts()
                     + " since this run began waiting): " + held.getMessage(), held);
         }
-        owed = held.remaining().isZero() ? Duration.ofMillis(1) : held.remaining();
+        owe(held.remaining().isZero() ? Duration.ofMillis(1) : held.remaining());
         return new Deferred("segment " + delivery.segmentKey() + " is held failed on this node",
                 held, false, this);
     }
@@ -202,7 +216,7 @@ final class SegmentFetcher {
                     + "(attempt " + attempts + " of " + attempts + "): " + failed.getMessage(),
                     failed);
         }
-        owed = Duration.ofMillis(HttpSubscriptionTransport.jitteredMillis(backoff));
+        owe(Duration.ofMillis(HttpSubscriptionTransport.jitteredMillis(backoff)));
         backoff = HttpSubscriptionTransport.grow(backoff, retry.ceiling());
         LOG.log(System.Logger.Level.WARNING, "segment {0} fetch attempt {1} of {2} failed, "
                 + "retrying in {3}: {4}", delivery.segmentKey(), failures, retry.maxAttempts(),
@@ -219,7 +233,9 @@ final class SegmentFetcher {
     void awaitBackoff(Duration timeout) throws InterruptedException {
         Duration wait;
         synchronized (this) {
-            wait = owed.compareTo(timeout) < 0 ? owed : timeout;
+            Duration left = retry.clockMillis() == null ? owed
+                    : Duration.ofMillis(Math.max(0, dueAtMillis - retry.clockMillis().getAsLong()));
+            wait = left.compareTo(timeout) < 0 ? left : timeout;
         }
         if (wait.compareTo(Duration.ZERO) <= 0) {
             return;
@@ -228,5 +244,31 @@ final class SegmentFetcher {
         synchronized (this) {
             owed = owed.minus(wait).isNegative() ? Duration.ZERO : owed.minus(wait);
         }
+    }
+
+    /** Starts a backoff of {@code wait}: a debt, and with a clock a due time too. */
+    private void owe(Duration wait) {
+        owed = wait;
+        if (retry.clockMillis() != null) {
+            dueAtMillis = retry.clockMillis().getAsLong() + wait.toMillis();
+        }
+    }
+
+    /** Whether the next fetch must wait: until the due time, or until the debt is paid. */
+    private synchronized boolean owesWait() {
+        return retry.clockMillis() == null ? owed.compareTo(Duration.ZERO) > 0
+                : retry.clockMillis().getAsLong() < dueAtMillis;
+    }
+
+    /**
+     * Whether this fetcher is backing off and its time has not come, which is
+     * only ever true with a clock (M12.26).
+     *
+     * <p>⚠️ FALSE WITHOUT ONE, deliberately: a debt is paid only by waiting it
+     * out, so a lane that yielded its turn on it would never be retried while
+     * the other lane kept the reader busy.
+     */
+    synchronized boolean backingOff() {
+        return retry.clockMillis() != null && retry.clockMillis().getAsLong() < dueAtMillis;
     }
 }

@@ -25,9 +25,15 @@ import java.util.Objects;
  * @param maxAttempts fetches of one segment before the failure surfaces
  * @param sleeper how a backoff is waited out; {@link #DEFAULT} sleeps the
  *     calling thread, and a test injects one that records instead
+ * @param clockMillis the host's relative clock in millis, or {@code null}. With
+ *     one a backoff is a DUE TIME, which passes whether or not anyone waits, so
+ *     a catch-up lane backing off gives its turn to live and is retried when
+ *     due (M12.26); without one it is a debt only waiting pays, as before. This
+ *     module reads no clock of its own (non-negotiable 7): the plugin passes
+ *     OpenSearch's.
  */
 public record SegmentFetchRetry(Duration floor, Duration ceiling, int maxAttempts,
-        Sleeper sleeper) {
+        Sleeper sleeper, java.util.function.LongSupplier clockMillis) {
 
     /** Waits out one backoff. */
     @FunctionalInterface
@@ -52,6 +58,16 @@ public record SegmentFetchRetry(Duration floor, Duration ceiling, int maxAttempt
     public static final SegmentFetchRetry DEFAULT = new SegmentFetchRetry(
             HttpSubscriptionTransport.DEFAULT_RETRY_FLOOR,
             HttpSubscriptionTransport.DEFAULT_RETRY_CEILING, 8, Thread::sleep);
+
+    /** A policy with no clock: a backoff is a debt only waiting pays. */
+    public SegmentFetchRetry(Duration floor, Duration ceiling, int maxAttempts, Sleeper sleeper) {
+        this(floor, ceiling, maxAttempts, sleeper, null);
+    }
+
+    /** This policy, its backoffs due on {@code clockMillis} (M12.26). */
+    public SegmentFetchRetry withClock(java.util.function.LongSupplier clockMillis) {
+        return new SegmentFetchRetry(floor, ceiling, maxAttempts, sleeper, clockMillis);
+    }
 
     public SegmentFetchRetry {
         Objects.requireNonNull(floor, "floor");

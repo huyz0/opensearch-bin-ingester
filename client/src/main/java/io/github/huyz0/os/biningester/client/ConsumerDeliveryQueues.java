@@ -28,14 +28,36 @@ final class ConsumerDeliveryQueues {
     private final Deque<ConsumerRecord> readyLive = new ArrayDeque<>();
     private final Deque<ConsumerRecord> readyCatchUp = new ArrayDeque<>();
     private final Decoder decoder;
+    /** Whether the catch-up lane is backing off and not yet due (M12.26). */
+    private final java.util.function.BooleanSupplier catchUpBackingOff;
     private int liveRecordsSinceCatchUp;
     private volatile boolean livePausedForGap;
     private volatile java.util.UUID gapReplayRequestId;
 
     ConsumerDeliveryQueues(int capacity, Decoder decoder) {
+        this(capacity, decoder, () -> false);
+    }
+
+    ConsumerDeliveryQueues(int capacity, Decoder decoder,
+            java.util.function.BooleanSupplier catchUpBackingOff) {
         live = new ArrayBlockingQueue<>(capacity);
         catchUp = new CatchUpDeliveryLane(capacity, deliveryLock, deliveryAvailable);
         this.decoder = decoder;
+        this.catchUpBackingOff = catchUpBackingOff;
+    }
+
+    /**
+     * Whether the catch-up lane's quantum turn has come: the live quantum is
+     * served, and the catch-up is not backing off.
+     *
+     * <p>⚠️ A BACKING-OFF CATCH-UP GIVES ITS TURN BACK TO LIVE (M12.26): its
+     * backoff otherwise escaped {@code readNext} before live was tried, and
+     * live waited out every catch-up backoff until the catch-up gave up. It
+     * keeps its turn: the next read once it is due loads it first.
+     */
+    private boolean catchUpTurn() {
+        return liveRecordsSinceCatchUp >= ConsumerClient.LIVE_RECORD_QUANTUM
+                && !catchUpBackingOff.getAsBoolean();
     }
 
     boolean deliverLive(Delivery delivery) {
@@ -145,7 +167,7 @@ final class ConsumerDeliveryQueues {
                     return null;
                 }
             }
-            boolean catchUpDue = liveRecordsSinceCatchUp >= ConsumerClient.LIVE_RECORD_QUANTUM;
+            boolean catchUpDue = catchUpTurn();
             if (catchUpDue && readyCatchUp.isEmpty() && catchUp.queuedDeliveries() > 0) {
                 tryLoadCatchUp(false);
             }
@@ -190,8 +212,7 @@ final class ConsumerDeliveryQueues {
             }
             return;
         }
-        if (liveRecordsSinceCatchUp >= ConsumerClient.LIVE_RECORD_QUANTUM
-                && tryLoadCatchUp(true)) {
+        if (catchUpTurn() && tryLoadCatchUp(true)) {
             return;
         }
         if (!tryLoadLive(true)) {
@@ -200,7 +221,7 @@ final class ConsumerDeliveryQueues {
     }
 
     private boolean loadAvailableDelivery(boolean globalPermitHeld) {
-        if (liveRecordsSinceCatchUp >= ConsumerClient.LIVE_RECORD_QUANTUM
+        if (catchUpTurn()
                 && (readyCatchUp.size() > 0 || catchUp.queuedDeliveries() > 0)
                 && tryLoadCatchUp(globalPermitHeld)) {
             return true;

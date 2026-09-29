@@ -172,7 +172,8 @@ public final class ConsumerClient implements AutoCloseable {
         if (queueCapacity <= 0) {
             throw new IllegalArgumentException("queue capacity must be positive");
         }
-        this.deliveryQueues = new ConsumerDeliveryQueues(queueCapacity, this::decodeAndReportGap);
+        this.deliveryQueues = new ConsumerDeliveryQueues(queueCapacity, this::decodeAndReportGap,
+                catchUpFetcher::backingOff);
         this.subscription = subscribe.apply(this);
     }
 

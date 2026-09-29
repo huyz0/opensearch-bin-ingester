@@ -58,7 +58,7 @@ public final class NodeSubscriptions implements AutoCloseable {
      */
     private final io.github.huyz0.os.biningester.client.SegmentSource nodeSegmentSource;
 
-    private final io.github.huyz0.os.biningester.client.SegmentFetchRetry fetchRetry;
+    private volatile io.github.huyz0.os.biningester.client.SegmentFetchRetry fetchRetry;
 
     /**
      * ⚠️ ONE SUBSCRIBER FOR THE WHOLE NODE (M5.62), and the identity is the
@@ -233,14 +233,25 @@ public final class NodeSubscriptions implements AutoCloseable {
     }
 
     /**
-     * Gives this node's segment hold the host's clock, so it holds a failed
-     * fetch per key for a backoff (M10.28); a node with no hold ignores it.
+     * Gives this node the host's clock: its segment hold holds a failed fetch
+     * per key for a backoff (M10.28; a node with no hold has none to give it
+     * to), and every client started after it has its fetch backoffs due on it
+     * (M12.26).
      */
     void holdFailuresWith(java.util.function.LongSupplier relativeMillis) {
+        // ⚠️ AND THE CLIENTS' BACKOFFS ARE DUE ON IT (M12.26), so a catch-up
+        // backing off gives its quantum turn to live and is retried when due.
+        // Set before the first shard starts a client, as createComponents is.
+        fetchRetry = fetchRetry.withClock(relativeMillis);
         if (nodeSegmentSource instanceof NodeSegmentSource hold) {
             hold.holdFailures(relativeMillis,
                     NodeSegmentSource.upJitter(new java.util.SplittableRandom()));
         }
+    }
+
+    /** How the clients this node starts retry a failed fetch; for a wiring test. */
+    io.github.huyz0.os.biningester.client.SegmentFetchRetry fetchRetry() {
+        return fetchRetry;
     }
 
     /** The one segment source every client on this node shares, or {@code null}. */
