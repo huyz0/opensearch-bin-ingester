@@ -28,18 +28,38 @@ final class StoreFakes {
     private StoreFakes() {
     }
 
-    /** Holds the commit's putIfAbsent open so the ack ordering is observable. */
+    /**
+     * Holds a commit-log delta's putIfAbsent open, once {@link #arm armed}, so
+     * the ack ordering is observable.
+     *
+     * <p>⚠️ ARMED AFTER SETUP, AND ONLY FOR A COMMIT DELTA (M11.25 review P1):
+     * it used to hold EVERY putIfAbsent, so building the ingest over it -- the
+     * sequencer's lease write, then {@code CommitLog.open} -- waited out the
+     * 10 s bound twice before a test's body began: 20 s of a 30 s class limit
+     * spent on every run, and {@code entered} counted down by the lease write,
+     * so "the flush reached its commit" held with no flush at all.
+     */
     static final class GatedCommit implements BinStore {
         private final BinStore delegate;
         final CountDownLatch entered = new CountDownLatch(1);
         final CountDownLatch release = new CountDownLatch(1);
+        private volatile boolean armed;
 
         GatedCommit(BinStore delegate) {
             this.delegate = delegate;
         }
 
+        /** Holds the next commit-log delta's putIfAbsent from now on. */
+        void arm() {
+            armed = true;
+        }
+
         @Override
         public Optional<Version> putIfAbsent(String key, Body body) throws IOException {
+            if (!armed || !io.github.huyz0.os.biningester.binstore.CountingBinStore
+                    .isCommitLogDelta(key)) {
+                return delegate.putIfAbsent(key, body);
+            }
             entered.countDown();
             try {
                 release.await(10, TimeUnit.SECONDS);

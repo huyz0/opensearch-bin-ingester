@@ -38,7 +38,6 @@ import java.util.OptionalLong;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -107,15 +106,10 @@ class DefaultIngestTest {
         StoreFakes.GatedCommit gate = new StoreFakes.GatedCommit(new MemoryBinStore());
         CountingBinStore store = new CountingBinStore(gate);
         try (DefaultIngest ingest = ingest(store)) {
+            gate.arm(); // after setup: the lease and the log's open are not held
             CompletableFuture<AppendResult> append = appendAsync(ingest, "logs", 0, 4);
             awaitPending(ingest, 1);
-            CompletableFuture<Void> flush = CompletableFuture.runAsync(() -> {
-                try {
-                    ingest.flushNow();
-                } catch (IOException e) {
-                    throw new CompletionException(e);
-                }
-            });
+            CompletableFuture<Void> flush = IngestTestSupport.flushAsync(ingest);
 
             assertThat(gate.entered.await(10, TimeUnit.SECONDS))
                     .as("the flush reached the commit").isTrue();
@@ -137,15 +131,10 @@ class DefaultIngestTest {
         StoreFakes.GatedCommit gate = new StoreFakes.GatedCommit(new MemoryBinStore());
         CountingBinStore store = new CountingBinStore(gate);
         try (DefaultIngest ingest = ingest(store)) {
+            gate.arm(); // after setup: the lease and the log's open are not held
             CompletableFuture<AppendResult> first = appendAsync(ingest, "logs", 0, 4);
             awaitPending(ingest, 1);
-            CompletableFuture<Void> flush = CompletableFuture.runAsync(() -> {
-                try {
-                    ingest.flushNow();
-                } catch (IOException e) {
-                    throw new CompletionException(e);
-                }
-            });
+            CompletableFuture<Void> flush = IngestTestSupport.flushAsync(ingest);
 
             assertThat(gate.entered.await(10, TimeUnit.SECONDS))
                     .as("the first flush reached its commit").isTrue();

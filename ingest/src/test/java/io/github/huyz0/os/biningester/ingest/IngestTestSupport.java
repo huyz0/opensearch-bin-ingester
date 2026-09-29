@@ -139,6 +139,23 @@ final class IngestTestSupport {
         return ingest(store, new SubscriptionHub(), NEVER);
     }
 
+    /**
+     * A thread of its own per task, never the JVM's common ForkJoin pool.
+     *
+     * <p>⚠️ M11.25 (H17): these tasks BLOCK -- an append until a flush carries
+     * it, a flush in a gated commit -- and a test may need three blocked at
+     * once. On the common pool, shared with every other async task in the JVM
+     * and sized to the core count less one, a full pool left the next append
+     * never started: {@code CommitInFlightPoolStarvationTest} measured it.
+     *
+     * <p>⚠️ PLATFORM THREADS, NOT VIRTUAL (review P2): a timeout's thread dump
+     * is {@code Thread.getAllStackTraces()}, which lists no virtual thread, so
+     * a stuck append or flush on one would be missing from the one trace
+     * written to find it.
+     */
+    private static final java.util.concurrent.Executor OWN_THREAD =
+            task -> Thread.ofPlatform().daemon().name("ingest-test-task").start(task);
+
     /** Starts an append on its own thread; it will block until a flush carries it. */
     static CompletableFuture<AppendResult> appendAsync(DefaultIngest ingest,
             String index, int partition, int count) {
@@ -148,7 +165,18 @@ final class IngestTestSupport {
             } catch (IOException e) {
                 throw new CompletionException(e);
             }
-        });
+        }, OWN_THREAD);
+    }
+
+    /** Starts a flush on its own thread; it may block in a gated commit. */
+    static CompletableFuture<Void> flushAsync(DefaultIngest ingest) {
+        return CompletableFuture.runAsync(() -> {
+            try {
+                ingest.flushNow();
+            } catch (IOException e) {
+                throw new CompletionException(e);
+            }
+        }, OWN_THREAD);
     }
 
     /** ⚠️ Spins on a bounded deadline rather than sleeping (testing.md rule 15). */

@@ -85,6 +85,8 @@ tasks.register<Test>("nativeGateTest") {
     description = "Run only the JVM-native repository gate tests"
     group = "verification"
     useJUnitPlatform()
+    // A @Timeout prints every thread's stack (M11.25), as the conventions set it.
+    systemProperty("junit.jupiter.execution.timeout.threaddump.enabled", "true")
     testClassesDirs = sourceSets["test"].output.classesDirs
     classpath = sourceSets["test"].runtimeClasspath
     filter {

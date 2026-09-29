@@ -132,6 +132,10 @@ testing {
                     jvmArgs("-XX:+HeapDumpOnOutOfMemoryError", "-XX:HeapDumpPath=$scratch")
                     // A hung test holds its memory until something reclaims it.
                     timeout.set(Duration.ofMinutes(10))
+                    // ⚠️ A @Timeout PRINTS EVERY THREAD's STACK (M11.25, H17):
+                    // DefaultIngestTest timed out once and left no trace of
+                    // where it was stuck. Pinned by TestTimeoutThreadDumpTest.
+                    systemProperty("junit.jupiter.execution.timeout.threaddump.enabled", "true")
                     // testing.md rule 17: scratch under build/tmp, never the
                     // system temp directory. Enforced here so it is automatic.
                     systemProperty("java.io.tmpdir", scratch.absolutePath)
