@@ -50,7 +50,7 @@ class NodeSegmentSourceFailureHoldTest {
 
     private static NodeSegmentSource held(Flaky delegate, AtomicLong millis) {
         NodeSegmentSource source = new NodeSegmentSource(delegate, 1L << 20);
-        source.holdFailures(millis::get);
+        source.holdFailures(millis::get, java.util.function.LongUnaryOperator.identity());
         return source;
     }
 

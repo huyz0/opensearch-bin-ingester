@@ -46,7 +46,7 @@ class NodeSegmentSourceFailureResetTest {
     /** ⚠️ A HOLD OF NO BYTES, so a success is never answered from held bytes. */
     private static NodeSegmentSource unheldBytes(Switch delegate, AtomicLong millis) {
         NodeSegmentSource source = new NodeSegmentSource(delegate, 0);
-        source.holdFailures(millis::get);
+        source.holdFailures(millis::get, java.util.function.LongUnaryOperator.identity());
         return source;
     }
 

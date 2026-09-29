@@ -36,8 +36,19 @@ class FailureHoldWithRetryTest {
     private static final int RUNS = 16;
     private static final long OUTAGE_MILLIS = 75_000;
 
+    /**
+     * ⚠️ WITH THE HOLD PRODUCTION BUILDS, jittered, across seeds (M12.11 review
+     * T1): a jitter that shortened holds failed this for six seeds in eight.
+     */
     @Test
     void sixteenRunsSurviveAnOutageThePolicyCoversAndCostOneRunsFetches() throws Exception {
+        survives(java.util.function.LongUnaryOperator.identity());
+        for (long seed = 1; seed <= 8; seed++) {
+            survives(NodeSegmentSource.upJitter(new java.util.SplittableRandom(seed)));
+        }
+    }
+
+    private static void survives(java.util.function.LongUnaryOperator jitter) throws Exception {
         UUID index = UUID.fromString("00000000-0000-0000-0000-0000000000aa");
         SegmentWriter writer = new SegmentWriter();
         for (int run = 0; run < RUNS; run++) {
@@ -63,7 +74,7 @@ class FailureHoldWithRetryTest {
             }
         };
         NodeSegmentSource hold = new NodeSegmentSource(store, 1L << 20);
-        hold.holdFailures(millis::get);
+        hold.holdFailures(millis::get, jitter);
         // ⚠️ ONE TIMELINE, AS A SCHEDULE: each run's backoff sets when THAT run
         // next wakes, and the loop always runs the earliest -- the node's runs
         // waiting in parallel on one wall clock. A run's sleep must not move

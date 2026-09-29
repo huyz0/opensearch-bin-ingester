@@ -166,7 +166,7 @@ say how each is checked. Items dropped:
 | M11.24, M11.24a–c | none: a move of code |
 | H2 (M12.1) | none; every existing request stays charged, now always to the reported ledger |
 | H3, H4, H5–H11, H14, H15 | none: admission, memory, quotas, metrics and routing are not store paths |
-| H12 (M12.11) | none added; jitter spreads the same number of retries |
+| H12 (M12.11) | none added: the jitter only LENGTHENS a hold (a draw from `(b, 1.5b]`), so a failing segment is re-fetched at most as often as before, spread across nodes (⚠️ amended by M12.11: a jitter that shortened holds re-fetched up to 2x as often and ran the consumer's attempts out) |
 | H13 (M12.12) | the consumer's fetch retries ARE a GET and proxy-fetch path: separating live and catch-up state must not raise the retry rate of either above today's per-(node, segment) bound (M10.28b). The row states the retry count per failing segment before and after, and a test asserts it does not rise |
 | H21 (M12.18) | none: a test workload |
 

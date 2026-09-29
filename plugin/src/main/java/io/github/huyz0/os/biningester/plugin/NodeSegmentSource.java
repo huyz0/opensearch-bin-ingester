@@ -95,6 +95,9 @@ public final class NodeSegmentSource implements SegmentSource {
 
     /** The host's relative clock in millis, or {@code null}: then no failure is held. */
     private volatile java.util.function.LongSupplier failureClock;
+    /** What a failure's backoff becomes when held (M12.11): jittered in production. */
+    private volatile java.util.function.LongUnaryOperator failureJitter =
+            java.util.function.LongUnaryOperator.identity();
     private final Map<String, KeyGate> keyGates = new HashMap<>();
 
     /**
@@ -223,8 +226,9 @@ public final class NodeSegmentSource implements SegmentSource {
                                 < failure.untilMillis() + FAILURE_HOLD_CEILING.toMillis();
                         int consecutive = continuing ? failure.consecutive() + 1 : 1;
                         synchronized (cacheLock) {
-                            failed.put(key, new Failed(fetchFailed,
-                                    clock.getAsLong() + holdMillis(consecutive), consecutive));
+                            failed.put(key, new Failed(fetchFailed, clock.getAsLong()
+                                    + failureJitter.applyAsLong(holdMillis(consecutive)),
+                                    consecutive));
                         }
                     }
                     throw fetchFailed;
@@ -268,8 +272,34 @@ public final class NodeSegmentSource implements SegmentSource {
      * it, the node fetches the key once per hold, the hold doubling from the
      * consumer's retry floor to its ceiling, as one client's retries would.
      */
-    void holdFailures(java.util.function.LongSupplier relativeMillis) {
+    void holdFailures(java.util.function.LongSupplier relativeMillis,
+            java.util.function.LongUnaryOperator jitter) {
+        this.failureJitter = Objects.requireNonNull(jitter, "jitter");
         this.failureClock = Objects.requireNonNull(relativeMillis, "relativeMillis");
+    }
+
+    /**
+     * Jitter that only LENGTHENS (M12.11, M10.28b P1): a backoff {@code b} held
+     * for a uniform draw from {@code (b, 1.5b]}, so a blip that fails one segment
+     * on every node does not bring every node back for it in the same
+     * millisecond.
+     *
+     * <p>⚠️ NEVER SHORTER THAN THE BACKOFF (M12.11 review P1): a hold drawn below
+     * it spends the consumer's attempts faster than its policy assumes, and
+     * {@code FailureHoldWithRetryTest}'s 75 s outage then paused shards for six
+     * seeds in eight. Longer holds mean at most as many re-fetches, not more.
+     *
+     * <p>⚠️ THE GENERATOR IS LOCKED: one node's failures come from many threads,
+     * and {@code SplittableRandom} is not safe to share.
+     */
+    static java.util.function.LongUnaryOperator upJitter(
+            java.util.random.RandomGenerator random) {
+        Objects.requireNonNull(random, "random");
+        return base -> {
+            synchronized (random) {
+                return base + 1 + random.nextLong(Math.max(1, base / 2));
+            }
+        };
     }
 
     private KeyGate acquire(String key) {

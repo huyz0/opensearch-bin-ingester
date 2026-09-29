@@ -238,7 +238,8 @@ public final class NodeSubscriptions implements AutoCloseable {
      */
     void holdFailuresWith(java.util.function.LongSupplier relativeMillis) {
         if (nodeSegmentSource instanceof NodeSegmentSource hold) {
-            hold.holdFailures(relativeMillis);
+            hold.holdFailures(relativeMillis,
+                    NodeSegmentSource.upJitter(new java.util.SplittableRandom()));
         }
     }
 
