@@ -172,6 +172,10 @@ public final class BulkService implements HttpService {
             @Override
             public void quotaRefused(String index) {
             }
+
+            @Override
+            public void registrationWaitRefused() {
+            }
         };
 
         /** The pod's in-flight budget refused a request (lane admission). */
@@ -179,6 +183,14 @@ public final class BulkService implements HttpService {
 
         /** {@code index}'s quota refused a request. */
         void quotaRefused(String index);
+
+        /**
+         * An explicit-partition write was refused its wait for an unregistered
+         * index's registration: as many writes already wait as may, for that
+         * index or across the ingester (M13.11, M12.10 review P1) -- not the
+         * pod's in-flight budget.
+         */
+        void registrationWaitRefused();
     }
 
     /** The same, telling {@code refusals} of each {@code 429} it sends (M12.5). */
@@ -276,6 +288,16 @@ public final class BulkService implements HttpService {
                     + " is not active on this ingester");
             return;
         }
+        // ⚠️ THE REGISTRATION WAIT's CAP, BEFORE THE PERMIT AND THE BODY (M13.11,
+        // M12.10 review P2), as every other 429: a write that would be refused
+        // its wait costs no permit and no parse. Advice only -- the wait still
+        // refuses a write that loses the race, caught below.
+        if (placement.partition() != null && ingest.registrationWaitFull(index)) {
+            refusals.registrationWaitRefused();
+            tooManyRequests(response, 1, "index " + index + " is not registered and as many "
+                    + "writes wait for registrations as may; retry");
+            return;
+        }
         var permit = admission.tryAcquire(placement.lane());
         if (permit.isEmpty()) {
             refusals.admissionRefused();
@@ -349,9 +371,11 @@ public final class BulkService implements HttpService {
             return;
         } catch (RegistrationWaitFullException e) {
             // ⚠️ A LOAD REFUSAL, THROUGH THE ONE EMITTER (M12.10): too many writes
-            // already wait for this index's registration. Counted as an
-            // admission refusal -- the pod's permits are what the cap protects.
-            refusals.admissionRefused();
+            // already wait for registrations -- the race the check above loses.
+            // ⚠️ ITS OWN COUNT (M13.11, M12.10 review P1): not the in-flight
+            // budget's, which a producer retrying an unregistered index would
+            // raise on an idle pod.
+            refusals.registrationWaitRefused();
             tooManyRequests(response, e.retryAfterSeconds(), e.getMessage());
             return;
         } catch (RegistrationTimeoutException e) {

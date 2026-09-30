@@ -6,6 +6,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import io.github.huyz0.os.biningester.format.IndexRegistration;
 import io.github.huyz0.os.biningester.ingest.AppendResult;
 import io.github.huyz0.os.biningester.ingest.IndexCatalog;
+import io.github.huyz0.os.biningester.ingest.IndexQuotas;
+import io.github.huyz0.os.biningester.ingest.LaneAdmission;
+import io.github.huyz0.os.biningester.ingest.LaneSet;
 import io.github.huyz0.os.biningester.ingest.Ingest;
 import io.github.huyz0.os.biningester.ingest.PendingPool;
 import io.github.huyz0.os.biningester.ingest.RoutedIngest;
@@ -130,6 +133,72 @@ class ExplicitPartitionWaitCapTest {
             assertThat(write.get(10, TimeUnit.SECONDS)).isEqualTo(202);
         }
         assertThat(routed.waitingForRegistration("logs")).as("every slot given back").isZero();
+    }
+
+    /**
+     * M13.11 (M12.10 review P1, P2, T4): at the cap the write is refused BEFORE
+     * ITS BODY IS OPENED -- a malformed body gets the 429, not the 400 its
+     * parse would give -- and without a lane permit, and it is counted as a
+     * registration-wait refusal, not as the pod's in-flight budget's.
+     */
+    @Test
+    void atTheCapTheBodyIsNotOpenedAndTheRefusalIsCountedAsItsOwn() throws Exception {
+        IndexCatalog catalog = new IndexCatalog();
+        RoutedIngest routed = new RoutedIngest(new Accepting(), catalog,
+                new PendingPool(Clock.systemUTC(), Duration.ofSeconds(30), 1 << 20),
+                Duration.ofSeconds(30), Clock.systemUTC());
+        List<String> told = new java.util.concurrent.CopyOnWriteArrayList<>();
+        LaneAdmission admission = new LaneAdmission(256, LaneSet.of((byte) 0));
+        server = WebServer.builder().port(0)
+                .routing(HttpRouting.builder().register(new BulkService(routed, PRINCIPAL,
+                        new DrainGate(), admission, new IndexQuotas(IndexQuotas.Config.none(),
+                                Clock.systemUTC(), name -> true, name -> List.of()),
+                        new BulkService.RefusalListener() {
+                            @Override
+                            public void admissionRefused() {
+                                told.add("admission");
+                            }
+
+                            @Override
+                            public void quotaRefused(String index) {
+                                told.add("quota " + index);
+                            }
+
+                            @Override
+                            public void registrationWaitRefused() {
+                                told.add("registration wait");
+                            }
+                        })))
+                .build().start();
+        WebClient client = WebClient.builder().baseUri("http://localhost:" + server.port())
+                .build();
+        List<CompletableFuture<Integer>> waiting = new ArrayList<>();
+        for (int i = 0; i < RoutedIngest.MAX_EXPLICIT_WAITERS_PER_INDEX; i++) {
+            waiting.add(post(client));
+        }
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (routed.waitingForRegistration("logs") < RoutedIngest.MAX_EXPLICIT_WAITERS_PER_INDEX
+                && System.nanoTime() < deadline) {
+            Thread.onSpinWait();
+        }
+        int inFlight = admission.inFlight();
+
+        try (HttpClientResponse refused = client.post("/logs/_bulk")
+                .queryParam("partition", "0").submit("this is not a bulk body\n")) {
+            assertThat(refused.status().code())
+                    .as("⚠️ 429, NOT THE PARSE's 400: the body was never opened").isEqualTo(429);
+            assertThat(refused.headers().first(HeaderNames.RETRY_AFTER)).hasValue("1");
+        }
+        assertThat(admission.inFlight()).as("no lane permit was taken for it")
+                .isEqualTo(inFlight);
+        assertThat(told).as("⚠️ ITS OWN COUNT (review P1, T4), not the in-flight budget's")
+                .containsExactly("registration wait");
+
+        catalog.register(new IndexRegistration(base64Url(UUID.randomUUID()), "logs", List.of(),
+                4, 4, 1, 1));
+        for (CompletableFuture<Integer> write : waiting) {
+            assertThat(write.get(10, TimeUnit.SECONDS)).isEqualTo(202);
+        }
     }
 
     private static CompletableFuture<Integer> post(WebClient client) {

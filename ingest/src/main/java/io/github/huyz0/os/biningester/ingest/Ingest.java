@@ -171,6 +171,21 @@ public interface Ingest extends AutoCloseable {
     }
 
     /**
+     * Whether an explicit-partition write to {@code index} would be refused its
+     * wait for the index's registration now, because as many writes already
+     * wait as may (M13.11, M12.10 review P2).
+     *
+     * <p>⚠️ A QUERY, SO THE FRONT DOOR CAN REFUSE BEFORE IT OPENS THE BODY, as
+     * every other {@code 429} is. It is advice, not a reservation: the wait
+     * itself still refuses a write that loses the race, with
+     * {@link RegistrationWaitFullException}. An ingester that never waits for a
+     * registration answers false.
+     */
+    default boolean registrationWaitFull(String index) {
+        return false;
+    }
+
+    /**
      * The concrete index {@code indexOrAlias} names now, or itself when this
      * ingester cannot say (M11.8 review P2): a per-index quota is charged to
      * the index, so a write through its alias spends the same bucket.

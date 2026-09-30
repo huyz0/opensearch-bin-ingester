@@ -98,6 +98,33 @@ class RefusalCountersTest {
         }
     }
 
+    /**
+     * M13.11 (M12.10 review P1): a refused registration wait moves its own
+     * counter, unlabelled, and neither of the other two.
+     */
+    @Test
+    void aRegistrationWaitRefusalIsCountedUnderItsOwnName() throws Exception {
+        try (var store = new MemoryBinStore();
+                var assembly = Assembly.open(config(), store, noPeers(), Clock.systemUTC());
+                var door = FrontDoor.start(assembly, Clock.systemUTC())) {
+            HttpClient client = HttpClient.newHttpClient();
+            String before = scrape(client, door.port());
+
+            new RefusalMetrics(new io.github.huyz0.os.biningester.ingest.RefusedIndices())
+                    .registrationWaitRefused();
+
+            String after = scrape(client, door.port());
+            assertThat(delta(before, after, RefusalMetrics.REGISTRATION_WAIT_REFUSALS))
+                    .isEqualTo(1.0);
+            assertThat(delta(before, after, RefusalMetrics.ADMISSION_REFUSALS)).isEqualTo(0.0);
+            assertThat(delta(before, after, RefusalMetrics.QUOTA_REFUSALS)).isEqualTo(0.0);
+            assertThat(metricLine(after, RefusalMetrics.REGISTRATION_WAIT_REFUSALS))
+                    .as("⚠️ NO LABEL (cost.md rule 16)")
+                    .startsWith(RefusalMetrics.REGISTRATION_WAIT_REFUSALS
+                            + "{scope=\"application\",}");
+        }
+    }
+
     private static ServerConfig config() {
         return new ServerConfig("writera", "az-a", "cluster-a", "bins/cluster-a",
                 new StoreConfig("memory", Optional.empty()), Duration.ofSeconds(10),

@@ -43,9 +43,12 @@ public final class RoutedIngest implements Ingest {
     private final Ingest delegate;
     private final IndexCatalog catalog;
     private final PendingPool pending;
-    /** Explicit-partition writes waiting for each index's registration (M12.10). */
-    private final java.util.concurrent.ConcurrentHashMap<String, Integer> explicitWaiters =
-            new java.util.concurrent.ConcurrentHashMap<>();
+    /**
+     * Explicit-partition writes waiting for each index's registration (M12.10),
+     * and their total across every index (M13.11): both guarded by the map.
+     */
+    private final java.util.Map<String, Integer> explicitWaiters = new java.util.HashMap<>();
+    private int explicitWaitersTotal;
 
     /**
      * How many explicit-partition writes may wait for one index's registration
@@ -55,6 +58,21 @@ public final class RoutedIngest implements Ingest {
      * way, in bytes.
      */
     public static final int MAX_EXPLICIT_WAITERS_PER_INDEX = 8;
+
+    /**
+     * How many explicit-partition writes may wait for registrations on this
+     * ingester, across every index (M13.11, M12.10 review P3): the per-index cap
+     * alone let a producer allowed any name hold eight lane permits per name it
+     * invented. Four indices' worth, an eighth of ADR-0074's default in-flight
+     * budget of 256.
+     *
+     * <p>⚠️ THE TRADE-OFF (M13.11 review P1): the cap is shared by every
+     * producer on this ingester. One producer waiting on four or more invented
+     * names fills it, and until those waits time out every producer's first
+     * write to a genuinely new index is refused 429 -- which it retries.
+     * Writes to registered indices are not affected: they wait for nothing.
+     */
+    public static final int MAX_EXPLICIT_WAITERS = 32;
     private final Duration pendingTimeout;
 
     /**
@@ -187,16 +205,11 @@ public final class RoutedIngest implements Ingest {
             // queued: a load refusal (429 + Retry-After), not the 503 of a wait
             // that ran out. The entry goes when its count does, so a name a
             // producer invents leaves nothing behind.
-            if (explicitWaiters.merge(index, 1, Integer::sum) > MAX_EXPLICIT_WAITERS_PER_INDEX) {
-                explicitWaiters.computeIfPresent(index, (name, n) -> n == 1 ? null : n - 1);
-                throw new RegistrationWaitFullException("index " + index + " is not registered "
-                        + "and already has " + MAX_EXPLICIT_WAITERS_PER_INDEX + " writes waiting "
-                        + "for it; retry");
-            }
+            takeWaitSlot(index);
             try {
                 known = awaitRegistration(index, catalog::resolve);
             } finally {
-                explicitWaiters.computeIfPresent(index, (name, n) -> n == 1 ? null : n - 1);
+                giveWaitSlot(index);
             }
             if (known.isEmpty()) {
                 throw new RegistrationTimeoutException("index " + index + " was still not "
@@ -363,9 +376,66 @@ public final class RoutedIngest implements Ingest {
         }
     }
 
+    /**
+     * Takes a slot to wait for {@code index}'s registration, or refuses at
+     * either cap (M12.10 per index, M13.11 across indices).
+     */
+    private void takeWaitSlot(String index) {
+        synchronized (explicitWaiters) {
+            if (explicitWaitersTotal >= MAX_EXPLICIT_WAITERS) {
+                throw new RegistrationWaitFullException("index " + index + " is not registered "
+                        + "and " + MAX_EXPLICIT_WAITERS + " writes wait for registrations on "
+                        + "this ingester already; retry");
+            }
+            if (explicitWaiters.getOrDefault(index, 0) >= MAX_EXPLICIT_WAITERS_PER_INDEX) {
+                throw new RegistrationWaitFullException("index " + index + " is not registered "
+                        + "and already has " + MAX_EXPLICIT_WAITERS_PER_INDEX + " writes waiting "
+                        + "for it; retry");
+            }
+            explicitWaiters.merge(index, 1, Integer::sum);
+            explicitWaitersTotal++;
+        }
+    }
+
+    /** Gives {@code index}'s slot back; its entry goes with its last waiter. */
+    private void giveWaitSlot(String index) {
+        synchronized (explicitWaiters) {
+            explicitWaiters.computeIfPresent(index, (name, n) -> n == 1 ? null : n - 1);
+            explicitWaitersTotal--;
+        }
+    }
+
+    /** ⚠️ ADVICE, NOT A RESERVATION: see {@link Ingest#registrationWaitFull}. */
+    @Override
+    public boolean registrationWaitFull(String index) {
+        if (catalog.resolve(index).isPresent()) {
+            return false;
+        }
+        synchronized (explicitWaiters) {
+            return explicitWaitersTotal >= MAX_EXPLICIT_WAITERS
+                    || explicitWaiters.getOrDefault(index, 0) >= MAX_EXPLICIT_WAITERS_PER_INDEX;
+        }
+    }
+
+    /** How many explicit-partition writes wait for registrations now, across every index. */
+    public int waitingForRegistration() {
+        synchronized (explicitWaiters) {
+            return explicitWaitersTotal;
+        }
+    }
+
+    /** How many indices have an explicit-partition write waiting for them now. */
+    public int indicesWaitedFor() {
+        synchronized (explicitWaiters) {
+            return explicitWaiters.size();
+        }
+    }
+
     /** How many explicit-partition writes wait for {@code index}'s registration now. */
     public int waitingForRegistration(String index) {
-        return explicitWaiters.getOrDefault(index, 0);
+        synchronized (explicitWaiters) {
+            return explicitWaiters.getOrDefault(index, 0);
+        }
     }
 
     @Override
