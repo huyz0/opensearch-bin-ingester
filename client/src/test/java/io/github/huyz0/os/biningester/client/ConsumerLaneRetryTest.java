@@ -118,6 +118,90 @@ class ConsumerLaneRetryTest {
         }
     }
 
+    /**
+     * ⚠️ UP TO TWICE ACROSS BOTH LANES, AND NO MORE (M13.12, M12.12 review T2):
+     * each lane spends its own {@code maxAttempts}. With a catch-up segment
+     * that has failed {@code maxAttempts - 1} times, a failing live segment
+     * still surfaces at exactly its own {@code maxAttempts}, not at what a
+     * shared budget has left; a catch-up failure that surfaces along the way
+     * does so at exactly its own; and neither lane is fetched more than its
+     * budget before it surfaces, so the window is at most 2 x maxAttempts.
+     *
+     * <p>⚠️ WHICHEVER LANE THE QUEUE SERVES (M13.12 review T2): today a failing
+     * live segment takes every turn and the catch-up waits; a fairer order
+     * would let the due catch-up surface first. Both are within the budgets,
+     * so this counts per lane at each lane's own surfacing, not in total.
+     */
+    @Test
+    void eachLaneSpendsItsOwnMaxAttemptsBeforeAFailureSurfaces() throws Exception {
+        SegmentFetchRetry retry = TestRetries.sleepAdvanced(Duration.ofSeconds(1),
+                Duration.ofSeconds(30), 8, wait -> { });
+        BothFail source = new BothFail();
+        try (ConsumerClient client = new ConsumerClient(KEY, 16, source, retry)) {
+            UUID request = UUID.randomUUID();
+            client.beginCatchUp(request);
+            client.deliverCatchUp(request, new Delivery(KEY, CATCH_UP, 1, 0, FetchMode.PROXY,
+                    new byte[0]));
+            for (int poll = 0; poll < 40 && source.count(CATCH_UP) < 7; poll++) {
+                assertThat(client.readNext(Duration.ofMinutes(1)))
+                        .as("the catch-up's failures, inside its budget").isEmpty();
+            }
+            assertThat(source.count(CATCH_UP)).as("the premise: catch-up failed 7 times")
+                    .isEqualTo(7);
+
+            client.deliver(new Delivery(KEY, LIVE, 1, 5, FetchMode.PROXY, new byte[0]));
+            Integer liveAtItsSurfacing = null;
+            Integer catchUpAtItsSurfacing = null;
+            for (int poll = 0; poll < 80 && liveAtItsSurfacing == null; poll++) {
+                try {
+                    client.readNext(Duration.ofMinutes(1)); // the no-op sleeper serves backoffs
+                } catch (RuntimeException failure) {
+                    String named = String.valueOf(failure.getMessage())
+                            + (failure.getCause() == null ? "" : failure.getCause().getMessage());
+                    if (named.contains(LIVE)) {
+                        liveAtItsSurfacing = source.count(LIVE);
+                    } else if (named.contains(CATCH_UP) && catchUpAtItsSurfacing == null) {
+                        catchUpAtItsSurfacing = source.count(CATCH_UP);
+                    }
+                }
+                assertThat(source.count(LIVE)).as("live never past its own budget unsurfaced")
+                        .isLessThanOrEqualTo(8);
+            }
+
+            assertThat(liveAtItsSurfacing).as("⚠️ LIVE SURFACES AT ITS OWN maxAttempts, not at"
+                    + " the one a shared budget has left").isEqualTo(8);
+            if (catchUpAtItsSurfacing != null) {
+                assertThat(catchUpAtItsSurfacing).as("and catch-up, if it surfaced, at its own")
+                        .isEqualTo(8);
+            } else {
+                assertThat(source.count(CATCH_UP))
+                        .as("catch-up, unsurfaced, never past its own budget")
+                        .isLessThanOrEqualTo(8);
+            }
+        }
+    }
+
+    /** Fails both segments every time. */
+    private static final class BothFail implements SegmentSource {
+        final Map<String, AtomicInteger> asked = new ConcurrentHashMap<>();
+
+        int count(String segmentKey) {
+            AtomicInteger n = asked.get(segmentKey);
+            return n == null ? 0 : n.get();
+        }
+
+        @Override
+        public byte[] fetch(Grant grant) throws IOException {
+            return fetchSegment(grant.url());
+        }
+
+        @Override
+        public byte[] fetchSegment(String segmentKey) throws IOException {
+            asked.computeIfAbsent(segmentKey, k -> new AtomicInteger()).incrementAndGet();
+            throw new IOException("502 from the ingester");
+        }
+    }
+
     private static byte[] segmentOf(String id, long offset) throws Exception {
         SegmentWriter w = new SegmentWriter();
         w.add(KEY, new SegmentRecord(id, OpType.INDEX, OptionalLong.of(1),

@@ -9,7 +9,11 @@ import io.github.huyz0.os.biningester.client.SubscriptionTransport;
 import io.github.huyz0.os.biningester.format.Grant;
 import io.github.huyz0.os.biningester.format.RunKey;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 import java.util.SplittableRandom;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongUnaryOperator;
@@ -110,6 +114,93 @@ class NodeFailureHoldJitterTest {
         } finally {
             subscriptions.close();
         }
+    }
+
+    /**
+     * ⚠️ TWO NODES, AS PRODUCTION BUILDS THEM, HOLD DIFFERENTLY (M13.12,
+     * M12.11 review T1; M12 criterion 13's "two nodes"): each node's entry
+     * point draws its own jitter, so the same failures on two nodes are not
+     * held in lockstep. A fixed seed shared by every node would pass every
+     * other case here.
+     */
+    @Test
+    void twoNodesBuiltThroughTheirEntryPointHoldTheSameFailuresDifferently()
+            throws Exception {
+        List<Long> first = holdsOfANodeInItsOwnClassLoader();
+        List<Long> second = holdsOfANodeInItsOwnClassLoader();
+
+        long floor = NodeSegmentSource.FAILURE_HOLD_FLOOR.toMillis();
+        assertThat(first).allSatisfy(hold -> assertThat(hold).isBetween(floor + 1,
+                floor + floor / 2));
+        assertThat(second).as("⚠️ NOT IN LOCKSTEP: the same ten failures are held"
+                + " differently on the two nodes").isNotEqualTo(first);
+    }
+
+    /**
+     * {@link #holdsOfANode} in a class loader of its own (M13.12 review T1): in
+     * production every node is its own JVM, so static state is not shared
+     * between nodes -- and a JVM-wide fixed seed, which two nodes in one loader
+     * would draw from in turn, must not look like two nodes drawing apart.
+     */
+    @SuppressWarnings("unchecked")
+    private static List<Long> holdsOfANodeInItsOwnClassLoader() throws Exception {
+        String[] entries = System.getProperty("java.class.path")
+                .split(System.getProperty("path.separator"));
+        java.net.URL[] urls = new java.net.URL[entries.length];
+        for (int i = 0; i < entries.length; i++) {
+            urls[i] = java.nio.file.Path.of(entries[i]).toUri().toURL();
+        }
+        try (java.net.URLClassLoader loader = new java.net.URLClassLoader(urls,
+                ClassLoader.getPlatformClassLoader())) {
+            Class<?> isolated = loader.loadClass(NodeFailureHoldJitterTest.class.getName());
+            assertThat(isolated).as("the premise: a class of the node's own loader")
+                    .isNotSameAs(NodeFailureHoldJitterTest.class);
+            java.lang.reflect.Method holds = isolated.getDeclaredMethod("holdsOfANode");
+            holds.setAccessible(true);
+            return (List<Long>) holds.invoke(null);
+        }
+    }
+
+    /** How long a node built through its entry point holds each of ten keys' first failure. */
+    private static List<Long> holdsOfANode() throws Exception {
+        Map<String, AtomicInteger> calls = new ConcurrentHashMap<>();
+        AtomicLong millis = new AtomicLong(1_000_000);
+        NodeSegmentSource hold = new NodeSegmentSource(new SegmentSource() {
+            @Override
+            public byte[] fetch(Grant grant) throws IOException {
+                return fetchSegment(grant.url());
+            }
+
+            @Override
+            public byte[] fetchSegment(String segmentKey) throws IOException {
+                calls.computeIfAbsent(segmentKey, k -> new AtomicInteger()).incrementAndGet();
+                throw new IOException("503 from the store");
+            }
+        }, 1L << 20);
+        NodeSubscriptions subscriptions = new NodeSubscriptions(new SubscriptionTransport() {
+            @Override
+            public AutoCloseable subscribe(RunKey key, Listener listener) {
+                return () -> { };
+            }
+        }, 16, hold);
+        List<Long> holds = new ArrayList<>();
+        try {
+            subscriptions.holdFailuresWith(millis::get);
+            for (int i = 0; i < 10; i++) {
+                String key = "seg-" + i;
+                long start = millis.get();
+                assertThatThrownBy(() -> hold.fetchSegment(key)).isInstanceOf(IOException.class);
+                while (calls.get(key).get() == 1) {
+                    millis.incrementAndGet();
+                    assertThatThrownBy(() -> hold.fetchSegment(key))
+                            .isInstanceOf(IOException.class);
+                }
+                holds.add(millis.get() - start);
+            }
+        } finally {
+            subscriptions.close();
+        }
+        return holds;
     }
 
     private static SegmentSource failing(AtomicInteger calls) {

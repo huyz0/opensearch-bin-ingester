@@ -604,6 +604,7 @@ journal's fsync and the Kubernetes pod lookup are injected seams.
 | M13.45 | Opened by M13.3: `PartitionVisibilityIT`'s slow drains (2 of 10 green on a day-old RustFS container, 5 of 6 on each fresh one); separate container age and state, memory and the drain's phases (apply, delete), name what applies the trigger's own deferred intent, never moving the bound | — (evidence) |
 | M13.5 | R4: ADR-0078 amended for M12.4 | — (docs) |
 | M13.46 | Opened by M13.5: quota tickets for a name unknown at admission -- a window write through an alias binds a bucket keyed by the alias (its debt refuses nothing sent to the concrete name), gets a free ticket under an unlimited default (uncharged), and carries the default rather than the concrete override; compute the limit when the ticket binds from the concrete name, issue no free ticket for an unknown name, and pin by tests: the alias cases, the window limit, binding into a bucket already at its cap, and the idle sweep's once-per-expiry throttle | FR-21, NFR-6 |
+| M13.47 | Opened by M13.12: a failing live segment starves a due catch-up; decide the order and pin it | FR-6 |
 | M13.6 | R5: no silent defaults; the started client's clock pinned | FR-6, FR-19 |
 | M13.6a | R5: `IndexQuotas`' three-argument and `ConsumerDeliveryQueues`' two-argument constructors removed; `SilentDefaultsGoneTest` per module | — (quality) |
 | M13.6b | R5: `ServerConfig`'s older constructors removed | — (quality) |
