@@ -165,14 +165,19 @@ class LaneOvertakeTest {
             // the test closes the delegate itself
         }
 
+        /**
+         * ⚠️ THE BUFFERED FORM IS DELEGATED (M13.13, M12.2 review T2): the real
+         * {@code DefaultIngest} runs {@code buffered} once the records are held
+         * and before the durable wait, so the permit goes back where it does in
+         * production -- not, as before, once the whole append had returned.
+         */
         @Override
         public AppendResult append(Principal principal, String index, int partition, byte lane,
                 RecordSource records, Runnable buffered) throws IOException {
-            try { // the removed default's behaviour: buffered once the append returns (M12.2)
-                return append(principal, index, partition, lane, records);
-            } finally {
-                buffered.run();
-            }
+            return delegate.append(principal, index, partition, lane, sink -> {
+                records.forEachRecord(sink);
+                of(partition).countDown();
+            }, buffered);
         }
 
         @Override

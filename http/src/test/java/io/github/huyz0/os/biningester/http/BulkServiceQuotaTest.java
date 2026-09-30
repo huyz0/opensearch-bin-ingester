@@ -93,14 +93,16 @@ class BulkServiceQuotaTest {
         public void close() {
         }
 
+        /**
+         * ⚠️ PRODUCTION's ORDER FOR A ROUTED WRITE TOO (M13.13, M12.2 review T2):
+         * as {@code RoutedIngest} over {@code DefaultIngest} places it, counts it,
+         * runs {@code buffered} and only then waits -- not, as before, a
+         * refusal followed by {@code buffered}.
+         */
         @Override
         public AppendResult appendRouted(Principal principal, String indexOrAlias, String routing,
                 byte lane, RecordSource records, Runnable buffered) throws IOException {
-            try { // the removed default's behaviour: buffered once the append returns (M12.2)
-                return appendRouted(principal, indexOrAlias, routing, lane, records);
-            } finally {
-                buffered.run();
-            }
+            return append(principal, indexOrAlias, 0, lane, records, buffered);
         }
 
         @Override
@@ -293,6 +295,45 @@ class BulkServiceQuotaTest {
                 .queryParam("partition", "0").submit(body(1))) {
             assertThat(other.status().code()).isEqualTo(202);
         }
+    }
+
+    /**
+     * M13.13 (M12.2 review T2): a ROUTED write parked in its durable wait
+     * holds no lane permit either -- the front door hands {@code buffered} to
+     * the routed form too, and this double now runs it in production's order.
+     */
+    @Test
+    void aRoutedWriteHeldInItsDurableWaitHoldsNoLanePermit() throws Exception {
+        Recording ingest = new Recording();
+        ingest.hold = new CountDownLatch(1);
+        LaneAdmission admission = new LaneAdmission(1, LaneSet.of((byte) 0));
+        WebClient client = serve(ingest, new IndexQuotas(IndexQuotas.Config.none(), FROZEN,
+                name -> true, name -> java.util.List.of()), admission);
+
+        CompletableFuture<Integer> routed = CompletableFuture.supplyAsync(() -> {
+            try (HttpClientResponse answer = client.post("/logs/_bulk")
+                    .queryParam("routing", "user-7").submit(body(1))) {
+                return answer.status().code();
+            }
+        }, Executors.newVirtualThreadPerTaskExecutor());
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+        while (ingest.entered.get() == 0 && System.nanoTime() < deadline) {
+            Thread.onSpinWait();
+        }
+        assertThat(ingest.entered).as("the premise: the routed write is parked").hasValue(1);
+        // ⚠️ POLLED, NOT READ ONCE (M13.13 review T1): `entered` counts before
+        // the records are read and `buffered` runs, so a read straight after
+        // could catch the permit on its way back. The write cannot complete
+        // while the hold is up, so a permit kept across the wait still fails.
+        while (admission.inFlight() != 0 && System.nanoTime() < deadline) {
+            Thread.onSpinWait();
+        }
+
+        assertThat(routed).as("the premise: still parked in its durable wait").isNotDone();
+        assertThat(admission.inFlight())
+                .as("⚠️ THE POD's ONLY LANE PERMIT WAS GIVEN BACK AT BUFFERING").isZero();
+        ingest.hold.countDown();
+        assertThat(routed.get(30, TimeUnit.SECONDS)).isEqualTo(202);
     }
 
     @Test
