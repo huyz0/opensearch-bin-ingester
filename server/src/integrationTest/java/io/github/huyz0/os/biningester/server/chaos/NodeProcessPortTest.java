@@ -98,6 +98,43 @@ class NodeProcessPortTest {
         }
     }
 
+    /**
+     * ⚠️ THE NEGATIVE SIDE, WHERE A REAL NODE'S DEATH IS CLASSIFIED (M13.2
+     * review R4, M13.2a): a child that died for its own reason is not a lost
+     * port, however its log reads, or it would be restarted until it happened
+     * to come up -- and it fails the wait at once, as a dead child cannot
+     * recover.
+     */
+    @Test
+    void aDeadChildThatDiedForAnotherReasonIsNotAPortLoss() throws Exception {
+        assertDiedWithoutPortLoss("could not start: direct needs a signing backend");
+    }
+
+    @Test
+    void aDeadChildThatRefusedAnotherPortIsNotAPortLoss() throws Exception {
+        assertDiedWithoutPortLoss(REFUSED.replace("50174", "50175"));
+    }
+
+    private static void assertDiedWithoutPortLoss(String logText) throws Exception {
+        Path dir = Files.createDirectories(Path.of("build", "tmp", "node-process-port"));
+        Path log = Files.writeString(dir.resolve(UUID.randomUUID() + ".log"), logText);
+        try {
+            DeadProcess child = new DeadProcess();
+            NodeProcess node = NodeProcess.forTest(child, 50174, log);
+            long started = System.nanoTime();
+
+            assertThatThrownBy(node::awaitServingOrClose)
+                    .isNotInstanceOf(NodePorts.PortLost.class)
+                    .hasMessageContaining("died before it started serving");
+            assertThat(Duration.ofNanos(System.nanoTime() - started))
+                    .as("a dead child ends the wait at once, not at 120 s")
+                    .isLessThan(Duration.ofSeconds(30));
+            assertThat(child.destroyed).isTrue();
+        } finally {
+            Files.deleteIfExists(log);
+        }
+    }
+
     @Test
     void aPortLossIsFoundHoweverDeeplyItIsWrapped() {
         NodePorts.PortLost lost = new NodePorts.PortLost(50174, "taken");

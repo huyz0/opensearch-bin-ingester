@@ -504,7 +504,7 @@ kind.
 | Criterion | Tier | First failing test | Mutation it must kill |
 |---|---|---|---|
 | 1 | T0 (gate) | `FileSizeCeilingTest` cases: `DefaultIngest` and `Assembly` refused at 500, `ConsumerClient` and `LocalSequencer` at 600 | M13.1 leaving `DefaultIngest` and `Assembly` untouched; a ceiling of 700 for the other two |
-| 2 | T1, T3 | `NodeProcessPortTest`, `NodeProcessLostPortIT` (a real node whose first port is held) | no retry after a lost port, or `start()` given one attempt; a retry on any other death or runtime failure; unbounded retries; a lost port read from another port's, a port prefix's or another refusal's message; a dead child's refusal not leaving the wait as a `PortLost`, or only after 120 s; the node not closed before a retry; `portLostIn` not walking the cause chain |
+| 2 | T1, T3 | `NodeProcessPortTest`, `NodeProcessLostPortIT` (a real node whose first port is held) | no retry after a lost port, or `startProbing` given one attempt (⚠️ a public `start` that bypassed `startProbing` is NOT killed: the IT enters through the port-source seam); a retry on any other death -- a real dead child whose log is another refusal or another port's, classified as a lost port (M13.2a) -- or on any other runtime failure; a dead child for any reason waiting out 120 s; unbounded retries; a lost port read from another port's, a port prefix's or another refusal's message; a dead child's refusal not leaving the wait as a `PortLost`, or only after 120 s; the node not closed before a retry; `portLostIn` not walking the cause chain |
 | 3 | T3 | `PartitionVisibilityIT` (measurement) and its `trigger202 ≤ drainEnd` assertion | `trigger202` timed after the drain; the evidence line cites the measurement file's per-run table, at least ten rows, or is NOT-RUN |
 | 4 | T1 | `SubscriptionReaderConnectionTest` close case, or the refutation's measurement | the reader client not closed |
 | 5 | T0/T1 | `SilentDefaultsGoneTest` (reflection) and `FetchBackoffClockWiringTest`'s started-client case | any of the three defaults left in main; a client built on a clock-less policy |
@@ -592,6 +592,7 @@ journal's fsync and the Kubernetes pod lookup are injected seams.
 | M13.1c | R1: `ConsumerClient` below 600, named by the ceiling gate at 600 | — (quality) |
 | M13.1d | R1: `LocalSequencer` below 600, named by the ceiling gate at 600 | — (quality) |
 | M13.2 | M12.28: `NodeProcess` starts a node that lost its probed port again on a fresh one | — (quality) |
+| M13.2a | Split from M13.2 at its review budget: a real dead child that did not lose its port is not retried, and fails the wait at once; criterion 2's row claims only the kills it has | — (quality) |
 | M13.3 | R2: `PartitionVisibilityIT` as a distribution | — (evidence) |
 | M13.4 | M12.27: the reader connection on close | FR-6 |
 | M13.5 | R4: ADR-0078 amended for M12.4 | — (docs) |

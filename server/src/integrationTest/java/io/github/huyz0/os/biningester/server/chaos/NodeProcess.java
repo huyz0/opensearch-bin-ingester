@@ -255,8 +255,12 @@ public final class NodeProcess implements AutoCloseable {
                             // retry until its two minutes were up (M13.2).
                             throw new NodePorts.PortLost(port, log);
                         }
-                        throw new AssertionError(
-                                podId + " died before it started serving:\n" + log());
+                        // ⚠️ NOT AN AssertionError EITHER (M13.2a): a dead child
+                        // cannot recover, and Awaitility would retry one for its
+                        // two minutes. And not a PortLost: onAFreePort restarts
+                        // only those, never a node that died for its own reason.
+                        throw new IllegalStateException(
+                                podId + " died before it started serving:\n" + log);
                     }
                     try (var response = client.get("/live").request()) {
                         assertThat(response.status().code())
