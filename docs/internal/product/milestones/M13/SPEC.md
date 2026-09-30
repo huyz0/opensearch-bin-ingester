@@ -610,6 +610,7 @@ journal's fsync and the Kubernetes pod lookup are injected seams.
 | M13.6c | R5: `SegmentFetchRetry`'s clock required and `DEFAULT` gone from main; a client started after `holdFailuresWith` pinned to receive the clocked policy (M12.26 T3) | FR-6, FR-19 |
 | M13.7 | R3: M11.5 T2 (the top-K log's prices) and the catch-up GET's share | FR-21 |
 | M13.8 | R6: quarantine the legacy buildSrc failures | — (harness) |
+| M13.8a | Split from M13.8 at its review budget: the quarantine guard refuses a wildcard, a `nativeGateTest` member, a missing class and one whose code names no script under `scripts/`; the build script takes the list from the file alone, its only exclusion | — (harness) |
 | M13.9 | R7: gate the compose `mem_limit`; build.md's script references | — (harness) |
 | M13.10 | R8: the top-K line's residue | FR-21 |
 | M13.11 | R9: the explicit-wait residue | FR-13 |

@@ -81,6 +81,41 @@ tasks.withType<Test>().configureEach {
         .withPathSensitivity(PathSensitivity.RELATIVE)
 }
 
+// M13.8 (M12 harvest R6): the tests that drive shell and Python scripts under
+// scripts/, quarantined out of `./gradlew -p buildSrc test`. The scripts do
+// not run on the development rig: 154 failures in the 18 classes
+// legacy-script-tests.txt lists, measured at M12.14 and at M13.8, which kept
+// the task red and so unread. Sixteen drive retired gate scripts (migration
+// references only, AGENTS.md § Gates). ⚠️ TWO DRIVE LIVE TOOLS the skills run:
+// ReviewRoundBudgetTest (scripts/review.sh) and CurrentMilestoneTest
+// (scripts/current-milestone.sh); they leave the default run on every OS too.
+// KEPT, NOT DELETED, and runnable by hand through `legacyScriptTest`; no gate
+// runs it. `LegacyScriptQuarantineTest` (in nativeGateTest) refuses an entry
+// that is a wildcard, a `nativeGateTest` member, missing, or a class whose
+// code names no script under scripts/, and pins that the list is the only
+// exclusion the default task has.
+// WHOLE CLASSES: 24 tests of these classes pass on the rig and leave the
+// default run with them.
+val legacyScriptTests = file("legacy-script-tests.txt").readLines().map { it.trim() }
+    .filter { it.isNotEmpty() && !it.startsWith("#") }
+
+tasks.named<Test>("test") {
+    filter {
+        legacyScriptTests.forEach { excludeTestsMatching("io.github.huyz0.os.biningester.$it") }
+    }
+}
+
+tasks.register<Test>("legacyScriptTest") {
+    description = "Run the quarantined tests of the shell and Python scripts under scripts/"
+    group = "verification"
+    useJUnitPlatform()
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    filter {
+        legacyScriptTests.forEach { includeTestsMatching("io.github.huyz0.os.biningester.$it") }
+    }
+}
+
 tasks.register<Test>("nativeGateTest") {
     description = "Run only the JVM-native repository gate tests"
     group = "verification"
@@ -89,6 +124,12 @@ tasks.register<Test>("nativeGateTest") {
     systemProperty("junit.jupiter.execution.timeout.threaddump.enabled", "true")
     testClassesDirs = sourceSets["test"].output.classesDirs
     classpath = sourceSets["test"].runtimeClasspath
+    // ⚠️ THE QUARANTINE's GUARD READS THESE (M13.8 review P3): undeclared, a
+    // list-only edit left this task UP-TO-DATE and the guard unrun.
+    inputs.file("build.gradle.kts").withPropertyName("buildSrcBuildScript")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.file("legacy-script-tests.txt").withPropertyName("legacyScriptTestList")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
     filter {
         includeTestsMatching("io.github.huyz0.os.biningester.GradleGateWiringTest")
         includeTestsMatching("io.github.huyz0.os.biningester.RepositoryGateChecksTest")
@@ -99,6 +140,7 @@ tasks.register<Test>("nativeGateTest") {
         includeTestsMatching("io.github.huyz0.os.biningester.LedgerlessConstructorGateTest")
         includeTestsMatching("io.github.huyz0.os.biningester.SingleTooManyRequestsGateTest")
         includeTestsMatching("io.github.huyz0.os.biningester.GateScannerEdgesTest")
+        includeTestsMatching("io.github.huyz0.os.biningester.LegacyScriptQuarantineTest")
     }
 }
 

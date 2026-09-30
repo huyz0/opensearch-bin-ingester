@@ -1,0 +1,27 @@
+# M13.8 (M12 harvest R6): buildSrc test classes quarantined out of
+# `./gradlew -p buildSrc test` into `legacyScriptTest` -- tests that drive
+# shell and Python scripts under scripts/, which do not run on the development
+# rig: sixteen retired gate scripts, and two live tools (ReviewRoundBudgetTest:
+# scripts/review.sh; CurrentMilestoneTest: scripts/current-milestone.sh).
+# One plain class name per line; `LegacyScriptQuarantineTest` refuses a
+# wildcard, a `nativeGateTest` member, a missing class, or a class whose code
+# names no script under scripts/. Read by buildSrc/build.gradle.kts and by
+# that test.
+AdrRefsGateTest
+CoverageGateTest
+CurrentMilestoneTest
+FaultStoreRecordsTest
+FreshCheckoutTest
+IoSeamLexerTest
+IoSeamShapeTest
+JavadocCitesGateTest
+ModuleDriftTest
+ModuleGateTest
+ModuleListDerivationTest
+ModulePlanTest
+ModuleSelectionTest
+MutantsGateTest
+OverrideGateTest
+ReviewRolesTest
+ReviewRoundBudgetTest
+RuleListTest
