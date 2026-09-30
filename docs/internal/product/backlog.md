@@ -21,7 +21,7 @@ Specified in [milestones/M13/SPEC.md](milestones/M13/SPEC.md). ⚠️ No commit 
 
 | ID | Task | Serves | State |
 |---|---|---|---|
-| M13.0 | Specify M13 | — | done: [milestones/M13/SPEC.md](milestones/M13/SPEC.md) -- the completion condition; M12's harvest R1-R18 and the open rows M12.27/M12.28 decomposed with criteria 1-6 (R19, the hooks, left to the owner); ⚠️ split at its third review round: fast mode's design, criteria 7 onward and tasks M13.22-M13.38 are M13.41's, with the three rounds' findings carried; the roadmap row updated |
+| M13.0 | Specify M13 | — | done: [milestones/M13/SPEC.md](milestones/M13/SPEC.md) -- the completion condition; M12's harvest R1-R18 and the open rows M12.27/M12.28 decomposed with criteria 1-6 (R19, the hooks, left to the owner); ⚠️ split at its third review round: fast mode's design, criteria 7 onward and tasks M13.22-M13.38 are M13.41's, with the three rounds' findings carried; the roadmap row updated; ⚠️ Committed (`59f9f222`) with `checkReviewed` FAILING -- "review round budget exceeded for M13.0": the split piece was reviewed under the original ID, five rounds against a budget of three; the commit chained the checks with `;` and was pushed before the refusal was read. Not amended (pushed); recorded here and in M13.44's commit (M13.41, M13.42 and M13.43 were split, never committed) |
 | M13.1 | R1: split `DefaultIngest` and `Assembly` below 500 along the write path, `ConsumerClient` and `LocalSequencer` below 600, the gate at those numbers | — (quality) | open |
 | M13.2 | M12.28: `NodeProcess` binds port 0 and reports it | — (quality) | open |
 | M13.3 | R2: `PartitionVisibilityIT` as a distribution | — (evidence) | open |
@@ -42,9 +42,29 @@ Specified in [milestones/M13/SPEC.md](milestones/M13/SPEC.md). ⚠️ No commit 
 | M13.18 | R16: two stale javadocs | — (docs) | open |
 | M13.19 | R17: `checkCommitMessage` requires a `Cost:` line; `PeerCommitTest` | — (harness) | open |
 | M13.20 | R18: a shared `Ingest` test base | — (quality) | open |
-| M13.21 | The research corpus updates M12 proposed (research 12's banner is M13.41's) | — (docs) | open |
+| M13.21 | The research corpus updates M12 proposed (research 12's banner landed with M13.44) | — (docs) | open |
+| M13.22 | The fast-mode protocol and formats decision records, meeting the eleven obligations and amending ADR-0013's Consequences for NFR-5 and NFR-10 -- including the quorum-loss predicate and the oracle's copy of it (obligation 4), the per-stream uncommitted-offset bound and the per-term `wal_quorum` record (obligation 4) -- reviewed before any fast-mode code | FR-17 | open |
+| M13.23 | The three settings: plugin index settings, `IndexRegistration` v2, the catalog | FR-17 | open |
+| M13.24 | The fast journal: append, fsync seam, entries, the byte bound, release, recovery read | FR-17 | open |
+| M13.25 | The fast frames, the roster object and the void-range chain entry, with golden files, and every reader of the void entry in the same commit (non-negotiable 8): the chain-entry kinds made a sealed type decoded by exhaustive `switch`, so a reader that ignores the new kind fails to compile -- `DeltaReader`, `CommitChargingBinStore`, `ChainEnd`, `ChainReplay`, `Checkpoint`, `ChainBackfill` -- and the consumer's and the plugin's counted skip | FR-17 | open |
+| M13.26 | The roster and lease-time fencing: join, admission, the epoch fence, the TTL wait, the per-term `wal_quorum` record, and a non-leader's graceful departure (upload, wait, then leave the roster) | FR-17 | open |
+| M13.27 | The leader's fast sequencer: cursor, assignment and the per-stream bound, journal, replica set, answer | FR-17 | open |
+| M13.28 | The replica endpoint: store, epoch fence, release | FR-17 | open |
+| M13.29 | The writer's fast path: commit, offset confirmation, the epoch check, ack with offsets; no fast frame for a `wal=false` index (`FastEndpointsUnusedTest`) | FR-17 | open |
+| M13.30 | Publication: interest registration, the leader's push to interested pods, and a cross-zone proxied `/seg` read served from the leader's journal before the upload (`FastProxySubscriberTest`) | FR-17 | open |
+| M13.31 | The upload at pre-assigned offsets, triggered by the journal's fill, a stream nearing its bound and a holder's loss as well as the timer (`FastCapacityTest`), release everywhere, and the per-stream barrier | FR-17 | open |
+| M13.32 | Catch-up of fast streams from the leader's journal | FR-17, FR-10 | open |
+| M13.33 | Takeover: fence, collect per stream, pod-UID liveness, recovery upload, truncation, writing void ranges, exactly-once delivery of a re-published offset across the takeover (`FastTakeoverSubscriberTest`), `FastRecoveryModelTest`, and the commit-protocol simulation extended over seeds | FR-17 | open |
+| M13.34 | Switching `wal` on a live index under skew | FR-17 | open |
+| M13.35 | Shutdown: the leader uploads its journal before releasing the lease | FR-17 | open |
+| M13.36 | Fast-mode metrics and the cost evidence | FR-17, NFR-5 | open |
+| M13.37 | The fast latency measurement on M9's rig | FR-17 | open |
+| M13.38 | The requirements table matched to M13.22's decision (NFR-8, NFR-5 and NFR-10 conditional); the architecture and operator docs | FR-17, NFR-8, NFR-5, NFR-10 | open |
 | M13.40 | `checkMilestoneVerified` refuses a VERIFIED.md enumeration missing a harvest ID its SPEC lists | — (harness) | open |
-| M13.41 | Specify fast mode: its design, the protocol's obligations, cost, criteria 7 onward, test plan, risks and tasks M13.22-M13.38 | FR-17 | open |
+| M13.41 | Specify fast mode: its design, the protocol's obligations, cost, criteria 7 onward, test plan, risks and tasks M13.22-M13.38 | FR-17 | split at its third review round (review.md rule 12), never committed: rounds 1-3 found 7+2+2 production majors and 4+3+3 test majors, the last two rounds' all in enumerated recovery rules (quorum-loss detection, the void's extent, the source of `q_s`), each wrong in a case the next round named; carried by M13.42 |
+| M13.42 | Specify fast mode, split from M13.41 at its third round: recovery stated as invariants against a ground-truth model, its enumerated rules moved to M13.22 | FR-17 | split at its third review round, never committed: rounds 1-3 found 3, 1 and 1 production majors and 1, 1 and 1 test majors, converging; the last, the oracle judging quorum loss from ground truth the survivors cannot know, is fixed in M13.43 |
+| M13.43 | Specify fast mode, split from M13.42 at its third round: quorum loss judged over rostered incarnations at the `q` in force, the per-stream bound triggering uploads, one void entry per takeover | FR-17 | split at its third review round, never committed: rounds 1-3 found 2, 2 and 1 production majors and 2, 2 and 1 test majors; the last, the oracle's `q` taken from ground truth the survivors cannot know, is the third draft of the quorum-loss predicate to fail, so M13.44 delegates the predicate to M13.22 |
+| M13.44 | Specify fast mode, split from M13.43 at its third round: the quorum-loss predicate and the oracle's copy of it delegated to M13.22 under stated constraints | FR-17 | done: fast mode's design; the protocol's eleven obligations, with recovery stated as invariants that `FastRecoveryModelTest` checks against a ground-truth model over seeds; the quorum-loss predicate (and the oracle's copy of it), the per-stream bound and the per-term `wal_quorum` record left to M13.22 under stated constraints; NFR-14 cited, NFR-5 and NFR-10 made conditional by M13.22's ADR; cost, criteria 7-19, test plan, risks and tasks M13.22-M13.38 added to the SPEC; ADR-0080/H16 weighed and deferred to the roadmap's table with the reason; research 12's revision banner (leader upload, the `q = 1` hop); the roadmap row matches |
 | M13.39 | Close M13 | — (evidence) | open |
 
 ## M12 — measure and clean the default path before fast mode (complete)

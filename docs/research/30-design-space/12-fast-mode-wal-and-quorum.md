@@ -4,6 +4,20 @@
 **Confidence:** medium (latency modelled; the cost figure is arithmetic and is the
 load-bearing number) · **Last updated:** 2026-08-30
 
+> ⚠️ **REVISION 2026-09-30 (M13.44, [milestones/M13/SPEC.md](../../internal/product/milestones/M13/SPEC.md)):**
+> §5's shape -- each writer keeps and uploads its own WAL -- cannot form the
+> contiguous per-stream runs a segment needs when several pods write one stream,
+> so the **sequencer leader** sequences, holds, publishes and uploads every fast
+> batch, and a copy counts toward the quorum only once it holds its assigned
+> offsets. Two figures here change: at `quorum=1` a writer outside the leader's
+> AZ ships its batch to the leader, **2/3 of a cross-AZ copy per record on
+> average** (≈ $36/month per 1 MiB/s, not zero), and publication adds up to one
+> copy per record per consuming pod in another AZ (at most one with
+> `all_active=false`; with `all_active=true`, one per consuming replica's pod). The `quorum=1` row below is superseded:
+> the ack follows the LEADER's fsync, and the data is lost with the leader's
+> disk, not the writing pod's. The `quorum ≥ 2` replication figure stands.
+> The protocol is M13.22's decision record.
+
 **Read this if:** you are implementing the fast tier, or deciding whether a
 workload should use it.
 **One-line takeaway:** fast mode reaches **~1.5–6 ms** ack-and-visible instead of
