@@ -103,7 +103,7 @@ class CrossAzBytesIT {
                 DeliveredSegments delivered = new DeliveredSegments(new HttpSegmentSource(
                         Duration.ofSeconds(30), "http://localhost:" + secondNode.port(), "az-b"));
                 try (ConsumerClient consumer = new ConsumerClient(transport, key, 16,
-                        delivered)) {
+                        delivered, io.github.huyz0.os.biningester.client.SegmentFetchRetry.standard(System::currentTimeMillis))) {
                     assertThat(node.write(List.of(firstId))).isEqualTo(202);
                     assertThat(consumer.readNext(Duration.ofSeconds(30))).isPresent();
                 } finally {
@@ -211,7 +211,7 @@ class CrossAzBytesIT {
                         Duration.ofSeconds(1), Duration.ofSeconds(30), Duration.ofSeconds(2),
                         32 * 1024 * 1024, "az-b");
                 try (ConsumerClient consumer = new ConsumerClient(transport, key, 16,
-                        delivered)) {
+                        delivered, io.github.huyz0.os.biningester.client.SegmentFetchRetry.standard(System::currentTimeMillis))) {
                     for (int batch = 0; batch < PROXIED_BATCHES; batch++) {
                         List<String> ids = new ArrayList<>();
                         for (int i = 0; i < PROXIED_RECORDS; i++) {
@@ -356,7 +356,7 @@ class CrossAzBytesIT {
                         Duration.ofSeconds(1), Duration.ofSeconds(30), Duration.ofSeconds(2),
                         32 * 1024 * 1024, "az-b");
                 try (ConsumerClient consumer = new ConsumerClient(transport, key, 16,
-                        delivered)) {
+                        delivered, io.github.huyz0.os.biningester.client.SegmentFetchRetry.standard(System::currentTimeMillis))) {
                     for (int batch = 0; batch < SUB_CAP_BATCHES; batch++) {
                         List<String> ids = new ArrayList<>();
                         for (int i = 0; i < SUB_CAP_RECORDS; i++) {
@@ -501,7 +501,7 @@ class CrossAzBytesIT {
                             Duration.ofSeconds(2), 32 * 1024 * 1024, "az-b");
                     transports.add(transport);
                     consumers.add(new ConsumerClient(transport, new RunKey(stream, partition), 16,
-                            delivered));
+                            delivered, io.github.huyz0.os.biningester.client.SegmentFetchRetry.standard(System::currentTimeMillis)));
                 }
 
                 long consumed = 0;

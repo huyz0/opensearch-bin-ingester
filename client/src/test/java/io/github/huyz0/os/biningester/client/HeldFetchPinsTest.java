@@ -71,7 +71,7 @@ class HeldFetchPinsTest {
     }
 
     private static ConsumerClient client(Script source, int attempts, List<Duration> waited) {
-        return new ConsumerClient(KEY, 16, source, new SegmentFetchRetry(Duration.ofSeconds(1),
+        return new ConsumerClient(KEY, 16, source, TestRetries.sleepAdvanced(Duration.ofSeconds(1),
                 Duration.ofSeconds(30), attempts, waited::add));
     }
 

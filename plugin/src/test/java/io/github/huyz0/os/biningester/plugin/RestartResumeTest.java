@@ -92,7 +92,7 @@ class RestartResumeTest {
     @Test
     void readNextResumesFromThePersistedPointerRatherThanFromTheBeginning() throws Exception {
         FakeTransport transport = new FakeTransport();
-        try (ConsumerClient client = new ConsumerClient(transport, KEY, 64);
+        try (ConsumerClient client = new ConsumerClient(transport, KEY, 64, null, TestRetries.noFailedFetch());
                 BinStoreShardConsumer consumer = new BinStoreShardConsumer(0, client)) {
             transport.push(batch(0, 10));
 
@@ -112,7 +112,7 @@ class RestartResumeTest {
         // 5..9. The node crashed mid-way through the second, so what it
         // persisted is 5 -- the first offset of the batch it had not finished.
         FakeTransport transport = new FakeTransport();
-        try (ConsumerClient client = new ConsumerClient(transport, KEY, 64);
+        try (ConsumerClient client = new ConsumerClient(transport, KEY, 64, null, TestRetries.noFailedFetch());
                 BinStoreShardConsumer consumer = new BinStoreShardConsumer(0, client)) {
             transport.push(batch(0, 5));
             transport.push(batch(5, 5));

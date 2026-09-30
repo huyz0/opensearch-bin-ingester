@@ -58,7 +58,7 @@ class CatchUpDeliveryLaneTest {
 
     @Test
     void liveRecordsYieldToCatchUpAfterFiniteRecordQuantum() throws Exception {
-        try (ConsumerClient client = new ConsumerClient(KEY, 64, null)) {
+        try (ConsumerClient client = new ConsumerClient(KEY, 64, null, TestRetries.noFailedFetch())) {
             UUID request = UUID.randomUUID();
             client.beginCatchUp(request);
             client.deliverCatchUp(request, delivery(0, "replay-0", "replay-1", "replay-2"));
@@ -89,7 +89,7 @@ class CatchUpDeliveryLaneTest {
 
     @Test
     void matchingEndCompletesOnlyAfterEveryReplayRecordIsDelivered() throws Exception {
-        try (ConsumerClient client = new ConsumerClient(KEY, 8, null)) {
+        try (ConsumerClient client = new ConsumerClient(KEY, 8, null, TestRetries.noFailedFetch())) {
             UUID request = UUID.randomUUID();
             client.beginCatchUp(request);
             client.deliverCatchUp(request, delivery(0, "a", "b", "c"));
@@ -111,7 +111,7 @@ class CatchUpDeliveryLaneTest {
 
     @Test
     void catchUpRejectsForeignEventsAndEndsAndAllowsReuseAfterCompletion() throws Exception {
-        try (ConsumerClient client = new ConsumerClient(KEY, 2, null)) {
+        try (ConsumerClient client = new ConsumerClient(KEY, 2, null, TestRetries.noFailedFetch())) {
             UUID request = UUID.randomUUID();
             UUID foreign = UUID.randomUUID();
             client.beginCatchUp(request);
@@ -181,7 +181,7 @@ class CatchUpDeliveryLaneTest {
 
     @Test
     void catchUpLaneBackpressuresWithoutBlockingLiveDelivery() throws Exception {
-        try (ConsumerClient client = new ConsumerClient(KEY, 1, null)) {
+        try (ConsumerClient client = new ConsumerClient(KEY, 1, null, TestRetries.noFailedFetch())) {
             UUID request = UUID.randomUUID();
             client.beginCatchUp(request);
             client.deliverCatchUp(request, delivery(0, "first"));
@@ -215,7 +215,7 @@ class CatchUpDeliveryLaneTest {
                     .isEqualTo("second");
         }
 
-        try (ConsumerClient client = new ConsumerClient(KEY, 1, null)) {
+        try (ConsumerClient client = new ConsumerClient(KEY, 1, null, TestRetries.noFailedFetch())) {
             UUID request = UUID.randomUUID();
             client.beginCatchUp(request);
             client.deliverCatchUp(request, delivery(0, "retained"));

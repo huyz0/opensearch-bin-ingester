@@ -62,7 +62,7 @@ class ShardConsumerGapTest {
 
     @Test
     void aGapDoesNotSTOPTheShardAndDoesNotLOSETheRecordsAroundIt() throws Exception {
-        ConsumerClient client = new ConsumerClient(KEY, 16, null);
+        ConsumerClient client = new ConsumerClient(KEY, 16, null, TestRetries.noFailedFetch());
         BinStoreShardConsumer shard = new BinStoreShardConsumer(0, client);
         client.deliver(delivery(0, "a", "b"));
         client.deliver(delivery(9, "j"));
@@ -83,7 +83,7 @@ class ShardConsumerGapTest {
 
     @Test
     void aSHARDWithNoGapReportsNONE() throws Exception {
-        ConsumerClient client = new ConsumerClient(KEY, 16, null);
+        ConsumerClient client = new ConsumerClient(KEY, 16, null, TestRetries.noFailedFetch());
         BinStoreShardConsumer shard = new BinStoreShardConsumer(0, client);
         client.deliver(delivery(0, "a", "b"));
         client.deliver(delivery(2, "c"));

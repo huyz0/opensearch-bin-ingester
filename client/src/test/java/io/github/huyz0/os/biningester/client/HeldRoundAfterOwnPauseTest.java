@@ -52,7 +52,7 @@ class HeldRoundAfterOwnPauseTest {
                 throw new AssertionError("the script ran out");
             }
         };
-        SegmentFetchRetry threeAttempts = new SegmentFetchRetry(Duration.ofSeconds(1),
+        SegmentFetchRetry threeAttempts = TestRetries.sleepAdvanced(Duration.ofSeconds(1),
                 Duration.ofSeconds(30), 3, wait -> { });
         try (ConsumerClient client = new ConsumerClient(KEY, 16, source, threeAttempts)) {
             client.deliver(new Delivery(KEY, "seg", 1, 0L, FetchMode.PROXY, new byte[0]));

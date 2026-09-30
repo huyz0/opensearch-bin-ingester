@@ -83,7 +83,7 @@ class VisibilityLatencyIT {
                 HttpSubscriptionTransport transport = new HttpSubscriptionTransport(
                         "http://localhost:" + node.port(), () -> { }, Duration.ofMillis(50),
                         Duration.ofSeconds(1), Duration.ofSeconds(30), Duration.ofSeconds(2));
-                try (ConsumerClient consumer = new ConsumerClient(transport, key, 256)) {
+                try (ConsumerClient consumer = new ConsumerClient(transport, key, 256, null, io.github.huyz0.os.biningester.client.SegmentFetchRetry.standard(System::currentTimeMillis))) {
                     FutureTask<Void> reader = new FutureTask<>(() -> {
                         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(60);
                         while (deliveries.size() < records && System.nanoTime() < deadline) {

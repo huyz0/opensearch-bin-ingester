@@ -62,7 +62,7 @@ class ConsumerClientTest {
     @Test
     void readNextReturnsRecordsInOrderWithTheCommitLogsOffsets() throws Exception {
         FakeTransport transport = new FakeTransport();
-        try (ConsumerClient c = new ConsumerClient(transport, KEY, 16)) {
+        try (ConsumerClient c = new ConsumerClient(transport, KEY, 16, null, TestRetries.noFailedFetch())) {
             transport.push(delivery(100, "a", "b", "c"));
             // WARNING: offsets come from the COMMIT LOG's assignment, advanced
             // per record -- not from the record's position in the segment. The
@@ -78,7 +78,7 @@ class ConsumerClientTest {
     @Test
     void offsetsContinueAcrossFlushesRatherThanRestarting() throws Exception {
         FakeTransport transport = new FakeTransport();
-        try (ConsumerClient c = new ConsumerClient(transport, KEY, 16)) {
+        try (ConsumerClient c = new ConsumerClient(transport, KEY, 16, null, TestRetries.noFailedFetch())) {
             transport.push(delivery(0, "a", "b"));
             transport.push(delivery(2, "c"));
             List<Long> offsets = new ArrayList<>();
@@ -95,7 +95,7 @@ class ConsumerClientTest {
     @Test
     void readNextBlocksUntilAPushArrives() throws Exception {
         FakeTransport transport = new FakeTransport();
-        try (ConsumerClient c = new ConsumerClient(transport, KEY, 16)) {
+        try (ConsumerClient c = new ConsumerClient(transport, KEY, 16, null, TestRetries.noFailedFetch())) {
             CountDownLatch reading = new CountDownLatch(1);
             var result = new java.util.concurrent.atomic.AtomicReference<Optional<ConsumerRecord>>();
             Thread reader = Thread.ofVirtual().start(() -> {
@@ -123,7 +123,7 @@ class ConsumerClientTest {
     @Test
     void readNextBlocksForTheFullTimeoutWhenNothingArrives() throws Exception {
         FakeTransport transport = new FakeTransport();
-        try (ConsumerClient c = new ConsumerClient(transport, KEY, 16)) {
+        try (ConsumerClient c = new ConsumerClient(transport, KEY, 16, null, TestRetries.noFailedFetch())) {
             long start = System.nanoTime();
             Optional<ConsumerRecord> got = c.readNext(Duration.ofMillis(300));
             long elapsedMillis = (System.nanoTime() - start) / 1_000_000;
@@ -140,7 +140,7 @@ class ConsumerClientTest {
     @Test
     void aQueuedDeliveryIsReturnedWithoutWaiting() throws Exception {
         FakeTransport transport = new FakeTransport();
-        try (ConsumerClient c = new ConsumerClient(transport, KEY, 16)) {
+        try (ConsumerClient c = new ConsumerClient(transport, KEY, 16, null, TestRetries.noFailedFetch())) {
             transport.push(delivery(0, "a"));
             long start = System.nanoTime();
             assertThat(c.readNext(Duration.ofSeconds(10))).isPresent();
@@ -152,7 +152,7 @@ class ConsumerClientTest {
     @Test
     void aFullQueueDropsRatherThanBlockingTheIngester() throws Exception {
         FakeTransport transport = new FakeTransport();
-        try (ConsumerClient c = new ConsumerClient(transport, KEY, 2)) {
+        try (ConsumerClient c = new ConsumerClient(transport, KEY, 2, null, TestRetries.noFailedFetch())) {
             for (int i = 0; i < 10; i++) {
                 transport.push(delivery(i, "r" + i));
             }
@@ -166,7 +166,7 @@ class ConsumerClientTest {
     @Test
     void closingUnsubscribes() throws Exception {
         FakeTransport transport = new FakeTransport();
-        ConsumerClient c = new ConsumerClient(transport, KEY, 4);
+        ConsumerClient c = new ConsumerClient(transport, KEY, 4, null, TestRetries.noFailedFetch());
         assertThat(transport.listenerCount()).isEqualTo(1);
         c.close();
         assertThat(transport.listenerCount()).as("no listener left behind").isZero();
@@ -175,7 +175,7 @@ class ConsumerClientTest {
     @Test
     void thePayloadIsTheDefaultEnvelope() throws Exception {
         FakeTransport transport = new FakeTransport();
-        try (ConsumerClient c = new ConsumerClient(transport, KEY, 4)) {
+        try (ConsumerClient c = new ConsumerClient(transport, KEY, 4, null, TestRetries.noFailedFetch())) {
             transport.push(delivery(5, "doc"));
             ConsumerRecord r = c.readNext(Duration.ofMillis(50)).orElseThrow();
             String json = new String(r.payload(), StandardCharsets.UTF_8);

@@ -43,7 +43,7 @@ class RetainedOffsetRefusalTest {
 
     /** ⚠️ FED, holding no subscription: the node-scoped shape since M5.62. */
     private static ConsumerClient client() {
-        return new ConsumerClient(KEY, 16, null);
+        return new ConsumerClient(KEY, 16, null, TestRetries.noFailedFetch());
     }
 
     @Test

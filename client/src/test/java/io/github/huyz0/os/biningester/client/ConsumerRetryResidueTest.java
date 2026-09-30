@@ -57,7 +57,7 @@ class ConsumerRetryResidueTest {
 
     @Test
     void aSurfacedFailureStartsAFreshRoundOfAttempts() throws Exception {
-        SegmentFetchRetry two = new SegmentFetchRetry(Duration.ofSeconds(1),
+        SegmentFetchRetry two = TestRetries.sleepAdvanced(Duration.ofSeconds(1),
                 Duration.ofSeconds(30), 2, wait -> { });
         AlwaysFails source = new AlwaysFails();
         try (ConsumerClient client = new ConsumerClient(KEY, 16, source, two)) {
@@ -78,7 +78,7 @@ class ConsumerRetryResidueTest {
     @Test
     void eachBackoffDoublesToTheCeilingAndIsJittered() throws Exception {
         List<Duration> waits = new CopyOnWriteArrayList<>();
-        SegmentFetchRetry many = new SegmentFetchRetry(Duration.ofSeconds(1),
+        SegmentFetchRetry many = TestRetries.sleepAdvanced(Duration.ofSeconds(1),
                 Duration.ofSeconds(4), 50, waits::add);
         AlwaysFails source = new AlwaysFails();
         try (ConsumerClient client = new ConsumerClient(KEY, 16, source, many)) {
@@ -118,7 +118,7 @@ class ConsumerRetryResidueTest {
             }
         };
         try (ConsumerClient client = new ConsumerClient(KEY, 16, counting,
-                SegmentFetchRetry.DEFAULT)) {
+                TestRetries.noFailedFetch())) {
             client.deliver(proxied(0));
             assertThat(client.readNext(Duration.ofSeconds(5))).isPresent();
             client.deliver(proxied(0));
@@ -130,8 +130,15 @@ class ConsumerRetryResidueTest {
                 .hasValue(1);
     }
 
+    /**
+     * The STANDARD policy retries (M13.6c): production builds every client on
+     * it -- {@code NodeSubscriptions} -- since the constructors that picked
+     * their own policy are gone. A standard policy of one attempt would
+     * restore the pause on every 502. The clock is fixed, so the backoff owed
+     * never comes due and nothing sleeps.
+     */
     @Test
-    void aSubscribingClientBuiltWithoutAPolicyRetriesByDefault() throws Exception {
+    void aSubscribingClientOnTheStandardPolicyRetries() throws Exception {
         List<SubscriptionTransport.Listener> listeners = new CopyOnWriteArrayList<>();
         SubscriptionTransport transport = new SubscriptionTransport() {
             @Override
@@ -141,11 +148,12 @@ class ConsumerRetryResidueTest {
             }
         };
         AlwaysFails source = new AlwaysFails();
-        try (ConsumerClient client = new ConsumerClient(transport, KEY, 16, source)) {
+        try (ConsumerClient client = new ConsumerClient(transport, KEY, 16, source,
+                SegmentFetchRetry.standard(() -> 0L))) {
             listeners.forEach(l -> l.onDelivery(proxied(0)));
             assertThat(client.readNext(Duration.ZERO))
-                    .as("⚠️ A 502 IS AN EMPTY POLL, not a pause: production builds clients "
-                            + "through this constructor")
+                    .as("⚠️ A 502 IS AN EMPTY POLL, not a pause: production builds every "
+                            + "client on the standard policy")
                     .isEmpty();
             assertThat(source.attempts).as("fetched once, and owed a backoff").hasValue(1);
         }

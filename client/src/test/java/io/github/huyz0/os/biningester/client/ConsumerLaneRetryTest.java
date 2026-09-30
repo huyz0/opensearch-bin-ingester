@@ -64,7 +64,7 @@ class ConsumerLaneRetryTest {
 
     @Test
     void aFailingCatchUpSegmentDoesNotDeferTheLiveOne() throws Exception {
-        SegmentFetchRetry retry = new SegmentFetchRetry(Duration.ofSeconds(1),
+        SegmentFetchRetry retry = TestRetries.sleepAdvanced(Duration.ofSeconds(1),
                 Duration.ofSeconds(30), 8, wait -> { });
         OneFails source = new OneFails(segmentOf("live-doc", 5));
         try (ConsumerClient client = new ConsumerClient(KEY, 16, source, retry)) {
@@ -95,7 +95,7 @@ class ConsumerLaneRetryTest {
      */
     @Test
     void aFailingCatchUpSegmentIsFetchedExactlyMaxAttemptsTimes() throws Exception {
-        SegmentFetchRetry retry = new SegmentFetchRetry(Duration.ofSeconds(1),
+        SegmentFetchRetry retry = TestRetries.sleepAdvanced(Duration.ofSeconds(1),
                 Duration.ofSeconds(30), 8, wait -> { });
         OneFails source = new OneFails(segmentOf("live-doc", 5));
         try (ConsumerClient client = new ConsumerClient(KEY, 16, source, retry)) {

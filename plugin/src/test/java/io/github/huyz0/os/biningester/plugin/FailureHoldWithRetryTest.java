@@ -86,10 +86,16 @@ class FailureHoldWithRetryTest {
         try {
             for (int run = 0; run < RUNS; run++) {
                 int me = run;
-                SegmentFetchRetry retry = new SegmentFetchRetry(SegmentFetchRetry.DEFAULT.floor(),
-                        SegmentFetchRetry.DEFAULT.ceiling(),
-                        SegmentFetchRetry.DEFAULT.maxAttempts(),
-                        wait -> wakeAt[me] = millis.get() + wait.toMillis());
+                // ⚠️ ON THE TIMELINE's CLOCK (M13.6c: a policy is always clocked):
+                // a run's backoff is due when the loop's clock reaches the wake
+                // its sleeper recorded, as the clock-less debt was paid there.
+                SegmentFetchRetry retry = new SegmentFetchRetry(
+                        io.github.huyz0.os.biningester.client.HttpSubscriptionTransport
+                                .DEFAULT_RETRY_FLOOR,
+                        io.github.huyz0.os.biningester.client.HttpSubscriptionTransport
+                                .DEFAULT_RETRY_CEILING,
+                        SegmentFetchRetry.DEFAULT_MAX_ATTEMPTS,
+                        wait -> wakeAt[me] = millis.get() + wait.toMillis(), millis::get);
                 RunKey key = new RunKey(index, run);
                 ConsumerClient client = new ConsumerClient(key, 16, hold, retry);
                 client.deliver(new Delivery(key, "seg", 1, 0L, FetchMode.PROXY, new byte[0]));
@@ -121,6 +127,6 @@ class FailureHoldWithRetryTest {
                 .isGreaterThanOrEqualTo(OUTAGE_MILLIS);
         assertThat(fetches.get())
                 .as("⚠️ ABOUT ONE RUN's FETCHES (eight over ~90 s), NOT %d x 8", RUNS)
-                .isLessThanOrEqualTo(SegmentFetchRetry.DEFAULT.maxAttempts() + 1);
+                .isLessThanOrEqualTo(SegmentFetchRetry.DEFAULT_MAX_ATTEMPTS + 1);
     }
 }

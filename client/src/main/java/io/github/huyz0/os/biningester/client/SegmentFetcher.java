@@ -14,9 +14,9 @@ import java.util.Objects;
  * TIMEOUTS.** Retrying inside one call's deadline was the alternative, and it
  * needs what this module may not have: the time remaining is a clock reading
  * (non-negotiable 7), and a call that has already blocked on the queue and on
- * a 30 s fetch has no honest remainder to retry in. Here time is counted in
- * waits this class itself asked for, which is a LOWER bound on time passed --
- * so the fetch rate is bounded without a clock, and:
+ * a 30 s fetch has no honest remainder to retry in. The backoff is a due
+ * time on the policy's clock, which the host passes (M12.26; required since
+ * M13.6c), and:
  * <ul>
  *   <li>a call waits at most its own timeout, and never after a fetch it made;
  *   <li>{@code readNext(ZERO)} neither waits nor fetches while a backoff is
@@ -75,14 +75,17 @@ final class SegmentFetcher {
     private final SegmentFetchRetry retry;
     private int failures;
     private Duration backoff;
+    /** The backoff last started, for the failure's log line. */
     private Duration owed = Duration.ZERO;
     /**
-     * With a clock on the policy (M12.26): when the backoff ends, on it. The
-     * backoff is then a DUE TIME, which passes whether or not anyone waits --
-     * so a catch-up that gives its turn to live is still retried once due --
-     * where without one it is a debt that only {@link #awaitBackoff} pays.
+     * When the backoff ends, on the policy's clock (M12.26). A DUE TIME, which
+     * passes whether or not anyone waits -- so a catch-up that gives its turn
+     * to live is still retried once due.
      */
-    private long dueAtMillis = Long.MIN_VALUE;
+    private long dueAtMillis = NO_BACKOFF;
+
+    /** {@link #dueAtMillis} when no backoff is pending. */
+    private static final long NO_BACKOFF = Long.MIN_VALUE;
     /**
      * The node's fetch count BEFORE this run's first held answer of the round,
      * or -1 (M10.28 review F4): a run pauses after the node has failed
@@ -233,7 +236,7 @@ final class SegmentFetcher {
     void awaitBackoff(Duration timeout) throws InterruptedException {
         Duration wait;
         synchronized (this) {
-            Duration left = retry.clockMillis() == null ? owed
+            Duration left = dueAtMillis == NO_BACKOFF ? Duration.ZERO
                     : Duration.ofMillis(Math.max(0, dueAtMillis - retry.clockMillis().getAsLong()));
             wait = left.compareTo(timeout) < 0 ? left : timeout;
         }
@@ -241,34 +244,37 @@ final class SegmentFetcher {
             return;
         }
         retry.sleeper().sleep(wait);
-        synchronized (this) {
-            owed = owed.minus(wait).isNegative() ? Duration.ZERO : owed.minus(wait);
-        }
     }
 
-    /** Starts a backoff of {@code wait}: a debt, and with a clock a due time too. */
+    /** Starts a backoff of {@code wait}, due on the policy's clock. */
     private void owe(Duration wait) {
         owed = wait;
-        if (retry.clockMillis() != null) {
-            dueAtMillis = retry.clockMillis().getAsLong() + wait.toMillis();
-        }
-    }
-
-    /** Whether the next fetch must wait: until the due time, or until the debt is paid. */
-    private synchronized boolean owesWait() {
-        return retry.clockMillis() == null ? owed.compareTo(Duration.ZERO) > 0
-                : retry.clockMillis().getAsLong() < dueAtMillis;
+        dueAtMillis = retry.clockMillis().getAsLong() + wait.toMillis();
     }
 
     /**
-     * Whether this fetcher is backing off and its time has not come, which is
-     * only ever true with a clock (M12.26).
-     *
-     * <p>⚠️ FALSE WITHOUT ONE, deliberately: a debt is paid only by waiting it
-     * out, so a lane that yielded its turn on it would never be retried while
-     * the other lane kept the reader busy.
+     * Whether the next fetch must wait until the due time. ⚠️ THE CLOCK IS READ
+     * ONLY WHILE A BACKOFF IS PENDING (M13.6c): once it is due the pending mark
+     * is cleared, so a fetcher that is not backing off never consults the
+     * host's clock -- as the clock-less policy never did.
+     */
+    private synchronized boolean owesWait() {
+        if (dueAtMillis == NO_BACKOFF) {
+            return false;
+        }
+        if (retry.clockMillis().getAsLong() < dueAtMillis) {
+            return true;
+        }
+        dueAtMillis = NO_BACKOFF;
+        return false;
+    }
+
+    /**
+     * Whether this fetcher is backing off and its time has not come (M12.26).
+     * ⚠️ There is no clock-less mode any more (M13.6c), where this was always
+     * false and a lane that yielded on a debt was never retried.
      */
     synchronized boolean backingOff() {
-        return retry.clockMillis() != null && retry.clockMillis().getAsLong() < dueAtMillis;
+        return owesWait();
     }
 }

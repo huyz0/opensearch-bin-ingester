@@ -133,7 +133,7 @@ class SegmentFetchRetryTest {
     }
 
     private static SegmentFetchRetry retry(int maxAttempts, RecordingSleeper sleeper) {
-        return new SegmentFetchRetry(Duration.ofSeconds(1), Duration.ofSeconds(30),
+        return TestRetries.sleepAdvanced(Duration.ofSeconds(1), Duration.ofSeconds(30),
                 maxAttempts, sleeper);
     }
 
@@ -359,23 +359,24 @@ class SegmentFetchRetryTest {
     }
 
     /**
-     * The DEPLOYED default retries: a client built without a policy answers a
+     * The DEPLOYED policy retries: a client on the standard policy answers a
      * 502 with an empty poll, not a pause, and owes a backoff before it asks
      * again.
      *
-     * <p>⚠️ THE DEFAULT PATH, NOT {@code DEFAULT}'s FIELDS: production builds
-     * clients through these constructors, and a default of one attempt would
-     * restore the pause on every 502 while every injected-policy case stayed
-     * green. ⚠️ AND NOTHING SLEEPS (M11.13, H8; M10.23 review T8): the default
-     * sleeper sleeps for real, so this case polls with {@code ZERO}, which
-     * neither waits nor fetches while a backoff is owed; that the backoff is
-     * then served and the records read is {@link
-     * #aTransient502ThenSuccessYieldsTheRecordsInOrder}'s, on an injected sleeper.
+     * <p>⚠️ THE STANDARD POLICY, which production builds every client on
+     * (M13.6c: {@code NodeSubscriptions}, since no constructor picks its own):
+     * a standard policy of one attempt would restore the pause on every 502
+     * while every injected-policy case stayed green. ⚠️ AND NOTHING SLEEPS
+     * (M11.13, H8; M10.23 review T8): the standard sleeper sleeps for real, so
+     * this case polls with {@code ZERO} on a fixed clock, which neither waits
+     * nor fetches while a backoff is owed; that the backoff is then served and
+     * the records read is {@link #aTransient502ThenSuccessYieldsTheRecordsInOrder}'s.
      */
     @Test
-    void aDefaultConstructedClientRetriesATransientFailure() throws Exception {
+    void aClientOnTheStandardPolicyRetriesATransientFailure() throws Exception {
         Scripted source = new Scripted(segmentOf("a"), false, true);
-        try (ConsumerClient c = new ConsumerClient(KEY, 16, source)) {
+        try (ConsumerClient c = new ConsumerClient(KEY, 16, source,
+                SegmentFetchRetry.standard(() -> 0L))) {
             c.deliver(proxied(40, 1));
 
             assertThat(c.readNext(Duration.ZERO)).as("a 502 is an empty poll, not a pause")

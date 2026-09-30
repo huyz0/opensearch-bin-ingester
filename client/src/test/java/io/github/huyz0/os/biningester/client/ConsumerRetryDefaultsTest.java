@@ -71,8 +71,8 @@ class ConsumerRetryDefaultsTest {
     @Test
     void theDeployedBackoffIsServedAndTheRetryReadsTheRecords() throws Exception {
         RecordingSleeper sleeper = new RecordingSleeper();
-        SegmentFetchRetry deployed = new SegmentFetchRetry(SegmentFetchRetry.DEFAULT.floor(),
-                SegmentFetchRetry.DEFAULT.ceiling(), SegmentFetchRetry.DEFAULT.maxAttempts(),
+        SegmentFetchRetry deployed = TestRetries.sleepAdvanced(HttpSubscriptionTransport.DEFAULT_RETRY_FLOOR,
+                HttpSubscriptionTransport.DEFAULT_RETRY_CEILING, SegmentFetchRetry.DEFAULT_MAX_ATTEMPTS,
                 sleeper);
         AtomicInteger attempts = new AtomicInteger();
         try (ConsumerClient c = new ConsumerClient(KEY, 16,
@@ -96,7 +96,7 @@ class ConsumerRetryDefaultsTest {
     @Test
     void aSurfacedFailureStartsItsNextRoundAtTheFloorAgain() throws Exception {
         RecordingSleeper sleeper = new RecordingSleeper();
-        SegmentFetchRetry three = new SegmentFetchRetry(Duration.ofSeconds(1),
+        SegmentFetchRetry three = TestRetries.sleepAdvanced(Duration.ofSeconds(1),
                 Duration.ofSeconds(30), 3, sleeper);
         try (ConsumerClient c = new ConsumerClient(KEY, 16,
                 failingThen(Integer.MAX_VALUE, new byte[0], new AtomicInteger()), three)) {
@@ -144,7 +144,7 @@ class ConsumerRetryDefaultsTest {
             }
         };
         UUID request = UUID.randomUUID();
-        try (ConsumerClient c = new ConsumerClient(KEY, 16, source, SegmentFetchRetry.DEFAULT)) {
+        try (ConsumerClient c = new ConsumerClient(KEY, 16, source, TestRetries.noFailedFetch())) {
             c.beginCatchUp(request);
             c.deliverCatchUp(request, proxied("s0", 0));
             c.deliverCatchUp(request, proxied("s1", 1));

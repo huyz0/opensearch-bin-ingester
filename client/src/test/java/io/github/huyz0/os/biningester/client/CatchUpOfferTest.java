@@ -22,7 +22,7 @@ class CatchUpOfferTest {
 
     @Test
     void fullLaneRejectsWithoutWaitingAndAcceptsAfterTheConsumerMakesRoom() throws Exception {
-        try (ConsumerClient client = new ConsumerClient(KEY, 1, null)) {
+        try (ConsumerClient client = new ConsumerClient(KEY, 1, null, TestRetries.noFailedFetch())) {
             UUID request = UUID.randomUUID();
             client.beginCatchUp(request);
 

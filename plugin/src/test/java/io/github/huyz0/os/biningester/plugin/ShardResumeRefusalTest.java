@@ -49,7 +49,7 @@ class ShardResumeRefusalTest {
     private final CapturingTransport transport = new CapturingTransport();
 
     private BinStoreShardConsumer shard() {
-        return new BinStoreShardConsumer(0, new ConsumerClient(transport, STREAM, 16));
+        return new BinStoreShardConsumer(0, new ConsumerClient(transport, STREAM, 16, null, TestRetries.noFailedFetch()));
     }
 
     /** Hands the floor to every client subscribed so far. */

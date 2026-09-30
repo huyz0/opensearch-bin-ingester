@@ -52,16 +52,11 @@ public final class ConsumerClient implements AutoCloseable {
     /** This stream's retained floor and the resume checks against it (M11.1). */
     private final RetainedFloorTracker floor;
 
-    public ConsumerClient(SubscriptionTransport transport, RunKey key, int queueCapacity) {
-        this(transport, key, queueCapacity, null);
-    }
-
-    public ConsumerClient(SubscriptionTransport transport, RunKey key, int queueCapacity,
-            SegmentSource segmentSource) {
-        this(transport, key, queueCapacity, segmentSource, SegmentFetchRetry.DEFAULT);
-    }
-
-    /** A subscribing client whose failed segment fetches are retried under {@code retry}. */
+    /**
+     * A subscribing client whose failed segment fetches are retried under
+     * {@code retry}. ⚠️ EVERY CONSTRUCTOR IS TOLD ITS RETRY (M13.6c, M12 harvest
+     * R5): the ones that were not got the clock-less default silently.
+     */
     public ConsumerClient(SubscriptionTransport transport, RunKey key, int queueCapacity,
             SegmentSource segmentSource, SegmentFetchRetry retry) {
         this(key, queueCapacity, segmentSource, retry,
@@ -84,13 +79,9 @@ public final class ConsumerClient implements AutoCloseable {
      * down on close would unsubscribe every OTHER run sharing it. So
      * {@link #close()} here does NOTHING AT ALL: its subscription handle is a
      * no-op, the queue is dropped with the client itself, and unsubscribing is
-     * the owner's to do.
+     * the owner's to do. Its failed segment fetches are retried under
+     * {@code retry} (M10.23).
      */
-    public ConsumerClient(RunKey key, int queueCapacity, SegmentSource segmentSource) {
-        this(key, queueCapacity, segmentSource, SegmentFetchRetry.DEFAULT);
-    }
-
-    /** A fed client whose failed segment fetches are retried under {@code retry} (M10.23). */
     public ConsumerClient(RunKey key, int queueCapacity, SegmentSource segmentSource,
             SegmentFetchRetry retry) {
         this(key, queueCapacity, segmentSource, retry, client -> () -> { });

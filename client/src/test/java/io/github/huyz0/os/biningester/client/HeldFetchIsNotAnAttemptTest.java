@@ -72,7 +72,7 @@ class HeldFetchIsNotAnAttemptTest {
     @Test
     void manyHeldAnswersSpendNoAttemptAndTheRunWaitsOutTheHold() throws Exception {
         List<Duration> waited = new CopyOnWriteArrayList<>();
-        SegmentFetchRetry threeAttempts = new SegmentFetchRetry(Duration.ofSeconds(1),
+        SegmentFetchRetry threeAttempts = TestRetries.sleepAdvanced(Duration.ofSeconds(1),
                 Duration.ofSeconds(30), 3, waited::add);
         HeldThenServed source = new HeldThenServed(10, 1, segmentOf("doc-1"));
         try (ConsumerClient client = new ConsumerClient(KEY, 16, source, threeAttempts)) {
@@ -108,7 +108,7 @@ class HeldFetchIsNotAnAttemptTest {
     @Test
     void aRunPausesAfterTheBudgetOfNodeFetchesSinceItBeganWaitingAndAResumeStartsANewRound()
             throws Exception {
-        SegmentFetchRetry threeAttempts = new SegmentFetchRetry(Duration.ofSeconds(1),
+        SegmentFetchRetry threeAttempts = TestRetries.sleepAdvanced(Duration.ofSeconds(1),
                 Duration.ofSeconds(30), 3, wait -> { });
         ScriptedHold source = new ScriptedHold();
         try (ConsumerClient client = new ConsumerClient(KEY, 16, source, threeAttempts)) {
@@ -141,7 +141,7 @@ class HeldFetchIsNotAnAttemptTest {
 
     @Test
     void aRunThatFirstMeetsTheKeyPastTheBudgetIsNotPausedOnItsFirstPoll() throws Exception {
-        SegmentFetchRetry threeAttempts = new SegmentFetchRetry(Duration.ofSeconds(1),
+        SegmentFetchRetry threeAttempts = TestRetries.sleepAdvanced(Duration.ofSeconds(1),
                 Duration.ofSeconds(30), 3, wait -> { });
         ScriptedHold source = new ScriptedHold();
         source.nodeAttempts.set(10);
@@ -204,7 +204,7 @@ class HeldFetchIsNotAnAttemptTest {
     @Test
     void aSuccessEndsTheRoundSoTheNextSegmentsHeldCountIsNotMeasuredFromTheLast()
             throws Exception {
-        SegmentFetchRetry threeAttempts = new SegmentFetchRetry(Duration.ofSeconds(1),
+        SegmentFetchRetry threeAttempts = TestRetries.sleepAdvanced(Duration.ofSeconds(1),
                 Duration.ofSeconds(30), 3, wait -> { });
         Script source = new Script().then(1).then(segmentAt("doc-a", 0)).then(10);
         try (ConsumerClient client = new ConsumerClient(KEY, 16, source, threeAttempts)) {
@@ -223,7 +223,7 @@ class HeldFetchIsNotAnAttemptTest {
 
     @Test
     void aPauseThroughTheHoldAlsoEndsTheRunsOwnRoundOfAttempts() throws Exception {
-        SegmentFetchRetry threeAttempts = new SegmentFetchRetry(Duration.ofSeconds(1),
+        SegmentFetchRetry threeAttempts = TestRetries.sleepAdvanced(Duration.ofSeconds(1),
                 Duration.ofSeconds(30), 3, wait -> { });
         Script source = new Script()
                 .then(new IOException("own 1")).then(new IOException("own 2"))

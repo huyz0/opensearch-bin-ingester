@@ -142,7 +142,7 @@ class RetentionRefusalTest {
                     "http://localhost:" + node.port(), () -> { },
                     Duration.ofMillis(50), Duration.ofSeconds(1), Duration.ofSeconds(30),
                     Duration.ofSeconds(1));
-            try (ConsumerClient consumer = new ConsumerClient(transport, stream, 64)) {
+            try (ConsumerClient consumer = new ConsumerClient(transport, stream, 64, null, TestRetries.noFailedFetch())) {
                 consumer.requestFreshFloor();
                 awaitCondition("the floor reached the consumer over HTTP",
                         () -> consumer.retainedFloor().isPresent());

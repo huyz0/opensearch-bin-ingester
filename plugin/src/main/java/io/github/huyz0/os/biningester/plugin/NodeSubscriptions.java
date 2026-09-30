@@ -61,6 +61,30 @@ public final class NodeSubscriptions implements AutoCloseable {
     private volatile io.github.huyz0.os.biningester.client.SegmentFetchRetry fetchRetry;
 
     /**
+     * The host's clock, which {@link #holdFailuresWith} gives (M13.6c, M12
+     * harvest R5): until then the standard policy's clock REFUSES to be read,
+     * so a fetch that fails before the host has given its clock fails loudly
+     * rather than backing off clock-less, which is what the removed
+     * {@code SegmentFetchRetry.DEFAULT} did silently.
+     */
+    private static final class HostClock implements java.util.function.LongSupplier {
+        private volatile java.util.function.LongSupplier given;
+
+        @Override
+        public long getAsLong() {
+            java.util.function.LongSupplier clock = given;
+            if (clock == null) {
+                throw new IllegalStateException("a segment fetch backoff read the host's clock "
+                        + "before holdFailuresWith gave it: there is no clock-less backoff");
+            }
+            return clock.getAsLong();
+        }
+    }
+
+    /** The late clock the standard policy is due on, or {@code null} for a policy given. */
+    private HostClock hostClock;
+
+    /**
      * ⚠️ ONE SUBSCRIBER FOR THE WHOLE NODE (M5.62), and the identity is the
      * point. {@code SubscriptionHub} groups by {@code Subscriber} IDENTITY, so
      * a node registering one listener for every key it holds is handed a
@@ -235,14 +259,19 @@ public final class NodeSubscriptions implements AutoCloseable {
     /**
      * Gives this node the host's clock: its segment hold holds a failed fetch
      * per key for a backoff (M10.28; a node with no hold has none to give it
-     * to), and every client started after it has its fetch backoffs due on it
-     * (M12.26).
+     * to), and its clients' fetch backoffs are due on it (M12.26) -- every
+     * client of the standard policy, started before this or after (M13.6c).
      */
     void holdFailuresWith(java.util.function.LongSupplier relativeMillis) {
         // ⚠️ AND THE CLIENTS' BACKOFFS ARE DUE ON IT (M12.26), so a catch-up
         // backing off gives its quantum turn to live and is retried when due.
-        // Set before the first shard starts a client, as createComponents is.
-        fetchRetry = fetchRetry.withClock(relativeMillis);
+        Objects.requireNonNull(relativeMillis, "relativeMillis");
+        if (hostClock != null) {
+            hostClock.given = relativeMillis;
+        } else {
+            // a policy given at construction: clients started after this get it
+            fetchRetry = fetchRetry.withClock(relativeMillis);
+        }
         if (nodeSegmentSource instanceof NodeSegmentSource hold) {
             hold.holdFailures(relativeMillis,
                     NodeSegmentSource.upJitter(new java.util.SplittableRandom()));
@@ -275,8 +304,16 @@ public final class NodeSubscriptions implements AutoCloseable {
      */
     public NodeSubscriptions(SubscriptionTransport transport, int queueCapacity,
             io.github.huyz0.os.biningester.client.SegmentSource nodeSegmentSource) {
+        this(transport, queueCapacity, nodeSegmentSource, new HostClock());
+    }
+
+    /** The standard policy (M10.23), due on the host's clock once it is given. */
+    private NodeSubscriptions(SubscriptionTransport transport, int queueCapacity,
+            io.github.huyz0.os.biningester.client.SegmentSource nodeSegmentSource,
+            HostClock hostClock) {
         this(transport, queueCapacity, nodeSegmentSource,
-                io.github.huyz0.os.biningester.client.SegmentFetchRetry.DEFAULT);
+                io.github.huyz0.os.biningester.client.SegmentFetchRetry.standard(hostClock));
+        this.hostClock = hostClock;
     }
 
     /**

@@ -30,7 +30,7 @@ class FreshFloorResumeCheckTest {
             new RunKey(UUID.fromString("00000000-0000-0000-0000-0000000000bb"), 0);
 
     private static ConsumerClient client() {
-        return new ConsumerClient(KEY, 16, null);
+        return new ConsumerClient(KEY, 16, null, TestRetries.noFailedFetch());
     }
 
     @Test

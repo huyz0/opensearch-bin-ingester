@@ -152,7 +152,7 @@ class SubscriptionFloorTest {
         transport = new HttpSubscriptionTransport(base, () -> { }, Duration.ofMillis(20),
                 Duration.ofMillis(100), Duration.ofSeconds(5), Duration.ofMillis(50));
 
-        try (ConsumerClient client = new ConsumerClient(transport, STREAM, 16)) {
+        try (ConsumerClient client = new ConsumerClient(transport, STREAM, 16, null, TestRetries.noFailedFetch())) {
             // ⚠️ WHAT A RESUME DOES: a client asks for a floor only when a shard
             // resumes, and costs the serving pod nothing otherwise.
             client.requestFreshFloor();
@@ -184,7 +184,7 @@ class SubscriptionFloorTest {
             captured.add(listener);
             return () -> { };
         };
-        try (ConsumerClient client = new ConsumerClient(fake, STREAM, 16)) {
+        try (ConsumerClient client = new ConsumerClient(fake, STREAM, 16, null, TestRetries.noFailedFetch())) {
             captured.get(0).onRetainedFloor(other, 10_000);
             client.refuseIfCollected(100);
 
@@ -254,7 +254,7 @@ class SubscriptionFloorTest {
         List<String> asked = recordingIngester(sofar ->
                 sofar.stream().filter("1"::equals).count() == 2 ? floorFrame : new byte[0]);
 
-        try (ConsumerClient client = new ConsumerClient(transport, STREAM, 16)) {
+        try (ConsumerClient client = new ConsumerClient(transport, STREAM, 16, null, TestRetries.noFailedFetch())) {
             awaitPolls(asked, 3);
             assertThat(List.copyOf(asked)).as("⚠️ TAILING: NO ASK").containsOnly("0");
 
@@ -300,7 +300,7 @@ class SubscriptionFloorTest {
         // rejects, arriving through the protocol.
         List<String> asked = recordingIngester(sofar -> new byte[0]);
 
-        try (ConsumerClient client = new ConsumerClient(transport, STREAM, 16)) {
+        try (ConsumerClient client = new ConsumerClient(transport, STREAM, 16, null, TestRetries.noFailedFetch())) {
             client.requestFreshFloor();
             awaitPolls(asked, ConsumerClient.MAX_FLOOR_ASKS + 10);
 

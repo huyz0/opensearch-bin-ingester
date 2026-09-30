@@ -91,7 +91,7 @@ class ProxyFetchTest {
     void aPROXYDeliveryDecodesFromTheBytesTheRouteReturns() throws Exception {
         ServesOneKey source = new ServesOneKey(SEGMENT, segmentOf("a", "b"));
         FakeTransport transport = new FakeTransport();
-        try (ConsumerClient c = new ConsumerClient(transport, KEY, 16, source)) {
+        try (ConsumerClient c = new ConsumerClient(transport, KEY, 16, source, TestRetries.noFailedFetch())) {
             transport.push(proxied(40, 2));
 
             ConsumerRecord first = c.readNext(Duration.ofMillis(200)).orElseThrow();
@@ -115,7 +115,7 @@ class ProxyFetchTest {
     @Test
     void aPROXYDeliveryToAConsumerWithNoSourceFailsLoudly() throws Exception {
         FakeTransport transport = new FakeTransport();
-        try (ConsumerClient c = new ConsumerClient(transport, KEY, 16)) {
+        try (ConsumerClient c = new ConsumerClient(transport, KEY, 16, null, TestRetries.noFailedFetch())) {
             transport.push(proxied(0, 1));
 
             assertThatThrownBy(() -> c.readNext(Duration.ofMillis(200)))

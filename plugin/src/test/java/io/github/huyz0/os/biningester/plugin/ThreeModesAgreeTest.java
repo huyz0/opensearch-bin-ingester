@@ -204,7 +204,7 @@ class ThreeModesAgreeTest {
             }
         };
         List<ConsumerRecord> got = new ArrayList<>();
-        try (ConsumerClient c = new ConsumerClient(bridge, KEY, 16, source)) {
+        try (ConsumerClient c = new ConsumerClient(bridge, KEY, 16, source, TestRetries.noFailedFetch())) {
             hub.publish(new CommitDelta(0, SEGMENT_KEY,
                             List.of(new RunCommit(KEY, 3, 500L))),
                     podHoldsBytes ? SEGMENT_KEY : "seg-some-other-pod-wrote",
@@ -308,8 +308,8 @@ class ThreeModesAgreeTest {
                 throw new AssertionError("direct must not be served at this fan-out");
             };
 
-            try (ConsumerClient one = new ConsumerClient(bridge, KEY, 16, neverCalled);
-                    ConsumerClient two = new ConsumerClient(bridge, KEY, 16, neverCalled)) {
+            try (ConsumerClient one = new ConsumerClient(bridge, KEY, 16, neverCalled, TestRetries.noFailedFetch());
+                    ConsumerClient two = new ConsumerClient(bridge, KEY, 16, neverCalled, TestRetries.noFailedFetch())) {
                 hub.publish(new CommitDelta(0, SEGMENT_KEY,
                                 List.of(new RunCommit(KEY, 3, 500L))),
                         "seg-some-other-pod-wrote", new byte[] {1},

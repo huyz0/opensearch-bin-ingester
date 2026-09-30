@@ -81,7 +81,7 @@ class MacroHarnessIT {
                 HttpSubscriptionTransport transport = new HttpSubscriptionTransport(
                         "http://localhost:" + first.port(), () -> { }, Duration.ofMillis(50),
                         Duration.ofSeconds(1), Duration.ofSeconds(30), Duration.ofSeconds(2));
-                try (ConsumerClient consumer = new ConsumerClient(transport, key, 256)) {
+                try (ConsumerClient consumer = new ConsumerClient(transport, key, 256, null, io.github.huyz0.os.biningester.client.SegmentFetchRetry.standard(System::currentTimeMillis))) {
                     for (int batch = 0; batch < expected / 4; batch++) {
                         var generated = generator.nextBatch();
                         long requestStarted = System.nanoTime();

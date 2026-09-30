@@ -71,7 +71,7 @@ class DeliveryGapTest {
 
     /** ⚠️ FED, holding no subscription: the node-scoped shape since M5.62. */
     private static ConsumerClient fed(int queueCapacity) {
-        return new ConsumerClient(KEY, queueCapacity, null);
+        return new ConsumerClient(KEY, queueCapacity, null, TestRetries.noFailedFetch());
     }
 
     private static List<String> drain(ConsumerClient client, int n) throws Exception {

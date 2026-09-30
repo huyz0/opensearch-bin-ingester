@@ -23,14 +23,15 @@ import java.util.Objects;
  *     reconnect's is ({@code HttpSubscriptionTransport.jitteredMillis})
  * @param ceiling how far the doubling wait may grow
  * @param maxAttempts fetches of one segment before the failure surfaces
- * @param sleeper how a backoff is waited out; {@link #DEFAULT} sleeps the
+ * @param sleeper how a backoff is waited out; {@link #standard} sleeps the
  *     calling thread, and a test injects one that records instead
- * @param clockMillis the host's relative clock in millis, or {@code null}. With
- *     one a backoff is a DUE TIME, which passes whether or not anyone waits, so
- *     a catch-up lane backing off gives its turn to live and is retried when
- *     due (M12.26); without one it is a debt only waiting pays, as before. This
- *     module reads no clock of its own (non-negotiable 7): the plugin passes
- *     OpenSearch's.
+ * @param clockMillis the host's relative clock in millis. A backoff is a DUE
+ *     TIME on it, which passes whether or not anyone waits, so a catch-up lane
+ *     backing off gives its turn to live and is retried when due (M12.26).
+ *     ⚠️ REQUIRED (M13.6c, M12 harvest R5): without one a backoff was a debt
+ *     only waiting paid, and the clock-less {@code DEFAULT} gave every client
+ *     built on it that mode silently. This module reads no clock of its own
+ *     (non-negotiable 7): the plugin passes OpenSearch's.
  */
 public record SegmentFetchRetry(Duration floor, Duration ceiling, int maxAttempts,
         Sleeper sleeper, java.util.function.LongSupplier clockMillis) {
@@ -55,14 +56,14 @@ public record SegmentFetchRetry(Duration floor, Duration ceiling, int maxAttempt
      * {@code sleepAndGrow} is: the policy never names it, so every case drives
      * the backoff through an injected sleeper and none of them waits.
      */
-    public static final SegmentFetchRetry DEFAULT = new SegmentFetchRetry(
-            HttpSubscriptionTransport.DEFAULT_RETRY_FLOOR,
-            HttpSubscriptionTransport.DEFAULT_RETRY_CEILING, 8, Thread::sleep);
-
-    /** A policy with no clock: a backoff is a debt only waiting pays. */
-    public SegmentFetchRetry(Duration floor, Duration ceiling, int maxAttempts, Sleeper sleeper) {
-        this(floor, ceiling, maxAttempts, sleeper, null);
+    public static SegmentFetchRetry standard(java.util.function.LongSupplier clockMillis) {
+        return new SegmentFetchRetry(HttpSubscriptionTransport.DEFAULT_RETRY_FLOOR,
+                HttpSubscriptionTransport.DEFAULT_RETRY_CEILING, DEFAULT_MAX_ATTEMPTS,
+                Thread::sleep, clockMillis);
     }
+
+    /** The standard policy's attempts: eight, about ninety seconds of trying. */
+    public static final int DEFAULT_MAX_ATTEMPTS = 8;
 
     /** This policy, its backoffs due on {@code clockMillis} (M12.26). */
     public SegmentFetchRetry withClock(java.util.function.LongSupplier clockMillis) {
@@ -73,6 +74,7 @@ public record SegmentFetchRetry(Duration floor, Duration ceiling, int maxAttempt
         Objects.requireNonNull(floor, "floor");
         Objects.requireNonNull(ceiling, "ceiling");
         Objects.requireNonNull(sleeper, "sleeper");
+        Objects.requireNonNull(clockMillis, "clockMillis");
         if (floor.isNegative() || floor.isZero() || ceiling.compareTo(floor) < 0) {
             throw new IllegalArgumentException("a retry floor is positive and at most the ceiling");
         }

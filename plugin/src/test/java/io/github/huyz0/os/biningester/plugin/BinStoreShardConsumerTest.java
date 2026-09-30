@@ -81,7 +81,7 @@ class BinStoreShardConsumerTest {
     @Test
     void readNextReturnsMessagesWithTheirPointers() throws Exception {
         FakeTransport t = new FakeTransport();
-        try (ConsumerClient c = new ConsumerClient(t, KEY, 16);
+        try (ConsumerClient c = new ConsumerClient(t, KEY, 16, null, TestRetries.noFailedFetch());
                 BinStoreShardConsumer consumer = new BinStoreShardConsumer(3, c)) {
             t.push(delivery(100, "a", "b"));
             var results = consumer.readNext(10, 200);
@@ -104,7 +104,7 @@ class BinStoreShardConsumerTest {
     @Test
     void readNextBlocksForTheTimeoutWhenIdleAndReturnsEmpty() throws Exception {
         FakeTransport t = new FakeTransport();
-        try (ConsumerClient c = new ConsumerClient(t, KEY, 16);
+        try (ConsumerClient c = new ConsumerClient(t, KEY, 16, null, TestRetries.noFailedFetch());
                 BinStoreShardConsumer consumer = new BinStoreShardConsumer(0, c)) {
             long start = System.nanoTime();
             var results = consumer.readNext(10, 300);
@@ -119,7 +119,7 @@ class BinStoreShardConsumerTest {
     @Test
     void aBatchDoesNotWaitAgainOnceSomethingArrived() throws Exception {
         FakeTransport t = new FakeTransport();
-        try (ConsumerClient c = new ConsumerClient(t, KEY, 16);
+        try (ConsumerClient c = new ConsumerClient(t, KEY, 16, null, TestRetries.noFailedFetch());
                 BinStoreShardConsumer consumer = new BinStoreShardConsumer(0, c)) {
             t.push(delivery(0, "a", "b"));
             long start = System.nanoTime();
@@ -135,7 +135,7 @@ class BinStoreShardConsumerTest {
     @Test
     void includeStartDecidesWhetherThePointerItselfIsReplayed() throws Exception {
         FakeTransport t = new FakeTransport();
-        try (ConsumerClient c = new ConsumerClient(t, KEY, 16);
+        try (ConsumerClient c = new ConsumerClient(t, KEY, 16, null, TestRetries.noFailedFetch());
                 BinStoreShardConsumer consumer = new BinStoreShardConsumer(0, c)) {
             t.push(delivery(5, "a", "b", "c"));
             var exclusive = consumer.readNext(new BinStoreOffset(5), false, 10, 200);
@@ -149,7 +149,7 @@ class BinStoreShardConsumerTest {
     @Test
     void lagIsServedFromMemoryAndCostsNothingWhenIdle() throws Exception {
         FakeTransport t = new FakeTransport();
-        try (ConsumerClient c = new ConsumerClient(t, KEY, 16);
+        try (ConsumerClient c = new ConsumerClient(t, KEY, 16, null, TestRetries.noFailedFetch());
                 BinStoreShardConsumer consumer = new BinStoreShardConsumer(0, c)) {
             assertThat(consumer.getPointerBasedLag(new BinStoreOffset(0)))
                     .as("nothing seen yet").isZero();
@@ -167,7 +167,7 @@ class BinStoreShardConsumerTest {
     @Test
     void pointersAreParsedFromTheirStringForm() throws Exception {
         FakeTransport t = new FakeTransport();
-        try (ConsumerClient c = new ConsumerClient(t, KEY, 4);
+        try (ConsumerClient c = new ConsumerClient(t, KEY, 4, null, TestRetries.noFailedFetch());
                 BinStoreShardConsumer consumer = new BinStoreShardConsumer(0, c)) {
             assertThat(consumer.pointerFromOffset(new BinStoreOffset(77).asString()))
                     .isEqualTo(new BinStoreOffset(77));

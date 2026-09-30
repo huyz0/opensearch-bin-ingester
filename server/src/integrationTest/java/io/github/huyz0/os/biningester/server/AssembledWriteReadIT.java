@@ -177,7 +177,7 @@ class AssembledWriteReadIT {
                     "http://localhost:" + node.port(), () -> { },
                     Duration.ofMillis(50), Duration.ofSeconds(1), Duration.ofSeconds(30),
                     Duration.ofSeconds(2));
-            try (ConsumerClient consumer = new ConsumerClient(transport, key, 256)) {
+            try (ConsumerClient consumer = new ConsumerClient(transport, key, 256, null, io.github.huyz0.os.biningester.client.SegmentFetchRetry.standard(System::currentTimeMillis))) {
 
                 // ⚠️ THE CONSUMER SUBSCRIBES BEFORE THE WRITE. A subscription
                 // opened afterwards would be asserting the resume path, which

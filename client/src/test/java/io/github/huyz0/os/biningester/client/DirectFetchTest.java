@@ -50,7 +50,7 @@ class DirectFetchTest {
      * The retry is {@code SegmentFetchRetryTest}'s; these cases pin which grant
      * is fetched and that a spent failure reaches the caller, not the backoff.
      */
-    private static final SegmentFetchRetry ONE_ATTEMPT = new SegmentFetchRetry(
+    private static final SegmentFetchRetry ONE_ATTEMPT = TestRetries.sleepAdvanced(
             Duration.ofSeconds(1), Duration.ofSeconds(1), 1, wait -> { });
 
     private static final class FakeTransport implements SubscriptionTransport {
@@ -151,7 +151,7 @@ class DirectFetchTest {
     void recordsDECODEFromTheBytesTheSEAMReturNS() throws Exception {
         ServesOneUrl source = new ServesOneUrl(GRANT.url(), segmentOf("a", "b", "c"));
         FakeTransport transport = new FakeTransport();
-        try (ConsumerClient c = new ConsumerClient(transport, KEY, 16, source)) {
+        try (ConsumerClient c = new ConsumerClient(transport, KEY, 16, source, TestRetries.noFailedFetch())) {
             transport.push(direct(100, 3));
 
             assertThat(c.readNext(Duration.ofMillis(50)).orElseThrow().offset()).isEqualTo(100);
@@ -176,7 +176,7 @@ class DirectFetchTest {
     void theSEAMIsNOTUsedWhenViaIsNotDIRECT() throws Exception {
         ServesOneUrl source = new ServesOneUrl(GRANT.url(), segmentOf("x"));
         FakeTransport transport = new FakeTransport();
-        try (ConsumerClient c = new ConsumerClient(transport, KEY, 16, source)) {
+        try (ConsumerClient c = new ConsumerClient(transport, KEY, 16, source, TestRetries.noFailedFetch())) {
             transport.push(new Delivery(KEY, "seg", 2, 50L, FetchMode.INLINE,
                     segmentOf("a", "b")));
 
@@ -260,7 +260,7 @@ class DirectFetchTest {
     @Test
     void aDIRECTDeliveryWithNOSeamIsRefused() throws Exception {
         FakeTransport transport = new FakeTransport();
-        try (ConsumerClient c = new ConsumerClient(transport, KEY, 16)) {
+        try (ConsumerClient c = new ConsumerClient(transport, KEY, 16, null, TestRetries.noFailedFetch())) {
             transport.push(direct(100, 1));
 
             assertThatThrownBy(() -> c.readNext(Duration.ofMillis(50)))

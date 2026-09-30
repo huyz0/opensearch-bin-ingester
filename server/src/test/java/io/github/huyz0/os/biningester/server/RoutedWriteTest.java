@@ -120,7 +120,7 @@ class RoutedWriteTest {
                 "http://localhost:" + node.port(), () -> { },
                 Duration.ofMillis(50), Duration.ofSeconds(1), Duration.ofSeconds(30),
                 Duration.ofSeconds(2));
-        try (ConsumerClient consumer = new ConsumerClient(transport, key, 256)) {
+        try (ConsumerClient consumer = new ConsumerClient(transport, key, 256, null, TestRetries.noFailedFetch())) {
             write.run();
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
             while (read.size() < RECORDS && System.nanoTime() < deadline) {

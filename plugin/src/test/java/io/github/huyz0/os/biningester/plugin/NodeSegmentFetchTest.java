@@ -356,7 +356,8 @@ class NodeSegmentFetchTest {
         // it (M10.23): the retry is the client's own case, and this one pins
         // that a failure fails every run rather than being held for them.
         SegmentFetchRetry oneAttempt =
-                new SegmentFetchRetry(Duration.ofSeconds(1), Duration.ofSeconds(1), 1, wait -> { });
+                new SegmentFetchRetry(Duration.ofSeconds(1), Duration.ofSeconds(1), 1, wait -> { },
+                        () -> 0L);
 
         try (NodeSubscriptions node =
                 new NodeSubscriptions(transport, 16, nodeSource, oneAttempt)) {
@@ -383,9 +384,10 @@ class NodeSegmentFetchTest {
     }
 
     /**
-     * A node built WITHOUT a policy retries: its clients take
-     * {@code SegmentFetchRetry.DEFAULT}, so a failed fetch is an empty poll
-     * rather than the pause a one-attempt default would restore (M10.23).
+     * A node built WITHOUT a policy retries: its clients take the standard
+     * policy on the host's clock (M13.6c; once {@code SegmentFetchRetry.DEFAULT}),
+     * so a failed fetch is an empty poll rather than the pause a one-attempt
+     * default would restore (M10.23).
      *
      * <p>⚠️ ZERO TIMEOUT, so nothing sleeps: the poll that fetched owes the
      * caller no wait, and the one after it is due no retry yet.
@@ -399,6 +401,7 @@ class NodeSegmentFetchTest {
 
         try (NodeSubscriptions node = new NodeSubscriptions(transport, 16,
                 new NodeSegmentSource(delegate, 1L << 20))) {
+            node.holdFailuresWith(() -> 0L); // as createComponents does (M13.6c)
             ConsumerClient client = node.clientFor(key);
             transport.deliver(directDelivery(key, SEGMENT_KEY));
 
