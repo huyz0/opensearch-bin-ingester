@@ -135,7 +135,16 @@ public final class CommitService implements HttpService {
         } catch (BodyTooLargeException tooLarge) {
             // ⚠️ 413 AND NOT 400: the frame may have been perfectly well
             // formed and simply enormous, and an operator needs to see which.
-            response.status(Status.REQUEST_ENTITY_TOO_LARGE_413).send(tooLarge.getMessage());
+            // ⚠️ AND THE CONNECTION CLOSED (M13.19, M12 harvest R17): kept
+            // alive, the server read the rest of the entity to reuse it --
+            // a refused 256 MiB body cost 8.5 s here and 38 s on M9's rig of
+            // reading the very bytes the cap refuses. Closed, the whole
+            // PeerCommitTest case ran in 0.65 s, the send refused in 120-240 ms.
+            // ⚠️ SO A FRAME OF 2 MiB OR MORE SEES THE CONNECTION ABORTED, not
+            // the 413 (review P3); only one just past the cap reads the status.
+            response.status(Status.REQUEST_ENTITY_TOO_LARGE_413)
+                    .header(io.helidon.http.HeaderNames.CONNECTION, "close")
+                    .send(tooLarge.getMessage());
             return;
         } catch (IOException malformed) {
             // ⚠️ 400 AND NOT 409: a frame this node cannot read says nothing

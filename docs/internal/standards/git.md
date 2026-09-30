@@ -4,14 +4,17 @@
 **Read when:** Before committing, when unsure whether a change is one commit or several, or before amending anything already pushed.
 
 1. **The commit subject starts with the backlog task ID**, then a summary in the
-   imperative. → `scripts/check-commit-msg.sh`
+   imperative. → `./gradlew checkCommitMessage` (`CommitMessage`)
 2. **One task, one commit, tree green.** Split anything that cannot meet that.
 3. **Never commit a tree you know is broken**, including "I will fix it in the
    next commit". No gate.
 4. **The commit body says what changed and why**, and records any `minor` review
    finding that was accepted rather than fixed.
-5. **When the change touches the object-store request path, the body states
-   requests-per-MiB before and after.** No gate; `cost.md` explains why.
+5. **The body states its cost on a line starting `Cost:`** -- `Cost: none`
+   when it is none (M13.19). → `./gradlew checkCommitMessage` checks the line
+   is there. **When the change touches the object-store request path, that
+   line states requests-per-MiB before and after**; no gate checks the
+   numbers, and `cost.md` explains why.
 6. **Never write a `Reviewed-by:` trailer.** ⚠️ It was never a rule here — an
    agent invented it and repeated it on nine commits, where it read
    `Reviewed-by: reviewer, test-reviewer` every time. No script reads it, no

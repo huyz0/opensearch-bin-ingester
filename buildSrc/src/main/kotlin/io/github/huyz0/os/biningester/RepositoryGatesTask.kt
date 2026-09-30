@@ -174,10 +174,8 @@ abstract class RepositoryGatesTask : DefaultTask() {
             failures += "commit message file is not inside the repository: $value"
             return
         }
-        val subject = file.readText().lineSequence().firstOrNull().orEmpty()
-        if (subject.startsWith("Merge ") || subject.startsWith("Revert ") || subject.startsWith("fixup!")) return
-        val id = Regex("^M-?\\d+\\.\\d+").find(subject)?.value
-        if (id == null || !root.resolve("docs/internal/product/backlog.md").readText().contains(id))
-            failures += "commit subject must start with a task ID present in the backlog: $subject"
+        val backlog = root.resolve("docs/internal/product/backlog.md")
+        failures += CommitMessage.failures(file.readText(),
+            if (backlog.isRegularFile()) backlog.readText() else "")
     }
 }

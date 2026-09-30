@@ -203,6 +203,29 @@ class PeerCommitTest {
         }
     }
 
+    /**
+     * ⚠️ THE STATUS ITSELF (M13.19 review T1): a frame just past the cap -- small
+     * enough to be read to the refusal -- is answered 413, and nothing is
+     * committed. The 256 MiB case below sees its connection closed instead, so
+     * without this one a wrong status there passed.
+     */
+    @Test
+    void aFRAMEJustPastTheCapIsAnswered413() throws Exception {
+        List<CommitRequest> seen = new CopyOnWriteArrayList<>();
+        String endpoint = start(answering(delta(), seen));
+        byte[] body = new byte[(int) CommitService.MAX_FRAME_BYTES + (100 << 10)];
+        body[0] = 0x42;
+        body[1] = 0x50;
+        body[2] = 0x43;
+        body[3] = 0x52;
+
+        var client = io.helidon.webclient.api.WebClient.builder().baseUri(endpoint).build();
+        try (var response = client.post(HttpSequencerTransport.PATH).submit(body)) {
+            assertThat(response.status().code()).isEqualTo(413);
+        }
+        assertThat(seen).as("and nothing was committed").isEmpty();
+    }
+
     @Test
     void aFRAMEBiggerThanTheCapIsREFUSEDWHILEItIsREAD() throws Exception {
         // ⚠️ THE ALLOCATION IS THE ATTACK. Reading the whole entity first makes
@@ -220,6 +243,9 @@ class PeerCommitTest {
         // stops at the cap answers 413 in milliseconds; one that buffers dies.
         long huge = 256L << 20;
         var client = io.helidon.webclient.api.WebClient.builder().baseUri(endpoint).build();
+        long started = System.nanoTime();
+        Integer status = null;
+        RuntimeException refused = null;
         try (var response = client.post(HttpSequencerTransport.PATH)
                 .outputStream(out -> {
                     byte[] chunk = new byte[64 << 10];
@@ -238,13 +264,27 @@ class PeerCommitTest {
                         // behaviour under test rather than a failure.
                     }
                 })) {
-            assertThat(response.status().code()).isEqualTo(413);
+            status = response.status().code();
         } catch (RuntimeException refusedMidStream) {
-            // ⚠️ ALSO A PASS: refusing a 256 MiB body while it is being sent
-            // may surface as a broken pipe before the status is read. What is
-            // NOT acceptable is the server buffering it.
-            assertThat(refusedMidStream).isNotNull();
+            refused = refusedMidStream;
         }
+        long elapsed = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+
+        // ⚠️ ONE OF TWO REFUSALS, EACH NAMED (M13.19, M12 harvest R17): the
+        // status, or the connection the server closed under the sender --
+        // measured as an UncheckedIOException over a SocketException in 120-240
+        // ms. The old catch asserted only isNotNull, so any failure passed.
+        if (status != null) {
+            assertThat(status).isEqualTo(413);
+        } else {
+            assertThat(refused).as("refused mid-stream: the connection closed, nothing else")
+                    .isInstanceOf(java.io.UncheckedIOException.class)
+                    .hasCauseInstanceOf(IOException.class);
+        }
+        // ⚠️ AND WHILE IT IS STILL BEING SENT: a server that kept the connection
+        // and read the rest took 8.5 s here and 38 s on M9's rig for the bytes
+        // the cap refuses; closing it answered in well under a second.
+        assertThat(elapsed).as("refused while the body was still being sent").isLessThan(5_000);
         assertThat(seen).as("and nothing was committed").isEmpty();
     }
 
