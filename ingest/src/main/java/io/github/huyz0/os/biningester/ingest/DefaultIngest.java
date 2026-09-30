@@ -108,6 +108,21 @@ public final class DefaultIngest implements Ingest {
     }
 
     /**
+     * How many pushes the shutdown drain gave up on; see
+     * {@link PushQueue#abandoned()}. ⚠️ PUBLIC BESIDE THE OTHER TWO (M13.16,
+     * M12.15 review P1): before it, outside this package a WARNING line was
+     * the only sign of them.
+     */
+    public long abandonedPushes() {
+        return pushQueue.abandoned();
+    }
+
+    /** The drain bound this ingester gave its push queue; for a test (M13.16). */
+    java.time.Duration pushDrainBound() {
+        return pushQueue.drainBound();
+    }
+
+    /**
      * Charges this pod's data PUTs and segment GETs into {@code costLedger} --
      * the one the composition root also hands its commit-charging store
      * (M11.22), so a pod has one ledger.

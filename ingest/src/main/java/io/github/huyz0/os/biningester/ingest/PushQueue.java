@@ -160,6 +160,25 @@ final class PushQueue {
         return abandonedPushes.get();
     }
 
+    /** The bytes queued and in flight now, which the budget counts (M13.16). */
+    long queuedBytes() {
+        return queuedPushBytes.get();
+    }
+
+    /**
+     * Whether the pusher thread still runs; for a test (M13.16). ⚠️ A DRAIN
+     * DOES NOT GUARANTEE IT ENDS: it interrupts the pusher and re-queues the
+     * sentinel, and a subscriber that blocks uninterruptibly keeps it alive.
+     */
+    boolean pusherAlive() {
+        return pusher.isAlive();
+    }
+
+    /** How long {@link #drain} waits before it gives up; for a test (M13.16). */
+    Duration drainBound() {
+        return drainBound;
+    }
+
     /** Delivers pushes in order, off the ingest lock. */
     private void pushLoop() {
         while (true) {

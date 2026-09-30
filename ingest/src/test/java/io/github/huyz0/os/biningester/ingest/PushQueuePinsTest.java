@@ -36,6 +36,18 @@ class PushQueuePinsTest {
         final CountDownLatch entered = new CountDownLatch(1);
         final CountDownLatch gate = new CountDownLatch(1);
         final List<Long> delivered = new CopyOnWriteArrayList<>();
+        /** Whether an interrupt of the held delivery is swallowed, not restored. */
+        final boolean swallow;
+        /** What a swallowing delivery waits for next, so the drain finishes first. */
+        final CountDownLatch resume = new CountDownLatch(1);
+
+        Held() {
+            this(false);
+        }
+
+        Held(boolean swallow) {
+            this.swallow = swallow;
+        }
 
         @Override
         public SegmentSink open(List<SubscriptionHub.Push> pushes) {
@@ -49,7 +61,20 @@ class PushQueuePinsTest {
                 try {
                     gate.await();
                 } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
+                    if (!swallow) {
+                        Thread.currentThread().interrupt();
+                    } else {
+                        // ⚠️ HELD UNTIL THE DRAIN HAS RETURNED (M13.16 review
+                        // T2): let go at once, the pusher could reach take()
+                        // before the drain emptied the queue, deliver the next
+                        // push and exit on the first sentinel -- the re-queued
+                        // one never tested.
+                        try {
+                            resume.await();
+                        } catch (InterruptedException ignored) {
+                            // swallowed as well
+                        }
+                    }
                 }
             }
             pushes.forEach(push -> delivered.add(push.chainSequence()));
@@ -153,6 +178,97 @@ class PushQueuePinsTest {
                     .doesNotContain(2L, 3L);
             assertThat(queue.dropped()).isZero();
             assertThat(queue.undeliverable()).isZero();
+        }
+    }
+
+    /**
+     * ⚠️ THE ABANDONED PUSHES' BYTES ARE RELEASED (M13.16, M12.15 review T2):
+     * kept, the budget would count bytes nothing will ever deliver, and later
+     * offers would be dropped for them.
+     */
+    @Test
+    void anAbandonedPushsBytesAreReleased() throws Exception {
+        SubscriptionHub hub = new SubscriptionHub();
+        Held held = new Held();
+        try (var ignored = hub.subscribe(KEY, held)) {
+            PushQueue queue = new PushQueue(hub, serving(), 1 << 20, Duration.ofMillis(1));
+            offer(queue, 1, 10);
+            assertThat(held.entered.await(10, TimeUnit.SECONDS)).isTrue();
+            offer(queue, 2, 20);
+            offer(queue, 3, 30);
+
+            queue.drain();
+
+            awaitTrue(() -> queue.queuedBytes() == 0, "every byte released");
+            assertThat(queue.abandoned()).isEqualTo(2);
+        }
+    }
+
+    /**
+     * ⚠️ A DRAIN THAT GIVES UP STOPS THE PUSHER (M13.16, M12.15 review T3): the
+     * held delivery is interrupted, so the thread ends rather than leaking for
+     * the life of the process.
+     */
+    @Test
+    void aDrainThatGivesUpStopsTheHeldPusher() throws Exception {
+        SubscriptionHub hub = new SubscriptionHub();
+        Held held = new Held();
+        try (var ignored = hub.subscribe(KEY, held)) {
+            PushQueue queue = new PushQueue(hub, serving(), 1 << 20, Duration.ofMillis(1));
+            offer(queue, 1, 10);
+            assertThat(held.entered.await(10, TimeUnit.SECONDS)).isTrue();
+            offer(queue, 2, 10);
+            try {
+                queue.drain();
+
+                awaitTrue(() -> !queue.pusherAlive(), "the pusher ended");
+            } finally {
+                held.gate.countDown();
+            }
+        }
+    }
+
+    /**
+     * ⚠️ A SUBSCRIBER THAT SWALLOWS THE INTERRUPT (M13.16, M12.15 review T1):
+     * the pusher takes its next entry rather than exiting, so the sentinel goes
+     * back behind the abandoned ones -- without it that take() never returns.
+     */
+    @Test
+    void aPusherWhoseSubscriberSwallowsTheInterruptStillExits() throws Exception {
+        SubscriptionHub hub = new SubscriptionHub();
+        Held held = new Held(true);
+        try (var ignored = hub.subscribe(KEY, held)) {
+            PushQueue queue = new PushQueue(hub, serving(), 1 << 20, Duration.ofMillis(1));
+            offer(queue, 1, 10);
+            assertThat(held.entered.await(10, TimeUnit.SECONDS)).isTrue();
+            offer(queue, 2, 10);
+
+            queue.drain();
+            assertThat(queue.abandoned()).as("2, queued behind the held one").isEqualTo(1);
+            held.resume.countDown();
+
+            awaitTrue(() -> !queue.pusherAlive(), "the pusher ended despite the swallow");
+        }
+    }
+
+    private static void awaitTrue(java.util.function.BooleanSupplier condition, String what) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (!condition.getAsBoolean() && System.nanoTime() < deadline) {
+            Thread.onSpinWait();
+        }
+        assertThat(condition.getAsBoolean()).as(what).isTrue();
+    }
+
+    /**
+     * ⚠️ THE BOUND DEFAULTINGEST GIVES ITS QUEUE (M13.16, M12.15 review T4):
+     * exactly the production one, where the case below pinned the constant.
+     */
+    @Test
+    void defaultIngestGivesItsQueueTheProductionBound() throws Exception {
+        try (DefaultIngest ingest = IngestTestSupport.ingest(
+                new io.github.huyz0.os.biningester.binstore.CountingBinStore(new MemoryBinStore()),
+                new SubscriptionHub(), IngestTestSupport.NEVER)) {
+            assertThat(ingest.pushDrainBound()).isEqualTo(PushQueue.DRAIN_BOUND);
         }
     }
 
