@@ -4,6 +4,7 @@ package io.github.huyz0.os.biningester.http;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.huyz0.os.biningester.ingest.AppendResult;
+import io.github.huyz0.os.biningester.ingest.ForwardingIngest;
 import io.github.huyz0.os.biningester.ingest.Ingest;
 import io.github.huyz0.os.biningester.security.Principal;
 import java.io.ByteArrayInputStream;
@@ -51,7 +52,7 @@ class BulkServiceTest {
         CountingStream in = new CountingStream(new ByteArrayInputStream(raw));
         long[] readWhenFirstEmitted = {-1};
         int[] seen = {0};
-        Ingest fake = new Ingest() {
+        Ingest fake = new ForwardingIngest() {
             @Override
             public AppendResult append(Principal principal, String index, int partition,
                     RecordSource source) throws IOException {
@@ -61,32 +62,6 @@ class BulkServiceTest {
                     }
                 });
                 return new AppendResult(seen[0], 0L, seen[0] - 1L);
-            }
-
-            @Override
-            public AppendResult append(Principal principal, String index, int partition,
-                    byte lane, RecordSource records, Runnable buffered) throws IOException {
-                try { // the removed default's behaviour: buffered once the append returns (M12.2)
-                    return append(principal, index, partition, lane, records);
-                } finally {
-                    buffered.run();
-                }
-            }
-
-            @Override
-            public AppendResult appendRouted(Principal principal, String indexOrAlias,
-                    String routing, byte lane, RecordSource records, Runnable buffered)
-                    throws IOException {
-                try { // the removed default's behaviour: buffered once the append returns (M12.2)
-                    return appendRouted(principal, indexOrAlias, routing, lane, records);
-                } finally {
-                    buffered.run();
-                }
-            }
-
-            @Override
-            public String concreteIndex(String indexOrAlias) {
-                return indexOrAlias; // no catalog in this double (M12.2)
             }
 
             @Override

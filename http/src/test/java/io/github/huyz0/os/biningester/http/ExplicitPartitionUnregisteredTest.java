@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.huyz0.os.biningester.format.IndexRegistration;
 import io.github.huyz0.os.biningester.ingest.AppendResult;
+import io.github.huyz0.os.biningester.ingest.ForwardingIngest;
 import io.github.huyz0.os.biningester.ingest.IndexCatalog;
 import io.github.huyz0.os.biningester.ingest.Ingest;
 import io.github.huyz0.os.biningester.ingest.PendingPool;
@@ -48,7 +49,7 @@ class ExplicitPartitionUnregisteredTest {
     }
 
     /** What the assembled pod's ingester does for an index it cannot resolve. */
-    private static final class Unresolvable implements Ingest {
+    private static final class Unresolvable extends ForwardingIngest {
         final AtomicInteger called = new AtomicInteger();
 
         @Override
@@ -60,31 +61,6 @@ class ExplicitPartitionUnregisteredTest {
 
         @Override
         public void close() {
-        }
-
-        @Override
-        public AppendResult append(Principal principal, String index, int partition, byte lane,
-                RecordSource records, Runnable buffered) throws IOException {
-            try { // the removed default's behaviour: buffered once the append returns (M12.2)
-                return append(principal, index, partition, lane, records);
-            } finally {
-                buffered.run();
-            }
-        }
-
-        @Override
-        public AppendResult appendRouted(Principal principal, String indexOrAlias, String routing,
-                byte lane, RecordSource records, Runnable buffered) throws IOException {
-            try { // the removed default's behaviour: buffered once the append returns (M12.2)
-                return appendRouted(principal, indexOrAlias, routing, lane, records);
-            } finally {
-                buffered.run();
-            }
-        }
-
-        @Override
-        public String concreteIndex(String indexOrAlias) {
-            return indexOrAlias; // no catalog in this double (M12.2)
         }
     }
 
@@ -121,7 +97,7 @@ class ExplicitPartitionUnregisteredTest {
         AtomicInteger written = new AtomicInteger();
         IndexCatalog catalog = new IndexCatalog();
         // ⚠️ REFUSES AN INDEX ITS CATALOG DOES NOT KNOW, as the assembled pod's does.
-        Ingest ingest = new Ingest() {
+        Ingest ingest = new ForwardingIngest() {
             @Override
             public AppendResult append(Principal principal, String index, int partition,
                     RecordSource records) throws java.io.IOException {
@@ -130,32 +106,6 @@ class ExplicitPartitionUnregisteredTest {
                 }
                 records.forEachRecord(r -> written.incrementAndGet());
                 return new AppendResult(1, 0L, 0L);
-            }
-
-            @Override
-            public AppendResult append(Principal principal, String index, int partition,
-                    byte lane, RecordSource records, Runnable buffered) throws IOException {
-                try { // the removed default's behaviour: buffered once the append returns (M12.2)
-                    return append(principal, index, partition, lane, records);
-                } finally {
-                    buffered.run();
-                }
-            }
-
-            @Override
-            public AppendResult appendRouted(Principal principal, String indexOrAlias,
-                    String routing, byte lane, RecordSource records, Runnable buffered)
-                    throws IOException {
-                try { // the removed default's behaviour: buffered once the append returns (M12.2)
-                    return appendRouted(principal, indexOrAlias, routing, lane, records);
-                } finally {
-                    buffered.run();
-                }
-            }
-
-            @Override
-            public String concreteIndex(String indexOrAlias) {
-                return indexOrAlias; // no catalog in this double (M12.2)
             }
 
             @Override

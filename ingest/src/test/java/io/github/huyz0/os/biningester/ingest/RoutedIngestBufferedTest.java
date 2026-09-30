@@ -31,7 +31,7 @@ class RoutedIngestBufferedTest {
     private static final String UUID_1 = "AAAAAAAAQACAAAAAAAAAqg";
 
     /** Runs the callback it is handed, and says so: a buffering ingester's part. */
-    private static final class Buffering implements Ingest {
+    private static final class Buffering extends ForwardingIngest {
         final AtomicInteger forwarded = new AtomicInteger();
 
         @Override
@@ -56,21 +56,6 @@ class RoutedIngestBufferedTest {
 
         @Override
         public void close() {
-        }
-
-        @Override
-        public AppendResult appendRouted(Principal principal, String indexOrAlias, String routing,
-                byte lane, RecordSource records, Runnable buffered) throws IOException {
-            try { // the removed default's behaviour: buffered once the append returns (M12.2)
-                return appendRouted(principal, indexOrAlias, routing, lane, records);
-            } finally {
-                buffered.run();
-            }
-        }
-
-        @Override
-        public String concreteIndex(String indexOrAlias) {
-            return indexOrAlias; // no catalog in this double (M12.2)
         }
     }
 

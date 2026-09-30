@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.huyz0.os.biningester.format.IndexRegistration;
 import io.github.huyz0.os.biningester.ingest.AppendResult;
+import io.github.huyz0.os.biningester.ingest.ForwardingIngest;
 import io.github.huyz0.os.biningester.ingest.IndexCatalog;
 import io.github.huyz0.os.biningester.ingest.IndexQuotas;
 import io.github.huyz0.os.biningester.ingest.Ingest;
@@ -64,7 +65,7 @@ class BulkServiceQuotaTest {
      * and only the index's slot is still held -- and may then be held on a
      * latch, as a durable wait is.
      */
-    private static final class Recording implements Ingest {
+    private static final class Recording extends ForwardingIngest {
         final AtomicInteger records = new AtomicInteger();
         final AtomicInteger entered = new AtomicInteger();
         volatile CountDownLatch hold = new CountDownLatch(0);
@@ -103,11 +104,6 @@ class BulkServiceQuotaTest {
         public AppendResult appendRouted(Principal principal, String indexOrAlias, String routing,
                 byte lane, RecordSource records, Runnable buffered) throws IOException {
             return append(principal, indexOrAlias, 0, lane, records, buffered);
-        }
-
-        @Override
-        public String concreteIndex(String indexOrAlias) {
-            return indexOrAlias; // no catalog in this double (M12.2)
         }
     }
 
@@ -161,7 +157,7 @@ class BulkServiceQuotaTest {
     }
 
     /** Registers the index inside its append, as a routed write's registration wait does. */
-    private static final class RegistersDuringAppend implements Ingest {
+    private static final class RegistersDuringAppend extends ForwardingIngest {
         private final Recording delegate;
         private final Set<String> known;
 
@@ -190,11 +186,6 @@ class BulkServiceQuotaTest {
                 throws java.io.IOException {
             return delegate.appendRouted(principal, indexOrAlias, routing, lane, records,
                     buffered);
-        }
-
-        @Override
-        public String concreteIndex(String indexOrAlias) {
-            return indexOrAlias;
         }
 
         @Override

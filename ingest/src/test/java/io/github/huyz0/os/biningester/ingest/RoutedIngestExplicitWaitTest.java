@@ -27,7 +27,7 @@ import org.junit.jupiter.api.Timeout;
 @Timeout(value = 30, unit = TimeUnit.SECONDS, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
 class RoutedIngestExplicitWaitTest {
 
-    private static final class Counting implements Ingest {
+    private static final class Counting extends ForwardingIngest {
         final AtomicInteger called = new AtomicInteger();
         volatile String index;
 
@@ -42,31 +42,6 @@ class RoutedIngestExplicitWaitTest {
 
         @Override
         public void close() {
-        }
-
-        @Override
-        public AppendResult append(Principal principal, String index, int partition, byte lane,
-                RecordSource records, Runnable buffered) throws IOException {
-            try { // the removed default's behaviour: buffered once the append returns (M12.2)
-                return append(principal, index, partition, lane, records);
-            } finally {
-                buffered.run();
-            }
-        }
-
-        @Override
-        public AppendResult appendRouted(Principal principal, String indexOrAlias, String routing,
-                byte lane, RecordSource records, Runnable buffered) throws IOException {
-            try { // the removed default's behaviour: buffered once the append returns (M12.2)
-                return appendRouted(principal, indexOrAlias, routing, lane, records);
-            } finally {
-                buffered.run();
-            }
-        }
-
-        @Override
-        public String concreteIndex(String indexOrAlias) {
-            return indexOrAlias; // no catalog in this double (M12.2)
         }
     }
 

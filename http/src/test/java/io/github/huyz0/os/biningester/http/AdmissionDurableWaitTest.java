@@ -8,6 +8,7 @@ import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import io.github.huyz0.os.biningester.binstore.backend.MemoryBinStore;
 import io.github.huyz0.os.biningester.ingest.AppendResult;
 import io.github.huyz0.os.biningester.ingest.DefaultIngest;
+import io.github.huyz0.os.biningester.ingest.ForwardingIngest;
 import io.github.huyz0.os.biningester.ingest.Ingest;
 import io.github.huyz0.os.biningester.ingest.IngestConfig;
 import io.github.huyz0.os.biningester.ingest.LaneAdmission;
@@ -57,7 +58,7 @@ class AdmissionDurableWaitTest {
     }
 
     /** Counts the appends that reached the buffer, on the ingest's own callback. */
-    private static final class CountingBuffered implements Ingest {
+    private static final class CountingBuffered extends ForwardingIngest {
         private final Ingest delegate;
         final AtomicInteger buffered = new AtomicInteger();
 
@@ -82,21 +83,6 @@ class AdmissionDurableWaitTest {
 
         @Override
         public void close() {
-        }
-
-        @Override
-        public AppendResult appendRouted(Principal principal, String indexOrAlias, String routing,
-                byte lane, RecordSource records, Runnable buffered) throws IOException {
-            try { // the removed default's behaviour: buffered once the append returns (M12.2)
-                return appendRouted(principal, indexOrAlias, routing, lane, records);
-            } finally {
-                buffered.run();
-            }
-        }
-
-        @Override
-        public String concreteIndex(String indexOrAlias) {
-            return indexOrAlias; // no catalog in this double (M12.2)
         }
     }
 

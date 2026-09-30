@@ -10,6 +10,7 @@ import io.github.huyz0.os.biningester.format.RunKey;
 import io.github.huyz0.os.biningester.format.SegmentReader;
 import io.github.huyz0.os.biningester.ingest.AppendResult;
 import io.github.huyz0.os.biningester.ingest.DefaultIngest;
+import io.github.huyz0.os.biningester.ingest.ForwardingIngest;
 import io.github.huyz0.os.biningester.ingest.Ingest;
 import io.github.huyz0.os.biningester.ingest.IngestConfig;
 import io.github.huyz0.os.biningester.ingest.SubscriptionHub;
@@ -128,7 +129,7 @@ class LaneOvertakeTest {
      * upstream still reaches the assertion that names the failure instead of
      * hanging on a latch for a lane that never arrives.
      */
-    private static final class BufferedWitness implements Ingest {
+    private static final class BufferedWitness extends ForwardingIngest {
         private final DefaultIngest delegate;
         private final Map<Integer, CountDownLatch> buffered = new ConcurrentHashMap<>();
 
@@ -178,21 +179,6 @@ class LaneOvertakeTest {
                 records.forEachRecord(sink);
                 of(partition).countDown();
             }, buffered);
-        }
-
-        @Override
-        public AppendResult appendRouted(Principal principal, String indexOrAlias, String routing,
-                byte lane, RecordSource records, Runnable buffered) throws IOException {
-            try { // the removed default's behaviour: buffered once the append returns (M12.2)
-                return appendRouted(principal, indexOrAlias, routing, lane, records);
-            } finally {
-                buffered.run();
-            }
-        }
-
-        @Override
-        public String concreteIndex(String indexOrAlias) {
-            return indexOrAlias; // no catalog in this double (M12.2)
         }
     }
 

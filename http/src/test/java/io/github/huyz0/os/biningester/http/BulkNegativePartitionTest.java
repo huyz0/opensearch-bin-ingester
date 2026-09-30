@@ -4,13 +4,12 @@ package io.github.huyz0.os.biningester.http;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.huyz0.os.biningester.ingest.AppendResult;
-import io.github.huyz0.os.biningester.ingest.Ingest;
+import io.github.huyz0.os.biningester.ingest.ForwardingIngest;
 import io.github.huyz0.os.biningester.security.Principal;
 import io.helidon.webclient.api.HttpClientResponse;
 import io.helidon.webclient.api.WebClient;
 import io.helidon.webserver.WebServer;
 import io.helidon.webserver.http.HttpRouting;
-import java.io.IOException;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
@@ -38,7 +37,7 @@ class BulkNegativePartitionTest {
     }
 
     /** Counts every call that reached the seam. */
-    private static final class Counting implements Ingest {
+    private static final class Counting extends ForwardingIngest {
         final AtomicInteger calls = new AtomicInteger();
 
         @Override
@@ -53,31 +52,6 @@ class BulkNegativePartitionTest {
                 String routing, RecordSource source) {
             calls.incrementAndGet();
             return new AppendResult(1, 0L, 0L);
-        }
-
-        @Override
-        public AppendResult append(Principal principal, String index, int partition, byte lane,
-                RecordSource records, Runnable buffered) throws IOException {
-            try {
-                return append(principal, index, partition, lane, records);
-            } finally {
-                buffered.run();
-            }
-        }
-
-        @Override
-        public AppendResult appendRouted(Principal principal, String indexOrAlias, String routing,
-                byte lane, RecordSource records, Runnable buffered) throws IOException {
-            try {
-                return appendRouted(principal, indexOrAlias, routing, lane, records);
-            } finally {
-                buffered.run();
-            }
-        }
-
-        @Override
-        public String concreteIndex(String indexOrAlias) {
-            return indexOrAlias;
         }
 
         @Override

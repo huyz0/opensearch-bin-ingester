@@ -7,7 +7,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.github.huyz0.os.biningester.format.OpType;
 import io.github.huyz0.os.biningester.format.SegmentRecord;
 import io.github.huyz0.os.biningester.security.Principal;
-import java.io.IOException;
 import java.util.OptionalLong;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
@@ -23,7 +22,7 @@ import org.junit.jupiter.api.Test;
 class IngestLaneDefaultsTest {
 
     /** Implements only the lane-less forms, as a fake that forgot lanes does. */
-    private static final class Laneless implements Ingest {
+    private static final class Laneless extends ForwardingIngest {
         final AtomicInteger appends = new AtomicInteger();
 
         @Override
@@ -35,31 +34,6 @@ class IngestLaneDefaultsTest {
 
         @Override
         public void close() {
-        }
-
-        @Override
-        public AppendResult append(Principal principal, String index, int partition, byte lane,
-                RecordSource records, Runnable buffered) throws IOException {
-            try { // the removed default's behaviour: buffered once the append returns (M12.2)
-                return append(principal, index, partition, lane, records);
-            } finally {
-                buffered.run();
-            }
-        }
-
-        @Override
-        public AppendResult appendRouted(Principal principal, String indexOrAlias, String routing,
-                byte lane, RecordSource records, Runnable buffered) throws IOException {
-            try { // the removed default's behaviour: buffered once the append returns (M12.2)
-                return appendRouted(principal, indexOrAlias, routing, lane, records);
-            } finally {
-                buffered.run();
-            }
-        }
-
-        @Override
-        public String concreteIndex(String indexOrAlias) {
-            return indexOrAlias; // no catalog in this double (M12.2)
         }
     }
 

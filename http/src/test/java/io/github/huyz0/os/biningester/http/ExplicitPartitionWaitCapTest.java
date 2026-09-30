@@ -5,11 +5,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.huyz0.os.biningester.format.IndexRegistration;
 import io.github.huyz0.os.biningester.ingest.AppendResult;
+import io.github.huyz0.os.biningester.ingest.ForwardingIngest;
 import io.github.huyz0.os.biningester.ingest.IndexCatalog;
 import io.github.huyz0.os.biningester.ingest.IndexQuotas;
 import io.github.huyz0.os.biningester.ingest.LaneAdmission;
 import io.github.huyz0.os.biningester.ingest.LaneSet;
-import io.github.huyz0.os.biningester.ingest.Ingest;
 import io.github.huyz0.os.biningester.ingest.PendingPool;
 import io.github.huyz0.os.biningester.ingest.RoutedIngest;
 import io.github.huyz0.os.biningester.security.Principal;
@@ -61,7 +61,7 @@ class ExplicitPartitionWaitCapTest {
     }
 
     /** Accepts every append, once its index is registered and the write is placed. */
-    private static final class Accepting implements Ingest {
+    private static final class Accepting extends ForwardingIngest {
         @Override
         public AppendResult append(Principal principal, String index, int partition,
                 RecordSource records) throws IOException {
@@ -84,11 +84,6 @@ class ExplicitPartitionWaitCapTest {
         public AppendResult appendRouted(Principal principal, String indexOrAlias,
                 String routing, byte lane, RecordSource records, Runnable buffered) {
             throw new UnsupportedOperationException("explicit partitions only");
-        }
-
-        @Override
-        public String concreteIndex(String indexOrAlias) {
-            return indexOrAlias;
         }
 
         @Override

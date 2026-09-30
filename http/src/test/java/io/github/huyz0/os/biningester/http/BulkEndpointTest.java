@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import io.github.huyz0.os.biningester.format.OpType;
 import io.github.huyz0.os.biningester.format.SegmentRecord;
 import io.github.huyz0.os.biningester.ingest.AppendResult;
+import io.github.huyz0.os.biningester.ingest.ForwardingIngest;
 import io.github.huyz0.os.biningester.ingest.Ingest;
 import io.github.huyz0.os.biningester.security.Principal;
 import io.helidon.webclient.api.WebClient;
@@ -40,7 +41,7 @@ class BulkEndpointTest {
     }
 
     /** Records exactly what the adapter handed down, and when. */
-    private static final class RecordingIngest implements Ingest {
+    private static final class RecordingIngest extends ForwardingIngest {
         final List<String> indices = new ArrayList<>();
         final List<Integer> partitions = new ArrayList<>();
         final List<SegmentRecord> records = new ArrayList<>();
@@ -69,31 +70,6 @@ class BulkEndpointTest {
         @Override
         public void close() {
         }
-
-        @Override
-        public AppendResult append(Principal principal, String index, int partition, byte lane,
-                RecordSource records, Runnable buffered) throws IOException {
-            try { // the removed default's behaviour: buffered once the append returns (M12.2)
-                return append(principal, index, partition, lane, records);
-            } finally {
-                buffered.run();
-            }
-        }
-
-        @Override
-        public AppendResult appendRouted(Principal principal, String indexOrAlias, String routing,
-                byte lane, RecordSource records, Runnable buffered) throws IOException {
-            try { // the removed default's behaviour: buffered once the append returns (M12.2)
-                return appendRouted(principal, indexOrAlias, routing, lane, records);
-            } finally {
-                buffered.run();
-            }
-        }
-
-        @Override
-        public String concreteIndex(String indexOrAlias) {
-            return indexOrAlias; // no catalog in this double (M12.2)
-        }
     }
 
     /**
@@ -107,7 +83,7 @@ class BulkEndpointTest {
      * property under test (that BulkService itself never retains the whole
      * body). A count is all those two tests need.
      */
-    private static final class CountingIngest implements Ingest {
+    private static final class CountingIngest extends ForwardingIngest {
         final java.util.concurrent.atomic.AtomicInteger appended =
                 new java.util.concurrent.atomic.AtomicInteger();
 
@@ -122,31 +98,6 @@ class BulkEndpointTest {
 
         @Override
         public void close() {
-        }
-
-        @Override
-        public AppendResult append(Principal principal, String index, int partition, byte lane,
-                RecordSource records, Runnable buffered) throws IOException {
-            try { // the removed default's behaviour: buffered once the append returns (M12.2)
-                return append(principal, index, partition, lane, records);
-            } finally {
-                buffered.run();
-            }
-        }
-
-        @Override
-        public AppendResult appendRouted(Principal principal, String indexOrAlias, String routing,
-                byte lane, RecordSource records, Runnable buffered) throws IOException {
-            try { // the removed default's behaviour: buffered once the append returns (M12.2)
-                return appendRouted(principal, indexOrAlias, routing, lane, records);
-            } finally {
-                buffered.run();
-            }
-        }
-
-        @Override
-        public String concreteIndex(String indexOrAlias) {
-            return indexOrAlias; // no catalog in this double (M12.2)
         }
     }
 

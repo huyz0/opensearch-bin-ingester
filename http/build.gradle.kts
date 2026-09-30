@@ -34,6 +34,9 @@ dependencies {
     // PUTs they measure -- they do not, and no test under http/src/test reads
     // `counts()` at all. See TestSequencers' javadoc.
     testImplementation(testFixtures(project(":sequencer")))
+    // TEST ONLY, for `ForwardingIngest`: the Ingest doubles' shared base
+    // (M13.20), stated once where each double here copied it.
+    testImplementation(testFixtures(project(":ingest")))
 }
 
 // ⚠️ T12 / criterion 8 (M1.18): a 200 MB `_bulk` body ingested under a 256 MB

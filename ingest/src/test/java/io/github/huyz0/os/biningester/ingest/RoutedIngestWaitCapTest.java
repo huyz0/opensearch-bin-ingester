@@ -42,7 +42,7 @@ class RoutedIngestWaitCapTest {
             Duration.ofSeconds(30), Clock.systemUTC());
 
     /** Accepts every append its router passes on. */
-    private static final class Accepting implements Ingest {
+    private static final class Accepting extends ForwardingIngest {
         @Override
         public AppendResult append(Principal principal, String index, int partition,
                 RecordSource records) throws java.io.IOException {
@@ -64,11 +64,6 @@ class RoutedIngestWaitCapTest {
         public AppendResult appendRouted(Principal principal, String indexOrAlias,
                 String routing, byte lane, RecordSource records, Runnable buffered) {
             throw new UnsupportedOperationException("explicit partitions only");
-        }
-
-        @Override
-        public String concreteIndex(String indexOrAlias) {
-            return indexOrAlias;
         }
 
         @Override
