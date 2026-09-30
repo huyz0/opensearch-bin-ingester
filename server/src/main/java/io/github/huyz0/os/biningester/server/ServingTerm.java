@@ -6,14 +6,17 @@ import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import io.github.huyz0.os.biningester.format.CatchUpRequestFrame;
 import io.github.huyz0.os.biningester.http.CatchUpService;
 import io.github.huyz0.os.biningester.ingest.DurableCatchUpResponder;
+import io.github.huyz0.os.biningester.ingest.RetainedFloors;
 import io.github.huyz0.os.biningester.ingest.RetentionLoop;
 import io.github.huyz0.os.biningester.ingest.SegmentGc;
 import io.github.huyz0.os.biningester.ingest.SnapshotCommittedDeltaSource;
 import io.github.huyz0.os.biningester.sequencer.ChainCollector;
 import io.github.huyz0.os.biningester.sequencer.ChainMemory;
+import io.github.huyz0.os.biningester.sequencer.Checkpoints;
 import io.github.huyz0.os.biningester.sequencer.FleetSequencer;
 import io.github.huyz0.os.biningester.sequencer.LocalSequencer;
 import java.io.IOException;
+import java.time.Clock;
 import java.util.Optional;
 
 /**
@@ -24,6 +27,20 @@ import java.util.Optional;
 final class ServingTerm {
 
     private ServingTerm() {
+    }
+
+    /**
+     * ⚠️ THE FLOOR A CONSUMER IS TOLD, READ ON DEMAND (ADR-0056). The epoch
+     * is the one this pod last committed under, known without a request;
+     * below 1 there has been no lease and there is no chain to read. Moved
+     * out of {@link Assembly} unchanged by M13.1b.
+     */
+    static RetainedFloors floors(FleetSequencer sequencer, BinStore store, String prefix,
+            Clock clock) {
+        return new RetainedFloors(() -> {
+            long epoch = sequencer.epoch();
+            return epoch < 1 ? Optional.empty() : Checkpoints.newest(store, prefix, epoch);
+        }, clock, RetainedFloors.DEFAULT_REFRESH);
     }
 
     /**

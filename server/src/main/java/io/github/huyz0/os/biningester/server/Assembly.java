@@ -9,35 +9,26 @@ import io.github.huyz0.os.biningester.binstore.StoreCounts;
 import io.github.huyz0.os.biningester.ingest.DefaultIngest;
 import io.github.huyz0.os.biningester.ingest.IndexCatalog;
 import io.github.huyz0.os.biningester.ingest.Ingest;
-import io.github.huyz0.os.biningester.ingest.IngestConfig;
-import io.github.huyz0.os.biningester.ingest.PendingPool;
 import io.github.huyz0.os.biningester.ingest.RoutedIngest;
 import io.github.huyz0.os.biningester.ingest.SubscriptionHub;
 import io.github.huyz0.os.biningester.ingest.RetainedFloors;
 import io.github.huyz0.os.biningester.ingest.RetentionLoop;
 import io.github.huyz0.os.biningester.ingest.WatermarkTable;
 import io.github.huyz0.os.biningester.ingest.SegmentPrefetcher;
-import io.github.huyz0.os.biningester.format.DurableSegmentSignalFrame;
 import io.github.huyz0.os.biningester.format.CatchUpRequestFrame;
 import io.github.huyz0.os.biningester.http.CatchUpService;
 import io.github.huyz0.os.biningester.http.DurableSegmentSignalSender;
 import io.github.huyz0.os.biningester.http.EndpointSliceView;
 import io.github.huyz0.os.biningester.binstore.CrossAzBytes;
-import io.github.huyz0.os.biningester.sequencer.Checkpoints;
-import io.github.huyz0.os.biningester.sequencer.BatchingSequencer;
 import io.github.huyz0.os.biningester.sequencer.ChainBackfill;
 import io.github.huyz0.os.biningester.sequencer.ChainMemory;
-import io.github.huyz0.os.biningester.sequencer.InboxDrain;
 import io.github.huyz0.os.biningester.sequencer.FleetSequencer;
-import io.github.huyz0.os.biningester.sequencer.LeaseConfig;
 import io.github.huyz0.os.biningester.sequencer.LeaseChallenge;
 import io.github.huyz0.os.biningester.sequencer.LeaseManager;
-import io.github.huyz0.os.biningester.sequencer.LocalSequencer;
 import io.github.huyz0.os.biningester.sequencer.SequencerTransport;
 import io.github.huyz0.os.biningester.sequencer.Sequencer;
 import java.io.IOException;
 import java.time.Clock;
-import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.Objects;
@@ -128,7 +119,8 @@ public final class Assembly implements AutoCloseable {
         BinStore store = StoreFactory.open(config.store());
         try {
             return new Assembly(config, store, true, transport, clock, challenge,
-                    ChainBackfill::inBackground, peerView, crossAz, null);
+                    ChainBackfill::inBackground, peerView, crossAz, null, LeaseManager::new,
+                    GovernorWiring.DEFAULT);
         } catch (RuntimeException | IOException failed) {
             // ⚠️ THE STORE IS OURS AND THE CONSTRUCTOR THREW, so nobody else
             // holds a reference that could close it. Without this, a failure
@@ -158,7 +150,7 @@ public final class Assembly implements AutoCloseable {
             CrossAzBytes crossAz) throws IOException {
         return new Assembly(config, Objects.requireNonNull(store, "store"), false,
                 transport, clock, LeaseChallenge.NEVER, ChainBackfill::inBackground,
-                peerView, crossAz, null);
+                peerView, crossAz, null, LeaseManager::new, GovernorWiring.DEFAULT);
     }
 
     static Assembly openForTest(ServerConfig config, BinStore store,
@@ -167,7 +159,7 @@ public final class Assembly implements AutoCloseable {
             throws IOException {
         return new Assembly(config, Objects.requireNonNull(store, "store"), false,
                 transport, clock, LeaseChallenge.NEVER, ChainBackfill::inBackground,
-                peerView, crossAz, signalPost);
+                peerView, crossAz, signalPost, LeaseManager::new, GovernorWiring.DEFAULT);
     }
 
     static Assembly openForTest(ServerConfig config, BinStore store,
@@ -192,15 +184,6 @@ public final class Assembly implements AutoCloseable {
         return new Assembly(config, Objects.requireNonNull(store, "store"), false,
                 transport, clock, LeaseChallenge.NEVER, ChainBackfill::inBackground,
                 null, null, null, leaseManagerFactory, GovernorWiring.DEFAULT);
-    }
-
-    private Assembly(ServerConfig config, BinStore raw, boolean ownsStore,
-            SequencerTransport transport, Clock clock, LeaseChallenge challenge,
-            BackfillStarter backfillStarter, EndpointSliceView peerView, CrossAzBytes crossAz,
-            DurableSegmentSignalSender.PeerPost signalPost)
-            throws IOException {
-        this(config, raw, ownsStore, transport, clock, challenge, backfillStarter,
-                peerView, crossAz, signalPost, LeaseManager::new, GovernorWiring.DEFAULT);
     }
 
     private Assembly(ServerConfig config, BinStore raw, boolean ownsStore,
@@ -240,28 +223,8 @@ public final class Assembly implements AutoCloseable {
         this.watermarks = new WatermarkTable(clock, kept.reportTimeout(), kept.copyExpiry(),
                 kept.minRetention());
 
-        LeaseConfig leases = sequencerLeaseConfig(config);
-        LeaseManager manager = leaseManagerFactory.create(store, leases, clock, challenge);
-        this.sequencer = new FleetSequencer(store, leases, transport,
-                () -> LocalSequencer.start(store, config.prefix(), manager, SEAL_REDRIVE_BUDGET)
-                        .map(term -> {
-                            // ⚠️ M8.42: THE CHAIN BELOW THE REPLAY, read once per
-                            // takeover and off the election's path. HERE, not in
-                            // `LocalSequencer.start`, which M4.9 bounds to a
-                            // small constant and tests to the request.
-                            // ⚠️ ONLY A TAKEOVER HAS A CHAIN BELOW IT: the first term
-                            // of a cluster (epoch 1) would otherwise widen its sweep
-                            // over a retention window of empty hours, a LIST each.
-                            if (term.epoch() > 1) {
-                                backfillStarter.start(store, config.prefix(),
-                                        term.chain(), term::serving);
-                            }
-                            // ⚠️ M8.14a: the intents of pods that died deferring
-                            // have nobody else to ask for a drain.
-                            InboxDrain.inBackground(store, config.prefix(), term,
-                                    metrics::failedIntentBatch);
-                            return new BatchingSequencer(term, COMMIT_WINDOW);
-                        }), challenge, false, metrics::failedIntentBatch);
+        this.sequencer = SequencerAssembly.create(config, store, transport, clock, challenge,
+                leaseManagerFactory, backfillStarter, metrics);
         // ⚠️ NOT PUSHED ONTO `toClose`, AND THAT IS NOT AN OMISSION.
         // `DefaultIngest.close()` closes the sequencer it was given and says so
         // in its own javadoc, and `FleetSequencer.close()` has no idempotence
@@ -270,58 +233,20 @@ public final class Assembly implements AutoCloseable {
         // NOT OWN. MEASURED by review: with the duplicate push removed the
         // lease is still released, because the writer releases it.
 
-        try {
-            DurableSegmentSignalSender signalSender =
-                    EndpointMembership.signalSender(config, peerView, crossAz, signalPost);
-            this.ingest = new DefaultIngest(config.ingest(), store, config.prefix(),
-                    config.podId(), this.sequencer, this.hub, clock,
-                    name -> CatalogStreams.streamFor(catalog, name),
-                    segmentKey -> {
-                        if (signalSender != null) {
-                            signalSender.send(new DurableSegmentSignalFrame(config.podId(),
-                                    config.az(), segmentKey), this.peerView.readyEndpoints());
-                        }
-                    }, costLedger);
-            this.prefetcher = new SegmentPrefetcher(new EndpointMembership(config, this.peerView),
-                    this.ingest.segmentProxy(), governor::discretionaryAllowed);
-        } catch (RuntimeException | IOException failed) {
-            // ⚠️ THE TERM IS ALREADY TAKEN AT THIS POINT, and if this throws
-            // nothing will ever hold a reference to the sequencer again.
-            // `new Leadership(election)` ELECTS IN ITS CONSTRUCTOR -- it
-            // acquires the lease and starts the renewer -- so a failure here
-            // leaves the lease naming a node that failed to start, renewed
-            // every interval for the life of the JVM. That is the failure
-            // `FleetSequencer`'s own constructor comment guards a null argument
-            // against, one level up: the fleet stops committing and nothing
-            // says why. It is also an NFR-2 defect -- one `putIfMatch` per
-            // renew interval, for ever, from a node that is not running.
-            // ⚠️ AND THE TRIGGER IS CONFIGURED RATHER THAN HYPOTHETICAL:
-            // `DefaultIngest` refuses at startup when `direct` is enabled over
-            // a backend that cannot sign (M5.43), as the memory and
-            // local-filesystem backends cannot.
-            closeQuietly(this.sequencer, failed);
-            throw failed;
-        }
+        // ⚠️ A FAILURE HERE RELEASES THE TERM just taken; see WritePathAssembly.
+        WritePathAssembly.WritePath writePath = WritePathAssembly.create(config, store,
+                this.sequencer, this.hub, clock, catalog, peerView, this.peerView, crossAz,
+                signalPost, costLedger, governor);
+        this.ingest = writePath.ingest();
+        this.prefetcher = writePath.prefetcher();
         // ⚠️ FROM HERE the governor reads the ingest's spacing; until now, the floor.
         stack.spacing().attach(this.ingest);
         toClose.push(this.ingest);
-        // ⚠️ THE ROUTED PATH IS WHAT THE FRONT DOOR IS HANDED (M8.32, FR-13).
-        // Plain `DefaultIngest` has no catalog: it refuses every routed write,
-        // and accepts an explicit partition the index does not have.
-        this.routed = new RoutedIngest(ingest, catalog,
-                new PendingPool(clock, PENDING_TIMEOUT, PENDING_BYTES_PER_INDEX),
-                PENDING_TIMEOUT, clock);
+        this.routed = WritePathAssembly.routed(ingest, catalog, clock);
 
         this.retention = RetentionAssembly.create(config, store, clock, this::retentionTerm,
                 watermarks, leaseManagerFactory, governor::discretionaryAllowed);
-        // ⚠️ THE FLOOR A CONSUMER IS TOLD, READ ON DEMAND (ADR-0056). The epoch
-        // is the one this pod last committed under, known without a request;
-        // below 1 there has been no lease and there is no chain to read.
-        this.floors = new RetainedFloors(() -> {
-            long epoch = sequencer.epoch();
-            return epoch < 1 ? Optional.empty()
-                    : Checkpoints.newest(store, config.prefix(), epoch);
-        }, clock, RetainedFloors.DEFAULT_REFRESH);
+        this.floors = ServingTerm.floors(sequencer, store, config.prefix(), clock);
         // ⚠️ PUSHED LAST, SO IT IS CLOSED FIRST. `toClose` is a stack, and a
         // retention tick that ran while the writer was closing would read a
         // chain whose term is being released under it -- and take the GC lease
@@ -329,11 +254,6 @@ public final class Assembly implements AutoCloseable {
         toClose.push(RetentionAssembly.schedule(retention, kept.passInterval()));
         toClose.push(CostReporting.scheduleTopK(costLedger, catalog,
                 raw.capabilities().costs(), config.costTopKInterval(), clock, refused));
-    }
-
-    static LeaseConfig sequencerLeaseConfig(ServerConfig config) {
-        return new LeaseConfig(config.prefix(), config.podId(), config.endpoint(),
-                config.podUid(), config.leaseTtl(), config.leaseRenewInterval());
     }
 
     /**
@@ -350,34 +270,6 @@ public final class Assembly implements AutoCloseable {
             throws IOException {
         ServingTerm.respondCatchUp(sequencer, store, stack.costLedger(), request, sink);
     }
-
-    /**
-     * ⚠️ 8, the value every construction site in the tree passes — it bounds
-     * how many ancestor seals one takeover will redrive before giving up.
-     */
-    private static final int SEAL_REDRIVE_BUDGET = 8;
-
-    /**
-     * How long the leader's commit window stays open once a commit arrives
-     * (M8.50).
-     *
-     * <p>⚠️ **SHORT, BECAUSE THE BATCH COMES FROM THE PUT, NOT THE WAIT.** While
-     * one delta is in the store, every commit that arrives queues, and the next
-     * window takes them all: that is where one PUT per window comes from under
-     * load. The window itself only adds latency to a commit that arrives alone.
-     */
-    static final Duration COMMIT_WINDOW = Duration.ofMillis(5);
-
-    /** How long a routed write waits for its index's registration: ADR-0015's default. */
-    static final Duration PENDING_TIMEOUT = Duration.ofSeconds(5);
-
-    /**
-     * ⚠️ THE BOUND ON WHAT ONE UNREGISTERED INDEX MAY HOLD (ADR-0015): one
-     * default segment's worth, so a producer racing the plugin is absorbed and
-     * one writing to an index nobody registers is refused rather than grown.
-     */
-    static final long PENDING_BYTES_PER_INDEX = IngestConfig.DEFAULT_MAX_SEGMENT_BYTES;
-
 
     public ServerConfig config() {
         return config;

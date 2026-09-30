@@ -16,8 +16,9 @@ import org.junit.jupiter.api.Test;
 /**
  * M11.24: `DefaultIngest`, `Assembly` and `BulkService` are refused at their
  * split ceilings, one case per file, so the splits M11.24a-c made cannot grow
- * back as M11's did (M11 criterion 1, OBSERVED-NOT at close). M13.1a lowers
- * `DefaultIngest`'s to 500, the headroom fast mode needs (M13 criterion 1).
+ * back as M11's did (M11 criterion 1, OBSERVED-NOT at close). M13.1a and
+ * M13.1b lower `DefaultIngest`'s and `Assembly`'s to 500, the headroom fast
+ * mode needs (M13 criterion 1).
  */
 class FileSizeCeilingTest {
 
@@ -28,16 +29,19 @@ class FileSizeCeilingTest {
     private static final String BULK_SERVICE =
             "http/src/main/java/io/github/huyz0/os/biningester/http/BulkService.java";
 
-    /** Each named file's ceiling: {@code DefaultIngest} at 500 since M13.1a, the rest at 600. */
+    /**
+     * Each named file's ceiling: {@code DefaultIngest} at 500 since M13.1a,
+     * {@code Assembly} at 500 since M13.1b, {@code BulkService} at 600.
+     */
     private static final Map<String, Integer> CEILINGS = Map.of(
-            DEFAULT_INGEST, 500, ASSEMBLY, 600, BULK_SERVICE, 600);
+            DEFAULT_INGEST, 500, ASSEMBLY, 500, BULK_SERVICE, 600);
 
     @Test
     void theCeilingNamesExactlyTheSplitFilesAtTheirCeilingsAndTheTreeMeetsIt() {
         assertThat(RepositoryGateChecks.INSTANCE.getSPLIT_CEILINGS()).isEqualTo(CEILINGS);
         List<String> failures = new ArrayList<>();
         RepositoryGateChecks.INSTANCE.splitCeilings(repository(), failures);
-        assertThat(failures).as("this tree, after M13.1a").isEmpty();
+        assertThat(failures).as("this tree, after M13.1b").isEmpty();
     }
 
     @Test
@@ -46,7 +50,7 @@ class FileSizeCeilingTest {
     }
 
     @Test
-    void assemblyIsRefusedAt600LinesAndAdmittedAt599() throws Exception {
+    void assemblyIsRefusedAt500LinesAndAdmittedAt499() throws Exception {
         assertRefusedAtCeiling(ASSEMBLY);
     }
 
