@@ -88,11 +88,18 @@ class PartitionVisibilityIT {
                 assertThat(expected).as("every partitioned write was acked").hasSize(inboxSize);
                 assertThat(intents).as("one durable intent per flush").hasSize(inboxSize);
 
+                // ⚠️ M13.3: pod1's newest intent before the heal, so a newer one
+                // seen right after the trigger's 202 is the trigger itself,
+                // deferred rather than forwarded.
+                String triggerPod = "pod1";
+                long lastSeqBeforeHeal = maxFlushSeq(intents, triggerPod);
                 long healedAt = System.nanoTime();
                 // ⚠️ TIMED APART FROM THE DRAIN (M11.23): the bound's clock starts
                 // here, before heal() and the trigger write, so a slow trigger
                 // write's 202 would otherwise read as a slow drain.
                 long triggerMillis = -1;
+                String triggerDeferred = "not-run";
+                int intentsAtTrigger = -1;
                 if (!Boolean.getBoolean("m9.12.disableHealDrain")) {
                     leader.peers().heal();
                     assertThat(followers.get(0).write("after-heal-" + inboxSize, 1,
@@ -100,6 +107,10 @@ class PartitionVisibilityIT {
                             .as("the first post-heal write triggers the drain")
                             .isEqualTo(202);
                     triggerMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - healedAt);
+                    List<String> atTrigger = intentKeys(bucket);
+                    intentsAtTrigger = atTrigger.size();
+                    triggerDeferred = maxFlushSeq(atTrigger, triggerPod) > lastSeqBeforeHeal
+                            ? "yes" : "not-seen";
                 }
 
                 long bound = Math.max(2, (inboxSize + 99) / 100);
@@ -117,9 +128,15 @@ class PartitionVisibilityIT {
                 }
                 long elapsed = System.nanoTime() - healedAt;
                 List<String> remaining = intentKeys(bucket);
-                System.out.printf("M11.23 inbox=%d writes=%d ms trigger202=%d ms drainEnd=%d ms"
-                        + " remaining=%d%n", inboxSize, writesMillis, triggerMillis,
-                        TimeUnit.NANOSECONDS.toMillis(elapsed), remaining.size());
+                System.out.printf("M13.3 inbox=%d writes=%d ms trigger202=%d ms drainEnd=%d ms"
+                        + " remaining=%d triggerDeferred=%s intentsAtTrigger=%d%n", inboxSize,
+                        writesMillis, triggerMillis, TimeUnit.NANOSECONDS.toMillis(elapsed),
+                        remaining.size(), triggerDeferred, intentsAtTrigger);
+                // ⚠️ NO `trigger202 <= drainEnd` ASSERTION (M13.3 review T1): both
+                // clocks start at `healedAt` and `elapsed` is read after the
+                // trigger's 202, so it could not fail -- and polled concurrently an
+                // M=10 inbox empties BEFORE its forwarded trigger's 202, so it is
+                // not a property either. The M13.3 line reports what each includes.
                 assertThat(remaining)
                         .withFailMessage("inbox still contains %s; leader log:%n%s", remaining,
                                 leader.log())
@@ -200,6 +217,22 @@ class PartitionVisibilityIT {
                 .as("partitioned writes must not fail instead of using the inbox")
                 .hasValue(0);
         return new HashSet<>(acked);
+    }
+
+    /**
+     * The highest flush sequence among {@code pod}'s intents, or -1. The key is
+     * {@code .../<pod>/<incarnation>/<16 hex digits>.intent} (Inbox.keyFor).
+     */
+    private static long maxFlushSeq(List<String> intents, String pod) {
+        long max = -1;
+        for (String key : intents) {
+            String[] parts = key.split("/");
+            if (parts.length >= 3 && parts[parts.length - 3].equals(pod)) {
+                String seq = parts[parts.length - 1].replace(".intent", "");
+                max = Math.max(max, Long.parseUnsignedLong(seq, 16));
+            }
+        }
+        return max;
     }
 
     private static List<String> intentKeys(ChaosBucket bucket) throws Exception {

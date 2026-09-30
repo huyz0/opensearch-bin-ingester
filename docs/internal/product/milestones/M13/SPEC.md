@@ -359,8 +359,12 @@ kind.
 3. **`PartitionVisibilityIT` is measured as a distribution** (R2): at least ten
    runs on M9's rig, `trigger202` and `drainEnd` recorded per run, the RustFS
    memory plateau measured or OBSERVED-NOT, variant B completed, the ~1.03 s
-   trigger write investigated and its cause named or OBSERVED-NOT, and `trigger202
-   ≤ drainEnd` asserted by the IT.
+   trigger write investigated and its cause named or OBSERVED-NOT, and what
+   `trigger202` and `drainEnd` each include reported. ⚠️ Corrected by M13.3
+   from "`trigger202 ≤ drainEnd` asserted by the IT": both clocks start at the
+   heal and `drainEnd` is read after the trigger's `202`, so the assertion
+   could not fail; and measured concurrently an M=10 inbox empties before its
+   forwarded trigger's `202`, so it is not a property of the system either.
 4. **A reader's connection closes with its subscription** (M12.27): decided and
    either fixed and pinned or refuted with its measurement.
 5. **ADR-0078 matches M12.4** (R4) and **no production code carries a silent
@@ -505,7 +509,7 @@ kind.
 |---|---|---|---|
 | 1 | T0 (gate) | `FileSizeCeilingTest` cases: `DefaultIngest` and `Assembly` refused at 500, `ConsumerClient` and `LocalSequencer` at 600 | M13.1 leaving `DefaultIngest` and `Assembly` untouched; a ceiling of 700 for the other two |
 | 2 | T1, T3 | `NodeProcessPortTest`, `NodeProcessLostPortIT` (a real node whose first port is held) | no retry after a lost port, or `startProbing` given one attempt (⚠️ a public `start` that bypassed `startProbing` is NOT killed: the IT enters through the port-source seam); a retry on any other death -- a real dead child whose log is another refusal or another port's, classified as a lost port (M13.2a) -- or on any other runtime failure; a dead child for any reason waiting out 120 s; unbounded retries; a lost port read from another port's, a port prefix's or another refusal's message; a dead child's refusal not leaving the wait as a `PortLost`, or only after 120 s; the node not closed before a retry; `portLostIn` not walking the cause chain |
-| 3 | T3 | `PartitionVisibilityIT` (measurement) and its `trigger202 ≤ drainEnd` assertion | `trigger202` timed after the drain; the evidence line cites the measurement file's per-run table, at least ten rows, or is NOT-RUN |
+| 3 | T3 | `PartitionVisibilityIT` (measurement) | the evidence line cites the measurement file's per-run table, at least ten rows, or is NOT-RUN |
 | 4 | T1 | `SubscriptionReaderConnectionTest` close case, or the refutation's measurement | the reader client not closed |
 | 5 | T0/T1 | `SilentDefaultsGoneTest` (reflection) and `FetchBackoffClockWiringTest`'s started-client case | any of the three defaults left in main; a client built on a clock-less policy |
 | 6 | T0 (gate) | `MilestoneEvidenceTest` harvest-enumeration case (M13.40) | a harvest ID missing from the enumeration |
@@ -595,6 +599,7 @@ journal's fsync and the Kubernetes pod lookup are injected seams.
 | M13.2a | Split from M13.2 at its review budget: a real dead child that did not lose its port is not retried, and fails the wait at once; criterion 2's row claims only the kills it has | — (quality) |
 | M13.3 | R2: `PartitionVisibilityIT` as a distribution | — (evidence) |
 | M13.4 | M12.27: the reader connection on close | FR-6 |
+| M13.45 | Opened by M13.3: `PartitionVisibilityIT`'s slow drains (2 of 10 green on a day-old RustFS container, 5 of 6 on each fresh one); separate container age and state, memory and the drain's phases (apply, delete), name what applies the trigger's own deferred intent, never moving the bound | — (evidence) |
 | M13.5 | R4: ADR-0078 amended for M12.4 | — (docs) |
 | M13.6 | R5: no silent defaults; the started client's clock pinned | FR-6, FR-19 |
 | M13.7 | R3: M11.5 T2 (the top-K log's prices) and the catch-up GET's share | FR-21 |
