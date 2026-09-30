@@ -32,6 +32,35 @@ class NodeLocalStoreReaderDeadlineResidueTest {
     private HttpServer server;
     private final CountDownLatch finish = new CountDownLatch(1);
 
+    /**
+     * ⚠️ ITS OWN DEADLINE IS RECOGNISED, NOT WRAPPED AGAIN (M13.17, M12.17
+     * review T1): past the deadline a read that succeeds underneath fails with
+     * the deadline, and that failure passes back through the same catch --
+     * reduced to "expired?", it would be wrapped in a second deadline.
+     */
+    @Test
+    void aDeadlineTheStreamThrowsItselfIsNotWrappedInAnother() throws Exception {
+        NodeLocalStoreReaderClient client = new NodeLocalStoreReaderClient(
+                URI.create("http://127.0.0.1:1"), secret(), Duration.ofSeconds(2), 1 << 20,
+                Duration.ofMillis(50));
+        InputStream in = client.deadlined(new java.io.ByteArrayInputStream(new byte[16]));
+
+        IOException failed = null;
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (failed == null && System.nanoTime() < deadline) {
+            try {
+                in.read(); // succeeds underneath: a ByteArrayInputStream ignores close
+            } catch (IOException e) {
+                failed = e;
+            }
+        }
+
+        assertThat(failed).as("the premise: the deadline fired")
+                .isInstanceOf(NodeLocalStoreReaderClient.BodyDeadlineException.class);
+        assertThat(failed.getCause()).as("⚠️ NOT A DEADLINE INSIDE A DEADLINE").isNull();
+        in.close();
+    }
+
     @AfterEach
     void stop() {
         finish.countDown();

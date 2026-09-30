@@ -62,7 +62,15 @@ final class GapTracker {
     record Commit(boolean decode, GapReport report, boolean undone) {
     }
 
-    private GapReport pendingGapReport;
+    /**
+     * What {@link #reportAnyGap} decided, and the gap it found if a handler must
+     * be told. ⚠️ RETURNED, NOT LEFT IN A FIELD (M13.17, M12.17 review P1): a
+     * field the caller had to clear could be read stale by the next commit.
+     */
+    private record Reported(boolean decode, GapReport report) {
+        static final Reported DECODE = new Reported(true, null);
+        static final Reported SKIP = new Reported(false, null);
+    }
 
     /**
      * Deliveries this consumer's queue was too full to take.
@@ -125,9 +133,9 @@ final class GapTracker {
      */
     Commit commit(Delivery delivery, boolean replay, boolean decoded) {
         synchronized (offsetLock) {
-            boolean decode = reportAnyGap(delivery, replay);
-            GapReport report = pendingGapReport;
-            pendingGapReport = null;
+            Reported reported = reportAnyGap(delivery, replay);
+            boolean decode = reported.decode();
+            GapReport report = reported.report();
             if (decode && !decoded) {
                 // ⚠️ NEVER A DECODE AFTER THE COMMIT: one that threw here would
                 // leave its retry reading as a duplicate -- the drop above.
@@ -174,26 +182,26 @@ final class GapTracker {
      * falling silent is the same loss one step along, and a two-gap case pins
      * it.
      */
-    private boolean reportAnyGap(Delivery delivery, boolean replay) {
+    private Reported reportAnyGap(Delivery delivery, boolean replay) {
         long expected = expectedNextOffset;
         long end = delivery.firstOffset() + delivery.recordCount();
         if (replay) {
             expectedNextOffset = Math.max(expectedNextOffset, end);
-            return true;
+            return Reported.DECODE;
         }
         if (expected < 0) {
             expectedNextOffset = end;
-            return true;
+            return Reported.DECODE;
         }
         if (delivery.firstOffset() < expected && end <= expected) {
-            return false;
+            return Reported.SKIP;
         }
         if (delivery.firstOffset() < expected) {
             throw new IllegalStateException("delivery overlaps the next expected offset");
         }
         if (delivery.firstOffset() == expected) {
             expectedNextOffset = end;
-            return true;
+            return Reported.DECODE;
         }
         // ⚠️ ATTRIBUTED, NOT COMPARED TO ZERO. A drop belongs to the FIRST gap
         // reported after it, and only to that one: the baseline moves when a
@@ -225,14 +233,13 @@ final class GapTracker {
         Consumer<DeliveryGapException> handler = gapHandler;
         if (handler == null) {
             expectedNextOffset = end;
-            return true;
+            return Reported.DECODE;
         }
         gapRepairPending = true;
-        pendingGapReport = new GapReport(handler, gap);
         // Keep the delivery that exposed the gap queued until replay reaches
         // this offset; decoding it now could make it impossible to suppress an
         // overlap if replay includes the same records.
-        return false;
+        return new Reported(false, new GapReport(handler, gap));
     }
 
     void onGap(Consumer<DeliveryGapException> handler) {
