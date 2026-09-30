@@ -127,7 +127,8 @@ public final class IndexQuotas {
     /** Quotas that refuse nothing: what a front door built without a configuration uses. */
     public static IndexQuotas none() {
         return new IndexQuotas(Config.none(),
-                Clock.fixed(java.time.Instant.EPOCH, java.time.ZoneOffset.UTC), name -> false);
+                Clock.fixed(java.time.Instant.EPOCH, java.time.ZoneOffset.UTC), name -> false,
+                name -> List.of());
     }
 
     /**
@@ -148,16 +149,13 @@ public final class IndexQuotas {
      * charges the tally with it; and a request whose only chunk came before
      * the wait binds at its release and is charged then. A name never
      * registered charges nothing, and is refused downstream.
-     */
-    public IndexQuotas(Config config, Clock clock, Predicate<String> known) {
-        this(config, clock, known, index -> List.of());
-    }
-
-    /**
-     * The same, finding an override named by one of an index's ALIASES too
+     *
+     * <p>⚠️ AND AN OVERRIDE NAMED BY ONE OF AN INDEX's ALIASES is found too
      * (M12.13, M11.8 P5): the front door charges the concrete index, so an
      * override an operator keyed by the alias they write through matched
-     * nothing, silently, and the index ran on the default.
+     * nothing, silently, and the index ran on the default. ⚠️ THE ONLY
+     * CONSTRUCTOR (M13.6a, M12 harvest R5): the three-argument one defaulted
+     * the aliases to none, which is that same silent default by another door.
      *
      * @param aliases the aliases naming a concrete index now; an override on
      *     the concrete name wins, then the first alias in sorted order

@@ -34,10 +34,11 @@ final class ConsumerDeliveryQueues {
     private volatile boolean livePausedForGap;
     private volatile java.util.UUID gapReplayRequestId;
 
-    ConsumerDeliveryQueues(int capacity, Decoder decoder) {
-        this(capacity, decoder, () -> false);
-    }
-
+    /**
+     * ⚠️ THE ONLY CONSTRUCTOR (M13.6a, M12 harvest R5): a two-argument one
+     * defaulted the catch-up lane to never backing off, silently dropping
+     * M12.26's quantum hand-over for any queue built through it.
+     */
     ConsumerDeliveryQueues(int capacity, Decoder decoder,
             java.util.function.BooleanSupplier catchUpBackingOff) {
         live = new ArrayBlockingQueue<>(capacity);

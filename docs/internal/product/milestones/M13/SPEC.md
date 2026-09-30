@@ -369,8 +369,10 @@ kind.
    either fixed and pinned or refuted with its measurement.
 5. **ADR-0078 matches M12.4** (R4) and **no production code carries a silent
    default** (R5): `SegmentFetchRetry.DEFAULT` and the default constructors of
-   `ConsumerDeliveryQueues` and `IndexQuotas` are gone from main sources, and the
-   plugin's started client receives the clocked policy.
+   `ConsumerDeliveryQueues`, `IndexQuotas` and `ServerConfig` are gone from main
+   sources, and the plugin's started client receives the clocked policy.
+   ⚠️ `ServerConfig` added by M13.6a: R5 names it and this criterion had
+   dropped it.
 6. **Every other harvest row (R3, R6–R18) has a disposition**, and each of the
    five research-corpus proposals is made or dropped with its reason (M13.21),
    enumerated once each in VERIFIED.md at close, as M12's criterion 17 was;
@@ -603,6 +605,9 @@ journal's fsync and the Kubernetes pod lookup are injected seams.
 | M13.5 | R4: ADR-0078 amended for M12.4 | — (docs) |
 | M13.46 | Opened by M13.5: quota tickets for a name unknown at admission -- a window write through an alias binds a bucket keyed by the alias (its debt refuses nothing sent to the concrete name), gets a free ticket under an unlimited default (uncharged), and carries the default rather than the concrete override; compute the limit when the ticket binds from the concrete name, issue no free ticket for an unknown name, and pin by tests: the alias cases, the window limit, binding into a bucket already at its cap, and the idle sweep's once-per-expiry throttle | FR-21, NFR-6 |
 | M13.6 | R5: no silent defaults; the started client's clock pinned | FR-6, FR-19 |
+| M13.6a | R5: `IndexQuotas`' three-argument and `ConsumerDeliveryQueues`' two-argument constructors removed; `SilentDefaultsGoneTest` per module | — (quality) |
+| M13.6b | R5: `ServerConfig`'s older constructors removed | — (quality) |
+| M13.6c | R5: `SegmentFetchRetry`'s clock required and `DEFAULT` gone from main; a client started after `holdFailuresWith` pinned to receive the clocked policy (M12.26 T3) | FR-6, FR-19 |
 | M13.7 | R3: M11.5 T2 (the top-K log's prices) and the catch-up GET's share | FR-21 |
 | M13.8 | R6: quarantine the legacy buildSrc failures | — (harness) |
 | M13.9 | R7: gate the compose `mem_limit`; build.md's script references | — (harness) |

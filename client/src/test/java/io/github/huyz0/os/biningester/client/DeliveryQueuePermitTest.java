@@ -55,7 +55,7 @@ class DeliveryQueuePermitTest {
     @Test
     void aLiveDeliveryWhoseDecodeThrowsIsReadOnTheNextPoll() throws Exception {
         ThrowsOnce decoder = new ThrowsOnce();
-        ConsumerDeliveryQueues queues = new ConsumerDeliveryQueues(4, decoder);
+        ConsumerDeliveryQueues queues = new ConsumerDeliveryQueues(4, decoder, () -> false);
         Delivery d = delivery(9);
         assertThat(queues.deliverLive(d)).isTrue();
 
@@ -73,7 +73,7 @@ class DeliveryQueuePermitTest {
     @Test
     void aReplayDeliveryWhoseDecodeThrowsIsNotLost() throws Exception {
         ThrowsOnce decoder = new ThrowsOnce();
-        ConsumerDeliveryQueues queues = new ConsumerDeliveryQueues(4, decoder);
+        ConsumerDeliveryQueues queues = new ConsumerDeliveryQueues(4, decoder, () -> false);
         UUID request = UUID.fromString("00000000-0000-0000-0000-00000000c0de");
         queues.beginCatchUp(request, false);
         Delivery d = delivery(3);

@@ -55,7 +55,7 @@ class IndexQuotasBoundTest {
 
     private IndexQuotas quotas(Set<String> known) {
         return new IndexQuotas(new IndexQuotas.Config(TEN_A_SECOND, Map.of(), 8, IDLE), clock,
-                known::contains);
+                known::contains, name -> java.util.List.of());
     }
 
     @Test
@@ -121,7 +121,7 @@ class IndexQuotasBoundTest {
     void aOneChunkRequestRegisteredDuringItsWaitIsStillCharged() {
         java.util.Set<String> known = new java.util.HashSet<>();
         IndexQuotas quotas = new IndexQuotas(new IndexQuotas.Config(TEN_A_SECOND, Map.of(), 8,
-                IDLE), clock, known::contains);
+                IDLE), clock, known::contains, name -> java.util.List.of());
         IndexQuotas.Ticket ticket = quotas.admit("logs").ticket().orElseThrow();
 
         ticket.charge(records(25)); // charged, then appended: the wait is inside
@@ -137,7 +137,7 @@ class IndexQuotasBoundTest {
     void aLaterChunkBindsTheTicketAndPaysForTheFirst() {
         java.util.Set<String> known = new java.util.HashSet<>();
         IndexQuotas quotas = new IndexQuotas(new IndexQuotas.Config(TEN_A_SECOND, Map.of(), 1,
-                IDLE), clock, known::contains);
+                IDLE), clock, known::contains, name -> java.util.List.of());
         IndexQuotas.Ticket ticket = quotas.admit("logs").ticket().orElseThrow();
 
         ticket.charge(records(8));

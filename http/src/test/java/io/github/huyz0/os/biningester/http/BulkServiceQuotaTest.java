@@ -142,7 +142,7 @@ class BulkServiceQuotaTest {
         WebClient client = serve(new RegistersDuringAppend(recording, known), new IndexQuotas(
                 new IndexQuotas.Config(IndexQuotas.Limit.UNLIMITED,
                         Map.of("logs", new IndexQuotas.Limit(0, 2)), 8),
-                FROZEN, known::contains));
+                FROZEN, known::contains, name -> java.util.List.of()));
 
         try (HttpClientResponse first = client.post("/logs/_bulk").queryParam("partition", "0")
                 .submit(body(5))) {
@@ -205,7 +205,7 @@ class BulkServiceQuotaTest {
         Recording ingest = new Recording();
         WebClient client = serve(ingest, new IndexQuotas(new IndexQuotas.Config(
                 IndexQuotas.Limit.UNLIMITED, Map.of("logs", new IndexQuotas.Limit(0, 2)), 8),
-                FROZEN, name -> true));
+                FROZEN, name -> true, name -> java.util.List.of()));
 
         try (HttpClientResponse first = client.post("/logs/_bulk").queryParam("partition", "0")
                 .submit(body(5))) {
@@ -233,7 +233,7 @@ class BulkServiceQuotaTest {
         Recording ingest = new Recording();
         ingest.hold = new CountDownLatch(1);
         WebClient client = serve(ingest, new IndexQuotas(new IndexQuotas.Config(
-                new IndexQuotas.Limit(0, 1_000_000), Map.of(), 2), FROZEN, name -> true));
+                new IndexQuotas.Limit(0, 1_000_000), Map.of(), 2), FROZEN, name -> true, name -> java.util.List.of()));
 
         List<CompletableFuture<Integer>> answers = new ArrayList<>();
         var executor = Executors.newVirtualThreadPerTaskExecutor();
@@ -268,7 +268,7 @@ class BulkServiceQuotaTest {
         LaneAdmission admission = new LaneAdmission(1, LaneSet.of((byte) 0));
         WebClient client = serve(ingest, new IndexQuotas(new IndexQuotas.Config(
                 IndexQuotas.Limit.UNLIMITED, Map.of("logs", new IndexQuotas.Limit(0, 3)), 1),
-                FROZEN, name -> true), admission);
+                FROZEN, name -> true, name -> java.util.List.of()), admission);
 
         for (int i = 0; i < 2; i++) {
             try (HttpClientResponse answer = client.post("/logs/_bulk")
@@ -306,7 +306,7 @@ class BulkServiceQuotaTest {
                 List.of("logs"), 4, 4, 1, 1));
         WebClient client = serve(routed, new IndexQuotas(new IndexQuotas.Config(
                 IndexQuotas.Limit.UNLIMITED, Map.of("audit", new IndexQuotas.Limit(0, 2)), 8),
-                FROZEN, name -> true));
+                FROZEN, name -> true, name -> java.util.List.of()));
 
         try (HttpClientResponse viaAlias = client.post("/logs/_bulk")
                 .queryParam("partition", "0").submit(body(5))) {
