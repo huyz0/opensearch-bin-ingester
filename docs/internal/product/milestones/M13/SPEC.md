@@ -347,8 +347,15 @@ kind.
    already meet -- and `ConsumerClient` and `LocalSequencer` below 600, all four
    pinned by the ceiling gate at those numbers, and `./gradlew test` is green
    after each split.
-2. **The harness binds its own port** (M12.28): `NodeProcess` passes port 0 to
-   the child and reads back the port it bound; pinned by a test.
+2. **The harness survives losing its probed port** (M12.28): when the child
+   refuses to start because another process took the port between the probe
+   and its bind, `NodeProcess` starts it again on a fresh port, at most three
+   times, and retries no other failure; pinned by a test. ⚠️ Corrected by
+   M13.2 from "passes port 0 to the child and reads back the port it bound":
+   the lease advertises the endpoint, port included, when the graph is
+   assembled -- before the front door binds -- so a child on port 0 would
+   advertise a port nobody knows. M12.28 allowed the retry ("or retry the
+   bind").
 3. **`PartitionVisibilityIT` is measured as a distribution** (R2): at least ten
    runs on M9's rig, `trigger202` and `drainEnd` recorded per run, the RustFS
    memory plateau measured or OBSERVED-NOT, variant B completed, the ~1.03 s
@@ -497,7 +504,7 @@ kind.
 | Criterion | Tier | First failing test | Mutation it must kill |
 |---|---|---|---|
 | 1 | T0 (gate) | `FileSizeCeilingTest` cases: `DefaultIngest` and `Assembly` refused at 500, `ConsumerClient` and `LocalSequencer` at 600 | M13.1 leaving `DefaultIngest` and `Assembly` untouched; a ceiling of 700 for the other two |
-| 2 | T1 | `NodeProcessPortTest` | the probe-then-hand-over port |
+| 2 | T1, T3 | `NodeProcessPortTest`, `NodeProcessLostPortIT` (a real node whose first port is held) | no retry after a lost port, or `start()` given one attempt; a retry on any other death or runtime failure; unbounded retries; a lost port read from another port's, a port prefix's or another refusal's message; a dead child's refusal not leaving the wait as a `PortLost`, or only after 120 s; the node not closed before a retry; `portLostIn` not walking the cause chain |
 | 3 | T3 | `PartitionVisibilityIT` (measurement) and its `trigger202 ≤ drainEnd` assertion | `trigger202` timed after the drain; the evidence line cites the measurement file's per-run table, at least ten rows, or is NOT-RUN |
 | 4 | T1 | `SubscriptionReaderConnectionTest` close case, or the refutation's measurement | the reader client not closed |
 | 5 | T0/T1 | `SilentDefaultsGoneTest` (reflection) and `FetchBackoffClockWiringTest`'s started-client case | any of the three defaults left in main; a client built on a clock-less policy |
@@ -584,7 +591,7 @@ journal's fsync and the Kubernetes pod lookup are injected seams.
 | M13.1b | R1: `Assembly` below 500: the sequencer and serving construction moved out; its ceiling lowered to 500 | — (quality) |
 | M13.1c | R1: `ConsumerClient` below 600, named by the ceiling gate at 600 | — (quality) |
 | M13.1d | R1: `LocalSequencer` below 600, named by the ceiling gate at 600 | — (quality) |
-| M13.2 | M12.28: `NodeProcess` binds port 0 and reports it | — (quality) |
+| M13.2 | M12.28: `NodeProcess` starts a node that lost its probed port again on a fresh one | — (quality) |
 | M13.3 | R2: `PartitionVisibilityIT` as a distribution | — (evidence) |
 | M13.4 | M12.27: the reader connection on close | FR-6 |
 | M13.5 | R4: ADR-0078 amended for M12.4 | — (docs) |

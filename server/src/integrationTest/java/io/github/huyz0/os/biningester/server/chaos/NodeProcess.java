@@ -68,6 +68,12 @@ public final class NodeProcess implements AutoCloseable {
         return node;
     }
 
+    /** A node over {@code process} on {@code port}, logging to {@code log}, for M13.2's test. */
+    static NodeProcess forTest(Process process, int port, Path log) {
+        return new NodeProcess("test", port, log, process, null, null,
+                java.time.Duration.ofSeconds(2));
+    }
+
     /**
      * The proxy peers reach this node through, to cut and heal.
      *
@@ -141,13 +147,31 @@ public final class NodeProcess implements AutoCloseable {
     public static NodeProcess start(Path dir, String podId, Map<String, String> settings,
             Options options, Path countsFile, java.time.Duration producerReadTimeout)
             throws Exception {
-        int port;
-        // ⚠️ BOUND AND RELEASED, so another process could take it in the
-        // window between -- the shape ConfigExitCodeIT uses and says so. The
-        // node reports its port to nobody, so the test has to choose it.
-        try (var probe = new java.net.ServerSocket(0)) {
-            port = probe.getLocalPort();
-        }
+        return startProbing(NodePorts::probeFreePort, dir, podId, settings, options, countsFile,
+                producerReadTimeout);
+    }
+
+    /**
+     * As {@link #start(Path, String, Map)}, with the ports handed out by
+     * {@code freePort} -- the seam M13.2's IT holds the first one through.
+     */
+    static NodeProcess start(Path dir, String podId, Map<String, String> settings,
+            java.util.function.IntSupplier freePort) throws Exception {
+        return startProbing(freePort, dir, podId, settings, Options.NONE, null,
+                java.time.Duration.ofSeconds(2));
+    }
+
+    /** ⚠️ THE ONE PATH EVERY START TAKES, so the retry M13.2 adds is the one tested. */
+    private static NodeProcess startProbing(java.util.function.IntSupplier freePort, Path dir,
+            String podId, Map<String, String> settings, Options options, Path countsFile,
+            java.time.Duration producerReadTimeout) throws Exception {
+        return NodePorts.onAFreePort(NodePorts.PORT_ATTEMPTS, freePort, port -> startOn(port,
+                dir, podId, settings, options, countsFile, producerReadTimeout));
+    }
+
+    private static NodeProcess startOn(int port, Path dir, String podId,
+            Map<String, String> settings, Options options, Path countsFile,
+            java.time.Duration producerReadTimeout) throws Exception {
         ChaosProxy peers = options.peerProxy() ? new ChaosProxy("localhost", port) : null;
         Map<String, String> all = new LinkedHashMap<>();
         all.put("pod.id", podId);
@@ -192,13 +216,25 @@ public final class NodeProcess implements AutoCloseable {
         builder.environment().putAll(ChaosBucket.credentials());
         NodeProcess node = new NodeProcess(podId, port, log, builder.start(), peers, macroPath,
                 producerReadTimeout);
+        node.awaitServingOrClose();
+        return node;
+    }
+
+    /**
+     * {@link #awaitServing}, closing the node if it does not serve, and
+     * reporting a lost port as a {@link NodePorts.PortLost} however it was wrapped.
+     */
+    void awaitServingOrClose() throws Exception {
         try {
-            node.awaitServing();
+            awaitServing();
         } catch (Exception | Error failed) {
-            node.close();
+            close();
+            NodePorts.PortLost lost = NodePorts.portLostIn(failed);
+            if (lost != null) {
+                throw lost;
+            }
             throw failed;
         }
-        return node;
     }
 
     /**
@@ -213,6 +249,12 @@ public final class NodeProcess implements AutoCloseable {
         await().pollInterval(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(120))
                 .untilAsserted(() -> {
                     if (!process.isAlive()) {
+                        String log = log();
+                        if (NodePorts.lostItsPort(log, port)) {
+                            // ⚠️ NOT AN AssertionError, which Awaitility would
+                            // retry until its two minutes were up (M13.2).
+                            throw new NodePorts.PortLost(port, log);
+                        }
                         throw new AssertionError(
                                 podId + " died before it started serving:\n" + log());
                     }
