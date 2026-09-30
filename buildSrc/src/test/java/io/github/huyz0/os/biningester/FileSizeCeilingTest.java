@@ -18,7 +18,8 @@ import org.junit.jupiter.api.Test;
  * split ceilings, one case per file, so the splits M11.24a-c made cannot grow
  * back as M11's did (M11 criterion 1, OBSERVED-NOT at close). M13.1a and
  * M13.1b lower `DefaultIngest`'s and `Assembly`'s to 500, the headroom fast
- * mode needs, and M13.1c names `ConsumerClient` at 600 (M13 criterion 1).
+ * mode needs, and M13.1c and M13.1d name `ConsumerClient` and
+ * `LocalSequencer` at 600 (M13 criterion 1).
  */
 class FileSizeCeilingTest {
 
@@ -30,21 +31,25 @@ class FileSizeCeilingTest {
             "http/src/main/java/io/github/huyz0/os/biningester/http/BulkService.java";
     private static final String CONSUMER_CLIENT =
             "client/src/main/java/io/github/huyz0/os/biningester/client/ConsumerClient.java";
+    private static final String LOCAL_SEQUENCER =
+            "sequencer/src/main/java/io/github/huyz0/os/biningester/sequencer/LocalSequencer.java";
 
     /**
      * Each named file's ceiling: {@code DefaultIngest} at 500 since M13.1a,
      * {@code Assembly} at 500 since M13.1b, {@code BulkService} at 600,
-     * {@code ConsumerClient} at 600 since M13.1c.
+     * {@code ConsumerClient} at 600 since M13.1c, {@code LocalSequencer} at 600
+     * since M13.1d.
      */
     private static final Map<String, Integer> CEILINGS = Map.of(
-            DEFAULT_INGEST, 500, ASSEMBLY, 500, BULK_SERVICE, 600, CONSUMER_CLIENT, 600);
+            DEFAULT_INGEST, 500, ASSEMBLY, 500, BULK_SERVICE, 600, CONSUMER_CLIENT, 600,
+            LOCAL_SEQUENCER, 600);
 
     @Test
     void theCeilingNamesExactlyTheSplitFilesAtTheirCeilingsAndTheTreeMeetsIt() {
         assertThat(RepositoryGateChecks.INSTANCE.getSPLIT_CEILINGS()).isEqualTo(CEILINGS);
         List<String> failures = new ArrayList<>();
         RepositoryGateChecks.INSTANCE.splitCeilings(repository(), failures);
-        assertThat(failures).as("this tree, after M13.1c").isEmpty();
+        assertThat(failures).as("this tree, after M13.1d").isEmpty();
     }
 
     @Test
@@ -65,6 +70,11 @@ class FileSizeCeilingTest {
     @Test
     void consumerClientIsRefusedAt600LinesAndAdmittedAt599() throws Exception {
         assertRefusedAtCeiling(CONSUMER_CLIENT);
+    }
+
+    @Test
+    void localSequencerIsRefusedAt600LinesAndAdmittedAt599() throws Exception {
+        assertRefusedAtCeiling(LOCAL_SEQUENCER);
     }
 
     @Test

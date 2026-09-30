@@ -195,7 +195,7 @@ final class CheckpointWriter implements AutoCloseable {
         try {
             capture(requests, appliedSequence);
         } catch (Throwable neverFailAnAcknowledgedCommit) {
-            // ⚠️ Throwable, not IOException, and for the reason `renewForever`
+            // ⚠️ Throwable, not IOException, and for the reason `LeaseRenewer.run`
             // and `commitBatch` both catch it: these records are ALREADY durable
             // and acknowledged. An unchecked throw escaping here fails a whole
             // BatchingSequencer window for writes that succeeded.
@@ -303,7 +303,7 @@ final class CheckpointWriter implements AutoCloseable {
      * so the renewer renews forever and no node can ever take that term again.
      * ⚠️ AN EARLIER DRAFT OF THIS SENTENCE SAID "unusable for a full TTL",
      * which is the LESSER failure and the wrong way round -- {@code
-     * renewForever} records that exact inversion being made and fixed once
+     * LeaseRenewer#run} records that exact inversion being made and fixed once
      * already. {@link #checkPolicy} exists to prevent the same outage. Anyone
      * adding a second producer of {@code recoveredPods} owes this method either
      * the separator or a guard.

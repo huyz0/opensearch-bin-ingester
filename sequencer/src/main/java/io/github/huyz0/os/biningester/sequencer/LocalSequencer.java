@@ -61,9 +61,6 @@ public final class LocalSequencer implements Sequencer {
         void awaitNextRenew() throws InterruptedException;
     }
 
-    private static final System.Logger LOG =
-            System.getLogger(LocalSequencer.class.getName());
-
     private final LeaseManager leases;
     private final CommitLog log;
     private final RenewTicker ticker;
@@ -117,7 +114,8 @@ public final class LocalSequencer implements Sequencer {
         this.window = new IdempotencyWindow(store, prefix);
         // ⚠️ A VIRTUAL THREAD parked on the tick, like every other blocking
         // worker here.
-        this.renewer = Thread.ofVirtual().name("lease-renewer").start(this::renewForever);
+        this.renewer = Thread.ofVirtual().name("lease-renewer").start(new LeaseRenewer(
+                leases, ticker, () -> closed, () -> fenced, this::fence, log::epoch));
     }
 
     /**
@@ -136,70 +134,15 @@ public final class LocalSequencer implements Sequencer {
         return !renewer.isAlive();
     }
 
-    private void renewForever() {
-        while (!closed && !fenced) {
-            try {
-                ticker.awaitNextRenew();
-                if (closed) {
-                    return;
-                }
-                if (leases.renew().isEmpty()) {
-                    // ⚠️ EMPTY MEANS FENCED, and it is the ONLY thing that does.
-                    // Another node holds the term now, and it has sealed this
-                    // chain; committing on would reassign offsets a successor
-                    // has already issued, which is I2.
-                    fenced = true;
-                    // ⚠️ THE WRITER STOPS WITH THE LEASE. A fenced node still
-                    // holds a live CheckpointWriter, and a checkpoint PUT is a
-                    // write into the chain's own prefix -- the thing being
-                    // fenced is exactly the right to make it.
-                    CheckpointWriter fencedWriter = checkpoints;
-                    if (fencedWriter != null) {
-                        fencedWriter.close();
-                    }
-                    // ⚠️ NOT NECESSARILY A TAKEOVER, and an earlier draft of
-                    // this line said it was. ADR-0027 accepts a case where the
-                    // renew comes back empty because this node's OWN late write
-                    // landed between the refresh and the CAS -- nobody took the
-                    // term. From in here the two are indistinguishable, which
-                    // is why stopping is right and why the message must not
-                    // send an operator hunting for a successor that may not
-                    // exist.
-                    // ⚠️ ERROR, ABOVE the renewer-died case below, because this
-                    // one is PERMANENT until restart while a lapsed renewer
-                    // merely fails over at the TTL. An earlier draft had the
-                    // severities the other way round.
-                    LOG.log(System.Logger.Level.ERROR,
-                            "the lease renew at epoch " + log.epoch() + " returned empty: either "
-                                    + "another node took the term or this one self-fenced after an "
-                                    + "ambiguous write (ADR-0027). This node will not sequence "
-                                    + "again and must be restarted to rejoin.");
-                    return;
-                }
-            } catch (InterruptedException stopping) {
-                Thread.currentThread().interrupt();
-                return;
-            } catch (IOException transientFailure) {
-                // ⚠️ NOT FENCED. `renew`'s contract separates an IOException --
-                // the store was unreachable, or the lock could not be taken --
-                // from an empty result, and only the latter means the term is
-                // gone. Standing down here would turn every store hiccup into a
-                // cluster-wide failover, which is the outage this task removes
-                // rather than one it should add. The next tick retries.
-                LOG.log(System.Logger.Level.WARNING,
-                        "a lease renew failed; the term is untouched and the next tick retries",
-                        transientFailure);
-            } catch (Throwable died) {
-                // ⚠️ THE RENEWER MUST NOT DIE SILENTLY. If it does, the lease
-                // lapses and the cluster fails over at the TTL -- survivable,
-                // and exactly the behaviour that existed before this task, but
-                // an operator has no other way to learn it happened.
-                LOG.log(System.Logger.Level.WARNING,
-                        "the lease renewer terminated; this node's term will lapse at its TTL "
-                                + "and the cluster will fail over -- survivable, unlike a fence",
-                        died);
-                return;
-            }
+    /**
+     * Marks this term fenced and stops its checkpoint writer (see
+     * {@link LeaseRenewer}): ⚠️ THE WRITER STOPS WITH THE LEASE.
+     */
+    private void fence() {
+        fenced = true;
+        CheckpointWriter fencedWriter = checkpoints;
+        if (fencedWriter != null) {
+            fencedWriter.close();
         }
     }
 
@@ -280,72 +223,9 @@ public final class LocalSequencer implements Sequencer {
         // is that, and a caller wanting a supervisor tick should use it.
         long epoch = won.get().epoch();
         try {
-            // ⚠️ Epochs advance by exactly one per acquisition, so the
-            // predecessor is E-1 — and at E == 1 that is epoch 0, the RESERVED
-            // unleased chain, which has no leader to fence and therefore cannot
-            // be sealed at all.
-            //
-            // ⚠️ ADR-0029: SEAL THE ANCESTOR YOU INHERIT FROM, NOT `epoch - 1`
-            // BLINDLY. When a run of epochs burned right after the real
-            // predecessor — every failed `start` burns one, and a store outage
-            // burns many — `epoch - 1` names a chain that was never opened and
-            // has nothing to seal, while the genuine ancestor further back
-            // stays unsealed and its leader, unaware it has been superseded,
-            // keeps committing into offsets this chain is about to reassign.
-            // I2. `firstInheritableAncestor` walks back through exactly those
-            // burned epochs — the same arithmetic the crossing already does —
-            // to the one chain whose offsets actually get inherited, and it is
-            // sealed here, BEFORE `open` below crosses into it. Order is
-            // load-bearing: reading first and sealing second would read a
-            // still-growing chain, reopening the defect this closes.
-            long prevEpoch = ChainReplay.firstInheritableAncestor(store, prefix, epoch - 1);
-            // ⚠️ ADR-0037: SEAL EVERY BURNED EPOCH THE WALK CROSSED, not only
-            // the one it lands on. A burned epoch is empty because its leader
-            // acquired the lease and has not written YET -- not because it is
-            // dead -- so stepping over it without sealing leaves it free to open
-            // and write beside this chain, which is the same I2 by another
-            // route. MEASURED over 100 ROUGH seeds: the crossed run is mean
-            // 1.56 and max 7, two orders of magnitude below the "seal every
-            // unsealed ancestor" ADR-0029 rejected on failover latency.
-            // ⚠️ THE ONE UNBOUNDED CASE IS CLUSTER BIRTH, when no epoch was ever
-            // opened and the walk reaches 0: the run is then every epoch minted
-            // so far, which is the count of failed starts before the first
-            // success. It is bounded by that and not by history, because once
-            // any epoch is opened the walk stops there.
-            // ⚠️ THE SEAL'S RETURN VALUE IS THE PROOF, and discarding it was a
-            // defect in this loop's first draft that review MEASURED: the probe
-            // above and these seals are NOT atomic, and nothing renews the lease
-            // during `start`, so a pod stalled past its TTL can open a chain
-            // this walk just read as empty. `seal` redrives past whatever
-            // landed, so a Seal returned ABOVE slot 0 says exactly one thing --
-            // that chain WAS opened after the probe, and it is the real
-            // ancestor. Keeping the stale `prevEpoch` there reassigns every
-            // offset it committed, which is ADR-0037's own rejected (c)
-            // arriving through a race instead of a missing seal.
-            long prevSeq = 0;
-            for (long crossed = epoch - 1; crossed > Math.max(prevEpoch, 0); crossed--) {
-                CommitLog burned = new CommitLog(store, prefix, crossed);
-                burned.recoverChainEnd();
-                Seal landed = burned.seal(epoch, sealRedriveBudget);
-                if (landed.sequence() > 0) {
-                    // Opened in the window. It is the nearest genuine ancestor,
-                    // and everything below it is its business rather than ours.
-                    prevEpoch = crossed;
-                    prevSeq = landed.sequence();
-                    break;
-                }
-            }
-            if (prevSeq == 0 && prevEpoch >= 1) {
-                CommitLog predecessor = new CommitLog(store, prefix, prevEpoch);
-                // ⚠️ THE END, not the contents. This instance only ever SEALS
-                // the predecessor; the offsets a full `recover()` would build
-                // are dropped with the local, and paying one GET per delta of
-                // the previous term makes failover cost grow without bound in
-                // that term's length. Measured on a 51-entry chain: 52 GETs,
-                // every one discarded.
-                predecessor.recoverChainEnd();
-                prevSeq = predecessor.seal(epoch, sealRedriveBudget).sequence();
-            }
+            // ⚠️ SEALED BEFORE `open` CROSSES INTO IT; see AncestorSeal.
+            AncestorSeal.Inherited inherited =
+                    AncestorSeal.sealFor(store, prefix, epoch, sealRedriveBudget);
             CommitLog log = new CommitLog(store, prefix, epoch);
             // ⚠️ RECOVER BEFORE SEQUENCING, and the note below moved here from
             // DefaultIngest's constructor with the responsibility. `commit`
@@ -363,7 +243,7 @@ public final class LocalSequencer implements Sequencer {
             // ⚠️ `open` IS WHAT CROSSES FROM THE PREDECESSOR, so the window can
             // only be seeded after it -- a successor's own chain is empty and
             // `recover` finds nothing to inherit.
-            log.open(prevEpoch, prevSeq);
+            log.open(inherited.epoch(), inherited.sequence());
             LocalSequencer sequencer =
                     new LocalSequencer(leases, log, ticker, store, prefix);
             // ⚠️ SEEDED FROM THE CHAIN, AFTER `open` -- which is what crosses
