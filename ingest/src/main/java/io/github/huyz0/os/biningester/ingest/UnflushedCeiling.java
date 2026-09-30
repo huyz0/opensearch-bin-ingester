@@ -114,7 +114,10 @@ final class UnflushedCeiling {
      */
     void flushEnded(Flush ended) {
         // ⚠️ NO TOKEN IS NO FLUSH (M13.14 review P1): refused rather than read
-        // as stale, so a completion handing back nothing fails loudly.
+        // as stale. ⚠️ NOT LOUDLY (M13.48, M13.14 review P2): the caller is
+        // FlushPath's whenComplete, whose result nobody reads, so the refusal
+        // is swallowed there -- nothing is released or signalled, and appends
+        // past the ceiling stall, which the ceiling tests catch.
         java.util.Objects.requireNonNull(ended, "ended");
         if (ended == current) {
             inFlightBytes = 0;

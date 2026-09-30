@@ -196,6 +196,31 @@ class IndexQuotasBoundTest {
     }
 
     /**
+     * ⚠️ A BOUND DEFERRED TICKET HOLDS A SLOT (M13.48, M13.14 review T1): once
+     * its name is known it enters the bucket as an admitted request, so it
+     * counts against the index's in-flight cap -- and against the sweep's
+     * "nothing in flight" -- until it is released.
+     */
+    @Test
+    void aBoundDeferredTicketHoldsOneOfTheIndexsInFlightSlots() {
+        Set<String> known = java.util.concurrent.ConcurrentHashMap.newKeySet();
+        IndexQuotas quotas = new IndexQuotas(new IndexQuotas.Config(TEN_A_SECOND, Map.of(), 2,
+                IDLE), clock, known::contains, name -> java.util.List.of());
+
+        IndexQuotas.Ticket deferred = quotas.admit("late").ticket().orElseThrow();
+        known.add("late");
+        deferred.charge(records(1)); // binds
+        IndexQuotas.Ticket second = quotas.admit("late").ticket().orElseThrow();
+
+        assertThat(quotas.admit("late").refusal()).as("the bound ticket and one more: the cap")
+                .hasValueSatisfying(refusal -> assertThat(refusal.reason())
+                        .contains("requests admitted, its cap"));
+        deferred.release();
+        assertThat(quotas.admit("late").refusal()).as("its slot back on release").isEmpty();
+        second.release();
+    }
+
+    /**
      * ⚠️ THE FIRST ALIAS IN SORTED ORDER WINS (M13.14, M12.13 review T2): an
      * index with no override of its own, named by two aliases that both have
      * one, takes the alias that sorts first -- however its aliases are listed.
