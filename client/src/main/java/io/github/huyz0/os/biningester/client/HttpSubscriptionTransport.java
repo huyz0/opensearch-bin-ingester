@@ -411,12 +411,16 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport, A
         // between polls; without it a push published in the gap between two
         // polls reaches nobody, with no gap and no error -- measured.
         String id = java.util.UUID.randomUUID().toString();
-        Thread reader = Thread.ofVirtual()
+        Thread.ofVirtual()
                 .name("subscription-" + key.indexId() + "-" + key.partitionId())
                 .start(() -> readForever(key, id, listener, stopped));
+        // ⚠️ STOPPED, NOT INTERRUPTED (M13.4, M12.27): an interrupt mid-poll
+        // abandoned the poll's connection, open until GC or the ingester's idle
+        // timeout. The reader finishes its poll or backoff sleep, then closes it;
+        // the stop checks bar delivery and the ladder leaves `tier()` at once.
         return () -> {
             stopped.set(true);
-            reader.interrupt();
+            ladders.remove(id);
         };
     }
 
@@ -479,6 +483,9 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport, A
                     throw new NotOk("subscribe answered " + response.status());
                 }
                 answered = true;
+                if (stopped.get() || closed.get()) {
+                    return; // ⚠️ answered after the close: no reconnect, no delivery
+                }
                 if (!connected) {
                     connected = true;
                     metrics.increment(SubscriptionMetrics.Counter.SUBSCRIPTION_RECONNECTS);
