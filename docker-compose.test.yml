@@ -11,8 +11,8 @@
 #
 # Every service declares mem_limit. build.md: WSL2 does not kill the offending
 # process, it kills whatever it likes, so a runaway must die as a Docker
-# OOM-kill. scripts/check-test-budget.sh asserts these are present and that
-# they sum below the ceiling.
+# OOM-kill. ./gradlew gates (TestBudget, M13.9) asserts these are present and
+# that, with the Gradle limits, they sum to no more than build.md's ceiling.
 services:
 
   rustfs:

@@ -22,8 +22,8 @@ import java.util.concurrent.TimeUnit;
  * endpoints.
  *
  * <p>⚠️ **`docker compose`, NOT Testcontainers.** The compose file pins the
- * image by digest and declares the memory cap `scripts/check-test-budget.sh`
- * reads; Testcontainers would be a second description of the same container
+ * image by digest and declares the memory cap `./gradlew gates` reads
+ * ({@code TestBudget}); Testcontainers would be a second description of the same container
  * plus a dependency tree this build would have to pin a sha and a licence for,
  * jar by jar.
  *

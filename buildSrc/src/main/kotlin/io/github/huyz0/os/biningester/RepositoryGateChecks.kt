@@ -150,18 +150,8 @@ object RepositoryGateChecks {
         if (examined == 0) failures += "fault-injecting store has no @Override verbs"
     }
 
-    fun testBudget(root: Path, failures: MutableList<String>) {
-        val props = root.resolve("gradle.properties")
-        if (!Files.isRegularFile(props)) return
-        val text = props.readText()
-        if (!Regex("(?m)^org\\.gradle\\.jvmargs=.*-Xmx\\S+").containsMatchIn(text)) failures += "gradle.properties has no Gradle heap limit"
-        if (!Regex("(?m)^org\\.gradle\\.workers\\.max=\\d+").containsMatchIn(text)) failures += "gradle.properties has no worker limit"
-        val conventions = root.resolve("buildSrc/src/main/kotlin/io.github.huyz0.os.biningester.java-conventions.gradle.kts")
-        val build = if (Files.isRegularFile(conventions)) conventions.readText() else ""
-        if (!build.contains("memoryMaximumSize")) failures += "conventions plugin has no compile-daemon heap limit"
-        if (!build.contains("maxHeapSize")) failures += "conventions plugin has no test heap limit"
-        if (!build.contains("timeout.set")) failures += "conventions plugin has no test timeout"
-    }
+    /** build.md's memory budget: every enforced limit, compose's included, summed against its ceiling (M13.9). */
+    fun testBudget(root: Path, failures: MutableList<String>) = TestBudget.check(root, failures)
 
     fun moduleDrift(root: Path, failures: MutableList<String>) {
         val settings = root.resolve("settings.gradle.kts").readText()

@@ -141,6 +141,7 @@ tasks.register<Test>("nativeGateTest") {
         includeTestsMatching("io.github.huyz0.os.biningester.SingleTooManyRequestsGateTest")
         includeTestsMatching("io.github.huyz0.os.biningester.GateScannerEdgesTest")
         includeTestsMatching("io.github.huyz0.os.biningester.LegacyScriptQuarantineTest")
+        includeTestsMatching("io.github.huyz0.os.biningester.TestBudgetGateTest")
     }
 }
 

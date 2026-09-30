@@ -26,7 +26,7 @@ lost session.**
 
 ⚠️ The compile-daemon and test-JVM rows are **per worker**, and
 `org.gradle.workers.max=2`, so each counts twice — which is what
-`scripts/test_budget.py` sums. A table counting one of each understates its own
+`./gradlew gates` sums (`TestBudget`, M13.9). A table counting one of each understates its own
 gate by ~1 GiB, and a real breach would look compliant.
 
 ⚠️ **Not `org.gradle.java.compile-daemon.jvmargs`.** That looks like a Gradle
@@ -35,13 +35,22 @@ It was set, counted toward the budget, and enforcing nothing, which is the exact
 failure this section exists to prevent. Set a limit where the runtime reads it,
 and prove it by probing the realised task.
 
-**Ceiling: 6 GiB**, which is what `scripts/check-test-budget.sh` sums the
-configured limits against — the table above is the intended allocation, the
-ceiling is the limit. The remainder of the 8 GiB is page cache and headroom.
+**Ceiling: 6 GiB**, which is what `./gradlew gates` (`TestBudget`) sums the
+configured limits against, reading the number from this line. The table above
+is the intended allocation; the ceiling is the limit. The remainder of the 8 GiB is page cache and headroom.
 
 Also: `--max-workers=2`, and a timeout on every test task so a hung test releases
-its memory. → `scripts/check-test-budget.sh` asserts the configured limits sum
-below the ceiling.
+its memory. → `./gradlew gates` (`TestBudget`, M13.9) asserts the Gradle and
+test-JVM limits are set, every compose service declares a `mem_limit` (or a
+`limits:` memory; a reservation is not a cap), and the configured limits sum to
+no more than the ceiling. A module's own test heap may be no larger than the
+conventions plugin's, which the sum counts. ⚠️ Not summed:
+- the OpenSearch-container and gateway rows, set by no file in this tree;
+- **`plugin`'s `clusterTest` at 2 GiB**, the one named exception
+  (`TestBudget.HEAP_EXCEPTIONS`, pinned at that value). It runs an OpenSearch
+  node in the test JVM, T4 and opt-in. Each of its JVMs takes 2 GiB where the
+  sum counts 512 MiB: with one, the limits sum to 5,632 MiB, inside the
+  ceiling; with one per worker, 7,168 MiB, above it.
 
 ## Tiers map to Gradle tasks; containers are opt-in
 
