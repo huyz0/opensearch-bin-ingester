@@ -106,6 +106,66 @@ class CostReportingAssemblyTest {
         }
     }
 
+    /**
+     * ⚠️ PRICED AT THE STORE's OWN TABLE (M13.7, M11.5 review T2, M12.18 P1): the
+     * memory store is free, so the case above passes with any table handed to
+     * the reporter -- {@code CostTable.free()} included, which would print every
+     * index at $0 in production. Here the store declares S3 Standard's prices,
+     * and the line must price the index above zero.
+     */
+    @Test
+    void theLineIsPricedAtTheStoresOwnCostTable() throws Exception {
+        Logger logger = Logger.getLogger("binstore.cost");
+        List<String> lines = capture(logger);
+        try (BinStore memory = StoreFactory.open(new StoreConfig("memory", Optional.empty()));
+                Assembly assembly = Assembly.open(config(Duration.ofMillis(100)),
+                        priced(memory), noPeers(), Clock.systemUTC())) {
+            assembly.catalog().register(
+                    new IndexRegistration(INDEX_UUID, INDEX, List.of(), 4, 4, 1, 1));
+            assembly.ingest().append(PRINCIPAL, INDEX, 0, sink -> sink.accept(
+                    new SegmentRecord("doc", OpType.INDEX, OptionalLong.of(1),
+                            "doc".getBytes(StandardCharsets.UTF_8))));
+
+            java.util.regex.Pattern priced =
+                    java.util.regex.Pattern.compile(INDEX + " \\$([0-9.]+)");
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+            double dollars = 0;
+            while (dollars == 0 && System.nanoTime() < deadline) {
+                for (String line : lines) {
+                    java.util.regex.Matcher m = priced.matcher(line);
+                    if (m.find()) {
+                        dollars = Math.max(dollars, Double.parseDouble(m.group(1)));
+                    }
+                }
+                Thread.onSpinWait();
+            }
+            assertThat(dollars).as("⚠️ THE INDEX PRICED AT THE STORE's TABLE, not at $0")
+                    .isPositive();
+        }
+    }
+
+    /** {@code store}, declaring S3 Standard's prices as its own. */
+    private static BinStore priced(BinStore store) {
+        io.github.huyz0.os.biningester.binstore.Capabilities free = store.capabilities();
+        io.github.huyz0.os.biningester.binstore.Capabilities s3 =
+                new io.github.huyz0.os.biningester.binstore.Capabilities(
+                        free.conditionalWrites(), free.batchDelete(), free.presignedUrls(),
+                        free.maxKeyBytes(), free.minPartSize(),
+                        io.github.huyz0.os.biningester.binstore.CostTable.awsS3Standard());
+        return (BinStore) java.lang.reflect.Proxy.newProxyInstance(
+                BinStore.class.getClassLoader(), new Class<?>[] {BinStore.class},
+                (proxy, method, args) -> {
+                    if (method.getName().equals("capabilities")) {
+                        return s3;
+                    }
+                    try {
+                        return method.invoke(store, args);
+                    } catch (java.lang.reflect.InvocationTargetException e) {
+                        throw e.getCause();
+                    }
+                });
+    }
+
     @Test
     void aPodConfiguredOffLogsNoLine() throws Exception {
         Logger logger = Logger.getLogger("binstore.cost");

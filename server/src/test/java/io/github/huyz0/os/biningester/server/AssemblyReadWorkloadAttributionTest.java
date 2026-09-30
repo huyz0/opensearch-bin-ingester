@@ -156,6 +156,8 @@ class AssemblyReadWorkloadAttributionTest {
 
             // 3. CATCH-UP: the appended record, replayed from its flushed segment.
             gets = assembly.dataSegmentGets();
+            long heavyBeforeCatchUp = share(assembly, HEAVY_UUID);
+            long unattributedBeforeCatchUp = unattributed(assembly);
             List<byte[]> frames = new ArrayList<>();
             assembly.respondCatchUp(new CatchUpRequestFrame(UUID.randomUUID(),
                     List.of(new CatchUpRequestFrame.Stream(
@@ -165,6 +167,16 @@ class AssemblyReadWorkloadAttributionTest {
                     .as("the premise: the catch-up read its segment from the store")
                     .isPositive();
             assertExact(assembly, "the catch-up read");
+            // ⚠️ AND WHERE IT WENT, not only that it summed (M13.7, M12.18 review
+            // T1): the flushed segment holds only the heavy index's run, so its
+            // GETs are the heavy index's, whole -- a catch-up GET charged whole
+            // to unattributed kept the sum exact and passed.
+            assertThat(share(assembly, HEAVY_UUID) - heavyBeforeCatchUp)
+                    .as("⚠️ THE CATCH-UP GET's SHARE is the heavy index's, whole")
+                    .isEqualTo((assembly.dataSegmentGets() - gets)
+                            * IndexCostLedger.MICROS_PER_REQUEST);
+            assertThat(unattributed(assembly)).as("and none of it unattributed")
+                    .isEqualTo(unattributedBeforeCatchUp);
         }
     }
 }
