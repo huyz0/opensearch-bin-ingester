@@ -18,7 +18,7 @@ import org.junit.jupiter.api.Test;
  * split ceilings, one case per file, so the splits M11.24a-c made cannot grow
  * back as M11's did (M11 criterion 1, OBSERVED-NOT at close). M13.1a and
  * M13.1b lower `DefaultIngest`'s and `Assembly`'s to 500, the headroom fast
- * mode needs (M13 criterion 1).
+ * mode needs, and M13.1c names `ConsumerClient` at 600 (M13 criterion 1).
  */
 class FileSizeCeilingTest {
 
@@ -28,20 +28,23 @@ class FileSizeCeilingTest {
             "server/src/main/java/io/github/huyz0/os/biningester/server/Assembly.java";
     private static final String BULK_SERVICE =
             "http/src/main/java/io/github/huyz0/os/biningester/http/BulkService.java";
+    private static final String CONSUMER_CLIENT =
+            "client/src/main/java/io/github/huyz0/os/biningester/client/ConsumerClient.java";
 
     /**
      * Each named file's ceiling: {@code DefaultIngest} at 500 since M13.1a,
-     * {@code Assembly} at 500 since M13.1b, {@code BulkService} at 600.
+     * {@code Assembly} at 500 since M13.1b, {@code BulkService} at 600,
+     * {@code ConsumerClient} at 600 since M13.1c.
      */
     private static final Map<String, Integer> CEILINGS = Map.of(
-            DEFAULT_INGEST, 500, ASSEMBLY, 500, BULK_SERVICE, 600);
+            DEFAULT_INGEST, 500, ASSEMBLY, 500, BULK_SERVICE, 600, CONSUMER_CLIENT, 600);
 
     @Test
     void theCeilingNamesExactlyTheSplitFilesAtTheirCeilingsAndTheTreeMeetsIt() {
         assertThat(RepositoryGateChecks.INSTANCE.getSPLIT_CEILINGS()).isEqualTo(CEILINGS);
         List<String> failures = new ArrayList<>();
         RepositoryGateChecks.INSTANCE.splitCeilings(repository(), failures);
-        assertThat(failures).as("this tree, after M13.1b").isEmpty();
+        assertThat(failures).as("this tree, after M13.1c").isEmpty();
     }
 
     @Test
@@ -57,6 +60,11 @@ class FileSizeCeilingTest {
     @Test
     void bulkServiceIsRefusedAt600LinesAndAdmittedAt599() throws Exception {
         assertRefusedAtCeiling(BULK_SERVICE);
+    }
+
+    @Test
+    void consumerClientIsRefusedAt600LinesAndAdmittedAt599() throws Exception {
+        assertRefusedAtCeiling(CONSUMER_CLIENT);
     }
 
     @Test
@@ -86,7 +94,7 @@ class FileSizeCeilingTest {
 
             RepositoryGateChecks.INSTANCE.splitCeilings(root, failures);
 
-            assertThat(failures).hasSize(3).anyMatch(message -> message.contains(ASSEMBLY)
+            assertThat(failures).hasSize(CEILINGS.size()).anyMatch(message -> message.contains(ASSEMBLY)
                     && message.contains("does not exist"));
         } finally {
             delete(root);

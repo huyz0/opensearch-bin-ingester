@@ -217,12 +217,15 @@ object RepositoryGateChecks {
      * ⚠️ M13.1a: `DefaultIngest` at 500, the headroom fast mode needs, after
      * its flush path moved to `FlushPath`; M13.1b: `Assembly` at 500, after
      * its sequencer and write-path construction moved to `SequencerAssembly`
-     * and `WritePathAssembly` (M13 criterion 1). Lowered, never raised.
+     * and `WritePathAssembly`; M13.1c: `ConsumerClient` named at 600, after
+     * its gap tracking moved to `GapTracker` (M13 criterion 1). Lowered, never
+     * raised.
      */
     val SPLIT_CEILINGS: Map<String, Int> = mapOf(
         "ingest/src/main/java/io/github/huyz0/os/biningester/ingest/DefaultIngest.java" to 500,
         "server/src/main/java/io/github/huyz0/os/biningester/server/Assembly.java" to 500,
         "http/src/main/java/io/github/huyz0/os/biningester/http/BulkService.java" to 600,
+        "client/src/main/java/io/github/huyz0/os/biningester/client/ConsumerClient.java" to 600,
     )
 
     fun splitCeilings(root: Path, failures: MutableList<String>) {
