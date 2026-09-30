@@ -9,16 +9,9 @@ import io.github.huyz0.os.biningester.security.Principal;
 import io.github.huyz0.os.biningester.sequencer.Sequencer;
 import java.io.IOException;
 import java.time.Clock;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
-import java.util.concurrent.locks.Condition;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * The production composition behind {@link Ingest}: accumulate across producers,
@@ -45,8 +38,6 @@ import java.util.concurrent.locks.ReentrantLock;
 public final class DefaultIngest implements Ingest {
 
     private final IngestConfig config;
-    /** ⚠️ Volatile for {@link #flushSpacingMillis()}, read off-lock; writers hold it. */
-    private volatile Accumulator accumulator;
     private final SegmentPublisher publisher;
     /** Each index's share of this pod's store requests (M11.2, ADR-0077). */
     private final IndexCostLedger costLedger;
@@ -65,23 +56,10 @@ public final class DefaultIngest implements Ingest {
      */
     private final SegmentServing serving;
     private final Sequencer sequencer;
-    /** The detached batch's store work, off {@link #lock}. */
+    /** The detached batch's store work, off the flush path's lock. */
     private final BatchFlusher batchFlusher;
     private final SubscriptionHub hub;
     private final StreamResolver streams;
-
-    /**
-     * ⚠️ Serializes active-buffer mutation and flush detachment. The detached
-     * accumulator's PUT and commit run on {@link FlushCoordinator}, whose
-     * single queue preserves segment/offset order without holding this lock
-     * across object-store I/O.
-     *
-     * <p>⚠️ It does NOT cover the push — see {@link PushQueue}.
-     */
-    private final ReentrantLock lock = new ReentrantLock();
-
-    /** ⚠️ Replaces a 1 ms poll that woke 1000x/s and took this lock each time. */
-    private final Condition work = lock.newCondition();
 
     /**
      * How many segments' worth of records may be buffered and not yet durable
@@ -95,17 +73,7 @@ public final class DefaultIngest implements Ingest {
      */
     public static final long MIN_UNFLUSHED_BYTES = 1L << 20;
 
-    /** The unflushed-bytes ceiling, under {@link #lock} (ADR-0079). */
-    private final UnflushedCeiling ceiling;
-
-    /**
-     * The spacing that governed the batch being flushed, {@link Long#MAX_VALUE}
-     * when none is (M10.7); see {@link #flushSpacingMillis()}. Written under
-     * {@link #lock}, read off it.
-     */
-    private volatile long inFlightSpacingMillis = Long.MAX_VALUE;
-
-    /** Delivers durable segments to subscribers, in order, off {@link #lock}. */
+    /** Delivers durable segments to subscribers, in order, off the flush path's lock. */
     private final PushQueue pushQueue;
 
     /** One caller waiting for the flush that will carry its records. */
@@ -113,12 +81,8 @@ public final class DefaultIngest implements Ingest {
             CompletableFuture<AppendResult> done) {
     }
 
-    private final List<Pending> pending = new ArrayList<>();
-    private final Map<RunKey, Integer> bufferedPerStream = new HashMap<>();
-    private final Thread flusher;
-    private final FlushCoordinator flushes;
-    private volatile boolean closed;
-
+    /** The active buffer, its waiters and the flush loop (M13.1a). */
+    private final FlushPath flushPath;
 
     /** How many pushes could not be delivered; see {@link PushQueue#undeliverable()}. */
     public long undeliverablePushes() {
@@ -158,10 +122,6 @@ public final class DefaultIngest implements Ingest {
             throws IOException {
         this.costLedger = Objects.requireNonNull(costLedger, "costLedger");
         this.config = Objects.requireNonNull(config, "config");
-        this.accumulator = new Accumulator(config, Objects.requireNonNull(clock, "clock"));
-        this.ceiling = new UnflushedCeiling(Math.max(MIN_UNFLUSHED_BYTES,
-                Math.multiplyExact(UNFLUSHED_SEGMENTS, config.maxSegmentBytes())),
-                lock.newCondition());
         this.publisher = new SegmentPublisher(Objects.requireNonNull(store, "store"),
                 Objects.requireNonNull(prefix, "prefix"),
                 Objects.requireNonNull(podShortId, "podShortId"), costLedger);
@@ -181,15 +141,11 @@ public final class DefaultIngest implements Ingest {
         // Establishing where a chain ended is the SEQUENCER's, because only it
         // knows which epoch it may write to.
 
-        this.flushes = new FlushCoordinator(lock, work, this::flushBatch,
-                batch -> {
-                    accumulator.adoptAdaptiveStateFrom(batch.accumulator());
-                    inFlightSpacingMillis = Long.MAX_VALUE;
-                });
+        this.flushPath = new FlushPath(config, Objects.requireNonNull(clock, "clock"),
+                this::flushBatch);
         this.pushQueue = new PushQueue(hub, serving, config.maxQueuedPushBytes());
         this.batchFlusher = new BatchFlusher(publisher, this.sequencer, podShortId,
                 durableSegmentListener, pushQueue);
-        this.flusher = Thread.ofVirtual().name("binstore-flush").start(this::flushLoop);
     }
 
     @Override
@@ -228,7 +184,7 @@ public final class DefaultIngest implements Ingest {
         }
         Objects.requireNonNull(index, "index");
         Objects.requireNonNull(records, "records");
-        if (closed) {
+        if (flushPath.isClosed()) {
             throw new IOException("this ingester is closed");
         }
         // ⚠️ THE TRUST DOMAIN, not just the index. Both halves are in hand only
@@ -245,68 +201,7 @@ public final class DefaultIngest implements Ingest {
         // ⚠️ Nothing above buffers anything. A refusal that had already added to
         // the accumulator would leak the refused records into the next flush.
         RunKey stream = new RunKey(streams.streamIdOf(index), partition);
-        Pending mine;
-        lock.lock();
-        try {
-            // ⚠️ CHECKED AGAIN, under the lock. The check above is outside it, so
-            // a thread that passed it can still be waiting here while close()
-            // runs its final flush: it would then register a Pending that
-            // nothing will ever complete, and CompletableFuture.join is
-            // UNINTERRUPTIBLE, so the producer hangs until SIGKILL with its
-            // records stranded in a dead accumulator.
-            if (closed) {
-                throw new IOException("this ingester is closed");
-            }
-            awaitRoomLocked();
-            int before = bufferedPerStream.getOrDefault(stream, 0);
-            // ⚠️ A one-element array, not a local: a lambda captures effectively
-            // final variables only, and this is mutated once per record as
-            // `records` is consumed -- which is the whole point (java-style.md
-            // rule 8): nothing here requires `records` to have a known size, or
-            // any backing collection at all, before this loop starts.
-            int[] count = {0};
-            // ⚠️ If `records` throws partway through (a producer's body turns
-            // out malformed after some valid records -- see Ingest.append's
-            // javadoc), whatever this lambda already handed to `accumulator`
-            // must stay reflected in `bufferedPerStream` -- updated PER RECORD
-            // below, not once after `forEachRecord` returns -- or the NEXT
-            // append to this same stream computes `before` from a stale count
-            // and hands out a Pending whose offset slice does not match what
-            // the eventual RunCommit assigns. No Pending is registered for
-            // THIS append when that happens: it has already failed, so nothing
-            // should be waiting on a future for it.
-            records.forEachRecord(record -> {
-                accumulator.add(stream, record, lane);
-                count[0]++;
-                bufferedPerStream.put(stream, before + count[0]);
-            });
-            if (count[0] == 0) {
-                // ⚠️ Refused rather than flushed: an empty append that still
-                // wrote a segment would spend two requests on nothing. Detected
-                // HERE rather than up front -- a RecordSource does not know its
-                // own size before it has been run -- but nothing has been
-                // buffered for THIS append (count is 0), so there is nothing to
-                // leak into the next flush.
-                throw new IllegalArgumentException(
-                        "an append of no records has nothing to make durable");
-            }
-            mine = new Pending(stream, before, count[0], new CompletableFuture<>());
-            pending.add(mine);
-            // ⚠️ M10.32: NEVER BEHIND A QUEUED FLUSH. The coordinator admits one
-            // batch at a time and REFUSES a second (M11.10) -- it once answered it
-            // with the first's future, so detaching here DROPPED this batch: records
-            // never written, producers blocked for ever. The flusher enqueues
-            // it instead, woken when the queued flush completes.
-            if (accumulator.isFlushDue() && !flushes.isQueued()) {
-                enqueueFlushLocked();
-            } else {
-                // ⚠️ Wakes the flusher so it re-computes its deadline rather
-                // than discovering this append up to a poll interval later.
-                work.signal();
-            }
-        } finally {
-            lock.unlock();
-        }
+        Pending mine = flushPath.buffer(stream, lane, records);
 
         buffered.run();
         // ⚠️ Waited on OUTSIDE the lock, so a producer whose flush is not yet due
@@ -349,22 +244,7 @@ public final class DefaultIngest implements Ingest {
 
     /** Flushes whatever is buffered, whether or not the trigger says it is due. */
     public void flushNow() throws IOException {
-        while (true) {
-            CompletableFuture<Void> done;
-            lock.lock();
-            try {
-                if (!pending.isEmpty() && !flushes.isQueued()) {
-                    done = enqueueFlushLocked();
-                } else if (flushes.isQueued()) {
-                    done = flushes.currentDone();
-                } else {
-                    return;
-                }
-            } finally {
-                lock.unlock();
-            }
-            FlushCoordinator.await(done);
-        }
+        flushPath.flushNow();
     }
 
     /**
@@ -373,120 +253,25 @@ public final class DefaultIngest implements Ingest {
      * batch is still queued; {@link #flushQueued()} is what it reads.
      */
     void whenReleased(int index, Runnable onRelease) {
-        lock.lock();
-        try {
-            pending.get(index).done().whenComplete((result, failure) -> onRelease.run());
-        } finally {
-            lock.unlock();
-        }
+        flushPath.whenReleased(index, onRelease);
     }
 
     /** Whether a detached batch is still queued or in flight. */
     boolean flushQueued() {
-        lock.lock();
-        try {
-            return flushes.isQueued();
-        } finally {
-            lock.unlock();
-        }
+        return flushPath.flushQueued();
     }
 
     /** Whether an append is parked waiting for room under the unflushed ceiling (M12.3). */
     boolean waitingForRoom() {
-        lock.lock();
-        try {
-            return ceiling.hasWaiters(lock);
-        } finally {
-            lock.unlock();
-        }
+        return flushPath.waitingForRoom();
     }
 
     /** How many callers are waiting for the next flush. */
     int pendingAppends() {
-        lock.lock();
-        try {
-            return pending.size();
-        } finally {
-            lock.unlock();
-        }
+        return flushPath.pendingAppends();
     }
 
-    private void flushLoop() {
-        lock.lock();
-        try {
-            while (!closed) {
-                if (!pending.isEmpty() && !flushes.isQueued() && accumulator.isFlushDue()) {
-                    enqueueFlushLocked();
-                    continue;
-                }
-                // ⚠️ A quarter of the floor, so the trigger is noticed promptly
-                // without polling; an append signals this condition as well, so
-                // the wait is an upper bound rather than a poll. ⚠️ M10.7: and
-                // no later than the EARLIEST buffered lane's deadline, read off
-                // the INJECTED clock (ADR-0074 decision 3), so a +2 record wakes
-                // the loop at its own deadline. ⚠️ ONLY WHEN THE CHECK ABOVE
-                // COULD FLUSH, i.e. with a waiter and no flush queued; in any
-                // other state a past deadline answers 0 and the loop would spin
-                // at the 1 ms minimum doing nothing: behind a queued flush until
-                // it signals, and -- with NO waiter -- for ever, since records a
-                // throwing RecordSource left buffered have nobody to flush them.
-                long waitMillis = config.intervalFloor().toMillis() / 4;
-                if (!pending.isEmpty() && !flushes.isQueued()) {
-                    waitMillis = Math.min(waitMillis, accumulator.millisUntilDue());
-                }
-                try {
-                    work.awaitNanos(Math.max(1_000_000L,
-                            TimeUnit.MILLISECONDS.toNanos(waitMillis)));
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    return;
-                }
-            }
-        } finally {
-            lock.unlock();
-        }
-    }
-
-
-    /** Waits for room under the unflushed ceiling; caller holds {@link #lock}. */
-    private void awaitRoomLocked() throws IOException {
-        ceiling.awaitRoom(() -> accumulator.bufferedBytes(),
-                () -> flushes.isQueued() || !pending.isEmpty(), () -> closed);
-    }
-
-    /** Detaches the active buffer and queues its store work; caller holds {@link #lock}. */
-    private CompletableFuture<Void> enqueueFlushLocked() {
-        if (pending.isEmpty()) {
-            return CompletableFuture.completedFuture(null);
-        }
-        if (flushes.isQueued()) { // ⚠️ BEFORE the detach, which would lose them (H5)
-            throw new IllegalStateException("a flush is already queued");
-        }
-        List<Pending> batch = List.copyOf(pending);
-        pending.clear();
-        bufferedPerStream.clear();
-        Accumulator detached = accumulator;
-        accumulator = accumulator.emptyCopy();
-        // ⚠️ TAKEN BEFORE THE DRAIN, which resets the detached buffer's lanes:
-        // the governor samples the spacing at this batch's data PUT, and by
-        // then both buffers would answer as if no +2 record had been written.
-        inFlightSpacingMillis = detached.flushSpacing().toMillis();
-        // ⚠️ TAKEN BEFORE THE DRAIN, which zeroes the detached buffer's count.
-        long generation = ceiling.detached(detached.bufferedBytes());
-        CompletableFuture<Void> done = flushes.enqueue(batch, detached);
-        // ⚠️ HOWEVER THE FLUSH ENDS -- see UnflushedCeiling.flushEnded.
-        done.whenComplete((ignored, failure) -> {
-            lock.lock();
-            try {
-                ceiling.flushEnded(generation);
-            } finally {
-                lock.unlock();
-            }
-        });
-        return done;
-    }
-
-    /** Runs without {@link #lock}; see {@link BatchFlusher#flush}. */
+    /** Runs off the flush path's lock; see {@link BatchFlusher#flush}. */
     private void flushBatch(FlushCoordinator.Batch queued) throws IOException {
         batchFlusher.flush(queued);
     }
@@ -504,7 +289,7 @@ public final class DefaultIngest implements Ingest {
      * already adapted past the one that made the flush due.
      */
     public long flushSpacingMillis() {
-        return Math.min(accumulator.flushSpacing().toMillis(), inFlightSpacingMillis);
+        return flushPath.flushSpacingMillis();
     }
 
     /** Each index's apportioned share of this pod's store requests (ADR-0077). */
@@ -519,15 +304,7 @@ public final class DefaultIngest implements Ingest {
 
     @Override
     public void close() throws IOException {
-        lock.lock();
-        try {
-            closed = true;
-            work.signalAll();
-            ceiling.wakeAll();
-        } finally {
-            lock.unlock();
-        }
-        flusher.interrupt();
+        flushPath.markClosed();
         // ⚠️ HELD so the `finally` can suppress against it rather than replace it;
         // a bare `finally` cannot see the exception in flight. `Throwable`, not
         // `IOException`, and the difference is reachable: an UncheckedIOException
@@ -545,20 +322,7 @@ public final class DefaultIngest implements Ingest {
             throw failed;
         } finally {
             // ⚠️ Anything that slipped in between is FAILED, never left waiting.
-            // join() is uninterruptible, so a Pending nobody completes is a
-            // producer thread hung until SIGKILL.
-            lock.lock();
-            try {
-                for (Pending p : pending) {
-                    p.done().completeExceptionally(
-                            new IOException("the ingester closed before this append was flushed"));
-                }
-                pending.clear();
-                bufferedPerStream.clear();
-            } finally {
-                lock.unlock();
-            }
-            flushes.close();
+            flushPath.failRemaining();
             pushQueue.drain();
             // ⚠️ RELEASES THE LEASE, and doing it here rather than leaving it to
             // the caller is the point. The Sequencer contract calls close "the

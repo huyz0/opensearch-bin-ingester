@@ -213,9 +213,13 @@ object RepositoryGateChecks {
      * split. ⚠️ And a named file that is moved or deleted FAILS rather than
      * passing silently, so the ceiling moves with the file or is dropped on
      * purpose.
+     *
+     * ⚠️ M13.1a: `DefaultIngest` at 500, the headroom fast mode needs, after
+     * its flush path moved to `FlushPath` (M13 criterion 1). Lowered, never
+     * raised.
      */
     val SPLIT_CEILINGS: Map<String, Int> = mapOf(
-        "ingest/src/main/java/io/github/huyz0/os/biningester/ingest/DefaultIngest.java" to 600,
+        "ingest/src/main/java/io/github/huyz0/os/biningester/ingest/DefaultIngest.java" to 500,
         "server/src/main/java/io/github/huyz0/os/biningester/server/Assembly.java" to 600,
         "http/src/main/java/io/github/huyz0/os/biningester/http/BulkService.java" to 600,
     )

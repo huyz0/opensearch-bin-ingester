@@ -8,15 +8,16 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Set;
+import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 
 /**
- * M11.24: `DefaultIngest`, `Assembly` and `BulkService` are refused at 600
- * lines, one case per file, so the splits M11.24a-c made cannot grow back as
- * M11's did (M11 criterion 1, OBSERVED-NOT at close).
+ * M11.24: `DefaultIngest`, `Assembly` and `BulkService` are refused at their
+ * split ceilings, one case per file, so the splits M11.24a-c made cannot grow
+ * back as M11's did (M11 criterion 1, OBSERVED-NOT at close). M13.1a lowers
+ * `DefaultIngest`'s to 500, the headroom fast mode needs (M13 criterion 1).
  */
 class FileSizeCeilingTest {
 
@@ -27,38 +28,39 @@ class FileSizeCeilingTest {
     private static final String BULK_SERVICE =
             "http/src/main/java/io/github/huyz0/os/biningester/http/BulkService.java";
 
+    /** Each named file's ceiling: {@code DefaultIngest} at 500 since M13.1a, the rest at 600. */
+    private static final Map<String, Integer> CEILINGS = Map.of(
+            DEFAULT_INGEST, 500, ASSEMBLY, 600, BULK_SERVICE, 600);
+
     @Test
-    void theCeilingNamesExactlyTheThreeSplitFilesAt600AndTheTreeMeetsIt() {
-        assertThat(RepositoryGateChecks.INSTANCE.getSPLIT_CEILINGS().keySet())
-                .isEqualTo(Set.of(DEFAULT_INGEST, ASSEMBLY, BULK_SERVICE));
-        assertThat(RepositoryGateChecks.INSTANCE.getSPLIT_CEILINGS().values())
-                .containsOnly(600);
+    void theCeilingNamesExactlyTheSplitFilesAtTheirCeilingsAndTheTreeMeetsIt() {
+        assertThat(RepositoryGateChecks.INSTANCE.getSPLIT_CEILINGS()).isEqualTo(CEILINGS);
         List<String> failures = new ArrayList<>();
         RepositoryGateChecks.INSTANCE.splitCeilings(repository(), failures);
-        assertThat(failures).as("this tree, after M11.24a-c").isEmpty();
+        assertThat(failures).as("this tree, after M13.1a").isEmpty();
     }
 
     @Test
-    void defaultIngestIsRefusedAt600LinesAndAdmittedAt599() throws Exception {
-        assertRefusedAt600(DEFAULT_INGEST);
+    void defaultIngestIsRefusedAt500LinesAndAdmittedAt499() throws Exception {
+        assertRefusedAtCeiling(DEFAULT_INGEST);
     }
 
     @Test
     void assemblyIsRefusedAt600LinesAndAdmittedAt599() throws Exception {
-        assertRefusedAt600(ASSEMBLY);
+        assertRefusedAtCeiling(ASSEMBLY);
     }
 
     @Test
     void bulkServiceIsRefusedAt600LinesAndAdmittedAt599() throws Exception {
-        assertRefusedAt600(BULK_SERVICE);
+        assertRefusedAtCeiling(BULK_SERVICE);
     }
 
     @Test
     void aRefusalReportsTheFilesOwnLineCountNotTheCeiling() throws Exception {
         Path root = scratch("count");
         try {
-            for (String named : List.of(DEFAULT_INGEST, ASSEMBLY, BULK_SERVICE)) {
-                write(root.resolve(named), 599);
+            for (Map.Entry<String, Integer> named : CEILINGS.entrySet()) {
+                write(root.resolve(named.getKey()), named.getValue() - 1);
             }
             write(root.resolve(ASSEMBLY), 650);
             List<String> failures = new ArrayList<>();
@@ -102,22 +104,23 @@ class FileSizeCeilingTest {
         assertThat(verify).contains("RepositoryGateChecks.splitCeilings(root, failures)");
     }
 
-    /** Every named file at 599 lines, then {@code path} at 600. */
-    private static void assertRefusedAt600(String path) throws Exception {
+    /** Every named file one line under its ceiling, then {@code path} at its ceiling. */
+    private static void assertRefusedAtCeiling(String path) throws Exception {
         Path root = scratch("ceiling");
         try {
-            for (String named : List.of(DEFAULT_INGEST, ASSEMBLY, BULK_SERVICE)) {
-                write(root.resolve(named), 599);
+            for (Map.Entry<String, Integer> named : CEILINGS.entrySet()) {
+                write(root.resolve(named.getKey()), named.getValue() - 1);
             }
             List<String> underCeiling = new ArrayList<>();
             RepositoryGateChecks.INSTANCE.splitCeilings(root, underCeiling);
-            assertThat(underCeiling).as("599 lines is under the ceiling").isEmpty();
+            assertThat(underCeiling).as("one line under the ceiling").isEmpty();
 
-            write(root.resolve(path), 600);
+            int ceiling = CEILINGS.get(path);
+            write(root.resolve(path), ceiling);
             List<String> atCeiling = new ArrayList<>();
             RepositoryGateChecks.INSTANCE.splitCeilings(root, atCeiling);
-            assertThat(atCeiling).as("600 lines is refused, naming the file").singleElement()
-                    .satisfies(message -> assertThat(message).contains(path + " has 600 lines"));
+            assertThat(atCeiling).as("the ceiling is refused, naming the file").singleElement()
+                    .satisfies(message -> assertThat(message).contains(path + " has " + ceiling + " lines"));
         } finally {
             delete(root);
         }

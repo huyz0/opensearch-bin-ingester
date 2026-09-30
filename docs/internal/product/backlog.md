@@ -22,7 +22,11 @@ Specified in [milestones/M13/SPEC.md](milestones/M13/SPEC.md). ⚠️ No commit 
 | ID | Task | Serves | State |
 |---|---|---|---|
 | M13.0 | Specify M13 | — | done: [milestones/M13/SPEC.md](milestones/M13/SPEC.md) -- the completion condition; M12's harvest R1-R18 and the open rows M12.27/M12.28 decomposed with criteria 1-6 (R19, the hooks, left to the owner); ⚠️ split at its third review round: fast mode's design, criteria 7 onward and tasks M13.22-M13.38 are M13.41's, with the three rounds' findings carried; the roadmap row updated; ⚠️ Committed (`59f9f222`) with `checkReviewed` FAILING -- "review round budget exceeded for M13.0": the split piece was reviewed under the original ID, five rounds against a budget of three; the commit chained the checks with `;` and was pushed before the refusal was read. Not amended (pushed); recorded here and in M13.44's commit (M13.41, M13.42 and M13.43 were split, never committed) |
-| M13.1 | R1: split `DefaultIngest` and `Assembly` below 500 along the write path, `ConsumerClient` and `LocalSequencer` below 600, the gate at those numbers | — (quality) | open |
+| M13.1 | R1: split `DefaultIngest` and `Assembly` below 500 along the write path, `ConsumerClient` and `LocalSequencer` below 600, the gate at those numbers | — (quality) | split into M13.1a-d, one file per commit so the tree is green after each split (criterion 1) |
+| M13.1a | R1: `DefaultIngest` below 500: its flush path (active buffer, waiters, ceiling, flush loop) moved to `FlushPath`; its ceiling lowered to 500 | — (quality) | done: `FlushPath` holds the lock, the active buffer, the waiters, the unflushed ceiling, the coordinator and the flush loop; `DefaultIngest` keeps admission, composition and shutdown's order at 356 lines; `FileSizeCeilingTest` holds it at 500 |
+| M13.1b | R1: `Assembly` below 500: the sequencer and serving construction moved out; its ceiling lowered to 500 | — (quality) | open |
+| M13.1c | R1: `ConsumerClient` below 600, named by the ceiling gate at 600 | — (quality) | open |
+| M13.1d | R1: `LocalSequencer` below 600, named by the ceiling gate at 600 | — (quality) | open |
 | M13.2 | M12.28: `NodeProcess` binds port 0 and reports it | — (quality) | open |
 | M13.3 | R2: `PartitionVisibilityIT` as a distribution | — (evidence) | open |
 | M13.4 | M12.27: the reader connection on close | FR-6 | open |

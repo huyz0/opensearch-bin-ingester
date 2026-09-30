@@ -580,6 +580,10 @@ journal's fsync and the Kubernetes pod lookup are injected seams.
 |---|---|---|
 | M13.0 | Specify M13 | — |
 | M13.1 | R1: split `DefaultIngest` and `Assembly` below 500 along the write path, `ConsumerClient` and `LocalSequencer` below 600, the gate at those numbers | — (quality) |
+| M13.1a | R1: `DefaultIngest` below 500: its flush path (active buffer, waiters, ceiling, flush loop) moved to `FlushPath`; its ceiling lowered to 500 | — (quality) |
+| M13.1b | R1: `Assembly` below 500: the sequencer and serving construction moved out; its ceiling lowered to 500 | — (quality) |
+| M13.1c | R1: `ConsumerClient` below 600, named by the ceiling gate at 600 | — (quality) |
+| M13.1d | R1: `LocalSequencer` below 600, named by the ceiling gate at 600 | — (quality) |
 | M13.2 | M12.28: `NodeProcess` binds port 0 and reports it | — (quality) |
 | M13.3 | R2: `PartitionVisibilityIT` as a distribution | — (evidence) |
 | M13.4 | M12.27: the reader connection on close | FR-6 |
