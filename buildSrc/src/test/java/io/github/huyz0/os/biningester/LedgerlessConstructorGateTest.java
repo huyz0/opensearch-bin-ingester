@@ -79,14 +79,23 @@ class LedgerlessConstructorGateTest {
         assertThat(Files.readString(root.resolve(OWNER))).contains("new IndexCostLedger()");
     }
 
+    /** ⚠️ BY BEHAVIOUR, NOT TEXT (M13.15, M11.24 review T4): see RepositoryChecks. */
     @Test
     void theRepositoryGatesTaskRunsTheOwnershipCheck() throws Exception {
-        String task = Files.readString(repository().resolve(
-                "buildSrc/src/main/kotlin/io/github/huyz0/os/biningester/RepositoryGatesTask.kt"));
-        String verify = task.substring(task.indexOf("fun verify()"),
-                task.indexOf("if (failures.isNotEmpty())"));
+        Path root = scratch("wired");
+        try {
+            Path violator = write(root,
+                    "ingest/src/main/java/io/github/huyz0/os/biningester/ingest/Proxy.java",
+                    "this(store, new IndexCostLedger());");
+            List<String> failures = new ArrayList<>();
 
-        assertThat(verify).contains("RepositoryGateChecks.ledgerOwnership(root, files, failures)");
+            RepositoryChecks.INSTANCE.named("ledgerOwnership").getRun()
+                    .invoke(root, List.of(violator), failures);
+
+            assertThat(failures).singleElement().asString().contains("ingest/Proxy.java");
+        } finally {
+            delete(root);
+        }
     }
 
     private static Path write(Path root, String relative, String body) throws Exception {

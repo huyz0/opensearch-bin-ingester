@@ -40,24 +40,14 @@ abstract class RepositoryGatesTask : DefaultTask() {
 
         checkHeaders(root, files, failures)
         checkFileSizes(root, files, failures)
-        RepositoryGateChecks.splitCeilings(root, failures)
-        RepositoryGateChecks.ledgerOwnership(root, files, failures)
-        RepositoryGateChecks.singleTooManyRequests(root, files, failures)
         checkMarkdownLinks(root, files, failures)
-        RepositoryGateChecks.adrReferences(root, files, failures)
         checkTerminology(root, files, failures)
         checkBuildWiring(root, failures)
         checkGeneratedIndexes(root, failures)
-        RepositoryGateChecks.gateScope(root, failures)
-        RepositoryGateChecks.javadocCitations(root, files, failures)
-        RepositoryGateChecks.portability(root, failures)
-        RepositoryGateChecks.metricCardinality(root, files, failures)
-        RepositoryGateChecks.ioSeam(root, files, failures)
-        RepositoryGateChecks.faultStore(root, files, failures)
-        RepositoryGateChecks.testBudget(root, failures)
-        RepositoryGateChecks.moduleDrift(root, failures)
-        RepositoryGateChecks.moduleDependencies(root, failures)
         checkCommitMessage(root, failures)
+        // ⚠️ EVERY LISTED CHECK, BEFORE THE THROW (M13.15): the list is data a
+        // wiring test runs by name; this line is pinned by RepositoryChecksTest.
+        RepositoryChecks.ALL.forEach { it.run(root, files, failures) }
 
         if (failures.isNotEmpty()) {
             throw GradleException("repository gates failed:\n" + failures.joinToString("\n"))

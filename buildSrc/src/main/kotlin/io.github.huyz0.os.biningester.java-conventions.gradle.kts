@@ -75,6 +75,15 @@ jacoco { toolVersion = "0.8.13" }
 // untested class compiled after the report was written.
 tasks.named("check") { dependsOn(tasks.withType<JacocoReport>()) }
 
+// ⚠️ A @Timeout PRINTS EVERY THREAD's STACK (M11.25, H17): DefaultIngestTest
+// timed out once and left no trace of where it was stuck. On EVERY Test task
+// by construction (M13.15, M11.25 review T2) -- a suite's and a standalone
+// `tasks.register<Test>`'s alike, which set it per task before. Pinned in the
+// JVM by TestTimeoutThreadDumpTest and in the build by RepositoryChecksTest.
+tasks.withType<Test>().configureEach {
+    systemProperty("junit.jupiter.execution.timeout.threaddump.enabled", "true")
+}
+
 tasks.withType<JacocoReport>().configureEach {
     // The report is only meaningful after the tests that produce its exec data.
     mustRunAfter(tasks.withType<Test>())
@@ -132,10 +141,6 @@ testing {
                     jvmArgs("-XX:+HeapDumpOnOutOfMemoryError", "-XX:HeapDumpPath=$scratch")
                     // A hung test holds its memory until something reclaims it.
                     timeout.set(Duration.ofMinutes(10))
-                    // ⚠️ A @Timeout PRINTS EVERY THREAD's STACK (M11.25, H17):
-                    // DefaultIngestTest timed out once and left no trace of
-                    // where it was stuck. Pinned by TestTimeoutThreadDumpTest.
-                    systemProperty("junit.jupiter.execution.timeout.threaddump.enabled", "true")
                     // testing.md rule 17: scratch under build/tmp, never the
                     // system temp directory. Enforced here so it is automatic.
                     systemProperty("java.io.tmpdir", scratch.absolutePath)

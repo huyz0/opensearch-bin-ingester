@@ -114,16 +114,24 @@ class FileSizeCeilingTest {
     /**
      * ⚠️ THE PREDICATE IS ONLY A GATE WHILE {@code ./gradlew gates} CALLS IT: a
      * ceiling proved correct here and dropped from {@code verify()} would refuse
-     * nothing (M11.24 review T3).
+     * nothing (M11.24 review T3). ⚠️ BY BEHAVIOUR, NOT TEXT (M13.15, M11.24
+     * review T4): the check {@code verify()} runs under this name refuses a
+     * tree missing the named files -- a commented-out call matched the old text.
      */
     @Test
     void theRepositoryGatesTaskRunsTheCeiling() throws Exception {
-        String task = Files.readString(repository().resolve(
-                "buildSrc/src/main/kotlin/io/github/huyz0/os/biningester/RepositoryGatesTask.kt"));
-        String verify = task.substring(task.indexOf("fun verify()"),
-                task.indexOf("private fun trackedTree"));
+        Path root = scratch("wired");
+        try {
+            List<String> failures = new ArrayList<>();
 
-        assertThat(verify).contains("RepositoryGateChecks.splitCeilings(root, failures)");
+            RepositoryChecks.INSTANCE.named("splitCeilings").getRun()
+                    .invoke(root, List.of(), failures);
+
+            assertThat(failures).hasSize(CEILINGS.size())
+                    .allMatch(message -> message.contains("does not exist"));
+        } finally {
+            delete(root);
+        }
     }
 
     /** Every named file one line under its ceiling, then {@code path} at its ceiling. */

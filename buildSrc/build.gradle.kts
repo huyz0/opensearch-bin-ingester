@@ -44,6 +44,10 @@ dependencies {
 tasks.withType<Test>().configureEach {
     useJUnitPlatform()
     maxHeapSize = "512m"
+    // ⚠️ A @Timeout PRINTS EVERY THREAD's STACK (M11.25), in EVERY test task of
+    // this build by construction (M13.15, M11.25 review T2): set per task, a
+    // task registered later inherited nothing. Pinned by RepositoryChecksTest.
+    systemProperty("junit.jupiter.execution.timeout.threaddump.enabled", "true")
     testLogging { events("failed") }
 
     // ⚠️ The suite EXECS `scripts/*.py`; Gradle cannot infer that, so without
@@ -120,8 +124,6 @@ tasks.register<Test>("nativeGateTest") {
     description = "Run only the JVM-native repository gate tests"
     group = "verification"
     useJUnitPlatform()
-    // A @Timeout prints every thread's stack (M11.25), as the conventions set it.
-    systemProperty("junit.jupiter.execution.timeout.threaddump.enabled", "true")
     testClassesDirs = sourceSets["test"].output.classesDirs
     classpath = sourceSets["test"].runtimeClasspath
     // ⚠️ THE QUARANTINE's GUARD READS THESE (M13.8 review P3): undeclared, a
@@ -142,6 +144,7 @@ tasks.register<Test>("nativeGateTest") {
         includeTestsMatching("io.github.huyz0.os.biningester.GateScannerEdgesTest")
         includeTestsMatching("io.github.huyz0.os.biningester.LegacyScriptQuarantineTest")
         includeTestsMatching("io.github.huyz0.os.biningester.TestBudgetGateTest")
+        includeTestsMatching("io.github.huyz0.os.biningester.RepositoryChecksTest")
     }
 }
 

@@ -116,11 +116,20 @@ class SingleTooManyRequestsGateTest {
 
         assertThat(RepositoryGateChecks.TOO_MANY_REQUESTS_OWNER).isEqualTo(OWNER);
         assertThat(failures).as("this tree").isEmpty();
-        String task = Files.readString(root.resolve(
-                "buildSrc/src/main/kotlin/io/github/huyz0/os/biningester/RepositoryGatesTask.kt"));
-        assertThat(task.substring(task.indexOf("fun verify()"),
-                task.indexOf("if (failures.isNotEmpty())")))
-                .contains("RepositoryGateChecks.singleTooManyRequests(root, files, failures)");
+        // ⚠️ AND THE GATES RUN IT, BY BEHAVIOUR (M13.15, M11.24 review T4): the
+        // check listed under this name refuses a second 429 sender.
+        Path scratch = scratch("wired");
+        try {
+            Path other = write(scratch,
+                    "server/src/main/java/io/github/huyz0/os/biningester/server/Door.java",
+                    "res.status(Status.create(429)).send();");
+            List<String> wired = new ArrayList<>();
+            RepositoryChecks.INSTANCE.named("singleTooManyRequests").getRun()
+                    .invoke(scratch, List.of(other), wired);
+            assertThat(wired).anyMatch(message -> message.contains("server/Door.java"));
+        } finally {
+            delete(scratch);
+        }
     }
 
     private static Path write(Path root, String relative, String body) throws Exception {

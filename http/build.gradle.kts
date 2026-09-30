@@ -77,9 +77,6 @@ val memoryBoundTest = tasks.register<Test>("memoryBoundTest") {
     // observed time and over the test's own 480s JUnit @Timeout (raised from
     // 300s for the same reason -- see MemoryFlatUnderTenXBodySizeTest).
     timeout.set(Duration.ofMinutes(10))
-    // ⚠️ A @Timeout PRINTS EVERY THREAD's STACK (M11.25): set here because a
-    // standalone `tasks.register<Test>` inherits nothing from the conventions.
-    systemProperty("junit.jupiter.execution.timeout.threaddump.enabled", "true")
     // ⚠️ JaCoCo's own instrumentation adds real heap overhead -- measured:
     // running this same test under the default `test` task (JaCoCo attached)
     // showed ~200 MB used BEFORE a single body byte was written, which is
@@ -129,8 +126,6 @@ val memoryBoundCeilingTest = tasks.register<Test>("memoryBoundCeilingTest") {
     // estimates ~192s of streaming; the rest is margin for the warm-up, GC
     // variance under a deliberately tight heap, and a slower machine.
     timeout.set(Duration.ofMinutes(20))
-    // ⚠️ A @Timeout PRINTS EVERY THREAD's STACK (M11.25), as above.
-    systemProperty("junit.jupiter.execution.timeout.threaddump.enabled", "true")
     extensions.configure<JacocoTaskExtension> { isEnabled = false }
 }
 
