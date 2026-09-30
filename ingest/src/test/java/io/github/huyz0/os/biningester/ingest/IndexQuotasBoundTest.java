@@ -150,6 +150,72 @@ class IndexQuotasBoundTest {
         assertThat(quotas.admit("logs").refusal()).as("16 records owed, not 8").isPresent();
     }
 
+    /**
+     * ⚠️ OWED ONCE, NOT TWICE (M13.14, M12.4 review T5): a ticket for a name
+     * unknown at admission tallies what it is charged, and on binding charges
+     * the tally and forgets it. Kept, the release would charge it again: seven
+     * records owed and bound would cost fourteen, and the index's next request
+     * would be refused for records it never sent.
+     */
+    @Test
+    void aDeferredTicketChargesWhatItOwedOnceWhenItBinds() {
+        Set<String> known = java.util.concurrent.ConcurrentHashMap.newKeySet();
+        IndexQuotas quotas = quotas(known);
+
+        IndexQuotas.Ticket ticket = quotas.admit("late").ticket().orElseThrow();
+        ticket.charge(records(4));
+        known.add("late");
+        ticket.charge(records(3)); // binds: the 4 owed and these 3
+        ticket.release();
+
+        assertThat(quotas.admit("late").refusal())
+                .as("7 of its 10 charged, so it is admitted; 14 would be debt").isEmpty();
+    }
+
+    /**
+     * ⚠️ AND ITS BYTES ONCE TOO (M13.14 review T1): a bytes-only quota, where
+     * a byte tally kept after binding would charge the pre-registration bytes
+     * again at release, and refuse the index for bytes it never sent.
+     */
+    @Test
+    void aDeferredTicketChargesTheBytesItOwedOnceWhenItBinds() {
+        long each = Accumulator.estimatedFramedBytes(records(1).getFirst());
+        Set<String> known = java.util.concurrent.ConcurrentHashMap.newKeySet();
+        IndexQuotas quotas = new IndexQuotas(new IndexQuotas.Config(
+                new IndexQuotas.Limit(10 * each, 0), Map.of(), 8, IDLE), clock,
+                known::contains, name -> java.util.List.of());
+
+        IndexQuotas.Ticket ticket = quotas.admit("late").ticket().orElseThrow();
+        ticket.charge(records(4));
+        known.add("late");
+        ticket.charge(records(3));
+        ticket.release();
+
+        assertThat(quotas.admit("late").refusal())
+                .as("7 records' bytes of its 10's burst charged, so it is admitted").isEmpty();
+    }
+
+    /**
+     * ⚠️ THE FIRST ALIAS IN SORTED ORDER WINS (M13.14, M12.13 review T2): an
+     * index with no override of its own, named by two aliases that both have
+     * one, takes the alias that sorts first -- however its aliases are listed.
+     */
+    @Test
+    void theOverrideOfTheAliasThatSortsFirstApplies() {
+        IndexQuotas quotas = new IndexQuotas(new IndexQuotas.Config(IndexQuotas.Limit.UNLIMITED,
+                Map.of("a-alias", new IndexQuotas.Limit(0, 1),
+                        "b-alias", new IndexQuotas.Limit(0, 100)), 8, IDLE),
+                clock, name -> true, name -> List.of("b-alias", "a-alias"));
+
+        IndexQuotas.Ticket ticket = quotas.admit("logs").ticket().orElseThrow();
+        ticket.charge(records(2));
+        ticket.release();
+
+        assertThat(quotas.admit("logs").refusal())
+                .as("a-alias's 1 a second, listed second but sorting first: 2 records is debt")
+                .isPresent();
+    }
+
     private static List<SegmentRecord> records(int n) {
         List<SegmentRecord> records = new ArrayList<>(n);
         for (int i = 0; i < n; i++) {

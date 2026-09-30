@@ -304,13 +304,13 @@ final class FlushPath {
         // then both buffers would answer as if no +2 record had been written.
         inFlightSpacingMillis = detached.flushSpacing().toMillis();
         // ⚠️ TAKEN BEFORE THE DRAIN, which zeroes the detached buffer's count.
-        long generation = ceiling.detached(detached.bufferedBytes());
+        UnflushedCeiling.Flush flush = ceiling.detached(detached.bufferedBytes());
         CompletableFuture<Void> done = flushes.enqueue(batch, detached);
         // ⚠️ HOWEVER THE FLUSH ENDS -- see UnflushedCeiling.flushEnded.
         done.whenComplete((ignored, failure) -> {
             lock.lock();
             try {
-                ceiling.flushEnded(generation);
+                ceiling.flushEnded(flush);
             } finally {
                 lock.unlock();
             }

@@ -116,6 +116,56 @@ class UnflushedCeilingGuardTest {
         }
     }
 
+    /**
+     * ⚠️ THE HOOK ITSELF (M13.14, M12.3 review T4): {@code waitingForRoom} is
+     * what the waits case reads, so it must say false when nobody waits --
+     * before any append, and with a flush queued and held but no append past
+     * the ceiling -- or that case rests on its buffered-nothing check alone.
+     */
+    @Test
+    void nothingIsWaitingForRoomUntilAnAppendIsPastTheCeiling() throws Exception {
+        CountDownLatch release = new CountDownLatch(1);
+        BinStore held = holding(release);
+        try (DefaultIngest ingest = ingest(held)) {
+            assertThat(ingest.waitingForRoom()).as("a fresh ingester").isFalse();
+            CompletableFuture<AppendResult> first = CompletableFuture.supplyAsync(() -> {
+                try {
+                    return ingest.append(IngestTestSupport.PRINCIPAL, "logs", 0, (byte) 0,
+                            sink -> {
+                                for (int i = 0; i < 18; i++) {
+                                    sink.accept(record("first-" + i));
+                                }
+                            }, () -> { });
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+            }, VIRTUAL);
+            awaitTrue(ingest::flushQueued, "the premise: the 1.125 MiB flush is queued, held");
+
+            assertThat(ingest.waitingForRoom())
+                    .as("⚠️ A HELD FLUSH IS NOT A WAITER: nobody is past the ceiling").isFalse();
+            release.countDown();
+            first.get(10, TimeUnit.SECONDS);
+            assertThat(ingest.waitingForRoom()).isFalse();
+        }
+    }
+
+    /** A store whose segment PUTs wait for {@code release}. */
+    private static BinStore holding(CountDownLatch release) {
+        MemoryBinStore memory = new MemoryBinStore();
+        return (BinStore) Proxy.newProxyInstance(BinStore.class.getClassLoader(),
+                new Class<?>[] {BinStore.class}, (self, method, args) -> {
+                    if (method.getName().equals("put") && ((String) args[0]).endsWith(".bseg")) {
+                        release.await();
+                    }
+                    try {
+                        return method.invoke(memory, args);
+                    } catch (java.lang.reflect.InvocationTargetException e) {
+                        throw e.getCause();
+                    }
+                });
+    }
+
     private static DefaultIngest ingest(BinStore store) throws IOException {
         return new DefaultIngest(IngestTestSupport.pinnedIntervalConfig(IngestTestSupport.NEVER,
                 SEGMENT), store, IngestTestSupport.PREFIX, "pod1",

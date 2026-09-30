@@ -120,7 +120,15 @@ public final class IndexQuotas {
     private final Clock clock;
     private final Predicate<String> known;
     private final java.util.function.Function<String, List<String>> aliases;
-    private final Map<String, Bucket> buckets = new ConcurrentHashMap<>();
+    /**
+     * ⚠️ EVERY CHANGE TO A KEY's BUCKET IS A {@code compute} ON THAT KEY
+     * (M13.14, M12.4 review T2): admission, a deferred ticket's entry and the
+     * sweep's expiry each run under the map's lock for their key, so a bucket
+     * is never admitted to after the sweep took it. The race M12.4 guarded with
+     * an {@code expired} flag and a retry, which no test could drive, cannot
+     * happen.
+     */
+    private final ConcurrentHashMap<String, Bucket> buckets = new ConcurrentHashMap<>();
     /** When idle buckets were last swept; at most one sweep per idle expiry (M12.4). */
     private volatile long sweptAt = Long.MIN_VALUE;
 
@@ -189,15 +197,14 @@ public final class IndexQuotas {
         }
         long now = clock.millis();
         sweepIdle(now);
-        while (true) {
-            Bucket bucket = buckets.computeIfAbsent(index, name -> new Bucket(limit,
-                    config.maxInFlightPerIndex(), now));
-            Admission admitted = bucket.admit(index, now);
-            if (admitted != null) {
-                return admitted;
-            }
-            buckets.remove(index, bucket); // swept while we held it: take a fresh one
-        }
+        Admission[] admitted = new Admission[1];
+        buckets.compute(index, (name, bucket) -> {
+            Bucket use = bucket != null ? bucket
+                    : new Bucket(limit, config.maxInFlightPerIndex(), now);
+            admitted[0] = use.admit(index, now);
+            return use;
+        });
+        return admitted[0];
     }
 
     /** The concrete index's own override, else its aliases' in sorted order, else the default. */
@@ -220,14 +227,15 @@ public final class IndexQuotas {
     /** A slot in {@code index}'s bucket without the cap's check, for a request already admitted. */
     private BucketTicket enterAdmitted(String index, Limit limit) {
         long now = clock.millis();
-        while (true) {
-            Bucket bucket = buckets.computeIfAbsent(index, name -> new Bucket(limit,
-                    config.maxInFlightPerIndex(), now));
-            if (bucket.enterUnchecked(now)) {
-                return new BucketTicket(bucket);
-            }
-            buckets.remove(index, bucket); // swept while we held it: take a fresh one
-        }
+        BucketTicket[] entered = new BucketTicket[1];
+        buckets.compute(index, (name, bucket) -> {
+            Bucket use = bucket != null ? bucket
+                    : new Bucket(limit, config.maxInFlightPerIndex(), now);
+            use.enterUnchecked(now);
+            entered[0] = new BucketTicket(use);
+            return use;
+        });
+        return entered[0];
     }
 
     /**
@@ -244,11 +252,9 @@ public final class IndexQuotas {
             return;
         }
         sweptAt = now;
-        buckets.forEach((name, bucket) -> {
-            if (bucket.expireIfIdle(now, idle)) {
-                buckets.remove(name, bucket);
-            }
-        });
+        for (String name : buckets.keySet()) {
+            buckets.computeIfPresent(name, (key, bucket) -> bucket.idle(now, idle) ? null : bucket);
+        }
     }
 
     /** Exactly one of a ticket and a refusal. */
@@ -268,8 +274,6 @@ public final class IndexQuotas {
         private long refilledAt;
         private int inFlight;
         private long usedAt;
-        /** Swept: an admission that finds it so takes a fresh bucket instead. */
-        private boolean expired;
 
         Bucket(Limit limit, int maxInFlight, long now) {
             this.limit = limit;
@@ -281,13 +285,11 @@ public final class IndexQuotas {
             this.usedAt = now;
         }
 
-        synchronized boolean expireIfIdle(long now, long idle) {
+        /** Whether it may be dropped: nothing in flight, unused for {@code idle}, and full. */
+        synchronized boolean idle(long now, long idle) {
             refill(now);
-            if (inFlight == 0 && now - usedAt >= idle && bytes >= limit.bytesPerSecond()
-                    && records >= limit.recordsPerSecond()) {
-                expired = true;
-            }
-            return expired;
+            return inFlight == 0 && now - usedAt >= idle && bytes >= limit.bytesPerSecond()
+                    && records >= limit.recordsPerSecond();
         }
 
         private void refill(long now) {
@@ -298,22 +300,15 @@ public final class IndexQuotas {
                     records + seconds * limit.recordsPerSecond());
         }
 
-        /** Takes a slot for a request already admitted; false if this bucket was swept. */
-        synchronized boolean enterUnchecked(long now) {
-            if (expired) {
-                return false;
-            }
+        /** Takes a slot for a request already admitted. */
+        synchronized void enterUnchecked(long now) {
             usedAt = now;
             refill(now);
             inFlight++;
-            return true;
         }
 
-        /** The admission, or {@code null} if this bucket was swept. */
+        /** The admission: a ticket, or the refusal. */
         synchronized Admission admit(String index, long now) {
-            if (expired) {
-                return null;
-            }
             usedAt = now;
             refill(now);
             if (inFlight >= maxInFlight) {

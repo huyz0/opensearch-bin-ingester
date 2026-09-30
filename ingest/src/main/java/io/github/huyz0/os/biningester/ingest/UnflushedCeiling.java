@@ -27,8 +27,19 @@ final class UnflushedCeiling {
     /** The batch being flushed's buffered bytes, 0 when none; under the lock. */
     private long inFlightBytes;
 
-    /** Which detached batch {@link #inFlightBytes} counts; under the lock (M12.3). */
-    private long generation;
+    /** The batch in flight, whose bytes {@link #inFlightBytes} are, under the lock (M12.3); null before the first. */
+    private Flush current;
+
+    /**
+     * One detached batch's claim on the in-flight bytes (M13.14, M12.3 review
+     * T2). ⚠️ OPAQUE, SO A COMPLETION CAN HAND BACK ONLY ITS OWN: a counter
+     * could be handed back off by one -- `generation - 1` passed every test --
+     * and a token cannot be computed, only kept.
+     */
+    static final class Flush {
+        private Flush() {
+        }
+    }
 
     UnflushedCeiling(long maxUnflushedBytes, Condition roomToBuffer) {
         this.maxUnflushedBytes = maxUnflushedBytes;
@@ -79,12 +90,13 @@ final class UnflushedCeiling {
     /**
      * A batch of {@code bytes} was detached for flushing; caller holds the lock.
      *
-     * @return the batch's generation, which its completion hands to
+     * @return the batch's token, which its completion hands to
      *     {@link #flushEnded}
      */
-    long detached(long bytes) {
+    Flush detached(long bytes) {
         inFlightBytes = bytes;
-        return ++generation;
+        current = new Flush();
+        return current;
     }
 
     /**
@@ -97,11 +109,14 @@ final class UnflushedCeiling {
      * run after the NEXT batch was detached -- the coordinator admits the next
      * one once this one is done, and this callback runs after that. Zeroing
      * unconditionally then dropped the next batch's bytes, and the pod admitted
-     * about twice its ceiling. A stale generation releases nothing; it still
+     * about twice its ceiling. A stale token releases nothing; it still
      * signals, which costs a waiter one re-check.
      */
-    void flushEnded(long ended) {
-        if (ended == generation) {
+    void flushEnded(Flush ended) {
+        // ⚠️ NO TOKEN IS NO FLUSH (M13.14 review P1): refused rather than read
+        // as stale, so a completion handing back nothing fails loudly.
+        java.util.Objects.requireNonNull(ended, "ended");
+        if (ended == current) {
             inFlightBytes = 0;
         }
         roomToBuffer.signalAll();

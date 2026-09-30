@@ -37,8 +37,8 @@ class UnflushedCeilingOverlapTest {
      */
     @Test
     void aFinishingFlushReleasesOnlyItsOwnBytesNeverTheNextOnes() throws Exception {
-        long a = locked(() -> ceiling.detached(60));
-        long b = locked(() -> ceiling.detached(70));
+        UnflushedCeiling.Flush a = locked(() -> ceiling.detached(60));
+        UnflushedCeiling.Flush b = locked(() -> ceiling.detached(70));
         locked(() -> {
             ceiling.flushEnded(a);
             return null;
@@ -57,7 +57,7 @@ class UnflushedCeilingOverlapTest {
 
     @Test
     void anAppendAtTheCeilingExactlyWaitsAndOneBelowItProceeds() throws Exception {
-        long flush = locked(() -> ceiling.detached(60));
+        UnflushedCeiling.Flush flush = locked(() -> ceiling.detached(60));
 
         CompletableFuture<Void> atCeiling = appendWith(40, true);
         assertThat(waiting(atCeiling)).as("60 + 40 = the ceiling: it waits").isTrue();
