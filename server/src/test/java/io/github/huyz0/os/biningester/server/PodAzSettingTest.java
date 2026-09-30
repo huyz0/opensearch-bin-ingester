@@ -95,7 +95,7 @@ class PodAzSettingTest {
                     new StoreConfig("memory", java.util.Optional.empty()),
                     java.time.Duration.ofSeconds(10), java.time.Duration.ofSeconds(3),
                     "http://pod1:8080", io.github.huyz0.os.biningester.ingest.IngestConfig.defaults("cluster-a"),
-                    8080, "producer-1", java.util.Set.of("logs"));
+                    8080, "producer-1", java.util.Set.of("logs"), RetentionConfig.defaults(), java.util.Optional.empty(), "", io.github.huyz0.os.biningester.ingest.CostTopKReporter.DEFAULT_INTERVAL, io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(), false);
         }
     }
 }

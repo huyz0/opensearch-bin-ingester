@@ -135,7 +135,7 @@ class DurableSignalRingOwnerTest {
     private static ServerConfig config(String podId, String az, StoreConfig store) {
         return new ServerConfig(podId, az, "cluster-a", PREFIX, store, Duration.ofHours(1),
                 Duration.ofMinutes(20), "http://" + podId + ":8080", IngestConfig.defaults(
-                        "cluster-a"), 8080, "producer", Set.of("logs"));
+                        "cluster-a"), 8080, "producer", Set.of("logs"), RetentionConfig.defaults(), java.util.Optional.empty(), "", io.github.huyz0.os.biningester.ingest.CostTopKReporter.DEFAULT_INTERVAL, io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(), false);
     }
 
     private static SequencerTransport noPeers() {

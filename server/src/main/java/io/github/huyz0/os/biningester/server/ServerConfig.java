@@ -68,78 +68,9 @@ public record ServerConfig(String podId, String az, String trustDomain, String p
         String podUid, Duration costTopKInterval,
         io.github.huyz0.os.biningester.ingest.IndexQuotas.Config quotas, boolean adminCost) {
 
-    /** The same, not serving {@code /admin/cost} (before M12.6). */
-    public ServerConfig(String podId, String az, String trustDomain, String prefix,
-            StoreConfig store, Duration leaseTtl, Duration leaseRenewInterval, String endpoint,
-            IngestConfig ingest, int httpPort, String producerSubject, Set<String> allowedIndices,
-            RetentionConfig retention, java.util.Optional<MembershipConfig> membership,
-            String podUid, Duration costTopKInterval,
-            io.github.huyz0.os.biningester.ingest.IndexQuotas.Config quotas) {
-        this(podId, az, trustDomain, prefix, store, leaseTtl, leaseRenewInterval, endpoint, ingest,
-                httpPort, producerSubject, allowedIndices, retention, membership, podUid,
-                costTopKInterval, quotas, false);
-    }
-
-    /** The same, with no per-index quota (before M11.8). */
-    public ServerConfig(String podId, String az, String trustDomain, String prefix,
-            StoreConfig store, Duration leaseTtl, Duration leaseRenewInterval, String endpoint,
-            IngestConfig ingest, int httpPort, String producerSubject, Set<String> allowedIndices,
-            RetentionConfig retention, java.util.Optional<MembershipConfig> membership,
-            String podUid, Duration costTopKInterval) {
-        this(podId, az, trustDomain, prefix, store, leaseTtl, leaseRenewInterval, endpoint, ingest,
-                httpPort, producerSubject, allowedIndices, retention, membership, podUid,
-                costTopKInterval, io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none());
-    }
-
-    /** The same, logging the top-K cost line at its default interval (before M11.5). */
-    public ServerConfig(String podId, String az, String trustDomain, String prefix,
-            StoreConfig store, Duration leaseTtl, Duration leaseRenewInterval, String endpoint,
-            IngestConfig ingest, int httpPort, String producerSubject, Set<String> allowedIndices,
-            RetentionConfig retention, java.util.Optional<MembershipConfig> membership,
-            String podUid) {
-        this(podId, az, trustDomain, prefix, store, leaseTtl, leaseRenewInterval, endpoint, ingest,
-                httpPort, producerSubject, allowedIndices, retention, membership, podUid,
-                io.github.huyz0.os.biningester.ingest.CostTopKReporter.DEFAULT_INTERVAL);
-    }
-
-    /** Compatibility constructor for callers without a Kubernetes identity. */
-    public ServerConfig(String podId, String az, String trustDomain, String prefix,
-            StoreConfig store, Duration leaseTtl, Duration leaseRenewInterval, String endpoint,
-            IngestConfig ingest, int httpPort, String producerSubject, Set<String> allowedIndices,
-            RetentionConfig retention, java.util.Optional<MembershipConfig> membership) {
-        this(podId, az, trustDomain, prefix, store, leaseTtl, leaseRenewInterval, endpoint, ingest,
-                httpPort, producerSubject, allowedIndices, retention, membership, "");
-    }
-
-    /**
-     * The same, with no {@code EndpointSlice} watch (M8.13).
-     *
-     * <p>⚠️ **FOR CALLERS THAT PREDATE M8.13**; a parsed configuration always
-     * carries the membership it parsed, present or not.
-     */
-    public ServerConfig(String podId, String az, String trustDomain, String prefix,
-            StoreConfig store,
-            Duration leaseTtl, Duration leaseRenewInterval, String endpoint, IngestConfig ingest,
-            int httpPort, String producerSubject, Set<String> allowedIndices,
-            RetentionConfig retention) {
-        this(podId, az, trustDomain, prefix, store, leaseTtl, leaseRenewInterval, endpoint, ingest,
-                httpPort, producerSubject, allowedIndices, retention, java.util.Optional.empty());
-    }
-
-    /**
-     * The same, with retention at its defaults.
-     *
-     * <p>⚠️ **FOR CALLERS THAT DO NOT CONFIGURE RETENTION**, which is every
-     * construction site that predates M8.5. {@link ServerProperties} never uses
-     * it: a parsed configuration always carries the retention it parsed.
-     */
-    public ServerConfig(String podId, String az, String trustDomain, String prefix,
-            StoreConfig store,
-            Duration leaseTtl, Duration leaseRenewInterval, String endpoint, IngestConfig ingest,
-            int httpPort, String producerSubject, Set<String> allowedIndices) {
-        this(podId, az, trustDomain, prefix, store, leaseTtl, leaseRenewInterval, endpoint, ingest,
-                httpPort, producerSubject, allowedIndices, RetentionConfig.defaults());
-    }
+    // ⚠️ ONLY THE CANONICAL CONSTRUCTOR (M13.6b, M12 harvest R5): six older
+    // ones each filled in a setting their callers predated, and a new caller
+    // reaching for the shortest got every default without saying so.
 
     /**
      * The identity every write this node accepts is attributed to.

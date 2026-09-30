@@ -84,7 +84,7 @@ class RefusalCountersTest {
                         Duration.ofSeconds(10), Duration.ofHours(3), Duration.ofDays(1)),
                 Optional.empty(), "", CostTopKReporter.DEFAULT_INTERVAL,
                 new IndexQuotas.Config(IndexQuotas.Limit.UNLIMITED,
-                        Map.of("logs", new IndexQuotas.Limit(0, 1)), 8));
+                        Map.of("logs", new IndexQuotas.Limit(0, 1)), 8), false);
     }
 
     private static SequencerTransport noPeers() {

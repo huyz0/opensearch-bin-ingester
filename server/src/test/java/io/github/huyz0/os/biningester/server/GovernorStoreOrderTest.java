@@ -49,7 +49,7 @@ class GovernorStoreOrderTest {
         ServerConfig config = new ServerConfig("pod1", "az-a", "cluster-a", "bins/cluster-a",
                 new StoreConfig("memory", Optional.empty()),
                 Duration.ofSeconds(10), Duration.ofSeconds(3), "http://pod1:8080",
-                IngestConfig.defaults("cluster-a"), 0, "producer-1", Set.of("logs"));
+                IngestConfig.defaults("cluster-a"), 0, "producer-1", Set.of("logs"), RetentionConfig.defaults(), java.util.Optional.empty(), "", io.github.huyz0.os.biningester.ingest.CostTopKReporter.DEFAULT_INTERVAL, io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(), false);
         try (ObservedStore shared = new ObservedStore(Inbox.prefixFor("bins/cluster-a"));
                 Assembly assembly = Assembly.openForTest(config, shared, noPeers(),
                         Clock.systemUTC(), ChainBackfill::inBackground,

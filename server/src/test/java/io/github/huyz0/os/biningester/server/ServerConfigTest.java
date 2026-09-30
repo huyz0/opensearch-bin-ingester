@@ -25,7 +25,7 @@ class ServerConfigTest {
         return new ServerConfig(podId, "az-a", trustDomain, prefix,
                 new StoreConfig("memory", Optional.empty()),
                 Duration.ofSeconds(10), Duration.ofSeconds(3), endpoint, ingest,
-                0, "producer-1", java.util.Set.of("logs"));
+                0, "producer-1", java.util.Set.of("logs"), RetentionConfig.defaults(), java.util.Optional.empty(), "", io.github.huyz0.os.biningester.ingest.CostTopKReporter.DEFAULT_INTERVAL, io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(), false);
     }
 
     private static ServerConfig valid() {
@@ -43,7 +43,7 @@ class ServerConfigTest {
         ServerConfig there = new ServerConfig("pod1", "az-b", "cluster-a", "bins/cluster-a",
                 new StoreConfig("memory", Optional.empty()),
                 Duration.ofSeconds(10), Duration.ofSeconds(3), "http://pod1:8080",
-                IngestConfig.defaults("cluster-a"), 0, "producer-1", java.util.Set.of("logs"));
+                IngestConfig.defaults("cluster-a"), 0, "producer-1", java.util.Set.of("logs"), RetentionConfig.defaults(), java.util.Optional.empty(), "", io.github.huyz0.os.biningester.ingest.CostTopKReporter.DEFAULT_INTERVAL, io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(), false);
 
         assertThat(here).isEqualTo(valid()).hasSameHashCodeAs(valid());
         assertThat(here).isNotEqualTo(there);
@@ -123,17 +123,17 @@ class ServerConfigTest {
                 .isInstanceOf(NullPointerException.class).hasMessageContaining("ingest");
         assertThatThrownBy(() -> new ServerConfig("pod1", "az-a", "cluster-a", "bins/c", null,
                 Duration.ofSeconds(10), Duration.ofSeconds(3), "http://p:1",
-                IngestConfig.defaults("cluster-a"), 0, "producer-1", java.util.Set.of("logs")))
+                IngestConfig.defaults("cluster-a"), 0, "producer-1", java.util.Set.of("logs"), RetentionConfig.defaults(), java.util.Optional.empty(), "", io.github.huyz0.os.biningester.ingest.CostTopKReporter.DEFAULT_INTERVAL, io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(), false))
                 .isInstanceOf(NullPointerException.class).hasMessageContaining("store");
         assertThatThrownBy(() -> new ServerConfig("pod1", "az-a", "cluster-a", "bins/c",
                 new StoreConfig("memory", Optional.empty()), null, Duration.ofSeconds(3),
                 "http://p:1", IngestConfig.defaults("cluster-a"), 0, "producer-1",
-                java.util.Set.of("logs")))
+                java.util.Set.of("logs"), RetentionConfig.defaults(), java.util.Optional.empty(), "", io.github.huyz0.os.biningester.ingest.CostTopKReporter.DEFAULT_INTERVAL, io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(), false))
                 .isInstanceOf(NullPointerException.class).hasMessageContaining("leaseTtl");
         assertThatThrownBy(() -> new ServerConfig("pod1", "az-a", "cluster-a", "bins/c",
                 new StoreConfig("memory", Optional.empty()), Duration.ofSeconds(10), null,
                 "http://p:1", IngestConfig.defaults("cluster-a"), 0, "producer-1",
-                java.util.Set.of("logs")))
+                java.util.Set.of("logs"), RetentionConfig.defaults(), java.util.Optional.empty(), "", io.github.huyz0.os.biningester.ingest.CostTopKReporter.DEFAULT_INTERVAL, io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(), false))
                 .isInstanceOf(NullPointerException.class).hasMessageContaining("leaseRenewInterval");
     }
 }

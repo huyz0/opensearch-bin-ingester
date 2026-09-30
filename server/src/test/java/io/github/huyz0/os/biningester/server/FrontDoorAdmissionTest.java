@@ -51,7 +51,7 @@ class FrontDoorAdmissionTest {
         ServerConfig config = new ServerConfig("writera", "az-a", "cluster-a", PREFIX,
                 new StoreConfig("memory", Optional.empty()), Duration.ofSeconds(10),
                 Duration.ofSeconds(3), "http://writer-a:8080", ingest,
-                0, "producer", Set.of("logs"));
+                0, "producer", Set.of("logs"), RetentionConfig.defaults(), java.util.Optional.empty(), "", io.github.huyz0.os.biningester.ingest.CostTopKReporter.DEFAULT_INTERVAL, io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(), false);
         SequencerTransport noPeers = new SequencerTransport() {
             @Override
             public io.github.huyz0.os.biningester.format.CommitDelta send(

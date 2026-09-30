@@ -61,7 +61,7 @@ class AssemblyTest {
                 new StoreConfig("memory", Optional.empty()),
                 Duration.ofSeconds(10), Duration.ofSeconds(3),
                 "http://" + podId + ":8080",
-                IngestConfig.defaults("cluster-a"), 0, "producer-1", java.util.Set.of("logs"));
+                IngestConfig.defaults("cluster-a"), 0, "producer-1", java.util.Set.of("logs"), RetentionConfig.defaults(), java.util.Optional.empty(), "", io.github.huyz0.os.biningester.ingest.CostTopKReporter.DEFAULT_INTERVAL, io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(), false);
     }
 
     /**
@@ -89,7 +89,7 @@ class AssemblyTest {
                 IngestConfig.defaults("cluster-a"), 0, "producer-1", java.util.Set.of("logs"),
                 new RetentionConfig(Duration.ofMinutes(1), Duration.ofHours(2),
                         Duration.ofSeconds(10), Duration.ofHours(3), Duration.ofDays(1)),
-                Optional.empty(), podUid);
+                Optional.empty(), podUid, io.github.huyz0.os.biningester.ingest.CostTopKReporter.DEFAULT_INTERVAL, io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(), false);
     }
 
     private static final class CloseTrackingTransport implements SequencerTransport {
@@ -395,7 +395,7 @@ class AssemblyTest {
         ServerConfig refuses = new ServerConfig("pod1", "az-a", "cluster-a", "bins/cluster-a",
                 new StoreConfig("memory", Optional.empty()), Duration.ofSeconds(10),
                 Duration.ofSeconds(3), "http://pod1:8080", direct, 0, "producer-1",
-                java.util.Set.of("logs"));
+                java.util.Set.of("logs"), RetentionConfig.defaults(), java.util.Optional.empty(), "", io.github.huyz0.os.biningester.ingest.CostTopKReporter.DEFAULT_INTERVAL, io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(), false);
 
         try (BinStore shared = StoreFactory.open(new StoreConfig("memory", Optional.empty()))) {
             assertThatThrownBy(() -> Assembly.open(refuses, shared, noPeers(), Clock.systemUTC()))
