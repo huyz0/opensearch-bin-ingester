@@ -53,7 +53,7 @@ final class ResendOnceSequencer implements Sequencer {
      *
      * <p>⚠️ THE SAME REQUEST OBJECT, WHICH IS WHY M5.2 HOISTED IT -- the window
      * answers only when the triple AND the segment key match. The caller builds
-     * it once -- {@code DefaultIngest.flushLocked} constructs the
+     * it once -- {@code BatchFlusher.flush} constructs the
      * {@code CommitRequest} before calling here, and {@code flushSeq} advances
      * at THAT construction, once per flush, whatever happens in this method.
      *

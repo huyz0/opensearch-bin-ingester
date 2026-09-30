@@ -117,6 +117,19 @@ the design of each is the finding's own fix. Two carry design weight:
   from main sources and every production caller passes a clock; the two
   `ConsumerDeliveryQueues` and `IndexQuotas` default constructors go.
 
+**R16, the failure hold's latency against NFR-7 (M12.11 review P1).** Since
+M12.11 the node's failure hold is its backoff plus up to half again, only ever
+longer: at the 30 s ceiling a failed segment is held (30, 45] s where it was held
+exactly 30 s before, so a consumer's recovery once the store returns can take up
+to 15 s longer. (A lone client's own wait is jittered both ways, [15, 45) s at
+the ceiling; the node's hold raises the shortest and the mean, not the longest.)
+ADR-0063 fixes NFR-7's endpoints and divisor and names no exclusion, so this is
+not claimed to be inside NFR-7: a record whose delivery waits out a failed
+segment's hold during a store outage is outside its bound (p99 < 3x the flush
+window) with or without the jitter, and the jitter lengthens that tail by up to
+15 s. Stated here and in `holdFailures`' javadoc (M13.18) rather than left
+implicit.
+
 ### Fast mode
 
 ⚠️ **This SPEC decides fast mode's architecture and states the protocol's

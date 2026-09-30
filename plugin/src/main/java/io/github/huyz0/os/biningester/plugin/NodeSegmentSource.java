@@ -271,6 +271,15 @@ public final class NodeSegmentSource implements SegmentSource {
      * rate scaling with shards, which non-negotiable 6 forbids by name. With
      * it, the node fetches the key once per hold, the hold doubling from the
      * consumer's retry floor to its ceiling, as one client's retries would.
+     *
+     * <p>⚠️ BUT JITTERED ONLY LONGER (M13.18, M12.11 review P1): each hold is
+     * its backoff plus up to half again ({@link #upJitter}), so at the 30 s
+     * ceiling a node holds a failed key for (30, 45] s -- where before M12.11
+     * it held exactly 30 s, so recovery once the store is back can take up to
+     * 15 s longer than it did. A client's own wait is jittered both ways,
+     * [15, 45) s at the ceiling ({@code HttpSubscriptionTransport.jitteredMillis}):
+     * the node's raises the shortest and the mean hold, not the longest, and
+     * never cuts a client's attempts shorter than its policy assumes.
      */
     void holdFailures(java.util.function.LongSupplier relativeMillis,
             java.util.function.LongUnaryOperator jitter) {

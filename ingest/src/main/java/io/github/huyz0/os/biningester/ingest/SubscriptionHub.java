@@ -598,8 +598,9 @@ public final class SubscriptionHub {
      * <p>⚠️ THE FOUR-ARGUMENT OVERLOAD ABOVE PASSES
      * {@link SubscriptionHub#EPOCH_UNKNOWN}, which is what a caller modelling
      * no chain honestly has. Every such caller in the tree is a fixture; the
-     * production path is {@code DefaultIngest.flushLocked} and it takes this
-     * one.
+     * production path is {@code PushQueue}'s pusher, fed by
+     * {@code BatchFlusher.flush} with the epoch read at flush time, and it
+     * takes this one.
      */
     public void publish(CommitDelta delta, String heldSegmentKey, byte[] heldBytes,
             SegmentServing serving, long sequencerEpoch) {
