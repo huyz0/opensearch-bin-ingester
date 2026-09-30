@@ -96,7 +96,7 @@ class CostTopKIntervalBoundsTest {
 
     private static CostTopKReporter reporter(Duration interval, Clock clock, List<String> lines) {
         return new CostTopKReporter(new IndexCostLedger(), Map::of, CostTable.free(), interval,
-                clock, lines::add, new RefusedIndices());
+                clock, lines::add, new RefusedIndices(), () -> 0);
     }
 
     private static Map<String, String> minimal() {

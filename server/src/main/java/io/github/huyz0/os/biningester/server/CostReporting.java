@@ -36,8 +36,18 @@ final class CostReporting {
      */
     static AutoCloseable scheduleTopK(IndexCostLedger costLedger, IndexCatalog catalog,
             CostTable costs, java.time.Duration interval, Clock clock, RefusedIndices refused) {
-        return schedule(new CostTopKReporter(costLedger, catalog::namesById, costs, interval,
-                clock, line -> COST_LOG.log(System.Logger.Level.INFO, line), refused), interval);
+        return schedule(topK(costLedger, catalog, costs, interval, clock, refused,
+                line -> COST_LOG.log(System.Logger.Level.INFO, line)), interval);
+    }
+
+    /** The reporter {@link #scheduleTopK} schedules, writing its lines to {@code sink}. */
+    static CostTopKReporter topK(IndexCostLedger costLedger, IndexCatalog catalog,
+            CostTable costs, java.time.Duration interval, Clock clock, RefusedIndices refused,
+            java.util.function.Consumer<String> sink) {
+        // ⚠️ THE CATALOG's UNDECODABLE COUNT (M13.10): the registrations
+        // namesById leaves out, which the line counts.
+        return new CostTopKReporter(costLedger, catalog::namesById, costs, interval, clock,
+                sink, refused, () -> catalog.undecodableUuids().size());
     }
 
     /** Ticks {@code reporter} every interval; what it returns stops it. A disabled one costs no thread. */

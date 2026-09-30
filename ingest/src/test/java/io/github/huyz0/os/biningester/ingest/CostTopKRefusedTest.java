@@ -51,7 +51,7 @@ class CostTopKRefusedTest {
     private final RefusedIndices refused = new RefusedIndices();
     private final List<String> lines = new ArrayList<>();
     private final CostTopKReporter reporter = new CostTopKReporter(new IndexCostLedger(),
-            Map::of, CostTable.free(), INTERVAL, clock, lines::add, refused);
+            Map::of, CostTable.free(), INTERVAL, clock, lines::add, refused, () -> 0);
 
     @Test
     void aLineNamesTheIndicesRefusedInItsIntervalAndTheNextLineDoesNot() {

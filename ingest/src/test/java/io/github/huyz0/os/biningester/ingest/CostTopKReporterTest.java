@@ -59,7 +59,7 @@ class CostTopKReporterTest {
 
     private CostTopKReporter reporter(Duration interval) {
         return new CostTopKReporter(ledger, () -> Map.of(A, "alpha", B, "beta", C, "gamma"),
-                CostTable.awsS3Standard(), interval, clock, lines::add, new RefusedIndices());
+                CostTable.awsS3Standard(), interval, clock, lines::add, new RefusedIndices(), () -> 0);
     }
 
     private void puts(UUID index, int n) {
@@ -125,7 +125,7 @@ class CostTopKReporterTest {
     @Test
     void onAFreeBackendTheBusiestIndexStillLeadsByRequests() {
         CostTopKReporter reporter = new CostTopKReporter(ledger, Map::of, CostTable.free(),
-                INTERVAL, clock, lines::add, new RefusedIndices());
+                INTERVAL, clock, lines::add, new RefusedIndices(), () -> 0);
         puts(A, 1);
         puts(D, 4);
 

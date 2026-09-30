@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.function.Consumer;
+import java.util.function.IntSupplier;
 import java.util.function.Supplier;
 
 /**
@@ -57,6 +58,7 @@ public final class CostTopKReporter {
     private final Clock clock;
     private final Consumer<String> sink;
     private final RefusedIndices refused;
+    private final IntSupplier undecodable;
     /** One index's cost: estimated dollars and apportioned micro-requests. */
     private record Spent(UUID index, double usd, long micros) {
     }
@@ -69,12 +71,15 @@ public final class CostTopKReporter {
     /**
      * @param interval how often a line is emitted; {@link Duration#ZERO} turns
      *     the event off
+     * @param undecodable how many registrations {@code names} leaves out because
+     *     their index UUID does not decode (M13.10)
      * @throws IllegalArgumentException if {@code interval} is negative
      */
     public CostTopKReporter(IndexCostLedger ledger, Supplier<Map<UUID, String>> names,
             CostTable prices, Duration interval, Clock clock, Consumer<String> sink,
-            RefusedIndices refused) {
+            RefusedIndices refused, IntSupplier undecodable) {
         this.refused = java.util.Objects.requireNonNull(refused, "refused");
+        this.undecodable = Objects.requireNonNull(undecodable, "undecodable");
         this.ledger = Objects.requireNonNull(ledger, "ledger");
         this.names = Objects.requireNonNull(names, "names");
         this.prices = Objects.requireNonNull(prices, "prices");
@@ -155,13 +160,29 @@ public final class CostTopKReporter {
             }
             line.append(" (estimated; see /admin/cost)");
         }
+        // ⚠️ WHAT THE RANKING CANNOT SEE, COUNTED (M13.10, M12.8 P3): a
+        // registration whose index UUID does not decode has no id to charge, so
+        // it is in no ranking; /admin/cost lists it, and this line says how many.
+        int unranked = undecodable.getAsInt();
+        if (unranked > 0) {
+            line.append(" -- ").append(unranked).append(unranked == 1
+                    ? " registration not ranked: its index UUID does not decode"
+                    : " registrations not ranked: their index UUIDs do not decode")
+                    .append(" (see /admin/cost)");
+        }
         // ⚠️ THE INDICES REFUSED 429 IN THIS INTERVAL (M12.5): a pod-level counter
         // says how many, and this line -- never a label -- says which.
         RefusedIndices.Drained refusedNow = refused.drain();
         if (!refusedNow.names().isEmpty()) {
             line.append(" -- refused 429: ").append(String.join(", ", refusedNow.names()));
+            // ⚠️ REFUSALS, NOT INDICES (M13.10, M12.5 P1): past the named ones
+            // only refusals are counted -- remembering which indices would be
+            // the unbounded set the bound exists to refuse -- so the line says
+            // what the number is.
             if (refusedNow.more() > 0) {
-                line.append(" and ").append(refusedNow.more()).append(" more");
+                line.append(" and ").append(refusedNow.more())
+                        .append(refusedNow.more() == 1 ? " more refusal" : " more refusals")
+                        .append(" of other indices");
             }
         }
         sink.accept(line.toString());

@@ -75,11 +75,34 @@ class RefusalCountersTest {
         }
     }
 
+    /**
+     * M13.10 (M12.5 review T2): a refusal POSTED THROUGH AN ALIAS names the
+     * concrete index on the top-K line -- the name the quota charged, not the
+     * one the producer sent.
+     */
+    @Test
+    void aRefusalThroughAnAliasNamesTheConcreteIndex() throws Exception {
+        try (var store = new MemoryBinStore();
+                var assembly = Assembly.open(config(), store, noPeers(), Clock.systemUTC());
+                var door = FrontDoor.start(assembly, Clock.systemUTC())) {
+            assembly.catalog().register(new IndexRegistration("AAAAAAAAQACAAAAAAAAAqg", "logs",
+                    List.of("logs-current"), 4, 4, 1, 1));
+            HttpClient client = HttpClient.newHttpClient();
+
+            assertThat(post(client, door.port(), "logs-current", 10))
+                    .as("admitted through the alias, into debt").isEqualTo(202);
+            assertThat(post(client, door.port(), "logs-current", 1))
+                    .as("refused by the concrete index's quota").isEqualTo(429);
+            assertThat(assembly.refusedIndices().drain().names())
+                    .as("the concrete index, not the alias sent").containsExactly("logs");
+        }
+    }
+
     private static ServerConfig config() {
         return new ServerConfig("writera", "az-a", "cluster-a", "bins/cluster-a",
                 new StoreConfig("memory", Optional.empty()), Duration.ofSeconds(10),
                 Duration.ofSeconds(3), "http://writer-a:8080", IngestConfig.defaults("cluster-a"),
-                0, "producer", Set.of("logs"),
+                0, "producer", Set.of("logs", "logs-current"),
                 new RetentionConfig(Duration.ofMinutes(1), Duration.ofHours(2),
                         Duration.ofSeconds(10), Duration.ofHours(3), Duration.ofDays(1)),
                 Optional.empty(), "", CostTopKReporter.DEFAULT_INTERVAL,
@@ -102,12 +125,17 @@ class RefusalCountersTest {
     }
 
     private static int post(HttpClient client, int port, int records) throws Exception {
+        return post(client, port, "logs", records);
+    }
+
+    private static int post(HttpClient client, int port, String index, int records)
+            throws Exception {
         StringBuilder body = new StringBuilder();
         for (int i = 0; i < records; i++) {
             body.append("{\"index\":{\"_id\":\"d").append(i).append("\"}}\n{\"f\":1}\n");
         }
         return client.send(HttpRequest.newBuilder()
-                .uri(URI.create("http://127.0.0.1:" + port + "/logs/_bulk?partition=0"))
+                .uri(URI.create("http://127.0.0.1:" + port + "/" + index + "/_bulk?partition=0"))
                 .POST(HttpRequest.BodyPublishers.ofString(body.toString())).build(),
                 HttpResponse.BodyHandlers.discarding()).statusCode();
     }
