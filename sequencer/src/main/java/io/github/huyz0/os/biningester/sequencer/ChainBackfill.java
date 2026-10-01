@@ -166,9 +166,15 @@ public final class ChainBackfill {
             bytes = in.readAllBytes();
         }
         requireServing(serving);
-        return ChainEntry.decode(bytes) instanceof CommitDelta delta
-                ? Optional.of(new ChainGc.DeltaAt(epoch, sequence, delta))
-                : Optional.empty();
+        // ⚠️ EXHAUSTIVE (M13.25): a recovery's commits are a delta to backfill;
+        // empty means a continue, a seal, or a recovery that only voids.
+        Optional<CommitDelta> delta = switch (ChainEntry.decode(bytes)) {
+            case CommitDelta d -> Optional.of(d);
+            case io.github.huyz0.os.biningester.format.Recovery recovery -> recovery.delta();
+            case io.github.huyz0.os.biningester.format.Seal ignored -> Optional.empty();
+            case io.github.huyz0.os.biningester.format.Continue ignored -> Optional.empty();
+        };
+        return delta.map(d -> new ChainGc.DeltaAt(epoch, sequence, d));
     }
 
     private static void requireServing(BooleanSupplier serving) {

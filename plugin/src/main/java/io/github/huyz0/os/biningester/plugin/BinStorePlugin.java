@@ -225,11 +225,8 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
             throw new IllegalArgumentException("could not configure the node-local Tier 2 reader",
                     invalid);
         }
-        subscriptions.enableTierTwo((epoch, sequence) -> {
-            String key = String.format(java.util.Locale.ROOT,
-                    "%s/ctl/log/0/%016x/%016x.delta", prefix, epoch, sequence);
-            return decodeDelta(reader.getIfPresent(bucket, prefix, key));
-        }, subscriptions::ingesterAnswers,
+        subscriptions.enableTierTwo(chainReader(reader::getIfPresent, bucket, prefix),
+                subscriptions::ingesterAnswers,
                 subscriptions::offerTierTwoDelta, reader);
         subscriptions.enableTierThree(new TierThreeRecovery(bucket, prefix,
                 new TierThreeRecovery.Reader() {
@@ -245,6 +242,78 @@ public final class BinStorePlugin extends Plugin implements IngestionConsumerPlu
                         return reader.getIfPresent(storeBucket, storePrefix, key);
                     }
                 }));
+    }
+
+    /** One object read, as the node-local reader answers it: empty when absent. */
+    @FunctionalInterface
+    interface ObjectRead {
+        java.util.Optional<java.io.InputStream> getIfPresent(String bucket, String prefix,
+                String key) throws java.io.IOException;
+    }
+
+    /**
+     * Tier 2's reader of the chain, over the node-local reader's GET.
+     *
+     * <p>⚠️ IT OVERRIDES {@code slot}, which the poller calls: the inherited
+     * default reads through {@code get}, a delta only, and stalled tier 2 for
+     * good at the first recovery (M13.25 review round 3, P1; M13.25a T1).
+     */
+    static TierTwoChainPoller.DeltaReader chainReader(ObjectRead read, String bucket,
+            String prefix) {
+        return new TierTwoChainPoller.DeltaReader() {
+            private java.util.Optional<java.io.InputStream> read(long epoch, long sequence)
+                    throws java.io.IOException {
+                String key = String.format(java.util.Locale.ROOT,
+                        "%s/ctl/log/0/%016x/%016x.delta", prefix, epoch, sequence);
+                return read.getIfPresent(bucket, prefix, key);
+            }
+
+            @Override
+            public java.util.Optional<io.github.huyz0.os.biningester.format.CommitDelta> get(
+                    long epoch, long sequence) throws java.io.IOException {
+                return decodeDelta(read(epoch, sequence));
+            }
+
+            @Override
+            public java.util.Optional<TierTwoChainPoller.Slot> slot(long epoch, long sequence)
+                    throws java.io.IOException {
+                return decodeSlot(read(epoch, sequence));
+            }
+        };
+    }
+
+    /**
+     * A chain slot as tier 2 reads it (M13.25a): a delta, or a recovery's
+     * commits -- none for one that only voids, and the poller passes it.
+     *
+     * <p>⚠️ EXHAUSTIVE, unlike {@link #decodeDelta}, which refuses anything
+     * but a delta: read through that, the first recovery slot stalled tier 2
+     * for good, in exactly the case tier 2 is for -- an ingester taken over.
+     * A seal or a continue is refused as before; tier 2 reads one epoch.
+     */
+    static java.util.Optional<TierTwoChainPoller.Slot> decodeSlot(
+            java.util.Optional<java.io.InputStream> result) throws java.io.IOException {
+        if (result.isEmpty()) {
+            return java.util.Optional.empty();
+        }
+        io.github.huyz0.os.biningester.format.ChainEntry entry;
+        try (var body = result.orElseThrow()) {
+            entry = io.github.huyz0.os.biningester.format.ChainEntry.decode(body.readAllBytes());
+        }
+        return switch (entry) {
+            case io.github.huyz0.os.biningester.format.CommitDelta delta ->
+                    java.util.Optional.of(new TierTwoChainPoller.Slot(delta.sequence(),
+                            java.util.Optional.of(delta)));
+            case io.github.huyz0.os.biningester.format.Recovery recovery ->
+                    java.util.Optional.of(new TierTwoChainPoller.Slot(recovery.sequence(),
+                            recovery.delta()));
+            case io.github.huyz0.os.biningester.format.Seal seal ->
+                    throw new java.io.IOException("tier 2 reached the epoch's seal at "
+                            + seal.sequence());
+            case io.github.huyz0.os.biningester.format.Continue opening ->
+                    throw new java.io.IOException("tier 2 reached a continue at "
+                            + opening.sequence());
+        };
     }
 
     static java.util.Optional<io.github.huyz0.os.biningester.format.CommitDelta> decodeDelta(

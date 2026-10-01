@@ -173,11 +173,7 @@ final class ReaderInvariants {
                 // of the reader whose behaviour is under test.
                 break;
             }
-            if (e instanceof CommitDelta delta) {
-                for (RunCommit run : delta.allRuns()) {
-                    expected.merge(run.key(), run.firstOffset() + run.recordCount(), Math::max);
-                }
-            }
+            CrossEpochInvariants.committedEnds(e, expected);
         }
 
         for (Map.Entry<RunKey, Long> want : expected.entrySet()) {

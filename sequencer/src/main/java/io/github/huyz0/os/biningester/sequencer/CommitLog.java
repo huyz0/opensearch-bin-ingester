@@ -270,6 +270,18 @@ public final class CommitLog {
             }
             case Seal ignored -> { }
             case Continue ignored -> { }
+            case io.github.huyz0.os.biningester.format.Recovery recovery -> {
+                // ⚠️ ITS VOIDS MOVE THE STREAM (ADR-0082 §5): without this the
+                // next commit after a takeover would assign inside a committed
+                // hole. Its commits are a delta's, recorded and counted as one.
+                ChainReplay.fold(recovery, nextOffsets);
+                recovery.delta().ifPresent(delta -> {
+                    chain.record(epoch, delta);
+                    for (io.github.huyz0.os.biningester.format.RunCommit run : delta.allRuns()) {
+                        compaction.recordIndexEntry(run.key());
+                    }
+                });
+            }
         }
         nextSequence = Math.max(nextSequence, entry.sequence() + 1);
     }

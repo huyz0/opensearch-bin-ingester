@@ -197,6 +197,28 @@ crash leaves all of it or none (ADR-0081 §5, invariant c). The sealed
 - the consumer and the plugin read its runs as a delta's and skip each void as
   a counted gap.
 
+⚠️ Landed by M13.25a (M13.25 split at its review budget) for every CHAIN
+reader, each now an exhaustive `switch` over the sealed `ChainEntry` -- the
+plugin's tier-2 poller included, which read every slot as a delta and so
+would have stopped for good at the first recovery. `ChainEnd` needs only a chain's last entry and
+`Checkpoint` is built from the fold, so neither branches on the kind. The
+last bullet -- a void reaching a consumer as a counted skip -- needs the
+subscription and catch-up paths to carry it, which are formats of their own:
+M13.25d. Until it lands no writer emits a recovery entry (the takeover is
+M13.33), and a void would reach a consumer as an unexplained offset jump,
+reported by `DeliveryGapException` as an upstream gap -- and in the plugin the
+stream would be held and its repair retried at every progress interval
+without ever completing, a permanent stall. So M13.33 must not land before
+M13.25d; the backlog records the dependency.
+
+The body after the kinded header and the kind: `sequence` (uvarint); the
+segment count (uvarint, zero allowed) and each segment exactly as a batched
+delta writes it -- key length and key, run count, and per run the index UUID
+(two i64), the partition, the record count and the first offset (uvarints);
+then the void count (uvarint) and each void as the index UUID (two i64), the
+partition, `fromOffset` and `toOffsetExclusive` (uvarints). Segments carry no
+attribution. (Layout stated by M13.25, which landed it.)
+
 Voids are sorted by RunKey and never overlap a committed offset. A stream's
 commits and voids are always in one recovery entry; a takeover's voids span
 more than one only when its batch is split by size (ADR-0081 §5).

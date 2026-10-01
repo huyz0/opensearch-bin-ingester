@@ -8,7 +8,13 @@ import java.nio.ByteOrder;
 
 /**
  * One object in a commit-log chain: a {@link CommitDelta}, a {@link Seal} that
- * ends an epoch's chain, or a {@link Continue} that opens the next one.
+ * ends an epoch's chain, a {@link Continue} that opens the next one, or a
+ * fast-mode takeover's {@link Recovery} (M13.25).
+ *
+ * <p>⚠️ EVERY READER SWITCHES OVER THESE EXHAUSTIVELY (M13.25): a reader that
+ * dispatched by {@code instanceof CommitDelta} compiled when {@link Recovery}
+ * was added and skipped it -- its runs undelivered, its voids unfolded, and
+ * the next commit assigning offsets inside a committed hole.
  *
  * <p>⚠️ A CLOSED SET, so a sealed interface rather than one record with a kind
  * field and mostly-absent columns (java-style.md rule 11). A reader that
@@ -36,7 +42,7 @@ import java.nio.ByteOrder;
  * chain loses a {@code SEAL} and a reader goes on applying a discarded suffix,
  * which is exactly what invariant I3 forbids.
  */
-public sealed interface ChainEntry permits CommitDelta, Seal, Continue {
+public sealed interface ChainEntry permits CommitDelta, Seal, Continue, Recovery {
 
     /** ⚠️ 'BDLT'. Unchanged since v0 — the chain is still the chain. */
     int MAGIC = 0x42444C54;
@@ -76,6 +82,14 @@ public sealed interface ChainEntry permits CommitDelta, Seal, Continue {
      * two and neither golden moves.
      */
     int KIND_DELTA_ATTRIBUTED = 3;
+
+    /**
+     * A takeover's {@link Recovery}: its segment commits and its voids in one
+     * entry (M13.25, ADR-0082 §5). ⚠️ An older binary stops at it, as it stops
+     * at any kind it does not know -- so a fleet runs a build that reads it
+     * before any index uses {@code wal=true} (ADR-0082's consequences).
+     */
+    int KIND_RECOVERY = 4;
 
     /** Where in its chain this entry sits. */
     long sequence();
@@ -143,6 +157,9 @@ public sealed interface ChainEntry permits CommitDelta, Seal, Continue {
             }
             if (kind == KIND_CONTINUE) {
                 return new Continue(c.uvarint(), c.uvarint(), c.uvarint());
+            }
+            if (kind == KIND_RECOVERY) {
+                return Recovery.decodeBody(c);
             }
         } catch (IllegalArgumentException e) {
             throw new IOException("corrupt chain entry of kind " + kind + ": " + e.getMessage(), e);

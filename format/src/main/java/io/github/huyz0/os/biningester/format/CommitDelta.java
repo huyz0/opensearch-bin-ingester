@@ -250,9 +250,10 @@ public record CommitDelta(long sequence, List<SegmentCommit> segments)
     }
 
     /**
-     * ⚠️ Narrows {@link ChainEntry#decode} to the delta case. A chain now
-     * carries three shapes, so a caller that can only handle one must say so
-     * and be refused rather than mis-cast.
+     * ⚠️ Narrows {@link ChainEntry#decode} to the delta case. A chain carries
+     * four shapes (a {@link Recovery} since M13.25), so a caller that can only
+     * handle one must say so and be refused rather than mis-cast -- and a
+     * caller that walks a chain must not use this: it refuses a recovery.
      */
     public static CommitDelta decode(byte[] bytes) throws IOException {
         ChainEntry entry = ChainEntry.decode(bytes);
@@ -300,6 +301,31 @@ public record CommitDelta(long sequence, List<SegmentCommit> segments)
             segments.add(readSegment(c));
         }
         return new CommitDelta(sequence, segments);
+    }
+
+    /**
+     * A count and the segments, as a batched delta writes them -- shared with
+     * {@link Recovery} (ADR-0082 §5), whose commits are a delta's. Zero allowed.
+     */
+    static void writeSegments(ByteArrayOutputStream out, List<SegmentCommit> segments) {
+        SegmentWriter.putUvarint(out, segments.size());
+        for (SegmentCommit s : segments) {
+            writeSegment(out, s);
+        }
+    }
+
+    /** The inverse of {@link #writeSegments}, its count bounded by the bytes left. */
+    static List<SegmentCommit> readSegments(Cursor c) throws IOException {
+        long count = c.uvarint();
+        if (count < 0 || count > c.remaining()) {
+            throw new IOException("a recovery claims " + count + " segments but only "
+                    + c.remaining() + " bytes remain");
+        }
+        List<SegmentCommit> segments = new ArrayList<>((int) count);
+        for (long i = 0; i < count; i++) {
+            segments.add(readSegment(c));
+        }
+        return segments;
     }
 
     /** ⚠️ ONE READER FOR BOTH VERSIONS, mirroring {@link #writeSegment}. */

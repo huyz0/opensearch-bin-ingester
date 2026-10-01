@@ -144,11 +144,12 @@ final class TierThreeRecovery {
         Map<RunKey, Long> covered = new HashMap<>();
         gaps.forEach((key, gap) -> covered.put(key, gap.expectedOffset()));
         for (long sequence = checkpoint.sequence(); sequence <= throughSequence; sequence++) {
-            Optional<CommitDelta> delta = delta(epoch, sequence, budget, recoveryAllowed);
-            if (delta.isEmpty()) {
+            Optional<List<SegmentCommit>> commits = commits(epoch, sequence, budget,
+                    recoveryAllowed);
+            if (commits.isEmpty()) {
                 return Optional.empty();
             }
-            for (SegmentCommit segment : delta.orElseThrow().segments()) {
+            for (SegmentCommit segment : commits.orElseThrow()) {
                 if (!appendRelevantRuns(epoch, sequence, segment, gaps, covered, segments,
                         events, budget, recoveryAllowed)) {
                     return Optional.empty();
@@ -163,7 +164,16 @@ final class TierThreeRecovery {
         return complete ? Optional.of(events) : Optional.empty();
     }
 
-    private Optional<CommitDelta> delta(long epoch, long sequence, Budget budget,
+    /**
+     * The segments committed at {@code sequence}, or empty if the slot cannot
+     * be used for the repair.
+     *
+     * <p>⚠️ A RECOVERY THAT ONLY VOIDS COMMITS NO SEGMENTS, AND THAT IS NOT
+     * MISSING (M13.25 review round 2, P1): answered as empty, it abandoned the
+     * whole repair, so no gap on any stream with such an entry in its window
+     * could ever be repaired.
+     */
+    private Optional<List<SegmentCommit>> commits(long epoch, long sequence, Budget budget,
             BooleanSupplier recoveryAllowed) throws IOException {
         String key = String.format(java.util.Locale.ROOT,
                 "%s/ctl/log/0/%016x/%016x.delta", prefix, epoch, sequence);
@@ -171,11 +181,17 @@ final class TierThreeRecovery {
         if (bytes.isEmpty()) {
             return Optional.empty();
         }
-        ChainEntry entry = ChainEntry.decode(bytes.orElseThrow());
-        if (entry instanceof CommitDelta delta && delta.sequence() == sequence) {
-            return Optional.of(delta);
-        }
-        return Optional.empty();
+        // ⚠️ EXHAUSTIVE (M13.25): a recovered run sits in a recovery entry, and
+        // a gap over it is repaired from its commits as from a delta's.
+        return switch (ChainEntry.decode(bytes.orElseThrow())) {
+            case CommitDelta d -> d.sequence() == sequence
+                    ? Optional.of(d.segments()) : Optional.empty();
+            case io.github.huyz0.os.biningester.format.Recovery recovery ->
+                    recovery.sequence() == sequence
+                            ? Optional.of(recovery.segments()) : Optional.empty();
+            case io.github.huyz0.os.biningester.format.Seal ignored -> Optional.empty();
+            case io.github.huyz0.os.biningester.format.Continue ignored -> Optional.empty();
+        };
     }
 
     private boolean appendRelevantRuns(long epoch, long sequence, SegmentCommit segment,

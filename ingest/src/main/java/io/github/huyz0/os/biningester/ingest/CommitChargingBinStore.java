@@ -87,11 +87,19 @@ public final class CommitChargingBinStore implements BinStore {
         } catch (IOException | RuntimeException undecodable) {
             return Map.of();
         }
-        if (!(entry instanceof CommitDelta delta)) {
+        // ⚠️ EXHAUSTIVE (M13.25): a recovery is charged by its runs as a delta
+        // is; its voids move no bytes and charge no index (ADR-0082 §5).
+        List<SegmentCommit> charged = switch (entry) {
+            case CommitDelta delta -> delta.segments();
+            case io.github.huyz0.os.biningester.format.Recovery recovery -> recovery.segments();
+            case io.github.huyz0.os.biningester.format.Seal ignored -> List.of();
+            case io.github.huyz0.os.biningester.format.Continue ignored -> List.of();
+        };
+        if (charged.isEmpty()) {
             return Map.of();
         }
         Map<UUID, Long> records = new HashMap<>();
-        for (SegmentCommit segment : delta.segments()) {
+        for (SegmentCommit segment : charged) {
             for (RunCommit run : segment.runs()) {
                 records.merge(run.key().indexId(), (long) run.recordCount(), Long::sum);
             }

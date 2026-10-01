@@ -153,6 +153,44 @@ public final class Invariants {
             switch (e) {
                 case Seal s -> seal = s;
                 case Continue ignored -> { }
+                case io.github.huyz0.os.biningester.format.Recovery recovery -> {
+                    // ⚠️ A VOID IS A COMMITTED HOLE, NOT A GAP (ADR-0082 §5): each
+                    // stream's recovered runs and voids, in offset order, must
+                    // continue from the high-water mark exactly as a delta's
+                    // runs must -- a void below it is I2 (a committed offset
+                    // voided), one above it a gap.
+                    Map<RunKey, List<long[]>> spans = new LinkedHashMap<>();
+                    for (io.github.huyz0.os.biningester.format.SegmentCommit segment
+                            : recovery.segments()) {
+                        for (RunCommit run : segment.runs()) {
+                            spans.computeIfAbsent(run.key(), k -> new ArrayList<>()).add(
+                                    new long[] {run.firstOffset(),
+                                            run.firstOffset() + run.recordCount()});
+                        }
+                    }
+                    for (io.github.huyz0.os.biningester.format.Recovery.VoidRange v
+                            : recovery.voids()) {
+                        spans.computeIfAbsent(v.key(), k -> new ArrayList<>())
+                                .add(new long[] {v.fromOffset(), v.toOffsetExclusive()});
+                    }
+                    for (Map.Entry<RunKey, List<long[]>> stream : spans.entrySet()) {
+                        List<long[]> ordered = new ArrayList<>(stream.getValue());
+                        ordered.sort(java.util.Comparator.comparingLong(span -> span[0]));
+                        for (long[] span : ordered) {
+                            long from = nextOffset.getOrDefault(stream.getKey(), 0L);
+                            if (span[0] < from) {
+                                found.add(new Violation("I2", "stream " + stream.getKey()
+                                        + " recovery resumes at " + span[0]
+                                        + " but the chain had assigned up to " + from));
+                            } else if (span[0] > from) {
+                                found.add(new Violation("gap", "stream " + stream.getKey()
+                                        + " recovery resumes at " + span[0] + ", skipping "
+                                        + (span[0] - from)));
+                            }
+                            nextOffset.put(stream.getKey(), Math.max(from, span[1]));
+                        }
+                    }
+                }
                 case CommitDelta delta -> {
                     // ⚠️ `allRuns`, NEVER `runs()`: `runs()` REFUSES a delta
                     // carrying more than one segment, so every checker here

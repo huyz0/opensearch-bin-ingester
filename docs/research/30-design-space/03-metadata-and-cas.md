@@ -9,6 +9,17 @@ a TLA+ or at minimum a deterministic-simulation test. · **Last updated:** 2026-
 epochs, appending to a write-once commit log** (`If-None-Match: *`). Never read-modify-write a
 shared manifest — that is exactly the pattern Quickwit warns collapses under concurrency.
 
+> ⚠️ **Revision (2026-10-01, M13.25).** The commit-log chain now has a fourth
+> entry kind beside the delta, the seal and the continue: a fast-mode
+> takeover's **recovery** entry, carrying its segment commits and its voids
+> (committed holes) in one write-once object, so a crash leaves all of it or
+> none. Its layout and every reader's treatment are
+> [ADR-0082 §5](../../internal/product/decisions/0082-fast-mode-formats.md);
+> the protocol that writes it is
+> [ADR-0081 §5](../../internal/product/decisions/0081-fast-mode-is-sequenced-held-published-and-uploaded-by-the-leader.md).
+> Nothing below is otherwise changed by it: the chain is still append-only,
+> raced for by sequence, and folded by the maximum.
+
 ---
 
 ## 1. The requirement

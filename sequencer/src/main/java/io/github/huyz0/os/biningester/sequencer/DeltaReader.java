@@ -44,6 +44,12 @@ final class DeltaReader {
      * which is the same conclusion. What follows either way is a retry, which
      * meets the seal through the fencing path that already exists.
      *
+     * <p>⚠️ A RECOVERY AT THE SLOT (M13.25) answers its commits, or empty if it
+     * only voids. Only this epoch's writer writes the slot, so a recovery there
+     * is that writer's own takeover entry, and reconciling an ambiguous one is
+     * the takeover's (M13.33), which must not read "empty" here as "my append
+     * never landed" for a recovery that only voids.
+     *
      * <p>⚠️ THE STAT IS NOT A DUPLICATE OF THE GET, and removing it turns one
      * failure mode into another. {@code BinStore.get} reports "no such key" and
      * "store unreachable" as the same {@link IOException}, so a caller
@@ -72,13 +78,19 @@ final class DeltaReader {
      * <p>⚠️ A slot holding a {@code Seal} or a {@code Continue} returns empty
      * rather than throwing: those are legitimate chain contents, not
      * corruption, and a caller asking for a delta wants to know it is not one.
+     * A {@code Recovery} returns its commits, or empty if it only voids.
      */
     static Optional<CommitDelta> at(BinStore store, String prefix, long epoch, long sequence)
             throws IOException {
         String key = new LogKeys(prefix, epoch).keyFor(sequence);
         try (InputStream in = store.get(key)) {
-            ChainEntry entry = ChainEntry.decode(in.readAllBytes());
-            return entry instanceof CommitDelta delta ? Optional.of(delta) : Optional.empty();
+            // ⚠️ EXHAUSTIVE (M13.25): a recovery's commits are a delta to read.
+            return switch (ChainEntry.decode(in.readAllBytes())) {
+                case CommitDelta delta -> Optional.of(delta);
+                case io.github.huyz0.os.biningester.format.Recovery recovery -> recovery.delta();
+                case io.github.huyz0.os.biningester.format.Seal ignored -> Optional.empty();
+                case io.github.huyz0.os.biningester.format.Continue ignored -> Optional.empty();
+            };
         }
     }
 }

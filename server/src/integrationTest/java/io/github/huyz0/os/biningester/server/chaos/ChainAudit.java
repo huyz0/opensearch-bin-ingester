@@ -4,6 +4,7 @@ package io.github.huyz0.os.biningester.server.chaos;
 import io.github.huyz0.os.biningester.format.ChainEntry;
 import io.github.huyz0.os.biningester.format.CommitDelta;
 import io.github.huyz0.os.biningester.format.Continue;
+import io.github.huyz0.os.biningester.format.Recovery;
 import io.github.huyz0.os.biningester.format.RunCommit;
 import io.github.huyz0.os.biningester.format.RunKey;
 import io.github.huyz0.os.biningester.format.Seal;
@@ -120,6 +121,9 @@ public final class ChainAudit {
                                 .append(run.firstOffset() + run.recordCount()).append(") ");
                     }
                 }
+            } else if (entry instanceof Recovery recovery) {
+                out.append("recovery ").append(recovery.segments()).append(" voids ")
+                        .append(recovery.voids());
             } else {
                 out.append(entry);
             }
@@ -182,7 +186,7 @@ public final class ChainAudit {
             Seal seal = chain.firstSeal();
             if (seal != null) {
                 for (ChainEntry entry : entries) {
-                    if (entry instanceof CommitDelta && entry.sequence() > seal.sequence()) {
+                    if (commits(entry) && entry.sequence() > seal.sequence()) {
                         violations.add("I5: epoch " + chain.epoch() + " has delta "
                                 + entry.sequence() + " after its SEAL at " + seal.sequence());
                     }
@@ -240,7 +244,7 @@ public final class ChainAudit {
         // instead of continuing would otherwise pass every check above.
         for (EpochChain chain : epochs.values()) {
             if (!onPath.contains(chain.epoch())
-                    && chain.entries().stream().anyMatch(e -> e instanceof CommitDelta)) {
+                    && chain.entries().stream().anyMatch(ChainAudit::commits)) {
                 violations.add("history: epoch " + chain.epoch()
                         + " holds deltas no later epoch continues from");
             }
@@ -250,8 +254,14 @@ public final class ChainAudit {
                 if (entry.sequence() >= hop[1] || entry instanceof Seal) {
                     break;
                 }
-                if (entry instanceof CommitDelta delta) {
-                    apply(hop[0], delta);
+                // ⚠️ EXHAUSTIVE (M13.25a): a recovery's runs and voids continue
+                // their streams like a delta's runs, so an offset assigned
+                // inside a void is flagged as I2.
+                switch (entry) {
+                    case CommitDelta delta -> apply(hop[0], delta);
+                    case Recovery recovery -> applyRecovery(hop[0], recovery);
+                    case Seal ignored -> { }
+                    case Continue ignored -> { }
                 }
             }
         }
@@ -265,11 +275,53 @@ public final class ChainAudit {
         for (long e = from; e < to; e++) {
             EpochChain chain = epochs.get(e);
             if (chain != null && chain.entries().stream()
-                    .anyMatch(x -> x instanceof Continue || x instanceof CommitDelta)) {
+                    .anyMatch(x -> x instanceof Continue || commits(x))) {
                 return false;
             }
         }
         return true;
+    }
+
+    /** Whether {@code e} commits anything: a delta, or a recovery. */
+    private static boolean commits(ChainEntry e) {
+        return switch (e) {
+            case CommitDelta ignored -> true;
+            case Recovery ignored -> true;
+            case Seal ignored -> false;
+            case Continue ignored -> false;
+        };
+    }
+
+    /** I2 over a recovery: its runs and voids, in offset order, continue each stream. */
+    private void applyRecovery(long epoch, Recovery recovery) {
+        Map<RunKey, List<long[]>> spans = new TreeMap<>();
+        for (SegmentCommit segment : recovery.segments()) {
+            committedSegments.add(segment.segmentKey());
+            for (RunCommit run : segment.runs()) {
+                spans.computeIfAbsent(run.key(), k -> new ArrayList<>()).add(
+                        new long[] {run.firstOffset(), run.firstOffset() + run.recordCount()});
+            }
+        }
+        for (Recovery.VoidRange v : recovery.voids()) {
+            spans.computeIfAbsent(v.key(), k -> new ArrayList<>())
+                    .add(new long[] {v.fromOffset(), v.toOffsetExclusive()});
+        }
+        for (Map.Entry<RunKey, List<long[]>> stream : spans.entrySet()) {
+            List<long[]> ordered = new ArrayList<>(stream.getValue());
+            ordered.sort(java.util.Comparator.comparingLong(span -> span[0]));
+            for (long[] span : ordered) {
+                long mark = nextOffsets.getOrDefault(stream.getKey(), 0L);
+                if (span[0] < mark) {
+                    violations.add("I2: epoch " + epoch + " recovery " + recovery.sequence()
+                            + " reassigns " + stream.getKey() + " from " + span[0]
+                            + ", below " + mark);
+                } else if (span[0] > mark) {
+                    violations.add("gap: epoch " + epoch + " recovery " + recovery.sequence()
+                            + " starts " + stream.getKey() + " at " + span[0] + ", past " + mark);
+                }
+                nextOffsets.put(stream.getKey(), Math.max(mark, span[1]));
+            }
+        }
     }
 
     /** I2: every run starts exactly where its stream's last one ended. */

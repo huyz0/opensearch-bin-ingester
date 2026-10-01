@@ -79,7 +79,7 @@ final class CrossEpochInvariants {
         // same defect as F1 one question earlier, and answered on the successor's
         // word in exactly the same way.
         if (!(entries.getFirst() instanceof Continue opening)) {
-            if (entries.stream().anyMatch(e -> e instanceof CommitDelta)) {
+            if (entries.stream().anyMatch(CrossEpochInvariants::commits)) {
                 found.add(new Violation("link", "epoch " + epoch + " carries committed deltas "
                         + "but never wrote a CONTINUE, so its offsets rest on nothing"));
             }
@@ -173,13 +173,53 @@ final class CrossEpochInvariants {
             if (e.sequence() > upTo) {
                 break;
             }
-            if (e instanceof CommitDelta delta) {
-                for (RunCommit run : delta.allRuns()) {
-                    inherited.merge(run.key(), run.lastOffset() + 1, Math::max);
-                }
-            }
+            committedEnds(e, inherited);
         }
         return inherited;
+    }
+
+    /**
+     * Folds where {@code e} leaves each stream into {@code into}, by the maximum.
+     *
+     * <p>⚠️ INDEPENDENT OF {@code ChainReplay.fold}, deliberately, and EXHAUSTIVE
+     * (M13.25 review round 2, T3): these checkers exist to catch the
+     * production fold being wrong, so they re-derive it; and a recovery's runs
+     * and voids both move a stream -- skipped, an offset assigned inside a
+     * predecessor's void would not be flagged as I2, nor a reader dropping a
+     * recovery's runs as I4.
+     */
+    static void committedEnds(ChainEntry e, Map<RunKey, Long> into) {
+        switch (e) {
+            case CommitDelta delta -> {
+                for (RunCommit run : delta.allRuns()) {
+                    into.merge(run.key(), run.firstOffset() + run.recordCount(), Math::max);
+                }
+            }
+            case io.github.huyz0.os.biningester.format.Recovery recovery -> {
+                for (io.github.huyz0.os.biningester.format.SegmentCommit segment
+                        : recovery.segments()) {
+                    for (RunCommit run : segment.runs()) {
+                        into.merge(run.key(), run.firstOffset() + run.recordCount(), Math::max);
+                    }
+                }
+                for (io.github.huyz0.os.biningester.format.Recovery.VoidRange v
+                        : recovery.voids()) {
+                    into.merge(v.key(), v.toOffsetExclusive(), Math::max);
+                }
+            }
+            case Seal ignored -> { }
+            case Continue ignored -> { }
+        }
+    }
+
+    /** Whether {@code e} commits anything: a delta, or a recovery. */
+    static boolean commits(ChainEntry e) {
+        return switch (e) {
+            case CommitDelta ignored -> true;
+            case io.github.huyz0.os.biningester.format.Recovery ignored -> true;
+            case Seal ignored -> false;
+            case Continue ignored -> false;
+        };
     }
 
     /**
@@ -193,7 +233,7 @@ final class CrossEpochInvariants {
             throws IOException {
         for (long e = epoch - 1; e >= 1; e--) {
             List<ChainEntry> chain = Invariants.readChain(store, prefix, e);
-            if (chain.stream().anyMatch(x -> x instanceof CommitDelta)) {
+            if (chain.stream().anyMatch(CrossEpochInvariants::commits)) {
                 return e;
             }
         }

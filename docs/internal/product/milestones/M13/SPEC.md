@@ -948,7 +948,11 @@ journal's fsync and the Kubernetes pod lookup are injected seams.
 | M13.23a | Split from M13.23 at its review budget: the three settings, with round 3's findings fixed | FR-17 |
 | M13.24 | The fast journal: append, fsync seam, entries, the byte bound, release, recovery read | FR-17 |
 | M13.24a | Split from M13.24 at its review budget: the fast journal, with round 3's findings fixed | FR-17 |
-| M13.25 | The fast frames, the roster object and the recovery chain entry (a takeover's commits and voids in one entry, ADR-0082), with golden files, and every reader of it in the same commit (non-negotiable 8): the chain-entry kinds made a sealed type decoded by exhaustive `switch`, so a reader that ignores the new kind fails to compile -- `DeltaReader`, `CommitChargingBinStore`, `ChainEnd`, `ChainReplay`, `Checkpoint`, `ChainBackfill` -- and the consumer's and the plugin's counted skip | FR-17 |
+| M13.25 | The recovery chain entry and every chain reader of it (narrowed: the frames, the roster object and the consumer's counted skip are M13.25b-d) | FR-17 |
+| M13.25a | M13.25 carried past its review budget, with the plugin's tier-2 poller and the chaos audit added to its readers | FR-17 |
+| M13.25b | The fast frames and the default-path commit answer, with golden files, landing with their first reader and writer | FR-17 |
+| M13.25c | The roster object and `LATEST`, with golden files, landing with their first reader and writer | FR-17 |
+| M13.25d | A void delivered to consumers and the plugin as a counted skip | FR-17 |
 | M13.26 | The roster and lease-time fencing: join, admission, the epoch fence, the TTL wait, the per-term `wal_quorum` record, and a non-leader's graceful departure (upload, wait, then leave the roster) | FR-17 |
 | M13.27 | The leader's fast sequencer: cursor, assignment and the per-stream bound, journal, replica set, answer | FR-17 |
 | M13.28 | The replica endpoint: store, epoch fence, release | FR-17 |

@@ -13,6 +13,23 @@ final class TierTwoChainPoller {
     @FunctionalInterface
     interface DeltaReader {
         Optional<CommitDelta> get(long epoch, long sequence) throws IOException;
+
+        /**
+         * The chain slot at {@code sequence}: written, with its commits if any.
+         *
+         * <p>⚠️ A SLOT CAN BE WRITTEN AND COMMIT NOTHING (M13.25a): a recovery
+         * that only voids. Read through {@link #get}, which can only say "a
+         * delta" or "not written yet", the poller waited at it for ever.
+         * Readers that read only deltas inherit this default.
+         */
+        default Optional<Slot> slot(long epoch, long sequence) throws IOException {
+            return get(epoch, sequence).map(delta -> new Slot(delta.sequence(),
+                    Optional.of(delta)));
+        }
+    }
+
+    /** A written chain slot and the commits it carries, none for a voids-only recovery. */
+    record Slot(long sequence, Optional<CommitDelta> commits) {
     }
 
     private long epoch;
@@ -72,24 +89,26 @@ final class TierTwoChainPoller {
             readEpoch = epoch;
             nextSequence = currentSequence + 1;
         }
-        Optional<CommitDelta> found;
+        Optional<Slot> found;
         try {
-            found = reader.get(readEpoch, nextSequence);
+            found = reader.slot(readEpoch, nextSequence);
         } catch (IOException unavailable) {
             return;
         }
         if (found.isEmpty()) {
             return;
         }
-        CommitDelta delta = found.orElseThrow();
-        if (delta.sequence() != nextSequence) {
+        Slot slot = found.orElseThrow();
+        if (slot.sequence() != nextSequence) {
             throw new IllegalStateException("node-local reader returned the wrong chain delta");
         }
         synchronized (this) {
             if (epoch != readEpoch || currentSequence != nextSequence - 1) {
                 return;
             }
-            consumer.accept(delta);
+            // ⚠️ ADVANCED EITHER WAY: a voids-only recovery is written and
+            // carries no records, and its voids reach consumers with M13.25d.
+            slot.commits().ifPresent(consumer);
             currentSequence = nextSequence;
         }
     }

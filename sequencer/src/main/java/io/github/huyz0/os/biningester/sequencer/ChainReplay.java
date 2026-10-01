@@ -9,6 +9,7 @@ import io.github.huyz0.os.biningester.format.ChainEntry;
 import io.github.huyz0.os.biningester.format.Checkpoint;
 import io.github.huyz0.os.biningester.format.CommitDelta;
 import io.github.huyz0.os.biningester.format.Continue;
+import io.github.huyz0.os.biningester.format.Recovery;
 import io.github.huyz0.os.biningester.format.RunCommit;
 import io.github.huyz0.os.biningester.format.RunKey;
 import io.github.huyz0.os.biningester.format.Seal;
@@ -603,39 +604,48 @@ final class ChainReplay {
         // ⚠️ COUNTED ON THE SAME WALK (M4.14). A replay already visits every
         // entry, so counting here costs nothing; a second pass would cost one
         // GET per delta on the recovery path, whose whole purpose is speed.
-        if (entry instanceof CommitDelta delta) {
-            // ⚠️ WITH ITS EPOCH, BECAUSE A SEQUENCE ALONE IS NOT AN IDENTITY.
-            // "OFFSETS CROSS, SEQUENCE NUMBERS DO NOT" -- each chain numbers
-            // from its own start -- and a crossing replay reads the ANCESTOR
-            // first, so a consumer that deduplicated on the sequence alone
-            // would discard this term's own deltas as repeats of the
-            // predecessor's. Review MEASURED exactly that.
-            deltas.add(new EpochDelta(chainEpoch, delta));
-            for (io.github.huyz0.os.biningester.format.RunCommit run : delta.allRuns()) {
-                indexEntries.merge(run.key(), 1L, Long::sum);
+        // ⚠️ EXHAUSTIVE (M13.25): a recovery's commits are a delta's; voids folded above.
+        switch (entry) {
+            case CommitDelta delta -> recordDelta(delta, chainEpoch);
+            case Recovery recovery -> recovery.delta()
+                    .ifPresent(delta -> recordDelta(delta, chainEpoch));
+            case Seal ignored -> { }
+            case Continue ignored -> { }
+        }
+    }
+
+    private void recordDelta(CommitDelta delta, long chainEpoch) {
+        // ⚠️ WITH ITS EPOCH, BECAUSE A SEQUENCE ALONE IS NOT AN IDENTITY.
+        // "OFFSETS CROSS, SEQUENCE NUMBERS DO NOT" -- each chain numbers
+        // from its own start -- and a crossing replay reads the ANCESTOR
+        // first, so a consumer that deduplicated on the sequence alone
+        // would discard this term's own deltas as repeats of the
+        // predecessor's. Review MEASURED exactly that.
+        deltas.add(new EpochDelta(chainEpoch, delta));
+        for (io.github.huyz0.os.biningester.format.RunCommit run : delta.allRuns()) {
+            indexEntries.merge(run.key(), 1L, Long::sum);
+        }
+        // ⚠️ KEYED ON (podId, incarnationId), NEVER ON podId ALONE, and
+        // review measured why. Comparing flushSeq ACROSS incarnations lets
+        // a DEAD one win: a producer that committed flushSeq 0..100 as i1,
+        // restarted, and committed flushSeq 0 as i2 would seed the window
+        // under i1 -- leaving i2, the only incarnation that can still
+        // retry, with no protection at all and duplicating on its first
+        // retry across a takeover. `CheckpointWriter` states the rule in as
+        // many words: "Math::max WITHIN AN INCARNATION, never across one".
+        // ⚠️ AND THE HIGHEST WINS WITHIN ONE, never the last seen: a chain
+        // replays in order today, but two requests in one batch may share a
+        // triple, so the last is not necessarily the highest.
+        for (io.github.huyz0.os.biningester.format.SegmentCommit segment : delta.segments()) {
+            io.github.huyz0.os.biningester.format.SegmentCommit.Attribution a = segment.attribution();
+            if (a == null) {
+                continue;
             }
-            // ⚠️ KEYED ON (podId, incarnationId), NEVER ON podId ALONE, and
-            // review measured why. Comparing flushSeq ACROSS incarnations lets
-            // a DEAD one win: a producer that committed flushSeq 0..100 as i1,
-            // restarted, and committed flushSeq 0 as i2 would seed the window
-            // under i1 -- leaving i2, the only incarnation that can still
-            // retry, with no protection at all and duplicating on its first
-            // retry across a takeover. `CheckpointWriter` states the rule in as
-            // many words: "Math::max WITHIN AN INCARNATION, never across one".
-            // ⚠️ AND THE HIGHEST WINS WITHIN ONE, never the last seen: a chain
-            // replays in order today, but two requests in one batch may share a
-            // triple, so the last is not necessarily the highest.
-            for (io.github.huyz0.os.biningester.format.SegmentCommit segment : delta.segments()) {
-                io.github.huyz0.os.biningester.format.SegmentCommit.Attribution a = segment.attribution();
-                if (a == null) {
-                    continue;
-                }
-                pods.merge(slot(a.podId(), a.incarnationId()),
-                        new Checkpoint.PodState(a.incarnationId(), a.flushSeq(),
-                                chainEpoch, delta.sequence()),
-                        (prior, now) -> now.lastAppliedFlushSeq() > prior.lastAppliedFlushSeq()
-                                ? now : prior);
-            }
+            pods.merge(slot(a.podId(), a.incarnationId()),
+                    new Checkpoint.PodState(a.incarnationId(), a.flushSeq(),
+                            chainEpoch, delta.sequence()),
+                    (prior, now) -> now.lastAppliedFlushSeq() > prior.lastAppliedFlushSeq()
+                            ? now : prior);
         }
     }
 
@@ -651,15 +661,27 @@ final class ChainReplay {
      * rewind the stream, which is I2.
      */
     static void fold(ChainEntry entry, Map<RunKey, Long> into) {
-        if (entry instanceof CommitDelta delta) {
-            // ⚠️ `allRuns`, deliberately: an offset is a STREAM fact, not a
-            // segment fact, so this is the one reader that genuinely does not
-            // care which object holds the records. Everything that DELIVERS
-            // records pairs each run with its own segment instead — see
-            // SubscriptionHub and ADR-0032.
-            for (RunCommit run : delta.allRuns()) {
-                into.merge(run.key(), run.lastOffset() + 1, Math::max);
+        switch (entry) {
+            case CommitDelta delta -> {
+                // ⚠️ `allRuns`, deliberately: an offset is a STREAM fact, not a
+                // segment fact, so this is the one reader that genuinely does not
+                // care which object holds the records. Everything that DELIVERS
+                // records pairs each run with its own segment instead — see
+                // SubscriptionHub and ADR-0032.
+                for (RunCommit run : delta.allRuns()) {
+                    into.merge(run.key(), run.lastOffset() + 1, Math::max);
+                }
             }
+            case Recovery recovery -> {
+                // ⚠️ A VOID IS A COMMITTED HOLE (ADR-0082 §5): it moves its stream
+                // past it, so no later commit assigns inside it; never backwards (I2).
+                recovery.delta().ifPresent(delta -> fold(delta, into));
+                for (Recovery.VoidRange v : recovery.voids()) {
+                    into.merge(v.key(), v.toOffsetExclusive(), Math::max);
+                }
+            }
+            case Seal ignored -> { }
+            case Continue ignored -> { }
         }
     }
 
