@@ -155,7 +155,12 @@ One append-only file per pod under the pod's `emptyDir`, plus a small
 `epoch` file holding the highest fast epoch the pod has seen (ADR-0081 §3),
 written and fsynced before it is relied on -- by writing a temporary file,
 fsyncing it, renaming it over the old one and fsyncing the directory, never in
-place. An entry:
+place. ⚠️ Its bytes, stated by M13.26c, which landed it: magic `0x42464550`
+("BFEP") u32, version 1 u8, the epoch i64, and the CRC32C of those thirteen
+bytes u32 -- seventeen bytes, big-endian. Replaced whole, it has no torn form,
+so a file that does not decode is refused and the pod stays unready, never
+read as a lower epoch -- except an EMPTY file, which is no file yet (a crash
+between its creation and its first write), and is written at once. An entry:
 
 | Field | Encoding |
 |---|---|

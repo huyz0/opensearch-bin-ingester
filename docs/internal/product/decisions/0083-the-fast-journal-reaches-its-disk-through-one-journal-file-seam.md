@@ -62,6 +62,9 @@ rule 4 says the seams are few and named, and a new one is an ADR.
   `SubscriptionTransport`, `Membership`, `JournalFile`.
 - The epoch file ADR-0082 §4 also places on the `emptyDir` is not part of
   this seam's first use; it lands with the epoch fence (M13.26c) and either
-  shares this seam or is decided there.
+  shares this seam or is decided there. ⚠️ Decided by M13.26c: it SHARES the
+  seam, a second `JournalFile` written only by `replace` -- the whole-file
+  write beside, fsync, rename, directory fsync that ADR-0082 §4 asks of it --
+  so no seventh seam exists.
 - Windows cannot fsync a directory; `FileJournalFile` treats that as best
   effort there and as an error elsewhere. The pods run on Linux.
