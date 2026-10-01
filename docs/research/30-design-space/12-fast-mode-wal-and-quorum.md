@@ -16,7 +16,7 @@ load-bearing number) · **Last updated:** 2026-08-30
 > `all_active=false`; with `all_active=true`, one per consuming replica's pod). The `quorum=1` row below is superseded:
 > the ack follows the LEADER's fsync, and the data is lost with the leader's
 > disk, not the writing pod's. The `quorum ≥ 2` replication figure stands.
-> The protocol is M13.22's decision record.
+> The protocol is M13.22's decision record: [ADR-0081](../../internal/product/decisions/0081-fast-mode-is-sequenced-held-published-and-uploaded-by-the-leader.md), formats [ADR-0082](../../internal/product/decisions/0082-fast-mode-formats.md).
 
 **Read this if:** you are implementing the fast tier, or deciding whether a
 workload should use it.

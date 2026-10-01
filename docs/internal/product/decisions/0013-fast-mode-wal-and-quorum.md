@@ -1,6 +1,6 @@
 # 0013. Fast mode: an opt-in quorum-replicated WAL
 
-Status: accepted
+Status: accepted; amended 2026-10-01 by [ADR-0081](0081-fast-mode-is-sequenced-held-published-and-uploaded-by-the-leader.md) (M13.22i): the protocol, and NFR-5, NFR-9 and NFR-10 made conditional
 Date: 2026-08-30
 Requirements: FR-17, NFR-14
 Research: docs/research/30-design-space/12-fast-mode-wal-and-quorum.md
@@ -97,8 +97,10 @@ from its quorum peers, so pods stay reschedulable.
   already indexed it, **the index contains a record the log cannot reproduce.**
   The registration must record the mode so an operator can see it; a cluster that
   quietly enabled fast mode everywhere has silently downgraded its durability.
-- ⚠️ **Scoped reversal of ADR-0011.** The default path is unchanged: object-store
-  CAS, no WAL, no quorum. Only the opt-in tier takes the trade.
+- ⚠️ **Scoped reversal of ADR-0011.** The default path keeps object-store
+  CAS, no WAL, no quorum (⚠️ amended by M13.22i: its takeover now also runs
+  fast mode's walk, roster and fences, and holds commits until the walk's
+  step 3, ADR-0081 §1, criterion 19). Only the opt-in tier takes the trade.
 - Pods become **stateful in effect** for the upload window: one holding
   un-uploaded WAL entries cannot terminate without flushing or handing off.
   Shutdown ordering and `terminationGracePeriodSeconds` must cover it. This, not
@@ -118,6 +120,22 @@ from its quorum peers, so pods stay reschedulable.
   so the ratio never flips. See [automq §10.3](../../../research/10-prior-art/02-automq.md).
   A `quorum=1` local-disk WAL *would* reproduce their economics — and their
   single-AZ durability posture with it.
+- ⚠️ **Amended by M13.22i ([ADR-0081](0081-fast-mode-is-sequenced-held-published-and-uploaded-by-the-leader.md)).**
+  - The writer's WAL is not the upload source. The sequencer leader holds,
+    publishes and uploads every fast batch, and a copy counts toward the quorum
+    only once it holds its assigned offsets (research 12 §5 overturned).
+  - Beside NFR-8, **NFR-5** holds only for `wal=false` indices: a fast record
+    crosses AZs `max(q − 1, [W ∉ AZ(L)])` times for its quorum, plus once per
+    interested pod in another AZ.
+  - **NFR-9** holds for every index except one with a term-record value in an
+    unclosed earlier term, whose default-path commits wait for a takeover's
+    decisions.
+  - **NFR-10** holds for `wal=false`, or `wal_quorum ≥ 2`, and at `q = 2` only
+    if no second holder of an entry is lost within the upload the first loss
+    triggers; a `q = 3` index on three AZs does not ack while one is lost.
+  - After quorum loss -- as ADR-0081 §5 defines it -- a takeover may void up to
+    `B` offsets per stream as counted gaps, per takeover that writes a
+    recovery entry, an exception to ADR-0001.
 - **Milestone placement: after M9.** This is a second write path with its own
   failure modes; it should be built once the default path is measured and proven,
   not alongside it.

@@ -8,7 +8,8 @@ NFR-15's bound (ack and visibility p99 < 10 ms), before their segment is in the
 object store; every acked fast record appears later in a
 committed segment at the offset it was acked with (invariant I6), through the
 death of the writing pod or of the sequencer leader while a quorum of its copies
-survives; the default path is unchanged for every index with `wal=false`; and
+survives; the default path carries no record through fast mode for every
+index with `wal=false` (its takeover pays what criterion 19 states); and
 every item of M12's review harvest is a closed M13 row or dropped with its reason
 below.**
 
@@ -220,8 +221,11 @@ read by the plugin's registrar and carried in `IndexRegistration` v2.
    oracle's copy of it, are M13.22's decision** (M13.43 review R3-P1: each of
    three SPEC drafts of it was wrong in a case the next round named), under two
    constraints: it is a function only of events the survivors can know and the
-   model records -- rostered joins, graceful departures, UID deletions, and the
-   `wal_quorum` values written to the term record, which a new leader reads --
+   model records -- rostered joins, graceful departures, UID deletions, the
+   `wal_quorum` values written to the term record, which a new leader reads,
+   and (⚠️ added by M13.22i, M13.22f review round 1, T1) each term's leader and
+   its closure, as written to the roster, for terms whose `LATEST` write
+   landed only (an orphan roster is no term, ADR-0081 §1) --
    never of which pods held copies, under which `q` a write was assigned, or a
    setting the leader received but did not record; and it holds in every case where an exposed
    entry may have lost every copy. A void of never-exposed offsets is allowed
@@ -231,7 +235,9 @@ read by the plugin's registrar and carried in `IndexRegistration` v2.
    next offset when the takeover began: a committed offset is never voided,
    though its copies are released and "every copy gone" is then trivially true
    (M13.43 review R2-P1).
-   All voids of one takeover are ONE chain entry, and a recovery upload is
+   Each stream's commits and voids in a takeover are ONE chain entry (⚠️
+   amended by M13.22g: a batch too large for one upload is split by stream,
+   ADR-0081 §5), and a recovery upload is
    segments and deltas at the ordinary cadence, never one request per stream
    (M13.42 review R3-P3). **M13.22 decides, and records, how this is
    met**: the quorum-loss detection rule; the per-stream bound on uncommitted
@@ -288,8 +294,10 @@ liveness from the Kubernetes API; completeness by AZ coverage (obligation 3).
 `IndexRegistration` v2; the fast commit, answer, replica, publish, interest,
 fence, collect and release frames; the roster object, carrying each term's
 `wal_quorum` record (the value in force at the term's start and every change
-made during it); the journal file's entry format; the chain's void-range entry
-kind.
+made during it); the journal file's entry format; the chain's recovery entry
+kind (a takeover's commits and voids, ADR-0082); and the default-path commit
+answer naming every delta and the redirected runs (ADR-0082 §7, added by
+M13.22i).
 
 ### Alternatives rejected
 
@@ -330,8 +338,8 @@ kind.
   of which incarnations can hold copies must cost a request rate that scales with
   nodes and terms only (the roster candidate: one write per pod joining a term),
   the per-term `wal_quorum` record at most one write per `min_upload_interval`
-  (coalesced, cost.md rule 6 above), a graceful departure one roster write, all of one takeover's voids one chain
-  entry, and a recovery upload segments and deltas at the ordinary cadence.
+  (coalesced, cost.md rule 6 above), a graceful departure one roster write, each stream's commits and voids in
+  a takeover one chain entry, and a recovery upload segments and deltas at the ordinary cadence.
   Replication,
   publication, fencing and collection are pod-to-pod HTTP. No request rate
   scales with records, shards, partitions or indices.
@@ -351,7 +359,9 @@ kind.
   - So at `q = 2` and `all_active=false`: at most two copies, $108/month per
     1 MiB/s; at `q = 1`: at most two, 4/3 on average.
   Catch-up of fast streams from the leader's journal adds bytes on repair only.
-- **The default path:** unchanged; asserted by the existing cost suites.
+- **The default path:** its own requests unchanged; each takeover adds the
+  per-term requests criterion 19 lists, asserted by the existing cost suites
+  with their pins moved by exactly those.
 
 ## Acceptance criteria
 
@@ -403,13 +413,61 @@ kind.
    counted against it.
 9. **An acked fast record is held on `q` pods in `q` distinct AZs**, for `q` in 1,
    2 and 3, with W in L's AZ and in another: the ack does not complete while any
-   required copy is missing, including a `q = 3` write with one AZ lost.
+   required copy is missing, including a `q = 3` write with one AZ lost. ⚠️
+   Added by M13.22i (M13.22e review round 1, T1): the model drops a pod's
+   unfsynced journal suffix at every crash it injects (a node reboot keeping
+   the UID), and an EXPOSED, an ack by a writer that is the leader, and a
+   CONFIRM are each delayed until the answering pod's group fsync -- a crash
+   between the write and the fsync leaves no answer sent; ⚠️ added by
+   M13.22i (M13.22e review round 2, T2): so is a holder's REPLICA_ACK -- at
+   `q = 2` a holder rebooting (UID kept) between its journal write and its
+   fsync, then the leader deleted, must leave the entry unexposed.
 10. **No deposed leader acks** (obligation 1): a live leader that paused across
     an early takeover, with its renewal's response delayed, and one whose
     monotonic clock stopped, acks nothing its
     successor may reuse -- driven at `q = 1` with the writer other than the
     leader, deleted after the ack; a pod refuses an epoch below the highest it
-    has seen; a pod not on the roster can neither write nor replicate.
+    has seen; a pod not on the roster can neither write nor replicate. ⚠️ Added
+    by M13.22i (M13.22 review; ADR-0081 §3): also a leader whose WALL clock stopped, and a
+    successor that took the lease by the early challenge; the asserted property
+    is that, on one global clock, the old leader exposes nothing after the
+    successor's first fast assignment or first void; and with the two pods'
+    wall clocks skewed by just under the margin, in each direction; and, ⚠️
+    added by M13.22i (M13.22b review round 3, T3), the two MONOTONIC clocks
+    running at rates just under ~18 % apart in each direction. ⚠️ Added by
+    M13.22b (M13.22a review round 1, T1): every case above is driven ALSO with the
+    writer being the leader (W = L), force-deleted while it keeps running, and
+    exposing through an ack, a catch-up and a proxied `/seg` read -- the
+    `q = 1`, W ≠ L shape alone is held by the epoch fence, so a broken lease-time
+    fence would pass it; in the stopped-wall-clock case the successor must wait
+    on its own monotonic clock (ADR-0081 §3). ⚠️ Added by M13.22i (M13.22a review
+    round 2, T2 and T4; narrowed by M13.22c's review round 1, T4): the pause is
+    injected at each point after assignment and BEFORE each validity check that
+    guards an exposing send (the ack, a PUBLISH, a catch-up and a `/seg`
+    response), not only before assignment -- and never between that check and
+    its send toward a non-member, which ADR-0081 §3 states as the residual
+    lease risk. ⚠️ Added by M13.22i (M13.22d review round 2, T1): the pause IS
+    injected between the check and the send toward each fenced member -- an
+    EXPOSED to a writer W ≠ L, a PUBLISH to an interested pod, a journal-served
+    `/seg` response through a forwarding pod -- with the successor's FENCE
+    delivered meanwhile; the writer must not ack, the interested pod must
+    refuse the PUBLISH, and the forwarding pod must refuse the response by its
+    `Binstore-Fast-Epoch`, each the only guard left; and the old leader renews several
+    times while the successor watches, the successor's first read seeing an
+    early version (it must not assign before the LAST renewal's send instant
+    plus TTL minus the margin, on one global clock). ⚠️ Added by M13.22i
+    (M13.22a review round 3, T1): a graceful release, then a pod that takes the
+    lease, creates its roster and is force-deleted while running, then a
+    successor by the early challenge that read the released lease, then the
+    deposed pod's late `LATEST` write and its acks at `q = 1`, W = L (the
+    successor's re-walk must restore both waits); and a term whose leader
+    crashed with its wall clock stopped, its successor departing gracefully
+    before its own monotonic wait ended, then the next successor (the
+    exemption must not hold: an unclosed term's leader did not depart). ⚠️
+    Added by M13.22i (M13.22b review round 1, T3): a holder's container restarted
+    between seeing a higher epoch and receiving a deposed leader's frame of the
+    lower one (refused: the seen epoch is in the fsynced epoch file, not only in
+    memory).
 11. **I6 under the writer's death**: kill W after the ack and before the upload;
     the record is committed at its acked offset; no copy is released before the
     commit delta covering it is in the chain (obligation 11).
@@ -443,8 +501,9 @@ kind.
     index is voided unless M13.22's quorum-loss predicate holds for it,
     evaluated by the oracle over the MODEL's events: its own joins,
     departures and deletions, never the protocol's roster object, and the
-    `wal_quorum` values the model saw written to the term record in its store,
-    checked for truth -- every recorded value is one the harness set, and no
+    `wal_quorum` values, each term's leader and each term's closure the model
+    saw written to rosters in its store, checked for truth (a closure only
+    after every stream of the term is decided and committed) -- every recorded value is one the harness set, and no
     write is assigned under a value before the model saw it recorded; no exposed offset precedes its quorum
     or a lower offset's. **At quiescence** (liveness), once every dead pod's UID is
     deleted and every live rostered incarnation is reachable, within a bounded
@@ -472,8 +531,197 @@ kind.
     rolling restart reaching the leader last, then the new leader's crash at
     `q = 2`, voiding nothing; at `q = 2`, pods in AZ2 and AZ3 departing
     gracefully while holding the second copy of exposed, unreleased entries,
-    then the leader in AZ1 crashing -- no void, every exposed offset committed; a takeover over many streams writing one void chain entry
-    and a number of deltas independent of the stream count.
+    then the leader in AZ1 crashing -- no void, every exposed offset committed; a takeover over many streams writing recovery chain
+    entries one per committed batch, their number independent of the stream
+    count, each stream's commits and voids in one of them. ⚠️ Added by M13.22i
+    (M13.22 review round 1): the driver's events include a graceful leader
+    shutdown and a paused leader (one that stops and resumes, its store writes
+    delayed), and more named cases -- a never-exposed copy truncated by one
+    takeover surviving on a holder, its offset then reassigned and exposed, then
+    quorum loss with EVERY copy of the reassigned entry lost (the stale copy must
+    be superseded by the recorded decision, not merely outranked by a higher
+    epoch's copy, and not committed); a graceful
+    leader shutdown while its own takeover still waits on a partitioned holder
+    (the successor must still find the earlier term); a crash before, and one
+    after, a quorum-loss takeover's recovery entry; and a deposed leader writing
+    `LATEST` after its successor, then a later takeover (the newer term must
+    not be hidden from it); a crash
+    after EACH of a quorum-loss takeover's store writes, in turn (no state
+    between its commits and its voids); an exposure in the new term after its
+    recovery entry, then a crash before the decisions write, then every copy of
+    the new entry lost while a stale copy of the earlier term at the same offset
+    survives (assignment must not have resumed, and the stale copy must not be
+    committed); a retry, after a
+    takeover that discarded the retried batch's entry above a hole, of the same
+    key (answered with new offsets, never the discarded ones); a default-path
+    run for an undecided stream during a takeover, by a stale registration and
+    by a switch to `wal=false` (committed only after the stream is decided, never
+    over an exposed entry or inside a void); a graceful departure while two
+    terms are unclosed, then losses in the earlier term one AZ short of quorum
+    loss unless the departure is counted (it must not be counted in either). ⚠️
+    Added by M13.22i (M13.22 review round 3): the driver's events include a
+    `wal_quorum` change and a switch to and from `wal=false`; and named cases --
+    a switch's discard, then a takeover finding a copy of a discarded entry
+    (superseded within its own term, by decision number); a writer's CONFIRM
+    arriving during a switch pause (the discarded entry is never exposed); a
+    default-path run arriving before a takeover's walk completes (never
+    committed over an exposed entry the walk has not yet found); at `q = 2` with
+    W outside the leader's AZ, an entry assigned and exposed after a switch's
+    decision, held by L and W, then L lost -- the takeover must find W's own copy
+    live (W journaled the leader's `assignedAfter`, not 0) and commit it, and in
+    the converse a discarded entry's surviving copy on W must be superseded (W
+    did not journal a value above the decision's number); a leader that released early, then its
+    successor's crash before the wait the first leader owed (the next successor
+    still waits it); a gracefully replaced leader's later loss (never counted as
+    quorum loss). ⚠️ Added by M13.22i (M13.22a review round 2, T3 and T5): `wal_quorum`
+    raised from 1 to 2 within a term, then the leader PARTITIONED (not deleted)
+    while holding entries exposed at `q = 1` -- the takeover must not decide
+    early by AZ coverage at the latest value (it waits, by `q_min`); and a
+    departing holder holding, on one stream and one epoch, a switch-discarded
+    entry and a later live exposed one -- only the first is answered superseded;
+    ⚠️ added by M13.22i (M13.22a review round 3, T3): a departure between a
+    switch's decision write and the commit of its exposed tail, one
+    `(epoch, assignedAfter)` group straddling the resume offset -- its exposed
+    part is answered pending until committed, and only the part at or above the
+    resume offset superseded. ⚠️ Added by M13.22i (M13.22b review round 1, T1 and
+    T2): an early-challenge takeover in which the old leader, still running,
+    answers COLLECTED and then is offered a `q = 1`, W = L batch and a catch-up
+    read (it must assign and serve nothing; the offset is never committed with
+    other content); and at `q = 2`, W outside the leader's AZ killed between
+    ASSIGNED and CONFIRM with the leader alive, then a second writer on the same
+    stream -- acked within the replica timeout plus one upload on the injected
+    clock (the copy replaced, or the entry discarded). ⚠️ Added by M13.22i
+    (M13.22b review round 2, T1 and T2): the same with NO spare pod in W's AZ or
+    another uncovered one and W's pod DELETED (its UID gone), so the discard
+    path is forced -- the second writer
+    acked at the discarded offset only after the decision is durable, and the
+    leader crashing before, and separately after, that decision write (W2's
+    acked entry committed, never superseded); a late REPLICA_ACK and a late
+    CONFIRM for the discarded entry arriving after its offset is reassigned in
+    the same term (counted toward nothing); and a `q = 3` index on two live AZs
+    for many flush intervals (its batches held unassigned, the roster's
+    decisions unchanged). ⚠️ Added by M13.22i (M13.22c review round 1, T2 and T3):
+    a holder that stays ready but refuses with backpressure at its journal cap,
+    and one whose fsync stalls past the replica timeout, each the only pod of
+    its AZ at `q = 3` -- no discard and no decision write while it stays ready,
+    batches held unassigned, acks resuming when it drains; and a `q = 2`
+    index whose writers and subscribers are all in the leader's AZ -- acked
+    (pods of other AZs joined the term though they neither write nor
+    subscribe), also after a takeover. ⚠️ Added by M13.22i (M13.22c review round 2,
+    T1-T3): a holder's container killed mid-append, restarted, then an entry
+    appended, acked and exposed, then a second restart (the entry recovered:
+    the torn tail was truncated first), and kills during compaction and during
+    the epoch file's write (the old or the new file whole, never a mix), and a
+    restart after DROP records (dropped entries not reported held); a deposed
+    leader's join, decision and term-record write each landing between the
+    successor's walk and its fence write (the successor's members, decisions
+    and held indices taken from the version it fenced); and, after a leader
+    crash, a `wal=false` index and a fast index with no value in an earlier
+    unclosed term committing default-path runs within the walk's store
+    requests on the injected clock -- not waiting for `notBefore` or any
+    stream's decision -- while an index with such a value waits. ⚠️ Added by
+    M13.22i (M13.22c review round 3, T1 and T2): at `q = 2`, entry e0 waiting
+    on a slow ready pod, entry e above it complete on L and a pod P, P deleted,
+    the upload its loss triggers, e0 then confirmed, then L lost -- e is
+    exposed only after a replacement copy holds it (never on L's copy alone);
+    ⚠️ added by M13.22i (M13.22d review round 3, T1): the same with NO
+    replacement pod, and the slow pod's REPLICA_ACK completing e0's quorum
+    while the discard's roster write is in flight -- e0 is never exposed (the
+    stream stopped exposing before the frontier was read), its writer is told
+    `discarded`, and no exposed offset is reassigned;
+    and, with the model's `B` set small, B offsets committed past a decision
+    on a stream, the decision pruned, then a takeover and a departure that
+    meet a copy it superseded -- the stale copy is skipped as committed-below,
+    a new entry's `assignedAfter` is the next `seq` (not the list's size), and
+    no `seq` is reused; ⚠️ added by M13.22i (M13.22d review round 2, T2): a
+    pod's JOIN whose roster write fails against a successor's fence (the pod
+    holds nothing and is told nothing joined until the write lands). ⚠️ Added
+    by M13.22i (M13.22d review round 1, T1 and
+    T3-T6): with the model's journal cap set small, a RELEASE to the only
+    holder of AZ3 at `q = 3` dropped -- the holder's half-cap HELD answered by
+    HELD_STATUS drains it and acks resume with no leader change; a holder
+    leaving the EndpointSlice (not deleted) treated as a loss exactly as a
+    deletion is; an entry whose offsets would reach `c₀ + B` held, never
+    assigned (`c₀ + B − 1` the last assignable); the oracle's join counted
+    when the roster write holding it lands, and its departure when the
+    `DEPARTED` write lands; a crash takeover completing within one renewal
+    interval plus TTL plus the margin of the old leader's last renewal, plus
+    the collection and one upload paced by `min_upload_interval`, on the
+    injected clock (an upper bound, as ADR-0081 §10 states it); ⚠️ added by
+    M13.22i (M13.22d review round 3, T4): a commit request without the
+    answer's `Accept` answered with the bare delta when every run is on a
+    default-path stream, and refused whole when one run's stream is fast. ⚠️
+    Added by M13.22i (M13.22e review round 1, T2-T4): a leader paused past a TTL
+    before its walk, then reading `LATEST` and a roster above its epoch (it
+    writes no fence, roster or `LATEST`; `LATEST` and `fencedBy` never fall;
+    the live leader keeps assigning); a departure completing within one
+    upload plus one `min_upload_interval` of its last pending entry's commit,
+    with no grace-period timeout (the re-sent HELD drives it); and a departing
+    pod, the only one of its AZ, never counted at admission. ⚠️ Added by
+    M13.22i (M13.22e review round 2, T1, T3 and T4): at `q = 2` the only holder of
+    AZ2 near its cap with stale entries from dropped RELEASEs while in-term
+    writes continue on several streams -- acks never stall past one HELD
+    round trip, and the holder never holds an entry above one it refused; at
+    `q = 2`, entry 101 exposed on L and X (AZ2) and 102 on L and Y (AZ3), then
+    L and X deleted (quorum loss: 102 committed, never discarded, only 101
+    voided); and the pruning case's stale copy placed at `resume + B − 1`.
+    ⚠️ Added by M13.22i (M13.22e review round 3, T1-T3): with the model's
+    upload size set small, a quorum-loss recovery batch split by size and a
+    crash between its entries (every stream's commits and voids in the same
+    entry, so no committed run sits above an unvoided hole); a pod
+    rescheduled under its predecessor's name and endpoint into another AZ,
+    joined, then sent a REPLICA addressed to the predecessor (refused; the
+    copy counts for no AZ); and the leader's segment PUTs and chain appends
+    counted through a takeover while resumed streams upload (at most one of
+    each per `min_upload_interval` in all); and a holder's lost HELD exchange
+    above half its cap (re-sent; acks never stall); and a truncated
+    COLLECTED (the member not answered until its `last` page). ⚠️ Added by
+    M13.22i (M13.22f review round 1, T1-T3): a `q = 1` index whose term-3 leader
+    was deleted, term 3 later closed, then a takeover after a later leader's
+    partition (no quorum loss: a closed term's losses never count, and the
+    oracle's closure input says so); at `q = 2`, a term-5 leader shutting down
+    while holding an exposed term-4 entry whose other copy is on the
+    partitioned term-4 leader (it stays undeparted in roster 4, and the
+    successor waits for it rather than decide early or void); and `q` raised
+    from 1 to 2 across terms, term 1's leader partitioned in the same AZ as
+    term 2's, which crashes (AZ coverage evaluated over every unclosed term
+    with its own `q_min`: no early decision). ⚠️ Added by M13.22i (M13.22f review
+    round 2, T2-T4): a quorum-loss stream with no recovered entry receiving a
+    default-path run during the takeover (held until decided like any
+    other); a member answering COLLECTED only after its raised epoch is
+    fsynced (a crash between leaves the old epoch and no answer); and one
+    COMMIT spanning a `q = 1` and a `q = 2` index, the writer outside the
+    leader's AZ (each run journaled with its own `walQuorum`, and the copy
+    required for the `q = 2` run only). ⚠️ Added by M13.22i (M13.22f review
+    round 3, T2 and T3): the switch-to-`wal=false` case run with a catalog
+    holding no other fast index (the takeover still walks and holds); and a
+    checkpoint and a backfill taken over a recovery entry with voids (the
+    stream's next offset stays past each void); and (M13.22g review round 2,
+    T3) a roster whose leader's `LATEST` write failed against a newer term
+    (an orphan: no JOIN accepted, nothing assigned, never walked, ignored by
+    the oracle); ⚠️ added by M13.22i (M13.22h review round 1, T1): with no fast
+    index, a successor taking the lease by the early challenge from a live
+    predecessor, then default-path commits on an index X, then X made fast
+    while the predecessor is still valid on its clocks -- the successor's
+    roster and `LATEST` were written at its takeover, so the predecessor's
+    term-record write for X fails against the successor's `fencedBy` and it
+    assigns nothing (⚠️ corrected by M13.22i review round 2, T3), and no
+    offset the successor committed is acked again with other content; ⚠️
+    added by M13.22i (M13.22h review round 2, T1 and T2): with no fast index in
+    the successor's catalog, a default-path run on X arriving before the
+    successor's step 3 while the predecessor's term-record write for X lands
+    between the successor's walk and its fence write (the run held until step
+    3, committed above anything the predecessor exposed, never at an offset
+    it acked); and an interested pod that has never journaled, fenced, then
+    restarted, then sent a deposed leader's lower-epoch PUBLISH (refused: its
+    seen epoch was taken from the lease at start). ⚠️ Added by M13.22i (M13.22b review round 3, T1 and
+    T2): at `q = 2`, entry A waiting on a CONFIRM, entry B above it complete,
+    an upload triggered, then A discarded -- nothing above A is committed
+    before A, and every offset is committed exactly once, voided or never
+    exposed; and at `q = 2`, the leader and another pod in the leader's AZ both
+    lost (not quorum loss: no void).
+    And one liveness case for AZ coverage: at `q = 3`, one pod of AZ3 partitioned and
+    holding nothing, a leader loss -- the index's streams decide without waiting.
 14. **Millisecond visibility, whichever pods write** (obligation 6): two writers
     on one partition, replicas completing out of order; a consumer on a third pod
     receives each batch in offset order (obligation 10) from the leader's publication before its
@@ -484,10 +732,33 @@ kind.
     the `wal` change at different times while both write one stream, in each
     direction, including a default-path delta PUT in flight and one ambiguous;
     every offset of the stream is committed exactly once, in order, and acked
-    once.
+    once. ⚠️ Added by M13.22i (M13.22 review): with a fast writer that never stops, the
+    default-path run commits within one roster write and one upload on the
+    injected clock; and with unexposed entries that cannot complete their
+    quorum (a `q = 3` index on two live AZs), the switch still commits, the
+    entries discarded and their writers unacked. ⚠️ Added by M13.22i (M13.22a review round 2, T1): a
+    leader crash, and separately a writer retry, between the two deltas of one
+    split segment -- the request is acked only after the last delta, and the
+    retry is answered only once every run of the segment is committed (the
+    paused run committed by the successor from the uploaded segment, never
+    lost and never moved to a new segment; every RECORD committed exactly once,
+    by record identity, not only every offset -- added by M13.22i, M13.22d review
+    round 2, T3). ⚠️ Added by M13.22i (M13.22c review
+    round 1, T1): a segment with runs on a default-path stream and on one the
+    catalog has just made fast, its commit ambiguous and retried -- the fast
+    stream's run redirected both times and never committed from the segment,
+    and the request acked only after the redirected records' fast ack.
 16. **Shutdown and handover** (obligation 8): a leader closing with an
     unreleased journal uploads and commits it before releasing its lease, and its
-    successor assigns fast offsets without the crash-takeover wait.
+    successor assigns fast offsets without the crash-takeover wait. ⚠️ Added by
+    M13.22i (M13.22 review): a writer's CONFIRM arriving after the leader began shutting down is
+    not answered as complete, and on one global clock the old leader exposes
+    nothing after its successor's first assignment. ⚠️ Added by M13.22i (its
+    review round 2, T3): a leader shutting down at `q = 1` crashing after it
+    marked itself `DEPARTED` would be quorum-safe only if every exposed entry
+    was committed first -- so a crash between its last commit and its
+    `DEPARTED` write, and the order itself (no `DEPARTED` write while an exposed
+    entry is uncommitted), are asserted.
 17. **Cost and capacity** (obligation 7): a fleet workload above `cap /
     flush_timer`, and one hot stream above `B / flush_timer`, each below its
     stated ceiling, are acked with no added wait on the injected clock -- not
@@ -498,9 +769,19 @@ kind.
     leader's segment PUTs never exceed one per `min_upload_interval`,
     on the hot stream too; over a fast workload, commit and data PUTs per MiB
     are no higher than the default path's at the same cadence; roster writes
-    are at most one per pod joining or departing a term, and term-record writes
+    are at most one per pod joining or departing a term, and join writes at
+    most one per `min_upload_interval` however many JOIN frames arrive, and term-record writes
     at most one per `min_upload_interval` however many indices change
-    `wal_quorum` at once; per fast MiB, for `q` in 1 and
+    `wal_quorum` at once; ⚠️ added by M13.22i (M13.22a review round 1, T2): with
+    switches on 1,000 streams at once, switch-decision roster writes are at most
+    one per `min_upload_interval`, under readiness flaps of every holder the
+    roster holds at most one decision per stream per flap, each pruned once
+    `B` more offsets of its stream commit (decisions never left unpruned), and so are discard decisions over 1,000
+    streams losing a holder at once, and so are the tail uploads' segment PUTs
+    and the deltas -- never one per switched stream -- and a takeover over 1,000
+    streams writes at
+    most one decisions write per committed batch, the batch count independent of
+    the stream count (both counted by the store's request counter); per fast MiB, for `q` in 1 and
     2, the quorum frames' cross-AZ bytes equal `max(q − 1, [W ∉ AZ(L)])` copies
     within 5%, and the publication frames' are at most one copy per interested
     pod in another AZ, plus 5% -- an upper bound, since a pod that already holds
@@ -515,8 +796,20 @@ kind.
     (T3). A p99 at or above 10 ms is recorded OBSERVED-NOT with its number and
     the milestone does not claim NFR-15; the bound is never moved. NOT-RUN on
     AWS.
-19. **The default path is unchanged**: with no index at `wal=true`, every
-    existing suite is green and no fast endpoint is called.
+19. **The default path carries no record through fast mode**: with no index at `wal=true`, every
+    existing suite is green and no fast frame carries a record. ⚠️ Amended by
+    M13.22i (M13.22f review round 2, P1; the dormant mode that tried to keep
+    "no fast endpoint is called" was withdrawn after M13.22g review round 3;
+    restated after M13.22h review round 1, P1 and P3): in a fleet with no
+    `wal=true` index every mechanism of ADR-0081 still runs except carrying
+    records -- each takeover walks, creates its roster, writes `LATEST`,
+    fences, sends FENCE and collects, and closes; every node JOINs; every
+    departure runs DEPART and HELD_STATUS and its `DEPARTED` writes; and
+    default-path commits are held after each lease change until the
+    takeover's step 3 -- while no node journals an entry, writes an epoch
+    file, or carries a record in a fast frame; the existing store-count pins
+    are moved by exactly those store requests, each move stated in its
+    commit.
 
 ## Test plan
 
@@ -530,17 +823,17 @@ kind.
 | 6 | T0 (gate) | `MilestoneEvidenceTest` harvest-enumeration case (M13.40) | a harvest ID missing from the enumeration |
 | 7 | T1 | `FastSettingsRegistrationTest` (registration and a live update), `IndexRegistrationV2GoldenTest` | a setting dropped in the registrar or the codec; the catalog ignoring a live settings change |
 | 8 | T1 | `FastAckBeforeStoreTest` | the ack after the segment PUT; a roster or term-record write on the ack path with nothing pending |
-| 9 | T0/T1 | `FastQuorumPlacementTest` | a replica set short of `q` AZs; the ack before a replica's acknowledgement; a `q = 3` ack with two live AZs |
-| 10 | T1 | `FastDeposedLeaderTest` (a delayed response; a stopped monotonic clock), `FastEpochFenceTest`, `FastRosterTest` | the renewal instant taken at the response; lease validity read from a clock that stopped; the leader left off its roster; a replica accepting a lower epoch; an unrostered writer admitted |
+| 9 | T0/T1 | `FastQuorumPlacementTest` | a replica set short of `q` AZs; the ack before a replica's acknowledgement; a `q = 3` ack with two live AZs; EXPOSED, a leader-writer's ack or a CONFIRM sent before the group fsync; REPLICA_ACK sent before the holder's group fsync |
+| 10 | T1 | `FastDeposedLeaderTest` (a delayed response; a stopped monotonic clock; a stopped wall clock; an early-challenge takeover), `FastEpochFenceTest`, `FastRosterTest` | the renewal instant taken at the response; lease validity read from a clock that stopped (either clock alone); a successor assigning before the old lease's expiry plus the margin after an early challenge; the leader left off its roster; a replica accepting a lower epoch; an unrostered writer admitted; a margin of 0 (the skew cases); lease-time checks removed with W = L (only the epoch fence left); the successor's monotonic wait left out (the stopped-wall-clock case); validity checked only at assignment, not before each send; `seenMono` kept from a first read of an older version; the waits not recomputed on a re-walk; the graceful exemption judged only on the newest unclosed term; the lease read at container start skipped (a pod without a journal accepting a lower epoch after a restart); the margin left out of the successor's monotonic wait or the leader's validity (the rate-skew cases); a writer acking on a lower-epoch EXPOSED; an interested pod accepting a lower-epoch PUBLISH; a forwarding pod ignoring `Binstore-Fast-Epoch` |
 | 11 | T1 | `FastWriterDeathTest` | L's copy released before the upload; copies released when the segment PUT succeeds, before the delta |
 | 12 | T1 | `FastLeaderDeathTest` (kills before the upload, between PUT and delta, between delta and release), `FastMultiTermTakeoverTest`, `FastTakeoverSubscriberTest` | assigning before recovery; skipping a recovered entry; collecting only the last term; copies released before the delta; a recovered entry below the chain's next offset committed again; a re-published offset delivered twice |
-| 13 | T1 | `FastRecoveryModelTest` (seeds and the named cases), `FastQuorumLossVoidTest`, `FastExposureBeforeQuorumTest`, `FastInOrderExposureTest` | an AZ counted lost only when all its pods are gone (the AZ1+AZ2 case); `wal_quorum` for recovery taken from the catalog or the recovered entries (the 1→2 case: the exposed `q = 1` tail left neither committed nor voided); a lowering assigned under before its term record is durable (the 2→1 case: the record-before-assignment check); a value recorded that the harness never set; one void chain entry or delta per stream in a takeover (counted by the store's request counter in the many-streams case); the per-stream bound unchecked at assignment (the past-bound case); a void whenever any incarnation is gone; a void over a partitioned holder's surviving entry (the partition case); a pod out of the EndpointSlice treated as gone; a stall forever after quorum loss once the UIDs are deleted; a gracefully departed pod left on the protocol's roster, and a departing pod releasing its uncommitted copies without an upload (both killed by the AZ2+AZ3 departure case, the oracle reading departures from the model); a stream of an index that did not lose quorum voided (the mixed-`q` case); no void at `q = 1` leader loss; the tail voided to `Long.MAX_VALUE`; a void starting at the dead term's first assigned offset, over committed and released offsets (the committed-stream case); a stream with no recovered entry left unvoided after its quorum loss; catch-up or publication before the quorum; the writer's offsetless copy counted; 102 exposed before 101's quorum; a recovered 102 committed above an unrecovered 101 |
+| 13 | T1 | `FastRecoveryModelTest` (seeds and the named cases), `FastQuorumLossVoidTest`, `FastExposureBeforeQuorumTest`, `FastInOrderExposureTest` | an AZ counted lost only when all its pods are gone (the AZ1+AZ2 case); `wal_quorum` for recovery taken from the catalog or the recovered entries (the 1→2 case: the exposed `q = 1` tail left neither committed nor voided); a lowering assigned under before its term record is durable (the 2→1 case: the record-before-assignment check); a value recorded that the harness never set; one recovery chain entry per stream in a takeover (counted by the store's request counter in the many-streams case); the per-stream bound unchecked at assignment (the past-bound case); a void whenever any incarnation is gone; a void over a partitioned holder's surviving entry (the partition case); a pod out of the EndpointSlice treated as gone; a stall forever after quorum loss once the UIDs are deleted; a gracefully departed pod left on the protocol's roster, and a departing pod releasing its uncommitted copies without an upload (both killed by the AZ2+AZ3 departure case, the oracle reading departures from the model); a stream of an index that did not lose quorum voided (the mixed-`q` case); no void at `q = 1` leader loss; the tail voided to `Long.MAX_VALUE`; a void starting at the dead term's first assigned offset, over committed and released offsets (the committed-stream case); a stream with no recovered entry left unvoided after its quorum loss; catch-up or publication before the quorum; the writer's offsetless copy counted; 102 exposed before 101's quorum; a recovered 102 committed above an unrecovered 101; ⚠️ added by M13.22 -- the walk stopping at a roster closed while an earlier one is unclosed; `LATEST` written without `putIfMatch`; a takeover's voids and recovery commits in separate chain entries; a superseded stale copy collected as live; assignment resumed before the decisions write; no early decision by AZ coverage (the `q = 3` partition case); a superseded copy kept only because a higher epoch outranks it (the strict P1 case); a retry answered from a discarded entry; a default-path commit on an undecided stream; a departure marked only in the current roster; exposure during a switch pause; a default-path commit before the walk; an inherited wait shortened by an early release (the round-3 cases); a writer journaling `assignedAfter` as 0, or as its maximum; early decision by the latest `wal_quorum` rather than `q_min`; departure status answered per epoch rather than per `(epoch, assignedAfter)`; a group answered superseded when any of its offsets is at or above a resume offset; a leader assigning or serving after a higher epoch reached it; a missing required copy never replaced or discarded (the stream wedged while the leader lives); an answer matched by offset alone; assignment resumed before a discard decision is durable; the cursor not reset to the resume offset; batches assigned while `q` exceeds the reachable AZs; every quorum-complete entry uploaded rather than the exposed prefix; the leader's own AZ counted toward quorum loss; a backpressure refusal or a slow holder treated as a loss and discarded; admission counting a full or slow holder; only writing or subscribing pods joining; appending after a torn tail without truncating; compaction or the epoch file rewritten in place; DROP records ignored on recovery; the first read's members, decisions or held indices kept after a failed fence write; every default-path commit held until the takeover ends; a lost holder's copy still counted for an unexposed entry; `assignedAfter` taken as the decisions list's size; pruning at the resume offset rather than `B` past it; a pruned `seq` reused; HELD at half the cap never sent, or HELD_STATUS's release offset ignored (the dropped-RELEASE case); loss judged by UID deletion only; offset `c₀ + B` assignable; `seenMono` taken at the lease CAS rather than the first read (the upper-bound case); JOINED sent before the roster write holding the join lands; exposure continuing while a loss-triggered discard's decision write is in flight; BCAN sent to a writer that did not ask, or a no-Accept run on a fast stream committed; `LATEST` or `fencedBy` written downward by a leader that read a newer term; a departing pod counted at admission; HELD not re-sent after RELEASE (a departure that never ends); a holder's cap equal to the leader's (the stall behind a refused lower entry); the loss branch discarding entries above the first hole; pruning at `resume + B/2`; an answer counted from an incarnation other than the one addressed; a size-split batch with a stream's voids apart from its commits; recovery uploads on their own timer; HELD sent only once; a COLLECTED read complete without its last page; a closed term's losses counted; a shutting-down leader marked `DEPARTED` in an earlier roster while holding a pending entry there; AZ coverage evaluated over the newest unclosed term only; default-path runs held only for streams with collected entries; COLLECTED sent before the raised epoch is recorded; a batch-level `walQuorum` or `copyRequired`; a checkpoint or backfill ignoring a recovery entry's voids; an orphan roster walked, joined or counted by the oracle; a roster and `LATEST` written only when the first fast index appears; default-path commits admitted right after the lease write when the catalog holds no fast index |
 | 14 | T1 | `FastVisibilityTest`, `FastProxySubscriberTest` | publication only through the writer's hub; out-of-order publication; catch-up blocking until the chain commits; a cross-zone subscriber's `/seg` GET failing until the upload |
-| 15 | T1 | `FastModeSwitchTest` (two pods, skewed registrations, both directions) | a durable commit assigned before the fast tail commits; a fast cursor taken from `nextOffset` while a durable PUT is in flight or ambiguous |
-| 16 | T1 | `FastLeaderShutdownTest` | the lease released first; a TTL wait after a graceful handover |
-| 17 | T1 | `FastCostTest`, `FastCapacityTest`, `FastBarrierIsolationTest`, `FastMetricsTest` | a PUT per batch; a metric left unregistered or labelled per index; a replica in W's AZ; publication to an uninterested pod; uploads only at the cadence; no upload on a holder's loss (the entries left on the leader alone until `flush_timer`); a term-record write per index whose `wal_quorum` changed; a roster write per ack; no upload on a stream nearing its bound, assignment waiting at `B` instead (an added wait below the ceiling); an upload per `B` records of the hot stream, unthrottled (PUTs above one per `min_upload_interval`); the hot stream refused at its bound; the writer-to-leader hop left out of the meter at `q = 1`; publication sent twice to one pod; a barriered stream holding a batched delta that delays another `wal=false` index's acks |
+| 15 | T1 | `FastModeSwitchTest` (two pods, skewed registrations, both directions) | a durable commit assigned before the fast tail commits; a fast cursor taken from `nextOffset` while a durable PUT is in flight or ambiguous; fast assignment continuing while a default-path run waits (the never-stopping writer); waiting for an unexposed entry's quorum at a switch (the `q = 3` case); ack after the first delta of a split segment; a retry answered from a partly committed segment; a retry committing a missing run whatever its stream's mode; a request acked before its redirected run's fast ack; a paused run re-sent by the writer and committed twice |
+| 16 | T1 | `FastLeaderShutdownTest` | the lease released first; a TTL wait after a graceful handover; exposure after the shutdown began (the late CONFIRM); `DEPARTED` written before the exposed entries commit |
+| 17 | T1 | `FastCostTest`, `FastCapacityTest`, `FastBarrierIsolationTest`, `FastMetricsTest` | a PUT per batch; a metric left unregistered or labelled per index; a replica in W's AZ; publication to an uninterested pod; uploads only at the cadence; no upload on a holder's loss (the entries left on the leader alone until `flush_timer`); a term-record write per index whose `wal_quorum` changed; a roster write per ack; no upload on a stream nearing its bound, assignment waiting at `B` instead (an added wait below the ceiling); an upload per `B` records of the hot stream, unthrottled (PUTs above one per `min_upload_interval`); the hot stream refused at its bound; the writer-to-leader hop left out of the meter at `q = 1`; publication sent twice to one pod; a barriered stream holding a batched delta that delays another `wal=false` index's acks; a switch-decision roster write per stream; a decisions write per decided stream; a tail upload or delta per switched stream; a discard decision write per stream rather than coalesced; decisions never pruned (roster bytes growing with flaps); a roster write per JOIN frame |
 | 18 | T3 | `FastLatencyIT` (measurement, p99 < 10 ms asserted) | a 50 ms delay before the ack; publication deferred to the upload |
-| 19 | T1 | the existing suites; `FastEndpointsUnusedTest` | a fast frame sent for a `wal=false` index |
+| 19 | T1 | the existing suites; `FastWalFalseFleetTest`, which drives a crash takeover, a graceful takeover and a rolling restart in a fleet with no `wal=true` index and asserts each request ADR-0081 §1 and §9 list is MADE (roster, `LATEST`, fences, close, `DEPARTED`) as well as that none beyond is | a record carried by a fast frame, an entry journaled or an epoch file written in a fleet with no `wal=true` index; a takeover or departure in such a fleet skipping its roster, `LATEST`, fence, close or `DEPARTED` write; a takeover store request beyond those listed; a join write per JOIN frame |
 
 Suites extended: the commit-protocol simulation (fast commits, a deposed leader,
 leader death and quorum loss over seeds), the store conformance suite (the
@@ -642,22 +935,31 @@ journal's fsync and the Kubernetes pod lookup are injected seams.
 | M13.21 | The research corpus updates M12 proposed (research 12's banner landed with M13.44) | — (docs) |
 | M13.21a | Split from M13.21 at its review budget: the five research-corpus banners, each claim held to its source | — (docs) |
 | M13.22 | The fast-mode protocol and formats decision records, meeting the eleven obligations and amending ADR-0013's Consequences for NFR-5 and NFR-10 -- including the quorum-loss predicate and the oracle's copy of it (obligation 4), the per-stream uncommitted-offset bound and the per-term `wal_quorum` record (obligation 4) -- reviewed before any fast-mode code | FR-17 |
+| M13.22a | Split from M13.22 at its review budget: the fast-mode protocol and formats decision records, with round 3's findings fixed | FR-17 |
+| M13.22b | Split from M13.22a at its review budget: the fast-mode protocol and formats decision records, with M13.22a's round 3 findings fixed | FR-17 |
+| M13.22c | Split from M13.22b at its review budget: the fast-mode protocol and formats decision records, with M13.22b's round 3 findings fixed | FR-17 |
+| M13.22d | Split from M13.22c at its review budget: the fast-mode protocol and formats decision records, with M13.22c's round 3 findings fixed | FR-17 |
+| M13.22e | Split from M13.22d at its review budget: the fast-mode protocol and formats decision records, with M13.22d's round 3 findings fixed | FR-17 |
+| M13.22f | Split from M13.22e at its review budget: the fast-mode protocol and formats decision records, with M13.22e's round 3 findings fixed | FR-17 |
+| M13.22g | Split from M13.22f at its review budget: the fast-mode protocol and formats decision records, with M13.22f's round 3 findings fixed | FR-17 |
+| M13.22h | Split from M13.22g at its review budget: the fast-mode protocol and formats decision records, the dormant mode withdrawn and criterion 19 amended | FR-17 |
+| M13.22i | Split from M13.22h at its review budget: the fast-mode protocol and formats decision records, with the deprecated term removed from M13.22g's row | FR-17 |
 | M13.23 | The three settings: plugin index settings, `IndexRegistration` v2, the catalog | FR-17 |
 | M13.24 | The fast journal: append, fsync seam, entries, the byte bound, release, recovery read | FR-17 |
-| M13.25 | The fast frames, the roster object and the void-range chain entry, with golden files, and every reader of the void entry in the same commit (non-negotiable 8): the chain-entry kinds made a sealed type decoded by exhaustive `switch`, so a reader that ignores the new kind fails to compile -- `DeltaReader`, `CommitChargingBinStore`, `ChainEnd`, `ChainReplay`, `Checkpoint`, `ChainBackfill` -- and the consumer's and the plugin's counted skip | FR-17 |
+| M13.25 | The fast frames, the roster object and the recovery chain entry (a takeover's commits and voids in one entry, ADR-0082), with golden files, and every reader of it in the same commit (non-negotiable 8): the chain-entry kinds made a sealed type decoded by exhaustive `switch`, so a reader that ignores the new kind fails to compile -- `DeltaReader`, `CommitChargingBinStore`, `ChainEnd`, `ChainReplay`, `Checkpoint`, `ChainBackfill` -- and the consumer's and the plugin's counted skip | FR-17 |
 | M13.26 | The roster and lease-time fencing: join, admission, the epoch fence, the TTL wait, the per-term `wal_quorum` record, and a non-leader's graceful departure (upload, wait, then leave the roster) | FR-17 |
 | M13.27 | The leader's fast sequencer: cursor, assignment and the per-stream bound, journal, replica set, answer | FR-17 |
 | M13.28 | The replica endpoint: store, epoch fence, release | FR-17 |
-| M13.29 | The writer's fast path: commit, offset confirmation, the epoch check, ack with offsets; no fast frame for a `wal=false` index (`FastEndpointsUnusedTest`) | FR-17 |
+| M13.29 | The writer's fast path: commit, offset confirmation, the epoch check, ack with offsets; no fast frame for a `wal=false` index (`FastWalFalseFleetTest`) | FR-17 |
 | M13.30 | Publication: interest registration, the leader's push to interested pods, and a cross-zone proxied `/seg` read served from the leader's journal before the upload (`FastProxySubscriberTest`) | FR-17 |
 | M13.31 | The upload at pre-assigned offsets, triggered by the journal's fill, a stream nearing its bound and a holder's loss as well as the timer (`FastCapacityTest`), release everywhere, and the per-stream barrier | FR-17 |
 | M13.32 | Catch-up of fast streams from the leader's journal | FR-17, FR-10 |
 | M13.33 | Takeover: fence, collect per stream, pod-UID liveness, recovery upload, truncation, writing void ranges, exactly-once delivery of a re-published offset across the takeover (`FastTakeoverSubscriberTest`), `FastRecoveryModelTest`, and the commit-protocol simulation extended over seeds | FR-17 |
-| M13.34 | Switching `wal` on a live index under skew | FR-17 |
+| M13.34 | Switching `wal` on a live index under skew, including a segment's runs committed across two deltas: the ack after the last, and `IdempotencyWindow` answering a retry only when every run is committed (ADR-0081 §8) | FR-17 |
 | M13.35 | Shutdown: the leader uploads its journal before releasing the lease | FR-17 |
 | M13.36 | Fast-mode metrics and the cost evidence | FR-17, NFR-5 |
 | M13.37 | The fast latency measurement on M9's rig | FR-17 |
-| M13.38 | The requirements table matched to M13.22's decision (NFR-8, NFR-5 and NFR-10 conditional); the architecture and operator docs | FR-17, NFR-8, NFR-5, NFR-10 |
+| M13.38 | The requirements table matched to the fast-mode decision, ADR-0081 (NFR-8, NFR-5, NFR-9 and NFR-10 conditional); the architecture and operator docs | FR-17, NFR-8, NFR-5, NFR-9, NFR-10 |
 | M13.40 | `checkMilestoneVerified` refuses a VERIFIED.md enumeration missing a harvest ID its SPEC lists | — (harness) |
 | M13.41 | Specify fast mode: its design, the protocol's obligations, cost, criteria 7 onward, test plan, risks and tasks M13.22-M13.38 | FR-17 |
 | M13.42 | Specify fast mode, split from M13.41 at its third round: recovery stated as invariants against a ground-truth model, its enumerated rules moved to M13.22 | FR-17 |
