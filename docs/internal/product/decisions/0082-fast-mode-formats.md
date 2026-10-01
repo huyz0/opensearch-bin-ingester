@@ -91,6 +91,28 @@ Kinds:
 | 16 | `HELD` | holder → leader | per stream held: RunKey, and per `(epoch, assignedAfter)` held: lowest and highest offset; sent at DEPART phase 1, in JOIN, when its journal passes half its cap, and after every RELEASE while a departing pod has an entry pending |
 | 17 | `HELD_STATUS` | leader → holder | per reported stream: RunKey, release below offset (the committed next offset), and per reported `(epoch, assignedAfter)` a `supersededFrom` i64 (the lowest resume offset of a decision superseding the group, `Long.MAX_VALUE` if none: offsets at or above it are superseded) and, for the part below it, a `status` u8 (1 committed, 2 superseded, 3 closed term, 4 pending) |
 
+⚠️ Stated by M13.26d, which landed the header and the JOIN, JOINED and
+REFUSED kinds with their first reader and writer (the other kinds land with
+theirs, M13.25b): strings are a uvarint length then UTF-8, prefixed as the
+existing frames prefix theirs but at most 1024 bytes -- above those frames'
+256, for a Kubernetes endpoint -- which supersedes "the limits the existing
+frames use" above, and is enforced on encode and decode alike; every other
+field is big-endian
+and fixed-width -- a count is a u32, an offset or epoch an i64,
+`assignedAfter` a u32, a reason or status a u8 (REFUSED's reasons: 1 lower
+epoch, 2 not rostered, 3 not fast, 4 backpressure, 5 departing, 6 discarded;
+HELD_STATUS's statuses as in the table) -- and a RunKey is the index
+UUID's two i64 then the partition as an i32. A HELD body is a u32 count of
+streams, each a RunKey, a u32 count of groups and per group `epoch`,
+`assignedAfter`, lowest and highest offset; a HELD_STATUS body a u32 count of
+streams, each a RunKey, its release-below offset, a u32 count of groups and
+per group `epoch`, `assignedAfter`, `supersededFrom` and the status. JOIN's
+incarnation is four strings: podId, podUid, az, endpoint. REFUSED carries
+the idempotency key exactly when its reason is `discarded` (podId string,
+incarnation UUID as two i64, `fastSeq` i64), then its text. A kind the
+build cannot read, an unknown reason or status, a count past the bytes left
+and trailing bytes are all refused.
+
 A catch-up or `/seg` response served from a journal is not a frame but an HTTP
 body; it carries the epoch it was served under in a `Binstore-Fast-Epoch`
 response header, which a forwarding pod checks against its epoch fence.
