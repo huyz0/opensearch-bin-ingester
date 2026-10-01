@@ -1,7 +1,7 @@
 # The consumer library and the three fetch modes
 
 **Status:** proposal · **Confidence:** medium-high (latency figures are modelled, not measured —
-see §1; the cache-destruction argument in §2 is structural) · **Last updated:** 2026-08-30
+see §1; the cache-destruction argument in §2 is structural) · **Last updated:** 2026-10-01
 
 **Read this if:** you are implementing the plugin's fetch path, the ingester's serving path, or
 deciding what the consumer library owns.
@@ -210,6 +210,17 @@ fetch from.
 
 Because every event carries coordinates regardless of mode, **every mode can degrade to every other
 mode**. That is the property that makes shipping all three safe.
+
+> ⚠️ **REVISED 2026-10-01 (M13.21, from M12's milestone review §5): fetch retry and the two lanes.**
+> - **The live and catch-up lanes retry separately** (M12.12): each has its own retry state and
+>   spends its own `maxAttempts` on a failing segment, so on live's own turn a failing catch-up
+>   segment does not defer a live fetch behind its backoff. (At catch-up's quantum turn that holds
+>   only with a host clock -- next bullet.) A consumer whose two lanes each fail a segment makes up to
+>   twice the attempts one shared counter allowed before both surface (pinned per lane by M13.12).
+> - **A backing-off catch-up yields its quantum turn to live** (M12.26), which needs a HOST CLOCK:
+>   a backoff paid only by the waiting reader starves the lane that yields.
+> - ⚠️ **The reverse is open (M13.47):** a failing live segment takes every turn, so a due catch-up
+>   is not loaded while live keeps failing.
 
 > ⚠️ **REVISION 2026-09-14 (ADR-0044): the conclusion holds, the reason given for it does not.**
 > Every degradation path in the table above is a **whole-object** read. "Ignore it and fetch by

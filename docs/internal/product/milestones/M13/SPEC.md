@@ -640,6 +640,7 @@ journal's fsync and the Kubernetes pod lookup are injected seams.
 | M13.19 | R17: `checkCommitMessage` requires a `Cost:` line; `PeerCommitTest` | — (harness) |
 | M13.20 | R18: a shared `Ingest` test base | — (quality) |
 | M13.21 | The research corpus updates M12 proposed (research 12's banner landed with M13.44) | — (docs) |
+| M13.21a | Split from M13.21 at its review budget: the five research-corpus banners, each claim held to its source | — (docs) |
 | M13.22 | The fast-mode protocol and formats decision records, meeting the eleven obligations and amending ADR-0013's Consequences for NFR-5 and NFR-10 -- including the quorum-loss predicate and the oracle's copy of it (obligation 4), the per-stream uncommitted-offset bound and the per-term `wal_quorum` record (obligation 4) -- reviewed before any fast-mode code | FR-17 |
 | M13.23 | The three settings: plugin index settings, `IndexRegistration` v2, the catalog | FR-17 |
 | M13.24 | The fast journal: append, fsync seam, entries, the byte bound, release, recovery read | FR-17 |

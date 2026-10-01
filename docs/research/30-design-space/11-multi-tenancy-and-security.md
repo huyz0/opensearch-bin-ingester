@@ -2,7 +2,7 @@
 
 **Status:** decided — see [ADR-0010](../../internal/product/decisions/0010-multi-tenancy-and-security-model.md) ·
 **Confidence:** medium-high (the promotion threshold is arithmetic; the threat model is conventional) ·
-**Last updated:** 2026-08-30
+**Last updated:** 2026-10-01
 
 **Read this if:** you are implementing admission control, buffer allocation, or
 anything that crosses a tenant boundary.
@@ -19,6 +19,20 @@ This document closes the two gaps the corpus previously acknowledged (Q9, Q10).
 > held across the durable wait, making it a per-index concurrency limit too.
 > §1's global `maxUnflushedBytes` is now ADR-0079's ceiling,
 > `max(1 MiB, 4 x maxSegmentBytes)`. Mechanisms 2 and 3 remain unbuilt.
+
+> ⚠️ **REVISED 2026-10-01 (M13.21, from M12's milestone review §5; M12, M13).** Mechanism 1 as built:
+> - **Buckets exist only for registered indices**, and a bucket idle and full for the idle expiry
+>   is dropped (M12.4) -- a producer inventing names gets no bucket per name. (An explicit-partition
+>   write waiting for an unknown name holds a wait entry, bounded by the caps below and gone with
+>   its wait.)
+> - **An override named by an alias applies to its concrete index** (M12.13); of several aliases,
+>   the one sorting first wins (pinned by M13.14).
+> - **Refusals are exported by cause, as unlabelled counters** -- admission, quota and (M13.11)
+>   registration wait -- and which indices a quota refused is said by the top-K cost log line,
+>   bounded to eight names an interval (M12.5).
+> - **The explicit-partition registration wait is capped** at 8 per index (M12.10) and 32 per
+>   ingester node (M13.11; a fleet of N nodes admits up to 32 x N), and refused before the body is read -- except a write that loses the
+>   race between that check and the wait, refused by the wait after its first chunk is read.
 
 ---
 

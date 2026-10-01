@@ -1,7 +1,7 @@
 # Benchmarking plan
 
 **Status:** proposal · **Confidence:** high (methodology), medium (which micro-benchmarks will
-actually matter — that is what the profiling tier is for) · **Last updated:** 2026-08-29
+actually matter — that is what the profiling tier is for) · **Last updated:** 2026-10-01
 
 **Read this if:** you are about to optimise something, or you want to know what "measured" means
 on this project.
@@ -56,7 +56,7 @@ A load generator plus the ingester plus a store backend, measuring the whole pip
 
 | Dimension | Values |
 |---|---|
-| Store | `MemoryBinStore`, `LocalFsBinStore`, MinIO (Testcontainers), real S3 |
+| Store | `MemoryBinStore`, `LocalFsBinStore`, RustFS (docker-compose), real S3 |
 | Ingest rate | 1, 10, 50, 100, 500 MiB/s |
 | Streams | 16, 256, 1,600, 20,000 |
 | Doc size | 200 B, 1 KiB, 10 KiB, mixed realistic |
@@ -64,6 +64,25 @@ A load generator plus the ingester plus a store backend, measuring the whole pip
 
 Outputs: throughput per core, end-to-end latency histogram (producer ack → OpenSearch searchable),
 heap/direct usage over time, GC pause distribution, **and the tier-3 cost counters**.
+
+> ⚠️ **REVISED 2026-10-01 (M13.21, from M12's milestone review §5).** The T3 fixture has been
+> RustFS in `docker-compose.test.yml` since M9.22, not MinIO in Testcontainers. Three things the
+> fixture taught, which a latency number from it must respect:
+> - **A T3 latency on RustFS depends on the fixture's `mem_limit`.** At 256 MiB one
+>   `PartitionVisibilityIT` run took RustFS to ~94% of its limit; at that level some runs drained
+>   over their bound and some lost the store (M11.23: 2 of 7 measured drains over, and the store lost).
+>   The limit is 1 GiB since M12.24; state the limit beside any number taken on it.
+> - **A single run is not a baseline.** M9's 2,209 ms was one run. M11.23 measured seven drains
+>   of 1,635-3,666 ms at 256 MiB (a fresh container's first run the worst). M13.3,
+>   at 1 GiB, records 22 runs as a distribution: green 2 of 10 on a day-old container and 5 of 6 on
+>   each fresh one, memory alone not explaining the overruns. There container age or state is a
+>   candidate, not a finding -- batch order and host load are confounded with it -- and the cause
+>   is open as M13.45. M12.24 adds that RustFS's memory grew across runs on one container.
+> - **Report a bound's clock as trigger and drain.** In `PartitionVisibilityIT` the trigger
+>   write's `202` came ~1.03 s after the heal: the follower's 1 s peer-commit timeout (the lease
+>   TTL) while the leaseholder drained synchronously (M13.3). Both clocks start at the heal, so
+>   they overlap -- the split says which phase moved, and is not for subtracting one from the
+>   other.
 
 The key deliverable from tier 2 is the **cost/latency curve** — cost per TiB versus p99 latency as
 the flush interval varies. That single chart is what an operator uses to pick their dial setting,

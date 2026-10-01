@@ -2,7 +2,7 @@
 
 **Status:** proposal · **Confidence:** medium-high (topology and mechanisms are conventional; the
 split-brain argument rests on [metadata-and-cas §7](03-metadata-and-cas.md), which is itself
-unproven) · **Last updated:** 2026-08-30
+unproven) · **Last updated:** 2026-10-01
 
 **Read this if:** you are sizing the deployment, writing K8s manifests, implementing shutdown/failover,
 or designing the chaos test suite.
@@ -151,6 +151,16 @@ behind — so "silence freezes the watermark" is now the load-bearing half of
 | F8 | **Gray failure**: pod alive but slow | latency SLO breach | worst case a sequencer that renews its lease but commits slowly ⇒ silent visibility lag | **self-fencing**: release the lease on SLO breach. Subscribers report staleness as a second signal | none, but lag |
 | F9 | Object store degraded (regional) | error rates | writes fail; consumers idle harmlessly | producers retry; rate-limited backoff | none |
 | F10 | Region loss | — | total | **out of scope** — cross-region replication is a non-goal |
+
+> ⚠️ **REVISED 2026-10-01 (M13.21, from M12's milestone review §5): F9 on the CONSUMER side -- a
+> jitter on the plugin node's FAILURE HOLD of a segment fetch, in front of a bounded-attempt
+> client, must only LENGTHEN.** (Not the producers' retry backoff in F9's row.) M12.11
+> measured a `[b/2, b]` jitter on that hold exhausting the consumer's attempts in 6 of 8 seeds over
+> a 75 s outage: holds drawn below the backoff spend a client's attempts faster than its policy
+> assumes. The hold is now `(b, 1.5b]` -- at the 30 s ceiling a failed segment is held up to 45 s,
+> where it was held 30 s, so recovery can take up to 15 s longer (M13.18). ⚠️ This is about a hold
+> a client retries through, NOT §6.1's takeover jitter, which spreads challengers; no measurement
+> here bears on that one.
 
 ### 6.1 Whole-AZ loss, step by step
 1. **Producers in the lost AZ** are gone with it. Producers elsewhere are unaffected. If producers

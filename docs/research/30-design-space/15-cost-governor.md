@@ -1,7 +1,7 @@
 # The cost governor: measuring, attributing and *limiting* store requests
 
 **Status:** proposal · **Confidence:** high (the arithmetic; the policy is a
-judgement call) · **Last updated:** 2026-08-30
+judgement call) · **Last updated:** 2026-10-01
 
 **Read this if:** you are implementing the store decorators, metrics, or anything
 that could loop over the store.
@@ -103,6 +103,12 @@ workload it observes ([observability.md](../../internal/standards/observability.
 Attribution reaches an operator by **top-K in a periodic log event** and by
 **`GET /admin/cost?by=index&top=50`**, both of which have zero metric cardinality.
 **Count everywhere, export almost nothing.**
+
+> ⚠️ **REVISED 2026-10-01 (M13.21, from M12's milestone review §5).** `/admin/cost` is **opt-in**
+> (`admin.cost.enabled`, M12.6) until the producer port is authenticated: it names indices and
+> their spend to whoever can reach that port. The top-K log line is on by default (M11.5; an interval of zero turns it off), and says
+> what it leaves out -- refusals past eight names, and registrations whose index UUID does not
+> decode (M13.10).
 
 Emit as metrics:
 
