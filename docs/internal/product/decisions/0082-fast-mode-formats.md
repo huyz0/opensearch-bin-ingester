@@ -133,6 +133,22 @@ style (fixed field order, strict decode refusing unknown or duplicate fields):
   blind overwrite).
 - Key length is fixed and short (NFR-12).
 
+⚠️ Stated by M13.26b, which landed the format (M13.25c's) with its first
+reader and writer, the new leader's walk:
+- a term record's `walQuorum` keys are ordered by the UUID's canonical text,
+  never by a language's own UUID order (Java's compares signed halves), so
+  another encoder can reproduce the form;
+- `notBefore` is `0` when there is nothing to wait for, `fencedBy` `0` while
+  unfenced; strings carry no escapes, and an encoder refuses a quote, a
+  backslash, a control character or an unpaired surrogate, as the lease does;
+- `predecessor` is `-1` or an earlier term, `fencedBy` `0` or a later one, the
+  leader is among `members` and listed once by pod UID, and `termRecord` is
+  numbered from 0 without gaps;
+- ⚠️ the next decision's number is the last listed one's plus one, so pruning
+  (ADR-0081 §1) must keep the newest decision of a roster, or a reused number
+  would let an entry assigned after a pruned decision read as superseded by
+  it. M13.33, which writes and prunes decisions, owns that.
+
 ### 4. The journal
 
 One append-only file per pod under the pod's `emptyDir`, plus a small

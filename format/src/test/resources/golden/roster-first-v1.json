@@ -1,0 +1,1 @@
+{"epoch":1,"predecessor":-1,"leader":{"podId":"ingester-0","podUid":"uid-0","az":"az-c","endpoint":""},"members":[{"podId":"ingester-0","podUid":"uid-0","az":"az-c","endpoint":"","state":"ROSTERED"}],"termRecord":[{"seq":0,"walQuorum":{}}],"decisions":[],"notBefore":0,"fencedBy":0,"closed":true}
