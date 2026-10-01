@@ -34,9 +34,31 @@ fields:
 | `walQuorum` | u8, 1–3; read only when `wal = 1` | 2 |
 
 The plugin's registrar reads `index.ingestion_source.param.flush_timer`,
-`.wal` and `.wal_quorum` and always writes v2; the ingester decodes v1 and v2
-(a v1 sender is an older plugin, and its indices are `wal=false`); an unknown
-version stops the read, as today. Golden files: one v1, one v2 per `walQuorum`.
+`.wal` and `.wal_quorum`; the ingester decodes v1 and v2 (a v1 frame comes
+from an older plugin, or from a newer one for an index at the defaults --
+either way the index is `wal=false` at the default timer); an unknown
+version stops the read, as today. ⚠️ Amended by M13.23: the registrar writes **v1 for an index
+at all three defaults and v2 otherwise** -- not v2 always -- because an older
+ingester refuses an unknown version, and "always v2" would make every index
+unroutable on every older ingester the moment the plugin upgraded first,
+falsifying this record's own rolling-upgrade consequence; only an index that
+sets one of the three needs the newer ingester. ⚠️ And the newer plugin on
+every node: an older plugin node pushes the same index as v1, and the
+catalog takes the last push, so set the three only once every plugin node
+runs a build that reads them (M13.23 review round 3, P2). With `wal = 0` the quorum is
+absent from the wire, so the decoded value is the default 2 and the
+registration normalises to it (equality means the same bytes; the registrar
+diffs by equality). The params are free-form strings OpenSearch does not
+validate, so the registrar reads them strictly (`wal` exactly `true` or
+`false`, `wal_quorum` exactly 1, 2 or 3 whatever `wal` says, `flush_timer` a
+positive whole number of `ms`, `s`, `m` or `h`) and, for a malformed value, keeps the index at its last
+good settings -- the last this node pushed -- with its placement re-derived,
+held through a reconnect, so an ingester restart re-registers it; logs an error and counts it once per
+distinct value; never a lenient guess at a durability. The last good
+settings live in the registering node's memory: an index never registered,
+or one whose shards moved or whose node restarted while the value was
+malformed, stays unregistered until it is fixed. Golden files:
+v1, v2 per `walQuorum` at `wal = 1`, and v2 with only `flush_timer` set.
 
 ### 2. The fast frames
 

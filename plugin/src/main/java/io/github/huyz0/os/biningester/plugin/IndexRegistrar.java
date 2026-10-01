@@ -160,6 +160,45 @@ public final class IndexRegistrar implements ClusterStateListener {
      */
     private final Map<String, IndexRegistration> accepted = new LinkedHashMap<>();
 
+    /**
+     * The malformed fast-mode setting last refused for each index, by UUID
+     * (M13.23).
+     *
+     * <p>⚠️ COUNTED ONCE PER DISTINCT VALUE, NOT PER EVALUATION: {@link #due}
+     * re-derives on every cluster-state change, so a value left malformed
+     * would otherwise count again on each one, and the counter would measure
+     * cluster activity instead of operator mistakes.
+     */
+    private final Map<String, String> refused = new LinkedHashMap<>();
+
+    /**
+     * The last registration THIS NODE's transport took for each index, by
+     * UUID -- kept through {@link #onReconnect()}, which clears
+     * {@link #accepted} (M13.23 review round 1, P1). ⚠️ This node's last
+     * successful push, not the cluster's last well-formed settings: if this
+     * node's push of a change failed while another node's succeeded, and the
+     * next change is malformed, a reconnect here re-pushes the older settings
+     * (M13.23 review round 3, P1). Each node pushes from the same index
+     * metadata, so this needs a failed push followed by a malformed change.
+     *
+     * <p>⚠️ IT IS WHAT A REFUSED INDEX KEEPS. An index whose fast-mode setting
+     * is malformed keeps the three settings recorded here, with its placement
+     * re-derived. Leaving it out of what the node hosts instead would drop it
+     * from {@link #accepted} on the same event, and after an ingester restart
+     * -- whose catalog is in memory -- the index would have no registration at
+     * all: an operator's typo taking down an index that was working.
+     *
+     * <p>⚠️ IT LIVES ON THIS NODE, IN MEMORY, and is forgotten when the index
+     * leaves it. So the protection holds while this node keeps a shard of the
+     * index and does not restart; after a relocation or a plugin node restart
+     * with the setting still malformed, no node has a last good shape, and the
+     * index stays unregistered until the setting is fixed -- loud, refused
+     * writes, never a guessed durability (M13.23 review round 2, P2).
+     */
+    private final Map<String, IndexRegistration> lastGood = new LinkedHashMap<>();
+
+    private final AtomicInteger refusedSettings = new AtomicInteger();
+
     private final AtomicInteger pushes = new AtomicInteger();
     private final AtomicInteger failures = new AtomicInteger();
 
@@ -308,7 +347,9 @@ public final class IndexRegistrar implements ClusterStateListener {
         if (node == null) {
             return;
         }
-        accepted.keySet().retainAll(hostedRegistrations(state, node).keySet());
+        java.util.Set<String> hosted = hostedRegistrations(state, node).keySet();
+        accepted.keySet().retainAll(hosted);
+        lastGood.keySet().retainAll(hosted);
     }
 
     /** What this node hosts and the ingester has not accepted in this shape. */
@@ -346,6 +387,7 @@ public final class IndexRegistrar implements ClusterStateListener {
                 // carry-forward set would be a second copy of that fact.
                 synchronized (this) {
                     accepted.put(registration.indexUuid(), registration);
+                    lastGood.put(registration.indexUuid(), registration);
                 }
                 return;
             } catch (RuntimeException e) {
@@ -376,6 +418,7 @@ public final class IndexRegistrar implements ClusterStateListener {
     private Map<String, IndexRegistration> hostedRegistrations(ClusterState state,
             RoutingNode node) {
         Map<String, IndexRegistration> wanted = new LinkedHashMap<>();
+        java.util.Set<String> ours = new java.util.HashSet<>();
         for (ShardRouting shard : node) {
             Index index = shard.index();
             // ⚠️ ONE REGISTRATION PER INDEX, HOWEVER MANY SHARDS OF IT THIS
@@ -391,8 +434,44 @@ public final class IndexRegistrar implements ClusterStateListener {
             if (metadata == null || !ours(metadata)) {
                 continue;
             }
-            wanted.put(index.getUUID(), registrationOf(metadata));
+            ours.add(index.getUUID());
+            // ⚠️ PLACEMENT OUTSIDE THE CATCH: a placement field the record
+            // refuses (routing_partition_size >= shards, say) is not a
+            // fast-mode setting and keeps the behaviour it had before M13.23.
+            IndexRegistration placement = placementOf(metadata);
+            IndexRegistration registration;
+            try {
+                registration = FastSettings.apply(placement, metadata.getSettings());
+            } catch (IllegalArgumentException malformed) {
+                // ⚠️ THIS INDEX ONLY, AT ITS LAST GOOD SHAPE (see `lastGood`):
+                // thrown on, one operator typo would stop every index's push
+                // on this node; read leniently, it would pick a durability
+                // nobody chose (FastSettings). An index never registered has
+                // no last good shape and stays unregistered, which is loud.
+                String why = String.valueOf(malformed.getMessage());
+                if (!why.equals(refused.put(index.getUUID(), why))) {
+                    refusedSettings.incrementAndGet();
+                    LOG.error("not registering index [{}] with new settings: {} -- it keeps "
+                            + "its last good registration, if it has one", index.getName(), why);
+                }
+                // ⚠️ ONLY THE SETTINGS ARE KEPT; PLACEMENT IS FRESH. Holding
+                // the whole last good registration froze the index's aliases
+                // too, so a rollover while a setting was malformed left the
+                // write alias on the old index after the next ingester
+                // restart (M13.23 review round 2, P1).
+                IndexRegistration kept = lastGood.get(index.getUUID());
+                if (kept != null) {
+                    wanted.put(index.getUUID(), placement.withFastSettings(
+                            kept.flushTimerMillis(), kept.wal(), kept.walQuorum()));
+                }
+                continue;
+            }
+            refused.remove(index.getUUID());
+            wanted.put(index.getUUID(), registration);
         }
+        // ⚠️ A REFUSAL IS FORGOTTEN WITH ITS INDEX, so one that leaves and
+        // comes back with the same bad value is logged and counted again.
+        refused.keySet().retainAll(ours);
         return wanted;
     }
 
@@ -407,7 +486,7 @@ public final class IndexRegistrar implements ClusterStateListener {
         return type != null && type.equalsIgnoreCase(BinStorePlugin.TYPE);
     }
 
-    private static IndexRegistration registrationOf(IndexMetadata metadata) {
+    private static IndexRegistration placementOf(IndexMetadata metadata) {
         // ⚠️ SORTED, because the registration is DIFFED by equality and its
         // aliases are a List: two states listing the same aliases in a
         // different order would otherwise read as a change and re-push. The
@@ -439,6 +518,11 @@ public final class IndexRegistrar implements ClusterStateListener {
     /** How many push ATTEMPTS have failed, including retried ones. */
     public int pushFailures() {
         return failures.get();
+    }
+
+    /** How many index-setting values were refused as malformed. */
+    public int refusedSettings() {
+        return refusedSettings.get();
     }
 
     /** How many indices this node has a live registration for. */

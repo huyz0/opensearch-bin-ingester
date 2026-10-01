@@ -12,12 +12,20 @@ import java.util.Objects;
 /**
  * What the plugin tells the ingester about one index (M6.2, FR-16, ADR-0015 §2).
  *
- * <p>⚠️ IT CARRIES WHAT PLACEMENT NEEDS AND NOTHING ELSE. ADR-0015 §2's payload
- * also lists {@code replicationMode}, {@code allActive}, {@code lanes[]},
- * {@code ackMode} and {@code quorum}; those serve FR-17 and FR-18, which are
- * out of M6's scope, and a field with no reader is a field nothing can be wrong
- * about. Adding them is another wire-format change, with this paragraph as the
- * starting point.
+ * <p>⚠️ V2 ADDS THE THREE FAST-MODE SETTINGS (M13.23, ADR-0082 §1):
+ * {@code flushTimerMillis}, {@code wal} and {@code walQuorum}. An index at all
+ * three defaults still ENCODES AS V1, so an older ingester -- which refuses an
+ * unknown version -- reads every index that sets none of them, and a rolling
+ * upgrade works whichever side moves first; only an index that sets one needs
+ * the newer ingester. With {@code wal} off the quorum is not on the wire, so
+ * it is normalised to its default here, and equality means the same bytes:
+ * the registrar diffs by equality, and a quorum the wire drops would read as a
+ * change it re-pushes forever.
+ *
+ * <p>⚠️ IT CARRIES WHAT PLACEMENT NEEDS AND THE THREE FAST-MODE SETTINGS, AND
+ * NOTHING ELSE. ADR-0015 §2's payload also lists {@code replicationMode},
+ * {@code allActive} and {@code lanes[]}; a field with no reader is a field
+ * nothing can be wrong about. Adding one is another wire-format change.
  *
  * <p>⚠️ THE PRODUCER NEVER SEES ANY OF THIS. ADR-0015 rejected an
  * unauthenticated endpoint on the plugin and rejected putting OpenSearch
@@ -52,13 +60,36 @@ import java.util.Objects;
  * it into stream identity is the reader's job and is already written down.
  */
 public record IndexRegistration(String indexUuid, String indexName, List<String> aliases,
-        int numShards, int routingNumShards, int routingFactor, int routingPartitionSize) {
+        int numShards, int routingNumShards, int routingFactor, int routingPartitionSize,
+        long flushTimerMillis, boolean wal, int walQuorum) {
 
     /** {@code "BIRG"} — big-endian, so an operator sees it in a hex dump. */
     public static final int MAGIC = 0x42495247;
 
-    /** The only shape that has ever been written. */
+    /** The placement-only shape. */
     public static final int VERSION_1 = 1;
+
+    /** V1 plus the three fast-mode settings (ADR-0082 §1). */
+    public static final int VERSION_2 = 2;
+
+    /** {@code index.ingestion_source.param.flush_timer}'s default, 5 s. */
+    public static final long DEFAULT_FLUSH_TIMER_MILLIS = 5_000;
+
+    /** {@code index.ingestion_source.param.wal_quorum}'s default. */
+    public static final int DEFAULT_WAL_QUORUM = 2;
+
+    /** A registration at the three settings' defaults (a v1 sender's indices). */
+    public IndexRegistration(String indexUuid, String indexName, List<String> aliases,
+            int numShards, int routingNumShards, int routingFactor, int routingPartitionSize) {
+        this(indexUuid, indexName, aliases, numShards, routingNumShards, routingFactor,
+                routingPartitionSize, DEFAULT_FLUSH_TIMER_MILLIS, false, DEFAULT_WAL_QUORUM);
+    }
+
+    /** This registration with the three fast-mode settings replaced. */
+    public IndexRegistration withFastSettings(long flushTimerMillis, boolean wal, int walQuorum) {
+        return new IndexRegistration(indexUuid, indexName, aliases, numShards, routingNumShards,
+                routingFactor, routingPartitionSize, flushTimerMillis, wal, walQuorum);
+    }
 
     public IndexRegistration {
         requireText(indexUuid, "indexUuid");
@@ -75,6 +106,20 @@ public record IndexRegistration(String indexUuid, String indexName, List<String>
         // path is where it would be discovered.
         requirePositive(routingFactor, "routingFactor");
         requirePositive(routingPartitionSize, "routingPartitionSize");
+        if (flushTimerMillis <= 0) {
+            // ⚠️ A ZERO DEADLINE IS AN UPLOAD PER RECORD, not a setting, and a
+            // negative one is a timer that has always already fired.
+            throw new IllegalArgumentException("flushTimerMillis is never " + flushTimerMillis
+                    + " for " + indexName);
+        }
+        if (!wal) {
+            // ⚠️ NOT ON THE WIRE WITHOUT WAL (ADR-0082 §1), so not in the value
+            // either -- see the class javadoc on equality.
+            walQuorum = DEFAULT_WAL_QUORUM;
+        } else if (walQuorum < 1 || walQuorum > 3) {
+            throw new IllegalArgumentException("walQuorum " + walQuorum + " for " + indexName
+                    + " is not 1, 2 or 3 -- the fleet spans at most three AZs");
+        }
         if (routingPartitionSize > 1 && routingPartitionSize >= numShards) {
             // ⚠️ OPENSEARCH REFUSES IT TOO: `routing_partition_size` must be
             // strictly less than the shard count, because it names how many
@@ -122,12 +167,21 @@ public record IndexRegistration(String indexUuid, String indexName, List<String>
         }
     }
 
-    /** These bytes, as {@link #VERSION_1}. */
+    /** Whether all three fast-mode settings hold their defaults. */
+    private boolean atFastDefaults() {
+        return flushTimerMillis == DEFAULT_FLUSH_TIMER_MILLIS && !wal;
+    }
+
+    /**
+     * These bytes: {@link #VERSION_1} for an index at the three defaults,
+     * {@link #VERSION_2} otherwise (see the class javadoc).
+     */
     public byte[] encode() {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         ByteBuffer head = ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN);
+        boolean v1 = atFastDefaults();
         head.putInt(MAGIC);
-        head.putInt(VERSION_1);
+        head.putInt(v1 ? VERSION_1 : VERSION_2);
         out.writeBytes(head.array());
         putString(out, indexUuid);
         putString(out, indexName);
@@ -139,6 +193,14 @@ public record IndexRegistration(String indexUuid, String indexName, List<String>
         SegmentWriter.putUvarint(out, routingNumShards);
         SegmentWriter.putUvarint(out, routingFactor);
         SegmentWriter.putUvarint(out, routingPartitionSize);
+        if (!v1) {
+            out.writeBytes(ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN)
+                    .putLong(flushTimerMillis).array());
+            out.write(wal ? 1 : 0);
+            if (wal) {
+                out.write(walQuorum);
+            }
+        }
         return out.toByteArray();
     }
 
@@ -165,9 +227,10 @@ public record IndexRegistration(String indexUuid, String indexName, List<String>
                     + Integer.toHexString(magic));
         }
         int version = ByteBuffer.wrap(c.bytes(4)).order(ByteOrder.BIG_ENDIAN).getInt();
-        if (version != VERSION_1) {
+        if (version != VERSION_1 && version != VERSION_2) {
             throw new IOException("index registration version " + version
-                    + " is not readable by this build, which knows " + VERSION_1
+                    + " is not readable by this build, which knows " + VERSION_1 + " and "
+                    + VERSION_2
                     + " -- refusing rather than guessing at a shape that decides placement");
         }
         String indexUuid = getString(c);
@@ -185,6 +248,24 @@ public record IndexRegistration(String indexUuid, String indexName, List<String>
         int routingNumShards = toInt(c.uvarint(), "routingNumShards");
         int routingFactor = toInt(c.uvarint(), "routingFactor");
         int routingPartitionSize = toInt(c.uvarint(), "routingPartitionSize");
+        long flushTimerMillis = DEFAULT_FLUSH_TIMER_MILLIS;
+        boolean wal = false;
+        int walQuorum = DEFAULT_WAL_QUORUM;
+        if (version == VERSION_2) {
+            flushTimerMillis = ByteBuffer.wrap(c.bytes(8)).order(ByteOrder.BIG_ENDIAN).getLong();
+            int walByte = c.bytes(1)[0];
+            if (walByte != 0 && walByte != 1) {
+                // ⚠️ STOP, DO NOT GUESS: a wal byte of 2 is a shape this build
+                // does not know, and reading it as either mode picks a
+                // durability nobody chose.
+                throw new IOException("index registration wal byte " + walByte
+                        + " is neither 0 nor 1");
+            }
+            wal = walByte == 1;
+            if (wal) {
+                walQuorum = c.bytes(1)[0];
+            }
+        }
         if (!c.atEnd()) {
             // ⚠️ TRAILING BYTES ARE A REFUSAL, NOT SLACK. A frame with more
             // after the last field is either a different shape this build does
@@ -196,7 +277,8 @@ public record IndexRegistration(String indexUuid, String indexName, List<String>
         }
         try {
             return new IndexRegistration(indexUuid, indexName, aliases, numShards,
-                    routingNumShards, routingFactor, routingPartitionSize);
+                    routingNumShards, routingFactor, routingPartitionSize, flushTimerMillis, wal,
+                    walQuorum);
         } catch (IllegalArgumentException refused) {
             // ⚠️ AN IOException, NOT AN IAE, because this arrived over a wire:
             // a caller reading a frame handles a bad frame, and an unchecked

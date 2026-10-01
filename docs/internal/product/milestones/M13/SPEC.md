@@ -945,6 +945,7 @@ journal's fsync and the Kubernetes pod lookup are injected seams.
 | M13.22h | Split from M13.22g at its review budget: the fast-mode protocol and formats decision records, the dormant mode withdrawn and criterion 19 amended | FR-17 |
 | M13.22i | Split from M13.22h at its review budget: the fast-mode protocol and formats decision records, with the deprecated term removed from M13.22g's row | FR-17 |
 | M13.23 | The three settings: plugin index settings, `IndexRegistration` v2, the catalog | FR-17 |
+| M13.23a | Split from M13.23 at its review budget: the three settings, with round 3's findings fixed | FR-17 |
 | M13.24 | The fast journal: append, fsync seam, entries, the byte bound, release, recovery read | FR-17 |
 | M13.25 | The fast frames, the roster object and the recovery chain entry (a takeover's commits and voids in one entry, ADR-0082), with golden files, and every reader of it in the same commit (non-negotiable 8): the chain-entry kinds made a sealed type decoded by exhaustive `switch`, so a reader that ignores the new kind fails to compile -- `DeltaReader`, `CommitChargingBinStore`, `ChainEnd`, `ChainReplay`, `Checkpoint`, `ChainBackfill` -- and the consumer's and the plugin's counted skip | FR-17 |
 | M13.26 | The roster and lease-time fencing: join, admission, the epoch fence, the TTL wait, the per-term `wal_quorum` record, and a non-leader's graceful departure (upload, wait, then leave the roster) | FR-17 |
