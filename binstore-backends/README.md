@@ -1,7 +1,9 @@
 # binstore-backends
 
 Implementations of `BinStore`: in-memory, local filesystem, and later S3, GCS and
-Azure.
+Azure. And of `JournalFile` (ADR-0083): `FileJournalFile` on the pod's
+`emptyDir`, and `MemoryJournalFile`, the fake that loses unforced bytes on an
+injected crash.
 
 **Depends on:** `binstore-spi`.
 

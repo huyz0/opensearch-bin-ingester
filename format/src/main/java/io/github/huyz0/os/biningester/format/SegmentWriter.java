@@ -67,7 +67,12 @@ public final class SegmentWriter {
         out.write((int) v);
     }
 
-    private static byte[] encodeRun(List<SegmentRecord> records) {
+    /**
+     * The records of one run in the segment's record encoding, with no block
+     * header -- shared with the fast journal (ADR-0082 §4), which carries
+     * records in exactly this shape.
+     */
+    static byte[] encodeRecords(List<SegmentRecord> records) {
         ByteArrayOutputStream body = new ByteArrayOutputStream();
         for (SegmentRecord r : records) {
             byte[] id = r.id().getBytes(StandardCharsets.UTF_8);
@@ -82,7 +87,11 @@ public final class SegmentWriter {
             putUvarint(body, payload.length);
             body.writeBytes(payload);
         }
-        byte[] bytes = body.toByteArray();
+        return body.toByteArray();
+    }
+
+    private static byte[] encodeRun(List<SegmentRecord> records) {
+        byte[] bytes = encodeRecords(records);
         CRC32C crc = new CRC32C();
         crc.update(bytes);
         ByteBuffer block = ByteBuffer.allocate(8 + bytes.length).order(ByteOrder.BIG_ENDIAN);

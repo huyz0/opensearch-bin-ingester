@@ -43,7 +43,8 @@
    and a dependency can open a socket without naming one. It raises the cost of
    reaching past a seam; it does not make it impossible.
 4. **The seams are few and named**: `BinStore`, `Clock`, `Sequencer`,
-   `SubscriptionTransport`, `Membership`. A new seam is an ADR.
+   `SubscriptionTransport`, `Membership`, `JournalFile` (ADR-0083, the fast
+   journal's one file). A new seam is an ADR.
 5. **Every seam has a fake** used by T0/T1 tests, kept in step with the real
    implementation in the same commit.
 6. **The ingester and the plugin share formats and the SPI, never runtime

@@ -150,9 +150,17 @@ public final class SegmentReader {
             throw new IOException("block checksum mismatch");
         }
 
-        List<SegmentRecord> out = new ArrayList<>(entry.recordCount());
+        return decodeRecords(body, entry.recordCount());
+    }
+
+    /**
+     * Exactly {@code count} records in the segment's record encoding, filling
+     * {@code body} -- shared with the fast journal (ADR-0082 §4).
+     */
+    static List<SegmentRecord> decodeRecords(byte[] body, int count) throws IOException {
+        List<SegmentRecord> out = new ArrayList<>(count);
         Cursor c = new Cursor(body);
-        for (int i = 0; i < entry.recordCount(); i++) {
+        for (int i = 0; i < count; i++) {
             int flags = c.u8();
             OpType op = SegmentFormat.opTypeOf(flags);
             String id = new String(c.bytes((int) c.uvarint()), StandardCharsets.UTF_8);

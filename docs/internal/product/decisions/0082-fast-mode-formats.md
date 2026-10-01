@@ -157,7 +157,7 @@ A release record carries RunKey and "release below offset". A drop record
 carries RunKey, epoch, `assignedAfter` and "drop from offset": the pod no
 longer holds that group at or above it (superseded, or of a closed term --
 `closedThrough` is written as a drop of every group of those epochs). Recovery reads to
-the first entry whose CRC or length fails (a torn tail) and stops there, then
+the first entry whose magic, length or CRC fails (a torn tail) and stops there, then
 **truncates the file there and fsyncs it before the first append**. Entries
 are answered only after their group's fsync, so every entry after the first
 failure was in the unfsynced group or never written, and none was answered;
@@ -166,8 +166,15 @@ risk -- it loses that pod's copies while its UID lives, invisibly to the
 predicate, as a lost disk would (M13.22d review round 3, P1, replacing round
 2's rule, which could not tell a torn group from damage without an fsync
 watermark). An entry appended after a tear would be lost to the next recovery (M13.22c review round
-2, P1). An entry is held while no later release or drop covers it; recovery
-applies both. The file is compacted by writing the held entries to a new
+2, P1). ⚠️ Amended by M13.24: a record whose CRC VERIFIES but whose version, kind or
+fields this build cannot read is not a tear -- some build fsynced it, and its
+copies may have been answered -- so recovery STOPS without truncating and the
+pod refuses to start (it stays unready) until a build that reads it runs.
+Unknown means stop, never skip and never cut. So the 13-byte header --
+magic, version, length, CRC32C, in that order and covering the bytes after
+it -- is frozen across versions: a later version that moved the checksum
+would be read as a tear on a rollback and cut. An entry is held while no later
+release or drop covers it; recovery applies both. The file is compacted by writing the held entries to a new
 file, fsyncing it, renaming it over the old one and fsyncing the directory,
 once released bytes pass half of it -- never rewritten in place.
 
