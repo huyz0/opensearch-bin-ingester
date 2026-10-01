@@ -953,7 +953,12 @@ journal's fsync and the Kubernetes pod lookup are injected seams.
 | M13.25b | The fast frames and the default-path commit answer, with golden files, landing with their first reader and writer | FR-17 |
 | M13.25c | The roster object and `LATEST`, with golden files, landing with their first reader and writer | FR-17 |
 | M13.25d | A void delivered to consumers and the plugin as a counted skip | FR-17 |
-| M13.26 | The roster and lease-time fencing: join, admission, the epoch fence, the TTL wait, the per-term `wal_quorum` record, and a non-leader's graceful departure (upload, wait, then leave the roster) | FR-17 |
+| M13.26 | The lease-time fence: the holder's two clocks from the send, and the successor's wait (narrowed: the rest is M13.26b-f) | FR-17 |
+| M13.26b | The roster and the walk, carrying M13.25c's format | FR-17 |
+| M13.26c | The epoch fence on every pod | FR-17 |
+| M13.26d | JOIN and admission | FR-17 |
+| M13.26e | The term record | FR-17 |
+| M13.26f | A non-leader's graceful departure | FR-17 |
 | M13.27 | The leader's fast sequencer: cursor, assignment and the per-stream bound, journal, replica set, answer | FR-17 |
 | M13.28 | The replica endpoint: store, epoch fence, release | FR-17 |
 | M13.29 | The writer's fast path: commit, offset confirmation, the epoch check, ack with offsets; no fast frame for a `wal=false` index (`FastWalFalseFleetTest`) | FR-17 |

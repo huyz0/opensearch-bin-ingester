@@ -125,6 +125,7 @@ public final class LeaseManager {
     private final Duration renewInterval;
     private final Clock clock;
     private final LeaseChallenge challenge;
+    private final LeaseTimeline timeline;
 
     /** ⚠️ VOLATILE, so {@link #held()} can read it without taking the lock. */
     private volatile Belief belief;
@@ -141,6 +142,16 @@ public final class LeaseManager {
      */
     public LeaseManager(BinStore store, LeaseConfig config, Clock clock,
             LeaseChallenge challenge) {
+        this(store, config, clock, challenge, LeaseTimeline.NONE);
+    }
+
+    /**
+     * The same, telling {@code timeline} when each write was sent and which
+     * landed -- fast mode's lease-time fence (ADR-0081 §3, M13.26).
+     */
+    public LeaseManager(BinStore store, LeaseConfig config, Clock clock,
+            LeaseChallenge challenge, LeaseTimeline timeline) {
+        this.timeline = Objects.requireNonNull(timeline, "timeline");
         this.challenge = Objects.requireNonNull(challenge, "challenge");
         this.store = Objects.requireNonNull(store, "store");
         Objects.requireNonNull(config, "config");
@@ -236,6 +247,7 @@ public final class LeaseManager {
         if (pending != null && !pending.verified()) {
             Belief found = refreshed(pending);
             if (found != null) {
+                timeline.settled(found.lease());
                 // ⚠️ Returned AS STORED, expiry unchecked — deliberately. The
                 // term may already have lapsed if the settling call arrives a
                 // TTL late, and even in the fast case however long the store
@@ -263,13 +275,15 @@ public final class LeaseManager {
             // chain provably disjoint from the unleased one.
             Lease fresh = new Lease(1, podId, podUid, endpoint,
                     clock.millis() + ttl.toMillis());
-            return adopt(fresh, writeOrRemember(fresh,
+            long sent = timeline.acquiring(null);
+            return adopt(fresh, sent, writeOrRemember(fresh,
                     () -> store.putIfAbsent(key, Body.ofBytes(fresh.encode()))));
         }
         // ⚠️ A corrupt lease propagates as IOException rather than being
         // treated as unheld. Taking over bytes nobody can parse is how two
         // nodes end up sequencing at once.
         Lease current = read();
+        timeline.observed(stat.get().version(), current);
         // ⚠️ AN UNEXPIRED LEASE IS TAKEN ONLY ON EVIDENCE THE HOLDER IS GONE
         // (M8.13). Pod names are stable across StatefulSet replacements, so
         // the name alone cannot establish that this process is the holder.
@@ -290,13 +304,14 @@ public final class LeaseManager {
             // identity `refreshed` uses, and for the same reason.
             Belief b = belief;
             if (b != null && !isOwnTerm(b.lease(), current)) {
-                belief = null;
+                forget();
             }
             return Optional.empty();
         }
         Lease taken = current.takenOverBy(podId, podUid, endpoint,
                 clock.millis() + ttl.toMillis());
-        return adopt(taken, writeOrRemember(taken, () -> store.putIfMatch(key,
+        long sent = timeline.acquiring(current);
+        return adopt(taken, sent, writeOrRemember(taken, () -> store.putIfMatch(key,
                 Body.ofBytes(taken.encode()), stat.get().version())));
     }
 
@@ -341,8 +356,10 @@ public final class LeaseManager {
             if (mine == null) {
                 return Optional.empty();
             }
+            timeline.settled(mine.lease());
         }
         Lease renewed = mine.lease().renewedUntil(clock.millis() + ttl.toMillis());
+        long sent = timeline.sending();
         // ⚠️ ONE conditional write, with no re-read: the holder already knows
         // its own version. A read per renew would double the lease's request
         // rate for nothing.
@@ -362,10 +379,11 @@ public final class LeaseManager {
         if (won.isEmpty()) {
             // ⚠️ Fenced. Drop the local belief too, so a caller that ignores
             // the empty result cannot keep renewing against a stale version.
-            belief = null;
+            forget();
             return Optional.empty();
         }
         belief = new Belief(renewed, won.get(), false);
+        timeline.won(renewed, sent);
         return Optional.of(renewed);
     }
 
@@ -427,7 +445,7 @@ public final class LeaseManager {
         // counter survives -- so its absence means someone did something this
         // protocol does not model, and continuing to sequence on that basis is
         // the failure mode worth avoiding.
-        belief = null;
+        forget();
         return null;
     }
 
@@ -492,8 +510,18 @@ public final class LeaseManager {
             }
         }
         Lease expired = mine.lease().renewedUntil(clock.millis());
+        // ⚠️ DROPPED BEFORE THE WRITE: the release is the last thing a leader
+        // shutting down does, and it must not still be exposing once the
+        // successor can read the expired lease.
+        timeline.dropped();
         store.putIfMatch(key, Body.ofBytes(expired.encode()), mine.version());
         belief = null;
+    }
+
+    /** No lease is held: the belief and the fast fence's validity go together. */
+    private void forget() {
+        belief = null;
+        timeline.dropped();
     }
 
     private Lease read() throws IOException {
@@ -525,15 +553,16 @@ public final class LeaseManager {
         Optional<Version> run() throws IOException;
     }
 
-    private Optional<Lease> adopt(Lease candidate, Optional<Version> won) {
+    private Optional<Lease> adopt(Lease candidate, long sent, Optional<Version> won) {
         if (won.isEmpty()) {
             // ⚠️ Drop any prior belief too, exactly as `renew` does. Leaving a
             // superseded lease in `held` would make `held()` report a term
             // this instance does not hold.
-            belief = null;
+            forget();
             return Optional.empty();
         }
         belief = new Belief(candidate, won.get(), false);
+        timeline.won(candidate, sent);
         return Optional.of(candidate);
     }
 }
