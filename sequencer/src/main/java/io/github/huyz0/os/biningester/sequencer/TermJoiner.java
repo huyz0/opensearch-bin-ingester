@@ -136,6 +136,12 @@ public final class TermJoiner {
             case FastFrame.Refused r -> new Refused(r.reason(), r.text());
             case FastFrame.Join unexpected -> throw new IOException(
                     "a JOIN answered by a JOIN");
+            case FastFrame.Depart unexpected -> throw new IOException(
+                    "a JOIN answered by a DEPART");
+            case FastFrame.HeldReport unexpected -> throw new IOException(
+                    "a JOIN answered by a HELD");
+            case FastFrame.HeldStatusReport unexpected -> throw new IOException(
+                    "a JOIN answered by a HELD_STATUS");
         };
     }
 }

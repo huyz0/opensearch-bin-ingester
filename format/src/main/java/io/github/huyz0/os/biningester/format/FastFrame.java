@@ -13,8 +13,8 @@ import java.util.UUID;
 
 /**
  * A pod-to-pod fast frame (ADR-0082 §2; M13.26d lands the header and the JOIN,
- * JOINED and REFUSED kinds with their first reader and writer, the rest
- * landing with theirs, M13.25b).
+ * JOINED and REFUSED kinds with their first reader and writer, M13.26h the
+ * DEPART, HELD and HELD_STATUS kinds, the rest landing with theirs, M13.25b).
  *
  * <p>Header: magic {@code 0x42465354} ("BFST") u32, version 1 u8, kind u8,
  * {@code epoch} i64, the sender's and the target's pod UID (each a uvarint
@@ -36,6 +36,9 @@ public final class FastFrame {
     public static final int VERSION = 1;
     public static final int KIND_REFUSED = 14;
     public static final int KIND_JOIN = 12;
+    public static final int KIND_DEPART = 13;
+    public static final int KIND_HELD = 16;
+    public static final int KIND_HELD_STATUS = 17;
     public static final int KIND_JOINED = 15;
     /** A pod UID or any other string here: generous for a Kubernetes UID or an endpoint. */
     public static final int MAX_STRING_BYTES = 1024;
@@ -68,7 +71,8 @@ public final class FastFrame {
     }
 
     /** A frame's body, by kind. */
-    public sealed interface Body permits Join, Joined, Refused {
+    public sealed interface Body permits Join, Joined, Refused, Depart, HeldReport,
+            HeldStatusReport {
         int kind();
     }
 
@@ -163,6 +167,60 @@ public final class FastFrame {
         }
     }
 
+    /**
+     * DEPART, pod to leader (ADR-0081 §9): phase 1 asks for an upload and
+     * reports what the pod holds; phase 2 asks to be marked departed, and
+     * carries nothing more.
+     */
+    public record Depart(Roster.Incarnation incarnation, int phase, Held held) implements Body {
+        public Depart {
+            Objects.requireNonNull(incarnation, "incarnation");
+            Objects.requireNonNull(held, "held");
+            if (phase != 1 && phase != 2) {
+                throw new IllegalArgumentException("a departure's phase is 1 or 2: " + phase);
+            }
+            if (phase == 2 && !held.streams().isEmpty()) {
+                throw new IllegalArgumentException("phase 2 reports nothing held");
+            }
+            requireString(incarnation.podId(), "podId");
+            requireString(incarnation.podUid(), "podUid");
+            requireString(incarnation.az(), "az");
+            requireString(incarnation.endpoint(), "endpoint");
+        }
+
+        @Override
+        public int kind() {
+            return KIND_DEPART;
+        }
+    }
+
+    /** HELD, holder to leader: what the pod's journal holds. */
+    public record HeldReport(Held held) implements Body {
+        public HeldReport {
+            Objects.requireNonNull(held, "held");
+        }
+
+        @Override
+        public int kind() {
+            return KIND_HELD;
+        }
+    }
+
+    /**
+     * HELD_STATUS, leader to holder: the answer to a HELD or a DEPART. A
+     * JOIN's report is answered inside JOINED, never by this.
+     */
+    public record HeldStatusReport(HeldStatus status) implements Body {
+        public HeldStatusReport {
+            Objects.requireNonNull(status, "status");
+        }
+
+        @Override
+        public int kind() {
+            return KIND_HELD_STATUS;
+        }
+    }
+
     /** JOINED, leader to pod: the highest closed epoch, and the reported streams' status. */
     public record Joined(long closedThrough, HeldStatus status) implements Body {
         public Joined {
@@ -250,38 +308,22 @@ public final class FastFrame {
         string(out, targetUid);
         switch (body) {
             case Join join -> {
-                Roster.Incarnation i = join.incarnation();
-                string(out, i.podId());
-                string(out, i.podUid());
-                string(out, i.az());
-                string(out, i.endpoint());
-                u32(out, join.held().streams().size());
-                for (HeldStream s : join.held().streams()) {
-                    runKey(out, s.stream());
-                    u32(out, s.groups().size());
-                    for (HeldGroup g : s.groups()) {
-                        i64(out, g.epoch());
-                        u32(out, g.assignedAfter());
-                        i64(out, g.lowest());
-                        i64(out, g.highest());
-                    }
-                }
+                incarnation(out, join.incarnation());
+                held(out, join.held());
             }
             case Joined joined -> {
                 i64(out, joined.closedThrough());
-                u32(out, joined.status().streams().size());
-                for (StreamStatus s : joined.status().streams()) {
-                    runKey(out, s.stream());
-                    i64(out, s.releaseBelow());
-                    u32(out, s.groups().size());
-                    for (GroupStatus g : s.groups()) {
-                        i64(out, g.epoch());
-                        u32(out, g.assignedAfter());
-                        i64(out, g.supersededFrom());
-                        out.write(g.status().code);
-                    }
+                status(out, joined.status());
+            }
+            case Depart depart -> {
+                incarnation(out, depart.incarnation());
+                out.write(depart.phase());
+                if (depart.phase() == 1) {
+                    held(out, depart.held());
                 }
             }
+            case HeldReport report -> held(out, report.held());
+            case HeldStatusReport report -> status(out, report.status());
             case Refused refused -> {
                 out.write(refused.reason().code);
                 refused.discarded().ifPresent(k -> {
@@ -307,38 +349,15 @@ public final class FastFrame {
         Header header = readHeader(c);
         try {
             Body body = switch (header.kind()) {
-                case KIND_JOIN -> {
-                    Roster.Incarnation i = new Roster.Incarnation(string(c), string(c), string(c),
-                            string(c));
-                    long streams = count(c, 24);
-                    List<HeldStream> held = new ArrayList<>();
-                    for (long s = 0; s < streams; s++) {
-                        RunKey key = runKey(c);
-                        long groups = count(c, 28);
-                        List<HeldGroup> list = new ArrayList<>();
-                        for (long g = 0; g < groups; g++) {
-                            list.add(new HeldGroup(i64(c), u32(c), i64(c), i64(c)));
-                        }
-                        held.add(new HeldStream(key, list));
-                    }
-                    yield new Join(i, new Held(held));
+                case KIND_JOIN -> new Join(incarnation(c), held(c));
+                case KIND_JOINED -> new Joined(i64(c), heldStatus(c));
+                case KIND_DEPART -> {
+                    Roster.Incarnation i = incarnation(c);
+                    int phase = c.bytes(1)[0] & 0xFF;
+                    yield new Depart(i, phase, phase == 1 ? held(c) : Held.NONE);
                 }
-                case KIND_JOINED -> {
-                    long closedThrough = i64(c);
-                    long streams = count(c, 32);
-                    List<StreamStatus> status = new ArrayList<>();
-                    for (long s = 0; s < streams; s++) {
-                        RunKey key = runKey(c);
-                        long releaseBelow = i64(c);
-                        long groups = count(c, 21);
-                        List<GroupStatus> list = new ArrayList<>();
-                        for (long g = 0; g < groups; g++) {
-                            list.add(new GroupStatus(i64(c), u32(c), i64(c), status(c)));
-                        }
-                        status.add(new StreamStatus(key, releaseBelow, list));
-                    }
-                    yield new Joined(closedThrough, new HeldStatus(status));
-                }
+                case KIND_HELD -> new HeldReport(held(c));
+                case KIND_HELD_STATUS -> new HeldStatusReport(heldStatus(c));
                 case KIND_REFUSED -> {
                     Reason reason = reason(c);
                     Optional<FastJournalRecord.IdempotencyKey> key = Optional.empty();
@@ -378,6 +397,77 @@ public final class FastFrame {
             throw new IOException("fast frame header is not valid: " + invalid.getMessage(),
                     invalid);
         }
+    }
+
+    private static void incarnation(ByteArrayOutputStream out, Roster.Incarnation i) {
+        string(out, i.podId());
+        string(out, i.podUid());
+        string(out, i.az());
+        string(out, i.endpoint());
+    }
+
+    private static void held(ByteArrayOutputStream out, Held held) {
+        u32(out, held.streams().size());
+        for (HeldStream s : held.streams()) {
+            runKey(out, s.stream());
+            u32(out, s.groups().size());
+            for (HeldGroup g : s.groups()) {
+                i64(out, g.epoch());
+                u32(out, g.assignedAfter());
+                i64(out, g.lowest());
+                i64(out, g.highest());
+            }
+        }
+    }
+
+    private static void status(ByteArrayOutputStream out, HeldStatus status) {
+        u32(out, status.streams().size());
+        for (StreamStatus s : status.streams()) {
+            runKey(out, s.stream());
+            i64(out, s.releaseBelow());
+            u32(out, s.groups().size());
+            for (GroupStatus g : s.groups()) {
+                i64(out, g.epoch());
+                u32(out, g.assignedAfter());
+                i64(out, g.supersededFrom());
+                out.write(g.status().code);
+            }
+        }
+    }
+
+    private static Roster.Incarnation incarnation(Cursor c) throws IOException {
+        return new Roster.Incarnation(string(c), string(c), string(c), string(c));
+    }
+
+    private static Held held(Cursor c) throws IOException {
+        long streams = count(c, 24);
+        List<HeldStream> held = new ArrayList<>();
+        for (long s = 0; s < streams; s++) {
+            RunKey key = runKey(c);
+            long groups = count(c, 28);
+            List<HeldGroup> list = new ArrayList<>();
+            for (long g = 0; g < groups; g++) {
+                list.add(new HeldGroup(i64(c), u32(c), i64(c), i64(c)));
+            }
+            held.add(new HeldStream(key, list));
+        }
+        return new Held(held);
+    }
+
+    private static HeldStatus heldStatus(Cursor c) throws IOException {
+        long streams = count(c, 32);
+        List<StreamStatus> status = new ArrayList<>();
+        for (long s = 0; s < streams; s++) {
+            RunKey key = runKey(c);
+            long releaseBelow = i64(c);
+            long groups = count(c, 21);
+            List<GroupStatus> list = new ArrayList<>();
+            for (long g = 0; g < groups; g++) {
+                list.add(new GroupStatus(i64(c), u32(c), i64(c), status(c)));
+            }
+            status.add(new StreamStatus(key, releaseBelow, list));
+        }
+        return new HeldStatus(status);
     }
 
     private static void i64(ByteArrayOutputStream out, long value) {

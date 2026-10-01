@@ -111,7 +111,10 @@ incarnation is four strings: podId, podUid, az, endpoint. REFUSED carries
 the idempotency key exactly when its reason is `discarded` (podId string,
 incarnation UUID as two i64, `fastSeq` i64), then its text. A kind the
 build cannot read, an unknown reason or status, a count past the bytes left
-and trailing bytes are all refused.
+and trailing bytes are all refused. ⚠️ M13.26h landed DEPART, HELD and
+HELD_STATUS the same way: DEPART is JOIN's four incarnation strings, the
+phase as a u8, and for phase 1 only the HELD body (phase 2 carries nothing
+more); HELD is the HELD body alone; HELD_STATUS the HELD_STATUS body alone.
 
 A catch-up or `/seg` response served from a journal is not a frame but an HTTP
 body; it carries the epoch it was served under in a `Binstore-Fast-Epoch`
