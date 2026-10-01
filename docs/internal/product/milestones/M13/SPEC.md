@@ -960,7 +960,7 @@ journal's fsync and the Kubernetes pod lookup are injected seams.
 | M13.26e | The term record | FR-17 |
 | M13.26f | A non-leader's graceful departure | FR-17 |
 | M13.26g | The pod side of JOIN: every ready pod joins each term on learning its leader | FR-17 |
-| M13.27 | The leader's fast sequencer: cursor, assignment and the per-stream bound, journal, replica set, answer | FR-17 |
+| M13.27 | The leader's fast sequencer: cursor, assignment and the per-stream bound, journal, replica set, answer; with the term start, joins and term record run by the leader, and every pod's JOIN triggered at startup and each leader change | FR-17 |
 | M13.28 | The replica endpoint: store, epoch fence, release | FR-17 |
 | M13.29 | The writer's fast path: commit, offset confirmation, the epoch check, ack with offsets; no fast frame for a `wal=false` index (`FastWalFalseFleetTest`) | FR-17 |
 | M13.30 | Publication: interest registration, the leader's push to interested pods, and a cross-zone proxied `/seg` read served from the leader's journal before the upload (`FastProxySubscriberTest`) | FR-17 |
