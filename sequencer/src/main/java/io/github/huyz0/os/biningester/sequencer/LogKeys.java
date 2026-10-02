@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 package io.github.huyz0.os.biningester.sequencer;
 
-import java.util.Locale;
-
 /**
  * WHERE a chain's entries live, and which keys are its own.
  *
@@ -18,8 +16,9 @@ import java.util.Locale;
  * ordering a reader has, so the padding is load-bearing rather than cosmetic:
  * unpadded, {@code 10.delta} sorts before {@code 9.delta}.
  *
- * <p>⚠️ {@code Locale.ROOT}: an object key is a wire value and must not depend
- * on the process's locale.
+ * <p>⚠️ NO LOCALE ANYWHERE: an object key is a wire value and must not depend
+ * on the process's locale, so it is built from {@link Long#toHexString}, which
+ * no locale changes -- never a formatter (M13.50).
  */
 record LogKeys(String prefix, long epoch) {
 
@@ -27,12 +26,25 @@ record LogKeys(String prefix, long epoch) {
 
     /** Everything this chain writes sorts under here. */
     String logPrefix() {
-        return String.format(Locale.ROOT, "%s/ctl/log/0/%016x/", prefix, epoch);
+        return prefix + "/ctl/log/0/" + hex16(epoch) + "/";
     }
 
     /** The one key slot {@code sequence} is written at. */
     String keyFor(long sequence) {
-        return String.format(Locale.ROOT, "%s%016x%s", logPrefix(), sequence, SUFFIX);
+        return logPrefix() + hex16(sequence) + SUFFIX;
+    }
+
+    /**
+     * {@code value} as sixteen lower-case hex digits, two's complement for a
+     * negative one -- exactly {@code String.format("%016x", value)}.
+     *
+     * <p>THE CHAIN'S HOT PATH (M13.50): every listed key is checked by
+     * {@link #isEntryKey}, and three {@code String.format} calls per key were
+     * the invariant sweep's largest cost, by a profile of the whole suite.
+     */
+    static String hex16(long value) {
+        String hex = Long.toHexString(value);
+        return "0".repeat(16 - hex.length()) + hex;
     }
 
     /**
@@ -53,7 +65,7 @@ record LogKeys(String prefix, long epoch) {
      * seq-keyed objects are the ordered history M7 prunes.
      */
     String checkpointKeyFor(long sequence) {
-        return String.format(Locale.ROOT, "%sckpt/%016x.ckpt", logPrefix(), sequence);
+        return logPrefix() + "ckpt/" + hex16(sequence) + ".ckpt";
     }
 
     /**

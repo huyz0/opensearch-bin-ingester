@@ -913,6 +913,7 @@ journal's fsync and the Kubernetes pod lookup are injected seams.
 | M13.47 | Opened by M13.12: a failing live segment starves a due catch-up; decide the order and pin it | FR-6 |
 | M13.48 | Opened by M13.14's review round 2: a row's wording, a false comment, a bound deferred ticket's slot pinned | — (quality) |
 | M13.49 | Opened by M13.19: the other `413` sites read the body they refuse on a kept-alive connection; measure and close | — (quality) |
+| M13.50 | The commit-protocol sweeps slowed 4x+ under the full suite and timed out at 300 s: find the cost and remove it, the timeout unmoved | — (quality) |
 | M13.6 | R5: no silent defaults; the started client's clock pinned | FR-6, FR-19 |
 | M13.6a | R5: `IndexQuotas`' three-argument and `ConsumerDeliveryQueues`' two-argument constructors removed; `SilentDefaultsGoneTest` per module | — (quality) |
 | M13.6b | R5: `ServerConfig`'s older constructors removed | — (quality) |
