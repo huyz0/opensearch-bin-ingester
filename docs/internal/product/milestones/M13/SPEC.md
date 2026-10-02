@@ -967,7 +967,8 @@ journal's fsync and the Kubernetes pod lookup are injected seams.
 | M13.27c | The write frames and the leader's answer | FR-17 |
 | M13.27e | M13.27c carried past its review budget: the fast write at the leader | FR-17 |
 | M13.27f | Opened by M13.27d: `ServerConfig` refuses a blank pod UID, as `ServerProperties` already does, since every term's roster names its leader by UID | FR-17 |
-| M13.27d | The wiring M13.26-M13.27c left, the term start, joins, term record and departure included | FR-17 |
+| M13.27g | Opened by M13.27d: a term start closes, oldest first, every earlier term it fenced that recorded no fast index, so the walk every fleet runs stays bounded before M13.33 closes terms | FR-17 |
+| M13.27d | The wiring M13.26-M13.27c left, the term start (followed by `EmptyTermCloser`, M13.27g), joins, term record and departure included | FR-17 |
 | M13.28 | The replica endpoint: store, epoch fence, release | FR-17 |
 | M13.29 | The writer's fast path: commit, offset confirmation, the epoch check, ack with offsets; no fast frame for a `wal=false` index (`FastWalFalseFleetTest`) | FR-17 |
 | M13.30 | Publication: interest registration, the leader's push to interested pods, and a cross-zone proxied `/seg` read served from the leader's journal before the upload (`FastProxySubscriberTest`) | FR-17 |

@@ -186,6 +186,12 @@ public record Roster(long epoch, long predecessor, Incarnation leader, List<Memb
                 successor, closed);
     }
 
+    /** The same roster, closed (ADR-0081 §5 step 7). */
+    public Roster asClosed() {
+        return new Roster(epoch, predecessor, leader, members, termRecord, decisions, notBefore,
+                fencedBy, true);
+    }
+
     /** The same roster under another predecessor and {@code notBefore}. */
     public Roster after(long newPredecessor, long newNotBefore) {
         return new Roster(epoch, newPredecessor, leader, members, termRecord, decisions,
