@@ -115,6 +115,18 @@ and trailing bytes are all refused. ⚠️ M13.26h landed DEPART, HELD and
 HELD_STATUS the same way: DEPART is JOIN's four incarnation strings, the
 phase as a u8, and for phase 1 only the HELD body (phase 2 carries nothing
 more); HELD is the HELD body alone; HELD_STATUS the HELD_STATUS body alone.
+⚠️ M13.27e landed the write's six likewise: COMMIT is the idempotency key
+(as in REFUSED) then a u32 count of runs, each a RunKey, its record count
+u32, the byte length of its records u32 -- added here, so a reader knows
+where each run's records end -- and the records in the segment record
+encoding; ASSIGNED is `assignedAfter` then a u32 count of runs, each a
+RunKey, its first offset i64, `walQuorum` u8 and `copyRequired` u8; CONFIRM
+is the key, `assignedAfter`, a u32 count of (RunKey, first offset i64) and
+`copyJournaled` u8; EXPOSED and REPLICA_ACK are `assignedAfter` and that
+run list; REPLICA a u32 count of journal entries, each its byte length u32
+then the whole journal record of §4. A flag other than 0 or 1, a run whose
+records do not fill its length and a REPLICA entry that is not one whole
+journal entry are refused.
 
 A catch-up or `/seg` response served from a journal is not a frame but an HTTP
 body; it carries the epoch it was served under in a `Binstore-Fast-Epoch`

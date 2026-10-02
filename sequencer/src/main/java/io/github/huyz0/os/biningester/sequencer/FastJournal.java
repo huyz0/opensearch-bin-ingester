@@ -178,6 +178,11 @@ public final class FastJournal {
         void run() throws IOException;
     }
 
+    /** Whether {@code bytes} more encoded entry bytes fit under the cap now. */
+    public boolean fits(long bytes) {
+        return heldBytes + bytes <= capBytes;
+    }
+
     /** Appends {@code entry}, or refuses it -- false -- if held bytes would pass the cap. */
     public boolean append(FastJournalRecord.Entry entry) throws IOException {
         requireUsable();

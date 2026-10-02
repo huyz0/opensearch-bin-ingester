@@ -68,6 +68,8 @@ public final class QuorumFrontier {
         final int q;
         final Map<String, String> copies = new LinkedHashMap<>();
         final Map<String, String> asked = new LinkedHashMap<>();
+        /** Pods that answered they did not journal it: not asked for it again until returned. */
+        final Set<String> declined = new HashSet<>();
         boolean exposed;
 
         Entry(EntryId id, int count, int q) {
@@ -138,6 +140,22 @@ public final class QuorumFrontier {
     }
 
     /**
+     * {@code podUid} answered that it did NOT journal the entry: its ask stops
+     * covering its zone, so the copy is replaced (ADR-0081 section 2.3).
+     */
+    public synchronized void withdraw(EntryId id, String podUid) {
+        Entry e = entry(id);
+        if (e != null) {
+            e.asked.remove(podUid);
+            // AND NOT CHOSEN AGAIN FOR IT UNTIL IT RETURNS (M13.27c review
+            // round 3, P8; M13.27e round 2, P12): the copy goes to ANOTHER
+            // available rostered pod, the decliner itself once returned
+            // (section 2.3).
+            e.declined.add(podUid);
+        }
+    }
+
+    /**
      * {@code holder} journaled the entry with its offsets and said so -- a
      * REPLICA_ACK, or the writer's CONFIRM -- after its group's fsync.
      */
@@ -182,7 +200,7 @@ public final class QuorumFrontier {
             if (missing <= 0) {
                 break;
             }
-            if (lostPods.contains(h.podUid())) {
+            if (lostPods.contains(h.podUid()) || e.declined.contains(h.podUid())) {
                 continue;
             }
             if (covered.contains(h.az()) || e.copies.containsKey(h.podUid())
@@ -275,6 +293,15 @@ public final class QuorumFrontier {
     /** {@code podUid}, reported lost, is ready again: its later copies count. */
     public synchronized void returned(String podUid) {
         lostPods.remove(podUid);
+        // AND ITS DECLINES FORGOTTEN (M13.27e review round 1, P9): a copy is
+        // replaced in another pod, "W itself, once it returns, included"
+        // (ADR-0081 section 2.3) -- kept for ever, a zone with one pod could
+        // never complete.
+        for (Stream s : streams.values()) {
+            for (Entry e : s.entries.values()) {
+                e.declined.remove(podUid);
+            }
+        }
     }
 
     /** The chain committed {@code stream} up to {@code committedNext}: its entries below go. */

@@ -14,7 +14,8 @@ import java.util.UUID;
 /**
  * A pod-to-pod fast frame (ADR-0082 §2; M13.26d lands the header and the JOIN,
  * JOINED and REFUSED kinds with their first reader and writer, M13.26h the
- * DEPART, HELD and HELD_STATUS kinds, the rest landing with theirs, M13.25b).
+ * DEPART, HELD and HELD_STATUS kinds, M13.27e the write's six in
+ * {@link FastWriteFrame}, the rest landing with theirs, M13.25b).
  *
  * <p>Header: magic {@code 0x42465354} ("BFST") u32, version 1 u8, kind u8,
  * {@code epoch} i64, the sender's and the target's pod UID (each a uvarint
@@ -72,7 +73,9 @@ public final class FastFrame {
 
     /** A frame's body, by kind. */
     public sealed interface Body permits Join, Joined, Refused, Depart, HeldReport,
-            HeldStatusReport {
+            HeldStatusReport, FastWriteFrame.Commit, FastWriteFrame.Assigned,
+            FastWriteFrame.Confirm, FastWriteFrame.Exposed, FastWriteFrame.Replica,
+            FastWriteFrame.ReplicaAck {
         int kind();
     }
 
@@ -324,6 +327,12 @@ public final class FastFrame {
             }
             case HeldReport report -> held(out, report.held());
             case HeldStatusReport report -> status(out, report.status());
+            case FastWriteFrame.Commit b -> FastWriteFrame.encode(out, b);
+            case FastWriteFrame.Assigned b -> FastWriteFrame.encode(out, b);
+            case FastWriteFrame.Confirm b -> FastWriteFrame.encode(out, b);
+            case FastWriteFrame.Exposed b -> FastWriteFrame.encode(out, b);
+            case FastWriteFrame.Replica b -> FastWriteFrame.encode(out, b);
+            case FastWriteFrame.ReplicaAck b -> FastWriteFrame.encode(out, b);
             case Refused refused -> {
                 out.write(refused.reason().code);
                 refused.discarded().ifPresent(k -> {
@@ -358,6 +367,10 @@ public final class FastFrame {
                 }
                 case KIND_HELD -> new HeldReport(held(c));
                 case KIND_HELD_STATUS -> new HeldStatusReport(heldStatus(c));
+                case FastWriteFrame.KIND_COMMIT, FastWriteFrame.KIND_ASSIGNED,
+                        FastWriteFrame.KIND_CONFIRM, FastWriteFrame.KIND_EXPOSED,
+                        FastWriteFrame.KIND_REPLICA, FastWriteFrame.KIND_REPLICA_ACK ->
+                        FastWriteFrame.decode(header.kind(), c);
                 case KIND_REFUSED -> {
                     Reason reason = reason(c);
                     Optional<FastJournalRecord.IdempotencyKey> key = Optional.empty();
@@ -470,36 +483,36 @@ public final class FastFrame {
         return new HeldStatus(status);
     }
 
-    private static void i64(ByteArrayOutputStream out, long value) {
+    static void i64(ByteArrayOutputStream out, long value) {
         out.writeBytes(ByteBuffer.allocate(8).putLong(value).array());
     }
 
-    private static void u32(ByteArrayOutputStream out, long value) {
+    static void u32(ByteArrayOutputStream out, long value) {
         out.writeBytes(ByteBuffer.allocate(4).putInt((int) value).array());
     }
 
-    private static void string(ByteArrayOutputStream out, String value) {
+    static void string(ByteArrayOutputStream out, String value) {
         byte[] utf8 = value.getBytes(StandardCharsets.UTF_8);
         SegmentWriter.putUvarint(out, utf8.length);
         out.writeBytes(utf8);
     }
 
-    private static void runKey(ByteArrayOutputStream out, RunKey key) {
+    static void runKey(ByteArrayOutputStream out, RunKey key) {
         i64(out, key.indexId().getMostSignificantBits());
         i64(out, key.indexId().getLeastSignificantBits());
         out.writeBytes(ByteBuffer.allocate(4).putInt(key.partitionId()).array());
     }
 
-    private static long i64(Cursor c) throws IOException {
+    static long i64(Cursor c) throws IOException {
         return ByteBuffer.wrap(c.bytes(8)).getLong();
     }
 
-    private static long u32(Cursor c) throws IOException {
+    static long u32(Cursor c) throws IOException {
         return ByteBuffer.wrap(c.bytes(4)).getInt() & MAX_U32;
     }
 
     /** A count, bounded by the bytes left at {@code minBytes} per element. */
-    private static long count(Cursor c, int minBytes) throws IOException {
+    static long count(Cursor c, int minBytes) throws IOException {
         long n = u32(c);
         if (n > c.remaining() / minBytes) {
             throw new IOException("fast frame claims " + n + " elements with only "
@@ -508,7 +521,7 @@ public final class FastFrame {
         return n;
     }
 
-    private static String string(Cursor c) throws IOException {
+    static String string(Cursor c) throws IOException {
         long length = c.uvarint();
         if (length < 0 || length > MAX_STRING_BYTES || length > c.remaining()) {
             throw new IOException("fast frame claims a " + length + "-byte string");
@@ -516,7 +529,7 @@ public final class FastFrame {
         return new String(c.bytes((int) length), StandardCharsets.UTF_8);
     }
 
-    private static RunKey runKey(Cursor c) throws IOException {
+    static RunKey runKey(Cursor c) throws IOException {
         UUID index = new UUID(i64(c), i64(c));
         int partition = ByteBuffer.wrap(c.bytes(4)).getInt();
         if (partition < 0) {

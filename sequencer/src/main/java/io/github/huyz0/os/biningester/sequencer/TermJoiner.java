@@ -142,6 +142,7 @@ public final class TermJoiner {
                     "a JOIN answered by a HELD");
             case FastFrame.HeldStatusReport unexpected -> throw new IOException(
                     "a JOIN answered by a HELD_STATUS");
+            default -> throw new IOException("a JOIN answered by kind " + body.kind());
         };
     }
 }

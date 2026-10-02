@@ -17,8 +17,12 @@ import java.util.OptionalLong;
  * offset can only be higher, so every offset any leader of an unclosed term
  * assigned lies below {@code c0 + B}, and a takeover after quorum loss voids
  * at most {@code B} offsets per stream (§5). ⚠️ A BATCH THAT WOULD PASS IT
- * WAITS -- backpressure, never a refusal (cost.md rule 14) -- and a stream at
- * {@code B / 2} uncommitted offsets triggers an upload (§7).
+ * WAITS -- backpressure, never a refusal to the producer (cost.md rule 14) --
+ * and a stream at {@code B / 2} uncommitted offsets triggers an upload (§7).
+ * ⚠️ A BATCH OF MORE THAN {@code B} IS REFUSED HERE: no commit could ever
+ * admit it: the leader refuses a longer run as the writer's error, the
+ * writer splits it (M13.29; M13.27's review rounds 1 and 3), and the
+ * producer still never sees a refusal.
  *
  * <p>⚠️ THE CURSOR STARTS AT THE COMMITTED NEXT OFFSET, read where no
  * default-path commit is in flight (§8): the caller supplies it, here it is
@@ -64,7 +68,7 @@ public final class FastCursor {
      *     the bound: it waits, and -- whether or not {@link #uploadDue} says
      *     so -- the waiting batch is itself an upload trigger (§4)
      * @throws IllegalArgumentException a batch of more than {@code B} offsets,
-     *     which no commit could ever admit: the caller splits it (M13.27
+     *     which no commit could ever admit: the writer splits it (M13.29; M13.27
      *     review round 1, P2)
      */
     public synchronized OptionalLong assign(RunKey stream, int count) {
@@ -79,6 +83,17 @@ public final class FastCursor {
         long first = s[1];
         s[1] += count;
         return OptionalLong.of(first);
+    }
+
+    /** {@code B}: the most offsets one batch of a stream may take. */
+    public long bound() {
+        return bound;
+    }
+
+    /** Whether a batch of {@code count} offsets of {@code stream} fits under the bound now. */
+    public synchronized boolean fits(RunKey stream, int count) {
+        long[] s = state(stream);
+        return count >= 1 && count <= bound && s[1] - s[0] + count <= bound;
     }
 
     /** The chain committed {@code stream} up to {@code committedNext}: the bound moves up. */
