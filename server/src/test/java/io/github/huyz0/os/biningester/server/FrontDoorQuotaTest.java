@@ -46,7 +46,7 @@ class FrontDoorQuotaTest {
                 0, "producer", Set.of("logs"),
                 new RetentionConfig(Duration.ofMinutes(1), Duration.ofHours(2),
                         Duration.ofSeconds(10), Duration.ofHours(3), Duration.ofDays(1)),
-                Optional.empty(), "", CostTopKReporter.DEFAULT_INTERVAL,
+                Optional.empty(), "uid-writera", CostTopKReporter.DEFAULT_INTERVAL,
                 new IndexQuotas.Config(IndexQuotas.Limit.UNLIMITED,
                         Map.of("logs", new IndexQuotas.Limit(0, 1)), 8), false);
         SequencerTransport noPeers = new SequencerTransport() {
@@ -96,7 +96,7 @@ class FrontDoorQuotaTest {
                 0, "producer", Set.of("logs"),
                 new RetentionConfig(Duration.ofMinutes(1), Duration.ofHours(2),
                         Duration.ofSeconds(10), Duration.ofHours(3), Duration.ofDays(1)),
-                Optional.empty(), "", CostTopKReporter.DEFAULT_INTERVAL,
+                Optional.empty(), "uid-writera", CostTopKReporter.DEFAULT_INTERVAL,
                 new IndexQuotas.Config(IndexQuotas.Limit.UNLIMITED,
                         Map.of("logs-write", new IndexQuotas.Limit(0, 1)), 8), false);
         SequencerTransport noPeers = new SequencerTransport() {

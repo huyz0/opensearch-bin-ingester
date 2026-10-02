@@ -80,7 +80,7 @@ class AssembledGcCostIT {
         return new ServerConfig("pod1", "az-a", "cluster-a", "bins/cluster-a",
                 new StoreConfig("memory", Optional.empty()), Duration.ofSeconds(10),
                 Duration.ofSeconds(3), "http://pod1:8080", IngestConfig.defaults("cluster-a"),
-                0, "producer-1", Set.of(INDEX), retention, java.util.Optional.empty(), "", io.github.huyz0.os.biningester.ingest.CostTopKReporter.DEFAULT_INTERVAL, io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(), false);
+                0, "producer-1", Set.of(INDEX), retention, java.util.Optional.empty(), "uid-pod1", io.github.huyz0.os.biningester.ingest.CostTopKReporter.DEFAULT_INTERVAL, io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(), false);
     }
 
     private static void awaitTicks(Assembly assembly, long atLeast) throws Exception {

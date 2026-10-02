@@ -110,6 +110,10 @@ public record ServerConfig(String podId, String az, String trustDomain, String p
         // site, and this record outlives every construction site.
         allowedIndices = Set.copyOf(Objects.requireNonNull(allowedIndices, "allowedIndices"));
         requireNotBlank(podId, "podId");
+        // ⚠️ REQUIRED BY THE RECORD AS BY THE PARSER (M13.27f): every term's
+        // roster names its leader by its UID (ADR-0081 §1), so a pod without
+        // one could take the lease and then start no term.
+        requireNotBlank(podUid, "podUid");
         // ⚠️ BLANK IS REFUSED HERE TOO, not only at the parser: a zone of
         // spaces makes every peer cross-AZ and every measurement of NFR-5 a
         // number about nothing.

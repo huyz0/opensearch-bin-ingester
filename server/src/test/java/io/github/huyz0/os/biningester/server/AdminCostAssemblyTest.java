@@ -57,7 +57,7 @@ class AdminCostAssemblyTest {
                 IngestConfig.defaults("cluster-a"), 0, "producer-1", indices,
                 new RetentionConfig(Duration.ofMinutes(1), Duration.ofHours(2),
                         Duration.ofSeconds(10), Duration.ofHours(3), Duration.ofDays(1)),
-                Optional.empty(), "", io.github.huyz0.os.biningester.ingest.CostTopKReporter
+                Optional.empty(), "uid-pod1", io.github.huyz0.os.biningester.ingest.CostTopKReporter
                         .DEFAULT_INTERVAL,
                 io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(),
                 true); // ⚠️ /admin/cost is opt-in since M12.6

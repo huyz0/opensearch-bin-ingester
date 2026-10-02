@@ -72,7 +72,7 @@ class AdminCostMalformedRegistrationTest {
                 new StoreConfig("memory", Optional.empty()),
                 Duration.ofDays(1), Duration.ofSeconds(3), "http://pod1:8080",
                 IngestConfig.defaults("cluster-a"), 0, "producer-1", Set.of("logs", "broken"),
-                RetentionConfig.defaults(), Optional.empty(), "",
+                RetentionConfig.defaults(), Optional.empty(), "uid-pod1",
                 io.github.huyz0.os.biningester.ingest.CostTopKReporter.DEFAULT_INTERVAL,
                 io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(), true);
     }

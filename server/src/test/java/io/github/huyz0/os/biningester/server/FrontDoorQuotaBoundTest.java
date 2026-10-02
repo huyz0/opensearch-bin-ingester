@@ -33,7 +33,7 @@ class FrontDoorQuotaBoundTest {
                 0, "producer", Set.of("logs"),
                 new RetentionConfig(Duration.ofMinutes(1), Duration.ofHours(2),
                         Duration.ofSeconds(10), Duration.ofHours(3), Duration.ofDays(1)),
-                Optional.empty(), "", CostTopKReporter.DEFAULT_INTERVAL,
+                Optional.empty(), "uid-writera", CostTopKReporter.DEFAULT_INTERVAL,
                 new IndexQuotas.Config(new IndexQuotas.Limit(0, 1_000), Map.of(), 8), false);
         SequencerTransport noPeers = new SequencerTransport() {
             @Override
