@@ -920,6 +920,8 @@ journal's fsync and the Kubernetes pod lookup are injected seams.
 | M13.54 | Opened by M13.51: the two SIGTERM integration cases cannot pass on Windows, where `Process.destroy()` runs no shutdown hook | — (quality) |
 | M13.55 | Opened by M13.51: the shipped-TTL measurement took the term after a pause shorter than the TTL, once; find whether that sample can be absorbed | FR-11 |
 | M13.56 | Opened by M13.54's review: the two SIGTERM integration classes run in no CI workflow; add them to a Linux CI step | — (quality) |
+| M13.57 | Opened by M13.56's survey: CI's L1 job overran its 5 min cap on nearly every push since at least 2026-09-28; run its unit step on the runner's four cores | — (harness) |
+| M13.58 | Opened by M13.56's survey: a permit-return test races the answer it reads after, and failed CI twice | — (quality) |
 | M13.6 | R5: no silent defaults; the started client's clock pinned | FR-6, FR-19 |
 | M13.6a | R5: `IndexQuotas`' three-argument and `ConsumerDeliveryQueues`' two-argument constructors removed; `SilentDefaultsGoneTest` per module | — (quality) |
 | M13.6b | R5: `ServerConfig`'s older constructors removed | — (quality) |

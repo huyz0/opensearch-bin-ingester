@@ -118,8 +118,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      # ⚠️ FOUR WORKERS HERE, TWO EVERYWHERE ELSE (M13.57): gradle.properties
+      # caps workers at two for the WSL2 memory budget (build.md), and this
+      # job inherited it -- so the unit step took 170-300 s and, with the cost
+      # subset's ~107 s, the job overran its 5 min cap on nearly every push
+      # since at least 2026-09-28 (green only at M12.3, M13.21a and M13.26e). The runner has four cores and 16 GiB; four 512 MiB test
+      # JVMs fit it. The cap itself is unmoved.
       - name: Product unit tests
-        run: ./gradlew test --no-daemon
+        run: ./gradlew test --no-daemon --max-workers=4
       - name: Cost assertions (fast subset)
         env:
           M9_8_RATE: '40'

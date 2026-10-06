@@ -39,7 +39,9 @@ and prove it by probing the realised task.
 configured limits against, reading the number from this line. The table above
 is the intended allocation; the ceiling is the limit. The remainder of the 8 GiB is page cache and headroom.
 
-Also: `--max-workers=2`, and a timeout on every test task so a hung test releases
+Also: `--max-workers=2` (⚠️ except CI's L1 unit step, which passes
+`--max-workers=4`: the runner has four cores and 16 GiB, and this budget is
+WSL2's, not the runner's -- M13.57), and a timeout on every test task so a hung test releases
 its memory. → `./gradlew gates` (`TestBudget`, M13.9) asserts the Gradle and
 test-JVM limits are set, every compose service declares a `mem_limit` (or a
 `limits:` memory; a reservation is not a cap), and the configured limits sum to
