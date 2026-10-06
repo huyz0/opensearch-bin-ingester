@@ -61,7 +61,8 @@ class LeaseTtlMeasurementIT {
     private static final Duration RENEW = shipped().leaseRenewInterval();
 
     private static io.github.huyz0.os.biningester.server.ServerConfig shipped() {
-        return io.github.huyz0.os.biningester.server.ServerProperties.parse(Map.of("pod.id", "pod0", "pod.az", "az-a",
+        return io.github.huyz0.os.biningester.server.ServerProperties.parse(Map.of("pod.id", "pod0",
+                "pod.uid", "uid-pod0", "pod.az", "az-a",
                 "trust.domain", "cluster-a", "store.prefix", "p", "store.kind", "memory",
                 "endpoint", "http://localhost:0", "http.port", "0",
                 "producer.subject", "producer-1", "producer.allowed-indices", "logs"));

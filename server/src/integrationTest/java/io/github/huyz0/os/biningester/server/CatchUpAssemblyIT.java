@@ -38,6 +38,7 @@ class CatchUpAssemblyIT {
         Path config = dir.resolve("node.properties");
         Files.writeString(config, String.join("\n",
                 "pod.id=catchupnode",
+                "pod.uid=uid-catchupnode",
                 "pod.az=az-a",
                 "trust.domain=cluster-a",
                 "store.prefix=bins/cluster-a",
@@ -145,6 +146,7 @@ class CatchUpAssemblyIT {
         Path config = dir.resolve("resume-node.properties");
         Files.writeString(config, String.join("\n",
                 "pod.id=catchupresume",
+                "pod.uid=uid-catchupresume",
                 "pod.az=az-a",
                 "trust.domain=cluster-a",
                 "store.prefix=bins/cluster-a",
@@ -214,6 +216,7 @@ class CatchUpAssemblyIT {
         Path config = dir.resolve("large-catchup-node.properties");
         Files.writeString(config, String.join("\n",
                 "pod.id=catchuplarge",
+                "pod.uid=uid-catchuplarge",
                 "pod.az=az-a",
                 "trust.domain=cluster-a",
                 "store.prefix=bins/cluster-a",

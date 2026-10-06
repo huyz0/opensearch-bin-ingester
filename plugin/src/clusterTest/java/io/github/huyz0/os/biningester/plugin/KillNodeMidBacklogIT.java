@@ -335,6 +335,7 @@ public class KillNodeMidBacklogIT extends OpenSearchIntegTestCase {
                     Path config = temp.resolve("node.properties");
                     Files.writeString(config, String.join("\n",
                             "pod.id=catchupnode",
+                            "pod.uid=uid-catchupnode",
                             "pod.az=az-a",
                             "trust.domain=cluster-a",
                             "store.prefix=bins/cluster-a",

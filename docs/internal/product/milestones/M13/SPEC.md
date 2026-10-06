@@ -916,6 +916,9 @@ journal's fsync and the Kubernetes pod lookup are injected seams.
 | M13.50 | The commit-protocol sweeps slowed 4x+ under the full suite and timed out at 300 s: find the cost and remove it, the timeout unmoved | — (quality) |
 | M13.51 | Opened by M13.27d: the assembly integration tests' configs carry no `pod.uid`, so four cases fail before they run | — (quality) |
 | M13.52 | Opened by M13.27h's review: the peer routes are unauthenticated, and a forged epoch can raise a pod's fence for good | — (security) |
+| M13.53 | Opened by M13.51: the chaos suites' fake EndpointSlice carries no pod UID, so no early challenge fires and takeover waits out the TTL | NFR-9 |
+| M13.54 | Opened by M13.51: the two SIGTERM integration cases cannot pass on Windows, where `Process.destroy()` runs no shutdown hook | — (quality) |
+| M13.55 | Opened by M13.51: the shipped-TTL measurement took the term after a pause shorter than the TTL, once; find whether that sample can be absorbed | FR-11 |
 | M13.6 | R5: no silent defaults; the started client's clock pinned | FR-6, FR-19 |
 | M13.6a | R5: `IndexQuotas`' three-argument and `ConsumerDeliveryQueues`' two-argument constructors removed; `SilentDefaultsGoneTest` per module | — (quality) |
 | M13.6b | R5: `ServerConfig`'s older constructors removed | — (quality) |

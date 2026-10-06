@@ -53,6 +53,7 @@ class GapRereadIT {
             var store = bucket.nodeSettings();
             Files.writeString(config, String.join("\n",
                     "pod.id=gapreread",
+                    "pod.uid=uid-gapreread",
                     "pod.az=az-a",
                     "trust.domain=cluster-a",
                     "store.prefix=bins/cluster-a",

@@ -95,6 +95,7 @@ class ConfigExitCodeIT {
     private String valid(Path root, int port) {
         return String.join("\n",
                 "pod.id=pod1",
+                "pod.uid=uid-pod1",
                 "pod.az=az-a",
                 "trust.domain=cluster-a",
                 "store.prefix=bins/cluster-a",
