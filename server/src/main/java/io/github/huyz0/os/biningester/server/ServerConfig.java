@@ -69,7 +69,7 @@ public record ServerConfig(String podId, String az, String trustDomain, String p
         RetentionConfig retention, java.util.Optional<MembershipConfig> membership,
         String podUid, Duration costTopKInterval,
         io.github.huyz0.os.biningester.ingest.IndexQuotas.Config quotas, boolean adminCost,
-        java.util.Optional<FastJournalConfig> fastJournal) {
+        java.util.Optional<FastJournalConfig> fastJournal, PeerConfig peer) {
 
     // ⚠️ ONLY THE CANONICAL CONSTRUCTOR (M13.6b, M12 harvest R5): six older
     // ones each filled in a setting their callers predated, and a new caller
@@ -91,6 +91,7 @@ public record ServerConfig(String podId, String az, String trustDomain, String p
         Objects.requireNonNull(podId, "podId");
         Objects.requireNonNull(podUid, "podUid");
         Objects.requireNonNull(fastJournal, "fastJournal");
+        Objects.requireNonNull(peer, "peer");
         Objects.requireNonNull(az, "az");
         Objects.requireNonNull(trustDomain, "trustDomain");
         Objects.requireNonNull(prefix, "prefix");

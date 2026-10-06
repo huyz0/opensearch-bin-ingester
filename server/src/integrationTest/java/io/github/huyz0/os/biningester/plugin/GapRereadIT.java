@@ -54,6 +54,8 @@ class GapRereadIT {
             Files.writeString(config, String.join("\n",
                     "pod.id=gapreread",
                     "pod.uid=uid-gapreread",
+                    "peer.tls=off",
+                    "peer.port=0",
                     "pod.az=az-a",
                     "trust.domain=cluster-a",
                     "store.prefix=bins/cluster-a",

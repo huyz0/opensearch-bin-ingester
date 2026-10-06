@@ -48,7 +48,7 @@ class FrontDoorQuotaTest {
                         Duration.ofSeconds(10), Duration.ofHours(3), Duration.ofDays(1)),
                 Optional.empty(), "uid-writera", CostTopKReporter.DEFAULT_INTERVAL,
                 new IndexQuotas.Config(IndexQuotas.Limit.UNLIMITED,
-                        Map.of("logs", new IndexQuotas.Limit(0, 1)), 8), false, java.util.Optional.empty());
+                        Map.of("logs", new IndexQuotas.Limit(0, 1)), 8), false, java.util.Optional.empty(), PeerConfig.off(0));
         SequencerTransport noPeers = new SequencerTransport() {
             @Override
             public io.github.huyz0.os.biningester.format.CommitDelta send(
@@ -98,7 +98,7 @@ class FrontDoorQuotaTest {
                         Duration.ofSeconds(10), Duration.ofHours(3), Duration.ofDays(1)),
                 Optional.empty(), "uid-writera", CostTopKReporter.DEFAULT_INTERVAL,
                 new IndexQuotas.Config(IndexQuotas.Limit.UNLIMITED,
-                        Map.of("logs-write", new IndexQuotas.Limit(0, 1)), 8), false, java.util.Optional.empty());
+                        Map.of("logs-write", new IndexQuotas.Limit(0, 1)), 8), false, java.util.Optional.empty(), PeerConfig.off(0));
         SequencerTransport noPeers = new SequencerTransport() {
             @Override
             public io.github.huyz0.os.biningester.format.CommitDelta send(

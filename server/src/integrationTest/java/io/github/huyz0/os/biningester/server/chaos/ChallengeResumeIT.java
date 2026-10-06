@@ -54,10 +54,18 @@ import org.junit.jupiter.api.io.TempDir;
 class ChallengeResumeIT {
 
     /** The TTL that ships, read from the configuration a node parses: not restated. */
-    private static final Duration TTL = io.github.huyz0.os.biningester.server.ServerProperties.parse(Map.of(
+    private static final Duration TTL = io.github.huyz0.os.biningester.server.ServerProperties.parse(withPeer(Map.of(
             "pod.id", "pod0", "pod.uid", "uid-pod0", "pod.az", "az-a", "trust.domain", "cluster-a", "store.prefix", "p",
             "store.kind", "memory", "endpoint", "http://localhost:0", "http.port", "0",
-            "producer.subject", "producer-1", "producer.allowed-indices", "logs")).leaseTtl();
+            "producer.subject", "producer-1", "producer.allowed-indices", "logs"))).leaseTtl();
+
+    /** {@code settings} with the peer listener's required keys, plaintext (ADR-0084). */
+    private static Map<String, String> withPeer(Map<String, String> settings) {
+        Map<String, String> all = new java.util.HashMap<>(settings);
+        all.put("peer.tls", "off");
+        all.put("peer.port", "0");
+        return all;
+    }
 
     /**
      * A notional readiness-probe failure window, well inside the TTL, so a

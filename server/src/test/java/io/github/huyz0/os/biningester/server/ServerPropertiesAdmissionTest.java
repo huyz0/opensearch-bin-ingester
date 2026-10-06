@@ -19,6 +19,8 @@ class ServerPropertiesAdmissionTest {
         Map<String, String> settings = new HashMap<>();
         settings.put(ServerProperties.POD_ID, "pod1");
         settings.put(ServerProperties.POD_UID, "uid-pod1");
+        settings.put(ServerProperties.PEER_TLS, "off");
+        settings.put(ServerProperties.PEER_PORT, "0");
         settings.put(ServerProperties.POD_AZ, "az-a");
         settings.put(ServerProperties.TRUST_DOMAIN, "cluster-a");
         settings.put(ServerProperties.PREFIX, "bins/cluster-a");

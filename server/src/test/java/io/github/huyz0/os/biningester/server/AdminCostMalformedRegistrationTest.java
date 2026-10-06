@@ -74,7 +74,7 @@ class AdminCostMalformedRegistrationTest {
                 IngestConfig.defaults("cluster-a"), 0, "producer-1", Set.of("logs", "broken"),
                 RetentionConfig.defaults(), Optional.empty(), "uid-pod1",
                 io.github.huyz0.os.biningester.ingest.CostTopKReporter.DEFAULT_INTERVAL,
-                io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(), true, java.util.Optional.empty());
+                io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(), true, java.util.Optional.empty(), PeerConfig.off(0));
     }
 
     private static SequencerTransport noPeers() {

@@ -31,7 +31,7 @@ class FastPeerPaceTest {
                 RetentionConfig.defaults(), Optional.empty(), "uid-pod1",
                 io.github.huyz0.os.biningester.ingest.CostTopKReporter.DEFAULT_INTERVAL,
                 io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(), false,
-                Optional.empty());
+                Optional.empty(), PeerConfig.off(0));
         MemoryBinStore store = new MemoryBinStore();
         String leaseKey = SequencerAssembly.leaseConfig(config).leaseKey();
         store.put(leaseKey, Body.ofBytes(new Lease(1, "pod1", "uid-pod1", "http://pod1:8080",

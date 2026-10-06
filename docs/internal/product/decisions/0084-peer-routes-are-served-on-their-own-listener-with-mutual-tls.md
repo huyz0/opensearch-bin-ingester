@@ -40,7 +40,8 @@ over a fence bound (below).
    are served on their own port, `peer.port`, and only there; the producer
    port answers those four 404 and keeps every other route it serves,
    `/ctl/register` and `/ctl/progress` among them. `peer.port` is a fleet-wide
-   setting, the same on every pod (as `http.port` is), 1 to 65535.
+   setting, the same on every pod (as `http.port` is), 1 to 65535 -- or 0, an
+   ephemeral port, for a test whose pods share one host (amended by M13.52b).
 2. **Every caller reaches it.** The advertised `endpoint` -- which the lease
    and the roster carry, and the commit forward, the drain and the fast
    frames dial -- names the peer listener, `https://` when TLS is on. The
@@ -67,9 +68,11 @@ over a fence bound (below).
 6. **Rotation and transition are restarts.** The files are read once, at
    start; a rotated certificate takes effect when the pod restarts. A fleet
    changes `peer.tls` or `peer.port` all at once: a pod in one mode cannot
-   reach a pod in the other, so during a rolling change commit forwards fail
-   (and are retried by their producers), joins are retried by the lease watch,
-   and durable-segment hints are lost (they are best effort).
+   reach a pod in the other, so during a rolling change a commit forward fails
+   and is deferred to the inbox (one PUT per deferred flush), the drain it asks
+   for over `/ctl/drain` fails too, and the leader's inbox sweep applies it
+   (corrected by M13.52b); joins are retried by the lease watch; and
+   durable-segment hints are lost (they are best effort).
 7. **Built in steps**: this record (M13.52a); the settings (M13.52b); the
    listener with client authentication (M13.52c); the clients (M13.52d); the
    identity binding (M13.52e). Test certificates are committed fixtures,

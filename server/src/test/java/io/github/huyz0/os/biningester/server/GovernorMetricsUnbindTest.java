@@ -118,7 +118,7 @@ class GovernorMetricsUnbindTest {
         return new ServerConfig("poda", "az-a", "cluster-a", "bins/cluster-a",
                 new StoreConfig("memory", Optional.empty()), Duration.ofSeconds(30),
                 Duration.ofSeconds(20), "http://poda:8080", IngestConfig.defaults("cluster-a"),
-                0, "producer-1", Set.of("logs"), RetentionConfig.defaults(), java.util.Optional.empty(), "uid-poda", io.github.huyz0.os.biningester.ingest.CostTopKReporter.DEFAULT_INTERVAL, io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(), false, java.util.Optional.empty());
+                0, "producer-1", Set.of("logs"), RetentionConfig.defaults(), java.util.Optional.empty(), "uid-poda", io.github.huyz0.os.biningester.ingest.CostTopKReporter.DEFAULT_INTERVAL, io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(), false, java.util.Optional.empty(), PeerConfig.off(0));
     }
 
     private static SequencerTransport noPeers() {

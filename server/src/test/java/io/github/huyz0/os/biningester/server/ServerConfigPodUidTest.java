@@ -24,7 +24,7 @@ class ServerConfigPodUidTest {
                 Duration.ofSeconds(10), Duration.ofSeconds(3), "http://pod1:8080",
                 IngestConfig.defaults("cluster-a"), 0, "producer-1", Set.of("logs"),
                 RetentionConfig.defaults(), Optional.empty(), podUid,
-                CostTopKReporter.DEFAULT_INTERVAL, IndexQuotas.Config.none(), false, java.util.Optional.empty());
+                CostTopKReporter.DEFAULT_INTERVAL, IndexQuotas.Config.none(), false, java.util.Optional.empty(), PeerConfig.off(0));
     }
 
     @Test

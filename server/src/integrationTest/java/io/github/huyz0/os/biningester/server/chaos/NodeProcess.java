@@ -188,6 +188,8 @@ public final class NodeProcess implements AutoCloseable {
         all.putAll(settings);
         String uid = UUID.randomUUID().toString();
         all.put("pod.uid", uid);
+        all.put("peer.tls", "off");
+        all.put("peer.port", "0");
         Properties properties = new Properties();
         all.forEach(properties::setProperty);
         Path file = dir.resolve(podId + ".properties");

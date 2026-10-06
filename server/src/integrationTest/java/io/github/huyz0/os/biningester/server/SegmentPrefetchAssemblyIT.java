@@ -144,7 +144,7 @@ class SegmentPrefetchAssemblyIT {
         return new ServerConfig(pod, az, "cluster-a", PREFIX, store,
                 Duration.ofSeconds(10), Duration.ofSeconds(3),
                 "http://" + host + ":" + port, IngestConfig.defaults("cluster-a"), port,
-                "producer", Set.of("logs"), RetentionConfig.defaults(), java.util.Optional.empty(), "uid-" + pod, io.github.huyz0.os.biningester.ingest.CostTopKReporter.DEFAULT_INTERVAL, io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(), false, java.util.Optional.empty());
+                "producer", Set.of("logs"), RetentionConfig.defaults(), java.util.Optional.empty(), "uid-" + pod, io.github.huyz0.os.biningester.ingest.CostTopKReporter.DEFAULT_INTERVAL, io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(), false, java.util.Optional.empty(), PeerConfig.off(0));
     }
 
     private static SequencerTransport noPeers() {

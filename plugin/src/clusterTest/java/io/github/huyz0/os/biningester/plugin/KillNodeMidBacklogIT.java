@@ -336,6 +336,8 @@ public class KillNodeMidBacklogIT extends OpenSearchIntegTestCase {
                     Files.writeString(config, String.join("\n",
                             "pod.id=catchupnode",
                             "pod.uid=uid-catchupnode",
+                            "peer.tls=off",
+                            "peer.port=0",
                             "pod.az=az-a",
                             "trust.domain=cluster-a",
                             "store.prefix=bins/cluster-a",

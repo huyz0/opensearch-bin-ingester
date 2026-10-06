@@ -25,6 +25,8 @@ class PodAzSettingTest {
         Map<String, String> settings = new HashMap<>();
         settings.put(ServerProperties.POD_ID, "pod1");
         settings.put(ServerProperties.POD_UID, "uid-pod1");
+        settings.put(ServerProperties.PEER_TLS, "off");
+        settings.put(ServerProperties.PEER_PORT, "0");
         settings.put(ServerProperties.POD_AZ, "az-a");
         settings.put(ServerProperties.TRUST_DOMAIN, "cluster-a");
         settings.put(ServerProperties.PREFIX, "bins/cluster-a");
@@ -95,7 +97,7 @@ class PodAzSettingTest {
                     new StoreConfig("memory", java.util.Optional.empty()),
                     java.time.Duration.ofSeconds(10), java.time.Duration.ofSeconds(3),
                     "http://pod1:8080", io.github.huyz0.os.biningester.ingest.IngestConfig.defaults("cluster-a"),
-                    8080, "producer-1", java.util.Set.of("logs"), RetentionConfig.defaults(), java.util.Optional.empty(), "uid-pod1", io.github.huyz0.os.biningester.ingest.CostTopKReporter.DEFAULT_INTERVAL, io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(), false, java.util.Optional.empty());
+                    8080, "producer-1", java.util.Set.of("logs"), RetentionConfig.defaults(), java.util.Optional.empty(), "uid-pod1", io.github.huyz0.os.biningester.ingest.CostTopKReporter.DEFAULT_INTERVAL, io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(), false, java.util.Optional.empty(), PeerConfig.off(0));
         }
     }
 }

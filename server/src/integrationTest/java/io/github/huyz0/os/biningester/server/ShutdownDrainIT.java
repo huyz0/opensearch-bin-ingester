@@ -65,6 +65,8 @@ class ShutdownDrainIT {
         Files.write(file, String.join("\n",
                 "pod.id=pod1",
                 "pod.uid=uid-pod1",
+                "peer.tls=off",
+                "peer.port=0",
                 "pod.az=az-a",
                 "trust.domain=cluster-a",
                 "store.prefix=bins/cluster-a",

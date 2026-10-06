@@ -65,6 +65,8 @@ class CrossAzBytesIT {
             settings.put("producer.allowed-indices", INDEX);
             settings.put("pod.az", "az-a");
             settings.put("pod.uid", "caller-supplied");
+            settings.put("peer.tls", "off");
+            settings.put("peer.port", "0");
             NodeProcess node = null;
             NodeProcess secondNode = null;
             try {

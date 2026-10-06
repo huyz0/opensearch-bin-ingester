@@ -46,7 +46,7 @@ class CostReportingAssemblyTest {
                 new StoreConfig("memory", Optional.empty()),
                 Duration.ofDays(1), Duration.ofSeconds(3), "http://pod1:8080",
                 IngestConfig.defaults("cluster-a"), 0, "producer-1", Set.of(INDEX),
-                RetentionConfig.defaults(), Optional.empty(), "uid-pod1", topK, io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(), false, java.util.Optional.empty());
+                RetentionConfig.defaults(), Optional.empty(), "uid-pod1", topK, io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(), false, java.util.Optional.empty(), PeerConfig.off(0));
     }
 
     private static SequencerTransport noPeers() {

@@ -35,7 +35,7 @@ class AssemblyFastTermOrderTest {
                 RetentionConfig.defaults(), Optional.empty(), "uid-" + podId,
                 io.github.huyz0.os.biningester.ingest.CostTopKReporter.DEFAULT_INTERVAL,
                 io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(), false,
-                Optional.empty());
+                Optional.empty(), PeerConfig.off(0));
     }
 
     private static SequencerTransport noPeers() {

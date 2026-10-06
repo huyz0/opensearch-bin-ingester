@@ -67,13 +67,15 @@ class AdminCostOptInTest {
                 new RetentionConfig(Duration.ofMinutes(1), Duration.ofHours(2),
                         Duration.ofSeconds(10), Duration.ofHours(3), Duration.ofDays(1)),
                 Optional.empty(), "uid-writera", CostTopKReporter.DEFAULT_INTERVAL,
-                IndexQuotas.Config.none(), adminCost, java.util.Optional.empty());
+                IndexQuotas.Config.none(), adminCost, java.util.Optional.empty(), PeerConfig.off(0));
     }
 
     private static Map<String, String> minimal() {
         Map<String, String> settings = new HashMap<>();
         settings.put(ServerProperties.POD_ID, "pod1");
         settings.put(ServerProperties.POD_UID, "uid-pod1");
+        settings.put(ServerProperties.PEER_TLS, "off");
+        settings.put(ServerProperties.PEER_PORT, "0");
         settings.put(ServerProperties.POD_AZ, "az-a");
         settings.put(ServerProperties.TRUST_DOMAIN, "cluster-a");
         settings.put(ServerProperties.PREFIX, "bins/cluster-a");

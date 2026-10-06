@@ -24,6 +24,8 @@ class ServerPropertiesTest {
         Map<String, String> settings = new HashMap<>();
         settings.put(ServerProperties.POD_ID, "pod1");
         settings.put(ServerProperties.POD_UID, "uid-pod1");
+        settings.put(ServerProperties.PEER_TLS, "off");
+        settings.put(ServerProperties.PEER_PORT, "0");
         settings.put(ServerProperties.POD_AZ, "az-a");
         settings.put(ServerProperties.TRUST_DOMAIN, "cluster-a");
         settings.put(ServerProperties.PREFIX, "bins/cluster-a");
@@ -345,7 +347,9 @@ class ServerPropertiesTest {
                         ServerProperties.STORE_KIND, ServerProperties.INTERVAL_CEILING,
                         ServerProperties.LANES_ACTIVE, ServerProperties.COST_TOP_K_INTERVAL,
                         ServerProperties.ADMIN_COST_ENABLED, ServerProperties.FAST_JOURNAL_DIR,
-                        ServerProperties.FAST_JOURNAL_CAP)
-                .hasSize(37);
+                        ServerProperties.FAST_JOURNAL_CAP, ServerProperties.PEER_TLS,
+                        ServerProperties.PEER_PORT, ServerProperties.PEER_TLS_CERT,
+                        ServerProperties.PEER_TLS_KEY, ServerProperties.PEER_TLS_CA)
+                .hasSize(42);
     }
 }

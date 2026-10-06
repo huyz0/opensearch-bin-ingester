@@ -151,10 +151,94 @@ public final class Main {
         java.util.List<java.security.cert.X509Certificate> trust = config.membership()
                 .flatMap(MembershipConfig::caFile).map(Main::certificatesIn)
                 .orElse(java.util.List.of());
+        // ⚠️ THE PEER FILES ARE READ ONCE, AT STARTUP, and a bad one refuses
+        // the node (ADR-0084): a rotated certificate takes effect at a restart.
+        // The listener that presents them is M13.52c's.
+        peerTls(config.peer(), message -> System.getLogger(Main.class.getName())
+                .log(System.Logger.Level.WARNING, message));
         // ⚠️ AND THE MONOTONIC ONE BESIDE IT (M13.27d): fast mode's lease-time
         // fence reads both, and only independent clocks catch each other.
         return IngesterNode.start(config, Clock.systemUTC(), System::nanoTime,
                 () -> tokenFile.map(Main::readToken), trust);
+    }
+
+    /**
+     * What {@code peer} reads at start (ADR-0084; M13.52b): with {@code mutual}
+     * this pod's chain, its key and the trust domain's CA; with {@code off}
+     * nothing, and a warning naming the four routes left open.
+     *
+     * @throws ConfigurationException naming the key and the path of a file
+     *     that cannot be read or holds nothing of what it should
+     */
+    static java.util.Optional<PeerTls> peerTls(PeerConfig peer,
+            java.util.function.Consumer<String> warn) {
+        if (peer.mode() == PeerConfig.Mode.OFF) {
+            warn.accept(ServerProperties.PEER_TLS + " = off: /ctl/commit, /ctl/drain, "
+                    + "/ctl/durable-segment and /ctl/fast are served in plaintext to any caller "
+                    + "(ADR-0084) -- for a single node, a development fleet or a test only");
+            return java.util.Optional.empty();
+        }
+        PeerConfig.Files files = peer.files().orElseThrow();
+        return java.util.Optional.of(new PeerTls(
+                certificates(ServerProperties.PEER_TLS_CERT, files.cert()),
+                privateKey(ServerProperties.PEER_TLS_KEY, files.key()),
+                certificates(ServerProperties.PEER_TLS_CA, files.ca())));
+    }
+
+    private static java.util.List<java.security.cert.X509Certificate> certificates(String key,
+            String path) {
+        try (java.io.InputStream in = java.nio.file.Files.newInputStream(
+                java.nio.file.Path.of(path))) {
+            java.util.List<java.security.cert.X509Certificate> certificates =
+                    java.security.cert.CertificateFactory.getInstance("X.509")
+                            .generateCertificates(in).stream()
+                            .map(c -> (java.security.cert.X509Certificate) c).toList();
+            if (certificates.isEmpty()) {
+                throw new ConfigurationException(key + " at " + path + " holds no certificate");
+            }
+            return certificates;
+        } catch (IOException | java.security.cert.CertificateException unreadable) {
+            throw new ConfigurationException(key + " at " + path
+                    + " could not be read as PEM certificates: " + unreadable.getMessage(),
+                    unreadable);
+        }
+    }
+
+    /**
+     * The PKCS#8 PEM private key in {@code path}. ⚠️ ITS BYTES NEVER REACH A
+     * MESSAGE: a refusal names the key and the path, nothing of the content.
+     */
+    private static java.security.PrivateKey privateKey(String key, String path) {
+        String pem;
+        try {
+            pem = java.nio.file.Files.readString(java.nio.file.Path.of(path));
+        } catch (IOException unreadable) {
+            throw new ConfigurationException(key + " at " + path + " could not be read",
+                    unreadable);
+        }
+        int begin = pem.indexOf("-----BEGIN PRIVATE KEY-----");
+        int end = pem.indexOf("-----END PRIVATE KEY-----");
+        if (begin < 0 || end < begin) {
+            throw new ConfigurationException(key + " at " + path
+                    + " holds no PKCS#8 PEM private key");
+        }
+        byte[] der;
+        try {
+            der = java.util.Base64.getMimeDecoder().decode(
+                    pem.substring(begin + "-----BEGIN PRIVATE KEY-----".length(), end));
+        } catch (IllegalArgumentException notBase64) {
+            throw new ConfigurationException(key + " at " + path + " is not valid PEM");
+        }
+        for (String algorithm : new String[] {"EC", "RSA", "Ed25519"}) {
+            try {
+                return java.security.KeyFactory.getInstance(algorithm)
+                        .generatePrivate(new java.security.spec.PKCS8EncodedKeySpec(der));
+            } catch (java.security.GeneralSecurityException notThisOne) {
+                // the next algorithm
+            }
+        }
+        throw new ConfigurationException(key + " at " + path
+                + " holds no EC, RSA or Ed25519 private key");
     }
 
     /**

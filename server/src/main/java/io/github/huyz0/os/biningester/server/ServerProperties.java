@@ -48,6 +48,16 @@ public final class ServerProperties {
     public static final String FAST_JOURNAL_DIR = "fast.journal.dir";
     /** Optional, with {@link #FAST_JOURNAL_DIR} only: the journal's cap in bytes. */
     public static final String FAST_JOURNAL_CAP = "fast.journal.cap";
+    /** Required: {@code mutual} or {@code off}, the peer listener's TLS (ADR-0084). */
+    public static final String PEER_TLS = "peer.tls";
+    /** Required: the peer listener's port, fleet-wide; 0 an ephemeral one, for a test. */
+    public static final String PEER_PORT = "peer.port";
+    /** With {@code peer.tls = mutual} only: this pod's PEM certificate chain. */
+    public static final String PEER_TLS_CERT = "peer.tls.cert";
+    /** With {@code peer.tls = mutual} only: this pod's PEM (PKCS#8) private key. */
+    public static final String PEER_TLS_KEY = "peer.tls.key";
+    /** With {@code peer.tls = mutual} only: the trust domain's PEM CA. */
+    public static final String PEER_TLS_CA = "peer.tls.ca";
     /**
      * Required: this pod's availability zone, as a LABEL (M9.2, NFR-5).
      *
@@ -159,7 +169,8 @@ public final class ServerProperties {
             RETENTION_MIN, RETENTION_MAX, RETENTION_REPORT_TIMEOUT, RETENTION_COPY_EXPIRY,
             RETENTION_PASS_INTERVAL, MEMBERSHIP_API, MEMBERSHIP_NAMESPACE, MEMBERSHIP_SERVICE,
             MEMBERSHIP_TOKEN_FILE, MEMBERSHIP_CA_FILE, COST_TOP_K_INTERVAL, ADMIN_COST_ENABLED,
-            FAST_JOURNAL_DIR, FAST_JOURNAL_CAP);
+            FAST_JOURNAL_DIR, FAST_JOURNAL_CAP, PEER_TLS, PEER_PORT, PEER_TLS_CERT, PEER_TLS_KEY,
+            PEER_TLS_CA);
 
     private ServerProperties() {
     }
@@ -275,7 +286,7 @@ public final class ServerProperties {
                     membership(settings), required(settings, POD_UID),
                     topKInterval(settings),
                     QuotaProperties.parse(settings), bool(settings, ADMIN_COST_ENABLED, false),
-                    fastJournal(settings));
+                    fastJournal(settings), peer(settings));
         } catch (IllegalArgumentException refused) {
             // ⚠️ `ConfigurationException` IS AN `IllegalArgumentException`, so
             // one already carrying a key's name lands here too and is returned
@@ -488,6 +499,34 @@ public final class ServerProperties {
         }
         return java.util.Optional.of(new FastJournalConfig(dir.trim(),
                 positiveBytes(settings, FAST_JOURNAL_CAP, FastJournalConfig.DEFAULT_CAP_BYTES)));
+    }
+
+    /**
+     * The peer listener's settings (ADR-0084; M13.52b): ⚠️ NO DEFAULT for either
+     * key -- an insecure listener is a choice written down -- and a file named
+     * under {@code off} is refused, never silently ignored.
+     */
+    private static PeerConfig peer(Map<String, String> settings) {
+        String tls = required(settings, PEER_TLS);
+        int port = port(settings, PEER_PORT);
+        String[] keys = {PEER_TLS_CERT, PEER_TLS_KEY, PEER_TLS_CA};
+        switch (tls) {
+            case "off" -> {
+                for (String key : keys) {
+                    if (settings.containsKey(key)) {
+                        throw new ConfigurationException(key + " is set with " + PEER_TLS
+                                + " = off: a peer file off reads configures nothing");
+                    }
+                }
+                return PeerConfig.off(port);
+            }
+            case "mutual" -> {
+                return new PeerConfig(PeerConfig.Mode.MUTUAL, port,
+                        java.util.Optional.of(new PeerConfig.Files(required(settings, PEER_TLS_CERT),
+                                required(settings, PEER_TLS_KEY), required(settings, PEER_TLS_CA))));
+            }
+            default -> throw new ConfigurationException(PEER_TLS + " is mutual or off, not " + tls);
+        }
     }
 
     private static long positiveBytes(Map<String, String> settings, String key, long fallback) {

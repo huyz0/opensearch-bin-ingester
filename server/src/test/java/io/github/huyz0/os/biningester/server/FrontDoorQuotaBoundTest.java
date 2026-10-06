@@ -34,7 +34,7 @@ class FrontDoorQuotaBoundTest {
                 new RetentionConfig(Duration.ofMinutes(1), Duration.ofHours(2),
                         Duration.ofSeconds(10), Duration.ofHours(3), Duration.ofDays(1)),
                 Optional.empty(), "uid-writera", CostTopKReporter.DEFAULT_INTERVAL,
-                new IndexQuotas.Config(new IndexQuotas.Limit(0, 1_000), Map.of(), 8), false, java.util.Optional.empty());
+                new IndexQuotas.Config(new IndexQuotas.Limit(0, 1_000), Map.of(), 8), false, java.util.Optional.empty(), PeerConfig.off(0));
         SequencerTransport noPeers = new SequencerTransport() {
             @Override
             public io.github.huyz0.os.biningester.format.CommitDelta send(

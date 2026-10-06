@@ -71,6 +71,8 @@ class ConfigFileTest {
         Files.write(file, String.join("\n",
                 "pod.id=pod7",
                 "pod.uid=uid-pod7",
+                "peer.tls=off",
+                "peer.port=0",
                 "pod.az=az-a",
                 "trust.domain=cluster-a",
                 "store.prefix=bins/cluster-a",
