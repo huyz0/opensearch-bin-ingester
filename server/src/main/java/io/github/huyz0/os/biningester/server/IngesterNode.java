@@ -70,7 +70,10 @@ public final class IngesterNode implements AutoCloseable {
      * one waits for the flush that makes it durable, and the drain forces one
      * flush per {@link #IN_FLIGHT_SLICE}, so a request inside normally
      * finishes in one slice. The bound is for a flush that is slow, and it
-     * keeps the whole sequence inside §7's 30 s budget.
+     * keeps the whole sequence inside §7's 30 s budget: 2 s for subscribers,
+     * 1 s of readiness propagation, these 20 s, and a follower's departure's
+     * 4 s grace plus one 1 s exchange (M13.27p, {@link FastDeparture#GRACE}),
+     * leaving 2 s for the flush and the release.
      */
     static final Duration IN_FLIGHT_BOUND = Duration.ofSeconds(20);
 
@@ -86,6 +89,8 @@ public final class IngesterNode implements AutoCloseable {
     private final FastDisk fastDisk;
     /** The watch joining every term this pod learns of (M13.27n). */
     private volatile FastPeer fastPeer;
+    /** This pod's departure at a graceful stop (M13.27p); none before start ends. */
+    private volatile java.util.function.Supplier<FastDeparture.Result> fastDeparture;
     private volatile ShutdownSequence.Report lastShutdown;
     private volatile EndpointSliceWatch watch;
 
@@ -217,6 +222,14 @@ public final class IngesterNode implements AutoCloseable {
             // frames its joins lead to; it joins every term it learns of.
             node.fastPeer = FastPeer.start(config, assembly.store(), fastDisk, crossAz,
                     peerCommitTimeout(config), () -> FastPeer.leading(assembly), Thread::sleep);
+            // ⚠️ M13.27p: a follower departs at a graceful stop, bounded by a TTL.
+            io.github.huyz0.os.biningester.http.HttpFastTransport departing =
+                    new io.github.huyz0.os.biningester.http.HttpFastTransport(
+                            FastDeparture.EXCHANGE_TIMEOUT, crossAz);
+            FastDisk disk = fastDisk;
+            node.fastDeparture = () -> FastDeparture.depart(config,
+                    FastPeer.leaseReader(config, assembly.store()), disk, departing,
+                    FastPeer.leading(assembly), FastDeparture.GRACE, mono, Thread::sleep);
             return node;
         } catch (RuntimeException | IOException failed) {
             // ⚠️ A `RuntimeException` IS THE ONLY THING `FrontDoor.start` CAN
@@ -342,6 +355,19 @@ public final class IngesterNode implements AutoCloseable {
             @Override
             public void flushAndCommit() throws IOException {
                 assembly.flush();
+                // ⚠️ M13.27p: AFTER THE FLUSH, so what this pod wrote is
+                // committed, and BEFORE THE LEASES ARE RELEASED -- a follower
+                // reports what it holds and leaves only with nothing pending.
+                java.util.function.Supplier<FastDeparture.Result> departing = fastDeparture;
+                if (departing != null) {
+                    FastDeparture.Result result = departing.get();
+                    // ⚠️ JOURNALED BUT FOR A LEADER (its review round 1, P3,
+                    // T3): an undeparted stop counts as a crash, and an
+                    // operator sees why the step took its grace.
+                    if (result != FastDeparture.Result.NOT_A_FOLLOWER) {
+                        journal.add(FastDeparture.JOURNALED + result);
+                    }
+                }
             }
 
             @Override

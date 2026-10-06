@@ -99,18 +99,26 @@ final class FastPeer implements AutoCloseable {
                 () -> held(disk));
     }
 
+    /** Reads the sequencer lease: one GET (M13.27r, M13.27p). */
+    static LeaderWatch.LeaseReader leaseReader(ServerConfig config, BinStore store) {
+        String leaseKey = SequencerAssembly.leaseConfig(config).leaseKey();
+        return () -> {
+            try (InputStream in = store.get(leaseKey)) {
+                return Lease.decode(in.readAllBytes());
+            }
+        };
+    }
+
     /** Starts the watch that joins every term this pod learns of. */
     static FastPeer start(ServerConfig config, BinStore store, FastDisk disk,
             CrossAzBytes crossAz, Duration timeout,
             java.util.function.BooleanSupplier leading, LeaderWatch.Sleeper sleeper) {
         TermJoiner joiner = joiner(config, disk, new HttpFastTransport(timeout, crossAz));
-        String leaseKey = SequencerAssembly.leaseConfig(config).leaseKey();
         java.util.concurrent.atomic.AtomicLong reads = new java.util.concurrent.atomic.AtomicLong();
+        LeaderWatch.LeaseReader lease = leaseReader(config, store);
         LeaderWatch watch = new LeaderWatch(config.podUid(), () -> {
             reads.incrementAndGet();
-            try (InputStream in = store.get(leaseKey)) {
-                return Lease.decode(in.readAllBytes());
-            }
+            return lease.read();
         }, joiner, leading);
         java.util.concurrent.atomic.AtomicBoolean stopped =
                 new java.util.concurrent.atomic.AtomicBoolean();
