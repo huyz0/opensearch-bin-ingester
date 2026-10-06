@@ -104,11 +104,11 @@ jobs:
         # gitignored .harness/. AGENTS.md § Gates.
         run: SKIP=check-reviewed,check-tdd pre-commit run --all-files --show-diff-on-failure
 
-  # ⚠️ FILLS L1's DEPENDENCY CACHE OFF L1's CLOCK (M13.59, its review P4): a
-  # save tars the whole cache before learning its key exists, so it runs
-  # here, beside the gates, and only on a miss -- never inside L1's 5 min.
+  # ⚠️ FILLS L1's CACHES OFF L1's CLOCK (M13.59, M13.61, M13.62), beside the
+  # gates: the dependencies on a miss, and on every push the build cache of
+  # this commit's compiles, so L1 compiles nothing it can take from it.
   gradle-deps:
-    name: "Gradle dependencies"
+    name: "Gradle dependencies and compiles"
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -117,8 +117,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '25'
-      # ⚠️ LOOKUP ONLY: this job needs to know the key exists, not its bytes
-      # (M13.59 review round 3, P6).
+      # ⚠️ NO LONGER lookup-only (M13.61): the compile below reads them.
       - name: Restore Gradle dependencies
         id: gradle-deps
         uses: actions/cache/restore@v4
@@ -127,13 +126,12 @@ jobs:
             ~/.gradle/caches/modules-2
             ~/.gradle/wrapper
           key: gradle-deps-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties', 'gradle/libs.versions.toml') }}
-          lookup-only: true
-      - name: Resolve what L1 compiles against
-        if: steps.gradle-deps.outputs.cache-hit != 'true'
+      # ⚠️ EVERY COMPILE L1 RUNS, buildSrc's included: test tasks are never
+      # cacheable (the conventions plugin), so only compiles land in the cache.
+      - name: Compile everything L1 compiles
         run: ./gradlew testClasses integrationTestClasses --no-daemon
       # ⚠️ THE KEY THE RESTORE COMPUTED, NOT A FRESH hashFiles (M13.61): after
-      # the build, generated `*.gradle.kts` under build/ change the hash, so
-      # run 37473607344 saved under a key no restore ever asks for.
+      # the build, generated `*.gradle.kts` under build/ change the hash.
       - name: Save Gradle dependencies
         if: steps.gradle-deps.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
@@ -142,6 +140,11 @@ jobs:
             ~/.gradle/caches/modules-2
             ~/.gradle/wrapper
           key: ${{ steps.gradle-deps.outputs.cache-primary-key }}
+      - name: Save this commit's build cache
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.gradle/caches/build-cache-1
+          key: gradle-build-${{ runner.os }}-${{ github.sha }}
 
   l1:
     name: "L1 — unit tests"
@@ -167,6 +170,13 @@ jobs:
             ~/.gradle/caches/modules-2
             ~/.gradle/wrapper
           key: gradle-deps-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties', 'gradle/libs.versions.toml') }}
+      # ⚠️ THIS COMMIT's COMPILES, from gradle-deps (M13.62): ~36 s of buildSrc
+      # Kotlin and the module compiles on the unit step's critical path.
+      - name: Restore this commit's build cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.gradle/caches/build-cache-1
+          key: gradle-build-${{ runner.os }}-${{ github.sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'

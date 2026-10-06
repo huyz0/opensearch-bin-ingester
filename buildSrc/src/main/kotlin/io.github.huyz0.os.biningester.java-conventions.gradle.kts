@@ -82,6 +82,10 @@ tasks.named("check") { dependsOn(tasks.withType<JacocoReport>()) }
 // JVM by TestTimeoutThreadDumpTest and in the build by RepositoryChecksTest.
 tasks.withType<Test>().configureEach {
     systemProperty("junit.jupiter.execution.timeout.threaddump.enabled", "true")
+    // ⚠️ RUN, NEVER SERVED FROM THE BUILD CACHE (M13.62): CI restores the
+    // build cache to skip compiles, and a test result taken from it would be
+    // a pass nobody ran. Pinned by RepositoryChecksTest.
+    outputs.cacheIf("a test result is a run, not an artifact") { false }
 }
 
 tasks.withType<JacocoReport>().configureEach {

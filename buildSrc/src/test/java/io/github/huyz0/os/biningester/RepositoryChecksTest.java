@@ -159,6 +159,23 @@ class RepositoryChecksTest {
                 .results().count()).sum()).as("set in exactly the two blocks").isEqualTo(2);
     }
 
+    /**
+     * ⚠️ A TEST TASK RUNS, NEVER SERVED FROM THE BUILD CACHE (M13.62): CI
+     * restores the build cache so compiles are skipped, and a test result
+     * taken from it would be a pass nobody ran. Set by construction, like the
+     * thread dump, in the conventions plugin and in buildSrc's own build.
+     */
+    @Test
+    void everyTestTaskRunsRatherThanComingFromTheBuildCache() throws Exception {
+        for (String path : List.of("buildSrc/src/main/kotlin/"
+                + "io.github.huyz0.os.biningester.java-conventions.gradle.kts",
+                "buildSrc/build.gradle.kts")) {
+            assertThat(withTypeTestBlocks(code(path))).as(path).anyMatch(block ->
+                    topLevel(block).contains("outputs.cacheIf(")
+                            && block.replaceAll("\\s+", " ").contains(") { false }"));
+        }
+    }
+
     /** {@code block} without the bodies of the blocks nested inside it. */
     private static String topLevel(String block) {
         StringBuilder top = new StringBuilder();

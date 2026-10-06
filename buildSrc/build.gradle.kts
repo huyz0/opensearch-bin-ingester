@@ -49,6 +49,10 @@ tasks.withType<Test>().configureEach {
     // task registered later inherited nothing. Pinned by RepositoryChecksTest.
     systemProperty("junit.jupiter.execution.timeout.threaddump.enabled", "true")
     testLogging { events("failed") }
+    // ⚠️ RUN, NEVER SERVED FROM THE BUILD CACHE (M13.62): CI restores the
+    // build cache to skip compiles, and a test result taken from it would be
+    // a pass nobody ran. Pinned by RepositoryChecksTest.
+    outputs.cacheIf("a test result is a run, not an artifact") { false }
 
     // ⚠️ The suite EXECS `scripts/*.py`; Gradle cannot infer that, so without
     // these declarations it sees no change and reports UP-TO-DATE on the only
