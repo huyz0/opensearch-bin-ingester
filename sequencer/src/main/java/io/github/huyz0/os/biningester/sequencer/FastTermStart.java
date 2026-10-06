@@ -39,7 +39,10 @@ import java.util.UUID;
  * every term found by every walk.
  *
  * <p>⚠️ NOT YET THE TAKEOVER: collecting, deciding, committing and closing the
- * unclosed terms is M13.33; this returns them, fenced.
+ * unclosed terms is M13.33; this returns them, fenced. The one exception is a
+ * term that recorded no fast index, which has no stream to decide:
+ * {@link EmptyTermCloser} closes it right after this start (M13.27g), and
+ * {@link FastTermOpening} runs the two together for every elected term.
  */
 public final class FastTermStart {
 

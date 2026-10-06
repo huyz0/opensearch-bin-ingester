@@ -13,6 +13,7 @@ import io.github.huyz0.os.biningester.ingest.WatermarkTable;
 import io.github.huyz0.os.biningester.sequencer.LeaseChallenge;
 import io.github.huyz0.os.biningester.sequencer.LeaseConfig;
 import io.github.huyz0.os.biningester.sequencer.LeaseManager;
+import io.github.huyz0.os.biningester.sequencer.LeaseTimeline;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.Objects;
@@ -28,7 +29,7 @@ final class RetentionAssembly {
     @FunctionalInterface
     interface LeaseManagerFactory {
         LeaseManager create(BinStore store, LeaseConfig config, Clock clock,
-                LeaseChallenge challenge);
+                LeaseChallenge challenge, LeaseTimeline timeline);
     }
 
     private RetentionAssembly() {
@@ -43,7 +44,7 @@ final class RetentionAssembly {
                 config.endpoint(), config.podUid(), config.leaseTtl(),
                 config.leaseRenewInterval());
         LeaseManager manager = leaseManagerFactory.create(store, gcLease, clock,
-                LeaseChallenge.NEVER);
+                LeaseChallenge.NEVER, LeaseTimeline.NONE);
         LeasedGc leased = new LeasedGc(new StoreGcLease(manager, clock), store);
         RetentionRule rule = new RetentionRule(clock, kept.minRetention(), kept.maxRetention(),
                 RetentionRule.DEFAULT_SAFETY_MARGIN,

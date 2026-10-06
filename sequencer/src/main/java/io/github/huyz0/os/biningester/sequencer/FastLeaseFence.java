@@ -6,6 +6,7 @@ import io.github.huyz0.os.biningester.format.Lease;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.Objects;
+import java.util.Optional;
 
 /**
  * Fast mode's lease-time fence (ADR-0081 §3, M13.26): whether this pod, as
@@ -59,6 +60,8 @@ public final class FastLeaseFence implements LeaseTimeline {
     private boolean waiting;
     private long notBeforeWallMillis;
     private long waitFromMono;
+    /** The replaced lease's holder pod UID, or null: see {@link #replacedHolderUid}. */
+    private String replacedHolderUid;
 
     public FastLeaseFence(Duration ttl, Clock wall, MonotonicClock mono) {
         Objects.requireNonNull(ttl, "ttl");
@@ -113,6 +116,15 @@ public final class FastLeaseFence implements LeaseTimeline {
      */
     public synchronized long notBeforeWallMillis() {
         return waiting ? notBeforeWallMillis : Long.MIN_VALUE;
+    }
+
+    /**
+     * The pod UID of the lease this term replaced (M13.27d): what a term start
+     * judges §3's graceful exemption by. Empty when it replaced none, or a
+     * legacy lease that named no UID.
+     */
+    public synchronized Optional<String> replacedHolderUid() {
+        return Optional.ofNullable(replacedHolderUid);
     }
 
     @Override
@@ -170,6 +182,8 @@ public final class FastLeaseFence implements LeaseTimeline {
     /** A new term: it owes the successor's wait exactly when it replaced a lease. */
     private void startTerm() {
         waiting = pendingReplaced != null;
+        replacedHolderUid = waiting && !pendingReplaced.holderPodUid().isBlank()
+                ? pendingReplaced.holderPodUid() : null;
         if (waiting) {
             notBeforeWallMillis = pendingReplaced.expiresAtMillis() + marginMillis;
             waitFromMono = seenMono;

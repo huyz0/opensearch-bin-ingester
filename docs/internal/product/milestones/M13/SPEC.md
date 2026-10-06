@@ -914,6 +914,7 @@ journal's fsync and the Kubernetes pod lookup are injected seams.
 | M13.48 | Opened by M13.14's review round 2: a row's wording, a false comment, a bound deferred ticket's slot pinned | — (quality) |
 | M13.49 | Opened by M13.19: the other `413` sites read the body they refuse on a kept-alive connection; measure and close | — (quality) |
 | M13.50 | The commit-protocol sweeps slowed 4x+ under the full suite and timed out at 300 s: find the cost and remove it, the timeout unmoved | — (quality) |
+| M13.51 | Opened by M13.27d: the assembly integration tests' configs carry no `pod.uid`, so four cases fail before they run | — (quality) |
 | M13.6 | R5: no silent defaults; the started client's clock pinned | FR-6, FR-19 |
 | M13.6a | R5: `IndexQuotas`' three-argument and `ConsumerDeliveryQueues`' two-argument constructors removed; `SilentDefaultsGoneTest` per module | — (quality) |
 | M13.6b | R5: `ServerConfig`'s older constructors removed | — (quality) |
@@ -968,7 +969,13 @@ journal's fsync and the Kubernetes pod lookup are injected seams.
 | M13.27e | M13.27c carried past its review budget: the fast write at the leader | FR-17 |
 | M13.27f | Opened by M13.27d: `ServerConfig` refuses a blank pod UID, as `ServerProperties` already does, since every term's roster names its leader by UID | FR-17 |
 | M13.27g | Opened by M13.27d: a term start closes, oldest first, every earlier term it fenced that recorded no fast index, so the walk every fleet runs stays bounded before M13.33 closes terms | FR-17 |
-| M13.27d | The wiring M13.26-M13.27c left, the term start (followed by `EmptyTermCloser`, M13.27g), joins, term record and departure included | FR-17 |
+| M13.27d | The term start at every lease, followed by `EmptyTermCloser` (M13.27g), before the term serves (narrowed: the rest of the wiring is M13.27h-m) | FR-17 |
+| M13.27h | Split from M13.27d: the fast frames' peer route and the HTTP transport | FR-17 |
+| M13.27i | Split from M13.27d: the fast journal on disk, recovered at startup | FR-17 |
+| M13.27j | Split from M13.27d: joins, answered at the leader and sent at startup and each leader change | FR-17 |
+| M13.27k | Split from M13.27d: departure, answered at the leader and run at a graceful stop | FR-17 |
+| M13.27l | Split from M13.27d: a fast index's registration reaching the leader, and the term record fed from it (with or after M13.33, since a recorded term stays open) | FR-17 |
+| M13.27m | Split from M13.27d: the write endpoint, the replica re-send and its timeout, the frontier's term-start and return calls, one journal lock | FR-17 |
 | M13.28 | The replica endpoint: store, epoch fence, release | FR-17 |
 | M13.29 | The writer's fast path: commit, offset confirmation, the epoch check, ack with offsets; no fast frame for a `wal=false` index (`FastWalFalseFleetTest`) | FR-17 |
 | M13.30 | Publication: interest registration, the leader's push to interested pods, and a cross-zone proxied `/seg` read served from the leader's journal before the upload (`FastProxySubscriberTest`) | FR-17 |

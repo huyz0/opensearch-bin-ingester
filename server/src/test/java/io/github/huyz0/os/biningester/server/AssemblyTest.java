@@ -232,9 +232,9 @@ class AssemblyTest {
                 Assembly assembly = Assembly.openForTestWithLeaseManagerFactory(
                         config("pod1", uid), shared, noPeers(),
                         Clock.systemUTC(), (RetentionAssembly.LeaseManagerFactory)
-                                (store, leaseConfig, clock, challenge) -> {
+                                (store, leaseConfig, clock, challenge, timeline) -> {
                                     LeaseManager manager = new LeaseManager(store, leaseConfig,
-                                            clock, challenge);
+                                            clock, challenge, timeline);
                                     if (leaseConfig.prefix().endsWith("/gc")) {
                                         gcLease.set(manager);
                                     }

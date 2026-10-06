@@ -151,8 +151,10 @@ public final class Main {
         java.util.List<java.security.cert.X509Certificate> trust = config.membership()
                 .flatMap(MembershipConfig::caFile).map(Main::certificatesIn)
                 .orElse(java.util.List.of());
-        return IngesterNode.start(config, Clock.systemUTC(), () -> tokenFile.map(Main::readToken),
-                trust);
+        // ⚠️ AND THE MONOTONIC ONE BESIDE IT (M13.27d): fast mode's lease-time
+        // fence reads both, and only independent clocks catch each other.
+        return IngesterNode.start(config, Clock.systemUTC(), System::nanoTime,
+                () -> tokenFile.map(Main::readToken), trust);
     }
 
     /**

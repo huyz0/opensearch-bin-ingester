@@ -25,6 +25,7 @@ import io.github.huyz0.os.biningester.sequencer.ChainMemory;
 import io.github.huyz0.os.biningester.sequencer.FleetSequencer;
 import io.github.huyz0.os.biningester.sequencer.LeaseChallenge;
 import io.github.huyz0.os.biningester.sequencer.LeaseManager;
+import io.github.huyz0.os.biningester.sequencer.MonotonicClock;
 import io.github.huyz0.os.biningester.sequencer.SequencerTransport;
 import io.github.huyz0.os.biningester.sequencer.Sequencer;
 import java.io.IOException;
@@ -107,18 +108,23 @@ public final class Assembly implements AutoCloseable {
      */
     public static Assembly open(ServerConfig config, SequencerTransport transport, Clock clock,
             LeaseChallenge challenge) throws IOException {
-        return open(config, transport, clock, challenge, null, null);
+        return open(config, transport, clock, SequencerAssembly.following(clock), challenge,
+                null, null);
     }
 
-    /** Builds the graph with the live EndpointSlice view used by durable-segment hints. */
+    /**
+     * Builds the graph with the live EndpointSlice view used by durable-segment
+     * hints, and {@code mono} beside {@code clock} for fast mode's lease-time
+     * fence (M13.27d).
+     */
     public static Assembly open(ServerConfig config, SequencerTransport transport, Clock clock,
-            LeaseChallenge challenge, EndpointSliceView peerView, CrossAzBytes crossAz)
-            throws IOException {
+            MonotonicClock mono, LeaseChallenge challenge, EndpointSliceView peerView,
+            CrossAzBytes crossAz) throws IOException {
         Objects.requireNonNull(config, "config");
         Objects.requireNonNull(challenge, "challenge");
         BinStore store = StoreFactory.open(config.store());
         try {
-            return new Assembly(config, store, true, transport, clock, challenge,
+            return new Assembly(config, store, true, transport, clock, mono, challenge,
                     ChainBackfill::inBackground, peerView, crossAz, null, LeaseManager::new,
                     GovernorWiring.DEFAULT);
         } catch (RuntimeException | IOException failed) {
@@ -149,7 +155,8 @@ public final class Assembly implements AutoCloseable {
             SequencerTransport transport, Clock clock, EndpointSliceView peerView,
             CrossAzBytes crossAz) throws IOException {
         return new Assembly(config, Objects.requireNonNull(store, "store"), false,
-                transport, clock, LeaseChallenge.NEVER, ChainBackfill::inBackground,
+                transport, clock, SequencerAssembly.following(clock),
+                LeaseChallenge.NEVER, ChainBackfill::inBackground,
                 peerView, crossAz, null, LeaseManager::new, GovernorWiring.DEFAULT);
     }
 
@@ -158,7 +165,8 @@ public final class Assembly implements AutoCloseable {
             CrossAzBytes crossAz, DurableSegmentSignalSender.PeerPost signalPost)
             throws IOException {
         return new Assembly(config, Objects.requireNonNull(store, "store"), false,
-                transport, clock, LeaseChallenge.NEVER, ChainBackfill::inBackground,
+                transport, clock, SequencerAssembly.following(clock),
+                LeaseChallenge.NEVER, ChainBackfill::inBackground,
                 peerView, crossAz, signalPost, LeaseManager::new, GovernorWiring.DEFAULT);
     }
 
@@ -173,7 +181,8 @@ public final class Assembly implements AutoCloseable {
             SequencerTransport transport, Clock clock, BackfillStarter backfillStarter,
             GovernorWiring.GovernorFactory governorFactory) throws IOException {
         return new Assembly(config, Objects.requireNonNull(store, "store"), false,
-                transport, clock, LeaseChallenge.NEVER, backfillStarter, null, null, null,
+                transport, clock, SequencerAssembly.following(clock),
+                LeaseChallenge.NEVER, backfillStarter, null, null, null,
                 LeaseManager::new, governorFactory);
     }
 
@@ -182,14 +191,15 @@ public final class Assembly implements AutoCloseable {
             RetentionAssembly.LeaseManagerFactory leaseManagerFactory)
             throws IOException {
         return new Assembly(config, Objects.requireNonNull(store, "store"), false,
-                transport, clock, LeaseChallenge.NEVER, ChainBackfill::inBackground,
+                transport, clock, SequencerAssembly.following(clock),
+                LeaseChallenge.NEVER, ChainBackfill::inBackground,
                 null, null, null, leaseManagerFactory, GovernorWiring.DEFAULT);
     }
 
     private Assembly(ServerConfig config, BinStore raw, boolean ownsStore,
-            SequencerTransport transport, Clock clock, LeaseChallenge challenge,
-            BackfillStarter backfillStarter, EndpointSliceView peerView, CrossAzBytes crossAz,
-            DurableSegmentSignalSender.PeerPost signalPost,
+            SequencerTransport transport, Clock clock, MonotonicClock mono,
+            LeaseChallenge challenge, BackfillStarter backfillStarter, EndpointSliceView peerView,
+            CrossAzBytes crossAz, DurableSegmentSignalSender.PeerPost signalPost,
             RetentionAssembly.LeaseManagerFactory leaseManagerFactory,
             GovernorWiring.GovernorFactory governorFactory) throws IOException {
         this.config = Objects.requireNonNull(config, "config");
@@ -223,8 +233,8 @@ public final class Assembly implements AutoCloseable {
         this.watermarks = new WatermarkTable(clock, kept.reportTimeout(), kept.copyExpiry(),
                 kept.minRetention());
 
-        this.sequencer = SequencerAssembly.create(config, store, transport, clock, challenge,
-                leaseManagerFactory, backfillStarter, metrics);
+        this.sequencer = SequencerAssembly.create(config, store, transport, clock, mono,
+                challenge, leaseManagerFactory, backfillStarter, metrics);
         // ⚠️ NOT PUSHED ONTO `toClose`, AND THAT IS NOT AN OMISSION.
         // `DefaultIngest.close()` closes the sequencer it was given and says so
         // in its own javadoc, and `FleetSequencer.close()` has no idempotence

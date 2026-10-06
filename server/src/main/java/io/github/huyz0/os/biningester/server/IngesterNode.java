@@ -138,6 +138,18 @@ public final class IngesterNode implements AutoCloseable {
     public static IngesterNode start(ServerConfig config, Clock clock,
             Supplier<Optional<String>> token,
             java.util.List<java.security.cert.X509Certificate> trust) throws IOException {
+        return start(config, clock, SequencerAssembly.following(clock), token, trust);
+    }
+
+    /**
+     * The same, with the monotonic clock fast mode's lease-time fence reads
+     * beside {@code clock} (M13.27d); {@link Main} passes the JDK's.
+     */
+    public static IngesterNode start(ServerConfig config, Clock clock,
+            io.github.huyz0.os.biningester.sequencer.MonotonicClock mono,
+            Supplier<Optional<String>> token,
+            java.util.List<java.security.cert.X509Certificate> trust) throws IOException {
+        Objects.requireNonNull(mono, "mono");
         Objects.requireNonNull(config, "config");
         Objects.requireNonNull(trust, "trust");
         Objects.requireNonNull(clock, "clock");
@@ -155,7 +167,7 @@ public final class IngesterNode implements AutoCloseable {
         // feed it. Without one the challenge is NEVER, which is exactly the
         // behaviour before M8.13: failover bounded by the TTL alone.
         EndpointSliceView view = config.membership().isPresent() ? new EndpointSliceView() : null;
-        Assembly assembly = Assembly.open(config, transport, clock,
+        Assembly assembly = Assembly.open(config, transport, clock, mono,
                 view == null ? LeaseChallenge.NEVER : view, view, crossAz);
         java.util.List<String> journal = new java.util.concurrent.CopyOnWriteArrayList<>();
         assembly.journal(journal::add);
