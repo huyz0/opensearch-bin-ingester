@@ -107,7 +107,20 @@ public final class FrontDoor implements AutoCloseable {
     public static FrontDoor start(Assembly assembly, Clock clock,
             java.util.function.Consumer<String> journal,
             io.github.huyz0.os.biningester.binstore.CrossAzBytes crossAz) {
+        return start(assembly, clock, journal, crossAz, java.util.Optional.empty());
+    }
+
+    /**
+     * The same, serving the fast frames' peer route with {@code fastFrames}
+     * (M13.27h): every node passes its own; a door without one serves no
+     * fast frame.
+     */
+    public static FrontDoor start(Assembly assembly, Clock clock,
+            java.util.function.Consumer<String> journal,
+            io.github.huyz0.os.biningester.binstore.CrossAzBytes crossAz,
+            java.util.Optional<io.github.huyz0.os.biningester.sequencer.FastFrameRouter> fastFrames) {
         Objects.requireNonNull(crossAz, "crossAz");
+        Objects.requireNonNull(fastFrames, "fastFrames");
         Objects.requireNonNull(assembly, "assembly");
         Objects.requireNonNull(journal, "journal");
         Objects.requireNonNull(clock, "clock");
@@ -124,7 +137,8 @@ public final class FrontDoor implements AutoCloseable {
                 name -> assembly.catalog().resolve(name)
                         .map(io.github.huyz0.os.biningester.format.IndexRegistration::aliases)
                         .orElse(java.util.List.of()));
-        WebServer server = build(config, assembly, clock, gate, crossAz, admission, quotas);
+        WebServer server = build(config, assembly, clock, gate, crossAz, admission, quotas,
+                fastFrames);
         try {
             server.start();
         } catch (RuntimeException notBound) {
@@ -181,7 +195,8 @@ public final class FrontDoor implements AutoCloseable {
 
     private static WebServer build(ServerConfig config, Assembly assembly, Clock clock,
             DrainGate gate, io.github.huyz0.os.biningester.binstore.CrossAzBytes crossAz,
-            LaneAdmission admission, io.github.huyz0.os.biningester.ingest.IndexQuotas quotas) {
+            LaneAdmission admission, io.github.huyz0.os.biningester.ingest.IndexQuotas quotas,
+            java.util.Optional<io.github.huyz0.os.biningester.sequencer.FastFrameRouter> fastFrames) {
         HttpRouting.Builder routes = HttpRouting.builder()
                 // ⚠️ HELIDON'S OWN SHUTDOWN HOOK IS OFF. Left on, a `SIGTERM`
                 // runs it alongside `Main`'s, and it stops the listener while
@@ -226,6 +241,9 @@ public final class FrontDoor implements AutoCloseable {
         if (config.adminCost()) {
             routes.register(new AdminCostService(top -> costReport(assembly, top)));
         }
+        // ⚠️ M13.27h: the fast frames' peer route, behind the node's own fence.
+        fastFrames.ifPresent(router -> routes.register(
+                new io.github.huyz0.os.biningester.http.FastFrameService(router)));
         String macroPath = System.getProperty("binstore.macro.path");
         if (macroPath != null && !macroPath.isBlank()) {
             routes.register(new MacroCountsService(assembly, macroPath, crossAz));
@@ -322,6 +340,8 @@ public final class FrontDoor implements AutoCloseable {
                         io.github.huyz0.os.biningester.binstore.CrossAzBytes.Transport.INBOX_DRAIN)
                 + ",\"durableSegmentSignal\":" + crossAz.crossAzBytes(
                         io.github.huyz0.os.biningester.binstore.CrossAzBytes.Transport.DURABLE_SEGMENT_SIGNAL)
+                + ",\"fastFrame\":" + crossAz.crossAzBytes(
+                        io.github.huyz0.os.biningester.binstore.CrossAzBytes.Transport.FAST_FRAME)
                 + "}\n";
     }
 

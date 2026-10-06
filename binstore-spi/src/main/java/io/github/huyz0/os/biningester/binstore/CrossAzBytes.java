@@ -102,7 +102,14 @@ public final class CrossAzBytes {
         INBOX_DRAIN,
 
         /** A key-only durable-segment hint sent to a remote-AZ cache owner. */
-        DURABLE_SEGMENT_SIGNAL
+        DURABLE_SEGMENT_SIGNAL,
+
+        /**
+         * A fast frame sent to a peer (ADR-0082 §2; M13.27h): a write's
+         * COMMIT and REPLICA as much as a JOIN -- fast mode's own share of
+         * NFR-5, which ADR-0081 made conditional on it.
+         */
+        FAST_FRAME
     }
 
     /**

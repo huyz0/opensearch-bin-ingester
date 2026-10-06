@@ -193,8 +193,13 @@ public final class IngesterNode implements AutoCloseable {
                         membership.service(), token, view, trust,
                         ignored -> assembly.metrics().endpointSliceWatchFailed());
             }
+            // ⚠️ M13.27h: answered as this incarnation, behind this pod's fence.
+            io.github.huyz0.os.biningester.sequencer.FastFrameRouter fastFrames =
+                    new io.github.huyz0.os.biningester.sequencer.FastFrameRouter(
+                            config.podUid(), fastDisk.fence());
             IngesterNode node = new IngesterNode(assembly,
-                    FrontDoor.start(assembly, clock, journal::add, crossAz), transport, clock,
+                    FrontDoor.start(assembly, clock, journal::add, crossAz,
+                            Optional.of(fastFrames)), transport, clock,
                     journal, crossAz, fastDisk);
             if (watch != null) {
                 node.watch = watch.start();
