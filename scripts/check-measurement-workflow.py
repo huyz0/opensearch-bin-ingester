@@ -108,13 +108,50 @@ def cost_job_failures(workflow: str) -> list[str]:
     return problems
 
 
+SHUTDOWN_CLASSES = ("ConfigExitCodeIT", "ShutdownDrainIT")
+
+# ⚠️ THE REFUSAL's CONTENT, NOT ITS NAME (M13.60 review P2): a renamed or
+# emptied step is what lets a skipped shutdown case read as a pass.
+SHUTDOWN_REFUSAL = (
+    "for c in " + " ".join(SHUTDOWN_CLASSES) + "; do",
+    'test -f "$f" || { echo "::error::$c did not run"; exit 1; }',
+    "grep -q 'skipped=\"0\"' \"$f\" || { echo \"::error::$c skipped a case\"; exit 1; }",
+)
+
+
+def shutdown_failures(workflow: str) -> list[str]:
+    """The only run of the shutdown hook and the SIGTERM drain (M13.56, M13.60)."""
+    lines = workflow.splitlines()
+    shutdown = job_block(lines, "shutdown")
+    if shutdown is None:
+        return ["measurement workflow must define the shutdown job"]
+    problems = []
+    # ⚠️ EXACT LINES (its review P1): a substring takes `timeout-minutes: 100`.
+    if "    timeout-minutes: 10" not in shutdown:
+        problems.append("shutdown job must retain its ten-minute L2 budget")
+    stripped = [line.strip() for line in shutdown]
+    for name in SHUTDOWN_CLASSES:
+        if f"--tests '*server.{name}'" not in stripped:
+            problems.append(f"shutdown job must run {name}")
+    if any(each not in stripped for each in SHUTDOWN_REFUSAL):
+        problems.append("shutdown job must refuse a case that did not run or was skipped")
+    # ⚠️ A STEP's FIRST KEY TOO (its review round 2, P4): `- if: false`.
+    keys = [line.lstrip().removeprefix("- ") for line in shutdown]
+    if any(key.startswith("continue-on-error:") for key in keys):
+        problems.append("shutdown job must fail the measurement workflow on regression")
+    if any(key.startswith("if:") for key in keys):
+        problems.append("shutdown job and its steps must not be conditionally skipped")
+    return problems
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workflow", type=Path, required=True)
     parser.add_argument("--ci", type=Path)
     args = parser.parse_args()
     try:
-        problems = failures(args.workflow.read_text(encoding="utf-8"))
+        workflow = args.workflow.read_text(encoding="utf-8")
+        problems = failures(workflow) + shutdown_failures(workflow)
     except OSError as error:
         print(f"cannot read measurement workflow {args.workflow}: {error}", file=sys.stderr)
         return 2
@@ -135,6 +172,7 @@ def main() -> int:
             print(problem, file=sys.stderr)
         return 1
     print("measurement workflow includes the scheduled L2S soak job")
+    print("measurement workflow includes the blocking L2 SIGTERM shutdown job")
     if args.ci is not None:
         print("measurement workflow includes full cost points and non-gating latency trends")
         print("CI workflow includes the blocking fast L1 cost subset")

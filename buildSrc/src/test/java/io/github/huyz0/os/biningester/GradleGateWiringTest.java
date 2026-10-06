@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
@@ -156,6 +158,103 @@ class GradleGateWiringTest {
         Run ignoredRefusal = checkMeasurementWorkflow(ignoredNightlyRefusal, ci);
         assertThat(ignoredRefusal.exitCode()).isEqualTo(1);
         assertThat(ignoredRefusal.output()).contains("gate the measurement");
+    }
+
+    /**
+     * The nightly SIGTERM shutdown job (M13.56) is required, blocking and
+     * refused when a case did not run (M13.60): it is the only run of the
+     * shutdown hook and the drain anywhere, so losing it loses them.
+     */
+    @Test
+    void measurementWorkflowRequiresTheBlockingShutdownJob() throws Exception {
+        Path root = repository();
+        Path measurement = root.resolve(".github/workflows/measurement.yml");
+        Path ci = root.resolve(".github/workflows/ci.yml");
+        String original = Files.readString(measurement);
+        Path fixture = root.resolve("buildSrc/build/tmp/measurement-l2")
+                .resolve(UUID.randomUUID().toString());
+        Files.createDirectories(fixture);
+
+        String refusal = "      - name: Refuse a shutdown case that did not run\n"
+                + "        run: |\n"
+                + "          for c in ConfigExitCodeIT ShutdownDrainIT; do\n";
+        String header = "  shutdown:\n    name: \"L2 — SIGTERM shutdown\"\n    runs-on: ubuntu-latest\n"
+                + "    timeout-minutes: 10\n";
+        // each mutation, and the refusal that must name it (M13.60 review T4)
+        Map<String, String[]> broken = new LinkedHashMap<>();
+        broken.put("removed", new String[] {
+            original.replace("  shutdown:\n", "  shutdown_removed:\n"),
+            "must define the shutdown job"});
+        broken.put("step-ignored", new String[] {original.replace(
+                "      - name: Shutdown hook and SIGTERM drain\n",
+                "      - name: Shutdown hook and SIGTERM drain\n        continue-on-error: true\n"),
+            "fail the measurement workflow"});
+        broken.put("job-ignored", new String[] {
+            original.replace("  shutdown:\n", "  shutdown:\n    continue-on-error: true\n"),
+            "fail the measurement workflow"});
+        broken.put("step-conditional", new String[] {original.replace(
+                "      - name: Refuse a shutdown case that did not run\n",
+                "      - name: Refuse a shutdown case that did not run\n        if: false\n"),
+            "conditionally skipped"});
+        broken.put("job-conditional", new String[] {
+            original.replace("  shutdown:\n", "  shutdown:\n    if: false\n"),
+            "conditionally skipped"});
+        broken.put("refusal-emptied", new String[] {original.replace(refusal,
+                "      - name: Refuse a shutdown case that did not run\n        run: |\n"
+                        + "          true\n          for c in nothing; do\n"),
+            "refuse a case that did not run"});
+        broken.put("refusal-one-class", new String[] {original.replace(
+                "          for c in ConfigExitCodeIT ShutdownDrainIT; do\n",
+                "          for c in ConfigExitCodeIT; do\n"),
+            "refuse a case that did not run"});
+        broken.put("refusal-no-result-check", new String[] {original.replace(
+                "            test -f \"$f\" || { echo \"::error::$c did not run\"; exit 1; }\n", ""),
+            "refuse a case that did not run"});
+        broken.put("refusal-no-skip-check", new String[] {original.replace(
+                "            grep -q 'skipped=\"0\"' \"$f\" || { echo \"::error::$c skipped a case\";"
+                        + " exit 1; }\n", ""),
+            "refuse a case that did not run"});
+        broken.put("step-first-key-conditional", new String[] {original.replace(
+                "      - name: Refuse a shutdown case that did not run\n",
+                "      - if: false\n        name: Refuse a shutdown case that did not run\n"),
+            "conditionally skipped"});
+        broken.put("no-config-exit", new String[] {original.replace(
+                "          --tests '*server.ConfigExitCodeIT'\n", ""),
+            "must run ConfigExitCodeIT"});
+        broken.put("no-shutdown-drain", new String[] {original.replace(
+                "          --tests '*server.ShutdownDrainIT'\n", ""),
+            "must run ShutdownDrainIT"});
+        broken.put("timeout-100", new String[] {original.replace(header,
+                header.replace("timeout-minutes: 10\n", "timeout-minutes: 100\n")),
+            "ten-minute"});
+        broken.put("timeout-at-a-step", new String[] {original.replace(header,
+                header.replace("    timeout-minutes: 10\n", "")).replace(
+                "      - name: Shutdown hook and SIGTERM drain\n",
+                "      - name: Shutdown hook and SIGTERM drain\n        timeout-minutes: 10\n"),
+            "ten-minute"});
+        for (Map.Entry<String, String[]> each : broken.entrySet()) {
+            String workflowText = each.getValue()[0];
+            assertThat(workflowText).as("the premise: %s mutates", each.getKey())
+                    .isNotEqualTo(original);
+            Path workflow = fixture.resolve(each.getKey() + ".yml");
+            Files.writeString(workflow, workflowText);
+            Run run = checkMeasurementWorkflow(workflow, ci);
+            assertThat(run.exitCode()).as("%s: %s", each.getKey(), run.output()).isEqualTo(1);
+            // ⚠️ THE CHECK's OWN WORDS FOR THIS FIXTURE, NOT A CRASH's: a
+            // traceback also exits 1 and can name the job it fell over in.
+            assertThat(run.output()).as(each.getKey()).contains(each.getValue()[1])
+                    .doesNotContain("Traceback");
+        }
+        Path valid = fixture.resolve("valid.yml");
+        Files.writeString(valid, original);
+        Run alone = checkMeasurementWorkflow(valid);
+        assertThat(alone.exitCode()).as("checked without --ci too: %s", alone.output()).isZero();
+        assertThat(alone.output()).contains("SIGTERM shutdown job");
+        // ⚠️ AND REFUSED WITHOUT --ci (its review round 2, T6): the nightly job
+        // is checked whether or not the CI workflow is.
+        Run removedAlone = checkMeasurementWorkflow(fixture.resolve("removed.yml"));
+        assertThat(removedAlone.exitCode()).as(removedAlone.output()).isEqualTo(1);
+        assertThat(removedAlone.output()).contains("must define the shutdown job");
     }
 
     @Test
