@@ -104,9 +104,42 @@ jobs:
         # gitignored .harness/. AGENTS.md § Gates.
         run: SKIP=check-reviewed,check-tdd pre-commit run --all-files --show-diff-on-failure
 
+  # ⚠️ FILLS L1's DEPENDENCY CACHE OFF L1's CLOCK (M13.59, its review P4): a
+  # save tars the whole cache before learning its key exists, so it runs
+  # here, beside the gates, and only on a miss -- never inside L1's 5 min.
+  gradle-deps:
+    name: "Gradle dependencies"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+      - name: Restore Gradle dependencies
+        id: gradle-deps
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.gradle/caches/modules-2
+            ~/.gradle/wrapper
+          key: gradle-deps-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties', 'gradle/libs.versions.toml') }}
+      - name: Resolve what L1 compiles against
+        if: steps.gradle-deps.outputs.cache-hit != 'true'
+        run: ./gradlew testClasses integrationTestClasses --no-daemon
+      - name: Save Gradle dependencies
+        if: steps.gradle-deps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.gradle/caches/modules-2
+            ~/.gradle/wrapper
+          key: gradle-deps-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties', 'gradle/libs.versions.toml') }}
+
   l1:
     name: "L1 — unit tests"
-    needs: gates
+    needs: [gates, gradle-deps]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -115,6 +148,19 @@ jobs:
         with:
           distribution: temurin
           java-version: '25'
+      # ⚠️ RESTORED ONLY: the `gradle-deps` job fills it (M13.59). Uncached, a
+      # run spent ~22 s resolving buildSrc's dependencies and ~3.5 s fetching
+      # the distribution before compiling anything (run 37464230792). NOT
+      # setup-java's `cache: gradle`, which saves only from a job that
+      # succeeded and carries the local BUILD cache, from which an unchanged
+      # module's tests are served rather than run (its review, P1, P3).
+      - name: Restore Gradle dependencies
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.gradle/caches/modules-2
+            ~/.gradle/wrapper
+          key: gradle-deps-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties', 'gradle/libs.versions.toml') }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
