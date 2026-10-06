@@ -149,7 +149,7 @@ class NodeStartTest {
         // resend from.
         try (IngesterNode node = Main.run(configFile().toString())) {
             WebClient client = WebClient.builder()
-                    .baseUri("http://localhost:" + node.port()).build();
+                    .baseUri("http://localhost:" + node.peerPort()).build();
 
             assertThat(client.post(io.github.huyz0.os.biningester.http.HttpSequencerTransport.PATH)
                     .submit(new byte[] {1, 2, 3}).status().code())

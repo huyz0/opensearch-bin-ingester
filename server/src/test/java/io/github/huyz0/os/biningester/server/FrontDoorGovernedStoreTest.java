@@ -62,7 +62,7 @@ class FrontDoorGovernedStoreTest {
             long reachedBefore = store.listsUnder(Inbox.prefixFor(PREFIX));
             long recoveryBefore = assembly.governor().counts().recoveryLists();
 
-            WebClient http = WebClient.builder().baseUri("http://127.0.0.1:" + door.port())
+            WebClient http = WebClient.builder().baseUri("http://127.0.0.1:" + door.peerPort())
                     .build();
             try (HttpClientResponse drained = http.post(HttpSequencerTransport.DRAIN_PATH)
                     .queryParam("pod", "podz").request()) {

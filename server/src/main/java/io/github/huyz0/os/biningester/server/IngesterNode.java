@@ -160,6 +160,20 @@ public final class IngesterNode implements AutoCloseable {
             io.github.huyz0.os.biningester.sequencer.MonotonicClock mono,
             Supplier<Optional<String>> token,
             java.util.List<java.security.cert.X509Certificate> trust) throws IOException {
+        return start(config, clock, mono, token, trust, Optional.empty());
+    }
+
+    /**
+     * The same, with what {@code peer.tls = mutual} read at start (ADR-0084;
+     * M13.52c): the peer listener presents it and requires its CA. {@link Main}
+     * passes it; a node whose {@code peer.tls} is {@code off} passes none.
+     */
+    public static IngesterNode start(ServerConfig config, Clock clock,
+            io.github.huyz0.os.biningester.sequencer.MonotonicClock mono,
+            Supplier<Optional<String>> token,
+            java.util.List<java.security.cert.X509Certificate> trust,
+            Optional<PeerTls> peerTls) throws IOException {
+        Objects.requireNonNull(peerTls, "peerTls");
         Objects.requireNonNull(mono, "mono");
         Objects.requireNonNull(config, "config");
         Objects.requireNonNull(trust, "trust");
@@ -224,7 +238,7 @@ public final class IngesterNode implements AutoCloseable {
                             (io.github.huyz0.os.biningester.format.FastWriteFrame.Commit) body));
             IngesterNode node = new IngesterNode(assembly,
                     FrontDoor.start(assembly, clock, journal::add, crossAz,
-                            Optional.of(fastFrames)), transport, clock,
+                            Optional.of(fastFrames), peerTls), transport, clock,
                     journal, crossAz, fastDisk);
             if (watch != null) {
                 node.watch = watch.start();
@@ -291,6 +305,11 @@ public final class IngesterNode implements AutoCloseable {
     /** The port the front door actually bound. */
     public int port() {
         return door.port();
+    }
+
+    /** The peer listener's bound port, where the four pod-to-pod routes are (ADR-0084). */
+    public int peerPort() {
+        return door.peerPort();
     }
 
     /**

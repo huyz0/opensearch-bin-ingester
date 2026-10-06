@@ -41,8 +41,11 @@ class IngesterNodeWatchRateTest {
         RuntimeException last = null;
         for (int attempt = 0; attempt < 5; attempt++) {
             int port;
-            try (ServerSocket probe = new ServerSocket(0)) {
+            int peerPort;
+            try (ServerSocket probe = new ServerSocket(0);
+                        ServerSocket peerProbe = new ServerSocket(0)) {
                 port = probe.getLocalPort();
+                peerPort = peerProbe.getLocalPort();
             }
             Map<String, String> settings = new HashMap<>();
             settings.put(ServerProperties.POD_ID, pod);
@@ -55,7 +58,8 @@ class IngesterNodeWatchRateTest {
             settings.put(ServerProperties.STORE_KIND, "local-fs");
             settings.put(ServerProperties.STORE_ROOT, dir.resolve("store").toString());
             settings.put(ServerProperties.LEASE_RENEW, "PT1S");
-            settings.put(ServerProperties.ENDPOINT, "http://localhost:" + port);
+            settings.put(ServerProperties.PEER_PORT, Integer.toString(peerPort));
+            settings.put(ServerProperties.ENDPOINT, "http://localhost:" + peerPort);
             settings.put(ServerProperties.HTTP_PORT, Integer.toString(port));
             settings.put(ServerProperties.PRODUCER_SUBJECT, "producer-1");
             settings.put(ServerProperties.PRODUCER_ALLOWED_INDICES, "logs");

@@ -65,10 +65,14 @@ class IngesterNodeWatchTest {
         RuntimeException last = null;
         for (int attempt = 0; attempt < 5; attempt++) {
             int port;
-            try (ServerSocket probe = new ServerSocket(0)) {
+            int peerPort;
+            try (ServerSocket probe = new ServerSocket(0);
+                        ServerSocket peerProbe = new ServerSocket(0)) {
                 port = probe.getLocalPort();
+                peerPort = peerProbe.getLocalPort();
             }
-            settings.put(ServerProperties.ENDPOINT, "http://localhost:" + port);
+            settings.put(ServerProperties.PEER_PORT, Integer.toString(peerPort));
+            settings.put(ServerProperties.ENDPOINT, "http://localhost:" + peerPort);
             settings.put(ServerProperties.HTTP_PORT, Integer.toString(port));
             try {
                 return IngesterNode.start(ServerProperties.parse(settings), Clock.systemUTC());

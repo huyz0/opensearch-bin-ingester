@@ -49,6 +49,8 @@ public final class NodeProcess implements AutoCloseable {
     private final ThreadLocal<WebClient> producerClients;
 
     private final ChaosProxy peers;
+    /** The peer listener's port (ADR-0084); 0 for a node made by {@code forTest}. */
+    private int peerPort;
 
     private NodeProcess(String podId, String uid, int port, Path log, Process process,
             ChaosProxy peers, String macroPath, java.time.Duration producerReadTimeout) {
@@ -174,14 +176,18 @@ public final class NodeProcess implements AutoCloseable {
     private static NodeProcess startOn(int port, Path dir, String podId,
             Map<String, String> settings, Options options, Path countsFile,
             java.time.Duration producerReadTimeout) throws Exception {
-        ChaosProxy peers = options.peerProxy() ? new ChaosProxy("localhost", port) : null;
+        // ⚠️ THE PEER LISTENER's OWN PORT (ADR-0084): the four pod-to-pod
+        // routes are there, so the endpoint every peer dials -- and the proxy
+        // a test puts in front of it -- names it, never the producer port.
+        int peerPort = NodePorts.probeFreePort();
+        ChaosProxy peers = options.peerProxy() ? new ChaosProxy("localhost", peerPort) : null;
         Map<String, String> all = new LinkedHashMap<>();
         all.put("pod.id", podId);
         all.put("pod.az", "az-a");
         all.put("trust.domain", "cluster-a");
         // ⚠️ THE ADVERTISED ENDPOINT IS THE PROXY when there is one: it is
         // what the lease names, so it is what every peer dials.
-        all.put("endpoint", "http://localhost:" + (peers == null ? port : peers.port()));
+        all.put("endpoint", "http://localhost:" + (peers == null ? peerPort : peers.port()));
         all.put("http.port", String.valueOf(port));
         all.put("producer.subject", "producer-1");
         all.put("producer.allowed-indices", "logs");
@@ -189,7 +195,7 @@ public final class NodeProcess implements AutoCloseable {
         String uid = UUID.randomUUID().toString();
         all.put("pod.uid", uid);
         all.put("peer.tls", "off");
-        all.put("peer.port", "0");
+        all.put("peer.port", String.valueOf(peerPort));
         Properties properties = new Properties();
         all.forEach(properties::setProperty);
         Path file = dir.resolve(podId + ".properties");
@@ -221,6 +227,7 @@ public final class NodeProcess implements AutoCloseable {
         builder.environment().putAll(ChaosBucket.credentials());
         NodeProcess node = new NodeProcess(podId, uid, port, log, builder.start(), peers,
                 macroPath, producerReadTimeout);
+        node.peerPort = peerPort;
         node.awaitServingOrClose();
         return node;
     }
@@ -278,6 +285,11 @@ public final class NodeProcess implements AutoCloseable {
 
     public String podId() {
         return podId;
+    }
+
+    /** Where this node's pod-to-pod routes are (ADR-0084): never the producer port. */
+    public int peerPort() {
+        return peerPort;
     }
 
     /**

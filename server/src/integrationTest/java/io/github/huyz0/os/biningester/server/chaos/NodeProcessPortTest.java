@@ -30,7 +30,8 @@ class NodeProcessPortTest {
 
     /** What `Main` prints when the front door refused its port (FrontDoor, M8.4). */
     private static final String REFUSED =
-            "could not start: the front door did not bind port 50174 -- it is already in use";
+            "could not start: the front door did not bind port 50174 (http.port) or its peer "
+                    + "port 50175 (peer.port) -- one is already in use";
 
     @Test
     void aNodeThatLostItsPortIsStartedAgainOnAFreshOne() throws Exception {

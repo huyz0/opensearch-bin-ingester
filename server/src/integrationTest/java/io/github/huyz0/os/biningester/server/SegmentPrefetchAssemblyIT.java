@@ -62,8 +62,12 @@ class SegmentPrefetchAssemblyIT {
                     StaticCredentialsProvider.create(AwsBasicCredentials.create(
                             S3Fixture.ACCESS_KEY, S3Fixture.SECRET_KEY))));
             int ownerPort = freePort();
-            var writerConfig = config("writera", "az-a", "127.0.0.1", ownerPort, storeConfig);
-            var ownerConfig = config("ownerb", "az-b", "127.0.0.1", ownerPort, storeConfig);
+            // ⚠️ A FLEET-WIDE PEER PORT (ADR-0084): the hint goes there now.
+            int peerPort = freePort();
+            var writerConfig = config("writera", "az-a", "127.0.0.1", ownerPort, peerPort,
+                    storeConfig);
+            var ownerConfig = config("ownerb", "az-b", "127.0.0.1", ownerPort, peerPort,
+                    storeConfig);
             String writerAddress = java.net.InetAddress.getByName("localhost").getHostAddress();
             EndpointSliceView writerView = peers(writerAddress, "writera", "az-a",
                     "localhost", "ownerb", "az-b");
@@ -140,11 +144,11 @@ class SegmentPrefetchAssemblyIT {
     }
 
     private static ServerConfig config(String pod, String az, String host, int port,
-            StoreConfig store) {
+            int peerPort, StoreConfig store) {
         return new ServerConfig(pod, az, "cluster-a", PREFIX, store,
                 Duration.ofSeconds(10), Duration.ofSeconds(3),
                 "http://" + host + ":" + port, IngestConfig.defaults("cluster-a"), port,
-                "producer", Set.of("logs"), RetentionConfig.defaults(), java.util.Optional.empty(), "uid-" + pod, io.github.huyz0.os.biningester.ingest.CostTopKReporter.DEFAULT_INTERVAL, io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(), false, java.util.Optional.empty(), PeerConfig.off(0));
+                "producer", Set.of("logs"), RetentionConfig.defaults(), java.util.Optional.empty(), "uid-" + pod, io.github.huyz0.os.biningester.ingest.CostTopKReporter.DEFAULT_INTERVAL, io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(), false, java.util.Optional.empty(), PeerConfig.off(peerPort));
     }
 
     private static SequencerTransport noPeers() {

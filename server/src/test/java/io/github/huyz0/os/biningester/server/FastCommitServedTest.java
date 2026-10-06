@@ -73,7 +73,7 @@ class FastCommitServedTest {
     private FastFrame.Body send(FastFrame.Body body) throws Exception {
         HttpFastTransport transport = new HttpFastTransport(Duration.ofSeconds(5),
                 CrossAzBytes.untracked());
-        return FastFrame.decode(transport.exchange("http://localhost:" + node.port(),
+        return FastFrame.decode(transport.exchange("http://localhost:" + node.peerPort(),
                 FastFrame.encode(1, POD.podUid(), "uid-pod1", body))).body();
     }
 

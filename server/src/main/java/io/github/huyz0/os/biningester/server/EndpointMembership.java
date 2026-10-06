@@ -46,19 +46,22 @@ final class EndpointMembership implements Membership {
     /**
      * The sender of this pod's durable-segment hints to those peers, or
      * {@code null} where there is no live view or no port to name (extracted
-     * from {@code Assembly} by M11.1, unchanged).
+     * from {@code Assembly} by M11.1). ⚠️ ON THE PEER PORT (ADR-0084 decision 2,
+     * M13.52c review round 1, P1): {@code /ctl/durable-segment} is served on
+     * the peer listener only, and {@code peer.port} is fleet-wide.
      */
     static DurableSegmentSignalSender signalSender(ServerConfig config,
             EndpointSliceView peerView, CrossAzBytes crossAz,
             DurableSegmentSignalSender.PeerPost signalPost) {
-        return peerView != null && config.httpPort() > 0
+        int peerPort = config.peer().port();
+        return peerView != null && peerPort > 0
                 ? signalPost == null
                         ? new DurableSegmentSignalSender(
                                 crossAz == null ? CrossAzBytes.untracked() : crossAz,
-                                config.httpPort())
+                                peerPort)
                         : new DurableSegmentSignalSender(
                                 crossAz == null ? CrossAzBytes.untracked() : crossAz,
-                                config.httpPort(), signalPost)
+                                peerPort, signalPost)
                 : null;
     }
 }

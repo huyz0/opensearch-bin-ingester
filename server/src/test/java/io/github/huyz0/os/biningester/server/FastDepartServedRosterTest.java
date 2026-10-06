@@ -53,7 +53,7 @@ class FastDepartServedRosterTest {
 
     private FastFrame.Body exchange(FastFrame.Body ask) throws Exception {
         byte[] answer = new HttpFastTransport(Duration.ofSeconds(5), CrossAzBytes.untracked())
-                .exchange("http://localhost:" + node.port(),
+                .exchange("http://localhost:" + node.peerPort(),
                         FastFrame.encode(1, POD.podUid(), "uid-pod1", ask));
         return FastFrame.decode(answer).body();
     }

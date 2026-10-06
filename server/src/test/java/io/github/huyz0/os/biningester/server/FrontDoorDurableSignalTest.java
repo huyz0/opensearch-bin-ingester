@@ -37,7 +37,7 @@ class FrontDoorDurableSignalTest {
         try (var store = new MemoryBinStore();
                 var assembly = Assembly.open(config, store, noPeers, Clock.systemUTC());
                 var door = FrontDoor.start(assembly, Clock.systemUTC());
-                var response = WebClient.builder().baseUri("http://127.0.0.1:" + door.port())
+                var response = WebClient.builder().baseUri("http://127.0.0.1:" + door.peerPort())
                         .build().post("/ctl/durable-segment")
                         .submit(new DurableSegmentSignalFrame("writerb", "az-b",
                                 new SegmentKey("bins/cluster-a", 1, "writerb", 1, 48).key())

@@ -937,6 +937,7 @@ journal's fsync and the Kubernetes pod lookup are injected seams.
 | M13.66 | Opened by M13.65's review: the fast-frame counter mixes control and data frames; split it | FR-17, NFR-5 |
 | M13.67 | Opened by M13.65's CI evidence: L1 still overran on test execution; two test forks per module on CI | — (harness) |
 | M13.68 | Opened while M13.66 was under review: a registration right after a node's start timed out its 2 s client once in CI; measure why | — (quality) |
+| M13.69 | Opened by M13.52c: the kill-mid-commit chaos test's final drain answered 409 by the leaseholder, before and after the peer listener | FR-11 |
 | M13.6 | R5: no silent defaults; the started client's clock pinned | FR-6, FR-19 |
 | M13.6a | R5: `IndexQuotas`' three-argument and `ConsumerDeliveryQueues`' two-argument constructors removed; `SilentDefaultsGoneTest` per module | — (quality) |
 | M13.6b | R5: `ServerConfig`'s older constructors removed | — (quality) |

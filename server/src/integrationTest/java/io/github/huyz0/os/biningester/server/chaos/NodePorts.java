@@ -64,11 +64,13 @@ final class NodePorts {
 
     /**
      * Whether {@code log} is the front door's refusal of exactly {@code port}
-     * (FrontDoor: "the front door did not bind port N -- it is already in
-     * use"), which `Main` prints before exiting.
+     * (FrontDoor: "the front door did not bind port N (http.port) or its peer
+     * port P (peer.port) -- one is already in use"), which `Main` prints
+     * before exiting. ⚠️ EITHER PORT LOST READS AS THIS ONE (M13.52c): the
+     * retry probes both afresh.
      */
     static boolean lostItsPort(String log, int port) {
-        return log.contains("the front door did not bind port " + port + " -- it is already in use");
+        return log.contains("the front door did not bind port " + port + " (http.port)");
     }
 
     /**

@@ -119,6 +119,25 @@ public final class FrontDoor implements AutoCloseable {
             java.util.function.Consumer<String> journal,
             io.github.huyz0.os.biningester.binstore.CrossAzBytes crossAz,
             java.util.Optional<io.github.huyz0.os.biningester.sequencer.FastFrameRouter> fastFrames) {
+        return start(assembly, clock, journal, crossAz, fastFrames, java.util.Optional.empty());
+    }
+
+    /**
+     * The same, the peer listener (ADR-0084; M13.52c) presenting {@code peerTls}
+     * and requiring a client certificate from its CA -- which a node whose
+     * {@code peer.tls} is {@code mutual} must pass, and one whose is
+     * {@code off} must not.
+     */
+    public static FrontDoor start(Assembly assembly, Clock clock,
+            java.util.function.Consumer<String> journal,
+            io.github.huyz0.os.biningester.binstore.CrossAzBytes crossAz,
+            java.util.Optional<io.github.huyz0.os.biningester.sequencer.FastFrameRouter> fastFrames,
+            java.util.Optional<PeerTls> peerTls) {
+        Objects.requireNonNull(peerTls, "peerTls");
+        if ((assembly.config().peer().mode() == PeerConfig.Mode.MUTUAL) != peerTls.isPresent()) {
+            throw new IllegalArgumentException("peer.tls is " + assembly.config().peer().mode()
+                    + ", and what it read must be passed exactly when it is MUTUAL");
+        }
         Objects.requireNonNull(crossAz, "crossAz");
         Objects.requireNonNull(fastFrames, "fastFrames");
         Objects.requireNonNull(assembly, "assembly");
@@ -138,7 +157,7 @@ public final class FrontDoor implements AutoCloseable {
                         .map(io.github.huyz0.os.biningester.format.IndexRegistration::aliases)
                         .orElse(java.util.List.of()));
         WebServer server = build(config, assembly, clock, gate, crossAz, admission, quotas,
-                fastFrames);
+                fastFrames, peerTls);
         try {
             server.start();
         } catch (RuntimeException notBound) {
@@ -159,10 +178,13 @@ public final class FrontDoor implements AutoCloseable {
             // `Main`, which exits; visible to an embedder that catches this and
             // retries, and finds the port it just failed on still occupied.
             stopQuietly(server, notBound);
-            throw new IllegalStateException("the front door did not bind port "
-                    + config.httpPort() + " -- it is already in use", notBound);
+            throw new IllegalStateException(notBound(config), notBound);
         }
-        if (server.port() <= 0) {
+        // ⚠️ EITHER LISTENER's -1 (M13.52c review rounds 1 and 2, P2, P4): a
+        // node whose peer routes cannot be reached must not take a term --
+        // and Helidon answers -1 for BOTH sockets when either fails, so the
+        // refusal names both, never guessing which.
+        if (server.port() <= 0 || server.port(PEER_SOCKET) <= 0) {
             // ⚠️ **HELIDON DOES NOT ALWAYS THROW WHEN THE PORT IS HELD. IT CAN
             // RETURN -1.** MEASURED on Helidon 4 against a plain
             // `ServerSocket` holding the port inside a Gradle test JVM:
@@ -174,10 +196,19 @@ public final class FrontDoor implements AutoCloseable {
             // `IngesterNode.start` closes the graph -- which releases the term
             // -- on exactly this exception.
             server.stop();
-            throw new IllegalStateException("the front door did not bind port "
-                    + config.httpPort() + " -- it is already in use");
+            throw new IllegalStateException(notBound(config));
         }
         return new FrontDoor(server, gate, journal, admission, quotas);
+    }
+
+    /**
+     * ⚠️ BOTH PORTS, BOTH KEYS (M13.52c review round 2, P4): Helidon starts its
+     * listeners in parallel and says neither which threw nor which answered -1.
+     */
+    private static String notBound(ServerConfig config) {
+        return "the front door did not bind port " + config.httpPort() + " ("
+                + ServerProperties.HTTP_PORT + ") or its peer port " + config.peer().port()
+                + " (" + ServerProperties.PEER_PORT + ") -- one is already in use";
     }
 
     /**
@@ -196,7 +227,25 @@ public final class FrontDoor implements AutoCloseable {
     private static WebServer build(ServerConfig config, Assembly assembly, Clock clock,
             DrainGate gate, io.github.huyz0.os.biningester.binstore.CrossAzBytes crossAz,
             LaneAdmission admission, io.github.huyz0.os.biningester.ingest.IndexQuotas quotas,
-            java.util.Optional<io.github.huyz0.os.biningester.sequencer.FastFrameRouter> fastFrames) {
+            java.util.Optional<io.github.huyz0.os.biningester.sequencer.FastFrameRouter> fastFrames,
+            java.util.Optional<PeerTls> peerTls) {
+        // ⚠️ THE FOUR POD-TO-POD ROUTES, AND ONLY THEY, ON THE PEER LISTENER
+        // (ADR-0084): /ctl/commit and /ctl/drain, /ctl/durable-segment,
+        // /ctl/fast. The producer port answers them 404 and keeps the
+        // plugin's /ctl/register and /ctl/progress.
+        HttpRouting.Builder peerRoutes = HttpRouting.builder()
+                .register(new CommitService(assembly::heldTerm,
+                        // ⚠️ THE NODE's STORE, NOT THE RAW BACKEND (M10.26):
+                        // the drain's LIST is declared recovery, so it is
+                        // counted and never refused, as at a takeover.
+                        (term, pod) -> io.github.huyz0.os.biningester.sequencer.InboxDrain.drain(
+                                assembly.nodeStore(), config.prefix(), term, pod,
+                                assembly.metrics()::failedIntentBatch)))
+                .register(new DurableSegmentSignalService(assembly.peerView(),
+                        assembly::prefetchDurableSegment));
+        // ⚠️ M13.27h: the fast frames' peer route, behind the node's own fence.
+        fastFrames.ifPresent(router -> peerRoutes.register(
+                new io.github.huyz0.os.biningester.http.FastFrameService(router)));
         HttpRouting.Builder routes = HttpRouting.builder()
                 // ⚠️ HELIDON'S OWN SHUTDOWN HOOK IS OFF. Left on, a `SIGTERM`
                 // runs it alongside `Main`'s, and it stops the listener while
@@ -214,13 +263,6 @@ public final class FrontDoor implements AutoCloseable {
                         .register(new BulkService(assembly.ingest(), config.principal(), gate,
                                 admission, quotas,
                                 new RefusalMetrics(assembly.refusedIndices())))
-                        .register(new CommitService(assembly::heldTerm,
-                                // ⚠️ THE NODE's STORE, NOT THE RAW BACKEND (M10.26):
-                                // the drain's LIST is declared recovery, so it is
-                                // counted and never refused, as at a takeover.
-                                (term, pod) -> io.github.huyz0.os.biningester.sequencer.InboxDrain.drain(
-                                        assembly.nodeStore(), config.prefix(), term, pod,
-                                        assembly.metrics()::failedIntentBatch)))
                 .register(new SubscriptionService(assembly.hub(), assembly.catalog(),
                         assembly.watermarks(), clock, assembly.floors(), gate, crossAz))
                 .register(new CatchUpService(assembly::respondCatchUp))
@@ -231,9 +273,7 @@ public final class FrontDoor implements AutoCloseable {
                 // per-pod NFR-5 counter. ⚠️ AND ITS ABSENT-KEY `stat` THROUGH
                 // THE NODE's STORE (M10.26), so it is counted like the GETs.
                 .register(SegmentFetchService.over(
-                        config.prefix(), assembly.segmentProxy(), assembly.nodeStore(), crossAz))
-                .register(new DurableSegmentSignalService(assembly.peerView(),
-                        assembly::prefetchDurableSegment));
+                        config.prefix(), assembly.segmentProxy(), assembly.nodeStore(), crossAz));
         // ⚠️ M11.4, ADR-0077: each index's share of THIS pod's requests, from the
         // ledger its stores charge. No request of its own. ⚠️ ONLY WHERE TURNED ON
         // (M12.6, M11 review F7): it names indices on the producer port, which is
@@ -241,15 +281,33 @@ public final class FrontDoor implements AutoCloseable {
         if (config.adminCost()) {
             routes.register(new AdminCostService(top -> costReport(assembly, top)));
         }
-        // ⚠️ M13.27h: the fast frames' peer route, behind the node's own fence.
-        fastFrames.ifPresent(router -> routes.register(
-                new io.github.huyz0.os.biningester.http.FastFrameService(router)));
         String macroPath = System.getProperty("binstore.macro.path");
         if (macroPath != null && !macroPath.isBlank()) {
             routes.register(new MacroCountsService(assembly, macroPath, crossAz));
         }
         return WebServer.builder().shutdownHook(false).port(config.httpPort())
-                .routing(routes).build();
+                .routing(routes)
+                .putSocket(PEER_SOCKET, socket -> {
+                    socket.port(config.peer().port()).routing(peerRoutes);
+                    // ⚠️ A CLIENT CERTIFICATE REQUIRED, never optional: a
+                    // client without one is the caller ADR-0084 exists for.
+                    // ⚠️ TLS 1.3 ONLY (ADR-0084 decision 3; its review
+                    // round 1, P3): a 1.2 client is refused at the handshake.
+                    peerTls.ifPresent(tls -> socket.tls(t -> t
+                            .enabledProtocols(java.util.List.of("TLSv1.3"))
+                            .privateKey(tls.key())
+                            .privateKeyCertChain(tls.chain())
+                            .trust(tls.ca())
+                            .clientAuth(requiredClientAuth())));
+                })
+                .build();
+    }
+
+    /** The peer listener's socket name (ADR-0084). */
+    static final String PEER_SOCKET = "peer";
+
+    private static io.helidon.common.tls.TlsClientAuth requiredClientAuth() {
+        return io.helidon.common.tls.TlsClientAuth.REQUIRED;
     }
 
     private static final class MacroCountsService implements io.helidon.webserver.http.HttpService {
@@ -395,6 +453,11 @@ public final class FrontDoor implements AutoCloseable {
      */
     public int port() {
         return server.port();
+    }
+
+    /** The peer listener's bound port (ADR-0084). */
+    public int peerPort() {
+        return server.port(PEER_SOCKET);
     }
 
     /**

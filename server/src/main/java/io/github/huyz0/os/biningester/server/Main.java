@@ -153,13 +153,13 @@ public final class Main {
                 .orElse(java.util.List.of());
         // ⚠️ THE PEER FILES ARE READ ONCE, AT STARTUP, and a bad one refuses
         // the node (ADR-0084): a rotated certificate takes effect at a restart.
-        // The listener that presents them is M13.52c's.
-        peerTls(config.peer(), message -> System.getLogger(Main.class.getName())
-                .log(System.Logger.Level.WARNING, message));
+        Optional<PeerTls> peerTls = peerTls(config.peer(),
+                message -> System.getLogger(Main.class.getName())
+                        .log(System.Logger.Level.WARNING, message));
         // ⚠️ AND THE MONOTONIC ONE BESIDE IT (M13.27d): fast mode's lease-time
         // fence reads both, and only independent clocks catch each other.
         return IngesterNode.start(config, Clock.systemUTC(), System::nanoTime,
-                () -> tokenFile.map(Main::readToken), trust);
+                () -> tokenFile.map(Main::readToken), trust, peerTls);
     }
 
     /**

@@ -263,7 +263,7 @@ class KillSequencerMidCommitIT {
     }
 
     private static void requestInboxDrain(NodeProcess leaseholder) throws Exception {
-        URI endpoint = URI.create("http://localhost:" + leaseholder.port()
+        URI endpoint = URI.create("http://localhost:" + leaseholder.peerPort()
                 + HttpSequencerTransport.DRAIN_PATH);
         HttpRequest request = HttpRequest.newBuilder(endpoint).timeout(Duration.ofSeconds(30))
                 .POST(HttpRequest.BodyPublishers.noBody()).build();

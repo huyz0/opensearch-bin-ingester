@@ -49,11 +49,14 @@ class IngesterNodeJoinsTest {
         RuntimeException last = null;
         for (int attempt = 0; attempt < 5; attempt++) {
             int port;
-            try (ServerSocket probe = new ServerSocket(0)) {
+            int peerPort;
+            try (ServerSocket probe = new ServerSocket(0);
+                    ServerSocket peerProbe = new ServerSocket(0)) {
                 port = probe.getLocalPort();
+                peerPort = peerProbe.getLocalPort();
             }
             try {
-                return IngesterNode.start(ServerProperties.parse(settings(pod, az, port)),
+                return IngesterNode.start(ServerProperties.parse(settings(pod, az, port, peerPort)),
                         Clock.systemUTC());
             } catch (RuntimeException taken) {
                 last = taken;
@@ -62,18 +65,18 @@ class IngesterNodeJoinsTest {
         throw last;
     }
 
-    private Map<String, String> settings(String pod, String az, int port) {
+    private Map<String, String> settings(String pod, String az, int port, int peerPort) {
         Map<String, String> settings = new HashMap<>();
         settings.put(ServerProperties.POD_ID, pod);
         settings.put(ServerProperties.POD_UID, "uid-" + pod);
         settings.put(ServerProperties.PEER_TLS, "off");
-        settings.put(ServerProperties.PEER_PORT, "0");
+        settings.put(ServerProperties.PEER_PORT, Integer.toString(peerPort));
         settings.put(ServerProperties.POD_AZ, az);
         settings.put(ServerProperties.TRUST_DOMAIN, "cluster-a");
         settings.put(ServerProperties.PREFIX, "bins/cluster-a");
         settings.put(ServerProperties.STORE_KIND, "local-fs");
         settings.put(ServerProperties.STORE_ROOT, dir.resolve("store").toString());
-        settings.put(ServerProperties.ENDPOINT, "http://localhost:" + port);
+        settings.put(ServerProperties.ENDPOINT, "http://localhost:" + peerPort);
         settings.put(ServerProperties.HTTP_PORT, Integer.toString(port));
         settings.put(ServerProperties.LEASE_RENEW, "PT1S");
         settings.put(ServerProperties.PRODUCER_SUBJECT, "producer-1");

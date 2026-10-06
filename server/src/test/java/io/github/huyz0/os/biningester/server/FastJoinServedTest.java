@@ -55,7 +55,7 @@ class FastJoinServedTest {
         HttpFastTransport transport = new HttpFastTransport(Duration.ofSeconds(5),
                 CrossAzBytes.untracked());
 
-        byte[] answer = transport.exchange("http://localhost:" + node.port(),
+        byte[] answer = transport.exchange("http://localhost:" + node.peerPort(),
                 FastFrame.encode(1, POD.podUid(), "uid-pod1",
                         new FastFrame.Join(POD, FastFrame.Held.NONE)));
 
