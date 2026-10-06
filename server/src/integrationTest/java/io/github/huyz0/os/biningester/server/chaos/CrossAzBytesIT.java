@@ -144,10 +144,11 @@ class CrossAzBytesIT {
                         + values.get("fastFrame");
                 assertThat(byTransport).as("named transport counters must partition cross-AZ bytes")
                         .isEqualTo(values.get("crossAzBytes"));
-                assertThat(values.get("crossAzBytes") * 1_000L)
-                        .as("cross-AZ bytes=%d, producer bytes=%d", values.get("crossAzBytes"),
+                assertThat(dataPath(values) * 1_000L)
+                        .as("data-path cross-AZ bytes=%d, producer bytes=%d", dataPath(values),
                                 accepted)
                         .isLessThan(accepted);
+                controlWithinBudget(values, bucket);
                 System.out.println("M9.10 cross-AZ bytes: producer=" + accepted
                         + ", counters=" + values);
             } finally {
@@ -263,12 +264,14 @@ class CrossAzBytesIT {
                 assertThat(a.get("inlinePush"))
                         .as("every delivered batch was above the inline cap, so served proxy")
                         .isZero();
-                // (1) every transport, proxy payloads included, both pods.
-                long crossAz = a.get("crossAzBytes") + b.get("crossAzBytes");
+                // (1) every data-path transport, proxy payloads included, both pods.
+                long crossAz = dataPath(a) + dataPath(b);
                 assertThat(crossAz * 1_000L)
-                        .as("cross-AZ bytes=%d (az-a %d, az-b %d), producer bytes=%d", crossAz,
-                                a.get("crossAzBytes"), b.get("crossAzBytes"), accepted)
+                        .as("data-path cross-AZ bytes=%d (az-a %d, az-b %d), producer bytes=%d",
+                                crossAz, dataPath(a), dataPath(b), accepted)
                         .isLessThan(accepted);
+                controlWithinBudget(a, bucket);
+                controlWithinBudget(b, bucket);
                 // ⚠️ AND AGAINST WHAT THE CONSUMER READ, which is the traffic
                 // these bytes were spent on. No write-only phase pads either
                 // denominator (M10.4 review T1): M9.10's 2,000 unconsumed
@@ -406,12 +409,14 @@ class CrossAzBytesIT {
                 assertThat(a.get("inlinePush"))
                         .as("the writer inlined nothing ACROSS the zone")
                         .isZero();
-                // (2) NFR-5 against what the consumer read.
-                long crossAz = a.get("crossAzBytes") + b.get("crossAzBytes");
+                // (2) NFR-5 against what the consumer read -- the data path.
+                long crossAz = dataPath(a) + dataPath(b);
                 assertThat(crossAz * 1_000L)
-                        .as("cross-AZ bytes=%d (az-a %d, az-b %d), consumed producer bytes=%d",
-                                crossAz, a.get("crossAzBytes"), b.get("crossAzBytes"), consumed)
+                        .as("data-path cross-AZ bytes=%d (az-a %d, az-b %d), consumed producer "
+                                + "bytes=%d", crossAz, dataPath(a), dataPath(b), consumed)
                         .isLessThan(consumed);
+                controlWithinBudget(a, bucket);
+                controlWithinBudget(b, bucket);
             } finally {
                 if (writer != null) {
                     writer.close();
@@ -546,7 +551,9 @@ class CrossAzBytesIT {
                 Map<String, Long> b = counters(Files.readString(proxyCounts,
                         StandardCharsets.UTF_8));
                 long servedStreams = delivered.fetches();
-                long crossAz = a.get("crossAzBytes") + b.get("crossAzBytes");
+                long crossAz = dataPath(a) + dataPath(b);
+                controlWithinBudget(a, bucket);
+                controlWithinBudget(b, bucket);
                 System.out.println("M10.34 partitions=" + STREAMS + ", K (streams per segment)="
                         + (delivered.sizes.isEmpty() ? 0 : servedStreams / delivered.sizes.size())
                         + " NFR-5: consumed=" + consumed
@@ -633,6 +640,29 @@ class CrossAzBytesIT {
         int sizeOf(String key) {
             return sizes.get(key);
         }
+    }
+
+    /**
+     * ⚠️ NFR-5's NUMERATOR IS THE DATA PATH (M13.65, ADR-0081 §12): the
+     * fast-mode control frames are a fixed cost per pod per term, bounded
+     * apart by {@link #controlWithinBudget}, never a share of ingested bytes.
+     */
+    private static long dataPath(Map<String, Long> pod) {
+        return pod.get("crossAzBytes") - pod.get("fastFrame");
+    }
+
+    /** NFR-5's control-frame budget: 1 KiB per pod per term, an empty journal (M13.65). */
+    static final long CONTROL_BYTES_PER_TERM = 1024;
+
+    /** {@code pod}'s fast frames within the budget, for every term the lease reached. */
+    private static void controlWithinBudget(Map<String, Long> pod, ChaosBucket bucket)
+            throws java.io.IOException {
+        long terms = bucket.lease().map(io.github.huyz0.os.biningester.format.Lease::epoch)
+                .orElse(1L);
+        assertThat(pod.get("fastFrame"))
+                .as("⚠️ the control frames' own budget: %d B per pod per term, %d term(s)",
+                        CONTROL_BYTES_PER_TERM, terms)
+                .isLessThanOrEqualTo(CONTROL_BYTES_PER_TERM * terms);
     }
 
     private static long bodyBytes(List<String> ids) {

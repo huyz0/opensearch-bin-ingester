@@ -31,7 +31,7 @@ IDs are stable and cited by specs, tasks, and ADRs. Status is `agreed`,
 | NFR-3 | LIST on hot paths | zero, and a hard runtime ceiling of ~1/s sustained — ⚠️ except the four declared recovery paths (chain-end recovery, chain replay, takeover backfill, inbox drain), each bounded by its trigger instead (ADR-0075) | agreed (amended by ADR-0075) |
 | NFR-16 | Governor refusals in steady state | zero | agreed |
 | NFR-4 | Read request rate | scales with segments, AZs, nodes — never with shards, partitions or indices | agreed |
-| NFR-5 | Cross-AZ bytes | < 0.1% of ingested bytes | agreed |
+| NFR-5 | Cross-AZ bytes | < 0.1% of ingested bytes over the data path; fast-mode control frames (JOIN, JOINED, DEPART, HELD, HELD_STATUS) apart, ≤ 1 KiB per pod per term while its journal holds nothing (M13.65, ADR-0081 §12) | agreed |
 | NFR-6 | Service memory | bounded and independent of request size | agreed |
 | NFR-7 | End-to-end latency | p99 < 3× the configured flush window | agreed |
 | NFR-8 | RPO for acked writes, `ack_mode=durable` | 0 | agreed |

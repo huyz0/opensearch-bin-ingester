@@ -706,6 +706,19 @@ stream per switch to `wal=false` (M13.22b review round 3, P3).
 - **NFR-5** holds only for `wal=false` indices: a fast record crosses AZs
   `max(q − 1, [W ∉ AZ(L)])` times for its quorum, plus once per interested pod in
   another AZ.
+- ⚠️ **NFR-5 is a ratio over the data path; the control frames have their own
+  budget** (amended by M13.65, the user's decision of 2026-10-07). Every pod
+  joins every term (§1), so a follower in another AZ sends one JOIN and is
+  answered one JOINED per term -- 262 bytes measured with an empty journal --
+  whatever it ingests: a fixed cost per pod per term, not per byte, which a
+  short run's ratio cannot amortise (`CrossAzBytesIT`'s 0.7 MB run went from
+  0.072% to 0.11% on it). So NFR-5's ratio counts the data-path transports, and
+  the fast-mode control frames (JOIN, JOINED, DEPART, HELD, HELD_STATUS) are
+  bounded apart: ≤ 1 KiB per pod per term while the pod's journal holds
+  nothing. A HELD body grows with what a journal holds, bounded by its cap
+  (§7); that bound is the journal's, not this one. Rejected: a larger test
+  workload (the threshold unmoved, but what is measured chosen to pass), and
+  joining only when a fast index exists (§1's every pod joins).
 - **NFR-9** holds for every index except one with a term-record value in an
   unclosed earlier term, whose default-path commits wait for a takeover's
   decisions (§5, §10).
