@@ -120,6 +120,29 @@ it has not been told it joined. **So the incarnations that can hold a term's
 copies are the roster's members, fixed once the roster is fenced**: a deposed
 leader's later roster write fails its `putIfMatch`.
 
+⚠️ **How a pod learns its leader** (amended by M13.27n; the paragraph above
+said when, not how). A pod that does not hold the lease READS IT once per
+lease renew interval -- one GET, no `stat`, absent or unreadable meaning "look
+again" -- and JOINs the term it names when that term is newer than the last it
+joined and led by another incarnation. An IDLE pod forwards no commit, so
+ADR-0039's forward-path lease read never reaches it, and holders in every AZ
+depend on idle pods joining. The rate is one GET per pod per renew interval
+(about 0.33/s per pod at the shipped 3 s), scaling with pods (non-negotiable
+6) and costing about $0.35 a month per pod at S3's GET price. Rejected:
+learning only from a successor's FENCE (§5 step 4) -- it reaches only members
+of terms still unclosed after the term start, and M13.27g closes an empty
+predecessor at the start, so an idle fleet would hear nothing; and a leader
+announcing itself to every pod it can see -- a new frame kind, and a pod the
+announcement missed would still need the read.
+⚠️ This amends M8's idle-pod criterion (M8 SPEC R3, NFR-2: an idle pod owes
+its lease renewals and nothing else) for a pod that does NOT lead: it now
+owes this one lease GET per renew interval as well. A leader still owes its
+renewals alone -- the watch reads nothing while its term serves.
+`IdlePodCostSoakTest` builds the assembly and its front door, not a node, so
+it runs no watch and does not see this read: the watch's rate is pinned by
+`LeaderWatchRunTest` (one read per interval) and by a node test bounding a
+follower's reads above (M13.27n review round 2, P5; round 3, P7).
+
 Writes: one roster creation per term; one write per batch of joins (at most one
 per pod per term); one per departure per unclosed term listing the pod; at most
 one term-record write per `min_upload_interval` (§7); one fence and one close

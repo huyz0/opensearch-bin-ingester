@@ -976,6 +976,7 @@ journal's fsync and the Kubernetes pod lookup are injected seams.
 | M13.27j | Split from M13.27d: joins answered at the leader (narrowed: the pod side is M13.27n) | FR-17 |
 | M13.27o | Split from M13.27j at its review budget: joins answered at the leader, with round 3's findings fixed | FR-17 |
 | M13.27n | Split from M13.27j: joins sent by every pod at startup and each leader change, how an idle pod learns its leader, and answers' bytes counted | FR-17 |
+| M13.27r | Split from M13.27n at its review budget: joins sent by every pod, with round 3's findings fixed | FR-17 |
 | M13.27k | Split from M13.27d: departure answered at the leader (narrowed: a pod's departure at a graceful stop is M13.27p) | FR-17 |
 | M13.27p | Split from M13.27k: a pod's departure at a graceful stop | FR-17 |
 | M13.27q | Opened by M13.27k's review: a deposed term refuses HELD, the roster read bounded, a served HELD pinned | FR-17 |

@@ -39,13 +39,34 @@ public final class FastFrameRouter {
         }
     }
 
+    /**
+     * Told the size of every answer sent (M13.27n; M13.27h review round 1, P1):
+     * an answer is a cross-AZ byte as much as a request is.
+     */
+    @FunctionalInterface
+    public interface AnswerMeter {
+        /**
+         * @param asked the frame answered, decoded; null when it was refused
+         *     from its header alone
+         */
+        void answered(FastFrame.Header header, FastFrame.Body asked, int bytes);
+
+        AnswerMeter NONE = (header, asked, bytes) -> { };
+    }
+
     private final String selfUid;
     private final EpochFence fence;
+    private final AnswerMeter meter;
     private final Map<Integer, Handler> handlers = new ConcurrentHashMap<>();
 
     public FastFrameRouter(String selfUid, EpochFence fence) {
+        this(selfUid, fence, AnswerMeter.NONE);
+    }
+
+    public FastFrameRouter(String selfUid, EpochFence fence, AnswerMeter meter) {
         this.selfUid = Objects.requireNonNull(selfUid, "selfUid");
         this.fence = Objects.requireNonNull(fence, "fence");
+        this.meter = Objects.requireNonNull(meter, "meter");
     }
 
     /** Answers every later frame of {@code kind} with {@code handler}. */
@@ -90,12 +111,15 @@ public final class FastFrameRouter {
             throw new Malformed(malformed);
         }
         FastFrame.Body answer = handler.answer(decoded.header(), decoded.body());
-        return Optional.of(FastFrame.encode(fence.highest(), selfUid, header.senderUid(),
-                answer));
+        byte[] encoded = FastFrame.encode(fence.highest(), selfUid, header.senderUid(), answer);
+        meter.answered(header, decoded.body(), encoded.length);
+        return Optional.of(encoded);
     }
 
     private byte[] refuse(FastFrame.Header header, FastFrame.Reason reason, String text) {
-        return FastFrame.encode(fence.highest(), selfUid, header.senderUid(),
+        byte[] encoded = FastFrame.encode(fence.highest(), selfUid, header.senderUid(),
                 new FastFrame.Refused(reason, Optional.empty(), text));
+        meter.answered(header, null, encoded.length);
+        return encoded;
     }
 }

@@ -173,7 +173,9 @@ class NodeShutdownTest {
 
         node.close();
 
-        assertThat(node.shutdownJournal()).containsExactly(DrainGate.READINESS_FAILED,
+        // ⚠️ M13.27n: the fast leader watch stops first -- only a ready pod joins.
+        assertThat(node.shutdownJournal()).containsExactly(FastPeer.WATCH_STOPPED,
+                DrainGate.READINESS_FAILED,
                 DrainGate.POLLS_RELEASED, DrainGate.BULK_REFUSED, FrontDoor.LISTENER_STOPPED,
                 Assembly.FLUSHED, Assembly.GRAPH_CLOSED);
         assertThat(node.gate().ready()).isFalse();

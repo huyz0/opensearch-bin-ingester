@@ -84,6 +84,8 @@ public final class IngesterNode implements AutoCloseable {
     private final java.util.List<String> journal;
     /** The epoch fence and fast journal (M13.27i). */
     private final FastDisk fastDisk;
+    /** The watch joining every term this pod learns of (M13.27n). */
+    private volatile FastPeer fastPeer;
     private volatile ShutdownSequence.Report lastShutdown;
     private volatile EndpointSliceWatch watch;
 
@@ -195,8 +197,7 @@ public final class IngesterNode implements AutoCloseable {
             }
             // ⚠️ M13.27h: answered as this incarnation, behind this pod's fence.
             io.github.huyz0.os.biningester.sequencer.FastFrameRouter fastFrames =
-                    new io.github.huyz0.os.biningester.sequencer.FastFrameRouter(
-                            config.podUid(), fastDisk.fence());
+                    FastPeer.router(config, fastDisk, crossAz);
             // ⚠️ M13.27o, M13.27k: a JOIN, DEPART or HELD is answered by the term
             // this pod leads, if any.
             for (int kind : new int[] {io.github.huyz0.os.biningester.format.FastFrame.KIND_JOIN,
@@ -212,6 +213,10 @@ public final class IngesterNode implements AutoCloseable {
             if (watch != null) {
                 node.watch = watch.start();
             }
+            // ⚠️ M13.27n: AFTER THE DOOR LISTENS, so this pod can answer the
+            // frames its joins lead to; it joins every term it learns of.
+            node.fastPeer = FastPeer.start(config, assembly.store(), fastDisk, crossAz,
+                    peerCommitTimeout(config), () -> FastPeer.leading(assembly), Thread::sleep);
             return node;
         } catch (RuntimeException | IOException failed) {
             // ⚠️ A `RuntimeException` IS THE ONLY THING `FrontDoor.start` CAN
@@ -241,6 +246,11 @@ public final class IngesterNode implements AutoCloseable {
      */
     public CrossAzBytes crossAzBytes() {
         return crossAz;
+    }
+
+    /** The watch joining every term, for a test that wants to look inside. */
+    FastPeer fastPeer() {
+        return fastPeer;
     }
 
     /** The epoch fence and fast journal, for a test that wants to look inside. */
@@ -278,6 +288,20 @@ public final class IngesterNode implements AutoCloseable {
         ShutdownSequence.Report report = ShutdownSequence.run(new ShutdownSequence.Steps() {
             @Override
             public void failReadiness() {
+                // ⚠️ THE WATCH STOPS FIRST (M13.27n review round 1, P2): only a
+                // ready pod joins (ADR-0081 §1), and a draining one joining a
+                // newer term would be chosen as a holder as it leaves.
+                FastPeer peer = fastPeer;
+                if (peer != null) {
+                    peer.close();
+                    // ⚠️ ONLY ONCE IT HAS STOPPED (M13.27n review round 3, T8,
+                    // P6): a watch still running past close's wait -- a JOIN
+                    // in flight ignoring its interrupt -- is not journaled
+                    // as stopped.
+                    if (!peer.watching()) {
+                        journal.add(FastPeer.WATCH_STOPPED);
+                    }
+                }
                 gate.failReadiness();
             }
 
@@ -334,6 +358,10 @@ public final class IngesterNode implements AutoCloseable {
                                 running.close();
                             }
                         } finally {
+                            FastPeer peer = fastPeer; // stopped already at readiness
+                            if (peer != null) {
+                                peer.close();
+                            }
                             // ⚠️ LAST: the lease is released above, so no
                             // frame of this pod's term needs the journal now.
                             fastDisk.close();
