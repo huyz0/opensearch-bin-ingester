@@ -102,10 +102,14 @@ over a fence bound (below).
 
 ## Consequences
 
-- **Cost.** A handshake per peer connection, not per frame: the clients keep
-  connections alive, so a pod's handshakes scale with its peers (pods), never
-  with records (non-negotiable 6); no object-store request. The CPU cost is
-  not measured here: M13.37's latency measurement runs with `mutual`.
+- **Cost.** A handshake per peer REQUEST, not per connection (amended by
+  M13.52d): every pod-to-pod client runs without keep-alive (M10.36, against
+  Helidon's connection-return race, M10.35), so each commit forward, drain,
+  fast frame and durable-segment hint opens its own TLS 1.3 connection. Those
+  requests scale with segments and terms, so the handshakes do too, never
+  with records (non-negotiable 6); no object-store request. Restoring
+  keep-alive would make it one per connection. The CPU cost is not measured
+  here: M13.37's latency measurement runs with `mutual`.
 - **Every configuration names `peer.tls` and `peer.port`.** Every
   property-built config in the tree, the tests' included, gains them --
   M13.51's lesson that a newly required key breaks every config not updated.

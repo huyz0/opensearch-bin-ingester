@@ -512,6 +512,10 @@ public final class ServerProperties {
         String[] keys = {PEER_TLS_CERT, PEER_TLS_KEY, PEER_TLS_CA};
         switch (tls) {
             case "off" -> {
+                if (!required(settings, ENDPOINT).startsWith("http://")) {
+                    throw new ConfigurationException(ENDPOINT + " is " + settings.get(ENDPOINT)
+                            + ": with " + PEER_TLS + " = off it is http://");
+                }
                 for (String key : keys) {
                     if (settings.containsKey(key)) {
                         throw new ConfigurationException(key + " is set with " + PEER_TLS
@@ -521,6 +525,12 @@ public final class ServerProperties {
                 return PeerConfig.off(port);
             }
             case "mutual" -> {
+                // ⚠️ THE ADVERTISED ENDPOINT SPEAKS WHAT THE LISTENER DOES
+                // (ADR-0084 decision 2; M13.52d): every peer dials it.
+                if (!required(settings, ENDPOINT).startsWith("https://")) {
+                    throw new ConfigurationException(ENDPOINT + " is " + settings.get(ENDPOINT)
+                            + ": with " + PEER_TLS + " = mutual it is https://");
+                }
                 return new PeerConfig(PeerConfig.Mode.MUTUAL, port,
                         java.util.Optional.of(new PeerConfig.Files(required(settings, PEER_TLS_CERT),
                                 required(settings, PEER_TLS_KEY), required(settings, PEER_TLS_CA))));

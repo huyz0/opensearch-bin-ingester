@@ -31,7 +31,8 @@ import java.time.Duration;
 final class WritePathAssembly {
 
     /** What {@link #create} built. */
-    record WritePath(DefaultIngest ingest, SegmentPrefetcher prefetcher) {
+    record WritePath(DefaultIngest ingest, SegmentPrefetcher prefetcher,
+            DurableSegmentSignalSender signalSender) {
     }
 
     /** How long a routed write waits for its index's registration: ADR-0015's default. */
@@ -82,7 +83,7 @@ final class WritePathAssembly {
             SegmentPrefetcher prefetcher = new SegmentPrefetcher(
                     new EndpointMembership(config, peers), ingest.segmentProxy(),
                     governor::discretionaryAllowed);
-            return new WritePath(ingest, prefetcher);
+            return new WritePath(ingest, prefetcher, signalSender);
         } catch (RuntimeException | IOException failed) {
             // ⚠️ THE TERM IS ALREADY TAKEN AT THIS POINT, and if this throws
             // nothing will ever hold a reference to the sequencer again.

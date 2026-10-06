@@ -54,14 +54,24 @@ final class EndpointMembership implements Membership {
             EndpointSliceView peerView, CrossAzBytes crossAz,
             DurableSegmentSignalSender.PeerPost signalPost) {
         int peerPort = config.peer().port();
+        // ⚠️ NO PLAINTEXT POST UNDER mutual (M13.52d review round 1, P2): it
+        // would dial https:// without the pod's certificate, or http:// a
+        // listener that speaks TLS -- every hint lost without a word.
+        if (signalPost == null && config.peer().mode() == PeerConfig.Mode.MUTUAL) {
+            throw new IllegalArgumentException("with " + ServerProperties.PEER_TLS
+                    + " = mutual the durable-segment hint needs the pod's certificate");
+        }
         return peerView != null && peerPort > 0
                 ? signalPost == null
                         ? new DurableSegmentSignalSender(
                                 crossAz == null ? CrossAzBytes.untracked() : crossAz,
                                 peerPort)
+                        // ⚠️ https UNDER mutual (ADR-0084; M13.52d), the post
+                        // presenting this pod's certificate.
                         : new DurableSegmentSignalSender(
                                 crossAz == null ? CrossAzBytes.untracked() : crossAz,
-                                peerPort, signalPost)
+                                peerPort, signalPost,
+                                config.peer().mode() == PeerConfig.Mode.MUTUAL)
                 : null;
     }
 }

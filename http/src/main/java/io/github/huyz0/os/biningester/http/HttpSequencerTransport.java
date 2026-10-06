@@ -77,6 +77,8 @@ public final class HttpSequencerTransport implements SequencerTransport {
     private final Duration timeout;
     private final CrossAzBytes crossAz;
     private volatile boolean closed;
+    /** The client TLS each peer connection presents, under {@code peer.tls = mutual} (ADR-0084). */
+    private final java.util.Optional<io.helidon.common.tls.Tls> tls;
 
     /**
      * @param timeout how long to wait for a peer. ⚠️ **A TIMEOUT THAT EXPIRES
@@ -102,6 +104,13 @@ public final class HttpSequencerTransport implements SequencerTransport {
      * fleet -- once as the forwarder's egress and once as the leaseholder's.
      */
     public HttpSequencerTransport(Duration timeout, CrossAzBytes crossAz) {
+        this(timeout, crossAz, java.util.Optional.empty());
+    }
+
+    /** The same, presenting {@code tls} to every peer (ADR-0084; M13.52d). */
+    public HttpSequencerTransport(Duration timeout, CrossAzBytes crossAz,
+            java.util.Optional<io.helidon.common.tls.Tls> tls) {
+        this.tls = Objects.requireNonNull(tls, "tls");
         this.crossAz = Objects.requireNonNull(crossAz, "crossAz");
         this.timeout = Objects.requireNonNull(timeout, "timeout");
         if (timeout.isZero() || timeout.isNegative()) {
@@ -348,12 +357,15 @@ public final class HttpSequencerTransport implements SequencerTransport {
         // is not HTTP: TTP", M10.35). A connection never re-queued cannot be
         // taken there; the cost is one TCP connect per request, and every
         // request here is per segment or per flush, never per record.
-        return clients.computeIfAbsent(endpoint, uri -> WebClient.builder()
-                .baseUri(URI.create(uri))
-                .connectTimeout(timeout)
-                .readTimeout(timeout)
-                .keepAlive(false)
-                .build());
+        return clients.computeIfAbsent(endpoint, uri -> {
+            var builder = WebClient.builder()
+                    .baseUri(URI.create(uri))
+                    .connectTimeout(timeout)
+                    .readTimeout(timeout)
+                    .keepAlive(false);
+            tls.ifPresent(builder::tls);
+            return builder.build();
+        });
     }
 
     /**

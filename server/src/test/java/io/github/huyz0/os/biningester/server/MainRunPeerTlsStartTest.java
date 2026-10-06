@@ -39,7 +39,9 @@ class MainRunPeerTlsStartTest {
                 "pod.id=pod1", "pod.uid=uid-pod1", "pod.az=az-a", "trust.domain=cluster-a",
                 "store.prefix=bins/cluster-a", "store.kind=local-fs",
                 "store.root=" + store.toString().replace('\\', '/'),
-                "endpoint=http://localhost:0", "http.port=0",
+                // the scheme the listener speaks (ADR-0084, M13.52d)
+                "endpoint=" + (List.of(peer).contains("peer.tls=mutual") ? "https" : "http")
+                        + "://localhost:0", "http.port=0",
                 "producer.subject=producer-1", "producer.allowed-indices=logs"));
         lines.addAll(List.of(peer));
         Files.writeString(file, String.join("\n", lines));

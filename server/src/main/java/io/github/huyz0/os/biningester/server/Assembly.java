@@ -80,6 +80,8 @@ public final class Assembly implements AutoCloseable {
     private final DefaultIngest ingest;
     private final EndpointSliceView peerView;
     private final SegmentPrefetcher prefetcher;
+    /** The hint's sender, null without a view or peer port; for a test (M13.52d). */
+    final DurableSegmentSignalSender signalSender;
     private final RoutedIngest routed;
     private final Deque<AutoCloseable> toClose = new ArrayDeque<>();
     /** The indices refused {@code 429} since the last top-K line (M12.5). */
@@ -109,23 +111,23 @@ public final class Assembly implements AutoCloseable {
     public static Assembly open(ServerConfig config, SequencerTransport transport, Clock clock,
             LeaseChallenge challenge) throws IOException {
         return open(config, transport, clock, SequencerAssembly.following(clock), challenge,
-                null, null);
+                null, null, null);
     }
 
     /**
-     * Builds the graph with the live EndpointSlice view used by durable-segment
-     * hints, and {@code mono} beside {@code clock} for fast mode's lease-time
-     * fence (M13.27d).
+     * With the hints' EndpointSlice view and {@code signalPost} -- the pod's certificate
+     * under mutual (ADR-0084), null for plaintext -- and fast mode's {@code mono} (M13.27d).
      */
     public static Assembly open(ServerConfig config, SequencerTransport transport, Clock clock,
             MonotonicClock mono, LeaseChallenge challenge, EndpointSliceView peerView,
-            CrossAzBytes crossAz) throws IOException {
+            CrossAzBytes crossAz, DurableSegmentSignalSender.PeerPost signalPost)
+            throws IOException {
         Objects.requireNonNull(config, "config");
         Objects.requireNonNull(challenge, "challenge");
         BinStore store = StoreFactory.open(config.store());
         try {
             return new Assembly(config, store, true, transport, clock, mono, challenge,
-                    ChainBackfill::inBackground, peerView, crossAz, null, LeaseManager::new,
+                    ChainBackfill::inBackground, peerView, crossAz, signalPost, LeaseManager::new,
                     GovernorWiring.DEFAULT);
         } catch (RuntimeException | IOException failed) {
             // ⚠️ THE STORE IS OURS AND THE CONSTRUCTOR THREW, so nobody else
@@ -249,6 +251,7 @@ public final class Assembly implements AutoCloseable {
                 signalPost, costLedger, governor);
         this.ingest = writePath.ingest();
         this.prefetcher = writePath.prefetcher();
+        this.signalSender = writePath.signalSender();
         // ⚠️ FROM HERE the governor reads the ingest's spacing; until now, the floor.
         stack.spacing().attach(this.ingest);
         toClose.push(this.ingest);

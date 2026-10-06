@@ -70,7 +70,8 @@ class PeerListenerStartTest {
         settings.put(ServerProperties.TRUST_DOMAIN, "cluster-a");
         settings.put(ServerProperties.PREFIX, "bins/cluster-a");
         settings.put(ServerProperties.STORE_KIND, "memory");
-        settings.put(ServerProperties.ENDPOINT, "https://localhost:0");
+        settings.put(ServerProperties.ENDPOINT, (tls.equals("mutual") ? "https" : "http")
+                + "://localhost:0");
         settings.put(ServerProperties.HTTP_PORT, "0");
         settings.put(ServerProperties.PRODUCER_SUBJECT, "producer-1");
         settings.put(ServerProperties.PRODUCER_ALLOWED_INDICES, "logs");

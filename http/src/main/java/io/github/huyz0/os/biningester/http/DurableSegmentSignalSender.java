@@ -28,22 +28,49 @@ public final class DurableSegmentSignalSender {
         void post(String endpoint, byte[] body) throws IOException;
     }
 
-    public DurableSegmentSignalSender(CrossAzBytes crossAz, int port, PeerPost post) {
+    /**
+     * The sender, its peers dialled at {@code https://} when {@code secure}
+     * (ADR-0084; M13.52d) -- with a {@code post} that presents this pod's
+     * certificate, {@link #httpPost(java.util.Optional)}'s.
+     */
+    public DurableSegmentSignalSender(CrossAzBytes crossAz, int port, PeerPost post,
+            boolean secure) {
         this.crossAz = Objects.requireNonNull(crossAz, "crossAz");
         if (port < 1 || port > 65535) {
             throw new IllegalArgumentException("port is not valid: " + port);
         }
         this.port = port;
         this.post = Objects.requireNonNull(post, "post");
+        this.scheme = secure ? "https" : "http";
+    }
+
+    /** The real post, presenting {@code tls} where there is one (ADR-0084; M13.52d). */
+    public static PeerPost httpPost(java.util.Optional<io.helidon.common.tls.Tls> tls) {
+        return new HttpPost(Objects.requireNonNull(tls, "tls"));
+    }
+
+    public DurableSegmentSignalSender(CrossAzBytes crossAz, int port, PeerPost post) {
+        this(crossAz, port, post, false);
     }
 
     private final CrossAzBytes crossAz;
     private final int port;
+    private final String scheme;
     private final PeerPost post;
+    private final java.util.concurrent.atomic.LongAdder lost =
+            new java.util.concurrent.atomic.LongAdder();
+
+    /**
+     * The hints whose post failed (M13.52d review round 1): each is swallowed,
+     * a lost warm being a cache miss, so this is the only trace one leaves.
+     */
+    public long lost() {
+        return lost.sum();
+    }
 
     /** Uses pooled Helidon clients for the node's configured HTTP port. */
     public DurableSegmentSignalSender(CrossAzBytes crossAz, int port) {
-        this(crossAz, port, new HttpPost());
+        this(crossAz, port, new HttpPost(java.util.Optional.empty()));
     }
 
     public List<String> send(DurableSegmentSignalFrame frame,
@@ -63,6 +90,7 @@ public final class DurableSegmentSignalSender {
                 post.post(target.endpoint(), body);
             } catch (IOException | RuntimeException unavailable) {
                 // A lost warm is a cache miss, never a reason to fail a durable write.
+                lost.increment();
             }
         }
         return List.copyOf(attempted);
@@ -76,7 +104,7 @@ public final class DurableSegmentSignalSender {
                     || endpoint.az().equals(frame.writerAz())) {
                 continue;
             }
-            String peerUri = peerUri(endpoint.address(), port);
+            String peerUri = peerUri(scheme, endpoint.address(), port);
             Peer peer;
             try {
                 peer = new Peer(endpoint.podId(), peerUri, endpoint.az());
@@ -93,15 +121,20 @@ public final class DurableSegmentSignalSender {
         return List.copyOf(selected);
     }
 
-    private static String peerUri(String address, int port) {
+    private static String peerUri(String scheme, String address, int port) {
         Objects.requireNonNull(address, "address");
         String host = address.indexOf(':') >= 0 && !address.startsWith("[")
                 ? "[" + address + "]" : address;
-        return "http://" + host + ":" + port;
+        return scheme + "://" + host + ":" + port;
     }
 
     private static final class HttpPost implements PeerPost {
         private final Map<String, WebClient> clients = new ConcurrentHashMap<>();
+        private final java.util.Optional<io.helidon.common.tls.Tls> tls;
+
+        HttpPost(java.util.Optional<io.helidon.common.tls.Tls> tls) {
+            this.tls = tls;
+        }
 
         @Override
         public void post(String endpoint, byte[] body) throws IOException {
@@ -125,9 +158,13 @@ public final class DurableSegmentSignalSender {
             }
             // ⚠️ NO KEEP-ALIVE (M10.36): shared by every flushing thread, and
             // exposed to Helidon 4.3.0's connection-return race (M10.35).
-            return clients.computeIfAbsent(endpoint, uri -> WebClient.builder()
-                    .baseUri(URI.create(uri)).connectTimeout(TIMEOUT).readTimeout(TIMEOUT)
-                    .keepAlive(false).build());
+            return clients.computeIfAbsent(endpoint, uri -> {
+                var builder = WebClient.builder()
+                        .baseUri(URI.create(uri)).connectTimeout(TIMEOUT).readTimeout(TIMEOUT)
+                        .keepAlive(false);
+                tls.ifPresent(builder::tls);
+                return builder.build();
+            });
         }
     }
 }

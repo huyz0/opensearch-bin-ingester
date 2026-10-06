@@ -33,7 +33,7 @@ class MainRunPeerTlsTest {
         Files.writeString(config, String.join("\n",
                 "pod.id=pod1", "pod.uid=uid-pod1", "pod.az=az-a", "trust.domain=cluster-a",
                 "store.prefix=bins/cluster-a", "store.kind=memory",
-                "endpoint=http://localhost:0", "http.port=0",
+                "endpoint=https://localhost:0", "http.port=0",
                 "producer.subject=producer-1", "producer.allowed-indices=logs",
                 "peer.tls=mutual", "peer.port=0",
                 "peer.tls.cert=" + fixture("pod1.pem"), "peer.tls.key=" + fixture("pod1.key"),

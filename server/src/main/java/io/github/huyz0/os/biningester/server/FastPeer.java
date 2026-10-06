@@ -129,9 +129,18 @@ final class FastPeer implements AutoCloseable {
     static FastPeer start(ServerConfig config, BinStore store, FastDisk disk,
             CrossAzBytes crossAz, PeerZones zones, Duration timeout,
             java.util.function.BooleanSupplier leading, LeaderWatch.Sleeper sleeper) {
+        return start(config, store, disk, crossAz, zones, timeout, leading, sleeper,
+                java.util.Optional.empty());
+    }
+
+    /** The same, its JOINs presenting {@code tls} (ADR-0084; M13.52d). */
+    static FastPeer start(ServerConfig config, BinStore store, FastDisk disk,
+            CrossAzBytes crossAz, PeerZones zones, Duration timeout,
+            java.util.function.BooleanSupplier leading, LeaderWatch.Sleeper sleeper,
+            java.util.Optional<io.helidon.common.tls.Tls> tls) {
         // ⚠️ M13.64: a JOIN counted at its leader's zone, learned from its roster.
         TermJoiner joiner = joiner(config, disk, zones.learning(
-                new HttpFastTransport(timeout, crossAz), store, config.prefix()));
+                new HttpFastTransport(timeout, crossAz, tls), store, config.prefix()));
         java.util.concurrent.atomic.AtomicLong reads = new java.util.concurrent.atomic.AtomicLong();
         LeaderWatch.LeaseReader lease = leaseReader(config, store);
         LeaderWatch watch = new LeaderWatch(config.podUid(), () -> {

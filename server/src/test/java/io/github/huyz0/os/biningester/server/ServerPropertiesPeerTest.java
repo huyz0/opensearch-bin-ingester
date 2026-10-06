@@ -36,6 +36,7 @@ class ServerPropertiesPeerTest {
     private static Map<String, String> mutual() {
         Map<String, String> settings = settings();
         settings.put(ServerProperties.PEER_TLS, "mutual");
+        settings.put(ServerProperties.ENDPOINT, "https://localhost:9443");
         settings.put(ServerProperties.PEER_PORT, "9443");
         settings.put(ServerProperties.PEER_TLS_CERT, "/etc/peer/tls.crt");
         settings.put(ServerProperties.PEER_TLS_KEY, "/etc/peer/tls.key");

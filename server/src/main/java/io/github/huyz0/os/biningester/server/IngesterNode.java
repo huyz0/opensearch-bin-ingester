@@ -91,6 +91,7 @@ public final class IngesterNode implements AutoCloseable {
     private volatile FastPeer fastPeer;
     /** This pod's departure at a graceful stop (M13.27p); none before start ends. */
     private volatile java.util.function.Supplier<FastDeparture.Result> fastDeparture;
+    private volatile io.github.huyz0.os.biningester.sequencer.TermJoiner.Transport departing;
     private volatile ShutdownSequence.Report lastShutdown;
     private volatile EndpointSliceWatch watch;
 
@@ -188,14 +189,19 @@ public final class IngesterNode implements AutoCloseable {
         // ⚠️ M13.64: a fast frame's peer zone, learned as frames come and go.
         PeerZones zones = new PeerZones();
         CrossAzBytes crossAz = new CrossAzBytes(config.az(), zones::ofEndpoint);
+        // ⚠️ EVERY POD-TO-POD CLIENT PRESENTS THE POD's CERTIFICATE under
+        // mutual (ADR-0084; M13.52d): the forward and the drain, the fast
+        // frames, the departure and the durable-segment hint.
+        Optional<io.helidon.common.tls.Tls> clientTls = PeerClientTls.of(peerTls);
         SequencerTransport transport =
-                new HttpSequencerTransport(peerCommitTimeout(config), crossAz);
+                new HttpSequencerTransport(peerCommitTimeout(config), crossAz, clientTls);
         // ⚠️ THE VIEW IS THE CHALLENGE, and it exists only when a watch will
         // feed it. Without one the challenge is NEVER, which is exactly the
         // behaviour before M8.13: failover bounded by the TTL alone.
         EndpointSliceView view = config.membership().isPresent() ? new EndpointSliceView() : null;
         Assembly assembly = Assembly.open(config, transport, clock, mono,
-                view == null ? LeaseChallenge.NEVER : view, view, crossAz);
+                view == null ? LeaseChallenge.NEVER : view, view, crossAz,
+                io.github.huyz0.os.biningester.http.DurableSegmentSignalSender.httpPost(clientTls));
         java.util.List<String> journal = new java.util.concurrent.CopyOnWriteArrayList<>();
         assembly.journal(journal::add);
         FastDisk fastDisk = null;
@@ -246,12 +252,14 @@ public final class IngesterNode implements AutoCloseable {
             // ⚠️ M13.27n: AFTER THE DOOR LISTENS, so this pod can answer the
             // frames its joins lead to; it joins every term it learns of.
             node.fastPeer = FastPeer.start(config, assembly.store(), fastDisk, crossAz, zones,
-                    peerCommitTimeout(config), () -> FastPeer.leading(assembly), Thread::sleep);
+                    peerCommitTimeout(config), () -> FastPeer.leading(assembly), Thread::sleep,
+                    clientTls);
             // ⚠️ M13.27p: a follower departs at a graceful stop, bounded by a TTL.
             io.github.huyz0.os.biningester.sequencer.TermJoiner.Transport departing =
                     zones.learning(new io.github.huyz0.os.biningester.http.HttpFastTransport(
-                            FastDeparture.EXCHANGE_TIMEOUT, crossAz), assembly.store(),
+                            FastDeparture.EXCHANGE_TIMEOUT, crossAz, clientTls), assembly.store(),
                             config.prefix());
+            node.departing = departing;
             FastDisk disk = fastDisk;
             node.fastDeparture = () -> FastDeparture.depart(config,
                     FastPeer.leaseReader(config, assembly.store()), disk, departing,
@@ -285,6 +293,19 @@ public final class IngesterNode implements AutoCloseable {
      */
     public CrossAzBytes crossAzBytes() {
         return crossAz;
+    }
+
+    /**
+     * The forward and drain client this node built, for a test that dials a
+     * peer with it (M13.52d review round 1, T1).
+     */
+    SequencerTransport sequencerTransport() {
+        return transport;
+    }
+
+    /** The departure's client this node built, for the same (M13.52d). */
+    io.github.huyz0.os.biningester.sequencer.TermJoiner.Transport departureTransport() {
+        return departing;
     }
 
     /** The watch joining every term, for a test that wants to look inside. */

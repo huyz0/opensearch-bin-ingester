@@ -42,9 +42,17 @@ public final class HttpFastTransport implements TermJoiner.Transport {
     private final CrossAzBytes crossAz;
     private final Map<String, WebClient> clients = new ConcurrentHashMap<>();
     private final long maxAnswerBytes;
+    /** The client TLS each peer connection presents, under {@code peer.tls = mutual} (ADR-0084). */
+    private final java.util.Optional<io.helidon.common.tls.Tls> tls;
 
     public HttpFastTransport(Duration timeout, CrossAzBytes crossAz) {
-        this(timeout, crossAz, FastFrameService.MAX_FRAME_BYTES);
+        this(timeout, crossAz, java.util.Optional.empty());
+    }
+
+    /** The same, presenting {@code tls} to every peer (ADR-0084; M13.52d). */
+    public HttpFastTransport(Duration timeout, CrossAzBytes crossAz,
+            java.util.Optional<io.helidon.common.tls.Tls> tls) {
+        this(timeout, crossAz, FastFrameService.MAX_FRAME_BYTES, tls);
     }
 
     /**
@@ -63,6 +71,12 @@ public final class HttpFastTransport implements TermJoiner.Transport {
     }
 
     HttpFastTransport(Duration timeout, CrossAzBytes crossAz, long maxAnswerBytes) {
+        this(timeout, crossAz, maxAnswerBytes, java.util.Optional.empty());
+    }
+
+    HttpFastTransport(Duration timeout, CrossAzBytes crossAz, long maxAnswerBytes,
+            java.util.Optional<io.helidon.common.tls.Tls> tls) {
+        this.tls = Objects.requireNonNull(tls, "tls");
         this.timeout = Objects.requireNonNull(timeout, "timeout");
         this.crossAz = Objects.requireNonNull(crossAz, "crossAz");
         this.maxAnswerBytes = maxAnswerBytes;
@@ -110,11 +124,14 @@ public final class HttpFastTransport implements TermJoiner.Transport {
             clients.clear();
         }
         // ⚠️ NO KEEP-ALIVE (M10.36), for the reason the commit transport has none.
-        return clients.computeIfAbsent(endpoint, uri -> WebClient.builder()
-                .baseUri(URI.create(uri))
-                .connectTimeout(timeout)
-                .readTimeout(timeout)
-                .keepAlive(false)
-                .build());
+        return clients.computeIfAbsent(endpoint, uri -> {
+            var builder = WebClient.builder()
+                    .baseUri(URI.create(uri))
+                    .connectTimeout(timeout)
+                    .readTimeout(timeout)
+                    .keepAlive(false);
+            tls.ifPresent(builder::tls);
+            return builder.build();
+        });
     }
 }
