@@ -11,6 +11,8 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.condition.DisabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
@@ -216,6 +218,10 @@ class ConfigExitCodeIT {
     }
 
     @Test
+    // ⚠️ POSIX ONLY (M13.54): Kubernetes sends SIGTERM, which `destroy()`
+    // is on Linux and macOS; on Windows it is a hard kill, so the case
+    // could only fail there, saying nothing about the drain.
+    @DisabledOnOs(value = OS.WINDOWS, disabledReason = "Process.destroy() is TerminateProcess on Windows: no shutdown hook runs, so no graceful stop can be observed (M13.54)")
     void aSIGTERMRunsTheSHUTDOWNHookAndTheHookRELEASESTheTerm() throws Exception {
         // ⚠️ **THE RELEASED LEASE IS THE EVIDENCE, AND THE EXIT CODE CANNOT BE.**
         // MEASURED: a JVM ended by `SIGTERM` exits 143 whether or not a hook

@@ -20,6 +20,8 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.condition.DisabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
@@ -48,6 +50,10 @@ class ShutdownDrainIT {
     Path dir;
 
     @Test
+    // ⚠️ POSIX ONLY (M13.54): Kubernetes sends SIGTERM, which `destroy()`
+    // is on Linux and macOS; on Windows it is a hard kill, so the case
+    // could only fail there, saying nothing about the drain.
+    @DisabledOnOs(value = OS.WINDOWS, disabledReason = "Process.destroy() is TerminateProcess on Windows: no shutdown hook runs, so no graceful stop can be observed (M13.54)")
     void aSIGTERMDrainsInSECTION7sOrderWithinTheBUDGETAndLosesNOTHING() throws Exception {
         int port;
         try (var probe = new java.net.ServerSocket(0)) {
