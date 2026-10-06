@@ -1,6 +1,6 @@
 # 0010. Multi-tenancy isolation and the security model
 
-Status: accepted
+Status: accepted -- amended by ADR-0084 (the pod-to-pod routes: mutual TLS on a peer listener; `peer.tls = off` an exception to "TLS everywhere" for a single node, a development fleet or a test)
 Date: 2026-08-30
 Requirements: FR-1, FR-6, FR-12, NFR-6
 Research: docs/research/30-design-space/10-client-library-and-fetch-modes.md §6 (Q9, Q10)
