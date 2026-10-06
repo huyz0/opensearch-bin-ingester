@@ -83,16 +83,16 @@ class ChallengeResumeIT {
             Map<String, String> settings = new HashMap<>(bucket.nodeSettings());
             settings.put("ingest.interval-floor", "PT0.05S");
             settings.putAll(kube.nodeSettings());
-            kube.ready("pod0", "10.0.0.1");
-            kube.ready("pod1", "10.0.0.2");
             NodeProcess leader = NodeProcess.start(
                     Files.createDirectories(dir.resolve("l")), "pod0", settings);
             nodes.add(leader);
+            kube.ready("pod0", leader.uid(), "10.0.0.1");
             leader.registerLogs(index);
             assertThat(leader.write("first", 1)).isEqualTo(202);
             NodeProcess follower = NodeProcess.start(
                     Files.createDirectories(dir.resolve("f")), "pod1", settings);
             nodes.add(follower);
+            kube.ready("pod1", follower.uid(), "10.0.0.2");
             follower.registerLogs(index);
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
             while (kube.watchers() < 2) {
@@ -130,7 +130,7 @@ class ChallengeResumeIT {
             }
             Set<Long> oldDeltas = deltasUnder(bucket, before.epoch());
 
-            kube.ready("pod0", "10.0.0.1");
+            kube.ready("pod0", leader.uid(), "10.0.0.1");
             leader.resume();
             Thread viaResumed = Thread.ofVirtual().start(() ->
                     KillSequencerMidCommitIT.produce(1, List.of(leader), acked, stop));

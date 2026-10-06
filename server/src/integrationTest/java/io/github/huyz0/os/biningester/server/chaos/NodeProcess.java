@@ -38,6 +38,7 @@ public final class NodeProcess implements AutoCloseable {
     private static final int PRODUCER_SOCKET_SEND_BUFFER_BYTES = 4 * 1024 * 1024;
 
     private final String podId;
+    private final String uid;
     private final int port;
     private final Path log;
     private final Process process;
@@ -49,9 +50,10 @@ public final class NodeProcess implements AutoCloseable {
 
     private final ChaosProxy peers;
 
-    private NodeProcess(String podId, int port, Path log, Process process, ChaosProxy peers,
-            String macroPath, java.time.Duration producerReadTimeout) {
+    private NodeProcess(String podId, String uid, int port, Path log, Process process,
+            ChaosProxy peers, String macroPath, java.time.Duration producerReadTimeout) {
         this.podId = podId;
+        this.uid = uid;
         this.port = port;
         this.log = log;
         this.process = process;
@@ -62,15 +64,15 @@ public final class NodeProcess implements AutoCloseable {
     }
 
     static NodeProcess forTest(Process process, boolean paused) {
-        NodeProcess node = new NodeProcess("test", 0, Path.of("test.log"), process, null, null,
-                java.time.Duration.ofSeconds(2));
+        NodeProcess node = new NodeProcess("test", "uid-test", 0, Path.of("test.log"), process,
+                null, null, java.time.Duration.ofSeconds(2));
         node.paused = paused;
         return node;
     }
 
     /** A node over {@code process} on {@code port}, logging to {@code log}, for M13.2's test. */
     static NodeProcess forTest(Process process, int port, Path log) {
-        return new NodeProcess("test", port, log, process, null, null,
+        return new NodeProcess("test", "uid-test", port, log, process, null, null,
                 java.time.Duration.ofSeconds(2));
     }
 
@@ -184,7 +186,8 @@ public final class NodeProcess implements AutoCloseable {
         all.put("producer.subject", "producer-1");
         all.put("producer.allowed-indices", "logs");
         all.putAll(settings);
-        all.put("pod.uid", UUID.randomUUID().toString());
+        String uid = UUID.randomUUID().toString();
+        all.put("pod.uid", uid);
         Properties properties = new Properties();
         all.forEach(properties::setProperty);
         Path file = dir.resolve(podId + ".properties");
@@ -214,8 +217,8 @@ public final class NodeProcess implements AutoCloseable {
                 .redirectErrorStream(true)
                 .redirectOutput(log.toFile());
         builder.environment().putAll(ChaosBucket.credentials());
-        NodeProcess node = new NodeProcess(podId, port, log, builder.start(), peers, macroPath,
-                producerReadTimeout);
+        NodeProcess node = new NodeProcess(podId, uid, port, log, builder.start(), peers,
+                macroPath, producerReadTimeout);
         node.awaitServingOrClose();
         return node;
     }
@@ -273,6 +276,15 @@ public final class NodeProcess implements AutoCloseable {
 
     public String podId() {
         return podId;
+    }
+
+    /**
+     * The pod UID this start drew: what the lease names and what an
+     * {@code EndpointSlice} must carry for the early challenge to match it
+     * (M8.58; M13.53).
+     */
+    public String uid() {
+        return uid;
     }
 
     public int port() {

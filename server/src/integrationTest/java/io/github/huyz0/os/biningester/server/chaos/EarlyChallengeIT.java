@@ -117,12 +117,12 @@ class EarlyChallengeIT {
             }
             for (int i = 0; i < NODES; i++) {
                 String pod = "pod" + i;
-                if (kube != null) {
-                    kube.ready(pod, "10.0.0." + (i + 1));
-                }
                 NodeProcess node = NodeProcess.start(
                         Files.createDirectories(dir.resolve((kube == null ? "off" : "on") + i)),
                         pod, settings);
+                if (kube != null) {
+                    kube.ready(pod, node.uid(), "10.0.0." + (i + 1));
+                }
                 node.registerLogs(index);
                 nodes.add(node);
             }

@@ -26,7 +26,10 @@ public final class FakeKubeApi implements AutoCloseable {
     public static final String NAMESPACE = "ingest";
     public static final String SERVICE = "ingester";
 
-    private final Map<String, String> ready = new ConcurrentHashMap<>();
+    private record Ready(String uid, String address) {
+    }
+
+    private final Map<String, Ready> ready = new ConcurrentHashMap<>();
     private final List<LinkedBlockingQueue<String>> watchers = new CopyOnWriteArrayList<>();
     private final WebServer server;
     private volatile boolean closed;
@@ -36,8 +39,11 @@ public final class FakeKubeApi implements AutoCloseable {
                 "/apis/discovery.k8s.io/v1/namespaces/" + NAMESPACE + "/endpointslices",
                 (req, res) -> {
                     LinkedBlockingQueue<String> events = new LinkedBlockingQueue<>();
-                    events.add(slice("ADDED"));
+                    // ⚠️ REGISTERED BEFORE THE SNAPSHOT (M13.53 review round
+                    // 1, P1): a `ready` between the two reaches this watch as
+                    // a broadcast, and the snapshot after it is never older.
                     watchers.add(events);
+                    events.add(slice("ADDED"));
                     try (OutputStream out = res.outputStream()) {
                         while (!closed) {
                             String event = events.poll(100, TimeUnit.MILLISECONDS);
@@ -62,9 +68,16 @@ public final class FakeKubeApi implements AutoCloseable {
                 "membership.namespace", NAMESPACE, "membership.service", SERVICE);
     }
 
-    /** Marks {@code podId} ready at {@code address}, and tells every watcher. */
-    public void ready(String podId, String address) {
-        ready.put(podId, address);
+    /**
+     * Marks {@code podId}, incarnation {@code uid}, ready at {@code address},
+     * and tells every watcher.
+     *
+     * <p>⚠️ THE UID IS REQUIRED (M13.53): since M8.58 the early challenge
+     * matches a lease holder by pod UID only, so an endpoint without one is
+     * never evidence and every takeover waits out the TTL.
+     */
+    public void ready(String podId, String uid, String address) {
+        ready.put(podId, new Ready(uid, address));
         broadcast();
     }
 
@@ -88,14 +101,14 @@ public final class FakeKubeApi implements AutoCloseable {
 
     private String slice(String type) {
         StringBuilder endpoints = new StringBuilder();
-        ready.forEach((pod, address) -> {
+        ready.forEach((pod, entry) -> {
             if (endpoints.length() > 0) {
                 endpoints.append(',');
             }
-            endpoints.append("{\"addresses\":[\"").append(address)
+            endpoints.append("{\"addresses\":[\"").append(entry.address())
                     .append("\"],\"conditions\":{\"ready\":true,\"terminating\":false},")
                     .append("\"targetRef\":{\"kind\":\"Pod\",\"name\":\"").append(pod)
-                    .append("\"}}");
+                    .append("\",\"uid\":\"").append(entry.uid()).append("\"}}");
         });
         return "{\"type\":\"" + type + "\",\"object\":{\"kind\":\"EndpointSlice\","
                 + "\"metadata\":{\"name\":\"" + SERVICE + "-1\"},\"endpoints\":[" + endpoints
