@@ -43,7 +43,7 @@ class FastLeaderTermJoinTest {
         return new FastLeaderTerm(opened,
                 new JoinDesk(new RosterJoins(store, "p", 3, new Mono(), Duration.ofMillis(250)),
                         nanos -> { }),
-                key -> committed.getOrDefault(key, 0L));
+                key -> committed.getOrDefault(key, 0L), store, "p");
     }
 
     private static FastFrame.Header header(long epoch) {

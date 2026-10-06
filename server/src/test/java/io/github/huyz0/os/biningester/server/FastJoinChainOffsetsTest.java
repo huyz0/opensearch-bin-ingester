@@ -87,7 +87,7 @@ class FastJoinChainOffsetsTest {
                         List.of(new FastFrame.HeldGroup(1, 0, 0, 0))));
             }
 
-            FastFrame.Joined joined = (FastFrame.Joined) FastJoins.answer(assembly.heldTerm(),
+            FastFrame.Joined joined = (FastFrame.Joined) FastLeaderFrames.answer(assembly.heldTerm(),
                     new FastFrame.Header(FastFrame.KIND_JOIN, 1, POD.podUid(), "uid-pod1"),
                     new FastFrame.Join(POD, new FastFrame.Held(streams)));
 

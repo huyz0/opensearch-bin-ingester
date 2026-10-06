@@ -976,13 +976,14 @@ journal's fsync and the Kubernetes pod lookup are injected seams.
 | M13.27j | Split from M13.27d: joins answered at the leader (narrowed: the pod side is M13.27n) | FR-17 |
 | M13.27o | Split from M13.27j at its review budget: joins answered at the leader, with round 3's findings fixed | FR-17 |
 | M13.27n | Split from M13.27j: joins sent by every pod at startup and each leader change, how an idle pod learns its leader, and answers' bytes counted | FR-17 |
-| M13.27k | Split from M13.27d: departure, answered at the leader and run at a graceful stop | FR-17 |
+| M13.27k | Split from M13.27d: departure answered at the leader (narrowed: a pod's departure at a graceful stop is M13.27p) | FR-17 |
+| M13.27p | Split from M13.27k: a pod's departure at a graceful stop | FR-17 |
 | M13.27l | Split from M13.27d: a fast index's registration reaching the leader, and the term record fed from it (with or after M13.33, since a recorded term stays open) | FR-17 |
 | M13.27m | Split from M13.27d: the write endpoint, the replica re-send and its timeout, the frontier's term-start and return calls, one journal lock | FR-17 |
 | M13.28 | The replica endpoint: store, epoch fence, release | FR-17 |
 | M13.29 | The writer's fast path: commit, offset confirmation, the epoch check, ack with offsets; no fast frame for a `wal=false` index (`FastWalFalseFleetTest`) | FR-17 |
 | M13.30 | Publication: interest registration, the leader's push to interested pods, and a cross-zone proxied `/seg` read served from the leader's journal before the upload (`FastProxySubscriberTest`) | FR-17 |
-| M13.31 | The upload at pre-assigned offsets, triggered by the journal's fill, a stream nearing its bound and a holder's loss as well as the timer (`FastCapacityTest`), release everywhere, and the per-stream barrier | FR-17 |
+| M13.31 | The upload at pre-assigned offsets, triggered by the journal's fill, a stream nearing its bound, a holder's loss and a departing pod's DEPART phase 1 (M13.27k review round 1, P1) as well as the timer (`FastCapacityTest`), release everywhere, and the per-stream barrier | FR-17 |
 | M13.32 | Catch-up of fast streams from the leader's journal | FR-17, FR-10 |
 | M13.33 | Takeover: fence, collect per stream, pod-UID liveness, recovery upload, truncation, writing void ranges, exactly-once delivery of a re-published offset across the takeover (`FastTakeoverSubscriberTest`), `FastRecoveryModelTest`, and the commit-protocol simulation extended over seeds | FR-17 |
 | M13.34 | Switching `wal` on a live index under skew, including a segment's runs committed across two deltas: the ack after the last, and `IdempotencyWindow` answering a retry only when every run is committed (ADR-0081 §8) | FR-17 |

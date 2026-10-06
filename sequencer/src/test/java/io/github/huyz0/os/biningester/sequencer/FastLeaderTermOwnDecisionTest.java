@@ -40,7 +40,7 @@ class FastLeaderTermOwnDecisionTest {
                 own.fencedBy(), own.closed()));
         FastLeaderTerm term = new FastLeaderTerm(opened,
                 new JoinDesk(new RosterJoins(store, "p", 3, new Mono(), Duration.ofMillis(250)),
-                        nanos -> { }), key -> 0L);
+                        nanos -> { }), key -> 0L, store, "p");
         FastFrame.Held held = new FastFrame.Held(List.of(new FastFrame.HeldStream(STREAM,
                 List.of(new FastFrame.HeldGroup(2, 0, 6, 8)))));
 
