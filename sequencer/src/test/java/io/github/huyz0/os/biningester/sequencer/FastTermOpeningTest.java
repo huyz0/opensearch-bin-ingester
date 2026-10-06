@@ -55,7 +55,7 @@ class FastTermOpeningTest {
         MemoryBinStore store = new MemoryBinStore();
         Term term = new Term();
 
-        Optional<FastTermStart.Started> started =
+        Optional<FastTermOpening.Opened> started =
                 opening(store, quietFence(), FastTermStartTest.SELF).open(1, term);
 
         assertThat(started).isPresent();
@@ -72,7 +72,7 @@ class FastTermOpeningTest {
         latest(store, 5);
         Term term = new Term();
 
-        Optional<FastTermStart.Started> started =
+        Optional<FastTermOpening.Opened> started =
                 opening(store, quietFence(), FastTermStartTest.SELF).open(3, term);
 
         assertThat(started).isEmpty();
@@ -142,7 +142,7 @@ class FastTermOpeningTest {
         long epoch = b.leases().tryAcquire().orElseThrow().epoch();
 
         FastTermStart.Started started = opening(store, b.fence(),
-                FastTermStartTest.incarnation("b")).open(epoch, new Term()).orElseThrow();
+                FastTermStartTest.incarnation("b")).open(epoch, new Term()).orElseThrow().started();
 
         assertThat(started.notBefore()).isEqualTo(b.fence().notBeforeWallMillis());
         assertThat(started.handedOver()).isFalse();
@@ -155,7 +155,7 @@ class FastTermOpeningTest {
         long epoch = b.leases().tryAcquire().orElseThrow().epoch();
 
         FastTermStart.Started started = opening(store, b.fence(),
-                FastTermStartTest.incarnation("b")).open(epoch, new Term()).orElseThrow();
+                FastTermStartTest.incarnation("b")).open(epoch, new Term()).orElseThrow().started();
 
         assertThat(started.handedOver()).as("a, the replaced holder, departed").isTrue();
     }

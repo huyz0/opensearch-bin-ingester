@@ -34,6 +34,22 @@ public final class FastTermOpening {
         int close(long epoch, List<Roster> unclosed) throws IOException;
     }
 
+    /**
+     * A started term, after its start closed what it could (M13.27j).
+     *
+     * @param closedThrough the highest closed epoch, 0 for none: every JOINED
+     *     carries it (ADR-0081 §5 step 7)
+     * @param stillOpen the earlier terms still open, newest first: their
+     *     decisions can supersede a group a pod reports
+     */
+    public record Opened(FastTermStart.Started started, long closedThrough,
+            List<Roster> stillOpen) {
+        public Opened {
+            Objects.requireNonNull(started, "started");
+            stillOpen = List.copyOf(stillOpen);
+        }
+    }
+
     private final FastTermStart start;
     private final TermCloser closer;
     private final FastLeaseFence fence;
@@ -60,7 +76,7 @@ public final class FastTermOpening {
      *     {@code term} is then closed
      * @throws IOException the start failed; {@code term} is closed
      */
-    public Optional<FastTermStart.Started> open(long epoch, Closeable term) throws IOException {
+    public Optional<Opened> open(long epoch, Closeable term) throws IOException {
         Objects.requireNonNull(term, "term");
         FastTermStart.Outcome outcome;
         try {
@@ -79,13 +95,40 @@ public final class FastTermOpening {
         // ⚠️ UNCHECKED TOO (M13.27d review round 1, P2): the election above
         // catches only IOException, so an escape here would leave the lease
         // held and renewed by a term nobody holds.
+        int closed = 0;
         try {
-            closer.close(epoch, started.unclosed());
+            closed = closer.close(epoch, started.unclosed());
+        } catch (EmptyTermCloser.Stopped partly) {
+            // ⚠️ WHAT IT CLOSED BEFORE FAILING STAYS CLOSED, and counts toward
+            // closedThrough (M13.27j review round 1, P2).
+            closed = partly.closed();
+            System.getLogger(FastTermOpening.class.getName()).log(System.Logger.Level.WARNING,
+                    "term " + epoch + " closed " + closed + " earlier term(s) of "
+                            + started.unclosed().size() + "; the next start retries", partly);
         } catch (IOException | RuntimeException notNow) {
             System.getLogger(FastTermOpening.class.getName()).log(System.Logger.Level.WARNING,
                     "term " + epoch + " closed no earlier term; the next start retries", notNow);
         }
-        return Optional.of(started);
+        return Optional.of(opened(started, closed));
+    }
+
+    /**
+     * ⚠️ THE CLOSED ONES ARE A PREFIX, OLDEST FIRST (invariant a): the walk
+     * stopped at the first closed term, and the closer closed the oldest
+     * {@code closed} of the unclosed ones.
+     */
+    private static Opened opened(FastTermStart.Started started, int closed) {
+        List<Roster> unclosed = started.unclosed();
+        int open = unclosed.size() - closed;
+        long closedThrough;
+        if (closed > 0) {
+            closedThrough = unclosed.get(open).epoch();
+        } else if (unclosed.isEmpty()) {
+            closedThrough = Math.max(0, started.own().predecessor());
+        } else {
+            closedThrough = Math.max(0, unclosed.get(unclosed.size() - 1).predecessor());
+        }
+        return new Opened(started, closedThrough, unclosed.subList(0, open));
     }
 
     private static void giveBack(Closeable term, Exception failed) {

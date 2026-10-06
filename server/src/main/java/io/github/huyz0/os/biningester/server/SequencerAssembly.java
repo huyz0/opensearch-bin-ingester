@@ -5,21 +5,25 @@ import io.github.huyz0.os.biningester.binstore.BinStore;
 import io.github.huyz0.os.biningester.format.Roster;
 import io.github.huyz0.os.biningester.sequencer.BatchingSequencer;
 import io.github.huyz0.os.biningester.sequencer.EmptyTermCloser;
+import io.github.huyz0.os.biningester.sequencer.FastLeaderTerm;
 import io.github.huyz0.os.biningester.sequencer.FastLeaseFence;
 import io.github.huyz0.os.biningester.sequencer.FastTermOpening;
 import io.github.huyz0.os.biningester.sequencer.FastTermStart;
 import io.github.huyz0.os.biningester.sequencer.FleetSequencer;
 import io.github.huyz0.os.biningester.sequencer.InboxDrain;
+import io.github.huyz0.os.biningester.sequencer.JoinDesk;
 import io.github.huyz0.os.biningester.sequencer.LeaseChallenge;
 import io.github.huyz0.os.biningester.sequencer.LeaseConfig;
 import io.github.huyz0.os.biningester.sequencer.LeaseManager;
 import io.github.huyz0.os.biningester.sequencer.LocalSequencer;
 import io.github.huyz0.os.biningester.sequencer.MonotonicClock;
+import io.github.huyz0.os.biningester.sequencer.RosterJoins;
 import io.github.huyz0.os.biningester.sequencer.SequencerTransport;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 
 /**
  * The fleet sequencer's construction for {@link Assembly}: the lease, the term
@@ -46,6 +50,12 @@ final class SequencerAssembly {
      * load. The window itself only adds latency to a commit that arrives alone.
      */
     static final Duration COMMIT_WINDOW = Duration.ofMillis(5);
+
+    /**
+     * ADR-0081's {@code min_upload_interval}: at most one roster write of JOINs
+     * per interval (§1), however many pods join (M13.27j).
+     */
+    static final Duration MIN_UPLOAD_INTERVAL = Duration.ofMillis(250);
 
     private SequencerAssembly() {
     }
@@ -81,6 +91,26 @@ final class SequencerAssembly {
             LeaseChallenge challenge, RetentionAssembly.LeaseManagerFactory leaseManagerFactory,
             Assembly.BackfillStarter backfillStarter, IngesterMetrics metrics)
             throws java.io.IOException {
+        return create(config, store, transport, clock, mono, challenge, leaseManagerFactory,
+                backfillStarter, metrics, InboxDrain::inBackground);
+    }
+
+    /** Starts the dead pods' inbox drain on a term just started: {@link InboxDrain}. */
+    @FunctionalInterface
+    interface DrainStarter {
+        void start(BinStore store, String prefix, LocalSequencer term,
+                java.util.function.LongConsumer failedBatchSize);
+    }
+
+    /**
+     * The same, with the inbox drain's start injected, so a test can see when
+     * it starts (M13.27o: after the term start, ADR-0081 §5 R3-2).
+     */
+    static FleetSequencer create(ServerConfig config, BinStore store,
+            SequencerTransport transport, Clock clock, MonotonicClock mono,
+            LeaseChallenge challenge, RetentionAssembly.LeaseManagerFactory leaseManagerFactory,
+            Assembly.BackfillStarter backfillStarter, IngesterMetrics metrics,
+            DrainStarter drainStarter) throws java.io.IOException {
         LeaseConfig leases = leaseConfig(config);
         // ⚠️ THE SEQUENCER'S LEASE ONLY reports to the fence; the GC lease's
         // holder exposes nothing.
@@ -103,9 +133,15 @@ final class SequencerAssembly {
                 return Optional.<BatchingSequencer>empty();
             }
             LocalSequencer term = won.get();
-            if (opening.open(term.epoch(), term::close).isEmpty()) {
+            Optional<FastTermOpening.Opened> opened = opening.open(term.epoch(), term::close);
+            if (opened.isEmpty()) {
                 return Optional.<BatchingSequencer>empty();
             }
+            // ⚠️ M13.27j: the term's JOINs, answered once its roster lists them.
+            term.attach(new FastLeaderTerm(opened.get(), new JoinDesk(
+                    new RosterJoins(store, config.prefix(), term.epoch(), mono,
+                            MIN_UPLOAD_INTERVAL), nanos -> TimeUnit.NANOSECONDS.sleep(nanos)),
+                    term::committedNext));
             // ⚠️ M8.42: THE CHAIN BELOW THE REPLAY, read once per
             // takeover and off the election's path. HERE, not in
             // `LocalSequencer.start`, which M4.9 bounds to a
@@ -118,7 +154,7 @@ final class SequencerAssembly {
             }
             // ⚠️ M8.14a: the intents of pods that died deferring
             // have nobody else to ask for a drain.
-            InboxDrain.inBackground(store, config.prefix(), term, metrics::failedIntentBatch);
+            drainStarter.start(store, config.prefix(), term, metrics::failedIntentBatch);
             return Optional.of(new BatchingSequencer(term, COMMIT_WINDOW));
         }, challenge, false, metrics::failedIntentBatch);
     }

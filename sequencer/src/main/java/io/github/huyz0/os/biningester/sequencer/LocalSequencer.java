@@ -69,6 +69,7 @@ public final class LocalSequencer implements Sequencer {
     private final Thread renewer;
     private final Object drainLock = new Object();
     private volatile boolean closed;
+    private volatile FastLeaderTerm fastTerm;
     /**
      * Set when a renew came back EMPTY, which is how a holder learns it has been
      * fenced — {@link LeaseManager#renew()} says so and says the holder must
@@ -321,6 +322,20 @@ public final class LocalSequencer implements Sequencer {
      */
     public ChainMemory chain() {
         return log.chain();
+    }
+
+    /** A stream's committed next offset in this term's chain (M13.27j). */
+    public synchronized long committedNext(io.github.huyz0.os.biningester.format.RunKey key) {
+        return log.nextOffset(key);
+    }
+
+    /** This term's fast-mode side, once its start opened it (M13.27j). */
+    public Optional<FastLeaderTerm> fastTerm() {
+        return Optional.ofNullable(fastTerm);
+    }
+
+    public void attach(FastLeaderTerm term) {
+        this.fastTerm = Objects.requireNonNull(term, "term");
     }
 
     /**

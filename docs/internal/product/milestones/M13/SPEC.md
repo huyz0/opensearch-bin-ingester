@@ -915,6 +915,7 @@ journal's fsync and the Kubernetes pod lookup are injected seams.
 | M13.49 | Opened by M13.19: the other `413` sites read the body they refuse on a kept-alive connection; measure and close | — (quality) |
 | M13.50 | The commit-protocol sweeps slowed 4x+ under the full suite and timed out at 300 s: find the cost and remove it, the timeout unmoved | — (quality) |
 | M13.51 | Opened by M13.27d: the assembly integration tests' configs carry no `pod.uid`, so four cases fail before they run | — (quality) |
+| M13.52 | Opened by M13.27h's review: the peer routes are unauthenticated, and a forged epoch can raise a pod's fence for good | — (security) |
 | M13.6 | R5: no silent defaults; the started client's clock pinned | FR-6, FR-19 |
 | M13.6a | R5: `IndexQuotas`' three-argument and `ConsumerDeliveryQueues`' two-argument constructors removed; `SilentDefaultsGoneTest` per module | — (quality) |
 | M13.6b | R5: `ServerConfig`'s older constructors removed | — (quality) |
@@ -972,7 +973,9 @@ journal's fsync and the Kubernetes pod lookup are injected seams.
 | M13.27d | The term start at every lease, followed by `EmptyTermCloser` (M13.27g), before the term serves (narrowed: the rest of the wiring is M13.27h-m) | FR-17 |
 | M13.27h | Split from M13.27d: the fast frames' peer route and the HTTP transport | FR-17 |
 | M13.27i | Split from M13.27d: the fast journal on disk, recovered at startup | FR-17 |
-| M13.27j | Split from M13.27d: joins, answered at the leader and sent at startup and each leader change | FR-17 |
+| M13.27j | Split from M13.27d: joins answered at the leader (narrowed: the pod side is M13.27n) | FR-17 |
+| M13.27o | Split from M13.27j at its review budget: joins answered at the leader, with round 3's findings fixed | FR-17 |
+| M13.27n | Split from M13.27j: joins sent by every pod at startup and each leader change, how an idle pod learns its leader, and answers' bytes counted | FR-17 |
 | M13.27k | Split from M13.27d: departure, answered at the leader and run at a graceful stop | FR-17 |
 | M13.27l | Split from M13.27d: a fast index's registration reaching the leader, and the term record fed from it (with or after M13.33, since a recorded term stays open) | FR-17 |
 | M13.27m | Split from M13.27d: the write endpoint, the replica re-send and its timeout, the frontier's term-start and return calls, one journal lock | FR-17 |

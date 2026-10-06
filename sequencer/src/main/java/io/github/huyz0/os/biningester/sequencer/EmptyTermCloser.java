@@ -37,6 +37,23 @@ import java.util.Optional;
  */
 public final class EmptyTermCloser {
 
+    /**
+     * The store failed after {@link #closed} terms were closed, oldest first:
+     * those stay closed (M13.27j review round 1, P2).
+     */
+    public static final class Stopped extends IOException {
+        private final int closed;
+
+        public Stopped(int closed, IOException cause) {
+            super(cause.getMessage(), cause);
+            this.closed = closed;
+        }
+
+        public int closed() {
+            return closed;
+        }
+    }
+
     private final BinStore store;
     private final String prefix;
 
@@ -51,15 +68,19 @@ public final class EmptyTermCloser {
      * {@code epoch}.
      *
      * @return how many terms it closed
-     * @throws IOException the store failed, or a roster is missing or kept
-     *     changing -- whatever was closed stays closed, and the next term
-     *     start closes the rest
+     * @throws Stopped the store failed, or a roster is missing or kept
+     *     changing -- whatever was closed stays closed, the exception says how
+     *     many, and the next term start closes the rest
      */
-    public int close(long epoch, List<Roster> unclosed) throws IOException {
+    public int close(long epoch, List<Roster> unclosed) throws Stopped {
         int closed = 0;
         for (int i = unclosed.size() - 1; i >= 0; i--) {
-            if (!closeOne(epoch, unclosed.get(i).epoch())) {
-                break;
+            try {
+                if (!closeOne(epoch, unclosed.get(i).epoch())) {
+                    break;
+                }
+            } catch (IOException failed) {
+                throw new Stopped(closed, failed);
             }
             closed++;
         }

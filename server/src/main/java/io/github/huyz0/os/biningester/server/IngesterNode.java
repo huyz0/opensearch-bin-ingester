@@ -197,6 +197,10 @@ public final class IngesterNode implements AutoCloseable {
             io.github.huyz0.os.biningester.sequencer.FastFrameRouter fastFrames =
                     new io.github.huyz0.os.biningester.sequencer.FastFrameRouter(
                             config.podUid(), fastDisk.fence());
+            // ⚠️ M13.27j: a JOIN is answered by the term this pod leads, if any.
+            fastFrames.handle(io.github.huyz0.os.biningester.format.FastFrame.KIND_JOIN,
+                    (header, body) -> FastJoins.answer(assembly.heldTerm(), header,
+                            (io.github.huyz0.os.biningester.format.FastFrame.Join) body));
             IngesterNode node = new IngesterNode(assembly,
                     FrontDoor.start(assembly, clock, journal::add, crossAz,
                             Optional.of(fastFrames)), transport, clock,
