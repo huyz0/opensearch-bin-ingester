@@ -112,9 +112,9 @@ class IngesterNodeWatchTest {
 
         await().atMost(Duration.ofSeconds(20)).until(() -> listed("uid-pod2"));
 
-        assertThat(leader.crossAzBytes().sameAzBytes(CrossAzBytes.Transport.FAST_FRAME))
+        assertThat(leader.crossAzBytes().sameAzBytes(CrossAzBytes.Transport.FAST_CONTROL))
                 .as("the JOINED, to the asker's own zone").isPositive();
-        assertThat(leader.crossAzBytes().crossAzBytes(CrossAzBytes.Transport.FAST_FRAME))
+        assertThat(leader.crossAzBytes().crossAzBytes(CrossAzBytes.Transport.FAST_CONTROL))
                 .isZero();
     }
 }

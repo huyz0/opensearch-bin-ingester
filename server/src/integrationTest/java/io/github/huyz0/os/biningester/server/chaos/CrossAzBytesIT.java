@@ -140,8 +140,8 @@ class CrossAzBytesIT {
                 long byTransport = values.get("proxyRead") + values.get("inlinePush")
                         + values.get("consumerPoll") + values.get("commitForward")
                         + values.get("inboxDrain")
-                        // ⚠️ M13.64: the fast frames every pod sends since M13.27n
-                        + values.get("fastFrame");
+                        // ⚠️ M13.64, M13.66: the fast frames, control and data
+                        + values.get("fastControl") + values.get("fastData");
                 assertThat(byTransport).as("named transport counters must partition cross-AZ bytes")
                         .isEqualTo(values.get("crossAzBytes"));
                 assertThat(dataPath(values) * 1_000L)
@@ -648,7 +648,9 @@ class CrossAzBytesIT {
      * apart by {@link #controlWithinBudget}, never a share of ingested bytes.
      */
     private static long dataPath(Map<String, Long> pod) {
-        return pod.get("crossAzBytes") - pod.get("fastFrame");
+        // ⚠️ ONLY THE CONTROL FRAMES LEAVE IT (M13.66): a fast write's data
+        // frames are data, counted in the ratio like any other transport.
+        return pod.get("crossAzBytes") - pod.get("fastControl");
     }
 
     /** NFR-5's control-frame budget: 1 KiB per pod per term, an empty journal (M13.65). */
@@ -659,7 +661,7 @@ class CrossAzBytesIT {
             throws java.io.IOException {
         long terms = bucket.lease().map(io.github.huyz0.os.biningester.format.Lease::epoch)
                 .orElse(1L);
-        assertThat(pod.get("fastFrame"))
+        assertThat(pod.get("fastControl"))
                 .as("⚠️ the control frames' own budget: %d B per pod per term, %d term(s)",
                         CONTROL_BYTES_PER_TERM, terms)
                 .isLessThanOrEqualTo(CONTROL_BYTES_PER_TERM * terms);

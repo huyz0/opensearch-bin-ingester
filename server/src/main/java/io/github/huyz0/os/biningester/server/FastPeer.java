@@ -60,7 +60,9 @@ final class FastPeer implements AutoCloseable {
     static FastFrameRouter router(String selfUid, EpochFence fence, CrossAzBytes crossAz,
             PeerZones zones) {
         return new FastFrameRouter(selfUid, fence, (header, asked, bytes) ->
-                crossAz.sent(CrossAzBytes.Transport.FAST_FRAME,
+                crossAz.sent(FastFrame.isControl(header.kind())
+                                ? CrossAzBytes.Transport.FAST_CONTROL
+                                : CrossAzBytes.Transport.FAST_DATA,
                         azOf(header, asked, zones), bytes));
     }
 

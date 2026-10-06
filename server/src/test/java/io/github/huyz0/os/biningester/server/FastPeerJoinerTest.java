@@ -87,7 +87,7 @@ class FastPeerJoinerTest {
                     new FastFrame.Depart(pod, 2, FastFrame.Held.NONE)));
         }
 
-        assertThat(crossAz.sameAzBytes(CrossAzBytes.Transport.FAST_FRAME)).isPositive();
-        assertThat(crossAz.crossAzBytes(CrossAzBytes.Transport.FAST_FRAME)).isZero();
+        assertThat(crossAz.sameAzBytes(CrossAzBytes.Transport.FAST_CONTROL)).isPositive();
+        assertThat(crossAz.crossAzBytes(CrossAzBytes.Transport.FAST_CONTROL)).isZero();
     }
 }

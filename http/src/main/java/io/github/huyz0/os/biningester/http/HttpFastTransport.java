@@ -47,6 +47,21 @@ public final class HttpFastTransport implements TermJoiner.Transport {
         this(timeout, crossAz, FastFrameService.MAX_FRAME_BYTES);
     }
 
+    /**
+     * ⚠️ BY THE FRAME's KIND (M13.66): control or data, two shares of NFR-5.
+     * A header that does not read is sent all the same -- the peer refuses it
+     * -- and counted as data, never as control under its budget.
+     */
+    private static CrossAzBytes.Transport shareOf(byte[] frame) {
+        try {
+            return io.github.huyz0.os.biningester.format.FastFrame.isControl(
+                    io.github.huyz0.os.biningester.format.FastFrame.header(frame).kind())
+                    ? CrossAzBytes.Transport.FAST_CONTROL : CrossAzBytes.Transport.FAST_DATA;
+        } catch (IOException unreadable) {
+            return CrossAzBytes.Transport.FAST_DATA;
+        }
+    }
+
     HttpFastTransport(Duration timeout, CrossAzBytes crossAz, long maxAnswerBytes) {
         this.timeout = Objects.requireNonNull(timeout, "timeout");
         this.crossAz = Objects.requireNonNull(crossAz, "crossAz");
@@ -57,7 +72,7 @@ public final class HttpFastTransport implements TermJoiner.Transport {
     public byte[] exchange(String endpoint, byte[] frame) throws IOException {
         Objects.requireNonNull(endpoint, "endpoint");
         Objects.requireNonNull(frame, "frame");
-        crossAz.sentTo(CrossAzBytes.Transport.FAST_FRAME, endpoint, frame.length);
+        crossAz.sentTo(shareOf(frame), endpoint, frame.length);
         try (HttpClientResponse response = clientFor(endpoint).post(PATH).submit(frame)) {
             // ⚠️ COMPARED BY CODE: Helidon's Status.equals compares the reason
             // phrase too (see HttpSequencerTransport).

@@ -67,7 +67,7 @@ class FastFrameRouteTest {
 
         assertThat(((FastFrame.Refused) FastFrame.decode(answer).body()).text())
                 .isEqualTo("joined uid-p");
-        assertThat(crossAz.crossAzBytes(CrossAzBytes.Transport.FAST_FRAME))
+        assertThat(crossAz.crossAzBytes(CrossAzBytes.Transport.FAST_CONTROL))
                 .as("an endpoint of no known zone counts as cross-AZ").isEqualTo(frame.length);
     }
 

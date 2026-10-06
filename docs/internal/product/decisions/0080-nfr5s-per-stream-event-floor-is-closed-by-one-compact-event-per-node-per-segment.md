@@ -59,6 +59,10 @@ consumed producer bytes (0.072%). The term is linear in K, as ADR-0076 stated.
    for segments carrying more than K x 200 KB for their K cross-zone
    streams, and `CrossAzBytesIT` asserts both at K > 1 (166 B measured,
    200 B asserted, so a regression in the event size is caught).
+   ⚠️ **Over the data path** (amended by M13.66): the cross-zone bytes the
+   bound counts are NFR-5's numerator -- every transport but the fast-mode
+   control frames, which have their own per-pod, per-term budget (ADR-0081
+   §12).
 
 ## Alternatives considered
 

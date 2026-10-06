@@ -87,16 +87,16 @@ class IngesterNodeFastZonesTest {
         follower = start("pod2", "az-b");
         await().atMost(Duration.ofSeconds(20)).until(() -> listed("uid-pod2"));
         CrossAzBytes sent = follower.crossAzBytes();
-        assertThat(sent.crossAzBytes(CrossAzBytes.Transport.FAST_FRAME))
+        assertThat(sent.crossAzBytes(CrossAzBytes.Transport.FAST_CONTROL))
                 .as("the premise: the JOIN crossed").isPositive();
         assertThat(sent.unknownPeerBytes()).as("the JOIN, at az-a").isZero();
         assertThat(leader.crossAzBytes().unknownPeerBytes()).as("the JOINED, at az-b").isZero();
-        long joined = sent.crossAzBytes(CrossAzBytes.Transport.FAST_FRAME);
+        long joined = sent.crossAzBytes(CrossAzBytes.Transport.FAST_CONTROL);
 
         follower.close();
         follower = null;
 
-        assertThat(sent.crossAzBytes(CrossAzBytes.Transport.FAST_FRAME))
+        assertThat(sent.crossAzBytes(CrossAzBytes.Transport.FAST_CONTROL))
                 .as("the premise: the departure sent frames").isGreaterThan(joined);
         assertThat(sent.unknownPeerBytes()).as("the DEPART and HELD, at az-a").isZero();
     }

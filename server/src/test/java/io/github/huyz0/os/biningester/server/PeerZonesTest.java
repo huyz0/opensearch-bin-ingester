@@ -70,7 +70,7 @@ class PeerZonesTest {
         CrossAzBytes crossAz = new CrossAzBytes("az-a", zones::ofEndpoint);
         List<String> sentTo = new ArrayList<>();
         TermJoiner.Transport transport = zones.learning((endpoint, frame) -> {
-            crossAz.sentTo(CrossAzBytes.Transport.FAST_FRAME, endpoint, frame.length);
+            crossAz.sentTo(CrossAzBytes.Transport.FAST_CONTROL, endpoint, frame.length);
             sentTo.add(endpoint);
             return new byte[0];
         }, store, "p");

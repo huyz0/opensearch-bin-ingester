@@ -104,9 +104,9 @@ class IngesterNodeJoinsTest {
 
         await().atMost(Duration.ofSeconds(20)).until(() -> listed("uid-pod2").isPresent());
         assertThat(listed("uid-pod2").orElseThrow().state()).isEqualTo(Roster.State.ROSTERED);
-        assertThat(leader.crossAzBytes().crossAzBytes(CrossAzBytes.Transport.FAST_FRAME))
+        assertThat(leader.crossAzBytes().crossAzBytes(CrossAzBytes.Transport.FAST_CONTROL))
                 .as("the JOINED sent to az-b").isPositive();
-        assertThat(follower.crossAzBytes().crossAzBytes(CrossAzBytes.Transport.FAST_FRAME))
+        assertThat(follower.crossAzBytes().crossAzBytes(CrossAzBytes.Transport.FAST_CONTROL))
                 .as("the JOIN sent to az-a").isPositive();
     }
 }

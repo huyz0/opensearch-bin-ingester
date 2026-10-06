@@ -105,11 +105,17 @@ public final class CrossAzBytes {
         DURABLE_SEGMENT_SIGNAL,
 
         /**
-         * A fast frame sent to a peer (ADR-0082 §2; M13.27h): a write's
-         * COMMIT and REPLICA as much as a JOIN -- fast mode's own share of
-         * NFR-5, which ADR-0081 made conditional on it.
+         * A fast-mode CONTROL frame (ADR-0082 §2; M13.27h, M13.66): JOIN,
+         * JOINED, DEPART, HELD, HELD_STATUS -- a fixed cost per pod per term,
+         * under its own budget beside NFR-5's ratio (ADR-0081 §12).
          */
-        FAST_FRAME
+        FAST_CONTROL,
+
+        /**
+         * Every other fast frame (M13.66): a write's COMMIT, ASSIGNED,
+         * CONFIRM, EXPOSED, REPLICA and the rest -- data, inside NFR-5's ratio.
+         */
+        FAST_DATA
     }
 
     /**

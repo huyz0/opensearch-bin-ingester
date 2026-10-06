@@ -340,8 +340,10 @@ public final class FrontDoor implements AutoCloseable {
                         io.github.huyz0.os.biningester.binstore.CrossAzBytes.Transport.INBOX_DRAIN)
                 + ",\"durableSegmentSignal\":" + crossAz.crossAzBytes(
                         io.github.huyz0.os.biningester.binstore.CrossAzBytes.Transport.DURABLE_SEGMENT_SIGNAL)
-                + ",\"fastFrame\":" + crossAz.crossAzBytes(
-                        io.github.huyz0.os.biningester.binstore.CrossAzBytes.Transport.FAST_FRAME)
+                + ",\"fastControl\":" + crossAz.crossAzBytes(
+                        io.github.huyz0.os.biningester.binstore.CrossAzBytes.Transport.FAST_CONTROL)
+                + ",\"fastData\":" + crossAz.crossAzBytes(
+                        io.github.huyz0.os.biningester.binstore.CrossAzBytes.Transport.FAST_DATA)
                 + "}\n";
     }
 

@@ -65,7 +65,7 @@ class PeerZonesRosterTest {
     private static TermJoiner.Transport counted(PeerZones zones, CrossAzBytes crossAz,
             BinStore store) {
         return zones.learning((endpoint, frame) -> {
-            crossAz.sentTo(CrossAzBytes.Transport.FAST_FRAME, endpoint, frame.length);
+            crossAz.sentTo(CrossAzBytes.Transport.FAST_CONTROL, endpoint, frame.length);
             return new byte[0];
         }, store, "p");
     }

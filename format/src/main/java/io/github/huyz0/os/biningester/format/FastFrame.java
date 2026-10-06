@@ -41,6 +41,16 @@ public final class FastFrame {
     public static final int KIND_HELD = 16;
     public static final int KIND_HELD_STATUS = 17;
     public static final int KIND_JOINED = 15;
+
+    /**
+     * Whether {@code kind} is a control frame (M13.66, ADR-0081 §12): the
+     * per-pod, per-term JOIN, JOINED, DEPART, HELD and HELD_STATUS. Every other
+     * kind carries a write's data.
+     */
+    public static boolean isControl(int kind) {
+        return kind == KIND_JOIN || kind == KIND_JOINED || kind == KIND_DEPART
+                || kind == KIND_HELD || kind == KIND_HELD_STATUS;
+    }
     /** A pod UID or any other string here: generous for a Kubernetes UID or an endpoint. */
     public static final int MAX_STRING_BYTES = 1024;
     public static final long MAX_U32 = 0xFFFF_FFFFL;

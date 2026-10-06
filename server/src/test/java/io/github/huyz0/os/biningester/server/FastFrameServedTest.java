@@ -67,10 +67,10 @@ class FastFrameServedTest {
     @Test
     void theMACROCountsReportFastFramesSentToAnotherZone() {
         CrossAzBytes crossAz = new CrossAzBytes("az-a");
-        crossAz.sent(CrossAzBytes.Transport.FAST_FRAME, "az-b", 17);
+        crossAz.sent(CrossAzBytes.Transport.FAST_CONTROL, "az-b", 17);
 
         assertThat(FrontDoor.macroCountsJson("pod", new StoreCounts(0, 0, 0, 0, 0), crossAz))
-                .contains("\"fastFrame\":17")
+                .contains("\"fastControl\":17")
                 .contains("\"crossAzBytes\":17");
     }
 }

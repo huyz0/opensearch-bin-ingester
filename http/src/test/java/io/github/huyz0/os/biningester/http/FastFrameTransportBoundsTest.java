@@ -63,9 +63,9 @@ class FastFrameTransportBoundsTest {
 
         new HttpFastTransport(Duration.ofSeconds(5), crossAz).exchange(endpoint, frame);
 
-        assertThat(crossAz.sameAzBytes(CrossAzBytes.Transport.FAST_FRAME))
+        assertThat(crossAz.sameAzBytes(CrossAzBytes.Transport.FAST_CONTROL))
                 .isEqualTo(frame.length);
-        assertThat(crossAz.crossAzBytes(CrossAzBytes.Transport.FAST_FRAME)).isZero();
+        assertThat(crossAz.crossAzBytes(CrossAzBytes.Transport.FAST_CONTROL)).isZero();
     }
 
     @Test
@@ -81,7 +81,7 @@ class FastFrameTransportBoundsTest {
         assertThatThrownBy(() -> new HttpFastTransport(Duration.ofSeconds(5), crossAz)
                 .exchange(endpoint, frame)).isInstanceOf(IOException.class);
 
-        assertThat(crossAz.crossAzBytes(CrossAzBytes.Transport.FAST_FRAME))
+        assertThat(crossAz.crossAzBytes(CrossAzBytes.Transport.FAST_CONTROL))
                 .as("the bytes were spent whether or not an answer came")
                 .isEqualTo(frame.length);
     }
