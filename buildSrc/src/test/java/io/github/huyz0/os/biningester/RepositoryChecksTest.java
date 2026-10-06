@@ -176,6 +176,20 @@ class RepositoryChecksTest {
         }
     }
 
+    /**
+     * ⚠️ ONE TEST FORK UNLESS ASKED (M13.67): the local WSL2 budget counts one
+     * 512 MiB test JVM per worker (build.md), and only CI's four-core runner
+     * asks for two, with {@code -Ptest.forks=2}.
+     */
+    @Test
+    void testForksAreOneUnlessThePropertyAsks() throws Exception {
+        String conventions = code("buildSrc/src/main/kotlin/"
+                + "io.github.huyz0.os.biningester.java-conventions.gradle.kts")
+                .replaceAll("\\s+", " ");
+        assertThat(conventions).contains("maxParallelForks = providers.gradleProperty("
+                + "\"test.forks\") .map(String::toInt).getOrElse(1)");
+    }
+
     /** {@code block} without the bodies of the blocks nested inside it. */
     private static String topLevel(String block) {
         StringBuilder top = new StringBuilder();

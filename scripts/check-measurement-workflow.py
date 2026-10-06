@@ -96,6 +96,12 @@ def ci_failures(ci: str) -> list[str]:
     for requirement in fast_requirements:
         if not any(requirement in line for line in l1):
             problems.append(f"L1 job must retain the fast cost subset requirement: {requirement}")
+    # ⚠️ THE UNIT STEP ON THE RUNNER's FOUR CORES, TWO FORKS EACH (M13.57,
+    # M13.67): what fits L1 in its 5 min cap.
+    if "run: ./gradlew test --no-daemon --max-workers=4 -Ptest.forks=2" not in [
+            line.strip().removeprefix("- ") for line in l1]:
+        problems.append("L1's unit step must run ./gradlew test --no-daemon "
+                        "--max-workers=4 -Ptest.forks=2")
     if any(line.lstrip().startswith("continue-on-error:") for line in l1):
         problems.append("L1 cost tests must fail the per-push job on regression")
     if any(line.lstrip().startswith("if:") for line in l1):

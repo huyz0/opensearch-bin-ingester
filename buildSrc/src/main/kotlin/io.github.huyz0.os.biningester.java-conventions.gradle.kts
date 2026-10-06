@@ -142,6 +142,11 @@ testing {
                     // dies as a JVM OutOfMemoryError rather than as WSL2 killing
                     // an unrelated session.
                     maxHeapSize = "512m"
+                    // ⚠️ ONE FORK UNLESS ASKED (M13.67): CI's four-core runner
+                    // passes -Ptest.forks=2; the local WSL2 budget (build.md)
+                    // counts one 512 MiB test JVM per worker, and is unmoved.
+                    maxParallelForks = providers.gradleProperty("test.forks")
+                        .map(String::toInt).getOrElse(1)
                     jvmArgs("-XX:+HeapDumpOnOutOfMemoryError", "-XX:HeapDumpPath=$scratch")
                     // A hung test holds its memory until something reclaims it.
                     timeout.set(Duration.ofMinutes(10))

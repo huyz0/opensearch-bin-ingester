@@ -185,9 +185,11 @@ jobs:
       # job inherited it -- so the unit step took 170-300 s and, with the cost
       # subset's ~107 s, the job overran its 5 min cap on nearly every push
       # since at least 2026-09-28 (green only at M12.3, M13.21a and M13.26e). The runner has four cores and 16 GiB; four 512 MiB test
-      # JVMs fit it. The cap itself is unmoved.
+      # JVMs fit it. The cap itself is unmoved. ⚠️ AND TWO TEST FORKS EACH
+      # (M13.67): with compiles from the cache (M13.62), the unit step's ~130 s
+      # was test execution, sequencer and server running last and alone.
       - name: Product unit tests
-        run: ./gradlew test --no-daemon --max-workers=4
+        run: ./gradlew test --no-daemon --max-workers=4 -Ptest.forks=2
       - name: Cost assertions (fast subset)
         env:
           M9_8_RATE: '40'

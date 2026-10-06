@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -328,6 +329,28 @@ class GradleGateWiringTest {
             assertThat(run.exitCode()).as("%s: %s", each.getKey(), run.output()).isEqualTo(1);
             assertThat(run.output()).as(each.getKey()).contains(each.getValue()[1])
                     .doesNotContain("Traceback");
+        }
+    }
+
+    /** L1's unit step on the runner's four cores, two test forks each (M13.57, M13.67). */
+    @Test
+    void ciUnitStepRunsFourWorkersAndTwoForks() throws Exception {
+        Path root = repository();
+        Path measurement = root.resolve(".github/workflows/measurement.yml");
+        String original = Files.readString(root.resolve(".github/workflows/ci.yml"));
+        Path fixture = root.resolve("buildSrc/build/tmp/ci-forks")
+                .resolve(UUID.randomUUID().toString());
+        Files.createDirectories(fixture);
+        String step = "        run: ./gradlew test --no-daemon --max-workers=4 -Ptest.forks=2\n";
+        for (String weaker : List.of("        run: ./gradlew test --no-daemon --max-workers=4\n",
+                "        run: ./gradlew test --no-daemon -Ptest.forks=2\n")) {
+            String text = original.replace(step, weaker);
+            assertThat(text).as("the premise: %s", weaker).isNotEqualTo(original);
+            Path ci = fixture.resolve(UUID.randomUUID() + ".yml");
+            Files.writeString(ci, text);
+            Run run = checkMeasurementWorkflow(measurement, ci);
+            assertThat(run.exitCode()).as(run.output()).isEqualTo(1);
+            assertThat(run.output()).contains("unit step").doesNotContain("Traceback");
         }
     }
 
