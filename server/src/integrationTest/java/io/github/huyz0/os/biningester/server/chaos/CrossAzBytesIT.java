@@ -139,7 +139,9 @@ class CrossAzBytesIT {
                         .isPositive();
                 long byTransport = values.get("proxyRead") + values.get("inlinePush")
                         + values.get("consumerPoll") + values.get("commitForward")
-                        + values.get("inboxDrain");
+                        + values.get("inboxDrain")
+                        // ⚠️ M13.64: the fast frames every pod sends since M13.27n
+                        + values.get("fastFrame");
                 assertThat(byTransport).as("named transport counters must partition cross-AZ bytes")
                         .isEqualTo(values.get("crossAzBytes"));
                 assertThat(values.get("crossAzBytes") * 1_000L)

@@ -77,7 +77,8 @@ class FastPeerJoinerTest {
         CrossAzBytes crossAz = new CrossAzBytes("az-a");
         try (FastDisk disk = FastDisk.open(leaseAt1(), LEASE, Optional.empty(),
                 new FastDiskTest.Files())) {
-            FastFrameRouter router = FastPeer.router(config("az-a"), disk, crossAz);
+            FastFrameRouter router = FastPeer.router(config("az-a"), disk, crossAz,
+                    new PeerZones());
             router.handle(FastFrame.KIND_DEPART, (header, body) ->
                     new FastFrame.HeldStatusReport(FastFrame.HeldStatus.NONE));
             Roster.Incarnation pod = new Roster.Incarnation("p", "uid-p", "az-a", "http://p:1");

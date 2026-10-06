@@ -171,7 +171,9 @@ public final class IngesterNode implements AutoCloseable {
         // which half a report was quoting. ⚠️ AND THE LABEL COMES FROM
         // `pod.az`, which `ServerProperties` refuses to default: a pod that
         // does not know its zone reports a cross-AZ total about nothing.
-        CrossAzBytes crossAz = new CrossAzBytes(config.az());
+        // ⚠️ M13.64: a fast frame's peer zone, learned as frames come and go.
+        PeerZones zones = new PeerZones();
+        CrossAzBytes crossAz = new CrossAzBytes(config.az(), zones::ofEndpoint);
         SequencerTransport transport =
                 new HttpSequencerTransport(peerCommitTimeout(config), crossAz);
         // ⚠️ THE VIEW IS THE CHALLENGE, and it exists only when a watch will
@@ -202,7 +204,7 @@ public final class IngesterNode implements AutoCloseable {
             }
             // ⚠️ M13.27h: answered as this incarnation, behind this pod's fence.
             io.github.huyz0.os.biningester.sequencer.FastFrameRouter fastFrames =
-                    FastPeer.router(config, fastDisk, crossAz);
+                    FastPeer.router(config, fastDisk, crossAz, zones);
             // ⚠️ M13.27o, M13.27k: a JOIN, DEPART or HELD is answered by the term
             // this pod leads, if any.
             for (int kind : new int[] {io.github.huyz0.os.biningester.format.FastFrame.KIND_JOIN,
@@ -229,12 +231,13 @@ public final class IngesterNode implements AutoCloseable {
             }
             // ⚠️ M13.27n: AFTER THE DOOR LISTENS, so this pod can answer the
             // frames its joins lead to; it joins every term it learns of.
-            node.fastPeer = FastPeer.start(config, assembly.store(), fastDisk, crossAz,
+            node.fastPeer = FastPeer.start(config, assembly.store(), fastDisk, crossAz, zones,
                     peerCommitTimeout(config), () -> FastPeer.leading(assembly), Thread::sleep);
             // ⚠️ M13.27p: a follower departs at a graceful stop, bounded by a TTL.
-            io.github.huyz0.os.biningester.http.HttpFastTransport departing =
-                    new io.github.huyz0.os.biningester.http.HttpFastTransport(
-                            FastDeparture.EXCHANGE_TIMEOUT, crossAz);
+            io.github.huyz0.os.biningester.sequencer.TermJoiner.Transport departing =
+                    zones.learning(new io.github.huyz0.os.biningester.http.HttpFastTransport(
+                            FastDeparture.EXCHANGE_TIMEOUT, crossAz), assembly.store(),
+                            config.prefix());
             FastDisk disk = fastDisk;
             node.fastDeparture = () -> FastDeparture.depart(config,
                     FastPeer.leaseReader(config, assembly.store()), disk, departing,

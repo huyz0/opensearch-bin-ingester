@@ -41,6 +41,7 @@ class FastPeerPaceTest {
         try (FastDisk disk = FastDisk.open(store, leaseKey, Optional.empty(),
                 new FastDiskTest.Files())) {
             FastPeer peer = FastPeer.start(config, store, disk, CrossAzBytes.untracked(),
+                    new PeerZones(),
                     Duration.ofSeconds(1), () -> false, interval -> {
                         paused.add(interval);
                         throw new InterruptedException("one look is enough");

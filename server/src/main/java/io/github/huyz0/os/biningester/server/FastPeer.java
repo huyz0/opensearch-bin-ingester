@@ -7,6 +7,7 @@ import io.github.huyz0.os.biningester.format.FastFrame;
 import io.github.huyz0.os.biningester.format.Lease;
 import io.github.huyz0.os.biningester.format.Roster;
 import io.github.huyz0.os.biningester.http.HttpFastTransport;
+import io.github.huyz0.os.biningester.sequencer.EpochFence;
 import io.github.huyz0.os.biningester.sequencer.FastFrameRouter;
 import io.github.huyz0.os.biningester.sequencer.HeldReports;
 import io.github.huyz0.os.biningester.sequencer.JoinedTerms;
@@ -46,21 +47,34 @@ final class FastPeer implements AutoCloseable {
 
     /**
      * The node's router, answering as {@code config}'s incarnation behind
-     * {@code disk}'s fence, every answer counted against the asker's zone
-     * where the frame names it -- a JOIN's or a DEPART's incarnation -- and
-     * as cross-AZ where it does not.
+     * {@code disk}'s fence, every answer counted against the asker's zone:
+     * the one a JOIN's or a DEPART's incarnation names, learned into
+     * {@code zones}, and for any other frame its sender's as learned (M13.64)
+     * -- unknown, so cross-AZ, only for a sender never seen.
      */
-    static FastFrameRouter router(ServerConfig config, FastDisk disk, CrossAzBytes crossAz) {
-        return new FastFrameRouter(config.podUid(), disk.fence(), (header, asked, bytes) ->
-                crossAz.sent(CrossAzBytes.Transport.FAST_FRAME, azOf(asked), bytes));
+    static FastFrameRouter router(ServerConfig config, FastDisk disk, CrossAzBytes crossAz,
+            PeerZones zones) {
+        return router(config.podUid(), disk.fence(), crossAz, zones);
     }
 
-    private static String azOf(FastFrame.Body asked) {
-        return switch (asked) {
-            case FastFrame.Join join -> join.incarnation().az();
-            case FastFrame.Depart depart -> depart.incarnation().az();
+    static FastFrameRouter router(String selfUid, EpochFence fence, CrossAzBytes crossAz,
+            PeerZones zones) {
+        return new FastFrameRouter(selfUid, fence, (header, asked, bytes) ->
+                crossAz.sent(CrossAzBytes.Transport.FAST_FRAME,
+                        azOf(header, asked, zones), bytes));
+    }
+
+    private static String azOf(FastFrame.Header header, FastFrame.Body asked, PeerZones zones) {
+        Roster.Incarnation named = switch (asked) {
+            case FastFrame.Join join -> join.incarnation();
+            case FastFrame.Depart depart -> depart.incarnation();
             case null, default -> null;
         };
+        if (named != null) {
+            zones.learn(named, header.epoch());
+            return named.az();
+        }
+        return zones.ofUid(header.senderUid()).orElse(null);
     }
 
     /** What a JOIN reports: what the pod's journal holds, nothing for a diskless pod. */
@@ -111,9 +125,11 @@ final class FastPeer implements AutoCloseable {
 
     /** Starts the watch that joins every term this pod learns of. */
     static FastPeer start(ServerConfig config, BinStore store, FastDisk disk,
-            CrossAzBytes crossAz, Duration timeout,
+            CrossAzBytes crossAz, PeerZones zones, Duration timeout,
             java.util.function.BooleanSupplier leading, LeaderWatch.Sleeper sleeper) {
-        TermJoiner joiner = joiner(config, disk, new HttpFastTransport(timeout, crossAz));
+        // ⚠️ M13.64: a JOIN counted at its leader's zone, learned from its roster.
+        TermJoiner joiner = joiner(config, disk, zones.learning(
+                new HttpFastTransport(timeout, crossAz), store, config.prefix()));
         java.util.concurrent.atomic.AtomicLong reads = new java.util.concurrent.atomic.AtomicLong();
         LeaderWatch.LeaseReader lease = leaseReader(config, store);
         LeaderWatch watch = new LeaderWatch(config.podUid(), () -> {
