@@ -924,6 +924,7 @@ journal's fsync and the Kubernetes pod lookup are injected seams.
 | M13.58 | Opened by M13.56's survey: a permit-return test races the answer it reads after, and failed CI twice | — (quality) |
 | M13.59 | Opened by M13.57's evidence: four workers left L1 over its cap; a quarter of it is an uncached Gradle start -- cache what can be cached | — (harness) |
 | M13.60 | Opened by M13.56's review: the workflow gate does not check the nightly SIGTERM shutdown job; require it | — (harness) |
+| M13.61 | Opened by M13.59's evidence: the dependency cache was saved under a key no restore asks for; save under the restore's own key | — (harness) |
 | M13.6 | R5: no silent defaults; the started client's clock pinned | FR-6, FR-19 |
 | M13.6a | R5: `IndexQuotas`' three-argument and `ConsumerDeliveryQueues`' two-argument constructors removed; `SilentDefaultsGoneTest` per module | — (quality) |
 | M13.6b | R5: `ServerConfig`'s older constructors removed | — (quality) |

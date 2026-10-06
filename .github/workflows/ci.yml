@@ -117,6 +117,8 @@ jobs:
         with:
           distribution: temurin
           java-version: '25'
+      # ⚠️ LOOKUP ONLY: this job needs to know the key exists, not its bytes
+      # (M13.59 review round 3, P6).
       - name: Restore Gradle dependencies
         id: gradle-deps
         uses: actions/cache/restore@v4
@@ -125,9 +127,13 @@ jobs:
             ~/.gradle/caches/modules-2
             ~/.gradle/wrapper
           key: gradle-deps-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties', 'gradle/libs.versions.toml') }}
+          lookup-only: true
       - name: Resolve what L1 compiles against
         if: steps.gradle-deps.outputs.cache-hit != 'true'
         run: ./gradlew testClasses integrationTestClasses --no-daemon
+      # ⚠️ THE KEY THE RESTORE COMPUTED, NOT A FRESH hashFiles (M13.61): after
+      # the build, generated `*.gradle.kts` under build/ change the hash, so
+      # run 37473607344 saved under a key no restore ever asks for.
       - name: Save Gradle dependencies
         if: steps.gradle-deps.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
@@ -135,7 +141,7 @@ jobs:
           path: |
             ~/.gradle/caches/modules-2
             ~/.gradle/wrapper
-          key: gradle-deps-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties', 'gradle/libs.versions.toml') }}
+          key: ${{ steps.gradle-deps.outputs.cache-primary-key }}
 
   l1:
     name: "L1 — unit tests"
