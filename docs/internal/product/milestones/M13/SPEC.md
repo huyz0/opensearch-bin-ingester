@@ -929,6 +929,7 @@ journal's fsync and the Kubernetes pod lookup are injected seams.
 | M13.63 | Opened by M13.62's review: no gate pins CI's cache steps; require them | — (harness) |
 | M13.64 | Opened by M13.62's evidence: fast frames reach peers of unattributed zone, and the cross-AZ test's partition omits them | FR-17, NFR-5 |
 | M13.65 | Opened by M13.64: a follower's per-term JOIN puts the small NFR-5 workload over its ratio; NFR-5 a data-path ratio, control frames their own per-term budget (decided by the user) | FR-17, NFR-5 |
+| M13.66 | Opened by M13.65's review: the fast-frame counter mixes control and data frames; split it | FR-17, NFR-5 |
 | M13.6 | R5: no silent defaults; the started client's clock pinned | FR-6, FR-19 |
 | M13.6a | R5: `IndexQuotas`' three-argument and `ConsumerDeliveryQueues`' two-argument constructors removed; `SilentDefaultsGoneTest` per module | — (quality) |
 | M13.6b | R5: `ServerConfig`'s older constructors removed | — (quality) |

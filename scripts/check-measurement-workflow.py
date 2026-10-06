@@ -39,12 +39,50 @@ def failures(workflow: str) -> list[str]:
     return problems
 
 
+BUILD_CACHE_KEY = "key: gradle-build-${{ runner.os }}-${{ github.sha }}"
+DEPS_SAVE_KEY = "key: ${{ steps.gradle-deps.outputs.cache-primary-key }}"
+DEPS_COMPILE = "run: ./gradlew testClasses integrationTestClasses --no-daemon"
+
+
+def ci_cache_failures(lines: list[str]) -> list[str]:
+    """CI's cache steps (M13.63; M13.61, M13.62): what fits L1 in its cap."""
+    deps = job_block(lines, "gradle-deps")
+    if deps is None:
+        return ["CI workflow must define the gradle-deps job that fills L1's caches"]
+    problems = []
+    # ⚠️ A STEP's FIRST KEY TOO (its review round 1, P1): `- run: ...`.
+    steps = [line.strip().removeprefix("- ") for line in deps]
+    restore = [line for line in steps if line.startswith("key: gradle-deps-")]
+    if len(restore) != 1:
+        problems.append("gradle-deps must restore its dependencies under one gradle-deps key")
+    # ⚠️ NEVER A FRESH hashFiles (M13.61): after the build it hashes the
+    # generated *.gradle.kts too, and saves under a key no restore asks for.
+    if DEPS_SAVE_KEY not in steps:
+        problems.append("gradle-deps must save its dependencies under the restore's "
+                        "cache-primary-key, never a fresh hashFiles")
+    # ⚠️ COMPILE ONLY (M13.62): a task that runs tests would put results in
+    # the build cache L1 restores -- a pass nobody ran.
+    if [line for line in steps if line.startswith("run:")] != [DEPS_COMPILE]:
+        problems.append("gradle-deps must compile only: " + DEPS_COMPILE)
+    if BUILD_CACHE_KEY not in steps:
+        problems.append("gradle-deps must save the build cache under "
+                        "gradle-build-<os>-<sha>")
+    l1 = job_block(lines, "l1")
+    if l1 is not None:
+        l1_steps = [line.strip().removeprefix("- ") for line in l1]
+        if restore and restore[0] not in l1_steps:
+            problems.append("L1 must restore the dependencies under gradle-deps' key")
+        if BUILD_CACHE_KEY not in l1_steps:
+            problems.append("L1 must restore the build cache under gradle-build-<os>-<sha>")
+    return problems
+
+
 def ci_failures(ci: str) -> list[str]:
     lines = ci.splitlines()
-    problems = []
+    problems = ci_cache_failures(lines)
     l1 = job_block(lines, "l1")
     if l1 is None:
-        return ["CI workflow must define the L1 job"]
+        return problems + ["CI workflow must define the L1 job"]
     fast_requirements = (
         "name: Cost assertions (fast subset)",
         "M9_8_RATE: '40'",

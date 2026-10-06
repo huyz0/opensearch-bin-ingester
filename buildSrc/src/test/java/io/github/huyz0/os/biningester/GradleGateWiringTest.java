@@ -257,6 +257,86 @@ class GradleGateWiringTest {
         assertThat(removedAlone.output()).contains("must define the shutdown job");
     }
 
+    /**
+     * CI's cache steps (M13.63; M13.61, M13.62): the dependency save under
+     * the restore's own key, L1 restoring both caches under the keys
+     * gradle-deps fills, and gradle-deps compiling only -- each of which
+     * regressed, or could, with every other gate green.
+     */
+    @Test
+    void ciWorkflowPinsItsCacheSteps() throws Exception {
+        Path root = repository();
+        Path measurement = root.resolve(".github/workflows/measurement.yml");
+        String original = Files.readString(root.resolve(".github/workflows/ci.yml"));
+        Path fixture = root.resolve("buildSrc/build/tmp/ci-cache")
+                .resolve(UUID.randomUUID().toString());
+        Files.createDirectories(fixture);
+        String depsKey = "key: gradle-deps-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', "
+                + "'gradle/wrapper/gradle-wrapper.properties', 'gradle/libs.versions.toml') }}";
+        String buildKey = "key: gradle-build-${{ runner.os }}-${{ github.sha }}";
+
+        Map<String, String[]> broken = new LinkedHashMap<>();
+        broken.put("deps-job-removed", new String[] {
+            original.replace("  gradle-deps:\n", "  gradle-deps-removed:\n"),
+            "must define the gradle-deps job"});
+        broken.put("save-key-recomputed", new String[] {original.replace(
+                "          key: ${{ steps.gradle-deps.outputs.cache-primary-key }}\n",
+                "          " + depsKey + "\n"),
+            "the restore's cache-primary-key"});
+        broken.put("deps-runs-build", new String[] {original.replace(
+                "        run: ./gradlew testClasses integrationTestClasses --no-daemon\n",
+                "        run: ./gradlew build --no-daemon\n"),
+            "compile only"});
+        // ⚠️ COMPILE *ONLY* (its review round 1, T1): the compile kept, a
+        // step that runs tests added beside it -- in both of YAML's forms.
+        String compile = "        run: ./gradlew testClasses integrationTestClasses --no-daemon\n";
+        broken.put("deps-adds-a-build-step", new String[] {original.replace(compile,
+                compile + "      - name: And the tests\n        run: ./gradlew build --no-daemon\n"),
+            "compile only"});
+        broken.put("deps-adds-a-dash-run-step", new String[] {original.replace(compile,
+                compile + "      - run: ./gradlew test --no-daemon\n"),
+            "compile only"});
+        // (its review round 1, T2) the dependency restore step deleted
+        broken.put("deps-restore-removed", new String[] {original.replaceFirst(
+                "      - name: Restore Gradle dependencies\n        id: gradle-deps\n"
+                        + "(?:.*\n){6}", ""),
+            "one gradle-deps key"});
+        broken.put("l1-build-cache-unrestored", new String[] {original.replace(
+                "      - name: Restore this commit's build cache\n"
+                        + "        uses: actions/cache/restore@v4\n"
+                        + "        with:\n"
+                        + "          path: ~/.gradle/caches/build-cache-1\n"
+                        + "          " + buildKey + "\n", ""),
+            "L1 must restore the build cache"});
+        broken.put("l1-deps-key-drifted", new String[] {replaceLast(original,
+                "          " + depsKey + "\n",
+                "          " + depsKey.replace("'gradle/libs.versions.toml'", "'other.toml'")
+                        + "\n"),
+            "L1 must restore the dependencies under gradle-deps' key"});
+        broken.put("build-cache-saved-elsewhere", new String[] {original.replace(
+                "          path: ~/.gradle/caches/build-cache-1\n          " + buildKey + "\n"
+                        + "\n  l1:",
+                "          path: ~/.gradle/caches/build-cache-1\n"
+                        + "          key: gradle-build-${{ runner.os }}-other\n\n  l1:"),
+            "gradle-deps must save the build cache"});
+        for (Map.Entry<String, String[]> each : broken.entrySet()) {
+            String text = each.getValue()[0];
+            assertThat(text).as("the premise: %s mutates", each.getKey()).isNotEqualTo(original);
+            Path ci = fixture.resolve(each.getKey() + ".yml");
+            Files.writeString(ci, text);
+            Run run = checkMeasurementWorkflow(measurement, ci);
+            assertThat(run.exitCode()).as("%s: %s", each.getKey(), run.output()).isEqualTo(1);
+            assertThat(run.output()).as(each.getKey()).contains(each.getValue()[1])
+                    .doesNotContain("Traceback");
+        }
+    }
+
+    private static String replaceLast(String text, String target, String replacement) {
+        int at = text.lastIndexOf(target);
+        return at < 0 ? text : text.substring(0, at) + replacement
+                + text.substring(at + target.length());
+    }
+
     @Test
     void fullMeasurementUsesTheExtendedIntegrationTestTimeout() throws Exception {
         Path root = repository();
