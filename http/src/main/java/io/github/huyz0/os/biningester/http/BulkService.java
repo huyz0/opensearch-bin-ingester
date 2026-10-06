@@ -213,7 +213,8 @@ public final class BulkService implements HttpService {
         rules.post("/{index}/_bulk", this::bulk);
     }
 
-    private void bulk(ServerRequest request, ServerResponse response) {
+    /** Package-private so a test can hand it a response that records the send (M13.58). */
+    void bulk(ServerRequest request, ServerResponse response) {
         if (!gate.enterBulk()) {
             // ⚠️ 503, WHICH A PRODUCER ALREADY RETRIES. Nothing was appended,
             // so the retry through the cluster address, to a pod that is
@@ -324,10 +325,42 @@ public final class BulkService implements HttpService {
         }
         Admitted held = new Admitted(admission, permit.get(), placement.lane(),
                 quota.ticket().get());
+        // ⚠️ EVERYTHING GOES BACK BEFORE THE ANSWER IS SENT (M13.58): a
+        // producer that reads its answer and sends again at once must not be
+        // refused by the permit of the request it just finished.
+        Answer answer;
         try {
-            append(request, response, index, placement, held);
+            answer = append(request, index, placement, held);
         } finally {
             held.release();
+        }
+        answer.send(response);
+    }
+
+    /**
+     * What {@link #append} answers, sent only once the request has given back
+     * what it held. ⚠️ A 429 IS A FLAG, NOT A STATUS HERE: it leaves through
+     * {@link #tooManyRequests}, the one place one is sent (M12.7).
+     */
+    private record Answer(Status status, String body, long retryAfterSeconds,
+            boolean tooMany) {
+
+        static Answer of(Status status, String body) {
+            return new Answer(status, body, 0, false);
+        }
+
+        static Answer tooMany(long retryAfterSeconds, String why) {
+            return new Answer(null, why, retryAfterSeconds, true);
+        }
+
+        void send(ServerResponse response) {
+            if (tooMany) {
+                tooManyRequests(response, retryAfterSeconds, body);
+            } else if (body == null) {
+                response.status(status).send();
+            } else {
+                response.status(status).send(body);
+            }
         }
     }
 
@@ -350,8 +383,8 @@ public final class BulkService implements HttpService {
                 .send(why);
     }
 
-    private void append(ServerRequest request, ServerResponse response, String index,
-            Placement placement, Admitted held) {
+    private Answer append(ServerRequest request, String index, Placement placement,
+            Admitted held) {
         try {
             // ⚠️ Each CHUNK's append blocks until ITS segment and commit delta
             // are durable (criterion 1); the 202 below means every chunk landed
@@ -367,8 +400,7 @@ public final class BulkService implements HttpService {
             // condition that IS the producer's and IS permanent -- a partition
             // the index does not have -- which is FR-13's defining clause, and
             // a 500 there is retried forever because 5xx reads as transient.
-            response.status(Status.BAD_REQUEST_400).send(e.getMessage());
-            return;
+            return Answer.of(Status.BAD_REQUEST_400, e.getMessage());
         } catch (RegistrationWaitFullException e) {
             // ⚠️ A LOAD REFUSAL, THROUGH THE ONE EMITTER (M12.10): too many writes
             // already wait for registrations -- the race the check above loses.
@@ -376,18 +408,15 @@ public final class BulkService implements HttpService {
             // budget's, which a producer retrying an unregistered index would
             // raise on an idle pod.
             refusals.registrationWaitRefused();
-            tooManyRequests(response, e.retryAfterSeconds(), e.getMessage());
-            return;
+            return Answer.tooMany(e.retryAfterSeconds(), e.getMessage());
         } catch (RegistrationTimeoutException e) {
             // ⚠️ 503, NOT 400 AND NOT 500. The index's shape has not been
             // pushed yet, which ends on its own: a producer told 400 drops the
             // batch, and one told 503 retries into a registration that has by
             // then usually arrived (ADR-0015's Consequences).
-            response.status(Status.SERVICE_UNAVAILABLE_503).send(e.getMessage());
-            return;
+            return Answer.of(Status.SERVICE_UNAVAILABLE_503, e.getMessage());
         } catch (BodyTooLargeException e) {
-            response.status(Status.REQUEST_ENTITY_TOO_LARGE_413).send(e.getMessage());
-            return;
+            return Answer.of(Status.REQUEST_ENTITY_TOO_LARGE_413, e.getMessage());
         } catch (BulkParseException e) {
             // ⚠️ Some prefix of the body may already be durable-bound (M1.7b):
             // this handler appends in CHUNKS as it parses, rather than parsing
@@ -397,18 +426,15 @@ public final class BulkService implements HttpService {
             // prefix as a rejected stale version, not a duplicate; a missing
             // version is not covered by that guarantee. See Ingest.append's
             // javadoc.
-            response.status(Status.BAD_REQUEST_400).send(e.getMessage());
-            return;
+            return Answer.of(Status.BAD_REQUEST_400, e.getMessage());
         } catch (BulkBodyReadException e) {
-            response.status(Status.BAD_REQUEST_400).send("could not read the request body");
-            return;
+            return Answer.of(Status.BAD_REQUEST_400, "could not read the request body");
         } catch (IOException e) {
             // ⚠️ 503, not 500. The store is unavailable; the producer should
             // retry the same batch, and an external version makes that safe.
-            response.status(Status.SERVICE_UNAVAILABLE_503).send();
-            return;
+            return Answer.of(Status.SERVICE_UNAVAILABLE_503, null);
         }
-        response.status(Status.ACCEPTED_202).send();
+        return Answer.of(Status.ACCEPTED_202, null);
     }
 
     /**
