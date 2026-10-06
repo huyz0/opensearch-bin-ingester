@@ -3,6 +3,7 @@ package io.github.huyz0.os.biningester.sequencer;
 
 import io.github.huyz0.os.biningester.binstore.BinStore;
 import io.github.huyz0.os.biningester.format.FastFrame;
+import io.github.huyz0.os.biningester.format.FastWriteFrame;
 import io.github.huyz0.os.biningester.format.Roster;
 import io.github.huyz0.os.biningester.format.RunKey;
 import java.io.IOException;
@@ -13,12 +14,15 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.ToLongFunction;
+import java.util.stream.Collectors;
 
 /**
  * An elected term's fast-mode side at its leader (M13.27j, M13.27k): what the
  * term start learned, the JOINs it answers, and a departing pod's DEPART and
- * HELD. The write (M13.27m) lands beside these.
+ * HELD; and the COMMITs it assigns (M13.27s), the rest of the write following
+ * (M13.27m).
  *
  * <p>⚠️ A JOIN IS ANSWERED ONLY ONCE THE ROSTER LISTS THE POD (ADR-0081 §1):
  * the incarnations that can hold a term's copies are exactly its members, so
@@ -31,6 +35,12 @@ import java.util.function.ToLongFunction;
  */
 public final class FastLeaderTerm {
 
+    /** ADR-0081's per-stream bound {@code B}: a cursor never more than this past its commit. */
+    public static final long STREAM_BOUND = 65_536;
+
+    /** How long a writer waits for the flush another COMMIT's caller runs. */
+    static final java.time.Duration ANSWER_WAIT = java.time.Duration.ofSeconds(10);
+
     private final FastTermOpening.Opened opened;
     private final JoinDesk joins;
     private final ToLongFunction<RunKey> committedNext;
@@ -41,6 +51,14 @@ public final class FastLeaderTerm {
     private final long refreshNanos;
     /** This term's roster as last read, and when; null before the first read. */
     private Roster cached;
+    /**
+     * The same roster, read without the monitor (M13.27s review round 1, P2):
+     * the monitor is held across a roster GET, and the write's next decision
+     * must never wait on one.
+     */
+    private volatile Roster latest;
+    /** The desk this term's COMMITs reach; null until the first. */
+    private CommitDesk desk;
     private long cachedAt;
 
     /**
@@ -187,8 +205,74 @@ public final class FastLeaderTerm {
         try (InputStream in = store.get(Roster.key(prefix, epoch()))) {
             cached = Roster.decode(in.readAllBytes());
         }
+        latest = cached;
         cachedAt = now;
         return cached;
+    }
+
+    /**
+     * The answer to a COMMIT from {@code header}'s sender, by {@code desk}
+     * (M13.27s): only a writer this term's roster lists as ROSTERED is
+     * assigned, at its own zone, against the pods the roster lists.
+     *
+     * @throws IOException the store or the journal failed; the writer retries
+     */
+    public FastFrame.Body answerCommit(FastFrame.Header header, FastWriteFrame.Commit commit,
+            CommitDesk desk) throws IOException {
+        Objects.requireNonNull(commit, "commit");
+        Objects.requireNonNull(desk, "desk");
+        if (header.epoch() != epoch()) {
+            return notThisTerm(header);
+        }
+        Roster own = ownRoster();
+        if (own.fencedBy() > epoch()) {
+            return refused(FastFrame.Reason.LOWER_EPOCH, "term " + epoch()
+                    + " was fenced by " + own.fencedBy());
+        }
+        Optional<Roster.Member> writer = own.member(header.senderUid());
+        if (writer.isEmpty() || writer.get().state() != Roster.State.ROSTERED) {
+            return refused(FastFrame.Reason.NOT_ROSTERED, header.senderUid()
+                    + " is not rostered in term " + epoch());
+        }
+        // ⚠️ AVAILABLE = EVERY POD THE ROSTER LISTS, for now: a pod's loss is
+        // judged by its UID's liveness, which M13.33 brings. A departed one
+        // lends no zone -- FastAdmission counts only the ROSTERED.
+        Set<String> available = own.members().stream()
+                .map(m -> m.incarnation().podUid()).collect(Collectors.toSet());
+        return desk.answer(new QuorumFrontier.Holder(header.senderUid(),
+                writer.get().incarnation().az()), commit, own, available);
+    }
+
+    /**
+     * This term's desk, over {@code journal}, built on the first call
+     * (M13.27s).
+     *
+     * <p>⚠️ ITS TERM RECORD IS WHAT THE TERM STARTED WITH, empty until M13.27l
+     * feeds it from the catalog: until then every COMMIT is held.
+     */
+    public synchronized CommitDesk commitDesk(FastJournal journal, Roster.Incarnation self) {
+        if (desk == null) {
+            Roster started = opened.started().own();
+            desk = new CommitDesk(new FastWriteLeader(epoch(), self,
+                    new FastCursor(STREAM_BOUND),
+                    new TermRecordWriter(store, prefix, started, mono,
+                            java.time.Duration.ofNanos(refreshNanos)),
+                    new QuorumFrontier(self.podUid(), self.az()), journal,
+                    this::nextDecision), committedNext, ANSWER_WAIT);
+        }
+        return desk;
+    }
+
+    /**
+     * The {@code seq} this term's next decision takes: one past the highest
+     * its roster as last read holds, never the list's size -- a pruned list
+     * is shorter than its numbering (ADR-0081 §2).
+     */
+    long nextDecision() {
+        Roster read = latest;
+        Roster r = read != null ? read : opened.started().own();
+        List<Roster.Decision> decisions = r.decisions();
+        return decisions.isEmpty() ? 0 : decisions.get(decisions.size() - 1).seq() + 1L;
     }
 
     private FastFrame.Refused notThisTerm(FastFrame.Header header) {

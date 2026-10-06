@@ -211,6 +211,15 @@ public final class IngesterNode implements AutoCloseable {
                 fastFrames.handle(kind, (header, body) ->
                         FastLeaderFrames.answer(assembly.heldTerm(), header, body));
             }
+            // ⚠️ M13.27s: a COMMIT, by the term this pod leads, over its journal.
+            io.github.huyz0.os.biningester.format.Roster.Incarnation self =
+                    new io.github.huyz0.os.biningester.format.Roster.Incarnation(config.podId(),
+                    config.podUid(), config.az(), config.endpoint());
+            FastDisk commitDisk = fastDisk;
+            fastFrames.handle(io.github.huyz0.os.biningester.format.FastWriteFrame.KIND_COMMIT,
+                    (header, body) -> FastLeaderFrames.answerCommit(assembly.heldTerm(),
+                            commitDisk, self, header,
+                            (io.github.huyz0.os.biningester.format.FastWriteFrame.Commit) body));
             IngesterNode node = new IngesterNode(assembly,
                     FrontDoor.start(assembly, clock, journal::add, crossAz,
                             Optional.of(fastFrames)), transport, clock,

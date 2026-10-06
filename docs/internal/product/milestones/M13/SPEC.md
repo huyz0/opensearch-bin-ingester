@@ -926,6 +926,8 @@ journal's fsync and the Kubernetes pod lookup are injected seams.
 | M13.60 | Opened by M13.56's review: the workflow gate does not check the nightly SIGTERM shutdown job; require it | — (harness) |
 | M13.61 | Opened by M13.59's evidence: the dependency cache was saved under a key no restore asks for; save under the restore's own key | — (harness) |
 | M13.62 | Opened by M13.61's evidence: with the dependency cache hitting, L1 still overran on its start and compiles; take compiles from the build cache, tests never | — (harness) |
+| M13.63 | Opened by M13.62's review: no gate pins CI's cache steps; require them | — (harness) |
+| M13.64 | Opened by M13.62's evidence: fast frames reach peers of unattributed zone, and the cross-AZ test's partition omits them | FR-17, NFR-5 |
 | M13.6 | R5: no silent defaults; the started client's clock pinned | FR-6, FR-19 |
 | M13.6a | R5: `IndexQuotas`' three-argument and `ConsumerDeliveryQueues`' two-argument constructors removed; `SilentDefaultsGoneTest` per module | — (quality) |
 | M13.6b | R5: `ServerConfig`'s older constructors removed | — (quality) |
@@ -991,6 +993,7 @@ journal's fsync and the Kubernetes pod lookup are injected seams.
 | M13.27p | Split from M13.27k: a pod's departure at a graceful stop | FR-17 |
 | M13.27q | Opened by M13.27k's review: a deposed term refuses HELD, the roster read bounded, a served HELD pinned | FR-17 |
 | M13.27l | Split from M13.27d: a fast index's registration reaching the leader, and the term record fed from it (with or after M13.33, since a recorded term stays open) | FR-17 |
+| M13.27s | Split from M13.27m: the leader answers a COMMIT, ASSIGNED once its group is fsynced | FR-17 |
 | M13.27m | Split from M13.27d: the write endpoint, the replica re-send and its timeout, the frontier's term-start and return calls, one journal lock | FR-17 |
 | M13.28 | The replica endpoint: store, epoch fence, release | FR-17 |
 | M13.29 | The writer's fast path: commit, offset confirmation, the epoch check, ack with offsets; no fast frame for a `wal=false` index (`FastWalFalseFleetTest`) | FR-17 |

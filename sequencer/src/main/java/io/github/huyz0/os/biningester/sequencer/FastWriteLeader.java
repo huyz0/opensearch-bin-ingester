@@ -69,8 +69,13 @@ public final class FastWriteLeader {
     public record Wait(String why) implements Outcome {
     }
 
-    /** An ASSIGNED answer to send, once fsynced. */
-    public record Answer(String writerUid, FastWriteFrame.Assigned assigned) {
+    /**
+     * An ASSIGNED answer to send, once fsynced, with the batch's key: every
+     * batch between two decisions shares {@code assignedAfter}, so only the
+     * key tells a writer's answers apart (M13.27s).
+     */
+    public record Answer(String writerUid, FastJournalRecord.IdempotencyKey key,
+            FastWriteFrame.Assigned assigned) {
     }
 
     /** An EXPOSED answer to send. */
@@ -279,7 +284,7 @@ public final class FastWriteLeader {
                         }
                     }
                     b.answered = true;
-                    answers.add(new Answer(b.writer.podUid(), b.assigned));
+                    answers.add(new Answer(b.writer.podUid(), b.key, b.assigned));
                 }
             }
             return answers;

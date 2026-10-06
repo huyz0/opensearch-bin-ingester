@@ -89,7 +89,7 @@ class FastWriteLeaderTest {
         List<FastWriteLeader.Answer> answers = l.leader().flushGroup();
 
         assertThat(answers).containsExactly(new FastWriteLeader.Answer("uid-b",
-                new FastWriteFrame.Assigned(3, List.of(
+                commit(1, S1).key(), new FastWriteFrame.Assigned(3, List.of(
                         new FastWriteFrame.AssignedRun(S1, 100, 1, false)))));
         assertThat(l.journal().held()).hasSize(1);
         assertThat(l.leader().expose()).containsExactly(new FastWriteLeader.Exposure("uid-b",
