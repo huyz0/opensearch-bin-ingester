@@ -978,6 +978,7 @@ journal's fsync and the Kubernetes pod lookup are injected seams.
 | M13.27n | Split from M13.27j: joins sent by every pod at startup and each leader change, how an idle pod learns its leader, and answers' bytes counted | FR-17 |
 | M13.27k | Split from M13.27d: departure answered at the leader (narrowed: a pod's departure at a graceful stop is M13.27p) | FR-17 |
 | M13.27p | Split from M13.27k: a pod's departure at a graceful stop | FR-17 |
+| M13.27q | Opened by M13.27k's review: a deposed term refuses HELD, the roster read bounded, a served HELD pinned | FR-17 |
 | M13.27l | Split from M13.27d: a fast index's registration reaching the leader, and the term record fed from it (with or after M13.33, since a recorded term stays open) | FR-17 |
 | M13.27m | Split from M13.27d: the write endpoint, the replica re-send and its timeout, the frontier's term-start and return calls, one journal lock | FR-17 |
 | M13.28 | The replica endpoint: store, epoch fence, release | FR-17 |

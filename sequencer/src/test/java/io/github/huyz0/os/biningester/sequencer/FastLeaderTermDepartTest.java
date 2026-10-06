@@ -50,7 +50,8 @@ class FastLeaderTermDepartTest {
         return new FastLeaderTerm(opened,
                 new JoinDesk(new RosterJoins(store, "p", 3, new Mono(), Duration.ofMillis(250)),
                         nanos -> { }),
-                key -> committed.getOrDefault(key, 0L), store, "p");
+                key -> committed.getOrDefault(key, 0L), store, "p",
+                new Mono(), Duration.ofMillis(250));
     }
 
     static FastFrame.Header header(int kind, long epoch) {

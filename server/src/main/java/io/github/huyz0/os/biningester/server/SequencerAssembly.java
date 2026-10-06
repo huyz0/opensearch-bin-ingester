@@ -141,7 +141,8 @@ final class SequencerAssembly {
             term.attach(new FastLeaderTerm(opened.get(), new JoinDesk(
                     new RosterJoins(store, config.prefix(), term.epoch(), mono,
                             MIN_UPLOAD_INTERVAL), nanos -> TimeUnit.NANOSECONDS.sleep(nanos)),
-                    term::committedNext, store, config.prefix()));
+                    term::committedNext, store, config.prefix(), mono,
+                    MIN_UPLOAD_INTERVAL));
             // ⚠️ M8.42: THE CHAIN BELOW THE REPLAY, read once per
             // takeover and off the election's path. HERE, not in
             // `LocalSequencer.start`, which M4.9 bounds to a

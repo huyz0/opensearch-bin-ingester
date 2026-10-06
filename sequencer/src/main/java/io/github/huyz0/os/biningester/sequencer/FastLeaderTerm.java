@@ -37,18 +37,28 @@ public final class FastLeaderTerm {
     private final BinStore store;
     private final String prefix;
     private final RosterDepartures departures;
+    private final MonotonicClock mono;
+    private final long refreshNanos;
+    /** This term's roster as last read, and when; null before the first read. */
+    private Roster cached;
+    private long cachedAt;
 
     /**
      * @param committedNext a stream's committed next offset, from the chain
+     * @param refresh how long a read of this term's roster answers HELDs:
+     *     {@code min_upload_interval} (M13.27q)
      */
     public FastLeaderTerm(FastTermOpening.Opened opened, JoinDesk joins,
-            ToLongFunction<RunKey> committedNext, BinStore store, String prefix) {
+            ToLongFunction<RunKey> committedNext, BinStore store, String prefix,
+            MonotonicClock mono, java.time.Duration refresh) {
         this.opened = Objects.requireNonNull(opened, "opened");
         this.joins = Objects.requireNonNull(joins, "joins");
         this.committedNext = Objects.requireNonNull(committedNext, "committedNext");
         this.store = Objects.requireNonNull(store, "store");
         this.prefix = Objects.requireNonNull(prefix, "prefix");
         this.departures = new RosterDepartures(store, prefix, epoch());
+        this.mono = Objects.requireNonNull(mono, "mono");
+        this.refreshNanos = refresh.toNanos();
     }
 
     public long epoch() {
@@ -96,7 +106,7 @@ public final class FastLeaderTerm {
             return notThisTerm(header);
         }
         if (depart.phase() == 1) {
-            return new FastFrame.HeldStatusReport(status(depart.held(), ownRoster()));
+            return answerHeld(depart.held());
         }
         // ⚠️ ONLY A POD DEPARTS ITSELF (M13.27k review round 1, P2): marked
         // departed on another's word, a pod still holding copies would lose
@@ -129,7 +139,22 @@ public final class FastLeaderTerm {
         if (header.epoch() != epoch()) {
             return notThisTerm(header);
         }
-        return new FastFrame.HeldStatusReport(status(held.held(), ownRoster()));
+        return answerHeld(held.held());
+    }
+
+    /**
+     * ⚠️ A DEPOSED TERM ANSWERS NO STATUS (M13.27k review round 2, P4): its
+     * roster shows the newer fence, and the newer term's decisions are not in
+     * what it reads -- a pod told PENDING by it would wait for a RELEASE no
+     * deposed leader sends.
+     */
+    private FastFrame.Body answerHeld(FastFrame.Held held) throws IOException {
+        Roster own = ownRoster();
+        if (own.fencedBy() > epoch()) {
+            return refused(FastFrame.Reason.LOWER_EPOCH, "term " + epoch()
+                    + " was fenced by " + own.fencedBy());
+        }
+        return new FastFrame.HeldStatusReport(status(held, own));
     }
 
     /**
@@ -148,10 +173,22 @@ public final class FastLeaderTerm {
         return HeldStatusAnswers.answer(held, next, rosters, opened.closedThrough());
     }
 
-    private Roster ownRoster() throws IOException {
-        try (InputStream in = store.get(Roster.key(prefix, epoch()))) {
-            return Roster.decode(in.readAllBytes());
+    /**
+     * ⚠️ READ AT MOST ONCE PER {@code min_upload_interval} (M13.27k review
+     * round 2, P3): a holder over half its cap sends a HELD on every refused
+     * REPLICA, and a read per HELD would follow the refused writes. A decision
+     * or a fence written meanwhile is seen within one interval.
+     */
+    private synchronized Roster ownRoster() throws IOException {
+        long now = mono.nanos();
+        if (cached != null && now - cachedAt < refreshNanos) {
+            return cached;
         }
+        try (InputStream in = store.get(Roster.key(prefix, epoch()))) {
+            cached = Roster.decode(in.readAllBytes());
+        }
+        cachedAt = now;
+        return cached;
     }
 
     private FastFrame.Refused notThisTerm(FastFrame.Header header) {
