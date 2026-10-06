@@ -60,13 +60,16 @@ import java.util.Set;
  * @param quotas the per-index admission quotas; none by default (M11.8)
  * @param adminCost whether {@code GET /admin/cost} is served; off unless
  *     configured (M12.6)
+ * @param fastJournal where the pod keeps its fast journal and epoch file, or
+ *     empty for a diskless pod (M13.27i)
  */
 public record ServerConfig(String podId, String az, String trustDomain, String prefix,
         StoreConfig store, Duration leaseTtl, Duration leaseRenewInterval, String endpoint, IngestConfig ingest,
         int httpPort, String producerSubject, Set<String> allowedIndices,
         RetentionConfig retention, java.util.Optional<MembershipConfig> membership,
         String podUid, Duration costTopKInterval,
-        io.github.huyz0.os.biningester.ingest.IndexQuotas.Config quotas, boolean adminCost) {
+        io.github.huyz0.os.biningester.ingest.IndexQuotas.Config quotas, boolean adminCost,
+        java.util.Optional<FastJournalConfig> fastJournal) {
 
     // ⚠️ ONLY THE CANONICAL CONSTRUCTOR (M13.6b, M12 harvest R5): six older
     // ones each filled in a setting their callers predated, and a new caller
@@ -87,6 +90,7 @@ public record ServerConfig(String podId, String az, String trustDomain, String p
     public ServerConfig {
         Objects.requireNonNull(podId, "podId");
         Objects.requireNonNull(podUid, "podUid");
+        Objects.requireNonNull(fastJournal, "fastJournal");
         Objects.requireNonNull(az, "az");
         Objects.requireNonNull(trustDomain, "trustDomain");
         Objects.requireNonNull(prefix, "prefix");

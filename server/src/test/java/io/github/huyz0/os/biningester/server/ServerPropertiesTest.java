@@ -344,7 +344,8 @@ class ServerPropertiesTest {
                 .contains(ServerProperties.POD_ID, ServerProperties.ENDPOINT,
                         ServerProperties.STORE_KIND, ServerProperties.INTERVAL_CEILING,
                         ServerProperties.LANES_ACTIVE, ServerProperties.COST_TOP_K_INTERVAL,
-                        ServerProperties.ADMIN_COST_ENABLED)
-                .hasSize(35);
+                        ServerProperties.ADMIN_COST_ENABLED, ServerProperties.FAST_JOURNAL_DIR,
+                        ServerProperties.FAST_JOURNAL_CAP)
+                .hasSize(37);
     }
 }

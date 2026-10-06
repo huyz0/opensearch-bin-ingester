@@ -60,7 +60,7 @@ class AdminCostAssemblyTest {
                 Optional.empty(), "uid-pod1", io.github.huyz0.os.biningester.ingest.CostTopKReporter
                         .DEFAULT_INTERVAL,
                 io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(),
-                true); // ⚠️ /admin/cost is opt-in since M12.6
+                true, java.util.Optional.empty()); // ⚠️ /admin/cost is opt-in since M12.6
     }
 
     private static SequencerTransport noPeers() {

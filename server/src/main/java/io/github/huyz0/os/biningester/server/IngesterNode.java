@@ -82,6 +82,8 @@ public final class IngesterNode implements AutoCloseable {
     private final SequencerTransport transport;
     private final Clock clock;
     private final java.util.List<String> journal;
+    /** The epoch fence and fast journal (M13.27i). */
+    private final FastDisk fastDisk;
     private volatile ShutdownSequence.Report lastShutdown;
     private volatile EndpointSliceWatch watch;
 
@@ -94,7 +96,9 @@ public final class IngesterNode implements AutoCloseable {
             new java.util.concurrent.atomic.AtomicBoolean();
 
     private IngesterNode(Assembly assembly, FrontDoor door, SequencerTransport transport,
-            Clock clock, java.util.List<String> journal, CrossAzBytes crossAz) {
+            Clock clock, java.util.List<String> journal, CrossAzBytes crossAz,
+            FastDisk fastDisk) {
+        this.fastDisk = fastDisk;
         this.crossAz = crossAz;
         this.assembly = assembly;
         this.door = door;
@@ -171,7 +175,14 @@ public final class IngesterNode implements AutoCloseable {
                 view == null ? LeaseChallenge.NEVER : view, view, crossAz);
         java.util.List<String> journal = new java.util.concurrent.CopyOnWriteArrayList<>();
         assembly.journal(journal::add);
+        FastDisk fastDisk = null;
         try {
+            // ⚠️ AFTER THE ASSEMBLY, WHICH TOOK ANY TERM THIS POD TAKES AT BOOT:
+            // the fence starts at the lease's epoch (ADR-0081 §3), and BEFORE
+            // THE DOOR, so no frame is answered under a lower one (M13.27i).
+            fastDisk = FastDisk.open(assembly.store(),
+                    SequencerAssembly.leaseConfig(config).leaseKey(), config.fastJournal(),
+                    io.github.huyz0.os.biningester.binstore.backend.FileJournalFile::in);
             // ⚠️ BUILT BEFORE THE DOOR, STARTED AFTER IT: a malformed API URL
             // throws here, where the unwind below closes the graph and there is
             // no listener yet to leave bound.
@@ -184,15 +195,19 @@ public final class IngesterNode implements AutoCloseable {
             }
             IngesterNode node = new IngesterNode(assembly,
                     FrontDoor.start(assembly, clock, journal::add, crossAz), transport, clock,
-                    journal, crossAz);
+                    journal, crossAz, fastDisk);
             if (watch != null) {
                 node.watch = watch.start();
             }
             return node;
-        } catch (RuntimeException failed) {
+        } catch (RuntimeException | IOException failed) {
             // ⚠️ A `RuntimeException` IS THE ONLY THING `FrontDoor.start` CAN
             // THROW -- Helidon reports a port already in use as one -- so this
-            // catches what it declares and not what it might.
+            // catches what it declares and not what it might; the fast disk's
+            // start throws `IOException` too (M13.27i).
+            if (fastDisk != null) {
+                closeQuietly(fastDisk, failed);
+            }
             // ⚠️ THE TERM IS ALREADY TAKEN BY THIS POINT. A port already in use
             // is the ordinary trigger, and without this the lease names a node
             // that is not listening, renewed every interval for the life of the
@@ -213,6 +228,11 @@ public final class IngesterNode implements AutoCloseable {
      */
     public CrossAzBytes crossAzBytes() {
         return crossAz;
+    }
+
+    /** The epoch fence and fast journal, for a test that wants to look inside. */
+    FastDisk fastDisk() {
+        return fastDisk;
     }
 
     /** The graph, for a test that wants to look inside a running node. */
@@ -296,8 +316,14 @@ public final class IngesterNode implements AutoCloseable {
                         transport.close();
                     } finally {
                         EndpointSliceWatch running = watch;
-                        if (running != null) {
-                            running.close();
+                        try {
+                            if (running != null) {
+                                running.close();
+                            }
+                        } finally {
+                            // ⚠️ LAST: the lease is released above, so no
+                            // frame of this pod's term needs the journal now.
+                            fastDisk.close();
                         }
                     }
                 }

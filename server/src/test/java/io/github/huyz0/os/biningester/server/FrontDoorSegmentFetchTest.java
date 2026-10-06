@@ -32,7 +32,7 @@ class FrontDoorSegmentFetchTest {
         ServerConfig config = new ServerConfig("writera", "az-a", "cluster-a", PREFIX,
                 new StoreConfig("memory", Optional.empty()), Duration.ofSeconds(10),
                 Duration.ofSeconds(3), "http://writer-a:8080", IngestConfig.defaults("cluster-a"),
-                0, "producer", Set.of("logs"), RetentionConfig.defaults(), java.util.Optional.empty(), "uid-writera", io.github.huyz0.os.biningester.ingest.CostTopKReporter.DEFAULT_INTERVAL, io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(), false);
+                0, "producer", Set.of("logs"), RetentionConfig.defaults(), java.util.Optional.empty(), "uid-writera", io.github.huyz0.os.biningester.ingest.CostTopKReporter.DEFAULT_INTERVAL, io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(), false, java.util.Optional.empty());
         SequencerTransport noPeers = new SequencerTransport() {
             @Override
             public io.github.huyz0.os.biningester.format.CommitDelta send(
@@ -70,7 +70,7 @@ class FrontDoorSegmentFetchTest {
         ServerConfig config = new ServerConfig("writera", "az-a", "cluster-a", PREFIX,
                 new StoreConfig("memory", Optional.empty()), Duration.ofSeconds(10),
                 Duration.ofSeconds(3), "http://writer-a:8080", IngestConfig.defaults("cluster-a"),
-                0, "producer", Set.of("logs"), RetentionConfig.defaults(), java.util.Optional.empty(), "uid-writera", io.github.huyz0.os.biningester.ingest.CostTopKReporter.DEFAULT_INTERVAL, io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(), false);
+                0, "producer", Set.of("logs"), RetentionConfig.defaults(), java.util.Optional.empty(), "uid-writera", io.github.huyz0.os.biningester.ingest.CostTopKReporter.DEFAULT_INTERVAL, io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(), false, java.util.Optional.empty());
         SequencerTransport noPeers = new SequencerTransport() {
             @Override
             public io.github.huyz0.os.biningester.format.CommitDelta send(

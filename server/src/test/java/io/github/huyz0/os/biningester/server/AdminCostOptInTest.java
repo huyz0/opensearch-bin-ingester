@@ -67,7 +67,7 @@ class AdminCostOptInTest {
                 new RetentionConfig(Duration.ofMinutes(1), Duration.ofHours(2),
                         Duration.ofSeconds(10), Duration.ofHours(3), Duration.ofDays(1)),
                 Optional.empty(), "uid-writera", CostTopKReporter.DEFAULT_INTERVAL,
-                IndexQuotas.Config.none(), adminCost);
+                IndexQuotas.Config.none(), adminCost, java.util.Optional.empty());
     }
 
     private static Map<String, String> minimal() {

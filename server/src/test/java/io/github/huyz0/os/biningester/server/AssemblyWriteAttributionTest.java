@@ -54,7 +54,7 @@ class AssemblyWriteAttributionTest {
                 Duration.ofDays(1), Duration.ofSeconds(3), "http://pod1:8080",
                 IngestConfig.defaults("cluster-a"), 0, "producer-1", Set.of(INDEX),
                 new RetentionConfig(Duration.ofMinutes(1), Duration.ofHours(2),
-                        Duration.ofSeconds(10), Duration.ofHours(3), Duration.ofDays(1)), java.util.Optional.empty(), "uid-pod1", io.github.huyz0.os.biningester.ingest.CostTopKReporter.DEFAULT_INTERVAL, io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(), false);
+                        Duration.ofSeconds(10), Duration.ofHours(3), Duration.ofDays(1)), java.util.Optional.empty(), "uid-pod1", io.github.huyz0.os.biningester.ingest.CostTopKReporter.DEFAULT_INTERVAL, io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(), false, java.util.Optional.empty());
     }
 
     private static SequencerTransport noPeers() {

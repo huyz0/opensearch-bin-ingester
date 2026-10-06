@@ -38,6 +38,40 @@ public final class FileJournalFile implements JournalFile {
         this.channel = channel;
     }
 
+    /**
+     * Opens or creates {@code name} in {@code directory}, creating the directory
+     * if it is missing (M13.27i): the server names its {@code emptyDir} from
+     * configuration as text and may not reach the file system itself
+     * (non-negotiable 7).
+     */
+    public static FileJournalFile in(String directory, String name) {
+        Objects.requireNonNull(directory, "directory");
+        Objects.requireNonNull(name, "name");
+        Path dir = Path.of(directory).toAbsolutePath();
+        try {
+            Path missing = dir;
+            while (missing.getParent() != null && !Files.exists(missing.getParent())) {
+                missing = missing.getParent();
+            }
+            boolean created = !Files.exists(dir);
+            Files.createDirectories(dir);
+            if (created) {
+                // ⚠️ A NEW DIRECTORY'S NAME IS DURABLE ONLY ONCE ITS PARENT IS
+                // (M13.27i review round 1, P2), as a new file's is once its
+                // directory is: forced from the deepest level up to the
+                // parent of the first one created.
+                Path top = missing.getParent();
+                for (Path level = dir; !level.equals(top); level = level.getParent()) {
+                    forceDirectory(level.getParent());
+                }
+            }
+        } catch (IOException failed) {
+            throw new UncheckedIOException("cannot create the fast journal's directory "
+                    + directory, failed);
+        }
+        return open(dir.resolve(name));
+    }
+
     /** Opens or creates the journal at {@code path}. */
     public static FileJournalFile open(Path path) {
         Objects.requireNonNull(path, "path");
@@ -152,7 +186,10 @@ public final class FileJournalFile implements JournalFile {
     }
 
     private void forceDirectory() throws IOException {
-        Path dir = path.toAbsolutePath().getParent();
+        forceDirectory(path.toAbsolutePath().getParent());
+    }
+
+    private static void forceDirectory(Path dir) throws IOException {
         try (FileChannel directory = FileChannel.open(dir, StandardOpenOption.READ)) {
             directory.force(true);
         } catch (IOException | UnsupportedOperationException noDirectoryFsync) {

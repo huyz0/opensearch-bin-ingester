@@ -42,6 +42,13 @@ public final class ServerProperties {
     /** Required: the immutable Kubernetes Pod UID (Downward API metadata.uid) written into leases. */
     public static final String POD_UID = "pod.uid";
     /**
+     * Optional: the pod's {@code emptyDir} for its fast journal and epoch file
+     * (M13.27i). Absent, the pod is diskless.
+     */
+    public static final String FAST_JOURNAL_DIR = "fast.journal.dir";
+    /** Optional, with {@link #FAST_JOURNAL_DIR} only: the journal's cap in bytes. */
+    public static final String FAST_JOURNAL_CAP = "fast.journal.cap";
+    /**
      * Required: this pod's availability zone, as a LABEL (M9.2, NFR-5).
      *
      * <p>⚠️ **REQUIRED, AND NOT DERIVED FROM ANYTHING.** Nothing else this
@@ -151,7 +158,8 @@ public final class ServerProperties {
             DIRECT_ENABLED, LANES_ACTIVE, MAX_IN_FLIGHT_BULK,
             RETENTION_MIN, RETENTION_MAX, RETENTION_REPORT_TIMEOUT, RETENTION_COPY_EXPIRY,
             RETENTION_PASS_INTERVAL, MEMBERSHIP_API, MEMBERSHIP_NAMESPACE, MEMBERSHIP_SERVICE,
-            MEMBERSHIP_TOKEN_FILE, MEMBERSHIP_CA_FILE, COST_TOP_K_INTERVAL, ADMIN_COST_ENABLED);
+            MEMBERSHIP_TOKEN_FILE, MEMBERSHIP_CA_FILE, COST_TOP_K_INTERVAL, ADMIN_COST_ENABLED,
+            FAST_JOURNAL_DIR, FAST_JOURNAL_CAP);
 
     private ServerProperties() {
     }
@@ -266,7 +274,8 @@ public final class ServerProperties {
                                     io.github.huyz0.os.biningester.ingest.RetentionLoop.DEFAULT_PASS_INTERVAL)),
                     membership(settings), required(settings, POD_UID),
                     topKInterval(settings),
-                    QuotaProperties.parse(settings), bool(settings, ADMIN_COST_ENABLED, false));
+                    QuotaProperties.parse(settings), bool(settings, ADMIN_COST_ENABLED, false),
+                    fastJournal(settings));
         } catch (IllegalArgumentException refused) {
             // ⚠️ `ConfigurationException` IS AN `IllegalArgumentException`, so
             // one already carrying a key's name lands here too and is returned
@@ -456,6 +465,29 @@ public final class ServerProperties {
                     + settings.get(key));
         }
         return parsed;
+    }
+
+    /**
+     * The fast journal, or none (M13.27i).
+     *
+     * <p>⚠️ A CAP WITHOUT A DIRECTORY IS REFUSED: it configures nothing, and an
+     * operator who set it believes the pod journals.
+     */
+    private static java.util.Optional<FastJournalConfig> fastJournal(
+            Map<String, String> settings) {
+        String dir = settings.get(FAST_JOURNAL_DIR);
+        if (dir == null) {
+            if (settings.containsKey(FAST_JOURNAL_CAP)) {
+                throw new ConfigurationException(FAST_JOURNAL_CAP + " is set without "
+                        + FAST_JOURNAL_DIR + ": a cap with no journal configures nothing");
+            }
+            return java.util.Optional.empty();
+        }
+        if (dir.isBlank()) {
+            throw blankSetting(FAST_JOURNAL_DIR);
+        }
+        return java.util.Optional.of(new FastJournalConfig(dir.trim(),
+                positiveBytes(settings, FAST_JOURNAL_CAP, FastJournalConfig.DEFAULT_CAP_BYTES)));
     }
 
     private static long positiveBytes(Map<String, String> settings, String key, long fallback) {

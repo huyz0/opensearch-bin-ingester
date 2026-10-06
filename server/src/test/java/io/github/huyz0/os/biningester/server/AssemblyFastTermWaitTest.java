@@ -35,7 +35,7 @@ class AssemblyFastTermWaitTest {
                 java.util.Set.of("logs"), RetentionConfig.defaults(), Optional.empty(),
                 "uid-" + podId,
                 io.github.huyz0.os.biningester.ingest.CostTopKReporter.DEFAULT_INTERVAL,
-                io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(), false);
+                io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(), false, java.util.Optional.empty());
     }
 
     private static SequencerTransport noPeers() {

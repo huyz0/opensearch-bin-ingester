@@ -36,7 +36,7 @@ class AssemblyChainGcTest {
         return new ServerConfig("pod1", "az-a", "cluster-a", PREFIX,
                 new StoreConfig("memory", Optional.empty()),
                 Duration.ofSeconds(10), Duration.ofSeconds(3), "http://pod1:8080",
-                IngestConfig.defaults("cluster-a"), 0, "producer-1", Set.of("logs"), RetentionConfig.defaults(), java.util.Optional.empty(), "uid-pod1", io.github.huyz0.os.biningester.ingest.CostTopKReporter.DEFAULT_INTERVAL, io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(), false);
+                IngestConfig.defaults("cluster-a"), 0, "producer-1", Set.of("logs"), RetentionConfig.defaults(), java.util.Optional.empty(), "uid-pod1", io.github.huyz0.os.biningester.ingest.CostTopKReporter.DEFAULT_INTERVAL, io.github.huyz0.os.biningester.ingest.IndexQuotas.Config.none(), false, java.util.Optional.empty());
     }
 
     private static SequencerTransport noPeers() {
