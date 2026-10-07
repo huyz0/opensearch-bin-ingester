@@ -74,6 +74,7 @@ class NodeShutdownTest {
         CompletableFuture<Integer> poll;
         CompletableFuture<Integer> inside;
         long closing;
+        var requests = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
         try {
             WebClient client = WebClient.builder()
                     .baseUri("http://localhost:" + node.port()).build();
@@ -93,24 +94,46 @@ class NodeShutdownTest {
                     .submit(bulkLine("first")).status().code()).isEqualTo(202);
             assertThat(node.assembly().leading()).as("the premise: a term is held").isTrue();
 
+            // ⚠️ ON THEIR OWN VIRTUAL THREADS, NOT THE COMMON POOL (M13.72): the
+            // poll blocks its thread until the close releases it, and a JVM-wide
+            // pool busy elsewhere could leave either request unstarted.
             poll = CompletableFuture.supplyAsync(() -> {
                 try (var response = client.get("/sub/" + uuid + "/0")
-                        .queryParam("wait", "30").queryParam("sub", "s1").request()) {
+                        .queryParam("wait", "30000").queryParam("sub", "s1").request()) {
                     return response.status().code();
                 }
-            });
+            }, requests);
+            // ⚠️ WAIT IS IN MILLISECONDS (M13.72, its review round 2, P3): `30`
+            // was clamped to the 50 ms floor, so the poll had to overlap the bulk
+            // AND still be waiting when the close released it, all within 50 ms
+            // -- the flake. 30,000 ms holds it until the close. And it registers
+            // before the bulk is sent, so the two are inside together for the
+            // bulk's whole wait for the flush.
+            long registered = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+            while (node.gate().awaitNoPollers(Duration.ZERO) == 0) {
+                assertThat(System.nanoTime()).as("the poll never registered: poll done %s",
+                        poll.isDone()).isLessThan(registered);
+                Thread.onSpinWait();
+            }
             inside = CompletableFuture.supplyAsync(() -> client.post("/logs/_bulk")
-                    .queryParam("partition", "0").submit(bulkLine("inside")).status().code());
+                    .queryParam("partition", "0").submit(bulkLine("inside")).status().code(),
+                    requests);
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
             while (node.gate().bulkInFlight() == 0
                     || node.gate().awaitNoPollers(Duration.ZERO) == 0) {
-                assertThat(System.nanoTime()).as("the poll and the bulk never both arrived")
+                // ⚠️ WHAT EACH SIDE WAS DOING, so a failure says which never arrived
+                assertThat(System.nanoTime()).as("the poll and the bulk never both arrived: "
+                                + "bulk in flight %d, pollers %d, poll done %s, bulk done %s",
+                        node.gate().bulkInFlight(), node.gate().awaitNoPollers(Duration.ZERO),
+                        poll.isDone(), inside.isDone())
                         .isLessThan(deadline);
                 Thread.onSpinWait();
             }
             closing = System.nanoTime();
         } finally {
             node.close();
+            // ⚠️ CLOSED AFTER THE NODE, which releases the poll (review round 1, T2)
+            requests.close();
         }
 
         assertThat(poll.get(20, TimeUnit.SECONDS))
@@ -191,17 +214,27 @@ class NodeShutdownTest {
         try {
             WebClient client = WebClient.builder()
                     .baseUri("http://localhost:" + node.port()).build();
-            CompletableFuture<Void> closing = CompletableFuture.runAsync(() -> {
+            // ⚠️ ON ITS OWN VIRTUAL THREAD, NOT THE COMMON POOL (M13.72): this wait,
+            // line 205 when the row was opened, timed out with the close unstarted
+            // or finished, and said neither.
+            CompletableFuture<Void> closing = new CompletableFuture<>();
+            Thread.ofVirtual().start(() -> {
                 try {
                     node.close();
-                } catch (IOException failed) {
-                    throw new java.util.concurrent.CompletionException(failed);
+                    closing.complete(null);
+                } catch (Throwable failed) {
+                    // ⚠️ AN Error TOO, or the get below times out saying nothing
+                    closing.completeExceptionally(failed);
                 }
             });
 
             long propagationDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
             while (!node.gate().readinessPropagationInProgress()) {
-                assertThat(System.nanoTime()).as("readiness propagation never opened")
+                // ⚠️ THE SHUTDOWN's JOURNAL SO FAR: a close never started and one
+                // slow inside an early step read the same from the flags alone
+                assertThat(System.nanoTime()).as("readiness propagation never opened: "
+                                + "ready %s, close done %s, shutdown so far %s",
+                        node.gate().ready(), closing.isDone(), node.shutdownJournal())
                         .isLessThan(propagationDeadline);
                 Thread.onSpinWait();
             }
