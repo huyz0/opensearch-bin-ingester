@@ -233,6 +233,12 @@ public final class FrontDoor implements AutoCloseable {
         // (ADR-0084): /ctl/commit and /ctl/drain, /ctl/durable-segment,
         // /ctl/fast. The producer port answers them 404 and keeps the
         // plugin's /ctl/register and /ctl/progress.
+        // ⚠️ EVERY PEER ROUTE BINDS ITS CALLER (ADR-0084 decision 8): within
+        // this pod's own fleet prefix under mutual, nothing under off.
+        io.github.huyz0.os.biningester.http.PeerBinding binding = peerTls
+                .map(tls -> io.github.huyz0.os.biningester.http.PeerBinding.within(
+                        tls.identity().prefix()))
+                .orElseGet(io.github.huyz0.os.biningester.http.PeerBinding::off);
         HttpRouting.Builder peerRoutes = HttpRouting.builder()
                 .register(new CommitService(assembly::heldTerm,
                         // ⚠️ THE NODE's STORE, NOT THE RAW BACKEND (M10.26):
@@ -240,12 +246,12 @@ public final class FrontDoor implements AutoCloseable {
                         // counted and never refused, as at a takeover.
                         (term, pod) -> io.github.huyz0.os.biningester.sequencer.InboxDrain.drain(
                                 assembly.nodeStore(), config.prefix(), term, pod,
-                                assembly.metrics()::failedIntentBatch)))
+                                assembly.metrics()::failedIntentBatch), binding))
                 .register(new DurableSegmentSignalService(assembly.peerView(),
-                        assembly::prefetchDurableSegment));
+                        assembly::prefetchDurableSegment, binding));
         // ⚠️ M13.27h: the fast frames' peer route, behind the node's own fence.
         fastFrames.ifPresent(router -> peerRoutes.register(
-                new io.github.huyz0.os.biningester.http.FastFrameService(router)));
+                new io.github.huyz0.os.biningester.http.FastFrameService(router, binding)));
         HttpRouting.Builder routes = HttpRouting.builder()
                 // ⚠️ HELIDON'S OWN SHUTDOWN HOOK IS OFF. Left on, a `SIGTERM`
                 // runs it alongside `Main`'s, and it stops the listener while

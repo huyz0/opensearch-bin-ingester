@@ -79,7 +79,8 @@ class FastLeaderTermCommitAdmissionTest {
         depart(term, A);
         FastWriteLeaderTest.Leader l = FastWriteLeaderTest.leader(1 << 20, 1_000);
 
-        FastFrame.Body answer = term.answerCommit(commitFrom(A), commit(1, S2), recorded(l));
+        FastFrame.Body answer = term.answerCommit(commitFrom(A), commit(A.podId(), 1, S2),
+                recorded(l));
 
         assertThat(((FastFrame.Refused) answer).reason())
                 .isEqualTo(FastFrame.Reason.NOT_ROSTERED);
@@ -96,7 +97,8 @@ class FastLeaderTermCommitAdmissionTest {
 
         // S2's index at wal_quorum 2: the leader and W share az-self, and only
         // the departed A was elsewhere.
-        FastFrame.Body answer = term.answerCommit(commitFrom(W), commit(1, S2), recorded(l));
+        FastFrame.Body answer = term.answerCommit(commitFrom(W), commit(W.podId(), 1, S2),
+                recorded(l));
 
         assertThat(answer).isInstanceOfSatisfying(FastFrame.Refused.class, refused -> {
             assertThat(refused.reason()).isEqualTo(FastFrame.Reason.BACKPRESSURE);
@@ -110,7 +112,8 @@ class FastLeaderTermCommitAdmissionTest {
         join(term, B);
         FastWriteLeaderTest.Leader l = FastWriteLeaderTest.leader(1 << 20, 1_000);
 
-        FastFrame.Body answer = term.answerCommit(commitFrom(B), commit(1, S2), recorded(l));
+        FastFrame.Body answer = term.answerCommit(commitFrom(B), commit(B.podId(), 1, S2),
+                recorded(l));
 
         // the fixture's leader is in az-a: a writer in az-b holds a required copy
         assertThat(answer).isEqualTo(new FastWriteFrame.Assigned(3,
@@ -125,7 +128,8 @@ class FastLeaderTermCommitAdmissionTest {
         FastTermStartTest.put(store, FastTermStartTest.read(store, 3).fencedBy(5));
         FastWriteLeaderTest.Leader l = FastWriteLeaderTest.leader(1 << 20, 1_000);
 
-        FastFrame.Body answer = term.answerCommit(commitFrom(B), commit(1, S2), recorded(l));
+        FastFrame.Body answer = term.answerCommit(commitFrom(B), commit(B.podId(), 1, S2),
+                recorded(l));
 
         assertThat(((FastFrame.Refused) answer).reason())
                 .isEqualTo(FastFrame.Reason.LOWER_EPOCH);

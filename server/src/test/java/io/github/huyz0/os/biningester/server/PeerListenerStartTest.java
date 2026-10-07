@@ -42,8 +42,10 @@ import org.junit.jupiter.api.io.TempDir;
  */
 class PeerListenerStartTest {
 
+    // ⚠️ pod2's incarnation: the client presents pod2's certificate, and a
+    // JOIN may claim only it (ADR-0084 decision 8; M13.52g).
     private static final Roster.Incarnation POD =
-            new Roster.Incarnation("p", "uid-p", "az-b", "");
+            new Roster.Incarnation("pod2", "uid-pod2", "az-b", "");
 
     @TempDir
     Path dir;

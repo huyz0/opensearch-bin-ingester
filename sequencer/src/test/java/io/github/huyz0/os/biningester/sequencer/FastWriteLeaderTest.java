@@ -68,6 +68,11 @@ class FastWriteLeaderTest {
     }
 
     static FastWriteFrame.Commit commit(long seq, RunKey... streams) {
+        return commit("pod", seq, streams);
+    }
+
+    /** The same, keyed by {@code pod} -- the sender's own, which a fast term binds (M13.52g). */
+    static FastWriteFrame.Commit commit(String pod, long seq, RunKey... streams) {
         List<FastWriteFrame.CommitRun> runs = new ArrayList<>();
         for (RunKey s : streams) {
             runs.add(new FastWriteFrame.CommitRun(s, List.of(
@@ -75,7 +80,7 @@ class FastWriteLeaderTest {
                     new SegmentRecord("e" + seq, OpType.INDEX, OptionalLong.empty(),
                             new byte[] {2}))));
         }
-        return new FastWriteFrame.Commit(new FastJournalRecord.IdempotencyKey("pod",
+        return new FastWriteFrame.Commit(new FastJournalRecord.IdempotencyKey(pod,
                 new UUID(9, 9), seq), runs);
     }
 

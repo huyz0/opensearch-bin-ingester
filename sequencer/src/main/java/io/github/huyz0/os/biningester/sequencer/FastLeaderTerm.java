@@ -234,6 +234,13 @@ public final class FastLeaderTerm {
             return refused(FastFrame.Reason.NOT_ROSTERED, header.senderUid()
                     + " is not rostered in term " + epoch());
         }
+        // ⚠️ THE KEY's POD IS THE SENDER's (ADR-0084 decision 8; M13.52g): a
+        // pod committing under another's key would collide with its dedupe.
+        if (!commit.key().podId().equals(writer.get().incarnation().podId())) {
+            return refused(FastFrame.Reason.NOT_ROSTERED, "the key names pod "
+                    + commit.key().podId() + ", not the sender's, "
+                    + writer.get().incarnation().podId());
+        }
         // ⚠️ AVAILABLE = EVERY POD THE ROSTER LISTS, for now: a pod's loss is
         // judged by its UID's liveness, which M13.33 brings. A departed one
         // lends no zone -- FastAdmission counts only the ROSTERED.

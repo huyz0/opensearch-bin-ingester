@@ -23,9 +23,9 @@ import org.junit.jupiter.api.Test;
  */
 class FastLeaderTermCommitTest {
 
-    private static final Roster.Incarnation POD = FastTermStartTest.incarnation("a");
+    static final Roster.Incarnation POD = FastTermStartTest.incarnation("a");
 
-    private static FastLeaderTerm term3(MemoryBinStore store) throws Exception {
+    static FastLeaderTerm term3(MemoryBinStore store) throws Exception {
         FastTermStartTest.put(store, FastTermStartTest.roster(1, -1, "x", false, 0, 0, false));
         FastTermStartTest.put(store, FastTermStartTest.roster(2, 1, "y", false, 0, 0, false));
         FastTermStartTest.latest(store, 2);
@@ -40,18 +40,18 @@ class FastLeaderTermCommitTest {
                 key -> 0L, store, "p", new Mono(), Duration.ofMillis(250));
     }
 
-    private static FastFrame.Header header(long epoch, Roster.Incarnation from) {
+    static FastFrame.Header header(long epoch, Roster.Incarnation from) {
         return new FastFrame.Header(FastWriteFrame.KIND_COMMIT, epoch, from.podUid(),
                 "uid-self");
     }
 
-    private static void join(FastLeaderTerm term) throws Exception {
+    static void join(FastLeaderTerm term) throws Exception {
         term.answerJoin(new FastFrame.Header(FastFrame.KIND_JOIN, 3, POD.podUid(), "uid-self"),
                 new FastFrame.Join(POD, FastFrame.Held.NONE));
     }
 
     /** A desk whose term record holds S1's index at {@code wal_quorum = 1}. */
-    private static CommitDesk recorded(FastWriteLeaderTest.Leader l) {
+    static CommitDesk recorded(FastWriteLeaderTest.Leader l) {
         return new CommitDesk(l.leader(), stream -> 0L, Duration.ofSeconds(10));
     }
 
@@ -61,7 +61,8 @@ class FastLeaderTermCommitTest {
         join(term);
         FastWriteLeaderTest.Leader l = FastWriteLeaderTest.leader(1 << 20, 1_000);
 
-        FastFrame.Body answer = term.answerCommit(header(3, POD), commit(1, S1), recorded(l));
+        FastFrame.Body answer = term.answerCommit(header(3, POD), commit(POD.podId(), 1, S1),
+                recorded(l));
 
         assertThat(answer).isEqualTo(new FastWriteFrame.Assigned(3,
                 List.of(new FastWriteFrame.AssignedRun(S1, 100, 1, false))));
@@ -73,7 +74,8 @@ class FastLeaderTermCommitTest {
         FastLeaderTerm term = term3(new MemoryBinStore());
         FastWriteLeaderTest.Leader l = FastWriteLeaderTest.leader(1 << 20, 1_000);
 
-        FastFrame.Body answer = term.answerCommit(header(3, POD), commit(1, S1), recorded(l));
+        FastFrame.Body answer = term.answerCommit(header(3, POD), commit(POD.podId(), 1, S1),
+                recorded(l));
 
         assertThat(((FastFrame.Refused) answer).reason())
                 .isEqualTo(FastFrame.Reason.NOT_ROSTERED);
@@ -86,7 +88,8 @@ class FastLeaderTermCommitTest {
         join(term);
         FastWriteLeaderTest.Leader l = FastWriteLeaderTest.leader(1 << 20, 1_000);
 
-        FastFrame.Body answer = term.answerCommit(header(4, POD), commit(1, S1), recorded(l));
+        FastFrame.Body answer = term.answerCommit(header(4, POD), commit(POD.podId(), 1, S1),
+                recorded(l));
 
         assertThat(((FastFrame.Refused) answer).reason())
                 .isEqualTo(FastFrame.Reason.NOT_ROSTERED);
@@ -106,7 +109,7 @@ class FastLeaderTermCommitTest {
         // ⚠️ AN EMPTY TERM RECORD ASSIGNS NOTHING until M13.27l feeds it from
         // the catalog: every COMMIT is held, as backpressure.
         FastFrame.Body answer = term.answerCommit(header(3, POD),
-                commit(1, new RunKey(FastWriteLeaderTest.Q1, 0)), desk);
+                commit(POD.podId(), 1, new RunKey(FastWriteLeaderTest.Q1, 0)), desk);
         assertThat(((FastFrame.Refused) answer).reason())
                 .isEqualTo(FastFrame.Reason.BACKPRESSURE);
         assertThat(journal.held()).isEmpty();

@@ -49,7 +49,8 @@ class FastLeaderTermCommitZoneTest {
         // leader zone's own, never required of A.
         FastFrame.Body answer = term.answerCommit(
                 new FastFrame.Header(FastWriteFrame.KIND_COMMIT, 3, A.podUid(), "uid-self"),
-                commit(1, S2), new CommitDesk(l.leader(), stream -> 0L, Duration.ofSeconds(10)));
+                commit(A.podId(), 1, S2),
+                new CommitDesk(l.leader(), stream -> 0L, Duration.ofSeconds(10)));
 
         assertThat(answer).isEqualTo(new FastWriteFrame.Assigned(3,
                 List.of(new FastWriteFrame.AssignedRun(S2, 0, 2, false))));

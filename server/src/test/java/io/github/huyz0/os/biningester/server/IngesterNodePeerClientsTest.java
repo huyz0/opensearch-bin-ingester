@@ -31,8 +31,10 @@ import org.junit.jupiter.api.Test;
  */
 class IngesterNodePeerClientsTest {
 
+    // ⚠️ THIS POD's incarnation: the node dials itself with its own
+    // certificate, and may claim only it (ADR-0084 decision 8; M13.52g).
     private static final Roster.Incarnation POD =
-            new Roster.Incarnation("p", "uid-p", "az-b", "");
+            new Roster.Incarnation("pod1", "uid-pod1", "az-a", "");
 
     private IngesterNode node;
     private int peerPort;
@@ -106,7 +108,7 @@ class IngesterNodePeerClientsTest {
     void theNODEsSequencerTransportIsAnsweredByAMutualPeer() {
         assertThatCode(() -> {
             try {
-                node.sequencerTransport().drain("https://localhost:" + peerPort, "pod2");
+                node.sequencerTransport().drain("https://localhost:" + peerPort, "pod1");
             } catch (NotTheLeaseholderException answered) {
                 // answered by the peer, which is all this checks
             }

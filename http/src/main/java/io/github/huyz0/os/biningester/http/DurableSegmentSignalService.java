@@ -23,13 +23,28 @@ public final class DurableSegmentSignalService implements HttpService {
     }
 
     public DurableSegmentSignalService(EndpointSliceView members, DurableHandler handler) {
+        this(members, handler, PeerBinding.off());
+    }
+
+    private final PeerBinding binding;
+
+    /** The same, a hint's writer bound to the client certificate (ADR-0084; M13.52g). */
+    public DurableSegmentSignalService(EndpointSliceView members, DurableHandler handler,
+            PeerBinding binding) {
         this.members = Objects.requireNonNull(members, "members");
         this.handler = Objects.requireNonNull(handler, "handler");
+        this.binding = Objects.requireNonNull(binding, "binding");
     }
 
     public boolean accept(String sourceHost, byte[] body) throws IOException {
+        return accept(java.util.Optional.empty(), sourceHost, body);
+    }
+
+    /** The same, from a client presenting {@code chain} (ADR-0084 decision 8). */
+    public boolean accept(java.util.Optional<java.security.cert.Certificate[]> chain,
+            String sourceHost, byte[] body) throws IOException {
         DurableSegmentSignalFrame frame = DurableSegmentSignalFrame.decode(body);
-        if (!authorized(sourceHost, frame)) {
+        if (!permitted(chain, sourceHost, frame)) {
             return false;
         }
         handler.onDurable(frame.segmentKey(), frame.writerAz());
@@ -60,7 +75,8 @@ public final class DurableSegmentSignalService implements HttpService {
             response.status(Status.BAD_REQUEST_400).send();
             return;
         }
-        if (!authorized(request.remotePeer().host(), frame)) {
+        if (!permitted(request.remotePeer().tlsCertificates(), request.remotePeer().host(),
+                frame)) {
             response.status(Status.FORBIDDEN_403).send();
             return;
         }
@@ -71,6 +87,13 @@ public final class DurableSegmentSignalService implements HttpService {
             // object-store read ladder authoritative and is not retried here.
         }
         response.status(Status.NO_CONTENT_204).send();
+    }
+
+    /** The writer is the certificate's pod, and the EndpointSlice's at the source address. */
+    private boolean permitted(java.util.Optional<java.security.cert.Certificate[]> chain,
+            String sourceHost, DurableSegmentSignalFrame frame) {
+        return binding.refusalForPodId(chain, frame.writerPodId()).isEmpty()
+                && authorized(sourceHost, frame);
     }
 
     private boolean authorized(String sourceHost, DurableSegmentSignalFrame frame) {

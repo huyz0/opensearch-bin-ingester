@@ -68,8 +68,20 @@ public final class CommitService implements HttpService {
 
     /** ⚠️ With the drain a deferring pod asks for when it can reach us again (M8.14a). */
     public CommitService(Supplier<Sequencer> sequencer, Drainer drainer) {
+        this(sequencer, drainer, PeerBinding.off());
+    }
+
+    private final PeerBinding binding;
+
+    /**
+     * The same, a commit's pod and a drain's requester bound to the client
+     * certificate (ADR-0084 decision 8; M13.52g): {@code 403} otherwise, and
+     * under {@code mutual} a drain naming no requester is refused too.
+     */
+    public CommitService(Supplier<Sequencer> sequencer, Drainer drainer, PeerBinding binding) {
         this.sequencer = Objects.requireNonNull(sequencer, "sequencer");
         this.drainer = Objects.requireNonNull(drainer, "drainer");
+        this.binding = Objects.requireNonNull(binding, "binding");
     }
 
     @Override
@@ -84,6 +96,15 @@ public final class CommitService implements HttpService {
      * no term, as for a commit.
      */
     private void drain(ServerRequest request, ServerResponse response) {
+        String requester = request.query().first("pod").orElse(null);
+        // ⚠️ BOUND BEFORE ANYTHING ELSE IS ANSWERED, a missing requester
+        // included: under mutual it may claim no pod (M13.52e review, P4).
+        java.util.Optional<String> refused = binding.refusalForPodId(
+                request.remotePeer().tlsCertificates(), requester);
+        if (refused.isPresent()) {
+            response.status(Status.FORBIDDEN_403).send(refused.get());
+            return;
+        }
         Sequencer local = sequencer.get();
         if (local == null) {
             response.status(HttpSequencerTransport.NOT_THE_LEASEHOLDER)
@@ -91,7 +112,6 @@ public final class CommitService implements HttpService {
             return;
         }
         try {
-            String requester = request.query().first("pod").orElse(null);
             drainBarrier.writeLock().lock();
             try {
                 response.status(Status.OK_200)
@@ -153,6 +173,13 @@ public final class CommitService implements HttpService {
             // MESSAGE IS THE DECODER'S, which names what was wrong with the
             // bytes -- the peer's operator is the one who can act on it.
             response.status(Status.BAD_REQUEST_400).send(String.valueOf(malformed.getMessage()));
+            return;
+        }
+        // ⚠️ THE COMMIT's POD IS THE CERTIFICATE's (ADR-0084 decision 8).
+        java.util.Optional<String> refused = binding.refusalForPodId(
+                request.remotePeer().tlsCertificates(), frame.podId());
+        if (refused.isPresent()) {
+            response.status(Status.FORBIDDEN_403).send(refused.get());
             return;
         }
         Sequencer local = sequencer.get();
