@@ -137,26 +137,49 @@ final class SequencerAssembly {
             if (opened.isEmpty()) {
                 return Optional.<BatchingSequencer>empty();
             }
-            // ⚠️ M13.27j: the term's JOINs, answered once its roster lists them.
-            term.attach(new FastLeaderTerm(opened.get(), new JoinDesk(
-                    new RosterJoins(store, config.prefix(), term.epoch(), mono,
-                            MIN_UPLOAD_INTERVAL), nanos -> TimeUnit.NANOSECONDS.sleep(nanos)),
-                    term::committedNext, store, config.prefix(), mono,
-                    MIN_UPLOAD_INTERVAL));
-            // ⚠️ M8.42: THE CHAIN BELOW THE REPLAY, read once per
-            // takeover and off the election's path. HERE, not in
-            // `LocalSequencer.start`, which M4.9 bounds to a
-            // small constant and tests to the request.
-            // ⚠️ ONLY A TAKEOVER HAS A CHAIN BELOW IT: the first term
-            // of a cluster (epoch 1) would otherwise widen its sweep
-            // over a retention window of empty hours, a LIST each.
-            if (term.epoch() > 1) {
-                backfillStarter.start(store, config.prefix(), term.chain(), term::serving);
+            // ⚠️ THE TERM IS GIVEN BACK IF ANY STEP BELOW THROWS (M13.76): the
+            // lease is written and renewed, and the election catches only an
+            // IOException -- an unchecked failure here, an Error from a thread
+            // that could not start among them, left a renewed lease
+            // naming a pod that never published its term, every commit
+            // forwarded to it answered 409 until the process ended.
+            try {
+                return Optional.of(started(config, store, mono, metrics, backfillStarter,
+                        drainStarter, term, opened.get()));
+            } catch (RuntimeException | Error failed) {
+                try {
+                    term.close();
+                } catch (java.io.IOException alsoFailed) {
+                    failed.addSuppressed(alsoFailed);
+                }
+                throw failed;
             }
-            // ⚠️ M8.14a: the intents of pods that died deferring
-            // have nobody else to ask for a drain.
-            drainStarter.start(store, config.prefix(), term, metrics::failedIntentBatch);
-            return Optional.of(new BatchingSequencer(term, COMMIT_WINDOW));
         }, challenge, false, metrics::failedIntentBatch);
+    }
+
+    /** The term's start after its fast term opened: attached, backfilling, draining, batched. */
+    private static BatchingSequencer started(ServerConfig config, BinStore store,
+            MonotonicClock mono, IngesterMetrics metrics, Assembly.BackfillStarter backfillStarter,
+            DrainStarter drainStarter, LocalSequencer term, FastTermOpening.Opened opened) {
+        // ⚠️ M13.27j: the term's JOINs, answered once its roster lists them.
+        term.attach(new FastLeaderTerm(opened, new JoinDesk(
+                new RosterJoins(store, config.prefix(), term.epoch(), mono,
+                        MIN_UPLOAD_INTERVAL), nanos -> TimeUnit.NANOSECONDS.sleep(nanos)),
+                term::committedNext, store, config.prefix(), mono,
+                MIN_UPLOAD_INTERVAL));
+        // ⚠️ M8.42: THE CHAIN BELOW THE REPLAY, read once per
+        // takeover and off the election's path. HERE, not in
+        // `LocalSequencer.start`, which M4.9 bounds to a
+        // small constant and tests to the request.
+        // ⚠️ ONLY A TAKEOVER HAS A CHAIN BELOW IT: the first term
+        // of a cluster (epoch 1) would otherwise widen its sweep
+        // over a retention window of empty hours, a LIST each.
+        if (term.epoch() > 1) {
+            backfillStarter.start(store, config.prefix(), term.chain(), term::serving);
+        }
+        // ⚠️ M8.14a: the intents of pods that died deferring
+        // have nobody else to ask for a drain.
+        drainStarter.start(store, config.prefix(), term, metrics::failedIntentBatch);
+        return new BatchingSequencer(term, COMMIT_WINDOW);
     }
 }
