@@ -262,14 +262,49 @@ class KillSequencerMidCommitIT {
                 .isLessThanOrEqualTo(allowance);
     }
 
+    /**
+     * ⚠️ RETRIED WHILE THE TERM ATTACHES (M13.69), AND ONLY THEN: a pod writes
+     * the lease when it wins the election and publishes the term only after
+     * its seal, its recovery and the term's start (the fast term's opening,
+     * its attach, the backfill and the inbox drain started), answering a
+     * drain 409 in between -- the safe side, which the fleet sequencer
+     * retries by asking again on its next commit. So 409, and a connection
+     * refused, are retried here for up to 60 s; anything else -- a 500 above
+     * all -- fails at once. ⚠️ So this test no longer bounds how long a won
+     * term takes to serve below 60 s.
+     */
     private static void requestInboxDrain(NodeProcess leaseholder) throws Exception {
         URI endpoint = URI.create("http://localhost:" + leaseholder.peerPort()
                 + HttpSequencerTransport.DRAIN_PATH);
         HttpRequest request = HttpRequest.newBuilder(endpoint).timeout(Duration.ofSeconds(30))
                 .POST(HttpRequest.BodyPublishers.noBody()).build();
-        HttpResponse<String> response = HttpClient.newHttpClient().send(request,
-                HttpResponse.BodyHandlers.ofString());
-        assertThat(response.statusCode()).as("the live leaseholder drains its inbox")
-                .isEqualTo(200);
+        List<String> answers = new CopyOnWriteArrayList<>();
+        try (HttpClient client = HttpClient.newHttpClient()) {
+            await().pollInterval(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(60))
+                    .untilAsserted(() -> {
+                        int status;
+                        try {
+                            HttpResponse<String> response = client.send(request,
+                                    HttpResponse.BodyHandlers.ofString());
+                            status = response.statusCode();
+                            answers.add(status + " " + response.body());
+                        } catch (java.net.ConnectException refused) {
+                            status = -1;
+                            answers.add(String.valueOf(refused));
+                        }
+                        if (status == 200) {
+                            return;
+                        }
+                        if (status != 409 && status != -1) {
+                            // ⚠️ NOT AN AssertionError, which the wait would retry
+                            throw new IllegalStateException("the live leaseholder did not "
+                                    + "drain its inbox; answers " + answers);
+                        }
+                        throw new AssertionError("not yet serving its term; answers "
+                                + answers);
+                    });
+        }
+        assertThat(answers).as("the drain answered").isNotEmpty();
+        assertThat(answers.get(answers.size() - 1)).startsWith("200");
     }
 }
