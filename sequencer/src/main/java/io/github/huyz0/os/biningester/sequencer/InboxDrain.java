@@ -96,10 +96,10 @@ public final class InboxDrain {
         // orphan sweep reads the same inbox for its keep list, and that read is
         // discretionary and governed. A refused DRAIN strands acked intents;
         // it is bounded by its trigger: a heal, a takeover, or a deferring
-        // pod's retry every renew interval (ADR-0058, M13.78) -- which is NOT
-        // bounded while that pod's own intent keeps failing: a LIST page per
-        // 1,000 keys and a GET per pending intent, each interval, until
-        // M13.80's backoff. ⚠️
+        // pod's retry every renew interval (ADR-0058, M13.78), which backs off
+        // to one ask per 64 intervals while that pod's own intent keeps
+        // failing (M13.80): a LIST page per 1,000 keys and a GET per pending
+        // intent per ask. ⚠️
         // Bound on the thread that lists: `inBackground` calls this on its own.
         List<Inbox.Pending> pending = GovernorScope.recovery(
                 () -> Inbox.pending(store, prefix));

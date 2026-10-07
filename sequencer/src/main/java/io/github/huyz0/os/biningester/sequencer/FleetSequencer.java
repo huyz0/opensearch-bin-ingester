@@ -58,6 +58,12 @@ import java.util.function.LongConsumer;
  */
 public final class FleetSequencer implements Sequencer {
 
+    /**
+     * The most renew intervals a failing retry skips between asks (M13.80):
+     * about three minutes at a 3 s interval.
+     */
+    static final int MAX_SKIPPED_ASKS = 63;
+
     private final Leadership leadership;
     private final RemoteSequencer remote;
     private final BinStore store;
@@ -275,24 +281,75 @@ public final class FleetSequencer implements Sequencer {
      * the inbox with nothing to ask for it -- an idle pod's acked writes
      * invisible for as long as it stays idle (measured by M13.45).
      *
-     * <p>⚠️ **A FAILURE IS NOT THROWN**: the pod stays deferring and the next
-     * interval asks again. It does not elect, for {@link #heldTerm}'s reason.
+     * <p>⚠️ **A FAILURE IS NOT THROWN**: the pod stays deferring and asks
+     * again. It does not elect, for {@link #heldTerm}'s reason.
+     *
+     * <p>⚠️ **AND AFTER AN ANSWERED FAILURE IT ASKS LESS OFTEN** (M13.80): an
+     * answered ask is a drain, which reads the whole inbox -- a LIST page per
+     * 1,000 keys and a GET per pending intent -- so a pod whose own intent
+     * never applies would otherwise re-read every intent each interval for
+     * ever. The skipped intervals double per such failure, to
+     * {@link #MAX_SKIPPED_ASKS}, and a new deferral starts them again. ⚠️ An ask
+     * with NO answer does not back off: measured by PartitionVisibilityIT, a
+     * retry that backed off on its timeouts -- queued behind the leaseholder's
+     * long first drain -- asked too late and stranded the heal's trigger.
      */
     public void retryDeferredDrain() {
         long seen = deferrals.get();
         if (closed || seen <= drained.get()) {
             return;
         }
+        // ⚠️ A NEW DEFERRAL STARTS THE BACKOFF AGAIN (M13.80): a heal's trigger
+        // must not wait out the backoff its partition built. Read off the
+        // deferral count rather than reset by the flush worker, so only this
+        // method writes the backoff and no reset can be overwritten (review P2).
+        if (backoffFor != seen) {
+            backoffFor = seen;
+            failedAsks = 0;
+            skipAsks = 0;
+        }
+        if (skipAsks > 0) {
+            skipAsks--;
+            return;
+        }
         try {
             Sequencer mine = leadership.heldWithoutElecting();
             if (mine != null) {
-                InboxDrain.drain(store, prefix, mine, podId, failedIntentBatch);
+                drainHeld(mine);
             } else {
                 remote.drain();
             }
             drainedUpTo(seen);
-        } catch (IOException stillCutOff) {
-            // still deferring: the next interval asks again
+        } catch (SequencerTransport.DrainFailedException answered) {
+            failedAsks = Math.min(failedAsks + 1, 31);
+            skipAsks = (int) Math.min((1L << (failedAsks - 1)) - 1, MAX_SKIPPED_ASKS);
+        } catch (IOException unanswered) {
+            // still deferring, and nothing read on its account: ask next interval
+        }
+    }
+
+    /**
+     * The retry's backoff: the deferral count it was built for, consecutive
+     * answered failures, and intervals still to skip. ⚠️ Written only by
+     * {@link #retryDeferredDrain}, which its owner calls from one thread; it
+     * decides timing only -- {@link #deferrals} alone decides what may forward.
+     */
+    private volatile long backoffFor;
+    private volatile int failedAsks;
+    private volatile int skipAsks;
+
+    /**
+     * This pod's own drain of the term it holds, its failure an answered one --
+     * ⚠️ except a fence (review P3): the term is gone, and the next interval
+     * should ask the new leaseholder rather than back off.
+     */
+    private void drainHeld(Sequencer mine) throws IOException {
+        try {
+            InboxDrain.drain(store, prefix, mine, podId, failedIntentBatch);
+        } catch (FencedException termGone) {
+            throw termGone;
+        } catch (IOException ran) {
+            throw new SequencerTransport.DrainFailedException(ran.getMessage(), ran);
         }
     }
 

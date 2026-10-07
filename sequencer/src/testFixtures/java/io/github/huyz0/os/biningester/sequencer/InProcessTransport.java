@@ -118,7 +118,17 @@ public final class InProcessTransport implements SequencerTransport {
             SequencerTransport.super.drain(endpoint, requester);
             return;
         }
-        InboxDrain.drain(inboxStore, inboxPrefix, peer, requester);
+        try {
+            InboxDrain.drain(inboxStore, inboxPrefix, peer, requester);
+        } catch (NotTheLeaseholderException | DrainFailedException passThrough) {
+            throw passThrough;
+        } catch (FencedException fenced) {
+            // ⚠️ THE ROUTE ANSWERS A FENCE 409 (M13.80 review P3).
+            throw new NotTheLeaseholderException(fenced.getMessage());
+        } catch (IOException ran) {
+            // ⚠️ AS THE ROUTE ANSWERS IT: a drain that ran and failed (M13.80).
+            throw new DrainFailedException(ran.getMessage(), ran);
+        }
     }
 
     @Override

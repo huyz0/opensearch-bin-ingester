@@ -59,20 +59,30 @@ partition heals and over deferring the inbox.
   keeps one high mark per incarnation, so an intent overtaken by a later flush
   would be refused as a replay -- an acked write lost.
 - The drain runs when a deferring pod reaches the leaseholder again and once
-  per takeover, never on a LIST timer. **A deferring pod asks again every
-  renew interval until a drain succeeds** (amended by M13.78): the drain it
+  per takeover, never on a LIST timer. **A deferring pod asks again until a
+  drain succeeds** (amended by M13.78), every renew interval unless backed off
+  (below): the drain it
   asks at the heal can time out on a large inbox and complete on the
   leaseholder anyway, and the flush it then defers would otherwise wait for
   the pod's next write -- an idle pod's acked writes invisible indefinitely
-  (measured by M13.45). That is one request per deferring pod per interval,
-  none from a pod not deferring and no timer on the leaseholder, so its
-  request rate scales with pods (cost.md rule 6). ⚠️ Each ask is a drain,
+  (measured by M13.45). That is at most one request per deferring pod per
+  interval, none from a pod not deferring and no timer on the leaseholder, so
+  its request rate scales with pods (cost.md rule 6). ⚠️ Each ask is a drain,
   and a drain reads the whole inbox: a LIST page per 1,000 keys and a GET per
   pending intent of every pod, as recovery the governor does not refuse. So
   while a pod's own intent keeps FAILING to apply, the retry re-reads every
   pending intent each interval, a cost that scales with intents for as long
-  as it fails. It is bounded by a backoff on consecutive failures (M13.80),
-  not yet built. Drains on one term are serialised, so
+  as it fails. **So an answered failure backs off** (amended by M13.80): a
+  drain the leaseholder RAN and could not finish (the route's 500, a
+  `DrainFailedException`) doubles the intervals skipped, 0, 1, 3, 7 ... to a
+  cap of 63 -- one ask per 64 intervals, about three minutes at 3 s -- and a
+  new deferral starts them again. An ask with NO answer, a timeout or an unreachable peer, does
+  not back off: a heal's drain can queue behind a long one, and a retry that
+  backed off on those timeouts asked too late and stranded the trigger
+  (measured by `PartitionVisibilityIT`). At the cap a pod whose own intent never applies costs
+  450 asks a day rather than 28,800 (at 3 s), each still a LIST page per
+  1,000 keys and a GET per pending intent -- so the leaseholder's GETs scale
+  with stuck pods times pending intents, 64 times fewer than without it. Drains on one term are serialised, so
   one intent never lands twice in a batch, and the cost at heal is the
   intents plus one LIST per asking pod. Each pod's intents apply in order; a
   pod whose intent sticks keeps deferring, and no other pod is held by it.

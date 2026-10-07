@@ -141,6 +141,11 @@ public final class HttpSequencerTransport implements SequencerTransport {
             if (response.status().code() == NOT_THE_LEASEHOLDER.code()) {
                 throw new NotTheLeaseholderException(endpoint + " does not hold the lease");
             }
+            if (response.status().code() == Status.INTERNAL_SERVER_ERROR_500.code()) {
+                // ⚠️ THE ROUTE's 500 IS A DRAIN THAT RAN AND LEFT INTENTS (M13.80).
+                throw new DrainFailedException("the drain at " + endpoint + " answered "
+                        + response.status() + ": " + read(response), null);
+            }
             if (response.status().code() != Status.OK_200.code()) {
                 throw new IOException("the drain at " + endpoint + " answered "
                         + response.status() + ": " + read(response));

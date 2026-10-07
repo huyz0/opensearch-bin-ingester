@@ -71,6 +71,26 @@ public interface SequencerTransport extends AutoCloseable {
     void close() throws IOException;
 
     /**
+     * The leaseholder answered that the drain FAILED (M13.80): the route's 500,
+     * a drain that ran and could not apply every intent of the pod that asked
+     * -- or failed on its own LIST or GETs, which the route answers the same.
+     *
+     * <p>⚠️ A DISTINCT TYPE BECAUSE AN ANSWERED FAILURE IS THE ONE WORTH BACKING
+     * OFF FOR: it read the inbox, or tried, and asking again each interval
+     * re-reads it. On a timeout or an unreachable peer a deferring pod keeps
+     * asking every interval, since a heal's drain may be queued behind a long
+     * one and the trigger strands if its ask comes late. A fence is not this:
+     * it is a {@link NotTheLeaseholderException}, as the route answers it 409.
+     */
+    final class DrainFailedException extends IOException {
+        private static final long serialVersionUID = 1L;
+
+        public DrainFailedException(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
+
+    /**
      * The peer declined because it is not the leaseholder.
      *
      * <p>⚠️ A DISTINCT TYPE BECAUSE THE TWO OUTCOMES DIFFER IN WHAT A CALLER
