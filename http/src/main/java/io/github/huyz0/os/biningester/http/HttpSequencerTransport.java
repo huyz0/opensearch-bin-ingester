@@ -162,6 +162,17 @@ public final class HttpSequencerTransport implements SequencerTransport {
             throw new IOException("transport is closed");
         }
         byte[] body = frameOf(request).encode();
+        // ⚠️ REFUSED HERE, NOT SENT, PAST THE PEER's CAP (M13.49): a frame of
+        // 2 MiB or more never reads the peer's 413 -- the peer closes the
+        // connection under it, which reads as an ambiguous failure -- so the
+        // known refusal below was reached only just past the cap. The size is
+        // known before a byte is sent, and the answer is the 413's.
+        if (body.length > CommitService.MAX_FRAME_BYTES) {
+            throw new IOException("commit to " + endpoint + " was REFUSED before sending: its "
+                    + body.length + "-byte frame is past the peer's " + CommitService.MAX_FRAME_BYTES
+                    + "-byte cap -- nothing was applied, and resending it unchanged will be "
+                    + "refused again");
+        }
         // ⚠️ COUNTED BEFORE THE SEND, AND NOT RETRACTED ON FAILURE. A commit
         // whose answer was lost still spent the bytes, and an unsent one is the
         // rarer case; a counter that only counted successes would under-report

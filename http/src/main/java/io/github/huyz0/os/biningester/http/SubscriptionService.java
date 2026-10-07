@@ -657,7 +657,7 @@ public final class SubscriptionService implements HttpService {
             catalog.register(registration);
             response.status(Status.NO_CONTENT_204).send();
         } catch (BodyTooLargeException tooLarge) {
-            response.status(Status.REQUEST_ENTITY_TOO_LARGE_413).send(tooLarge.getMessage());
+            refuseTooLarge(response, tooLarge.getMessage());
         } catch (IOException | IllegalArgumentException malformed) {
             // ⚠️ 400 AND THE REGISTRAR RETRIES. A registration lost to one
             // dropped message turns into a sustained stream of refused writes
@@ -672,7 +672,7 @@ public final class SubscriptionService implements HttpService {
             watermarks.observe(ConsumerProgress.decode(bounded(request)));
             response.status(Status.NO_CONTENT_204).send();
         } catch (BodyTooLargeException tooLarge) {
-            response.status(Status.REQUEST_ENTITY_TOO_LARGE_413).send(tooLarge.getMessage());
+            refuseTooLarge(response, tooLarge.getMessage());
         } catch (IOException | IllegalArgumentException malformed) {
             // ⚠️ A REFUSED FRAME LEAVES THE WATERMARK WHERE IT WAS, which is
             // the safe direction: an unmoved watermark KEEPS data (research 09
@@ -682,6 +682,11 @@ public final class SubscriptionService implements HttpService {
         }
     }
 
+    /** A 413 that closes the connection: read to the end, 256 MiB took 13-14 s (M13.49). */
+    private static void refuseTooLarge(ServerResponse response, String why) {
+        response.status(Status.REQUEST_ENTITY_TOO_LARGE_413)
+                .header(io.helidon.http.HeaderNames.CONNECTION, "close").send(why);
+    }
     private static byte[] bounded(ServerRequest request) throws IOException {
         try (var in = new BoundedStream(request.content().inputStream(), MAX_FRAME_BYTES)) {
             return in.readAllBytes();

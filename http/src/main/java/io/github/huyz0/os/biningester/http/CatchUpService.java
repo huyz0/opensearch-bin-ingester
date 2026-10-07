@@ -62,7 +62,11 @@ public final class CatchUpService implements HttpService {
         try {
             frame = CatchUpRequestFrame.decode(bounded(request));
         } catch (BodyTooLargeException tooLarge) {
+            // ⚠️ AND THE CONNECTION CLOSED (M13.49, as M13.19 did for commits):
+            // kept alive, the server read the rest of the entity it refused --
+            // 256 MiB took 10 s here.
             response.status(io.helidon.http.Status.REQUEST_ENTITY_TOO_LARGE_413)
+                    .header(io.helidon.http.HeaderNames.CONNECTION, "close")
                     .send(tooLarge.getMessage());
             return;
         } catch (IOException | IllegalArgumentException malformed) {

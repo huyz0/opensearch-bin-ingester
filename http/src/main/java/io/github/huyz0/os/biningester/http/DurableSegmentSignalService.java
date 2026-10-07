@@ -62,7 +62,10 @@ public final class DurableSegmentSignalService implements HttpService {
         try {
             body = bounded(request);
         } catch (BodyTooLargeException tooLarge) {
-            response.status(Status.REQUEST_ENTITY_TOO_LARGE_413).send();
+            // ⚠️ AND THE CONNECTION CLOSED (M13.49): kept alive, the server read
+            // the rest of the entity it refused -- 256 MiB took 4 s here.
+            response.status(Status.REQUEST_ENTITY_TOO_LARGE_413)
+                    .header(io.helidon.http.HeaderNames.CONNECTION, "close").send();
             return;
         } catch (IOException failed) {
             response.status(Status.BAD_REQUEST_400).send();

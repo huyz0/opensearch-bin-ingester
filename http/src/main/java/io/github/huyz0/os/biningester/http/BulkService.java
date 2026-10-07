@@ -354,6 +354,12 @@ public final class BulkService implements HttpService {
         }
 
         void send(ServerResponse response) {
+            // ⚠️ A REFUSED BODY CLOSES THE CONNECTION (M13.49, as M13.19 did for
+            // commits): kept alive, the server reads the rest of the entity it
+            // refused before the next request can use it.
+            if (status == Status.REQUEST_ENTITY_TOO_LARGE_413) {
+                response.header(io.helidon.http.HeaderNames.CONNECTION, "close");
+            }
             if (tooMany) {
                 tooManyRequests(response, retryAfterSeconds, body);
             } else if (body == null) {
