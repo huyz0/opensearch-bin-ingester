@@ -72,6 +72,36 @@ class KillSequencerMidCommitIT {
 
     @Test
     void killingTheSEQUENCERMidCommitKEEPSI1ToI5AndEverySEALSucceeds() throws Exception {
+        try {
+            killTheSequencerMidCommit();
+        } catch (Throwable failed) {
+            keepNodeLogs(failed);
+            throw failed;
+        }
+    }
+
+    /**
+     * ⚠️ EVERY NODE's LOG, KEPT WHEN THE TEST FAILS (M13.74): they live in the
+     * test's temporary directory, which is deleted when it ends -- and a
+     * chaos failure that keeps nothing cannot be diagnosed. Under
+     * {@code build/chaos-logs}, killed nodes' logs included.
+     */
+    private void keepNodeLogs(Throwable failed) {
+        Path kept = Path.of("build", "chaos-logs",
+                "KillSequencerMidCommitIT-" + System.currentTimeMillis());
+        try (var logs = Files.walk(dir)) {
+            for (Path log : logs.filter(f -> f.toString().endsWith(".log")).toList()) {
+                Path target = kept.resolve(dir.relativize(log));
+                Files.createDirectories(target.getParent());
+                Files.copy(log, target);
+            }
+            System.err.println("M13.74: node logs kept in " + kept.toAbsolutePath());
+        } catch (java.io.IOException notKept) {
+            failed.addSuppressed(notKept);
+        }
+    }
+
+    private void killTheSequencerMidCommit() throws Exception {
         UUID index = UUID.randomUUID();
         List<NodeProcess> nodes = new CopyOnWriteArrayList<>();
         Set<String> acked = ConcurrentHashMap.newKeySet();
@@ -137,11 +167,7 @@ class KillSequencerMidCommitIT {
             // acks above may all be deferred intents (ADR-0058), which only a
             // live term's seal and drain turn into committed records.
             awaitLiveTerm(bucket, nodes);
-            Lease finalTerm = bucket.lease().orElseThrow();
-            NodeProcess leaseholder = nodes.stream()
-                    .filter(node -> node.podId().equals(finalTerm.holderPodId())).findFirst()
-                    .orElseThrow(() -> new AssertionError("no running node holds the final term"));
-            requestInboxDrain(leaseholder);
+            requestInboxDrain(bucket, nodes);
             stop.set(true);
             for (Thread producer : producers) {
                 producer.join(TimeUnit.SECONDS.toMillis(60));
@@ -263,31 +289,46 @@ class KillSequencerMidCommitIT {
     }
 
     /**
-     * ⚠️ RETRIED WHILE THE TERM ATTACHES (M13.69), AND ONLY THEN: a pod writes
-     * the lease when it wins the election and publishes the term only after
-     * its seal, its recovery and the term's start (the fast term's opening,
-     * its attach, the backfill and the inbox drain started), answering a
-     * drain 409 in between -- the safe side, which the fleet sequencer
-     * retries by asking again on its next commit. So 409, and a connection
-     * refused, are retried here for up to 60 s; anything else -- a 500 above
-     * all -- fails at once. ⚠️ So this test no longer bounds how long a won
-     * term takes to serve below 60 s.
+     * ⚠️ RETRIED WHILE THE TERM ATTACHES (M13.69), AND ASKED OF WHOEVER HOLDS IT
+     * NOW (M13.74): a pod writes the lease when it wins the election and
+     * publishes the term only after its seal, its recovery and the term's
+     * start, answering a drain 409 in between -- the safe side, which the
+     * fleet sequencer retries by asking again on its next commit. And under
+     * this test's load a term can lapse and move during the wait (M13.75):
+     * the pod that lost it keeps its fenced term until a commit through it
+     * fails, answering 409 for as long, so each attempt re-reads the lease and
+     * asks its holder. 409, no live term, and a connection refused are
+     * retried for up to 60 s; anything else -- a 500 above all -- fails at
+     * once. ⚠️ So this test no longer bounds how long a won term takes to
+     * serve below 60 s.
      */
-    private static void requestInboxDrain(NodeProcess leaseholder) throws Exception {
-        URI endpoint = URI.create("http://localhost:" + leaseholder.peerPort()
-                + HttpSequencerTransport.DRAIN_PATH);
-        HttpRequest request = HttpRequest.newBuilder(endpoint).timeout(Duration.ofSeconds(30))
-                .POST(HttpRequest.BodyPublishers.noBody()).build();
+    private static void requestInboxDrain(ChaosBucket bucket, List<NodeProcess> nodes)
+            throws Exception {
         List<String> answers = new CopyOnWriteArrayList<>();
         try (HttpClient client = HttpClient.newHttpClient()) {
             await().pollInterval(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(60))
                     .untilAsserted(() -> {
+                        Lease current = bucket.lease().orElseThrow();
+                        NodeProcess holder = nodes.stream()
+                                .filter(n -> n.podId().equals(current.holderPodId()))
+                                .findFirst().orElse(null);
+                        if (holder == null
+                                || current.expiresAtMillis() <= System.currentTimeMillis()) {
+                            answers.add("no live term: " + current);
+                            throw new AssertionError("no live term; answers " + answers);
+                        }
+                        HttpRequest request = HttpRequest.newBuilder(URI.create(
+                                        "http://localhost:" + holder.peerPort()
+                                                + HttpSequencerTransport.DRAIN_PATH))
+                                .timeout(Duration.ofSeconds(30))
+                                .POST(HttpRequest.BodyPublishers.noBody()).build();
                         int status;
                         try {
                             HttpResponse<String> response = client.send(request,
                                     HttpResponse.BodyHandlers.ofString());
                             status = response.statusCode();
-                            answers.add(status + " " + response.body());
+                            answers.add(holder.podId() + "@" + current.epoch() + ": " + status
+                                    + " " + response.body());
                         } catch (java.net.ConnectException refused) {
                             status = -1;
                             answers.add(String.valueOf(refused));
@@ -304,7 +345,5 @@ class KillSequencerMidCommitIT {
                                 + answers);
                     });
         }
-        assertThat(answers).as("the drain answered").isNotEmpty();
-        assertThat(answers.get(answers.size() - 1)).startsWith("200");
     }
 }
