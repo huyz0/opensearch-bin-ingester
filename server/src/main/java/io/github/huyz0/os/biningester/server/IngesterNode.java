@@ -180,6 +180,10 @@ public final class IngesterNode implements AutoCloseable {
         Objects.requireNonNull(trust, "trust");
         Objects.requireNonNull(clock, "clock");
         Objects.requireNonNull(token, "token");
+        // ⚠️ BEFORE ANY TERM IS TAKEN (ADR-0084 decision 8; M13.52f): a
+        // certificate naming another pod refuses the start.
+        peerTls.ifPresent(tls -> tls.requireNames(config.trustDomain(), config.podId(),
+                config.podUid()));
         // ⚠️ ONE COUNTER PER NODE, BUILT HERE. NFR-5 is one ratio per pod, so
         // the peer transport and the front door count into the SAME instance;
         // a second one would be a second partial answer with nothing saying
