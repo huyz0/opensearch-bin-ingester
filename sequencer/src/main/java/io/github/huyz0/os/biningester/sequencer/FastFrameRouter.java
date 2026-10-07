@@ -19,6 +19,11 @@ import java.util.concurrent.ConcurrentHashMap;
  * answer carrying the fence so the sender learns it is deposed; a higher
  * epoch raises the fence, durably, BEFORE the handler runs (ADR-0081 §3).
  *
+ * <p>⚠️ AND A LEADER's FENCE IS AT LEAST ITS OWN TERM (M13.82): the fence is
+ * read from the lease once, at boot, so a pod that took the term by failover
+ * kept the fence of the term before -- and answered under it, which a pod
+ * started since took as a deposition.
+ *
  * <p>⚠️ A KIND WITH NO HANDLER IS NOT ANSWERED: the route tells the sender it
  * cannot serve that kind rather than inventing a refusal no reason names.
  * Each kind's handler lands with its task (joins M13.27j, departure M13.27k,
@@ -57,6 +62,7 @@ public final class FastFrameRouter {
     private final String selfUid;
     private final EpochFence fence;
     private final AnswerMeter meter;
+    private final java.util.function.LongSupplier ownTerm;
     private final Map<Integer, Handler> handlers = new ConcurrentHashMap<>();
 
     public FastFrameRouter(String selfUid, EpochFence fence) {
@@ -64,9 +70,19 @@ public final class FastFrameRouter {
     }
 
     public FastFrameRouter(String selfUid, EpochFence fence, AnswerMeter meter) {
+        this(selfUid, fence, meter, () -> 0L);
+    }
+
+    /**
+     * @param ownTerm the epoch of the term this pod serves, or 0 where it leads
+     *     none: raised to before any frame is answered
+     */
+    public FastFrameRouter(String selfUid, EpochFence fence, AnswerMeter meter,
+            java.util.function.LongSupplier ownTerm) {
         this.selfUid = Objects.requireNonNull(selfUid, "selfUid");
         this.fence = Objects.requireNonNull(fence, "fence");
         this.meter = Objects.requireNonNull(meter, "meter");
+        this.ownTerm = Objects.requireNonNull(ownTerm, "ownTerm");
     }
 
     /** Answers every later frame of {@code kind} with {@code handler}. */
@@ -95,6 +111,12 @@ public final class FastFrameRouter {
         if (!header.targetUid().equals(selfUid)) {
             return Optional.of(refuse(header, FastFrame.Reason.NOT_ROSTERED,
                     "addressed to " + header.targetUid() + ", not this incarnation"));
+        }
+        // ⚠️ ONCE PER TERM IN EFFECT: a raise to what the fence holds writes
+        // nothing (M13.82).
+        long own = ownTerm.getAsLong();
+        if (own > fence.highest()) {
+            fence.raise(own);
         }
         if (!fence.admit(header.epoch())) {
             return Optional.of(refuse(header, FastFrame.Reason.LOWER_EPOCH,

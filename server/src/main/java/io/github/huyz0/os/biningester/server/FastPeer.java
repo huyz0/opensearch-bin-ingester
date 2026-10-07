@@ -54,16 +54,27 @@ final class FastPeer implements AutoCloseable {
      */
     static FastFrameRouter router(ServerConfig config, FastDisk disk, CrossAzBytes crossAz,
             PeerZones zones) {
-        return router(config.podUid(), disk.fence(), crossAz, zones);
+        return router(config, disk, crossAz, zones, () -> 0L);
+    }
+
+    /** The same, its fence raised to {@code ownTerm} before it answers (M13.82). */
+    static FastFrameRouter router(ServerConfig config, FastDisk disk, CrossAzBytes crossAz,
+            PeerZones zones, java.util.function.LongSupplier ownTerm) {
+        return router(config.podUid(), disk.fence(), crossAz, zones, ownTerm);
     }
 
     static FastFrameRouter router(String selfUid, EpochFence fence, CrossAzBytes crossAz,
             PeerZones zones) {
+        return router(selfUid, fence, crossAz, zones, () -> 0L);
+    }
+
+    static FastFrameRouter router(String selfUid, EpochFence fence, CrossAzBytes crossAz,
+            PeerZones zones, java.util.function.LongSupplier ownTerm) {
         return new FastFrameRouter(selfUid, fence, (header, asked, bytes) ->
                 crossAz.sent(FastFrame.isControl(header.kind())
                                 ? CrossAzBytes.Transport.FAST_CONTROL
                                 : CrossAzBytes.Transport.FAST_DATA,
-                        azOf(header, asked, zones), bytes));
+                        azOf(header, asked, zones), bytes), ownTerm);
     }
 
     private static String azOf(FastFrame.Header header, FastFrame.Body asked, PeerZones zones) {
@@ -82,6 +93,17 @@ final class FastPeer implements AutoCloseable {
     /** What a JOIN reports: what the pod's journal holds, nothing for a diskless pod. */
     static FastFrame.Held held(FastDisk disk) {
         return disk.journal().map(j -> HeldReports.of(j.held())).orElse(FastFrame.Held.NONE);
+    }
+
+    /**
+     * The epoch of the term {@code held} serves, or 0 where it serves none
+     * (M13.82): what the fast route's fence is raised to before it answers.
+     */
+    static long ownTerm(io.github.huyz0.os.biningester.sequencer.Sequencer held) {
+        return io.github.huyz0.os.biningester.sequencer.LocalSequencer.underneath(held)
+                .filter(io.github.huyz0.os.biningester.sequencer.LocalSequencer::serving)
+                .map(io.github.huyz0.os.biningester.sequencer.LocalSequencer::epoch)
+                .orElse(0L);
     }
 
     /**

@@ -228,7 +228,8 @@ public final class IngesterNode implements AutoCloseable {
             }
             // ⚠️ M13.27h: answered as this incarnation, behind this pod's fence.
             io.github.huyz0.os.biningester.sequencer.FastFrameRouter fastFrames =
-                    FastPeer.router(config, fastDisk, crossAz, zones);
+                    FastPeer.router(config, fastDisk, crossAz, zones,
+                            () -> FastPeer.ownTerm(assembly.heldTerm()));
             // ⚠️ M13.27o, M13.27k: a JOIN, DEPART or HELD is answered by the term
             // this pod leads, if any.
             for (int kind : new int[] {io.github.huyz0.os.biningester.format.FastFrame.KIND_JOIN,
