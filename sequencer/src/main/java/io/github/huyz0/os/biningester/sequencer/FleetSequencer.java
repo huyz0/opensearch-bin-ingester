@@ -152,7 +152,7 @@ public final class FleetSequencer implements Sequencer {
             if (deferring) {
                 // ⚠️ THIS POD's OWN INTENTS FIRST: committing past them here
                 // would raise its high mark over them, and the drain would then
-                // refuse each as a replay -- acked writes lost (M8.14a).
+                // delete each as applied -- acked writes lost (M8.14a, M13.73).
                 InboxDrain.drain(store, prefix, mine, podId, failedIntentBatch);
                 deferring = false;
             }

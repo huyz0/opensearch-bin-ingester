@@ -27,8 +27,9 @@ import java.util.concurrent.Future;
  *
  * <p>⚠️ **ONE OBJECT PER POD PER SLOT PER FLUSH**, keyed by the request's
  * {@code (podId, incarnationId, flushSeq)} triple, which is also what makes
- * applying it idempotent: a drained intent whose forward had in fact landed is
- * answered from the dedupe window, never committed twice (ADR-0036). Slot 0
+ * applying it idempotent: a drained intent whose forward had in fact landed --
+ * at or below its incarnation's mark in the dedupe window (ADR-0036) -- is
+ * deleted, never committed twice (M13.73). Slot 0
  * is the only slot (S = 1), and the key names it so a second slot adds a
  * directory rather than a format.
  *
@@ -81,8 +82,9 @@ public final class Inbox {
      *
      * <p>⚠️ **THE ORDER IS THE SAFETY**: the dedupe window keeps ONE high mark
      * per pod incarnation (ADR-0036), so a pod's intents are applied oldest
-     * first -- a later flush applied first would make every earlier one read
-     * as a replay and be refused, an acked write lost.
+     * first -- a later flush applied first would put every earlier one at or
+     * below the mark, where the drain deletes it as applied (M13.73): an acked
+     * write silently lost.
      *
      * <p>⚠️ **ONE LIST PER 1,000 INTENTS AND ONE GET EACH**, paid by a drain or
      * a sweep, never on a timer.

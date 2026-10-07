@@ -21,8 +21,10 @@ import java.util.function.LongConsumer;
  * per interval on every idle leader, for ever (cost.md rule 2).
  *
  * <p>⚠️ **EACH POD's INTENTS IN ORDER, AND A POD STOPS AT ITS FIRST FAILURE**:
- * the dedupe window keeps one high mark per incarnation, so applying flush N+1
- * after N failed would turn N into a refused replay. Applied intents are
+ * the dedupe window keeps one high mark per incarnation, and an intent at or
+ * below it is DELETED as applied (M13.73) -- so applying flush N+1 after N
+ * failed would have N deleted unapplied, an acked write silently lost. Applied
+ * intents are
  * deleted; an intent batch that failed stays, and so does everything after it.
  * The ordered intents are committed in one batch per pod, so commit-log PUT
  * cost scales with pods rather than with the number of intents accumulated
@@ -107,7 +109,17 @@ public final class InboxDrain {
         for (List<Inbox.Pending> batch : byPod.values()) {
             Inbox.Pending firstIntent = batch.getFirst();
             try {
-                term.commitAll(batch.stream().map(Inbox.Pending::request).toList());
+                List<CommitRequest> requests = batch.stream().map(Inbox.Pending::request)
+                        .toList();
+                // ⚠️ ONLY WHAT THE TERM HAS NOT APPLIED (M13.73): the rest landed
+                // under an earlier drain that died before its deletes, and is
+                // deleted below with the batch.
+                List<CommitRequest> unapplied = LocalSequencer.underneath(term).isPresent()
+                        ? LocalSequencer.underneath(term).get().unapplied(requests)
+                        : requests;
+                if (!unapplied.isEmpty()) {
+                    term.commitAll(unapplied);
+                }
                 applied.addAll(batch.stream().map(Inbox.Pending::key).toList());
             } catch (FencedException fenced) {
                 deleteApplied(store, applied);

@@ -30,9 +30,25 @@ partition heals and over deferring the inbox.
   (S = 1), named in the key so a second slot is a directory, not a format.
 - **One PUT per pod per slot per flush**, never per record or index (cost.md
   rule 6). A retried flush finds its key occupied and defers again.
-- Any forward failure qualifies, an ambiguous one included: the drain applies
-  an intent through the per-pod dedupe window (ADR-0036), so a flush whose
-  forward had in fact landed is answered, never committed twice.
+- Any forward failure qualifies, an ambiguous one included: the drain checks
+  each intent against the per-pod dedupe window (ADR-0036), so a flush whose
+  forward had in fact landed is never committed twice.
+- **An intent at or below its incarnation's high mark has landed, and the
+  drain deletes it** (amended by M13.73): it commits only the intents above
+  the mark. A pod's flushes reach the chain in order, so the mark is proof
+  -- and that proof rests on exactly three things, each a precondition of
+  this rule: ONE flush worker per incarnation (one `BatchFlusher` per node,
+  its incarnation minted per process), a pod forwarding NOTHING while it has
+  an intent (`FleetSequencer`'s `deferring`, set only after the intent is
+  durable), and each pod's batch applied oldest first. A change to any of
+  them changes this rule: a second flusher sharing one incarnation, or a
+  forward overtaking an intent, would put an unapplied intent at or below
+  the mark, and the drain would delete an acked write. The first form asked the window to ANSWER those intents,
+  and the window answers a replay only from the delta of the incarnation's
+  last applied flush: a drain that committed a batch and died before its
+  deletes -- a leaseholder killed mid-drain -- left a batch the next drain
+  refused for good, its acked writes stranded and every deferring flush
+  re-reading every intent.
 - A store that refuses the intent fails the flush: nothing durable to ack on,
   and criterion 12 says those acks stop.
 - The append completes with `AppendResult.deferred`: no offset, and nothing
