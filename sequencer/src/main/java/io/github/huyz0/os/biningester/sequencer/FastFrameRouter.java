@@ -24,6 +24,14 @@ import java.util.concurrent.ConcurrentHashMap;
  * kept the fence of the term before -- and answered under it, which a pod
  * started since took as a deposition.
  *
+ * <p>⚠️ AND A SENDER THAT IS NO LIVE INCARNATION IS REFUSED (M13.71): a
+ * certificate outlives its pod, so a leaked key passes the binding under its
+ * own UID until it expires -- a {@code Long.MAX_VALUE} frame from it deposed
+ * every leader it reached, and a JOIN at the fence was rostered and could
+ * commit. It is refused {@code NOT_ROSTERED}, unread and raising nothing,
+ * which a joiner asks again on its next look: a pod's first JOIN, sent
+ * before the view lists it, is admitted once it does.
+ *
  * <p>⚠️ A KIND WITH NO HANDLER IS NOT ANSWERED: the route tells the sender it
  * cannot serve that kind rather than inventing a refusal no reason names.
  * Each kind's handler lands with its task (joins M13.27j, departure M13.27k,
@@ -59,10 +67,23 @@ public final class FastFrameRouter {
         AnswerMeter NONE = (header, asked, bytes) -> { };
     }
 
+    /**
+     * Whether a UID is a live incarnation (M13.71): read from what the pod
+     * already holds, never from the store per frame.
+     */
+    @FunctionalInterface
+    public interface Liveness {
+        boolean live(String uid);
+
+        /** No evidence either way: every sender is admitted. */
+        Liveness ANY = uid -> true;
+    }
+
     private final String selfUid;
     private final EpochFence fence;
     private final AnswerMeter meter;
     private final java.util.function.LongSupplier ownTerm;
+    private final Liveness liveness;
     private final Map<Integer, Handler> handlers = new ConcurrentHashMap<>();
 
     public FastFrameRouter(String selfUid, EpochFence fence) {
@@ -79,10 +100,17 @@ public final class FastFrameRouter {
      */
     public FastFrameRouter(String selfUid, EpochFence fence, AnswerMeter meter,
             java.util.function.LongSupplier ownTerm) {
+        this(selfUid, fence, meter, ownTerm, Liveness.ANY);
+    }
+
+    /** The same, refusing every frame from a sender {@code liveness} does not name (M13.71). */
+    public FastFrameRouter(String selfUid, EpochFence fence, AnswerMeter meter,
+            java.util.function.LongSupplier ownTerm, Liveness liveness) {
         this.selfUid = Objects.requireNonNull(selfUid, "selfUid");
         this.fence = Objects.requireNonNull(fence, "fence");
         this.meter = Objects.requireNonNull(meter, "meter");
         this.ownTerm = Objects.requireNonNull(ownTerm, "ownTerm");
+        this.liveness = Objects.requireNonNull(liveness, "liveness");
     }
 
     /** Answers every later frame of {@code kind} with {@code handler}. */
@@ -117,6 +145,13 @@ public final class FastFrameRouter {
         long own = ownTerm.getAsLong();
         if (own > fence.highest()) {
             fence.raise(own);
+        }
+        // ⚠️ AFTER THE RAISE, so the refusal is answered under the term led and
+        // a joiner never reads it as a deposition (M13.71 review P1); BEFORE
+        // ADMIT, so it raises nothing.
+        if (!liveness.live(header.senderUid())) {
+            return Optional.of(refuse(header, FastFrame.Reason.NOT_ROSTERED,
+                    header.senderUid() + " is no live incarnation"));
         }
         if (!fence.admit(header.epoch())) {
             return Optional.of(refuse(header, FastFrame.Reason.LOWER_EPOCH,

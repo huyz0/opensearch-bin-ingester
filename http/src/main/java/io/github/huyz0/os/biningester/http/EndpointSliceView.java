@@ -90,6 +90,31 @@ public final class EndpointSliceView implements LeaseChallenge {
         return true;
     }
 
+    /**
+     * Whether any slice lists the incarnation {@code uid}, ready or not
+     * (M13.71). ⚠️ NOT READY COUNTS: a starting pod joins before it is ready.
+     */
+    public synchronized boolean lists(String uid) {
+        for (List<Member> members : slices.values()) {
+            for (Member member : members) {
+                if (member.uid().equals(uid)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** Whether the view lists anyone at all: false before its first event. */
+    public synchronized boolean hasMembers() {
+        for (List<Member> members : slices.values()) {
+            if (!members.isEmpty()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** Current ready endpoints with an AZ label, in a stable order. */
     public synchronized List<Endpoint> readyEndpoints() {
         List<Endpoint> ready = new ArrayList<>();

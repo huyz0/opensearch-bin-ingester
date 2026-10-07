@@ -126,8 +126,18 @@ over a fence bound (below).
    certificate is the bound (M13.38 says so). And a leaked key can still
    raise every pod's fence to `Long.MAX_VALUE` under its OWN UID, as
    M13.52's caller could, until it expires: binding stops it speaking for
-   another pod, not for a pod that is gone. Refusing a frame from a UID that
-   is no live incarnation, before admission, is M13.71's.
+   another pod, not for a pod that is gone. **So a fast frame from a UID that
+   is no live incarnation is refused** (amended by M13.71): `NOT_ROSTERED`,
+   unread and raising nothing, whatever its kind or epoch -- at the fence too,
+   since every answer names the fence and a gone pod's JOIN there was
+   rostered. Live is what the membership view lists, ready or not, read from
+   memory and never from the store. A pod's first JOIN, sent before the view
+   lists it, is refused under the term led (M13.82) and asked again on the
+   joiner's next look, so it is admitted once the view lists the pod. ⚠️ No
+   evidence judges nothing: without membership, or before the view's first
+   event, every sender is admitted, and this residual remains there. A watch
+   outage keeps the view's last state: a pod started during it waits to
+   join, and one deleted during it stays live, until the watch reads again.
 
    Under `off` there is no certificate and nothing is bound; decision 5's
    warning names that too.

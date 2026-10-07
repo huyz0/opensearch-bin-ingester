@@ -54,27 +54,56 @@ final class FastPeer implements AutoCloseable {
      */
     static FastFrameRouter router(ServerConfig config, FastDisk disk, CrossAzBytes crossAz,
             PeerZones zones) {
-        return router(config, disk, crossAz, zones, () -> 0L);
+        return router(config, disk, crossAz, zones, () -> 0L, null);
     }
 
-    /** The same, its fence raised to {@code ownTerm} before it answers (M13.82). */
+    /**
+     * The same, its fence raised to {@code ownTerm} before it answers (M13.82),
+     * refusing a sender {@code view} does not list (M13.71).
+     */
     static FastFrameRouter router(ServerConfig config, FastDisk disk, CrossAzBytes crossAz,
-            PeerZones zones, java.util.function.LongSupplier ownTerm) {
-        return router(config.podUid(), disk.fence(), crossAz, zones, ownTerm);
+            PeerZones zones, java.util.function.LongSupplier ownTerm,
+            io.github.huyz0.os.biningester.http.EndpointSliceView view) {
+        return router(config.podUid(), disk.fence(), crossAz, zones, ownTerm, view);
     }
 
     static FastFrameRouter router(String selfUid, EpochFence fence, CrossAzBytes crossAz,
             PeerZones zones) {
-        return router(selfUid, fence, crossAz, zones, () -> 0L);
+        return router(selfUid, fence, crossAz, zones, () -> 0L,
+                (io.github.huyz0.os.biningester.http.EndpointSliceView) null);
     }
 
     static FastFrameRouter router(String selfUid, EpochFence fence, CrossAzBytes crossAz,
-            PeerZones zones, java.util.function.LongSupplier ownTerm) {
+            PeerZones zones, io.github.huyz0.os.biningester.http.EndpointSliceView view) {
+        return router(selfUid, fence, crossAz, zones, () -> 0L, view);
+    }
+
+    static FastFrameRouter router(String selfUid, EpochFence fence, CrossAzBytes crossAz,
+            PeerZones zones, java.util.function.LongSupplier ownTerm,
+            io.github.huyz0.os.biningester.http.EndpointSliceView view) {
         return new FastFrameRouter(selfUid, fence, (header, asked, bytes) ->
                 crossAz.sent(FastFrame.isControl(header.kind())
                                 ? CrossAzBytes.Transport.FAST_CONTROL
                                 : CrossAzBytes.Transport.FAST_DATA,
-                        azOf(header, asked, zones), bytes), ownTerm);
+                        azOf(header, asked, zones), bytes), ownTerm, liveness(view));
+    }
+
+    /**
+     * Live is what the membership view lists, ready or not (M13.71).
+     *
+     * <p>⚠️ **NO EVIDENCE JUDGES NOTHING**: without membership, or before the
+     * view's first event, it lists nobody, and refusing then would refuse
+     * every pod. So a node that runs without membership, or whose watch has
+     * not yet read a slice, keeps ADR-0084's residual. ⚠️ A watch outage keeps
+     * the last state: a pod started during it is refused until the watch
+     * reads it, and one deleted during it stays listed until then.
+     */
+    static FastFrameRouter.Liveness liveness(
+            io.github.huyz0.os.biningester.http.EndpointSliceView view) {
+        if (view == null) {
+            return FastFrameRouter.Liveness.ANY;
+        }
+        return uid -> !view.hasMembers() || view.lists(uid);
     }
 
     private static String azOf(FastFrame.Header header, FastFrame.Body asked, PeerZones zones) {
