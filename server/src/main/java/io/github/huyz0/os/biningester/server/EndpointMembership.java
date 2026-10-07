@@ -53,6 +53,13 @@ final class EndpointMembership implements Membership {
     static DurableSegmentSignalSender signalSender(ServerConfig config,
             EndpointSliceView peerView, CrossAzBytes crossAz,
             DurableSegmentSignalSender.PeerPost signalPost) {
+        return signalSender(config, peerView, crossAz, signalPost, () -> { });
+    }
+
+    /** The same, each lost hint told to {@code lostHint} -- the node's counter (M13.70). */
+    static DurableSegmentSignalSender signalSender(ServerConfig config,
+            EndpointSliceView peerView, CrossAzBytes crossAz,
+            DurableSegmentSignalSender.PeerPost signalPost, Runnable lostHint) {
         int peerPort = config.peer().port();
         // ⚠️ NO PLAINTEXT POST UNDER mutual (M13.52d review round 1, P2): it
         // would dial https:// without the pod's certificate, or http:// a
@@ -63,15 +70,17 @@ final class EndpointMembership implements Membership {
         }
         return peerView != null && peerPort > 0
                 ? signalPost == null
+                        // ⚠️ THE COUNTER ON THIS PATH TOO (M13.70 review, P2)
                         ? new DurableSegmentSignalSender(
                                 crossAz == null ? CrossAzBytes.untracked() : crossAz,
-                                peerPort)
+                                peerPort, DurableSegmentSignalSender.httpPost(
+                                        java.util.Optional.empty()), false, lostHint)
                         // ⚠️ https UNDER mutual (ADR-0084; M13.52d), the post
                         // presenting this pod's certificate.
                         : new DurableSegmentSignalSender(
                                 crossAz == null ? CrossAzBytes.untracked() : crossAz,
                                 peerPort, signalPost,
-                                config.peer().mode() == PeerConfig.Mode.MUTUAL)
+                                config.peer().mode() == PeerConfig.Mode.MUTUAL, lostHint)
                 : null;
     }
 }

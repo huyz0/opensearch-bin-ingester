@@ -67,10 +67,11 @@ final class WritePathAssembly {
             SubscriptionHub hub, Clock clock, IndexCatalog catalog, EndpointSliceView peerHints,
             EndpointSliceView peers, CrossAzBytes crossAz,
             DurableSegmentSignalSender.PeerPost signalPost, IndexCostLedger costLedger,
-            CostGovernor governor) throws IOException {
+            CostGovernor governor, Runnable lostHint) throws IOException {
         try {
             DurableSegmentSignalSender signalSender =
-                    EndpointMembership.signalSender(config, peerHints, crossAz, signalPost);
+                    EndpointMembership.signalSender(config, peerHints, crossAz, signalPost,
+                            lostHint);
             DefaultIngest ingest = new DefaultIngest(config.ingest(), store, config.prefix(),
                     config.podId(), sequencer, hub, clock,
                     name -> CatalogStreams.streamFor(catalog, name),

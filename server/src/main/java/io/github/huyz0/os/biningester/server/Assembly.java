@@ -248,7 +248,7 @@ public final class Assembly implements AutoCloseable {
         // ⚠️ A FAILURE HERE RELEASES THE TERM just taken; see WritePathAssembly.
         WritePathAssembly.WritePath writePath = WritePathAssembly.create(config, store,
                 this.sequencer, this.hub, clock, catalog, peerView, this.peerView, crossAz,
-                signalPost, costLedger, governor);
+                signalPost, costLedger, governor, metrics::durableHintLost);
         this.ingest = writePath.ingest();
         this.prefetcher = writePath.prefetcher();
         this.signalSender = writePath.signalSender();

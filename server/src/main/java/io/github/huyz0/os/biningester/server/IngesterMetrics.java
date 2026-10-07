@@ -11,9 +11,17 @@ final class IngesterMetrics {
             "biningester_endpointslice_watch_failures_total";
     static final String STUCK_INTENT_ATTEMPTS =
             "biningester_inbox_stuck_intent_attempts_total";
+    /**
+     * Durable-segment hints whose post failed (M13.70): each is a cache miss
+     * and nothing worse, so it is swallowed -- and this is the only trace a
+     * fleet losing every one of them leaves (a rolling {@code peer.tls}
+     * change, a broken trust).
+     */
+    static final String DURABLE_HINTS_LOST = "biningester_durable_segment_hints_lost_total";
 
     private final Counter endpointSliceWatchFailures;
     private final Counter stuckIntentAttempts;
+    private final Counter durableHintsLost;
 
     IngesterMetrics() {
         var registry = Metrics.globalRegistry();
@@ -23,6 +31,17 @@ final class IngesterMetrics {
         stuckIntentAttempts = registry.getOrCreate(Counter
                 .builder(STUCK_INTENT_ATTEMPTS)
                 .description("Failed inbox intent application attempts; retries count again"));
+        durableHintsLost = registry.getOrCreate(Counter
+                .builder(DURABLE_HINTS_LOST)
+                .description("Durable-segment hints whose post to a peer failed"));
+    }
+
+    void durableHintLost() {
+        durableHintsLost.increment();
+    }
+
+    long durableHintsLost() {
+        return durableHintsLost.count();
     }
 
     void endpointSliceWatchFailed() {

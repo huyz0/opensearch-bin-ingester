@@ -35,6 +35,16 @@ public final class DurableSegmentSignalSender {
      */
     public DurableSegmentSignalSender(CrossAzBytes crossAz, int port, PeerPost post,
             boolean secure) {
+        this(crossAz, port, post, secure, () -> { });
+    }
+
+    /**
+     * The same, telling {@code lostHint} of every hint whose post failed
+     * (M13.70): the node's counter, so an operator sees a fleet losing them.
+     */
+    public DurableSegmentSignalSender(CrossAzBytes crossAz, int port, PeerPost post,
+            boolean secure, Runnable lostHint) {
+        this.lostHint = Objects.requireNonNull(lostHint, "lostHint");
         this.crossAz = Objects.requireNonNull(crossAz, "crossAz");
         if (port < 1 || port > 65535) {
             throw new IllegalArgumentException("port is not valid: " + port);
@@ -59,6 +69,7 @@ public final class DurableSegmentSignalSender {
     private final PeerPost post;
     private final java.util.concurrent.atomic.LongAdder lost =
             new java.util.concurrent.atomic.LongAdder();
+    private final Runnable lostHint;
 
     /**
      * The hints whose post failed (M13.52d review round 1): each is swallowed,
@@ -91,6 +102,7 @@ public final class DurableSegmentSignalSender {
             } catch (IOException | RuntimeException unavailable) {
                 // A lost warm is a cache miss, never a reason to fail a durable write.
                 lost.increment();
+                lostHint.run();
             }
         }
         return List.copyOf(attempted);

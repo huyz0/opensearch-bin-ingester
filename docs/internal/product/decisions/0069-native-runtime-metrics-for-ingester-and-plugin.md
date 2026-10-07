@@ -41,7 +41,7 @@ Use the host runtime's registry at each process boundary:
   assembly-owned in-memory counter. It increments by the batch size for each
   failed intent-application attempt, not a claim about the current number of
   distinct inbox objects; retries of the same intent count again.
-* All 15 measurements use fixed names and no application-defined tags. The fallback enum and poll
+* All 18 measurements use fixed names and no application-defined tags. The fallback enum and poll
   failure enum are encoded in a finite set of metric names rather than labels.
   The endpoint reads only in-memory values and is not allowed to perform store
   I/O.
@@ -53,8 +53,10 @@ The exact names are `biningester_fallback_current_tier`,
 `biningester_progress_push_failures_total`,
 `biningester_segment_hold_{oversize_fetches,refetches_after_eviction}_total`
 (M10.25: the node hold's per-shard re-fetch fall-backs),
-`biningester_endpointslice_watch_failures_total`, and
-`biningester_inbox_stuck_intent_attempts_total`. The current-tier gauge reports
+`biningester_endpointslice_watch_failures_total`,
+`biningester_inbox_stuck_intent_attempts_total`, and
+`biningester_durable_segment_hints_lost_total` (M13.70: hints whose post to a
+peer failed, otherwise swallowed). The current-tier gauge reports
 the `AutomaticTier` ordinal (0–3); all other instruments are counters seeded
 from their source counts and incremented for subsequent source events. No
 instrument has a dynamic tag.
