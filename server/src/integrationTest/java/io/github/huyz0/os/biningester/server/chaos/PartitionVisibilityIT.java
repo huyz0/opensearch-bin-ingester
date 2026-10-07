@@ -143,10 +143,11 @@ class PartitionVisibilityIT {
                 // trigger's 202, so it could not fail -- and polled concurrently an
                 // M=10 inbox empties BEFORE its forwarded trigger's 202, so it is
                 // not a property either. The M13.3 line reports what each includes.
-                // ⚠️ RED UNTIL M13.78 (M13.45): a drain outlasting the forward
-                // timeout completes on the leader, and the trigger deferred after
-                // it waits for the pod's NEXT write, which never comes here --
-                // at M=1,000 in every run since, at M=10 in one of eight.
+                // ⚠️ M13.78 asks a deferred trigger's drain again every renew
+                // interval, so the inbox empties (it stranded the trigger at
+                // M=1,000 in every run before). The LATENCY below stays red at
+                // M=1,000 until M13.79: the first 1,000-intent drain itself
+                // takes 2.8-5.6 s against 2,500 ms.
                 assertThat(remaining)
                         .withFailMessage("inbox still contains %s; leader log:%n%s", remaining,
                                 leader.log())

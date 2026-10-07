@@ -39,8 +39,9 @@ partition heals and over deferring the inbox.
   -- and that proof rests on exactly three things, each a precondition of
   this rule: ONE flush worker per incarnation (one `BatchFlusher` per node,
   its incarnation minted per process), a pod forwarding NOTHING while it has
-  an intent (`FleetSequencer`'s `deferring`, set only after the intent is
-  durable), and each pod's batch applied oldest first. A change to any of
+  an intent (`FleetSequencer`'s deferral count, raised only after the intent
+  is durable, and cleared by a drain only up to the count it saw before
+  asking -- M13.78), and each pod's batch applied oldest first. A change to any of
   them changes this rule: a second flusher sharing one incarnation, or a
   forward overtaking an intent, would put an unapplied intent at or below
   the mark, and the drain would delete an acked write. The first form asked the window to ANSWER those intents,
@@ -58,7 +59,20 @@ partition heals and over deferring the inbox.
   keeps one high mark per incarnation, so an intent overtaken by a later flush
   would be refused as a replay -- an acked write lost.
 - The drain runs when a deferring pod reaches the leaseholder again and once
-  per takeover, never on a LIST timer. Drains on one term are serialised, so
+  per takeover, never on a LIST timer. **A deferring pod asks again every
+  renew interval until a drain succeeds** (amended by M13.78): the drain it
+  asks at the heal can time out on a large inbox and complete on the
+  leaseholder anyway, and the flush it then defers would otherwise wait for
+  the pod's next write -- an idle pod's acked writes invisible indefinitely
+  (measured by M13.45). That is one request per deferring pod per interval,
+  none from a pod not deferring and no timer on the leaseholder, so its
+  request rate scales with pods (cost.md rule 6). ⚠️ Each ask is a drain,
+  and a drain reads the whole inbox: a LIST page per 1,000 keys and a GET per
+  pending intent of every pod, as recovery the governor does not refuse. So
+  while a pod's own intent keeps FAILING to apply, the retry re-reads every
+  pending intent each interval, a cost that scales with intents for as long
+  as it fails. It is bounded by a backoff on consecutive failures (M13.80),
+  not yet built. Drains on one term are serialised, so
   one intent never lands twice in a batch, and the cost at heal is the
   intents plus one LIST per asking pod. Each pod's intents apply in order; a
   pod whose intent sticks keeps deferring, and no other pod is held by it.

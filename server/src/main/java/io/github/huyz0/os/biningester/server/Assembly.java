@@ -244,7 +244,6 @@ public final class Assembly implements AutoCloseable {
         // `closeTransport()` twice, the second on a transport THIS CLASS DOES
         // NOT OWN. MEASURED by review: with the duplicate push removed the
         // lease is still released, because the writer releases it.
-
         // ⚠️ A FAILURE HERE RELEASES THE TERM just taken; see WritePathAssembly.
         WritePathAssembly.WritePath writePath = WritePathAssembly.create(config, store,
                 this.sequencer, this.hub, clock, catalog, peerView, this.peerView, crossAz,
@@ -255,6 +254,7 @@ public final class Assembly implements AutoCloseable {
         // ⚠️ FROM HERE the governor reads the ingest's spacing; until now, the floor.
         stack.spacing().attach(this.ingest);
         toClose.push(this.ingest);
+        toClose.push(SequencerAssembly.retryDeferredDrains(sequencer, config)); // M13.78
         this.routed = WritePathAssembly.routed(ingest, catalog, clock);
 
         this.retention = RetentionAssembly.create(config, store, clock, this::retentionTerm,

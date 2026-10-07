@@ -15,9 +15,10 @@ import java.util.function.LongConsumer;
  * The leaseholder applies the inbox's intents and deletes them (M8.14a,
  * ADR-0058).
  *
- * <p>⚠️ **ON HEAL AND ON TAKEOVER, NEVER ON A TIMER**: a pod that deferred asks
- * for a drain the next time it can reach the leaseholder, and a new term
- * drains once for the pods that died deferring. A timer would LIST the inbox
+ * <p>⚠️ **ON HEAL AND ON TAKEOVER, NEVER ON A LEADER's TIMER**: a pod that
+ * deferred asks for a drain the next time it can reach the leaseholder, and
+ * again every renew interval until one succeeds (M13.78); a new term drains
+ * once for the pods that died deferring. A leader's timer would LIST the inbox
  * per interval on every idle leader, for ever (cost.md rule 2).
  *
  * <p>⚠️ **EACH POD's INTENTS IN ORDER, AND A POD STOPS AT ITS FIRST FAILURE**:
@@ -94,7 +95,11 @@ public final class InboxDrain {
         // ⚠️ DECLARED RECOVERY (ADR-0075), HERE AND NOT IN `Inbox.pending`: the
         // orphan sweep reads the same inbox for its keep list, and that read is
         // discretionary and governed. A refused DRAIN strands acked intents;
-        // it is bounded by its trigger, a heal or a takeover (ADR-0058). ⚠️
+        // it is bounded by its trigger: a heal, a takeover, or a deferring
+        // pod's retry every renew interval (ADR-0058, M13.78) -- which is NOT
+        // bounded while that pod's own intent keeps failing: a LIST page per
+        // 1,000 keys and a GET per pending intent, each interval, until
+        // M13.80's backoff. ⚠️
         // Bound on the thread that lists: `inBackground` calls this on its own.
         List<Inbox.Pending> pending = GovernorScope.recovery(
                 () -> Inbox.pending(store, prefix));

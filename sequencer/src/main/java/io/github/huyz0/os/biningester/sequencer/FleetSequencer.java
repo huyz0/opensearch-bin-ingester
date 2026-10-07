@@ -149,12 +149,13 @@ public final class FleetSequencer implements Sequencer {
         Sequencer mine = leadership.sequencer();
         FencedException fence = null;
         if (mine != null) {
-            if (deferring) {
+            long seen = deferrals.get();
+            if (seen > drained.get()) {
                 // ⚠️ THIS POD's OWN INTENTS FIRST: committing past them here
                 // would raise its high mark over them, and the drain would then
                 // delete each as applied -- acked writes lost (M8.14a, M13.73).
                 InboxDrain.drain(store, prefix, mine, podId, failedIntentBatch);
-                deferring = false;
+                drainedUpTo(seen);
             }
             try {
                 return mine.commitAll(requests);
@@ -174,13 +175,14 @@ public final class FleetSequencer implements Sequencer {
             throw new IOException("this pod's sequencer was closed while this commit was in"
                     + " flight, and must not forward it");
         }
-        if (deferring) {
+        long seen = deferrals.get();
+        if (seen > drained.get()) {
             // ⚠️ STILL DEFERRING: this pod has intents in the inbox, so it may
             // not forward until the leaseholder has applied them -- the drain
             // it asks for here IS the heal (M8.14a). Cut off still, it defers.
             try {
                 remote.drain();
-                deferring = false;
+                drainedUpTo(seen);
             } catch (IOException stillCutOff) {
                 throw defer(requests, stillCutOff, fence);
             }
@@ -242,7 +244,7 @@ public final class FleetSequencer implements Sequencer {
         }
         try {
             String key = Inbox.write(store, prefix, requests.get(0));
-            deferring = true;
+            deferrals.incrementAndGet();
             return new CommitDeferredException(key, cause);
         } catch (IOException intentFailed) {
             cause.addSuppressed(intentFailed);
@@ -252,10 +254,60 @@ public final class FleetSequencer implements Sequencer {
 
     /**
      * ⚠️ WHETHER THIS POD HAS INTENTS THE LEASEHOLDER HAS NOT CONFIRMED
-     * APPLYING. While true it forwards nothing: its next flush asks for a drain
-     * first. Volatile because a close and a flush reach it from two threads.
+     * APPLYING: more deferrals counted than drained. While so it forwards
+     * nothing: its next flush asks for a drain first. Counts rather than a
+     * flag because the flush worker and {@link #retryDeferredDrain} reach them
+     * from two threads (M13.78), and raised only after the intent is durable.
      */
-    private volatile boolean deferring;
+    private final java.util.concurrent.atomic.AtomicLong deferrals =
+            new java.util.concurrent.atomic.AtomicLong();
+    private final java.util.concurrent.atomic.AtomicLong drained =
+            new java.util.concurrent.atomic.AtomicLong();
+
+    /**
+     * Asks once more for the drain this pod defers on, and asks nothing when it
+     * is not deferring (M13.78, ADR-0058 amended). Its owner calls it every
+     * renew interval.
+     *
+     * <p>⚠️ **WITHOUT IT A DEFERRED FLUSH WAITS FOR THE POD's NEXT WRITE.** The
+     * drain a pod asks at the heal can time out on a large inbox and complete
+     * on the leaseholder anyway, and the flush deferred after it then sits in
+     * the inbox with nothing to ask for it -- an idle pod's acked writes
+     * invisible for as long as it stays idle (measured by M13.45).
+     *
+     * <p>⚠️ **A FAILURE IS NOT THROWN**: the pod stays deferring and the next
+     * interval asks again. It does not elect, for {@link #heldTerm}'s reason.
+     */
+    public void retryDeferredDrain() {
+        long seen = deferrals.get();
+        if (closed || seen <= drained.get()) {
+            return;
+        }
+        try {
+            Sequencer mine = leadership.heldWithoutElecting();
+            if (mine != null) {
+                InboxDrain.drain(store, prefix, mine, podId, failedIntentBatch);
+            } else {
+                remote.drain();
+            }
+            drainedUpTo(seen);
+        } catch (IOException stillCutOff) {
+            // still deferring: the next interval asks again
+        }
+    }
+
+    /**
+     * Records that every deferral counted up to {@code seen} has been drained.
+     *
+     * <p>⚠️ **ONLY THOSE COUNTED BEFORE THE DRAIN WAS ASKED** (M13.78): the
+     * retry runs beside the flush worker, so a flush can defer while its drain
+     * is in flight -- after the drain's LIST. Clearing a flag there would let
+     * the next flush forward past that intent, and the drain after it would
+     * delete it as at or below the mark: an acked write lost.
+     */
+    private void drainedUpTo(long seen) {
+        drained.accumulateAndGet(seen, Math::max);
+    }
 
     /** Whether this pod is currently the one writing the chain. */
     public boolean leading() {

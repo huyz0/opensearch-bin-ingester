@@ -95,6 +95,47 @@ final class SequencerAssembly {
                 backfillStarter, metrics, InboxDrain::inBackground);
     }
 
+    /** {@link #retryDeferredDrains(Runnable, Duration)} every renew interval of {@code config}. */
+    static AutoCloseable retryDeferredDrains(FleetSequencer fleet, ServerConfig config) {
+        return retryDeferredDrains(fleet::retryDeferredDrain, retryInterval(config));
+    }
+
+    /** How often a deferring pod asks again: its renew interval, never its TTL. */
+    static Duration retryInterval(ServerConfig config) {
+        return leaseConfig(config).renewInterval();
+    }
+
+    /**
+     * Asks a deferring pod's drain again {@code every} interval on its own
+     * virtual thread, and returns what stops it (M13.78, ADR-0058 amended).
+     *
+     * <p>⚠️ **A REQUEST PER DEFERRING POD PER INTERVAL, NOT A LIST TIMER**: a pod
+     * not deferring asks nothing, and a leader runs no timer of its own.
+     */
+    static AutoCloseable retryDeferredDrains(Runnable retry, Duration every) {
+        java.util.concurrent.ScheduledExecutorService scheduler =
+                java.util.concurrent.Executors.newSingleThreadScheduledExecutor(
+                        Thread.ofVirtual().name("deferred-drain").factory());
+        long nanos = every.toNanos();
+        scheduler.scheduleWithFixedDelay(() -> {
+            // ⚠️ A THROW OUT OF A SCHEDULED TASK CANCELS EVERY LATER RUN OF IT,
+            // and the pod's deferred flushes would wait for its next write again.
+            try {
+                retry.run();
+            } catch (RuntimeException failed) {
+                RETRY_LOG.log(System.Logger.Level.WARNING,
+                        "a deferred drain's retry failed; the next interval asks again", failed);
+            }
+        }, nanos, nanos, TimeUnit.NANOSECONDS);
+        return () -> {
+            scheduler.shutdownNow();
+            scheduler.awaitTermination(5, TimeUnit.SECONDS);
+        };
+    }
+
+    private static final System.Logger RETRY_LOG =
+            System.getLogger(SequencerAssembly.class.getName());
+
     /** Starts the dead pods' inbox drain on a term just started: {@link InboxDrain}. */
     @FunctionalInterface
     interface DrainStarter {
