@@ -50,7 +50,7 @@ class IndexQuotasByteBurstTest {
     void anIdleIndexsByteBucketRefillsToOneSecondsBurstAndNoFurther() {
         TestClock clock = new TestClock();
         IndexQuotas quotas = new IndexQuotas(new IndexQuotas.Config(
-                new IndexQuotas.Limit(1_000, 0), Map.of(), 8), clock, name -> true, name -> java.util.List.of());
+                new IndexQuotas.Limit(1_000, 0), Map.of(), 8), clock, java.util.Optional::of, name -> java.util.List.of());
         quotas.admit("logs").ticket().orElseThrow().release();
         clock.advance(Duration.ofSeconds(100));
 

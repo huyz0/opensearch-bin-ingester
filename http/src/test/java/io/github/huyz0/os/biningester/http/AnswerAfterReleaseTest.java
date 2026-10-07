@@ -60,7 +60,7 @@ class AnswerAfterReleaseTest {
      */
     private final IndexQuotas quotas = new IndexQuotas(
             new IndexQuotas.Config(new IndexQuotas.Limit(1L << 40, 1L << 40), Map.of(), 1),
-            Clock.systemUTC(), index -> true, index -> List.of());
+            Clock.systemUTC(), java.util.Optional::of, index -> List.of());
 
     @AfterEach
     void stop() throws Exception {

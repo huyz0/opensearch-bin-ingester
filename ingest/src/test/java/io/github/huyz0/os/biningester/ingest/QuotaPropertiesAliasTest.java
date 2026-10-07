@@ -29,7 +29,8 @@ class QuotaPropertiesAliasTest {
 
     private static IndexQuotas quotas(Map<String, IndexQuotas.Limit> overrides) {
         return new IndexQuotas(new IndexQuotas.Config(IndexQuotas.Limit.UNLIMITED, overrides, 8),
-                FROZEN, KNOWN::contains,
+                FROZEN, name -> KNOWN.contains(name) ? java.util.Optional.of(name)
+                        : java.util.Optional.empty(),
                 index -> index.equals("logs-000002") ? List.of("logs-write", "logs") : List.of());
     }
 

@@ -147,7 +147,7 @@ class ExplicitPartitionWaitCapTest {
         server = WebServer.builder().port(0)
                 .routing(HttpRouting.builder().register(new BulkService(routed, PRINCIPAL,
                         new DrainGate(), admission, new IndexQuotas(IndexQuotas.Config.none(),
-                                Clock.systemUTC(), name -> true, name -> List.of()),
+                                Clock.systemUTC(), java.util.Optional::of, name -> List.of()),
                         new BulkService.RefusalListener() {
                             @Override
                             public void admissionRefused() {

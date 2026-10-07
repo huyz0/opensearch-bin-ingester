@@ -55,7 +55,8 @@ class IndexQuotasBoundTest {
 
     private IndexQuotas quotas(Set<String> known) {
         return new IndexQuotas(new IndexQuotas.Config(TEN_A_SECOND, Map.of(), 8, IDLE), clock,
-                known::contains, name -> java.util.List.of());
+                name -> known.contains(name) ? java.util.Optional.of(name)
+                        : java.util.Optional.empty(), name -> java.util.List.of());
     }
 
     @Test
@@ -121,7 +122,8 @@ class IndexQuotasBoundTest {
     void aOneChunkRequestRegisteredDuringItsWaitIsStillCharged() {
         java.util.Set<String> known = new java.util.HashSet<>();
         IndexQuotas quotas = new IndexQuotas(new IndexQuotas.Config(TEN_A_SECOND, Map.of(), 8,
-                IDLE), clock, known::contains, name -> java.util.List.of());
+                IDLE), clock, name -> known.contains(name) ? java.util.Optional.of(name)
+                        : java.util.Optional.empty(), name -> java.util.List.of());
         IndexQuotas.Ticket ticket = quotas.admit("logs").ticket().orElseThrow();
 
         ticket.charge(records(25)); // charged, then appended: the wait is inside
@@ -137,7 +139,8 @@ class IndexQuotasBoundTest {
     void aLaterChunkBindsTheTicketAndPaysForTheFirst() {
         java.util.Set<String> known = new java.util.HashSet<>();
         IndexQuotas quotas = new IndexQuotas(new IndexQuotas.Config(TEN_A_SECOND, Map.of(), 1,
-                IDLE), clock, known::contains, name -> java.util.List.of());
+                IDLE), clock, name -> known.contains(name) ? java.util.Optional.of(name)
+                        : java.util.Optional.empty(), name -> java.util.List.of());
         IndexQuotas.Ticket ticket = quotas.admit("logs").ticket().orElseThrow();
 
         ticket.charge(records(8));
@@ -183,7 +186,8 @@ class IndexQuotasBoundTest {
         Set<String> known = java.util.concurrent.ConcurrentHashMap.newKeySet();
         IndexQuotas quotas = new IndexQuotas(new IndexQuotas.Config(
                 new IndexQuotas.Limit(10 * each, 0), Map.of(), 8, IDLE), clock,
-                known::contains, name -> java.util.List.of());
+                name -> known.contains(name) ? java.util.Optional.of(name)
+                        : java.util.Optional.empty(), name -> java.util.List.of());
 
         IndexQuotas.Ticket ticket = quotas.admit("late").ticket().orElseThrow();
         ticket.charge(records(4));
@@ -205,7 +209,8 @@ class IndexQuotasBoundTest {
     void aBoundDeferredTicketHoldsOneOfTheIndexsInFlightSlots() {
         Set<String> known = java.util.concurrent.ConcurrentHashMap.newKeySet();
         IndexQuotas quotas = new IndexQuotas(new IndexQuotas.Config(TEN_A_SECOND, Map.of(), 2,
-                IDLE), clock, known::contains, name -> java.util.List.of());
+                IDLE), clock, name -> known.contains(name) ? java.util.Optional.of(name)
+                        : java.util.Optional.empty(), name -> java.util.List.of());
 
         IndexQuotas.Ticket deferred = quotas.admit("late").ticket().orElseThrow();
         known.add("late");
@@ -230,7 +235,7 @@ class IndexQuotasBoundTest {
         IndexQuotas quotas = new IndexQuotas(new IndexQuotas.Config(IndexQuotas.Limit.UNLIMITED,
                 Map.of("a-alias", new IndexQuotas.Limit(0, 1),
                         "b-alias", new IndexQuotas.Limit(0, 100)), 8, IDLE),
-                clock, name -> true, name -> List.of("b-alias", "a-alias"));
+                clock, java.util.Optional::of, name -> List.of("b-alias", "a-alias"));
 
         IndexQuotas.Ticket ticket = quotas.admit("logs").ticket().orElseThrow();
         ticket.charge(records(2));

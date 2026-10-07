@@ -150,8 +150,10 @@ public final class FrontDoor implements AutoCloseable {
         LaneAdmission admission = new LaneAdmission(config.ingest().maxInFlightBulk(),
                 config.ingest().lanes());
         io.github.huyz0.os.biningester.ingest.IndexQuotas quotas = new io.github.huyz0.os.biningester.ingest.IndexQuotas(config.quotas(), clock,
-                // ⚠️ ONLY A REGISTERED INDEX GETS A BUCKET (M12.4)
-                name -> assembly.catalog().resolve(name).isPresent(),
+                // ⚠️ ONLY A REGISTERED INDEX GETS A BUCKET (M12.4), its CONCRETE
+                // name's, an alias resolved through it (M13.46)
+                name -> assembly.catalog().resolve(name)
+                        .map(io.github.huyz0.os.biningester.format.IndexRegistration::indexName),
                 // ⚠️ AN OVERRIDE NAMED BY AN ALIAS applies to its index (M12.13)
                 name -> assembly.catalog().resolve(name)
                         .map(io.github.huyz0.os.biningester.format.IndexRegistration::aliases)

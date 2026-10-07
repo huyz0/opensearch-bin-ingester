@@ -9,7 +9,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.Predicate;
 
 /**
  * Per-index admission quotas (M11.8, ADR-0078, ADR-0010 mechanism 1): two debt
@@ -118,7 +117,7 @@ public final class IndexQuotas {
 
     private final Config config;
     private final Clock clock;
-    private final Predicate<String> known;
+    private final java.util.function.Function<String, Optional<String>> concrete;
     private final java.util.function.Function<String, List<String>> aliases;
     /**
      * ⚠️ EVERY CHANGE TO A KEY's BUCKET IS A {@code compute} ON THAT KEY
@@ -135,12 +134,14 @@ public final class IndexQuotas {
     /** Quotas that refuse nothing: what a front door built without a configuration uses. */
     public static IndexQuotas none() {
         return new IndexQuotas(Config.none(),
-                Clock.fixed(java.time.Instant.EPOCH, java.time.ZoneOffset.UTC), name -> false,
-                name -> List.of());
+                Clock.fixed(java.time.Instant.EPOCH, java.time.ZoneOffset.UTC),
+                // ⚠️ EVERY NAME ITS OWN: with no quota every ticket is free at
+                // once, never a deferred one tallying for nothing (review P3)
+                Optional::of, name -> List.of());
     }
 
     /**
-     * Quotas over the indices {@code known} names (M12.4, M11 review F6).
+     * Quotas over the indices {@code concrete} resolves (M12.4, M11 review F6).
      *
      * <p>⚠️ ONLY A KNOWN INDEX GETS A BUCKET: with a default quota, a bucket per
      * name a producer sends -- and none ever removed -- grew with the names an
@@ -165,14 +166,25 @@ public final class IndexQuotas {
      * CONSTRUCTOR (M13.6a, M12 harvest R5): the three-argument one defaulted
      * the aliases to none, which is that same silent default by another door.
      *
+     * <p>⚠️ AND A NAME UNKNOWN AT ADMISSION IS RESOLVED WHEN IT BINDS (M13.46):
+     * to its concrete index and THAT index's limit, never the name as written
+     * or the limit it had when unknown. An alias written before its index
+     * registered bound a bucket of its own, whose debt refused nothing sent to
+     * the index; under an unlimited default it was waved through uncharged,
+     * an override on the index notwithstanding; and it carried the default
+     * where the index had an override.
+     *
+     * @param concrete the registered concrete index a name -- the index or one
+     *     of its aliases -- resolves to, or empty while it is unregistered
      * @param aliases the aliases naming a concrete index now; an override on
      *     the concrete name wins, then the first alias in sorted order
      */
-    public IndexQuotas(Config config, Clock clock, Predicate<String> known,
+    public IndexQuotas(Config config, Clock clock,
+            java.util.function.Function<String, Optional<String>> concrete,
             java.util.function.Function<String, List<String>> aliases) {
         this.config = Objects.requireNonNull(config, "config");
         this.clock = Objects.requireNonNull(clock, "clock");
-        this.known = Objects.requireNonNull(known, "known");
+        this.concrete = Objects.requireNonNull(concrete, "concrete");
         this.aliases = Objects.requireNonNull(aliases, "aliases");
     }
 
@@ -182,23 +194,29 @@ public final class IndexQuotas {
     }
 
     /**
-     * Admits one request to {@code index}, or says why not.
+     * Admits one request to {@code name} -- an index, one of its aliases, or a
+     * name not yet registered, which is resolved when its ticket binds -- or
+     * says why not.
      *
      * @return the admitted request's ticket, or the refusal
      */
-    public Admission admit(String index) {
-        Objects.requireNonNull(index, "index");
+    public Admission admit(String name) {
+        Objects.requireNonNull(name, "name");
+        Optional<String> registered = concrete.apply(name);
+        if (registered.isEmpty()) {
+            // ⚠️ NEVER FREE WHILE UNKNOWN (M13.46): its limit is its concrete
+            // index's, which is not known until it binds.
+            return new Admission(Optional.of(new DeferredTicket(name)), Optional.empty());
+        }
+        String index = registered.get();
         Limit limit = limitFor(index);
         if (limit.unlimited()) {
             return new Admission(Optional.of(FREE), Optional.empty());
         }
-        if (!known.test(index)) {
-            return new Admission(Optional.of(new DeferredTicket(index, limit)), Optional.empty());
-        }
         long now = clock.millis();
         sweepIdle(now);
         Admission[] admitted = new Admission[1];
-        buckets.compute(index, (name, bucket) -> {
+        buckets.compute(index, (key, bucket) -> {
             Bucket use = bucket != null ? bucket
                     : new Bucket(limit, config.maxInFlightPerIndex(), now);
             admitted[0] = use.admit(index, now);
@@ -362,21 +380,21 @@ public final class IndexQuotas {
      * what it is charged before that is tallied and charged on binding (M12.4).
      */
     private final class DeferredTicket implements Ticket {
-        private final String index;
-        private final Limit limit;
+        private final String name;
         private BucketTicket bound;
+        /** Bound to an unlimited index: charged nothing, held nothing. */
+        private boolean free;
         private boolean released;
         private long owedBytes;
         private long owedRecords;
 
-        DeferredTicket(String index, Limit limit) {
-            this.index = index;
-            this.limit = limit;
+        DeferredTicket(String name) {
+            this.name = name;
         }
 
         @Override
         public synchronized void charge(List<SegmentRecord> records) {
-            if (released) {
+            if (released || free) {
                 return;
             }
             owedBytes += framedBytes(records);
@@ -396,10 +414,24 @@ public final class IndexQuotas {
             }
         }
 
-        /** Binds once the name is known, and charges everything owed so far; caller holds this. */
+        /**
+         * Binds once the name is known -- to its CONCRETE index under that
+         * index's limit (M13.46) -- and charges everything owed so far; caller
+         * holds this.
+         */
         private void bindIfKnown() {
-            if (bound == null && known.test(index)) {
-                bound = enterAdmitted(index, limit);
+            if (bound == null && !free) {
+                Optional<String> registered = concrete.apply(name);
+                if (registered.isPresent()) {
+                    Limit limit = limitFor(registered.get());
+                    if (limit.unlimited()) {
+                        free = true;
+                        owedBytes = 0;
+                        owedRecords = 0;
+                    } else {
+                        bound = enterAdmitted(registered.get(), limit);
+                    }
+                }
             }
             if (bound != null && (owedBytes > 0 || owedRecords > 0)) {
                 bound.bucket.charge(owedBytes, owedRecords);

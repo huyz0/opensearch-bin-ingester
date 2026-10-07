@@ -69,24 +69,18 @@ Two facts constrain the mechanism:
      refused downstream.
    - **So the cap does not bound requests admitted during an index's
      registration window.** They bind past it; see § Consequences for how far.
-   - ⚠️ **A window write through an ALIAS binds a bucket keyed by the ALIAS,
-     not by its index.** At admission `concreteIndex` cannot resolve the
-     alias, so the name as sent is the key, and its limit is the alias's own
-     override, else the default. That bucket is not the index's: its debt
-     refuses nothing sent to the concrete name, and a write through an alias
-     does NOT then spend its index's bucket, contrary to the paragraph above.
-     This is a defect, opened as M13.46.
-   - ⚠️ **And under an UNLIMITED default, a window write through an alias is
-     not charged at all.** The limit is computed from the name as sent before
-     the name is known, and `admit` hands out a free ticket for an unlimited
-     limit. So an index with a quota only on its concrete name (for example,
-     a default of 0 and an override on `logs-000001`) takes its
-     registration-window writes through the alias `logs` uncharged: up to the
-     window's bound below, with no debt. The same limit-at-admission makes a
-     deferred ticket carry the default rather than the concrete name's
-     override under a non-zero default. M13.46 owns both: compute the limit
-     when the ticket binds, from the concrete name, and issue no free ticket
-     for a name unknown at admission.
+   - **A window write binds its CONCRETE index's bucket, at that index's
+     limit** (amended by M13.46). A name unknown at admission -- the index
+     or an alias written before it registered -- is never handed a free
+     ticket: its deferred ticket resolves the name when it binds, and takes
+     the concrete index's bucket under the concrete index's own limit (its
+     override, else an alias's in sorted order, else the default), or turns
+     free if that limit is unlimited. Before M13.46 the name as sent was the
+     key and the limit was read at admission: a window write through an
+     alias bound a bucket of its own, whose debt refused nothing sent to the
+     index; under an unlimited default it went uncharged, whatever override
+     its index carried; and under a non-zero default it carried the default
+     rather than the override.
    - **Idle buckets expire.** A bucket that is full, idle for the idle expiry
      (default 5 min) and has nothing in flight is dropped, swept at most once
      per expiry. A bucket in debt or holding a slot is never dropped, because
@@ -109,20 +103,13 @@ Two facts constrain the mechanism:
    (amended by M13.5 for M12.4: no bucket is made for an unknown name any
    more).
    - A bucket first made by a request admitted before its index was known
-     takes the limit computed AT ADMISSION, from the name as sent: that
-     name's own override, else the default. Its aliases are not known yet.
+     is made when that request's ticket binds, from the concrete index and
+     its own limit, alias-keyed overrides included (amended by M13.46;
+     decision 2a). Before, it took the limit read at admission from the name
+     as sent, so an override keyed only by an alias went unapplied to window
+     writes.
    - It keeps that limit until it expires idle, and a bucket expires only
      when full and idle, which a busy index may never be.
-   - ⚠️ **So an override keyed only by an alias can go unapplied**, whether
-     a window write names the concrete index or the alias:
-     - **The concrete index, under an unlimited default:** the window
-       requests go unquota'd (their ticket is free).
-     - **The concrete index, under a non-zero default:** the index's own
-       bucket is made at the default. The alias override then never applies
-       while the index stays busy. For example, a 1 MB/s alias override runs
-       at a 10 MB/s default, with no signal.
-     - **Through the alias:** the requests land in the alias-keyed bucket
-       (decision 2a, M13.46).
    **0 means
    unlimited, and is the default**, so a pod configured with nothing behaves
    exactly as before M11.
@@ -182,12 +169,11 @@ Two facts constrain the mechanism:
     at most the pod's in-flight budget (ADR-0074, 256 at the default) are
     alive when the registration lands. With a quota configured and that
     budget at its default, that is up to 256 more bodies of up to 256 MiB
-    each, charged past the cap -- or, through an alias under an unlimited
-    default, not charged at all (decision 2a, M13.46).
+    each, charged past the cap (before M13.46, through an alias under an
+    unlimited default, not charged at all; decision 2a).
   - **What the debt refuses.** Further requests to the SAME bucket are
-    refused until the debt is repaid. ⚠️ Debt charged to an alias-keyed
-    window bucket refuses nothing sent to the concrete name (decision 2a,
-    M13.46).
+    refused until the debt is repaid. A window write's debt is its concrete
+    index's, through an alias or not (decision 2a, amended by M13.46).
   - **The first chunk.** Each such request's first chunk, up to
     `APPEND_CHUNK_RECORDS` (1,000) records, is charged to its ticket before
     the registration wait and reaches the bucket when the ticket binds.
