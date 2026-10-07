@@ -80,6 +80,12 @@ class PartitionVisibilityIT {
                 assertThat(bucket.lease().orElseThrow().holderPodId())
                         .as("the premise: the leader owns the slot").isEqualTo("pod0");
 
+                // ⚠️ NO REPLAY OF WHAT TIMED OUT DURING THE CUT (M13.45): held
+                // connections were all delivered at the heal, and every drain and
+                // forward abandoned during the partition reached the leader ahead
+                // of the trigger's -- one of them applying its deferred intent by
+                // luck. A connect into a real partition never completes.
+                leader.peers().dropAbandonedAtHeal();
                 leader.peers().cut();
                 long writesStartedAt = System.nanoTime();
                 Set<String> expected = writeDuringPartition(followers, inboxSize);
@@ -137,6 +143,10 @@ class PartitionVisibilityIT {
                 // trigger's 202, so it could not fail -- and polled concurrently an
                 // M=10 inbox empties BEFORE its forwarded trigger's 202, so it is
                 // not a property either. The M13.3 line reports what each includes.
+                // ⚠️ RED UNTIL M13.78 (M13.45): a drain outlasting the forward
+                // timeout completes on the leader, and the trigger deferred after
+                // it waits for the pod's NEXT write, which never comes here --
+                // at M=1,000 in every run since, at M=10 in one of eight.
                 assertThat(remaining)
                         .withFailMessage("inbox still contains %s; leader log:%n%s", remaining,
                                 leader.log())

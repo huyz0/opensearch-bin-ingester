@@ -350,6 +350,9 @@ public final class NodeProcess implements AutoCloseable {
                 .readTimeout(readTimeout).build();
     }
 
+    private final java.util.Map<java.time.Duration, WebClient> timedClients =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
     private WebClient producerClient() {
         return producerClients.get();
     }
@@ -406,7 +409,21 @@ public final class NodeProcess implements AutoCloseable {
             body.append("{\"index\":{\"_id\":\"").append(idPrefix).append('-').append(i)
                     .append("\",\"_version\":1}}\n{\"n\":").append(i).append("}\n");
         }
-        try (var response = newClient(readTimeout).post("/logs/_bulk").queryParam("partition", "0")
+        // ⚠️ ONE CLIENT PER TIMEOUT, AND NO KEEP-ALIVE (M13.45): a thousand
+        // partitioned writes each left a keep-alive client behind, and a pooled
+        // connection the node had closed failed its reuse with Helidon's
+        // "Exception in socket monitor thread" (its idle monitor; M10.36's
+        // Helidon 4.3.0 race) -- a write lost to the harness, not the node.
+        // So every timed write opens its own connection, LowRateWriteBudgetIT's
+        // included; the node's object-store requests do not depend on it.
+        WebClient client = timedClients.computeIfAbsent(readTimeout, timeout ->
+                WebClient.builder().baseUri("http://localhost:" + port)
+                        .proxy(io.helidon.webclient.api.Proxy.noProxy())
+                        .socketOptions(options -> options.socketSendBufferSize(
+                                PRODUCER_SOCKET_SEND_BUFFER_BYTES))
+                        .connectTimeout(java.time.Duration.ofSeconds(2))
+                        .readTimeout(timeout).keepAlive(false).build());
+        try (var response = client.post("/logs/_bulk").queryParam("partition", "0")
                 .submit(body.toString())) {
             return response.status().code();
         }
