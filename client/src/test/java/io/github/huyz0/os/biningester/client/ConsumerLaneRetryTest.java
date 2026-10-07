@@ -127,10 +127,10 @@ class ConsumerLaneRetryTest {
      * does so at exactly its own; and neither lane is fetched more than its
      * budget before it surfaces, so the window is at most 2 x maxAttempts.
      *
-     * <p>⚠️ WHICHEVER LANE THE QUEUE SERVES (M13.12 review T2): today a failing
-     * live segment takes every turn and the catch-up waits; a fairer order
-     * would let the due catch-up surface first. Both are within the budgets,
-     * so this counts per lane at each lane's own surfacing, not in total.
+     * <p>⚠️ WHICHEVER LANE THE QUEUE SERVES (M13.12 review T2): since M13.47 a
+     * due catch-up takes the turn of a backing-off live head, where before the
+     * catch-up waited. Both are within the budgets, so this counts per lane at
+     * each lane's own surfacing, not in total.
      */
     @Test
     void eachLaneSpendsItsOwnMaxAttemptsBeforeAFailureSurfaces() throws Exception {

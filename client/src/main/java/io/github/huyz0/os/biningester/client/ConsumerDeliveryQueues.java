@@ -30,6 +30,8 @@ final class ConsumerDeliveryQueues {
     private final Decoder decoder;
     /** Whether the catch-up lane is backing off and not yet due (M12.26). */
     private final java.util.function.BooleanSupplier catchUpBackingOff;
+    /** Whether the live lane is backing off and not yet due (M13.47). */
+    private final java.util.function.BooleanSupplier liveBackingOff;
     private int liveRecordsSinceCatchUp;
     private volatile boolean livePausedForGap;
     private volatile java.util.UUID gapReplayRequestId;
@@ -40,24 +42,32 @@ final class ConsumerDeliveryQueues {
      * M12.26's quantum hand-over for any queue built through it.
      */
     ConsumerDeliveryQueues(int capacity, Decoder decoder,
-            java.util.function.BooleanSupplier catchUpBackingOff) {
+            java.util.function.BooleanSupplier catchUpBackingOff,
+            java.util.function.BooleanSupplier liveBackingOff) {
         live = new ArrayBlockingQueue<>(capacity);
         catchUp = new CatchUpDeliveryLane(capacity, deliveryLock, deliveryAvailable);
         this.decoder = decoder;
         this.catchUpBackingOff = catchUpBackingOff;
+        this.liveBackingOff = liveBackingOff;
     }
 
     /**
      * Whether the catch-up lane's quantum turn has come: the live quantum is
-     * served, and the catch-up is not backing off.
+     * served or live is backing off, and the catch-up is not backing off.
      *
      * <p>⚠️ A BACKING-OFF CATCH-UP GIVES ITS TURN BACK TO LIVE (M12.26): its
      * backoff otherwise escaped {@code readNext} before live was tried, and
      * live waited out every catch-up backoff until the catch-up gave up. It
      * keeps its turn: the next read once it is due loads it first.
+     *
+     * <p>⚠️ AND A BACKING-OFF LIVE HEAD GIVES ITS TURN TO THE CATCH-UP (M13.47),
+     * the mirror: a failing live head serves no record while it stays pending,
+     * so its quantum never filled and a due catch-up was never loaded while
+     * live failed.
      */
     private boolean catchUpTurn() {
-        return liveRecordsSinceCatchUp >= ConsumerClient.LIVE_RECORD_QUANTUM
+        return (liveRecordsSinceCatchUp >= ConsumerClient.LIVE_RECORD_QUANTUM
+                        || liveBackingOff.getAsBoolean())
                 && !catchUpBackingOff.getAsBoolean();
     }
 

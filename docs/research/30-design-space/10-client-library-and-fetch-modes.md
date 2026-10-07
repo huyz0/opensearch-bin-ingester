@@ -219,8 +219,8 @@ mode**. That is the property that makes shipping all three safe.
 >   twice the attempts one shared counter allowed before both surface (pinned per lane by M13.12).
 > - **A backing-off catch-up yields its quantum turn to live** (M12.26), which needs a HOST CLOCK:
 >   a backoff paid only by the waiting reader starves the lane that yields.
-> - ⚠️ **The reverse is open (M13.47):** a failing live segment takes every turn, so a due catch-up
->   is not loaded while live keeps failing.
+> - **And a backing-off live head yields its turn to a due catch-up** (M13.47), the mirror: a failing
+>   live segment served no record, so its quantum never filled and the catch-up waited for it.
 
 > ⚠️ **REVISION 2026-09-14 (ADR-0044): the conclusion holds, the reason given for it does not.**
 > Every degradation path in the table above is a **whole-object** read. "Ignore it and fetch by
