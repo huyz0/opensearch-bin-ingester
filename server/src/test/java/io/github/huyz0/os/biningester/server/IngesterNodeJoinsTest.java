@@ -109,8 +109,12 @@ class IngesterNodeJoinsTest {
 
         await().atMost(Duration.ofSeconds(20)).until(() -> listed("uid-pod2").isPresent());
         assertThat(listed("uid-pod2").orElseThrow().state()).isEqualTo(Roster.State.ROSTERED);
-        assertThat(leader.crossAzBytes().crossAzBytes(CrossAzBytes.Transport.FAST_CONTROL))
-                .as("the JOINED sent to az-b").isPositive();
+        // ⚠️ AWAITED, NOT READ AT ONCE (M13.77): the leader writes the roster
+        // while it answers the JOIN, and counts the JOINED's bytes only once
+        // the answer is encoded -- after the roster already lists the follower.
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertThat(
+                leader.crossAzBytes().crossAzBytes(CrossAzBytes.Transport.FAST_CONTROL))
+                .as("the JOINED sent to az-b").isPositive());
         assertThat(follower.crossAzBytes().crossAzBytes(CrossAzBytes.Transport.FAST_CONTROL))
                 .as("the JOIN sent to az-a").isPositive();
     }
