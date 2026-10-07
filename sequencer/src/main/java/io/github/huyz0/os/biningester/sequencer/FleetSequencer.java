@@ -312,14 +312,21 @@ public final class FleetSequencer implements Sequencer {
             skipAsks--;
             return;
         }
+        Sequencer mine = leadership.heldWithoutElecting();
         try {
-            Sequencer mine = leadership.heldWithoutElecting();
             if (mine != null) {
                 drainHeld(mine);
             } else {
                 remote.drain();
             }
             drainedUpTo(seen);
+        } catch (FencedException termGone) {
+            // ⚠️ PUT DOWN, AS A COMMIT's FENCE IS (M13.81): left held, an idle
+            // pod would drain its dead term every interval and never ask the
+            // pod that holds the lease now.
+            if (mine != null) {
+                leadership.retire(mine, termGone);
+            }
         } catch (SequencerTransport.DrainFailedException answered) {
             failedAsks = Math.min(failedAsks + 1, 31);
             skipAsks = (int) Math.min((1L << (failedAsks - 1)) - 1, MAX_SKIPPED_ASKS);
@@ -340,8 +347,8 @@ public final class FleetSequencer implements Sequencer {
 
     /**
      * This pod's own drain of the term it holds, its failure an answered one --
-     * ⚠️ except a fence (review P3): the term is gone, and the next interval
-     * should ask the new leaseholder rather than back off.
+     * ⚠️ except a fence (review P3): the term is gone, and is retired so the
+     * next interval asks the new leaseholder rather than backing off.
      */
     private void drainHeld(Sequencer mine) throws IOException {
         try {

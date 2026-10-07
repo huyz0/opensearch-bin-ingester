@@ -259,8 +259,9 @@ public final class LocalSequencer implements Sequencer {
      * <p>⚠️ **HELD IS NOT THE SAME AS SERVING, AND GC IS WHERE THE DIFFERENCE
      * DELETES DATA.** {@code FleetSequencer.heldTerm()} keeps returning a term
      * after its renewer has fenced it: the term is retired only when a COMMIT
-     * through it throws, so a node that receives no writes keeps a dead term
-     * indefinitely. Its chain is then frozen at the takeover while the
+     * through it throws, or a deferring pod's retry drain through it is fenced
+     * (M13.81), so a node that receives no writes and defers nothing keeps a
+     * dead term indefinitely. Its chain is then frozen at the takeover while the
      * successor keeps committing. A retention loop that read that chain as the
      * orphan sweep's keep list would list the successor's hours, find its
      * committed segments in no delta, and delete them -- with the GC lease
