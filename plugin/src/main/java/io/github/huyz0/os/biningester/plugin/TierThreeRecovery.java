@@ -36,15 +36,30 @@ final class TierThreeRecovery {
 
     record Gap(long expectedOffset, long receivedOffset) { }
 
-    private record PendingEvent(long epoch, long sequence, RunCommit run, String segmentKey,
-            byte[] segment) {
+    private record PendingEvent(long epoch, long sequence, RunKey key, long firstOffset,
+            int count, String segmentKey, byte[] segment, boolean voided) {
         SubscriptionEvent toEvent() {
-            return new SubscriptionEvent(UUID.randomUUID().toString(), epoch, 1, run.key(),
-                    segmentKey, run.firstOffset(), run.recordCount(), FetchMode.INLINE, segment,
+            if (voided) {
+                return SubscriptionEvent.voidRange(UUID.randomUUID().toString(), epoch, 1, key,
+                        firstOffset, count, sequence);
+            }
+            return new SubscriptionEvent(UUID.randomUUID().toString(), epoch, 1, key,
+                    segmentKey, firstOffset, count, FetchMode.INLINE, segment,
                     null, SubscriptionEvent.RANGE_ABSENT, SubscriptionEvent.RANGE_ABSENT,
                     sequence);
         }
     }
+
+    /** What one chain slot commits: its segments, and a recovery's voids. */
+    private record Slot(List<SegmentCommit> segments,
+            List<io.github.huyz0.os.biningester.format.Recovery.VoidRange> voids) { }
+
+    /**
+     * One thing a slot commits for a gap's stream, at its first offset: a run
+     * of a segment, or a void ({@code segment} null).
+     */
+    private record Item(RunKey key, long firstOffset, SegmentCommit segment, RunCommit run,
+            io.github.huyz0.os.biningester.format.Recovery.VoidRange voidRange) { }
 
     interface Reader {
         OptionalLong stat(String bucket, String prefix, String key) throws IOException;
@@ -144,14 +159,19 @@ final class TierThreeRecovery {
         Map<RunKey, Long> covered = new HashMap<>();
         gaps.forEach((key, gap) -> covered.put(key, gap.expectedOffset()));
         for (long sequence = checkpoint.sequence(); sequence <= throughSequence; sequence++) {
-            Optional<List<SegmentCommit>> commits = commits(epoch, sequence, budget,
-                    recoveryAllowed);
-            if (commits.isEmpty()) {
+            Optional<Slot> slot = commits(epoch, sequence, budget, recoveryAllowed);
+            if (slot.isEmpty()) {
                 return Optional.empty();
             }
-            for (SegmentCommit segment : commits.orElseThrow()) {
-                if (!appendRelevantRuns(epoch, sequence, segment, gaps, covered, segments,
-                        events, budget, recoveryAllowed)) {
+            // ⚠️ RUNS AND VOIDS TOGETHER, EACH STREAM IN OFFSET ORDER (M13.25g):
+            // a takeover's recovery may void a hole before a run it commits,
+            // and the walk advances a stream only from where it stands.
+            for (Item item : relevantItems(slot.orElseThrow(), gaps)) {
+                boolean appended = item.segment() == null
+                        ? appendVoid(epoch, sequence, item, gaps, covered, events)
+                        : appendRun(epoch, sequence, item.segment(), item.run(), gaps, covered,
+                                segments, events, budget, recoveryAllowed);
+                if (!appended) {
                     return Optional.empty();
                 }
             }
@@ -173,7 +193,7 @@ final class TierThreeRecovery {
      * whole repair, so no gap on any stream with such an entry in its window
      * could ever be repaired.
      */
-    private Optional<List<SegmentCommit>> commits(long epoch, long sequence, Budget budget,
+    private Optional<Slot> commits(long epoch, long sequence, Budget budget,
             BooleanSupplier recoveryAllowed) throws IOException {
         String key = String.format(java.util.Locale.ROOT,
                 "%s/ctl/log/0/%016x/%016x.delta", prefix, epoch, sequence);
@@ -185,50 +205,86 @@ final class TierThreeRecovery {
         // a gap over it is repaired from its commits as from a delta's.
         return switch (ChainEntry.decode(bytes.orElseThrow())) {
             case CommitDelta d -> d.sequence() == sequence
-                    ? Optional.of(d.segments()) : Optional.empty();
+                    ? Optional.of(new Slot(d.segments(), List.of())) : Optional.empty();
             case io.github.huyz0.os.biningester.format.Recovery recovery ->
                     recovery.sequence() == sequence
-                            ? Optional.of(recovery.segments()) : Optional.empty();
+                            ? Optional.of(new Slot(recovery.segments(), recovery.voids()))
+                            : Optional.empty();
             case io.github.huyz0.os.biningester.format.Seal ignored -> Optional.empty();
             case io.github.huyz0.os.biningester.format.Continue ignored -> Optional.empty();
         };
     }
 
-    private boolean appendRelevantRuns(long epoch, long sequence, SegmentCommit segment,
+    /** The runs and voids of {@code slot} overlapping a gap, each stream in offset order. */
+    private static List<Item> relevantItems(Slot slot, Map<RunKey, Gap> gaps) {
+        List<Item> items = new ArrayList<>();
+        for (SegmentCommit segment : slot.segments()) {
+            for (RunCommit run : segment.runs()) {
+                if (gaps.containsKey(run.key()) && overlaps(run, gaps.get(run.key()))) {
+                    items.add(new Item(run.key(), run.firstOffset(), segment, run, null));
+                }
+            }
+        }
+        for (var range : slot.voids()) {
+            Gap gap = gaps.get(range.key());
+            if (gap != null && range.fromOffset() < gap.receivedOffset()
+                    && range.toOffsetExclusive() > gap.expectedOffset()) {
+                items.add(new Item(range.key(), range.fromOffset(), null, null, range));
+            }
+        }
+        items.sort(java.util.Comparator.comparing((Item item) -> item.key().toString())
+                .thenComparingLong(Item::firstOffset));
+        return items;
+    }
+
+    /**
+     * Covers a void's part of a gap with a void event (M13.25g): no segment is
+     * read, and the part before the stream's coverage was covered already.
+     */
+    private static boolean appendVoid(long epoch, long sequence, Item item, Map<RunKey, Gap> gaps,
+            Map<RunKey, Long> covered, List<PendingEvent> events) {
+        var range = item.voidRange();
+        long next = covered.get(range.key());
+        if (range.fromOffset() > next) {
+            return false;
+        }
+        long end = Math.min(range.toOffsetExclusive(), gaps.get(range.key()).receivedOffset());
+        if (end <= next) {
+            return true;
+        }
+        events.add(new PendingEvent(epoch, sequence, range.key(), next,
+                Math.toIntExact(end - next), null, null, true));
+        covered.put(range.key(), end);
+        return true;
+    }
+
+    private boolean appendRun(long epoch, long sequence, SegmentCommit segment, RunCommit run,
             Map<RunKey, Gap> gaps, Map<RunKey, Long> covered, Map<String, byte[]> segments,
             List<PendingEvent> events, Budget budget, BooleanSupplier recoveryAllowed)
             throws IOException {
-        List<RunCommit> relevant = segment.runs().stream()
-                .filter(run -> gaps.containsKey(run.key()))
-                .filter(run -> overlaps(run, gaps.get(run.key())))
-                .toList();
-        if (relevant.isEmpty()) {
-            return true;
-        }
         Optional<SegmentReader> parsed = segment(segment.segmentKey(), segments, budget,
                 recoveryAllowed);
         if (parsed.isEmpty()) {
             return false;
         }
-        for (RunCommit run : relevant) {
-            var entry = parsed.orElseThrow().find(run.key());
-            if (entry.isEmpty() || entry.orElseThrow().recordCount() != run.recordCount()) {
-                return false;
-            }
-            parsed.orElseThrow().read(entry.orElseThrow());
-            long next = covered.get(run.key());
-            long end = Math.addExact(run.firstOffset(), run.recordCount());
-            if (run.firstOffset() != next || end > gaps.get(run.key()).receivedOffset()) {
-                return false;
-            }
-            events.add(new PendingEvent(epoch, sequence, run, segment.segmentKey(),
-                    segments.get(segment.segmentKey())));
-            if (!budget.reserveRetained(Math.multiplyExact(
-                    (long) segments.get(segment.segmentKey()).length, 2L))) {
-                return false;
-            }
-            covered.put(run.key(), end);
+        var entry = parsed.orElseThrow().find(run.key());
+        if (entry.isEmpty() || entry.orElseThrow().recordCount() != run.recordCount()) {
+            return false;
         }
+        parsed.orElseThrow().read(entry.orElseThrow());
+        long next = covered.get(run.key());
+        long end = Math.addExact(run.firstOffset(), run.recordCount());
+        if (run.firstOffset() != next || end > gaps.get(run.key()).receivedOffset()) {
+            return false;
+        }
+        events.add(new PendingEvent(epoch, sequence, run.key(), run.firstOffset(),
+                run.recordCount(), segment.segmentKey(), segments.get(segment.segmentKey()),
+                false));
+        if (!budget.reserveRetained(Math.multiplyExact(
+                (long) segments.get(segment.segmentKey()).length, 2L))) {
+            return false;
+        }
+        covered.put(run.key(), end);
         return true;
     }
 
