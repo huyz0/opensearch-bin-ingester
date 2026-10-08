@@ -136,10 +136,23 @@ import java.util.Objects;
  *     {@code byteStart} -- the two are absent together or present together
  * @param chainSequence the commit-chain sequence in v4, or
  *     {@link #CHAIN_SEQUENCE_ABSENT} for v1-v3 and unsequenced fixtures
+ * @param voided whether {@code [firstOffset, firstOffset + recordCount)} is a
+ *     VOID -- a committed hole no record will ever hold (M13.25e, ADR-0082
+ *     §5) -- rather than records. ⚠️ A VOID IS v5 AND NOTHING ELSE IS, so an
+ *     event that is not a void keeps its v1-v4 bytes; see {@link #voidRange}
  */
 public record SubscriptionEvent(String session, long sequencerEpoch, long sessionEpoch,
         RunKey key, String segmentKey, long firstOffset, int recordCount, FetchMode via,
-        byte[] inline, Grant grant, long byteStart, long byteLen, long chainSequence) {
+        byte[] inline, Grant grant, long byteStart, long byteLen, long chainSequence,
+        boolean voided) {
+
+    /** An event of records, as every event was before voids (M13.25e). */
+    public SubscriptionEvent(String session, long sequencerEpoch, long sessionEpoch,
+            RunKey key, String segmentKey, long firstOffset, int recordCount, FetchMode via,
+            byte[] inline, Grant grant, long byteStart, long byteLen, long chainSequence) {
+        this(session, sequencerEpoch, sessionEpoch, key, segmentKey, firstOffset, recordCount,
+                via, inline, grant, byteStart, byteLen, chainSequence, false);
+    }
 
     /** What a v1-v3 frame carries when the commit-chain sequence is absent. */
     public static final long CHAIN_SEQUENCE_ABSENT = -1L;
@@ -213,6 +226,27 @@ public record SubscriptionEvent(String session, long sequencerEpoch, long sessio
     public static final int VERSION_4 = 4;
 
     /**
+     * A void (M13.25e): a v4 body, then one byte, {@code 1}.
+     *
+     * <p>⚠️ ONLY A VOID IS v5, so no existing event's bytes move, and a reader
+     * built before it REFUSES the version rather than reading a hole as
+     * records -- refusing is the safe direction, and readers ship first.
+     */
+    public static final int VERSION_5 = 5;
+
+    /**
+     * A void of {@code count} offsets from {@code fromOffset}: no segment, no
+     * bytes, no grant, under the chain sequence of the recovery entry that
+     * committed it.
+     */
+    public static SubscriptionEvent voidRange(String session, long sequencerEpoch,
+            long sessionEpoch, RunKey key, long fromOffset, int count, long chainSequence) {
+        return new SubscriptionEvent(session, sequencerEpoch, sessionEpoch, key, "", fromOffset,
+                count, FetchMode.INLINE, new byte[0], null, RANGE_ABSENT, RANGE_ABSENT,
+                chainSequence, true);
+    }
+
+    /**
      * What a v1 event's session epoch reads as: there was no such field.
      *
     ABSENT IS NOT ZERO-THE-NUMBER. Collapsing the two would
@@ -243,7 +277,8 @@ public record SubscriptionEvent(String session, long sequencerEpoch, long sessio
         Objects.requireNonNull(via, "via");
         Objects.requireNonNull(inline, "inline");
         SubscriptionEventValidation.validate(session, sequencerEpoch, sessionEpoch,
-                firstOffset, recordCount, via, inline, grant, byteStart, byteLen, chainSequence);
+                firstOffset, recordCount, via, inline, grant, byteStart, byteLen, chainSequence,
+                segmentKey, voided);
         inline = inline.clone();
     }
 
@@ -295,13 +330,14 @@ public record SubscriptionEvent(String session, long sequencerEpoch, long sessio
                 // golden files assert exactly that way, so a decoder that
                 // dropped the grant would still have matched.
                 && Objects.equals(grant, that.grant)
-                && byteStart == that.byteStart && byteLen == that.byteLen;
+                && byteStart == that.byteStart && byteLen == that.byteLen
+                && voided == that.voided;
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(session, sequencerEpoch, sessionEpoch, chainSequence, key, segmentKey,
-                firstOffset, recordCount, via, grant, byteStart, byteLen)
+                firstOffset, recordCount, via, grant, byteStart, byteLen, voided)
                 * 31 + java.util.Arrays.hashCode(inline);
     }
 
@@ -326,6 +362,7 @@ public record SubscriptionEvent(String session, long sequencerEpoch, long sessio
                 + ", key=" + key
                 + ", segmentKey=" + segmentKey + ", firstOffset=" + firstOffset
                 + ", recordCount=" + recordCount + ", via=" + via
+                + (voided ? ", voided" : "")
                 + ", inline=" + inline.length + " bytes"
                 // ⚠️ THE GRANT PRINTS THROUGH ITS OWN REDACTION, so the URL
                 // never reaches this line -- `Grant.toString` is the whole
@@ -382,7 +419,8 @@ public record SubscriptionEvent(String session, long sequencerEpoch, long sessio
         boolean carriesSessionEpoch = carriesGrant || sessionEpoch != SESSION_EPOCH_ABSENT;
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         boolean carriesChainSequence = chainSequence != CHAIN_SEQUENCE_ABSENT;
-        int version = carriesChainSequence ? VERSION_4
+        int version = voided ? VERSION_5
+                : carriesChainSequence ? VERSION_4
                 : carriesGrant ? VERSION_3
                 : carriesSessionEpoch ? VERSION_2 : VERSION_1;
         out.writeBytes(header(version));
@@ -437,6 +475,9 @@ public record SubscriptionEvent(String session, long sequencerEpoch, long sessio
         if (carriesChainSequence) {
             SegmentWriter.putUvarint(out, chainSequence);
         }
+        if (voided) {
+            out.write(1);
+        }
         return out.toByteArray();
     }
 
@@ -466,7 +507,7 @@ public record SubscriptionEvent(String session, long sequencerEpoch, long sessio
         }
         int version = b.getInt(4);
         if (version != VERSION_1 && version != VERSION_2 && version != VERSION_3
-                && version != VERSION_4) {
+                && version != VERSION_4 && version != VERSION_5) {
             // ⚠️ REFUSED, NOT SKIPPED -- see the class javadoc. A consumer that
             // ignored an event it could not read would report a clean stream
             // while losing records.
@@ -496,6 +537,11 @@ public record SubscriptionEvent(String session, long sequencerEpoch, long sessio
         // `wire-format-change`'s "ship the read side first" that is reachable
         // in one commit: a reader built today parses what a v1 writer produced,
         // and a v1 event's session epoch reads as ABSENT rather than as zero.
+        // ⚠️ v5 IS A v4 BODY THEN ITS VOID BYTE (M13.25e): read as v4 to the end.
+        boolean voided = version == VERSION_5;
+        if (voided) {
+            version = VERSION_4;
+        }
         long sessionEpoch = version == VERSION_2 || version == VERSION_3 || version == VERSION_4
                 ? c.uvarint()
                 : SESSION_EPOCH_ABSENT;
@@ -569,6 +615,12 @@ public record SubscriptionEvent(String session, long sequencerEpoch, long sessio
         if (version == VERSION_4 && chainSequence < 0) {
             throw new IOException("chain sequence is not non-negative");
         }
+        if (voided) {
+            int voidByte = c.bytes(1)[0] & 0xff;
+            if (voidByte != 1) {
+                throw new IOException("a version 5 event's void byte is 1, got " + voidByte);
+            }
+        }
         // ⚠️ TRAILING BYTES ARE A REFUSAL, matching every other decoder here:
         // `ChainEntry`, `Checkpoint` and `SegmentReader` all end with this
         // check. Bytes after a complete event mean the sender and this reader
@@ -607,7 +659,7 @@ public record SubscriptionEvent(String session, long sequencerEpoch, long sessio
             return new SubscriptionEvent(session, sequencerEpoch, sessionEpoch,
                     new RunKey(new java.util.UUID(indexHi, indexLo), (int) partition), segmentKey,
                     firstOffset, (int) recordCount, mode, inline, grant, byteStart, byteLen,
-                    chainSequence);
+                    chainSequence, voided);
         } catch (IllegalArgumentException malformed) {
             // ⚠️ The constructor's invariants are the FORMAT's invariants, so a
             // violation arriving over the wire is a parse failure rather than a

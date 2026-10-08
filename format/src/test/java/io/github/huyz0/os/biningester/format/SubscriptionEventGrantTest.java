@@ -352,10 +352,11 @@ class SubscriptionEventGrantTest {
     @Test
     void anUNKNOWNVersionIsREFUSEDNotSkipped() throws Exception {
         byte[] v3 = event(GRANT, 4_096L, 65_536L).encode();
-        v3[7] = 5;
+        // ⚠️ 6, NOT 5: version 5 is a void since M13.25e.
+        v3[7] = 6;
 
         assertThatThrownBy(() -> SubscriptionEvent.decode(v3))
                 .isInstanceOf(java.io.IOException.class)
-                .hasMessageContaining("unsupported subscription event version: 5");
+                .hasMessageContaining("unsupported subscription event version: 6");
     }
 }

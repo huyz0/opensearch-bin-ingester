@@ -59,7 +59,7 @@ final class GapTracker {
      * the gap to report once the lock is released, and whether the commit was
      * undone because a race made it one the check did not foresee.
      */
-    record Commit(boolean decode, GapReport report, boolean undone) {
+    record Commit(boolean decode, GapReport report, boolean undone, long covered) {
     }
 
     /**
@@ -133,6 +133,7 @@ final class GapTracker {
      */
     Commit commit(Delivery delivery, boolean replay, boolean decoded) {
         synchronized (offsetLock) {
+            long before = expectedNextOffset;
             Reported reported = reportAnyGap(delivery, replay);
             boolean decode = reported.decode();
             GapReport report = reported.report();
@@ -151,9 +152,15 @@ final class GapTracker {
                 // unrecoverable (research 02 §6; review R2).
                 // ⚠️ AND UNDER THE LOCK THE COMMIT TOOK (M12.17, M11.13 R4).
                 expectedNextOffset = delivery.firstOffset();
-                return new Commit(false, null, true);
+                return new Commit(false, null, true, 0);
             }
-            return new Commit(decode, report, false);
+            // ⚠️ WHAT THIS COMMIT NEWLY COVERS, not the delivery's width: a
+            // replay re-delivers offsets the live lane already committed
+            // (M13.25e review P2), and those were counted there.
+            long from = before < 0 ? delivery.firstOffset()
+                    : Math.max(before, delivery.firstOffset());
+            long covered = decode ? Math.max(0, expectedNextOffset - from) : 0;
+            return new Commit(decode, report, false, covered);
         }
     }
 

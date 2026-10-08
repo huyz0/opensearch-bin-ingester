@@ -215,7 +215,10 @@ final class ConsumerDeliveryQueues {
     }
 
     private void loadAfterWake() {
-        if (livePausedForGap) {
+        // ⚠️ AND WHILE A GAP REPLAY RUNS (M13.25e): a void moves the expected
+        // offset onto the held live tail while the replay's own copy of it is
+        // still queued, and the live copy decoded here was read twice.
+        if (livePausedForGap || gapReplayRequestId != null) {
             if (!tryLoadCatchUp(true)) {
                 // The wake may have belonged to a queued live delivery. Keep
                 // its shared permit available until the gap replay releases it.
@@ -334,6 +337,9 @@ final class ConsumerDeliveryQueues {
                 throw new IllegalStateException("catch-up delivery queue head changed");
             }
         }
+        // ⚠️ A VOID HANDS OFF NO RECORD, so its reservation is released here,
+        // once committed, or the exchange never completes (M13.25e review P1).
+        catchUp.settle(delivery);
         return true;
     }
 }

@@ -7,7 +7,8 @@ final class SubscriptionEventValidation {
 
     static void validate(String session, long sequencerEpoch, long sessionEpoch,
             long firstOffset, int recordCount, FetchMode via, byte[] inline,
-            Grant grant, long byteStart, long byteLen, long chainSequence) {
+            Grant grant, long byteStart, long byteLen, long chainSequence,
+            String segmentKey, boolean voided) {
         if (session.isBlank()) {
             throw new IllegalArgumentException("a blank session identifies no subscription");
         }
@@ -27,7 +28,27 @@ final class SubscriptionEventValidation {
         }
         validateGrantAndRange(sessionEpoch, grant, byteStart, byteLen);
         validateOffsets(firstOffset, recordCount);
-        validateFetchMode(via, inline);
+        if (voided) {
+            validateVoid(via, inline, grant, chainSequence, segmentKey);
+        } else {
+            validateFetchMode(via, inline);
+        }
+    }
+
+    /**
+     * A void names no segment and carries nothing, under a chain sequence
+     * (M13.25e): v5 is a v4 body, so it needs what v4 needs.
+     */
+    private static void validateVoid(FetchMode via, byte[] inline, Grant grant,
+            long chainSequence, String segmentKey) {
+        if (via != FetchMode.INLINE || inline.length > 0 || grant != null
+                || !segmentKey.isEmpty()) {
+            throw new IllegalArgumentException("a void carries no segment, bytes or grant");
+        }
+        if (chainSequence == SubscriptionEvent.CHAIN_SEQUENCE_ABSENT) {
+            throw new IllegalArgumentException(
+                    "a void is committed by a chain entry, so it carries its sequence");
+        }
     }
 
     private static void validateGrantAndRange(long sessionEpoch, Grant grant,

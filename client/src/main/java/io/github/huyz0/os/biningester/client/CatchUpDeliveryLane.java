@@ -108,6 +108,21 @@ final class CatchUpDeliveryLane {
         return record;
     }
 
+    /**
+     * Releases what {@code taken} reserved and will never hand off: a void's
+     * offsets, which decode to no record (M13.25e). ⚠️ AFTER ITS COMMIT, never
+     * at reservation: released early, the exchange completed before the void
+     * was committed, and the live tail met the hole as a gap again.
+     */
+    synchronized void settle(Delivery taken) {
+        if (taken.voided()) {
+            if (pendingRecords < taken.recordCount()) {
+                throw new IllegalStateException("catch-up record accounting underflow");
+            }
+            pendingRecords -= taken.recordCount();
+        }
+    }
+
     int queuedDeliveries() {
         return deliveries.size();
     }

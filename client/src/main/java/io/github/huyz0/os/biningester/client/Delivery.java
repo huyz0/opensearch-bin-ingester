@@ -48,12 +48,25 @@ import java.util.Objects;
  * demand a mode. That is rung 1 of the gate-design ladder rather than a
  * documented rule: a consumer that could demand `direct` at fan-out 300 would
  * reproduce the $3,732/month design ADR-0004 rejected.
+ *
+ * <p>⚠️ {@code voided} MARKS A HOLE, NOT RECORDS (M13.25e, ADR-0082 §5): the
+ * chain committed {@code [firstOffset, firstOffset + recordCount)} as a void,
+ * so the consumer decodes nothing for it, counts it, and expects the next
+ * offset after it -- never reporting it as records lost upstream.
  */
 public record Delivery(RunKey key, String segmentKey, int recordCount, long firstOffset,
         FetchMode via, byte[] segment, io.github.huyz0.os.biningester.format.Grant grant,
-        long sequencerEpoch, long chainSequence) {
+        long sequencerEpoch, long chainSequence, boolean voided) {
 
     public static final long CHAIN_SEQUENCE_UNKNOWN = -1L;
+
+    /** A delivery of records, as every delivery was before voids (M13.25e). */
+    public Delivery(RunKey key, String segmentKey, int recordCount, long firstOffset,
+            FetchMode via, byte[] segment, io.github.huyz0.os.biningester.format.Grant grant,
+            long sequencerEpoch, long chainSequence) {
+        this(key, segmentKey, recordCount, firstOffset, via, segment, grant, sequencerEpoch,
+                chainSequence, false);
+    }
 
     public Delivery(RunKey key, String segmentKey, int recordCount, long firstOffset,
             FetchMode via, byte[] segment, io.github.huyz0.os.biningester.format.Grant grant,
@@ -93,6 +106,13 @@ public record Delivery(RunKey key, String segmentKey, int recordCount, long firs
                 CHAIN_SEQUENCE_UNKNOWN);
     }
 
+    /** A void of {@code count} offsets from {@code fromOffset}: no segment and no bytes. */
+    public static Delivery voidRange(RunKey key, long fromOffset, int count, long sequencerEpoch,
+            long chainSequence) {
+        return new Delivery(key, "", count, fromOffset, FetchMode.INLINE, new byte[0], null,
+                sequencerEpoch, chainSequence, true);
+    }
+
     public Delivery {
         Objects.requireNonNull(key, "key");
         Objects.requireNonNull(segmentKey, "segmentKey");
@@ -123,6 +143,9 @@ public record Delivery(RunKey key, String segmentKey, int recordCount, long firs
         if (grant != null && via != FetchMode.DIRECT) {
             throw new IllegalArgumentException(
                     "a grant is for `direct`; this delivery is " + via);
+        }
+        if (voided && (via != FetchMode.INLINE || segment.length > 0 || !segmentKey.isEmpty())) {
+            throw new IllegalArgumentException("a void carries no segment and no bytes");
         }
     }
 }

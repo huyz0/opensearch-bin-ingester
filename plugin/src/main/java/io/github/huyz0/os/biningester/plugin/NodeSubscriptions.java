@@ -625,7 +625,8 @@ public final class NodeSubscriptions implements AutoCloseable {
                     new io.github.huyz0.os.biningester.client.Delivery(event.key(),
                             event.segmentKey(), event.recordCount(), event.firstOffset(),
                             io.github.huyz0.os.biningester.format.FetchMode.INLINE,
-                            event.inline(), null, event.sequencerEpoch(), event.chainSequence());
+                            event.inline(), null, event.sequencerEpoch(), event.chainSequence(),
+                            event.voided());
             TierTwoChainPoller poller = tierTwoPoller;
             if (!entry.client.tryDeliverCatchUp(requestId, delivery)) {
                 return false;

@@ -580,7 +580,7 @@ public final class HttpSubscriptionTransport implements SubscriptionTransport, A
     static Delivery deliveryFor(SubscriptionEvent event) {
         return new Delivery(event.key(), event.segmentKey(), event.recordCount(),
                 event.firstOffset(), event.via(), event.inline(), event.grant(),
-                event.sequencerEpoch(), event.chainSequence());
+                event.sequencerEpoch(), event.chainSequence(), event.voided());
     }
 
     private Duration sleepAndGrow(Duration backoff) {

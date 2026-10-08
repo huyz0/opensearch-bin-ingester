@@ -269,6 +269,28 @@ stream would be held and its repair retried at every progress interval
 without ever completing, a permanent stall. So M13.33 must not land before
 M13.25d; the backlog records the dependency.
 
+⚠️ **M13.25d is split, readers first** (wire-format-change). **M13.25e lands
+the format and every reader**: a void reaches a subscriber as a
+`SubscriptionEvent` of **version 5** -- a v4 body, then one byte, `1` -- whose
+`firstOffset` and `recordCount` are the void's range, with an empty segment
+key, `via = INLINE`, no bytes, no grant, and the chain sequence of the
+recovery entry that committed it. Only a void is v5, so no other event's
+bytes move, and a reader built before it refuses version 5 rather than
+reading a hole as records -- the safe direction, since readers ship first.
+The same event travels the live poll answer and, wrapped as ever, the
+catch-up event frame. The consumer decodes nothing for it, advances its
+expected offset over it and counts the offsets each commit newly covers
+(`ConsumerClient.voidedOffsetsSkipped`), so a replayed void is not counted
+twice. On the catch-up lane a void reserves its width like any delivery and
+releases it once committed (`CatchUpDeliveryLane.settle`), since it hands
+off no record -- otherwise the exchange never completed, the stall moved one
+layer down -- and while a gap replay runs only the catch-up lane is loaded,
+or a void moved the expected offset onto the held live tail while the
+replay's own copy of it was still queued, and the tail was read twice. So the
+plugin's gap repair completes over a void and the stream is released. **M13.25f lands the writers**: the chain memory keeping voids,
+catch-up and the live push emitting them, and the plugin's tier-2 and tier-3
+readers delivering them. M13.33 still waits on M13.25f.
+
 The body after the kinded header and the kind: `sequence` (uvarint); the
 segment count (uvarint, zero allowed) and each segment exactly as a batched
 delta writes it -- key length and key, run count, and per run the index UUID

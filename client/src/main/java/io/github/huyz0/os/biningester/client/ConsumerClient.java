@@ -335,6 +335,11 @@ public final class ConsumerClient implements AutoCloseable {
         }
         if (commit.decode()) {
             out.addAll(decoded);
+            // ⚠️ COUNTED ON THE COMMIT, NOT THE DECODE: a commit the catch-up
+            // race undoes decodes the delivery again later (M13.25e).
+            if (delivery.voided()) {
+                voidedOffsets.add(commit.covered());
+            }
         }
         return commit.decode() || !gapTracker.repairPending();
     }
@@ -351,6 +356,17 @@ public final class ConsumerClient implements AutoCloseable {
             gapTracker.clearRepair();
         }
     }
+
+    /**
+     * How many offsets this consumer skipped as voids (M13.25e): committed holes,
+     * counted here rather than reported as gaps.
+     */
+    public long voidedOffsetsSkipped() {
+        return voidedOffsets.sum();
+    }
+
+    private final java.util.concurrent.atomic.LongAdder voidedOffsets =
+            new java.util.concurrent.atomic.LongAdder();
 
     /** How many gaps this consumer has reported (M6.1). */
     public long gapsDetected() {
@@ -369,6 +385,9 @@ public final class ConsumerClient implements AutoCloseable {
 
     private void decodeInto(Delivery delivery, Deque<ConsumerRecord> out,
             SegmentFetcher fetcher) {
+        if (delivery.voided()) {
+            return;
+        }
         try {
             SegmentReader reader = SegmentReader.open(fetcher.bytesOf(delivery));
             RunEntry entry = reader.find(key).orElseThrow(
