@@ -78,10 +78,78 @@ public final class ChainMemory {
      *     list taken from it is safe for hours before this term began
      */
     public record Snapshot(List<CommitDelta> deltas, boolean complete, long firstEpoch,
-            long firstSequence, long lastEpoch, long lastSequence, boolean fromFloor) {
+            long firstSequence, long lastEpoch, long lastSequence, boolean fromFloor,
+            List<SequencedVoid> voids, boolean voidsComplete) {
 
         public Snapshot {
             deltas = List.copyOf(Objects.requireNonNull(deltas, "deltas"));
+            voids = List.copyOf(Objects.requireNonNull(voids, "voids"));
+        }
+
+        /** A snapshot of deltas alone, as every snapshot was before voids (M13.25h). */
+        public Snapshot(List<CommitDelta> deltas, boolean complete, long firstEpoch,
+                long firstSequence, long lastEpoch, long lastSequence, boolean fromFloor) {
+            this(deltas, complete, firstEpoch, firstSequence, lastEpoch, lastSequence, fromFloor,
+                    List.of(), true);
+        }
+    }
+
+    /**
+     * A recovery entry's void, with the slot that committed it (M13.25h,
+     * ADR-0082 §5).
+     *
+     * <p>⚠️ **BESIDE THE DELTAS, NOT AMONG THEM**: retention, GC and the orphan
+     * keep list read only {@link Snapshot#deltas}, and a void holds no
+     * segment, so none of them changes. Catch-up is to read both, a stream's
+     * runs and voids merged by offset (M13.25i).
+     *
+     * <p>⚠️ **{@link Snapshot#voidsComplete}, NOT {@link Snapshot#complete}**,
+     * says whether a void was evicted (M13.25h review P1): the deltas'
+     * flag stops the orphan sweep and catch-up, and an evicted void must
+     * stop neither while every delta is still held.
+     */
+    public record SequencedVoid(long epoch, long sequence,
+            io.github.huyz0.os.biningester.format.Recovery.VoidRange range) {
+        public SequencedVoid {
+            Objects.requireNonNull(range, "range");
+        }
+    }
+
+    private final Deque<SequencedVoid> voids = new ArrayDeque<>();
+    private long lastVoidEpoch = -1;
+    private long lastVoidSequence = -1;
+    private boolean voidsComplete = true;
+
+    /**
+     * Takes a recovery entry's voids, from a live apply or a replay, by the
+     * same monotonic-tail rule as {@link #record}: a slot at or before the last
+     * one taken IN THE SAME EPOCH is a replay of what this holds -- a
+     * crossing reads the ancestor's slots first, and epoch 2's slot 3 is not
+     * a repeat of epoch 1's slot 5. ⚠️ BOUNDED BY {@code maxDeltas} as the
+     * deltas are; a void dropped clears {@link Snapshot#voidsComplete} only.
+     */
+    synchronized void recordVoids(long epoch, long sequence,
+            List<io.github.huyz0.os.biningester.format.Recovery.VoidRange> taken) {
+        Objects.requireNonNull(taken, "taken");
+        if (epoch == lastVoidEpoch && sequence <= lastVoidSequence) {
+            return;
+        }
+        for (var range : taken) {
+            voids.addLast(new SequencedVoid(epoch, sequence, range));
+        }
+        lastVoidEpoch = epoch;
+        lastVoidSequence = sequence;
+        while (voids.size() > maxDeltas) {
+            voids.removeFirst();
+            voidsComplete = false;
+        }
+    }
+
+    private void forgetVoidsThrough(long epoch, long sequence) {
+        while (!voids.isEmpty() && (voids.peekFirst().epoch() < epoch
+                || (voids.peekFirst().epoch() == epoch
+                        && voids.peekFirst().sequence() <= sequence))) {
+            voids.removeFirst();
         }
     }
 
@@ -196,6 +264,10 @@ public final class ChainMemory {
      */
     synchronized void reset() {
         deltas.clear();
+        voids.clear();
+        lastVoidEpoch = -1;
+        lastVoidSequence = -1;
+        voidsComplete = true;
         complete = true;
         fromFloor = false;
         emptyEpoch = 0;
@@ -225,13 +297,15 @@ public final class ChainMemory {
         for (EpochDelta held : deltas) {
             copy.add(held.delta());
         }
+        List<SequencedVoid> heldVoids = List.copyOf(voids);
         if (deltas.isEmpty()) {
             return new Snapshot(copy, complete, emptyEpoch, emptySequence, emptyEpoch,
-                    emptySequence, fromFloor && complete);
+                    emptySequence, fromFloor && complete, heldVoids, voidsComplete);
         }
         return new Snapshot(copy, complete, deltas.peekFirst().epoch(),
                 deltas.peekFirst().delta().sequence(), deltas.peekLast().epoch(),
-                deltas.peekLast().delta().sequence(), fromFloor && complete);
+                deltas.peekLast().delta().sequence(), fromFloor && complete, heldVoids,
+                voidsComplete);
     }
 
     /**
@@ -254,6 +328,7 @@ public final class ChainMemory {
         while (!deltas.isEmpty() && atOrBefore(deltas.peekFirst(), epoch, sequence)) {
             deltas.removeFirst();
         }
+        forgetVoidsThrough(epoch, sequence);
         if (deltas.isEmpty()) {
             emptyEpoch = epoch;
             emptySequence = sequence + 1;
@@ -297,6 +372,10 @@ public final class ChainMemory {
             if (awaitingChainGc.size() > maxDeltas) {
                 awaitingChainGc.removeFirst();
             }
+        }
+        if (last != null) {
+            // ⚠️ A VOID BEFORE A COLLECTED DELTA HAS BEEN CONSUMED WITH IT (M13.25h).
+            forgetVoidsThrough(last.epoch(), last.delta().sequence());
         }
         if (last != null && deltas.isEmpty()) {
             // ⚠️ THE SAME BOUNDARY `forgetThrough` WOULD HAVE LEFT, so a

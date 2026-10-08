@@ -111,7 +111,7 @@ public record CommitDelta(long sequence, List<SegmentCommit> segments)
      * which object holds the records.
      *
      * <p>⚠️ THERE IS EXACTLY ONE SUCH CALLER TODAY and it is worth naming:
-     * {@code ChainReplay.fold}, which folds offsets forward to learn where each
+     * {@code ChainFold.fold}, which folds offsets forward to learn where each
      * stream has reached. An offset is a stream fact, not a segment fact, so the
      * pairing is genuinely irrelevant there. Anything that DELIVERS records —
      * {@code SubscriptionHub} — must use {@link #segments()} instead.

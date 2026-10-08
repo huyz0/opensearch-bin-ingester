@@ -62,13 +62,15 @@ final class ChainReplay {
     /** What a replay learned: offsets, this chain's next free slot, its seal. */
     record Result(Map<RunKey, Long> offsets, long nextSequence, Seal seal,
             Map<RunKey, Long> indexEntries, Map<String, Checkpoint.PodState> pods,
-            List<EpochDelta> deltas, long checkpointEpoch, long checkpointSequence) {
+            List<EpochDelta> deltas, long checkpointEpoch, long checkpointSequence,
+            List<ChainMemory.SequencedVoid> voids) {
 
         /** A result whose walk did not start at a checkpoint. */
         Result(Map<RunKey, Long> offsets, long nextSequence, Seal seal,
                 Map<RunKey, Long> indexEntries, Map<String, Checkpoint.PodState> pods,
                 List<EpochDelta> deltas) {
-            this(offsets, nextSequence, seal, indexEntries, pods, deltas, NO_CHECKPOINT, 0);
+            this(offsets, nextSequence, seal, indexEntries, pods, deltas, NO_CHECKPOINT, 0,
+                    List.of());
         }
 
         /**
@@ -96,6 +98,9 @@ final class ChainReplay {
          */
         Result {
             deltas = List.copyOf(deltas);
+            // ⚠️ A RECOVERY's VOIDS, WITH THEIR SLOT (M13.25h): dropped, a
+            // replay handed catch-up nothing to deliver for a committed hole.
+            voids = List.copyOf(voids);
         }
 
         Result(Map<RunKey, Long> offsets, long nextSequence, Seal seal,
@@ -155,6 +160,7 @@ final class ChainReplay {
      * folds.
      */
     private final List<EpochDelta> deltas = new java.util.ArrayList<>();
+    private final List<ChainMemory.SequencedVoid> voids = new java.util.ArrayList<>();
 
     /** One idempotency slot: a pod AND the incarnation of it that wrote. */
     private static String slot(String podId, String incarnationId) {
@@ -178,7 +184,7 @@ final class ChainReplay {
         ChainReplay r = new ChainReplay(store, prefix, epoch);
         r.replayAncestry(epoch, Long.MAX_VALUE, true);
         return new Result(r.offsets, r.nextSequence, r.seal, Map.copyOf(r.indexEntries),
-                Map.copyOf(r.pods), r.deltas, r.checkpointEpoch, r.checkpointSequence);
+                Map.copyOf(r.pods), r.deltas, r.checkpointEpoch, r.checkpointSequence, r.voids);
     }
 
     /**
@@ -217,7 +223,7 @@ final class ChainReplay {
         // GC pass must be able to condemn.
         return new Result(Map.copyOf(r.offsets), r.nextSequence, r.seal,
                 Map.copyOf(r.indexEntries), Map.copyOf(r.pods), r.deltas, r.checkpointEpoch,
-                r.checkpointSequence);
+                r.checkpointSequence, r.voids);
     }
 
     /**
@@ -600,15 +606,18 @@ final class ChainReplay {
     }
 
     private void applyOffsets(ChainEntry entry, long chainEpoch) {
-        fold(entry, offsets);
+        ChainFold.fold(entry, offsets);
         // ⚠️ COUNTED ON THE SAME WALK (M4.14). A replay already visits every
         // entry, so counting here costs nothing; a second pass would cost one
         // GET per delta on the recovery path, whose whole purpose is speed.
         // ⚠️ EXHAUSTIVE (M13.25): a recovery's commits are a delta's; voids folded above.
         switch (entry) {
             case CommitDelta delta -> recordDelta(delta, chainEpoch);
-            case Recovery recovery -> recovery.delta()
-                    .ifPresent(delta -> recordDelta(delta, chainEpoch));
+            case Recovery recovery -> {
+                recovery.delta().ifPresent(delta -> recordDelta(delta, chainEpoch));
+                recovery.voids().forEach(v -> voids.add(
+                        new ChainMemory.SequencedVoid(chainEpoch, recovery.sequence(), v)));
+            }
             case Seal ignored -> { }
             case Continue ignored -> { }
         }
@@ -646,42 +655,6 @@ final class ChainReplay {
                             chainEpoch, delta.sequence()),
                     (prior, now) -> now.lastAppliedFlushSeq() > prior.lastAppliedFlushSeq()
                             ? now : prior);
-        }
-    }
-
-    /**
-     * ⚠️ THE ONE PLACE a delta becomes an offset. It lived here AND in
-     * {@code CommitLog.apply} until review pointed out that the split's stated
-     * principle — do not re-derive wire semantics in two places — had been
-     * applied to the key grammar and not to this.
-     *
-     * <p>{@code Math::max} rather than assignment, because entries arrive in
-     * ascending sequence within a chain but a CROSSING merges an older chain's
-     * offsets into a newer one's; taking the later value unconditionally would
-     * rewind the stream, which is I2.
-     */
-    static void fold(ChainEntry entry, Map<RunKey, Long> into) {
-        switch (entry) {
-            case CommitDelta delta -> {
-                // ⚠️ `allRuns`, deliberately: an offset is a STREAM fact, not a
-                // segment fact, so this is the one reader that genuinely does not
-                // care which object holds the records. Everything that DELIVERS
-                // records pairs each run with its own segment instead — see
-                // SubscriptionHub and ADR-0032.
-                for (RunCommit run : delta.allRuns()) {
-                    into.merge(run.key(), run.lastOffset() + 1, Math::max);
-                }
-            }
-            case Recovery recovery -> {
-                // ⚠️ A VOID IS A COMMITTED HOLE (ADR-0082 §5): it moves its stream
-                // past it, so no later commit assigns inside it; never backwards (I2).
-                recovery.delta().ifPresent(delta -> fold(delta, into));
-                for (Recovery.VoidRange v : recovery.voids()) {
-                    into.merge(v.key(), v.toOffsetExclusive(), Math::max);
-                }
-            }
-            case Seal ignored -> { }
-            case Continue ignored -> { }
         }
     }
 

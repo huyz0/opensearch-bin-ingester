@@ -181,7 +181,7 @@ final class CrossEpochInvariants {
     /**
      * Folds where {@code e} leaves each stream into {@code into}, by the maximum.
      *
-     * <p>⚠️ INDEPENDENT OF {@code ChainReplay.fold}, deliberately, and EXHAUSTIVE
+     * <p>⚠️ INDEPENDENT OF {@code ChainFold.fold}, deliberately, and EXHAUSTIVE
      * (M13.25 review round 2, T3): these checkers exist to catch the
      * production fold being wrong, so they re-derive it; and a recovery's runs
      * and voids both move a stream -- skipped, an offset assigned inside a

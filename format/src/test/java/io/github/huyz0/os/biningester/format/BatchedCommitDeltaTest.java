@@ -114,7 +114,7 @@ class BatchedCommitDeltaTest {
 
     @Test
     void allRunsSpansEverySegmentForTheOneCallerThatDoesNotCare() {
-        // ⚠️ `ChainReplay.fold` folds offsets forward, and an offset is a STREAM
+        // ⚠️ `ChainFold.fold` folds offsets forward, and an offset is a STREAM
         // fact rather than a segment fact. That caller is why this accessor
         // exists; it is not a general-purpose escape from the pairing.
         assertThat(batched().allRuns()).hasSize(3);

@@ -196,7 +196,7 @@ public final class Invariants {
                     // carrying more than one segment, so every checker here
                     // threw on the batched commit M4's scope item 5 is about.
                     // An OFFSET is a stream fact, not a segment fact -- which is
-                    // why `ChainReplay.fold` uses `allRuns()` too. M4.13n.
+                    // why `ChainFold.fold` uses `allRuns()` too. M4.13n.
                     Map<RunKey, List<RunCommit>> bySegmentOrder = new LinkedHashMap<>();
                     for (RunCommit run : delta.allRuns()) {
                         bySegmentOrder.computeIfAbsent(run.key(), k -> new ArrayList<>()).add(run);

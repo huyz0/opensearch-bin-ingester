@@ -178,6 +178,7 @@ public final class CommitLog {
         for (EpochDelta held : r.deltas()) {
             chain.record(held.epoch(), held.delta());
         }
+        recordVoids(r);
         if (r.startedAtCheckpoint()) {
             chain.startsAt(r.checkpointEpoch(), r.checkpointSequence());
         }
@@ -250,7 +251,7 @@ public final class CommitLog {
     private void apply(ChainEntry entry) {
         switch (entry) {
             case CommitDelta delta -> {
-                ChainReplay.fold(delta, nextOffsets);
+                ChainFold.fold(delta, nextOffsets);
                 // ⚠️ THE ONLY PRODUCER OF THE `List<CommitDelta>` THREE CLASSES
                 // CONSUME (M7.25). Here rather than in `commit` for the reason
                 // the histogram below records: a replay must fill it too.
@@ -274,7 +275,8 @@ public final class CommitLog {
                 // ⚠️ ITS VOIDS MOVE THE STREAM (ADR-0082 §5): without this the
                 // next commit after a takeover would assign inside a committed
                 // hole. Its commits are a delta's, recorded and counted as one.
-                ChainReplay.fold(recovery, nextOffsets);
+                ChainFold.fold(recovery, nextOffsets);
+                chain.recordVoids(epoch, recovery.sequence(), recovery.voids());
                 recovery.delta().ifPresent(delta -> {
                     chain.record(epoch, delta);
                     for (io.github.huyz0.os.biningester.format.RunCommit run : delta.allRuns()) {
@@ -284,6 +286,13 @@ public final class CommitLog {
             }
         }
         nextSequence = Math.max(nextSequence, entry.sequence() + 1);
+    }
+
+    /** A replay's voids into the chain memory, each with its slot (M13.25h). */
+    private void recordVoids(ChainReplay.Result replayed) {
+        for (ChainMemory.SequencedVoid held : replayed.voids()) {
+            chain.recordVoids(held.epoch(), held.sequence(), List.of(held.range()));
+        }
     }
 
     /** Merges in whatever this chain inherits from the slot its CONTINUE names. */
@@ -301,6 +310,7 @@ public final class CommitLog {
         for (EpochDelta held : inherited.deltas()) {
             chain.record(held.epoch(), held.delta());
         }
+        recordVoids(inherited);
         if (inherited.startedAtCheckpoint()) {
             chain.startsAt(inherited.checkpointEpoch(), inherited.checkpointSequence());
         }

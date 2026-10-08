@@ -24,7 +24,7 @@ import org.junit.jupiter.api.Test;
  * <p>⚠️ THE GUARD IS RIGHT AND THE CALLERS WERE WRONG. {@code runs()} refuses
  * because pairing a run with the wrong segment reads records from the wrong
  * object. But an OFFSET is a stream fact rather than a segment fact --
- * {@code ChainReplay.fold} says exactly that and uses {@code allRuns()} -- and
+ * {@code ChainFold.fold} says exactly that and uses {@code allRuns()} -- and
  * all three sites are folding offsets.
  *
  * <p>⚠️ NOTHING CAUGHT IT BECAUSE THE SWEEP NEVER BATCHES:

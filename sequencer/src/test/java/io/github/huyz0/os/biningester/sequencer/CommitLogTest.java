@@ -153,7 +153,7 @@ class CommitLogTest {
     @Test
     void recoveryFoldsOffsetsFromEVERYSegmentOfABatchedDelta() throws Exception {
         // ⚠️ THE CALLER `allRuns()` WAS ADDED FOR, and it had no test: reverting
-        // `ChainReplay.fold` to `delta.runs()` — undoing the production change
+        // `ChainFold.fold` to `delta.runs()` — undoing the production change
         // outright — left the whole suite green, because nothing replayed a
         // chain that CONTAINED a batched delta. Once M4.7 batches, that revert
         // either throws out of `fold` or folds one pod's runs and silently

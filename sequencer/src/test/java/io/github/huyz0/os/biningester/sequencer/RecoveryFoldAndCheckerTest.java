@@ -28,7 +28,7 @@ class RecoveryFoldAndCheckerTest {
     void everyVOIDOfARecoveryIsFolded() {
         Map<RunKey, Long> offsets = new HashMap<>();
 
-        ChainReplay.fold(new Recovery(3, List.of(), List.of(
+        ChainFold.fold(new Recovery(3, List.of(), List.of(
                 new Recovery.VoidRange(A, 0, 4),
                 new Recovery.VoidRange(A, 9, 12),
                 new Recovery.VoidRange(B, 0, 7))), offsets);

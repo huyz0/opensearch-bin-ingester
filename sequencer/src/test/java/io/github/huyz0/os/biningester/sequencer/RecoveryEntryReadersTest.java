@@ -45,7 +45,7 @@ class RecoveryEntryReadersTest {
     void theFOLDAdvancesOverARecoverysRunsAndPastItsVoids() {
         Map<RunKey, Long> offsets = new HashMap<>();
 
-        ChainReplay.fold(recovery(1), offsets);
+        ChainFold.fold(recovery(1), offsets);
 
         assertThat(offsets).containsEntry(A, 100L).containsEntry(B, 4L);
     }
@@ -54,7 +54,7 @@ class RecoveryEntryReadersTest {
     void theFOLDNeverRewindsAStreamAlreadyPastAVoid() {
         Map<RunKey, Long> offsets = new HashMap<>(Map.of(A, 500L));
 
-        ChainReplay.fold(recovery(1), offsets);
+        ChainFold.fold(recovery(1), offsets);
 
         assertThat(offsets).as("the maximum, as for a delta (I2)").containsEntry(A, 500L);
     }
