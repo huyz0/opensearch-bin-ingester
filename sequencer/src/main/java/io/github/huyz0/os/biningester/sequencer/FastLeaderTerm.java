@@ -110,7 +110,17 @@ public final class FastLeaderTerm {
         if (header.epoch() != epoch()) {
             return notThisTerm(header);
         }
-        return switch (joins.join(join.incarnation())) {
+        JoinDesk.Outcome joined;
+        try {
+            joined = joins.join(join.incarnation());
+        } finally {
+            // ⚠️ THE TERM's OWN WRITE IS SEEN BY THE NEXT ANSWER (M13.33m): the
+            // cache is dropped -- a failed join's write may have landed too --
+            // so a COMMIT from the pod just joined is read against the roster
+            // that lists it.
+            forget();
+        }
+        return switch (joined) {
             case JoinDesk.Rostered rostered -> new FastFrame.Joined(opened.closedThrough(),
                     status(join.held(), rostered.roster()));
             case JoinDesk.Departed departed -> refused(FastFrame.Reason.DEPARTING,
@@ -151,7 +161,10 @@ public final class FastLeaderTerm {
         for (Roster r : opened.stillOpen()) {
             earlier.add(r.epoch());
         }
-        return switch (departures.depart(depart.incarnation().podUid(), earlier)) {
+        RosterDepartures.Outcome outcome = departures.depart(depart.incarnation().podUid(),
+                earlier);
+        rosterWritten();
+        return switch (outcome) {
             case RosterDepartures.Departed departed ->
                     new FastFrame.HeldStatusReport(FastFrame.HeldStatus.NONE);
             case RosterDepartures.Deposed deposed -> refused(FastFrame.Reason.LOWER_EPOCH,
@@ -203,6 +216,25 @@ public final class FastLeaderTerm {
             next.put(s.stream(), committedNext.applyAsLong(s.stream()));
         }
         return HeldStatusAnswers.answer(held, next, rosters, opened.closedThrough());
+    }
+
+    /**
+     * This term wrote its roster -- a departure, a takeover's decisions
+     * (M13.33m; M13.27q review round 1, P1): read it again at once, so no
+     * answer and no next decision number comes from before the write.
+     *
+     * @throws IOException the roster could not be read again: ⚠️ the next
+     *     decision number is not yet known past the write (its review round
+     *     1, P1), so the caller writes again -- a decisions write is
+     *     idempotent -- before it numbers anything
+     */
+    public void rosterWritten() throws IOException {
+        forget();
+        ownRoster();
+    }
+
+    private synchronized void forget() {
+        cached = null;
     }
 
     /**
