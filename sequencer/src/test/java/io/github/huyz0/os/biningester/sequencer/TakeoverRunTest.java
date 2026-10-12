@@ -89,6 +89,7 @@ class TakeoverRunTest {
         RosterDecisions.Outcome decisions = new RosterDecisions.Recorded(List.of());
         Map<RunKey, Long> released;
         int mayDecideAfter;
+        long batchBytes = Long.MAX_VALUE;
         boolean recoverFails;
         private int collects;
 
@@ -168,8 +169,50 @@ class TakeoverRunTest {
                     return false;
                 }
                 return true;
-            }, nanos -> calls.add("sleep " + nanos), Duration.ofMillis(5), BOUND);
+            }, nanos -> calls.add("sleep " + nanos), Duration.ofMillis(5), BOUND, batchBytes);
         }
+    }
+
+    @Test
+    void aBATCHTooLargeForOneUploadIsSplitByStreamBeforeAnyDecisionIsRecorded()
+            throws Exception {
+        // ⚠️ M13.33q: each record counts its id, payload and 16 bytes -- 21
+        // here -- so 45 bytes hold two streams and not three.
+        Fake f = new Fake();
+        f.batchBytes = 45;
+        f.collections.add(collected(Map.of("uid-m",
+                List.of(at(7, S1, 0, 1), at(7, S2, 0, 1), at(7, SO, 0, 1))), Set.of()));
+
+        f.run().run(List.of(term7(0)), 6, List.of());
+
+        assertThat(f.recovered).containsExactly(List.of(S1, S2), List.of(SO));
+        assertThat(f.calls).as("one decisions write, after every entry")
+                .containsSubsequence("recover [" + S1 + ", " + S2 + "]", "recover [" + SO + "]",
+                        "decisions {" + S1 + "=1, " + S2 + "=1, " + SO + "=1}");
+    }
+
+    @Test
+    void aBUDGETMetExactlyKeepsTheStreamsInOneEntry() throws Exception {
+        Fake f = new Fake();
+        f.batchBytes = 42;
+        f.collections.add(collected(Map.of("uid-m",
+                List.of(at(7, S1, 0, 1), at(7, S2, 0, 1))), Set.of()));
+
+        f.run().run(List.of(term7(0)), 6, List.of());
+
+        assertThat(f.recovered).as("21 + 21 = 42: not over").containsExactly(List.of(S1, S2));
+    }
+
+    @Test
+    void aSTREAMOverTheBudgetIsAnEntryOfItsOwn() throws Exception {
+        Fake f = new Fake();
+        f.batchBytes = 10;
+        f.collections.add(collected(Map.of("uid-m",
+                List.of(at(7, S1, 0, 1), at(7, S2, 0, 1))), Set.of()));
+
+        f.run().run(List.of(term7(0)), 6, List.of());
+
+        assertThat(f.recovered).containsExactly(List.of(S1), List.of(S2));
     }
 
     @Test

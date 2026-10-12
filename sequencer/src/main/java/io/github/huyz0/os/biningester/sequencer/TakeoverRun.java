@@ -102,6 +102,7 @@ public final class TakeoverRun {
     private final JoinDesk.Sleeper sleeper;
     private final Duration poll;
     private final long bound;
+    private final long batchBytes;
 
     /**
      * @param mayDecide whether the wall clock has passed {@code notBefore} and
@@ -111,6 +112,19 @@ public final class TakeoverRun {
      */
     public TakeoverRun(Steps steps, Hold hold, BooleanSupplier mayDecide,
             JoinDesk.Sleeper sleeper, Duration poll, long bound) {
+        this(steps, hold, mayDecide, sleeper, poll, bound, Long.MAX_VALUE);
+    }
+
+    /**
+     * @param batchBytes the most record bytes one recovery entry's uploads
+     *     carry: a batch beyond it is split by stream (M13.33q; ADR-0082 §5)
+     */
+    public TakeoverRun(Steps steps, Hold hold, BooleanSupplier mayDecide,
+            JoinDesk.Sleeper sleeper, Duration poll, long bound, long batchBytes) {
+        if (batchBytes < 1) {
+            throw new IllegalArgumentException("a recovery entry carries at least one byte");
+        }
+        this.batchBytes = batchBytes;
         this.steps = Objects.requireNonNull(steps, "steps");
         this.hold = Objects.requireNonNull(hold, "hold");
         this.mayDecide = Objects.requireNonNull(mayDecide, "mayDecide");
@@ -193,9 +207,7 @@ public final class TakeoverRun {
                 // that, yet the decision still supersedes what it discarded.
                 List<StreamDecision.Decided> writes = batch.stream()
                         .filter(d -> !d.commits().isEmpty() || !d.voids().isEmpty()).toList();
-                if (!writes.isEmpty()) {
-                    steps.recover(writes);
-                }
+                recoverByStream(writes);
                 if (steps.recordDecisions(at) instanceof RosterDecisions.Deposed d) {
                     return new Deposed(d.newer());
                 }
@@ -213,6 +225,42 @@ public final class TakeoverRun {
             steps.release(stillOpen, resumed);
         }
         return new Done(resumed, steps.close(stillOpen, r -> true));
+    }
+
+    /**
+     * {@code writes} as recovery entries of at most {@code batchBytes} each,
+     * split between streams, never within one: a stream's commits and voids
+     * stay in one entry (invariant c), and a stream over the budget is an
+     * entry of its own.
+     */
+    private void recoverByStream(List<StreamDecision.Decided> writes) throws IOException {
+        List<StreamDecision.Decided> entry = new ArrayList<>();
+        long bytes = 0;
+        for (StreamDecision.Decided d : writes) {
+            long size = bytes(d);
+            if (!entry.isEmpty() && bytes + size > batchBytes) {
+                steps.recover(entry);
+                entry = new ArrayList<>();
+                bytes = 0;
+            }
+            entry.add(d);
+            bytes += size;
+        }
+        if (!entry.isEmpty()) {
+            steps.recover(entry);
+        }
+    }
+
+    /** A decision's record bytes: each record's id, payload and 16 bytes of framing. */
+    private static long bytes(StreamDecision.Decided d) {
+        long bytes = 0;
+        for (FastJournalRecord.Entry e : d.commits()) {
+            for (io.github.huyz0.os.biningester.format.SegmentRecord r : e.records()) {
+                bytes += r.id().getBytes(java.nio.charset.StandardCharsets.UTF_8).length
+                        + r.payload().length + 16L;
+            }
+        }
+        return bytes;
     }
 
     private static void add(Map<RunKey, List<FastJournalRecord.Entry>> live,

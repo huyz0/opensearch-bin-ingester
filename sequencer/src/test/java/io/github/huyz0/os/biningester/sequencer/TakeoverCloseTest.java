@@ -84,13 +84,16 @@ class TakeoverCloseTest {
         final List<FastFrame.Frame> sent = new ArrayList<>();
         Set<String> refusing = Set.of();
         Set<String> failing = Set.of();
+        /** Holders that miss only the FIRST frame sent them. */
+        Set<String> missingFirst = Set.of();
 
         @Override
         public byte[] exchange(String endpoint, byte[] frame) throws IOException {
             FastFrame.Frame f = FastFrame.decode(frame);
-            sent.add(f);
             String uid = f.header().targetUid();
-            if (failing.contains(uid)) {
+            boolean first = sent.stream().noneMatch(s -> s.header().targetUid().equals(uid));
+            sent.add(f);
+            if (failing.contains(uid) || first && missingFirst.contains(uid)) {
                 throw new IOException("unreachable");
             }
             FastFrame.Body answer = refusing.contains(uid)
@@ -123,6 +126,56 @@ class TakeoverCloseTest {
             assertThat(f.body()).isEqualTo(new FastTakeoverFrame.Release(List.of(
                     new FastTakeoverFrame.ReleaseAt(S, 12), new FastTakeoverFrame.ReleaseAt(T, 4))));
         });
+    }
+
+    @Test
+    void aRELEASETooLongForOneFrameIsSplitAcrossFrames() throws Exception {
+        // ⚠️ M13.33q: one RELEASE carries at most `perFrame` streams.
+        Roster.Member m = new Roster.Member(FastTermStartTest.incarnation("m"),
+                Roster.State.ROSTERED);
+        RunKey u = new RunKey(new UUID(3, 3), 0);
+        Holders holders = new Holders();
+
+        int acked = new ReleaseSender("uid-self", 7, holders, 2).send(
+                List.of(recording(6, "b", m)), Map.of(T, 4L, S, 12L, u, 1L));
+
+        assertThat(acked).as("each holder answered every frame").isEqualTo(2);
+        for (String holder : List.of("uid-b", "uid-m")) {
+            assertThat(holders.sent).filteredOn(f -> f.header().targetUid().equals(holder))
+                    .flatExtracting(f -> ((FastTakeoverFrame.Release) f.body()).streams())
+                    .as(holder + ": two frames, every stream once")
+                    .containsExactly(new FastTakeoverFrame.ReleaseAt(S, 12),
+                            new FastTakeoverFrame.ReleaseAt(T, 4),
+                            new FastTakeoverFrame.ReleaseAt(u, 1));
+        }
+        assertThat(holders.sent).hasSize(4);
+    }
+
+    @Test
+    void aHOLDERThatMissedAnEarlierFrameIsNotAcknowledged() throws Exception {
+        // ⚠️ M13.33q review round 1, T1: the LAST frame answered is not enough.
+        Roster.Member m = new Roster.Member(FastTermStartTest.incarnation("m"),
+                Roster.State.ROSTERED);
+        Holders holders = new Holders();
+        holders.missingFirst = Set.of("uid-m");
+
+        int acked = new ReleaseSender("uid-self", 7, holders, 1).send(
+                List.of(recording(6, "b", m)), Map.of(T, 4L, S, 12L));
+
+        assertThat(acked).as("b answered both frames; m only the second").isEqualTo(1);
+    }
+
+    @Test
+    void anEMPTYReleaseIsSentToNobodyAndAcknowledgedByNobody() throws Exception {
+        Roster.Member m = new Roster.Member(FastTermStartTest.incarnation("m"),
+                Roster.State.ROSTERED);
+        Holders holders = new Holders();
+
+        int acked = new ReleaseSender("uid-self", 7, holders).send(
+                List.of(recording(6, "b", m)), Map.of());
+
+        assertThat(acked).isZero();
+        assertThat(holders.sent).isEmpty();
     }
 
     @Test

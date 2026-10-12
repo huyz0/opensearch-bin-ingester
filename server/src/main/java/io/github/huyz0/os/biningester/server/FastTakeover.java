@@ -46,6 +46,11 @@ final class FastTakeover {
 
     /** Collection rounds per pass; a member still waited for is asked again next pass. */
     static final int ROUNDS = 3;
+    /**
+     * The most record bytes one recovery entry's uploads carry (M13.33q): a
+     * peer frame's worth, the most a member's COLLECTED pages hand over at once.
+     */
+    static final long RECOVERY_BATCH_BYTES = 64L << 20;
     /** Between collection rounds, and between asking whether the wait has passed. */
     static final Duration RETRY = Duration.ofMillis(250);
 
@@ -144,7 +149,7 @@ final class FastTakeover {
         };
         TakeoverRun run = new TakeoverRun(steps, desk.hold(),
                 () -> opened.mayDecide(wall.millis()), sleeper, RETRY,
-                FastLeaderTerm.STREAM_BOUND);
+                FastLeaderTerm.STREAM_BOUND, RECOVERY_BATCH_BYTES);
         launch.execute(() -> runOrGiveBack(
                 () -> run.run(opened.stillOpen(), opened.closedThrough(), journal.held()),
                 chain::close));
