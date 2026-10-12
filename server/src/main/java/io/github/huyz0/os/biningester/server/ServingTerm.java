@@ -67,6 +67,11 @@ final class ServingTerm {
         if (!snapshot.complete()) {
             throw new IOException("the committed chain is incomplete and cannot replay safely");
         }
+        // ⚠️ AND A VOID EVICTED IS REFUSED THE SAME WAY (M13.25i; its review,
+        // P2): unavailable, never a server error the route did not expect.
+        if (!snapshot.voidsComplete()) {
+            throw new IOException("the chain evicted a void and cannot vouch for its voids");
+        }
         new DurableCatchUpResponder(store,
                 new SnapshotCommittedDeltaSource(() -> snapshot), local::epoch,
                 costLedger)

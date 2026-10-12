@@ -100,6 +100,17 @@ public final class DurableCatchUpResponder {
                         exclusiveOffset(stream.batchStart())))
                 .toList();
         CommittedDeltaSource.SegmentReplayCursor cursor = source.openSegments(positions);
+        // ⚠️ ONE FIXED SNAPSHOT FOR BOTH (M13.25i; its review, P1): the source
+        // ServingTerm builds answers the cursor and these voids from the same
+        // snapshot, so the voids lie among exactly the runs it streams. Read
+        // from a live chain, a void past runs the cursor never sends would
+        // reach the plugin as records skipped.
+        java.util.Map<io.github.huyz0.os.biningester.format.RunKey,
+                java.util.ArrayDeque<CommittedDeltaSource.ReplayVoid>> voids =
+                new java.util.HashMap<>();
+        for (CommittedDeltaSource.ReplayVoid v : source.voidsFor(positions)) {
+            voids.computeIfAbsent(v.key(), ignored -> new java.util.ArrayDeque<>()).addLast(v);
+        }
         while (true) {
             var next = cursor.next();
             if (next.isEmpty()) {
@@ -108,6 +119,9 @@ public final class DurableCatchUpResponder {
             CommittedDeltaSource.ReplaySegment replaySegment = next.get();
             byte[] segment = readSegment(replaySegment.segmentKey());
             for (CommittedDeltaSource.CommittedRun run : replaySegment.runs()) {
+                // ⚠️ A STREAM's VOIDS BELOW THIS RUN FIRST: its events must
+                // arrive in offset order, which the plugin's repair checks.
+                writeVoids(request, voids.get(run.key()), run.firstOffset(), sink);
                 SubscriptionEvent event = new SubscriptionEvent(
                         request.requestId().toString(), epoch.getAsLong(), 1,
                         run.key(), run.segmentKey(), run.firstOffset(), run.recordCount(),
@@ -119,9 +133,41 @@ public final class DurableCatchUpResponder {
                 sink.write(encoded);
             }
         }
+        for (var remaining : voids.values()) {
+            writeVoids(request, remaining, Long.MAX_VALUE, sink);
+        }
         byte[] end = new CatchUpEndFrame(request.requestId()).encode();
         requireFrameWithinBudget(end);
         sink.write(end);
+    }
+
+    /**
+     * Writes the voids of {@code pending} that start below {@code before}, as
+     * M13.25e's v5 events.
+     *
+     * <p>⚠️ A VOID WIDER THAN AN EVENT's INT COUNT IS REFUSED, not split (its
+     * review, P3): split, a pathological void was billions of frames on a path
+     * with no total budget. A takeover's void is bounded by its per-stream
+     * fast offsets, far below it.
+     */
+    private void writeVoids(CatchUpRequestFrame request,
+            java.util.ArrayDeque<CommittedDeltaSource.ReplayVoid> pending, long before,
+            FrameSink sink) throws IOException {
+        while (pending != null && !pending.isEmpty() && pending.peekFirst().firstOffset() < before) {
+            CommittedDeltaSource.ReplayVoid v = pending.removeFirst();
+            long width = v.toOffsetExclusive() - v.firstOffset();
+            if (width > Integer.MAX_VALUE) {
+                throw new ResponseTooLargeException("a void of " + width
+                        + " offsets is wider than a catch-up event can carry");
+            }
+            byte[] encoded = new CatchUpEventFrame(request.requestId(),
+                    SubscriptionEvent.voidRange(request.requestId().toString(),
+                            epoch.getAsLong(), 1, v.key(), v.firstOffset(), (int) width,
+                            v.chainSequence()))
+                    .encode();
+            requireFrameWithinBudget(encoded);
+            sink.write(encoded);
+        }
     }
 
     private static long exclusiveOffset(long batchStart) {

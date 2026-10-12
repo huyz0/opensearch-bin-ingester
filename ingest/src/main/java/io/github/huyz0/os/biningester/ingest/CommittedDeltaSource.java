@@ -96,6 +96,26 @@ public interface CommittedDeltaSource {
         Optional<ReplaySegment> next();
     }
 
+    /**
+     * The voids of {@code requests}' streams after each one's exclusive
+     * offset, cut to it, each stream's in offset order (M13.25i, ADR-0082
+     * §5). ⚠️ None, by default: a source that holds no chain memory knows of
+     * no void, and catch-up then answers runs only, as it always did.
+     */
+    default List<ReplayVoid> voidsFor(List<ReplayRequest> requests) {
+        return List.of();
+    }
+
+    /** A committed hole of one stream, as a replay delivers it (M13.25i). */
+    record ReplayVoid(RunKey key, long firstOffset, long toOffsetExclusive, long chainSequence) {
+        public ReplayVoid {
+            Objects.requireNonNull(key, "key");
+            if (firstOffset < 0 || toOffsetExclusive <= firstOffset) {
+                throw new IllegalArgumentException("a replay void is a non-empty range");
+            }
+        }
+    }
+
     /** One stream and its next exclusive resume offset in a node request. */
     record ReplayRequest(RunKey key, long exclusiveOffset) {
         public ReplayRequest {

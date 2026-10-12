@@ -134,6 +134,39 @@ public final class SnapshotCommittedDeltaSource implements CommittedDeltaSource 
         return new SnapshotCursor(key, exclusiveOffset, current.deltas());
     }
 
+    /**
+     * Each requested stream's voids past its exclusive offset, cut to it
+     * (M13.25i). ⚠️ REFUSED WHEN THE CHAIN CANNOT VOUCH FOR THEM -- a void
+     * evicted by the bound -- as a replay is refused on an incomplete chain:
+     * the consumer would meet the missing void as an unexplained jump.
+     */
+    @Override
+    public List<ReplayVoid> voidsFor(List<ReplayRequest> requests) {
+        Objects.requireNonNull(requests, "requests");
+        Map<RunKey, Long> offsets = new LinkedHashMap<>();
+        for (ReplayRequest request : requests) {
+            offsets.put(request.key(), request.exclusiveOffset());
+        }
+        ChainMemory.Snapshot current = completeSnapshot();
+        if (!current.voidsComplete()) {
+            throw new IllegalStateException(
+                    "the chain evicted a void and cannot vouch for the voids it holds");
+        }
+        List<ReplayVoid> found = new ArrayList<>();
+        for (ChainMemory.SequencedVoid held : current.voids()) {
+            Long exclusive = offsets.get(held.range().key());
+            if (exclusive == null || held.range().toOffsetExclusive() <= exclusive + 1) {
+                continue;
+            }
+            found.add(new ReplayVoid(held.range().key(),
+                    Math.max(held.range().fromOffset(), exclusive + 1),
+                    held.range().toOffsetExclusive(), held.sequence()));
+        }
+        found.sort(java.util.Comparator.comparing((ReplayVoid v) -> v.key().toString())
+                .thenComparingLong(ReplayVoid::firstOffset));
+        return List.copyOf(found);
+    }
+
     private ChainMemory.Snapshot completeSnapshot() {
         ChainMemory.Snapshot current = Objects.requireNonNull(snapshot.get(), "snapshot result");
         if (!current.complete()) {
