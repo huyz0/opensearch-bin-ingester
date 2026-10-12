@@ -64,7 +64,7 @@ class FastWriterPathTest {
     }
 
     private static FastWriterPath path(JoinedTerms joined, Writer writer) {
-        return new FastWriterPath("pod1", INCARNATION, joined, writer, 3, 100);
+        return new FastWriterPath("pod1", INCARNATION, joined::latest, writer, 3, 100);
     }
 
     @Test

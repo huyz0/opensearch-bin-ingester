@@ -412,9 +412,9 @@ public final class Assembly implements AutoCloseable {
         return routed;
     }
 
-    /** A takeover's segments, through this pod's own publisher (M13.33r). */
-    io.github.huyz0.os.biningester.sequencer.RecoveryWriter.SegmentUpload recoveryUpload() {
-        return ingest::publishRecovery;
+    /** This pod's own ingest: its publisher for a takeover, its fast route (M13.29e). */
+    DefaultIngest defaultIngest() {
+        return ingest;
     }
 
     /**

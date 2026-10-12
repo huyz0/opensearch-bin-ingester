@@ -263,7 +263,7 @@ public final class IngesterNode implements AutoCloseable {
                                     config.membership().get().namespace(), token, trust)
                             : io.github.huyz0.os.biningester.sequencer.PodGone.NEVER;
             io.github.huyz0.os.biningester.sequencer.RecoveryWriter.SegmentUpload recoveryUpload =
-                    FastTakeover.paced(assembly.recoveryUpload(), mono,
+                    FastTakeover.paced(assembly.defaultIngest()::publishRecovery, mono,
                             SequencerAssembly.MIN_UPLOAD_INTERVAL,
                             nanos -> java.util.concurrent.TimeUnit.NANOSECONDS.sleep(nanos));
             // ⚠️ M13.27x: the REPLICAs first, since their acks can expose a batch.
@@ -280,6 +280,15 @@ public final class IngesterNode implements AutoCloseable {
             // ⚠️ M13.27v: a writer's CONFIRM, counted by the same desk.
             ExposedDrain.Ticks ticks = exposed.tickEvery(
                     io.github.huyz0.os.biningester.sequencer.FastLeaderTerm.REPLICA_TIMEOUT);
+            // ⚠️ M13.29e: a wal=true index's appends, through the term this
+            // pod leads or the newest it joined, batched into COMMITs.
+            assembly.defaultIngest().routeFast(FastRouting.fastIndices(assembly.catalog()),
+                    FastRouting.path(config, commitDisk, self,
+                            zones.learning(new io.github.huyz0.os.biningester.http
+                                    .HttpFastTransport(peerCommitTimeout(config), crossAz,
+                                            clientTls), assembly.store(), config.prefix()),
+                            assembly::heldTerm, java.util.UUID.randomUUID(),
+                            peerCommitTimeout(config)));
             // ⚠️ M13.28a: every pod holds copies, whichever term it leads.
             FastHolderFrames.register(fastFrames::handle, commitDisk);
             FastLeaderFrames.registerWrite(fastFrames::handle, assembly::heldTerm, commitDisk, self,

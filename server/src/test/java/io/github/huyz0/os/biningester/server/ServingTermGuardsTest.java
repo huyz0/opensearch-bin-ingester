@@ -92,4 +92,35 @@ class ServingTermGuardsTest {
             }
         }
     }
+
+    @Test
+    void aCHAINThatEvictedAVoidGivesNoCatchUp() throws Exception {
+        // ⚠️ M13.25i's review round 2, T5: one recovery entry voiding more
+        // streams than ChainMemory keeps -- 100,000 -- evicts a void.
+        try (MemoryBinStore store = new MemoryBinStore()) {
+            LeaseManager leases = new LeaseManager(store, config(), Clock.systemUTC());
+            FleetSequencer fleet = new FleetSequencer(store, config(), noPeers(),
+                    () -> LocalSequencer.start(store, PREFIX, leases, 8));
+            try {
+                fleet.commitAll(List.of(flush(0, "seg-1")));
+                LocalSequencer local = LocalSequencer.underneath(fleet.heldTerm()).orElseThrow();
+                List<io.github.huyz0.os.biningester.format.Recovery.VoidRange> voids =
+                        new java.util.ArrayList<>();
+                UUID other = UUID.fromString("00000000-0000-0000-0000-0000000000ae");
+                for (int partition = 0; partition <= 100_000; partition++) {
+                    voids.add(new io.github.huyz0.os.biningester.format.Recovery.VoidRange(
+                            new RunKey(other, partition), 0, 1));
+                }
+                local.recover(List.of(new io.github.huyz0.os.biningester.sequencer
+                        .StreamDecision.Decided(List.of(), voids, 1)), runs -> "seg-r");
+
+                assertThatThrownBy(() -> ServingTerm.respondCatchUp(fleet, store,
+                        new IndexCostLedger(), catchUp(), frame -> { }))
+                        .isInstanceOf(IOException.class)
+                        .hasMessageContaining("evicted a void");
+            } finally {
+                fleet.close();
+            }
+        }
+    }
 }

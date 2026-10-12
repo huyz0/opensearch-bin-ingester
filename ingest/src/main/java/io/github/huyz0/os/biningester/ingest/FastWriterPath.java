@@ -44,7 +44,7 @@ public final class FastWriterPath implements FastPath, FastBatcher.Batch {
 
     private final String podId;
     private final UUID incarnationId;
-    private final JoinedTerms joined;
+    private final java.util.function.Supplier<Optional<JoinedTerms.Leader>> leaders;
     private final Writer writer;
     private final int attempts;
     private final long bound;
@@ -53,13 +53,16 @@ public final class FastWriterPath implements FastPath, FastBatcher.Batch {
     /**
      * @param incarnationId this pod's incarnation: a restart's keys never
      *     collide with the last one's
+     * @param leaders the term to write through: the one this pod leads, else
+     *     the newest it joined (M13.29e) -- a leader joins no term of its own
      * @param bound {@code B}: an append longer than it goes the default way
      */
-    public FastWriterPath(String podId, UUID incarnationId, JoinedTerms joined, Writer writer,
+    public FastWriterPath(String podId, UUID incarnationId,
+            java.util.function.Supplier<Optional<JoinedTerms.Leader>> leaders, Writer writer,
             int attempts, long bound) {
         this.podId = Objects.requireNonNull(podId, "podId");
         this.incarnationId = Objects.requireNonNull(incarnationId, "incarnationId");
-        this.joined = Objects.requireNonNull(joined, "joined");
+        this.leaders = Objects.requireNonNull(leaders, "leaders");
         this.writer = Objects.requireNonNull(writer, "writer");
         if (attempts < 1 || bound < 1) {
             throw new IllegalArgumentException("at least one attempt, and a bound of one");
@@ -91,7 +94,7 @@ public final class FastWriterPath implements FastPath, FastBatcher.Batch {
     @Override
     public Optional<Map<RunKey, Long>> write(List<FastWriteFrame.CommitRun> runs)
             throws IOException {
-        Optional<JoinedTerms.Leader> leader = joined.latest();
+        Optional<JoinedTerms.Leader> leader = leaders.get();
         if (leader.isEmpty() || runs.stream().anyMatch(r -> r.records().size() > bound)) {
             return Optional.empty();
         }
