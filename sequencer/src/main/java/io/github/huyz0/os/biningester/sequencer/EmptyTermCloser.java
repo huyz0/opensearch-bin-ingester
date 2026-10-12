@@ -73,10 +73,22 @@ public final class EmptyTermCloser {
      *     many, and the next term start closes the rest
      */
     public int close(long epoch, List<Roster> unclosed) throws Stopped {
+        return close(epoch, unclosed, r -> false);
+    }
+
+    /**
+     * The same, closing too a term the takeover decided (M13.33i; ADR-0081
+     * §5 step 7): {@code decided} says whether every stream a roster's term
+     * holds is decided and committed -- the takeover's judgement, which only
+     * it can make. Oldest first, stopping at the first it cannot close.
+     */
+    public int close(long epoch, List<Roster> unclosed,
+            java.util.function.Predicate<Roster> decided) throws Stopped {
+        Objects.requireNonNull(decided, "decided");
         int closed = 0;
         for (int i = unclosed.size() - 1; i >= 0; i--) {
             try {
-                if (!closeOne(epoch, unclosed.get(i).epoch())) {
+                if (!closeOne(epoch, unclosed.get(i).epoch(), decided)) {
                     break;
                 }
             } catch (IOException failed) {
@@ -88,7 +100,8 @@ public final class EmptyTermCloser {
     }
 
     /** Whether term {@code term} is closed when this returns. */
-    private boolean closeOne(long epoch, long term) throws IOException {
+    private boolean closeOne(long epoch, long term,
+            java.util.function.Predicate<Roster> decided) throws IOException {
         String key = Roster.key(prefix, term);
         for (int attempt = 0; attempt < FastTermStart.MAX_ATTEMPTS; attempt++) {
             Optional<ObjectStat> stat = store.stat(key);
@@ -104,7 +117,7 @@ public final class EmptyTermCloser {
             }
             // ⚠️ ONLY WHILE THIS TERM'S FENCE HOLDS IT: a newer term fenced it
             // since, and closing is that term's to judge.
-            if (r.fencedBy() != epoch || !recordedNothing(r)) {
+            if (r.fencedBy() != epoch || !(recordedNothing(r) || decided.test(r))) {
                 return false;
             }
             Version version = stat.get().version();
