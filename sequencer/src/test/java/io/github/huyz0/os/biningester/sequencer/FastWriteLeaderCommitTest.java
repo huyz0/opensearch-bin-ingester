@@ -69,6 +69,23 @@ class FastWriteLeaderCommitTest {
         }
     }
 
+    /**
+     * Another writer's entry encoding to just over {@code bytes}: with the
+     * cap twice a batch, the leader's half admits it, and only a filler
+     * past that half refuses a later append (M13.27u).
+     */
+    static FastJournalRecord.Entry fillerOver(long bytes, FastWriteFrame.Commit other) {
+        List<io.github.huyz0.os.biningester.format.SegmentRecord> records =
+                new java.util.ArrayList<>();
+        FastJournalRecord.Entry e;
+        do {
+            records.add(other.runs().get(0).records().get(0));
+            e = new FastJournalRecord.Entry(7, FastWriteLeaderTest.S1, 500, 1, 9, other.key(),
+                    List.copyOf(records));
+        } while (e.encode().length <= bytes);
+        return e;
+    }
+
     private static FastJournalRecord.Entry entryOf(FastWriteFrame.Commit commit, int run,
             long first, int q) {
         return new FastJournalRecord.Entry(7, commit.runs().get(run).stream(), first, q, 3,
@@ -79,16 +96,16 @@ class FastWriteLeaderCommitTest {
     void anAPPENDRefusedMidBatchWithdrawsItWhole() throws Exception {
         FastWriteFrame.Commit commit = FastWriteLeaderTest.commit(1, FastWriteLeaderTest.S1,
                 FastWriteLeaderTest.S2);
-        long cap = entryOf(commit, 0, 100, 1).encode().length
+        long batch = entryOf(commit, 0, 100, 1).encode().length
                 + entryOf(commit, 1, 0, 2).encode().length;
         FillingFile file = new FillingFile();
-        FastJournal journal = FastJournal.recover(file, cap);
+        // ⚠️ THE CAP TWICE THE BATCH (M13.27u): the leader admits up to half.
+        FastJournal journal = FastJournal.recover(file, 2 * batch);
         file.journal = journal;
         FastWriteFrame.Commit other = FastWriteLeaderTest.commit(9, FastWriteLeaderTest.S1);
         // ANOTHER WRITER'S ENTRY, its own group: the withdrawal drops the
         // batch's group only.
-        file.filler = new FastJournalRecord.Entry(7, FastWriteLeaderTest.S1, 500, 1, 9,
-                other.key(), other.runs().get(0).records());
+        file.filler = fillerOver(batch, other);
         FastCursor cursor = new FastCursor(1_000);
         FastWriteLeader l = new FastWriteLeader(7, FastWriteLeaderTest.LEADER, cursor,
                 new TermRecordWriter(new MemoryBinStore(), "p", FastWriteLeaderTest.roster(),

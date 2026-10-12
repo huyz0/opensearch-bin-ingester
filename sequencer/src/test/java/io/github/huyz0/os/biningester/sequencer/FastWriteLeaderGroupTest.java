@@ -123,11 +123,12 @@ class FastWriteLeaderGroupTest {
     }
 
     @Test
-    void aBATCHFillingTheJournalExactlyToItsCapIsAssigned() throws Exception {
+    void aBATCHFillingTheLeadersHalfOfTheCapExactlyIsAssigned() throws Exception {
         FastWriteFrame.Commit commit = FastWriteLeaderTest.commit(1, FastWriteLeaderTest.S1);
         long size = new FastJournalRecord.Entry(7, FastWriteLeaderTest.S1, 100, 1, 3, commit.key(),
                 commit.runs().get(0).records()).encode().length;
-        FastWriteLeader l = leader(new MemoryJournalFile(), size, 1_000);
+        // ⚠️ ITS CAP = THE LEADER's HALF (M13.27u): the cap is twice it.
+        FastWriteLeader l = leader(new MemoryJournalFile(), 2 * size, 1_000);
 
         assertThat(l.commit(FastWriteLeaderTest.B, commit, FastWriteLeaderTest.roster(),
                 FastWriteLeaderTest.ALL)).isInstanceOf(FastWriteLeader.Pending.class);

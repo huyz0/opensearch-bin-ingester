@@ -32,11 +32,11 @@ class FastWriteLeaderGroupKeepTest {
                 + new FastJournalRecord.Entry(7, FastWriteLeaderTest.S2, 0, 2, 3, refused.key(),
                         refused.runs().get(1).records()).encode().length;
         FastWriteLeaderCommitTest.FillingFile file = new FastWriteLeaderCommitTest.FillingFile();
-        FastJournal journal = FastJournal.recover(file, earlierBytes + refusedBytes);
+        // ⚠️ THE CAP TWICE BOTH BATCHES (M13.27u): the leader admits up to half.
+        FastJournal journal = FastJournal.recover(file, 2 * (earlierBytes + refusedBytes));
         file.journal = journal;
         FastWriteFrame.Commit other = FastWriteLeaderTest.commit(9, FastWriteLeaderTest.S1);
-        file.filler = new FastJournalRecord.Entry(7, FastWriteLeaderTest.S1, 500, 1, 9,
-                other.key(), other.runs().get(0).records());
+        file.filler = FastWriteLeaderCommitTest.fillerOver(earlierBytes + refusedBytes, other);
         FastWriteLeader l = new FastWriteLeader(7, FastWriteLeaderTest.LEADER, new FastCursor(1_000),
                 new TermRecordWriter(new MemoryBinStore(), "p", FastWriteLeaderTest.roster(),
                         new Mono(), Duration.ofMillis(250)),

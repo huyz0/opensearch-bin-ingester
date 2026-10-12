@@ -183,6 +183,15 @@ public final class FastJournal {
         return heldBytes + bytes <= capBytes;
     }
 
+    /**
+     * Whether {@code bytes} more fit under the LEADER's share -- half the cap
+     * (M13.27u; ADR-0081 §5.7, §7): the cap is a holder's, twice the
+     * leader's, so stale entries a holder still keeps fill the other half.
+     */
+    public boolean fitsLeaderShare(long bytes) {
+        return heldBytes + bytes <= capBytes / 2;
+    }
+
     /** Appends {@code entry}, or refuses it -- false -- if held bytes would pass the cap. */
     public boolean append(FastJournalRecord.Entry entry) throws IOException {
         requireUsable();

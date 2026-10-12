@@ -213,8 +213,8 @@ public final class FastWriteLeader {
                     runs.add(new FastWriteFrame.AssignedRun(run.stream(), first, quorums.get(i),
                             !writer.az().equals(self.az()) && quorums.get(i) >= 2));
                 }
-                if (!journal.fits(bytes)) {
-                    return new Wait("the journal is at its cap");
+                if (!journal.fitsLeaderShare(bytes)) {
+                    return new Wait("the journal is at the leader's half of its cap");
                 }
                 for (FastJournalRecord.Entry e : entries) {
                     cursor.assign(e.key(), e.records().size());
