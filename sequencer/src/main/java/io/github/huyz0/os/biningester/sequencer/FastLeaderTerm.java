@@ -3,6 +3,7 @@ package io.github.huyz0.os.biningester.sequencer;
 
 import io.github.huyz0.os.biningester.binstore.BinStore;
 import io.github.huyz0.os.biningester.format.FastFrame;
+import io.github.huyz0.os.biningester.format.FastJournalRecord;
 import io.github.huyz0.os.biningester.format.FastWriteFrame;
 import io.github.huyz0.os.biningester.format.Roster;
 import io.github.huyz0.os.biningester.format.RunKey;
@@ -21,8 +22,8 @@ import java.util.stream.Collectors;
 /**
  * An elected term's fast-mode side at its leader (M13.27j, M13.27k): what the
  * term start learned, the JOINs it answers, and a departing pod's DEPART and
- * HELD; and the COMMITs it assigns (M13.27s), the rest of the write following
- * (M13.27m).
+ * HELD; the COMMITs it assigns (M13.27s) and the CONFIRMs that count their
+ * writers' copies (M13.27v), the rest of the write following (M13.27m).
  *
  * <p>⚠️ A JOIN IS ANSWERED ONLY ONCE THE ROSTER LISTS THE POD (ADR-0081 §1):
  * the incarnations that can hold a term's copies are exactly its members, so
@@ -221,33 +222,74 @@ public final class FastLeaderTerm {
             CommitDesk desk) throws IOException {
         Objects.requireNonNull(commit, "commit");
         Objects.requireNonNull(desk, "desk");
-        if (header.epoch() != epoch()) {
-            return notThisTerm(header);
-        }
-        Roster own = ownRoster();
-        if (own.fencedBy() > epoch()) {
-            return refused(FastFrame.Reason.LOWER_EPOCH, "term " + epoch()
-                    + " was fenced by " + own.fencedBy());
-        }
-        Optional<Roster.Member> writer = own.member(header.senderUid());
-        if (writer.isEmpty() || writer.get().state() != Roster.State.ROSTERED) {
-            return refused(FastFrame.Reason.NOT_ROSTERED, header.senderUid()
-                    + " is not rostered in term " + epoch());
-        }
-        // ⚠️ THE KEY's POD IS THE SENDER's (ADR-0084 decision 8; M13.52g): a
-        // pod committing under another's key would collide with its dedupe.
-        if (!commit.key().podId().equals(writer.get().incarnation().podId())) {
-            return refused(FastFrame.Reason.NOT_ROSTERED, "the key names pod "
-                    + commit.key().podId() + ", not the sender's, "
-                    + writer.get().incarnation().podId());
+        Writer writer = writer(header, commit.key());
+        if (writer.refused() != null) {
+            return writer.refused();
         }
         // ⚠️ AVAILABLE = EVERY POD THE ROSTER LISTS, for now: a pod's loss is
         // judged by its UID's liveness, which M13.33 brings. A departed one
         // lends no zone -- FastAdmission counts only the ROSTERED.
-        Set<String> available = own.members().stream()
+        Set<String> available = writer.roster().members().stream()
                 .map(m -> m.incarnation().podUid()).collect(Collectors.toSet());
-        return desk.answer(new QuorumFrontier.Holder(header.senderUid(),
-                writer.get().incarnation().az()), commit, own, available);
+        return desk.answer(writer.holder(), commit, writer.roster(), available);
+    }
+
+    /**
+     * The answer to a writer's CONFIRM, by {@code desk} (M13.27v; ADR-0081
+     * §2.3): from the ROSTERED writer under its own key, its copy counts --
+     * or, not journaled, is replaced -- answered by an empty HELD_STATUS, the
+     * EXPOSED following once the quorum frontier passes the batch.
+     *
+     * <p>⚠️ CHECKED AS ITS COMMIT WAS: a copy counted on another pod's word
+     * would expose a batch on a copy no zone holds.
+     *
+     * @throws IOException the store failed; the writer retries
+     */
+    public FastFrame.Body answerConfirm(FastFrame.Header header, FastWriteFrame.Confirm confirm,
+            CommitDesk desk) throws IOException {
+        Objects.requireNonNull(confirm, "confirm");
+        Objects.requireNonNull(desk, "desk");
+        Writer writer = writer(header, confirm.key());
+        if (writer.refused() != null) {
+            return writer.refused();
+        }
+        desk.confirm(writer.holder(), confirm);
+        return new FastFrame.HeldStatusReport(FastFrame.HeldStatus.NONE);
+    }
+
+    /** A write frame's sender: its holder and the roster judging it, or why refused. */
+    private record Writer(QuorumFrontier.Holder holder, Roster roster,
+            FastFrame.Refused refused) {
+    }
+
+    /**
+     * ⚠️ IN THIS ORDER: the term, its fence, the sender ROSTERED in it, and
+     * the key's pod the sender's own (ADR-0084 decision 8; M13.52g) -- a pod
+     * writing under another's key would collide with its dedupe.
+     */
+    private Writer writer(FastFrame.Header header, FastJournalRecord.IdempotencyKey key)
+            throws IOException {
+        if (header.epoch() != epoch()) {
+            return new Writer(null, null, notThisTerm(header));
+        }
+        Roster own = ownRoster();
+        if (own.fencedBy() > epoch()) {
+            return new Writer(null, null, refused(FastFrame.Reason.LOWER_EPOCH, "term "
+                    + epoch() + " was fenced by " + own.fencedBy()));
+        }
+        Optional<Roster.Member> member = own.member(header.senderUid());
+        if (member.isEmpty() || member.get().state() != Roster.State.ROSTERED) {
+            return new Writer(null, null, refused(FastFrame.Reason.NOT_ROSTERED,
+                    header.senderUid() + " is not rostered in term " + epoch()));
+        }
+        Roster.Incarnation incarnation = member.get().incarnation();
+        if (!key.podId().equals(incarnation.podId())) {
+            return new Writer(null, null, refused(FastFrame.Reason.NOT_ROSTERED,
+                    "the key names pod " + key.podId() + ", not the sender's, "
+                            + incarnation.podId()));
+        }
+        return new Writer(new QuorumFrontier.Holder(header.senderUid(), incarnation.az()),
+                own, null);
     }
 
     /**

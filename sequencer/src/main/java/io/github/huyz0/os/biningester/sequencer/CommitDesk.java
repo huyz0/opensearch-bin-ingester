@@ -83,6 +83,11 @@ public final class CommitDesk {
         };
     }
 
+    /** A writer's CONFIRM (M13.27v): its copy counted, or replaced if not journaled. */
+    public void confirm(Holder writer, FastWriteFrame.Confirm confirm) {
+        write.confirm(writer, confirm);
+    }
+
     /**
      * The EXPOSED answers now owed, a retried exposed batch's among them: what
      * the EXPOSED sender (M13.27m) drains.

@@ -126,7 +126,12 @@ is the key, `assignedAfter`, a u32 count of (RunKey, first offset i64) and
 run list; REPLICA a u32 count of journal entries, each its byte length u32
 then the whole journal record of §4. A flag other than 0 or 1, a run whose
 records do not fill its length and a REPLICA entry that is not one whole
-journal entry are refused.
+journal entry are refused. ⚠️ Stated by M13.27v: the leader answers a
+CONFIRM it accepts with an empty HELD_STATUS -- the acknowledgement DEPART
+phase 2 already uses -- and one it refuses with REFUSED as it refuses a
+COMMIT; the batch's EXPOSED is never that answer, but sent once the quorum
+frontier passes it. A CONFIRM about an entry the leader does not hold counts
+nowhere and is acknowledged the same way.
 
 A catch-up or `/seg` response served from a journal is not a frame but an HTTP
 body; it carries the epoch it was served under in a `Binstore-Fast-Epoch`

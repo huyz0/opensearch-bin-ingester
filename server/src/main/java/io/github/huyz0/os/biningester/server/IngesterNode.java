@@ -247,6 +247,11 @@ public final class IngesterNode implements AutoCloseable {
                     (header, body) -> FastLeaderFrames.answerCommit(assembly.heldTerm(),
                             commitDisk, self, header,
                             (io.github.huyz0.os.biningester.format.FastWriteFrame.Commit) body));
+            // ⚠️ M13.27v: a writer's CONFIRM, counted by the same desk.
+            fastFrames.handle(io.github.huyz0.os.biningester.format.FastWriteFrame.KIND_CONFIRM,
+                    (header, body) -> FastLeaderFrames.answerConfirm(assembly.heldTerm(),
+                            commitDisk, self, header,
+                            (io.github.huyz0.os.biningester.format.FastWriteFrame.Confirm) body));
             IngesterNode node = new IngesterNode(assembly,
                     FrontDoor.start(assembly, clock, journal::add, crossAz,
                             Optional.of(fastFrames), peerTls), transport, clock,

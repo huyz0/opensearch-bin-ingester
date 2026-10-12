@@ -12,7 +12,7 @@ import java.util.Optional;
 
 /**
  * A node's handler of the frames a leader answers -- JOIN (M13.27o), DEPART
- * and HELD (M13.27k), COMMIT (M13.27s): the term this pod leads answers them, and a pod leading
+ * and HELD (M13.27k), COMMIT (M13.27s), CONFIRM (M13.27v): the term this pod leads answers them, and a pod leading
  * no term refuses them {@code NOT_ROSTERED} -- the sender learned an old
  * leader, and asks the new one.
  */
@@ -39,6 +39,23 @@ final class FastLeaderFrames {
                     "this pod holds no fast journal");
         }
         return term.get().answerCommit(header, commit,
+                term.get().commitDesk(disk.journal().get(), self));
+    }
+
+    /** A CONFIRM (M13.27v), counted by the same desk its COMMIT was assigned by. */
+    static FastFrame.Body answerConfirm(Sequencer held, FastDisk disk, Roster.Incarnation self,
+            FastFrame.Header header, FastWriteFrame.Confirm confirm) throws IOException {
+        Optional<FastLeaderTerm> term =
+                LocalSequencer.underneath(held).flatMap(LocalSequencer::fastTerm);
+        if (term.isEmpty()) {
+            return new FastFrame.Refused(FastFrame.Reason.NOT_ROSTERED, Optional.empty(),
+                    "this pod leads no term");
+        }
+        if (disk.journal().isEmpty()) {
+            return new FastFrame.Refused(FastFrame.Reason.NOT_FAST, Optional.empty(),
+                    "this pod holds no fast journal");
+        }
+        return term.get().answerConfirm(header, confirm,
                 term.get().commitDesk(disk.journal().get(), self));
     }
 

@@ -293,9 +293,19 @@ public final class FastWriteLeader {
         }
     }
 
-    /** The writer's CONFIRM: its copy counts if journaled with the offsets. */
+    /**
+     * The writer's CONFIRM: its copy counts if journaled with the offsets.
+     *
+     * <p>⚠️ ONLY FOR A RUN OF THE SENDER's OWN BATCH under the CONFIRM's key
+     * (M13.27v review round 1, P1): {@code assignedAfter} is shared by every
+     * batch between two decisions, so a CONFIRM naming another writer's entry
+     * would count a copy no pod in its zone holds.
+     */
     public synchronized void confirm(Holder writer, FastWriteFrame.Confirm confirm) {
         for (FastWriteFrame.RunAt run : confirm.runs()) {
+            if (!ownRun(writer, confirm, run)) {
+                continue;
+            }
             EntryId id = new EntryId(epoch, confirm.assignedAfter(), run.stream(),
                     run.firstOffset());
             if (confirm.copyJournaled()) {
@@ -308,6 +318,21 @@ public final class FastWriteLeader {
                 frontier.withdraw(id, writer.podUid());
             }
         }
+    }
+
+    private boolean ownRun(Holder writer, FastWriteFrame.Confirm confirm,
+            FastWriteFrame.RunAt run) {
+        for (Batch b : batches) {
+            if (b.key.equals(confirm.key()) && b.writer.podUid().equals(writer.podUid())
+                    && b.assignedAfter == confirm.assignedAfter()) {
+                for (FastJournalRecord.Entry e : b.entries) {
+                    if (e.key().equals(run.stream()) && e.firstOffset() == run.firstOffset()) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     /** A holder's REPLICA_ACK, sent once its group is fsynced. */
