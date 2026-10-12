@@ -87,6 +87,45 @@ class FastWriterPathTest {
     }
 
     @Test
+    void aBATCHOfRunsIsAnsweredByStream() throws Exception {
+        // ⚠️ M13.29d: the leader's runs matched by stream, never by position.
+        RunKey t = new RunKey(new UUID(2, 2), 0);
+        Writer writer = new Writer();
+        writer.answers.add(new FastWriter.Written(new FastWriteFrame.Assigned(0, List.of(
+                new FastWriteFrame.AssignedRun(t, 5, 1, false),
+                new FastWriteFrame.AssignedRun(S, 40, 1, false)))));
+
+        assertThat(path(joined(), writer).write(List.of(
+                new FastWriteFrame.CommitRun(S, docs(1)), new FastWriteFrame.CommitRun(t, docs(2)))))
+                .hasValue(java.util.Map.of(S, 40L, t, 5L));
+    }
+
+    @Test
+    void anASSIGNEDMissingARunIsAFailureTheProducerRetries() {
+        // ⚠️ M13.29c review round 1, P1: an IOException, never an unchecked one.
+        RunKey t = new RunKey(new UUID(2, 2), 0);
+        Writer writer = new Writer();
+        writer.answers.add(written(40));
+
+        assertThatThrownBy(() -> path(joined(), writer).write(List.of(
+                new FastWriteFrame.CommitRun(S, docs(1)), new FastWriteFrame.CommitRun(t, docs(2)))))
+                .isInstanceOf(IOException.class);
+    }
+
+    @Test
+    void anASSIGNEDNamingARunNotSentIsAFailureTheProducerRetries() {
+        // ⚠️ M13.29d review round 1, T4.
+        RunKey t = new RunKey(new UUID(2, 2), 0);
+        Writer writer = new Writer();
+        writer.answers.add(new FastWriter.Written(new FastWriteFrame.Assigned(0, List.of(
+                new FastWriteFrame.AssignedRun(S, 40, 1, false),
+                new FastWriteFrame.AssignedRun(t, 5, 1, false)))));
+
+        assertThatThrownBy(() -> path(joined(), writer).write(List.of(
+                new FastWriteFrame.CommitRun(S, docs(1))))).isInstanceOf(IOException.class);
+    }
+
+    @Test
     void aRETRYIsResentUnderTheSameKey() throws Exception {
         Writer writer = new Writer();
         writer.answers.add(new FastWriter.Retry("held"));

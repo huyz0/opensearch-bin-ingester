@@ -8,7 +8,9 @@ import io.github.huyz0.os.biningester.format.SegmentRecord;
 import io.github.huyz0.os.biningester.sequencer.FastWriter;
 import io.github.huyz0.os.biningester.sequencer.JoinedTerms;
 import java.io.IOException;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
@@ -31,7 +33,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * one range. A fenced or unrostered writer refuses instead: the producer's
  * retry finds the newer term, or this pod's re-join.
  */
-public final class FastWriterPath implements FastPath {
+public final class FastWriterPath implements FastPath, FastBatcher.Batch {
 
     /** {@link FastWriter#write}: a seam, so the outcomes are tested one by one. */
     @FunctionalInterface
@@ -69,22 +71,39 @@ public final class FastWriterPath implements FastPath {
     @Override
     public Optional<AppendResult> append(RunKey stream, List<SegmentRecord> records)
             throws IOException {
+        Optional<Map<RunKey, Long>> firsts =
+                write(List.of(new FastWriteFrame.CommitRun(stream, records)));
+        if (firsts.isEmpty()) {
+            return Optional.empty();
+        }
+        long first = firsts.get().get(stream);
+        return Optional.of(new AppendResult(records.size(), first,
+                first + records.size() - 1));
+    }
+
+    /**
+     * Writes {@code runs}, one per stream, as ONE COMMIT (M13.29d): each
+     * stream's first offset, or empty where it goes the default way.
+     *
+     * @throws IOException the batch could not be written, or the leader's
+     *     answer does not assign every run
+     */
+    @Override
+    public Optional<Map<RunKey, Long>> write(List<FastWriteFrame.CommitRun> runs)
+            throws IOException {
         Optional<JoinedTerms.Leader> leader = joined.latest();
-        if (leader.isEmpty() || records.size() > bound) {
+        if (leader.isEmpty() || runs.stream().anyMatch(r -> r.records().size() > bound)) {
             return Optional.empty();
         }
         FastWriteFrame.Commit commit = new FastWriteFrame.Commit(
                 new FastJournalRecord.IdempotencyKey(podId, incarnationId,
-                        fastSeq.getAndIncrement()),
-                List.of(new FastWriteFrame.CommitRun(stream, records)));
+                        fastSeq.getAndIncrement()), runs);
         JoinedTerms.Leader to = leader.get();
         String why = "";
         for (int attempt = 0; attempt < attempts; attempt++) {
             switch (writer.write(to.epoch(), to.uid(), to.endpoint(), commit)) {
                 case FastWriter.Written written -> {
-                    long first = written.assigned().runs().get(0).firstOffset();
-                    return Optional.of(new AppendResult(records.size(), first,
-                            first + records.size() - 1));
+                    return Optional.of(firsts(runs, written.assigned()));
                 }
                 case FastWriter.NotFast notFast -> {
                     return Optional.empty();
@@ -98,5 +117,27 @@ public final class FastWriterPath implements FastPath {
         }
         throw new IOException("the batch was not exposed after " + attempts
                 + " attempts: " + why);
+    }
+
+    /**
+     * Each run's first offset, matched BY STREAM (M13.29c review round 1,
+     * P1): an answer missing a run, or naming another, is a failure the
+     * producer retries, never an unchecked one.
+     */
+    private static Map<RunKey, Long> firsts(List<FastWriteFrame.CommitRun> runs,
+            FastWriteFrame.Assigned assigned) throws IOException {
+        Map<RunKey, Long> firsts = new HashMap<>();
+        for (FastWriteFrame.AssignedRun run : assigned.runs()) {
+            firsts.put(run.stream(), run.firstOffset());
+        }
+        for (FastWriteFrame.CommitRun run : runs) {
+            if (!firsts.containsKey(run.stream())) {
+                throw new IOException("the leader assigned no run of " + run.stream());
+            }
+        }
+        if (firsts.size() != runs.size()) {
+            throw new IOException("the leader assigned runs the COMMIT did not carry");
+        }
+        return firsts;
     }
 }
