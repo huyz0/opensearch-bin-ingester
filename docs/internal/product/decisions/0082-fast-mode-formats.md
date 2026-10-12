@@ -81,7 +81,7 @@ Kinds:
 | 6 | `REPLICA_ACK` | holder → leader | `assignedAfter` u32; per run: RunKey, firstOffset (with the header's epoch, the batch's full identity) -- one per batch |
 | 7 | `PUBLISH` | leader → interested pod | the exposed entries the pod is interested in, of one or more batches (§4) -- a frame per exposure step per pod, never per stream |
 | 8 | `INTEREST` | pod → leader | RunKeys added and removed |
-| 9 | `FENCE` | successor → member | u32 count of the unclosed terms' epochs, each i64, strictly ascending above `closedThrough`; `closedThrough` i64, the highest closed epoch, every entry at or below which the member drops |
+| 9 | `FENCE` | successor → member | u32 count of the unclosed terms' epochs, each i64, strictly ascending above `closedThrough`; `closedThrough` i64, the highest closed epoch, every entry at or below which the member drops; the page of COLLECTED it asks for u32 (M13.33b) |
 | 10 | `COLLECTED` | member → successor | page number u32, `last` u8, entry count u32, then that many entries it holds of those terms (§4); the successor treats a member as answered only on the page marked `last` with every earlier page received (M13.22e review round 3, P3) |
 | 11 | `RELEASE` | leader → holder | u32 count of streams, each once: RunKey, release below offset i64 |
 | 12 | `JOIN` | pod → leader | incarnation: podId, podUid, az, endpoint; the HELD body of what its journal still holds |
@@ -144,7 +144,17 @@ holding nothing answers one empty page marked last; RELEASE is a u32 count
 of streams, each a RunKey then its release-below offset i64, no stream
 twice. A FENCE naming no term, epochs out of order or at or below
 `closedThrough`, a flag other than 0 or 1, an entry that is not one whole
-journal entry and a stream named twice are refused.
+journal entry and a stream named twice are refused. ⚠️ Stated by M13.33b:
+FENCE ends with the page of COLLECTED it asks for, a u32 -- the successor
+asks for each page by number and the member answers it from what it holds
+of the fenced terms in one fixed order (term, `assignedAfter`, stream, first
+offset), at most a frame's bytes a page and an entry larger alone on its
+page, a page past the last empty and marked last. With the member's epoch
+raised, what it holds of those terms does not change while it is collected,
+so a page asked again is the same page and a lost answer skips none; a
+member-side cursor would skip a page on a lost answer, and pages a member
+pushed could arrive out of order. The layout landed by M13.33a had no reader
+or writer, so no old FENCE exists.
 
 A catch-up or `/seg` response served from a journal is not a frame but an HTTP
 body; it carries the epoch it was served under in a `Binstore-Fast-Epoch`

@@ -32,8 +32,9 @@ class FastTakeoverFrameTest {
 
     @Test
     void eachKINDEncodesToItsGoldenBytes() throws Exception {
+        // ⚠️ PAGE 3, intentionally: M13.33b added the page asked to FENCE.
         assertThat(FastFrame.encode(9, "uid-s", "uid-m",
-                new FastTakeoverFrame.Fence(List.of(7L, 8L), 6)))
+                new FastTakeoverFrame.Fence(List.of(7L, 8L), 6, 3)))
                 .isEqualTo(FastFrameTest.golden("fast-fence-v1.bin"));
         assertThat(FastFrame.encode(9, "uid-m", "uid-s",
                 new FastTakeoverFrame.Collected(3, true, List.of(entry()))))
@@ -45,7 +46,7 @@ class FastTakeoverFrameTest {
     @Test
     void eachGOLDENFrameDecodesToItsBody() throws Exception {
         assertThat(FastFrame.decode(FastFrameTest.golden("fast-fence-v1.bin")).body())
-                .isEqualTo(new FastTakeoverFrame.Fence(List.of(7L, 8L), 6));
+                .isEqualTo(new FastTakeoverFrame.Fence(List.of(7L, 8L), 6, 3));
         FastTakeoverFrame.Collected collected = (FastTakeoverFrame.Collected) FastFrame.decode(
                 FastFrameTest.golden("fast-collected-v1.bin")).body();
         assertThat(collected.page()).isEqualTo(3);
@@ -112,9 +113,11 @@ class FastTakeoverFrameTest {
         assertThatThrownBy(() -> FastFrame.decode(trailing)).isInstanceOf(IOException.class);
 
         byte[] descending = fence.clone();
-        // the two epochs, 7 then 8, swapped: each is the last byte of its i64
-        descending[fence.length - 17] = 8;
-        descending[fence.length - 9] = 7;
+        // the two epochs, 7 then 8, swapped: each is the last byte of its i64,
+        // before closedThrough's 8 bytes and, intentionally since M13.33b, the
+        // page's 4
+        descending[fence.length - 21] = 8;
+        descending[fence.length - 13] = 7;
         assertThatThrownBy(() -> FastFrame.decode(descending)).isInstanceOf(IOException.class);
 
         byte[] release = FastFrameTest.golden("fast-release-v1.bin");

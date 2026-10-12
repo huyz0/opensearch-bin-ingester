@@ -40,6 +40,15 @@ public final class HolderGate {
     }
 
     /**
+     * Runs {@code call} under this gate whether or not the pod is departing
+     * (M13.33b review round 1, P1): a FENCE's page is read here, so no copy
+     * a REPLICA appends lands between two of its pages.
+     */
+    public synchronized <T> T exclusively(IoCall<T> call) throws IOException {
+        return call.call();
+    }
+
+    /**
      * Stops accepting copies and says whether {@code journal} holds nothing
      * -- one step, so no copy lands between the two.
      */

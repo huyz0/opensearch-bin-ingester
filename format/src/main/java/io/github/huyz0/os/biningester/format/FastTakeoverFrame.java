@@ -16,7 +16,9 @@ import java.util.Set;
  *
  * <p>FENCE is a u32 count of the unclosed terms' epochs, each an i64,
  * strictly ascending and each above {@code closedThrough}, then
- * {@code closedThrough} i64. COLLECTED is the page number u32, {@code last}
+ * {@code closedThrough} i64, then the page of COLLECTED it asks for u32
+ * (M13.33b): the successor asks for each page by number, so a lost answer
+ * is asked for again and never skips one. COLLECTED is the page number u32, {@code last}
  * u8, a u32 count of entries, each its byte length u32 then the whole journal
  * record of ADR-0082 §4, as a REPLICA carries one. RELEASE is a u32 count of
  * streams, each a RunKey then its release-below offset i64, no stream twice.
@@ -35,12 +37,19 @@ public final class FastTakeoverFrame {
     private FastTakeoverFrame() {
     }
 
-    /** FENCE, successor to member: the unclosed terms it takes over, and the highest closed. */
-    public record Fence(List<Long> unclosedEpochs, long closedThrough) implements FastFrame.Body {
+    /**
+     * FENCE, successor to member: the unclosed terms it takes over, the
+     * highest closed, and the page of the member's COLLECTED it asks for.
+     */
+    public record Fence(List<Long> unclosedEpochs, long closedThrough, long page)
+            implements FastFrame.Body {
         public Fence {
             unclosedEpochs = List.copyOf(unclosedEpochs);
             if (closedThrough < 0) {
                 throw new IllegalArgumentException("closedThrough is never negative");
+            }
+            if (page < 0 || page > FastFrame.MAX_U32) {
+                throw new IllegalArgumentException("a page number is a u32: " + page);
             }
             if (unclosedEpochs.isEmpty()) {
                 throw new IllegalArgumentException("a FENCE names at least one unclosed term");
@@ -53,6 +62,11 @@ public final class FastTakeoverFrame {
                 }
                 previous = epoch;
             }
+        }
+
+        /** The first page. */
+        public Fence(List<Long> unclosedEpochs, long closedThrough) {
+            this(unclosedEpochs, closedThrough, 0);
         }
 
         @Override
@@ -114,6 +128,7 @@ public final class FastTakeoverFrame {
                     FastFrame.i64(out, epoch);
                 }
                 FastFrame.i64(out, f.closedThrough());
+                FastFrame.u32(out, f.page());
             }
             case Collected c -> {
                 FastFrame.u32(out, c.page());
@@ -145,7 +160,8 @@ public final class FastTakeoverFrame {
                     for (long i = 0; i < n; i++) {
                         epochs.add(FastFrame.i64(c));
                     }
-                    yield new Fence(epochs, FastFrame.i64(c));
+                    long closedThrough = FastFrame.i64(c);
+                    yield new Fence(epochs, closedThrough, FastFrame.u32(c));
                 }
                 case KIND_COLLECTED -> {
                     long page = FastFrame.u32(c);

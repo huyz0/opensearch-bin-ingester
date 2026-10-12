@@ -33,12 +33,28 @@ public final class ReplicaHolder {
     private final FastJournal journal;
     private final JoinedTerms joined;
     private final HolderGate gate;
+    private final java.util.function.LongSupplier fence;
 
     public ReplicaHolder(FastJournal journal, JoinedTerms joined, HolderGate gate) {
+        this(journal, joined, gate, () -> 0);
+    }
+
+    /**
+     * The same, re-checking the pod's {@code fence} under the gate (M13.33b
+     * review round 1, P1): a REPLICA that passed the router's fence before a
+     * successor's FENCE raised it is refused LOWER_EPOCH rather than appended
+     * between two of the FENCE's pages.
+     */
+    public ReplicaHolder(FastJournal journal, JoinedTerms joined, HolderGate gate,
+            java.util.function.LongSupplier fence) {
         this.journal = Objects.requireNonNull(journal, "journal");
         this.joined = Objects.requireNonNull(joined, "joined");
         this.gate = Objects.requireNonNull(gate, "gate");
+        this.fence = Objects.requireNonNull(fence, "fence");
     }
+
+    /** What the gate decided: kept, past the cap, or below the fence. */
+    private enum Kept { KEPT, FULL, FENCED }
 
     /**
      * The answer to {@code replica}, sent under {@code header}.
@@ -66,11 +82,16 @@ public final class ReplicaHolder {
                         + "of its own term");
             }
         }
-        Optional<Boolean> kept = gate.whileAccepting(() -> keep(replica.entries()));
+        Optional<Kept> kept = gate.whileAccepting(() -> epoch < fence.getAsLong() ? Kept.FENCED
+                : keep(replica.entries()) ? Kept.KEPT : Kept.FULL);
         if (kept.isEmpty()) {
             return refused(FastFrame.Reason.DEPARTING, "this pod is departing");
         }
-        if (!kept.get()) {
+        if (kept.get() == Kept.FENCED) {
+            return refused(FastFrame.Reason.LOWER_EPOCH, "term " + epoch
+                    + " is below this pod's fence");
+        }
+        if (kept.get() == Kept.FULL) {
             return refused(FastFrame.Reason.BACKPRESSURE, "this pod's journal is at its cap");
         }
         List<FastWriteFrame.RunAt> runs = new ArrayList<>();

@@ -18,12 +18,21 @@ import java.util.function.BiConsumer;
  */
 final class FastHolderFrames {
 
+    /**
+     * A COLLECTED page's entry bytes: one peer frame less 1 MiB for the
+     * header and the per-entry lengths (ADR-0082 §2: COLLECTED is streamed in
+     * pages of the frame's size).
+     */
+    static final long COLLECTED_PAGE_BYTES =
+            io.github.huyz0.os.biningester.http.FastFrameService.MAX_FRAME_BYTES - (1L << 20);
+
     private FastHolderFrames() {
     }
 
     static void register(BiConsumer<Integer, FastFrameRouter.Handler> handle, FastDisk disk) {
         Optional<ReplicaHolder> holder = disk.journal().map(
-                journal -> new ReplicaHolder(journal, disk.joined(), disk.gate()));
+                journal -> new ReplicaHolder(journal, disk.joined(), disk.gate(),
+                        disk.fence()::highest));
         handle.accept(FastWriteFrame.KIND_REPLICA, (header, body) -> {
             if (holder.isEmpty()) {
                 return new FastFrame.Refused(FastFrame.Reason.NOT_FAST, Optional.empty(),
@@ -31,6 +40,20 @@ final class FastHolderFrames {
             }
             return holder.get().answer(header, (FastWriteFrame.Replica) body);
         });
+        // ⚠️ M13.33b: a successor's FENCE, answered from this pod's journal --
+        // a diskless pod holds nothing, so answers one empty page marked last.
+        Optional<io.github.huyz0.os.biningester.sequencer.FenceAnswer> fences = disk.journal().map(
+                journal -> new io.github.huyz0.os.biningester.sequencer.FenceAnswer(journal,
+                        COLLECTED_PAGE_BYTES, disk.gate()));
+        handle.accept(io.github.huyz0.os.biningester.format.FastTakeoverFrame.KIND_FENCE,
+                (header, body) -> {
+                    var fence = (io.github.huyz0.os.biningester.format.FastTakeoverFrame.Fence) body;
+                    if (fences.isEmpty()) {
+                        return new io.github.huyz0.os.biningester.format.FastTakeoverFrame
+                                .Collected(fence.page(), true, java.util.List.of());
+                    }
+                    return fences.get().answer(header, fence);
+                });
         handle.accept(FastWriteFrame.KIND_EXPOSED, (header, body) -> {
             Optional<String> leader = disk.joined().leaderOf(header.epoch());
             if (leader.isEmpty() || !leader.get().equals(header.senderUid())) {
