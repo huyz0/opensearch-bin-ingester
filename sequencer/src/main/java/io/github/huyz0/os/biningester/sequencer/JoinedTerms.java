@@ -15,8 +15,14 @@ import java.util.TreeMap;
  */
 public final class JoinedTerms {
 
+    /** A joined term's leader, where a writer sends its batches (M13.29c). */
+    public record Leader(long epoch, String uid, String endpoint) {
+    }
+
     /** Each joined term, by epoch, and its leader's UID: empty where it was not recorded. */
     private final TreeMap<Long, String> joined = new TreeMap<>();
+    /** Each joined term's leader endpoint, where its join recorded one. */
+    private final TreeMap<Long, String> endpoints = new TreeMap<>();
     private long closedThrough;
 
     /** A JOINED for {@code epoch} arrived, naming the highest closed epoch. */
@@ -29,6 +35,16 @@ public final class JoinedTerms {
      * journals a REPLICA only from it.
      */
     public synchronized void joined(long epoch, long closedThrough, String leaderUid) {
+        joined(epoch, closedThrough, leaderUid, "");
+    }
+
+    /**
+     * The same, at {@code leaderEndpoint}, where the join reached the leader
+     * (M13.29c): a writer's batches of the term go there.
+     */
+    public synchronized void joined(long epoch, long closedThrough, String leaderUid,
+            String leaderEndpoint) {
+        java.util.Objects.requireNonNull(leaderEndpoint, "leaderEndpoint");
         if (epoch < 1 || closedThrough < 0) {
             throw new IllegalArgumentException("a joined term is at least 1, a closed one "
                     + "never negative");
@@ -37,8 +53,25 @@ public final class JoinedTerms {
         this.closedThrough = Math.max(this.closedThrough, closedThrough);
         if (epoch > this.closedThrough) {
             joined.put(epoch, leaderUid);
+            endpoints.put(epoch, leaderEndpoint);
         }
         joined.headMap(this.closedThrough, true).clear();
+        endpoints.headMap(this.closedThrough, true).clear();
+    }
+
+    /**
+     * The newest joined term's leader, where its join recorded the leader and
+     * its endpoint (M13.29c): empty where it did not, or no term is held.
+     */
+    public synchronized Optional<Leader> latest() {
+        if (joined.isEmpty()) {
+            return Optional.empty();
+        }
+        long epoch = joined.lastKey();
+        String uid = joined.get(epoch);
+        String endpoint = endpoints.getOrDefault(epoch, "");
+        return uid.isEmpty() || endpoint.isEmpty() ? Optional.empty()
+                : Optional.of(new Leader(epoch, uid, endpoint));
     }
 
     /** Whether this pod may journal, or send, an entry of {@code epoch}. */

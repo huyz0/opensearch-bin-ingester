@@ -130,7 +130,7 @@ public final class TermJoiner {
         }
         return switch (body) {
             case FastFrame.Joined j -> {
-                joined.joined(epoch, j.closedThrough(), leaderUid);
+                joined.joined(epoch, j.closedThrough(), leaderUid, leaderEndpoint);
                 yield new Joined(epoch, j.closedThrough(), j.status());
             }
             case FastFrame.Refused r -> new Refused(r.reason(), r.text());

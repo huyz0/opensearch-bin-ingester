@@ -36,4 +36,20 @@ class TermJoinerLeaderTest {
 
         assertThat(terms.leaderOf(7)).contains("uid-l");
     }
+
+    @Test
+    void aJOINRecordsWhereItReachedTheLeader() throws Exception {
+        // ⚠️ M13.29c: a writer's batches of the term go to that endpoint.
+        MemoryBinStore store = new MemoryBinStore();
+        store.put(LEASE, Body.ofBytes(new Lease(7, "leader", "", 1_000).encode()));
+        JoinedTerms terms = new JoinedTerms();
+        TermJoiner joiner = new TermJoiner(POD, (endpoint, frame) -> FastFrame.encode(7, "uid-l",
+                "uid-2", new FastFrame.Joined(0, FastFrame.HeldStatus.NONE)),
+                EpochFence.start(store, LEASE, Optional.empty()), terms,
+                () -> FastFrame.Held.NONE);
+
+        joiner.join(7, "uid-l", "leader:9443");
+
+        assertThat(terms.latest()).hasValue(new JoinedTerms.Leader(7, "uid-l", "leader:9443"));
+    }
 }
