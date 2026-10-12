@@ -130,6 +130,12 @@ public final class QuorumFrontier {
         s.entries.put(id.firstOffset(), e);
     }
 
+    /** Whether a copy of {@code id} is asked of {@code podUid} and not yet held (M13.27y). */
+    public synchronized boolean isAsked(EntryId id, String podUid) {
+        Entry e = entry(id);
+        return e != null && e.asked.containsKey(podUid);
+    }
+
     /** A copy was asked of {@code holder}; it counts once {@link #copied}. */
     public synchronized void asked(EntryId id, Holder holder) {
         Entry e = entry(id);

@@ -40,6 +40,15 @@ public final class FastLeaderTerm {
     /** ADR-0081's per-stream bound {@code B}: a cursor never more than this past its commit. */
     public static final long STREAM_BOUND = 65_536;
 
+    /**
+     * ADR-0081's replica timeout (M13.27y; its seventh constant, measured by
+     * M13.37): how long a holder that has not answered, or refused with
+     * backpressure, is unavailable, and how often a waiting REPLICA is
+     * re-sent to it -- far below the lease TTL, since it bounds how long one
+     * slow holder stalls a stream's acks.
+     */
+    public static final java.time.Duration REPLICA_TIMEOUT = java.time.Duration.ofSeconds(1);
+
     /** How long a writer waits for the flush another COMMIT's caller runs. */
     static final java.time.Duration ANSWER_WAIT = java.time.Duration.ofSeconds(10);
 
@@ -59,6 +68,9 @@ public final class FastLeaderTerm {
      * must never wait on one.
      */
     private volatile Roster latest;
+    /** When each unavailable holder last failed to answer, or refused: M13.27y. */
+    private final Map<String, Long> unavailableAt =
+            new java.util.concurrent.ConcurrentHashMap<>();
     /** The desk this term's COMMITs reach; null until the first. */
     private CommitDesk desk;
     private long cachedAt;
@@ -350,14 +362,30 @@ public final class FastLeaderTerm {
         Objects.requireNonNull(transport, "transport");
         Roster own = ownRoster();
         String self = opened.started().own().leader().podUid();
-        List<QuorumFrontier.Holder> available = own.members().stream()
+        List<QuorumFrontier.Holder> ready = own.members().stream()
                 .filter(m -> m.state() == Roster.State.ROSTERED)
                 .filter(m -> !m.incarnation().podUid().equals(self))
                 .map(m -> new QuorumFrontier.Holder(m.incarnation().podUid(),
                         m.incarnation().az()))
                 .toList();
+        // ⚠️ ONE TIMEOUT AFTER A FAILURE OR A BACKPRESSURE REFUSAL, A HOLDER IS
+        // AVAILABLE AGAIN and what still waits on it is re-sent (M13.27y;
+        // ADR-0081 §2.3); before it, its ask covers no zone, so the copy goes
+        // to another.
+        long now = mono.nanos();
+        List<FastWriteLeader.ReplicaSend> sends = new ArrayList<>();
+        for (QuorumFrontier.Holder h : ready) {
+            Long at = unavailableAt.get(h.podUid());
+            if (at != null && now - at >= REPLICA_TIMEOUT.toNanos()) {
+                unavailableAt.remove(h.podUid());
+                sends.addAll(desk.resends(h));
+            }
+        }
+        List<QuorumFrontier.Holder> available = ready.stream()
+                .filter(h -> !unavailableAt.containsKey(h.podUid())).toList();
+        sends.addAll(desk.replicas(available));
         int acked = 0;
-        for (FastWriteLeader.ReplicaSend send : desk.replicas(available)) {
+        for (FastWriteLeader.ReplicaSend send : sends) {
             String uid = send.holder().podUid();
             Optional<Roster.Member> holder = own.member(uid);
             if (holder.isEmpty()) {
@@ -368,6 +396,7 @@ public final class FastLeaderTerm {
                 answer = FastFrame.decode(transport.exchange(holder.get().incarnation().endpoint(),
                         FastFrame.encode(epoch(), self, uid, send.replica())));
             } catch (IOException unanswered) {
+                unavailableAt.put(uid, now);
                 continue;
             }
             if (answer.header().epoch() != epoch() || !answer.header().senderUid().equals(uid)) {
@@ -377,11 +406,17 @@ public final class FastLeaderTerm {
                 case FastWriteFrame.ReplicaAck ack -> {
                     desk.replicaAck(send.holder(), ack);
                     desk.returned(uid);
+                    unavailableAt.remove(uid);
                     acked++;
                 }
                 case FastFrame.Refused refused when refused.reason()
-                        != FastFrame.Reason.LOWER_EPOCH -> desk.declined(send.holder(),
-                                send.replica());
+                        != FastFrame.Reason.LOWER_EPOCH -> {
+                    desk.declined(send.holder(), send.replica());
+                    if (refused.reason() == FastFrame.Reason.BACKPRESSURE
+                            || refused.reason() == FastFrame.Reason.DEPARTING) {
+                        unavailableAt.put(uid, now);
+                    }
+                }
                 default -> {
                     // a deposed term's answer, or no answer at all: still asked
                 }

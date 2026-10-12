@@ -167,6 +167,10 @@ class FastLeaderTermReplicaTest {
         assertThat(term.sendReplicas(desk, transport)).as("H declined batch 1: no other zone")
                 .isZero();
 
+        // ⚠️ A BACKPRESSURE REFUSAL MAKES H UNAVAILABLE FOR ONE REPLICA TIMEOUT
+        // (M13.27y): this edit is intentional -- H is offered batch 2 once it
+        // has passed, which is when the case below begins.
+        mono.advance(FastLeaderTerm.REPLICA_TIMEOUT);
         commitS2(term, desk, 2);
         assertThat(term.sendReplicas(desk, transport)).as("H acks batch 2").isEqualTo(1);
         assertThat(term.sendReplicas(desk, transport)).as("and is offered batch 1 again")

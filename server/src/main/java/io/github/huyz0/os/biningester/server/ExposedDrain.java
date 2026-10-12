@@ -32,6 +32,48 @@ final class ExposedDrain {
         }
     }
 
+    /** A ticking thread waking this drain, until closed (M13.27y). */
+    static final class Ticks implements AutoCloseable {
+        private final Thread thread;
+
+        private Ticks(Thread thread) {
+            this.thread = thread;
+        }
+
+        boolean running() {
+            return thread.isAlive();
+        }
+
+        /** Stops the ticks and waits for the thread to end; an interrupt is kept. */
+        @Override
+        public void close() {
+            thread.interrupt();
+            try {
+                thread.join();
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+    /**
+     * Wakes this drain every {@code every} as well as on each answer
+     * (M13.27y): a waiting REPLICA is re-sent every replica timeout while no
+     * COMMIT or CONFIRM arrives.
+     */
+    Ticks tickEvery(java.time.Duration every) {
+        return new Ticks(Thread.ofVirtual().name("exposed-ticks").start(() -> {
+            while (!Thread.currentThread().isInterrupted()) {
+                try {
+                    Thread.sleep(every);
+                } catch (InterruptedException stopped) {
+                    return;
+                }
+                wake();
+            }
+        }));
+    }
+
     /** Whether no drain runs or is owed: for tests, which must not sleep. */
     boolean idle() {
         return pending.get() == 0;

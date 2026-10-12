@@ -344,6 +344,29 @@ public final class FastWriteLeader {
     }
 
     /**
+     * The REPLICAs still asked of {@code holder} and unanswered, one per
+     * batch (M13.27y): what is re-sent to it every replica timeout.
+     */
+    public synchronized List<ReplicaSend> resends(Holder holder) {
+        List<ReplicaSend> sends = new ArrayList<>();
+        for (Batch b : batches) {
+            if (!b.answered || b.exposed != null) {
+                continue;
+            }
+            List<FastJournalRecord.Entry> waiting = new ArrayList<>();
+            for (FastJournalRecord.Entry e : b.entries) {
+                if (frontier.isAsked(id(e), holder.podUid())) {
+                    waiting.add(e);
+                }
+            }
+            if (!waiting.isEmpty()) {
+                sends.add(new ReplicaSend(holder, new FastWriteFrame.Replica(waiting)));
+            }
+        }
+        return sends;
+    }
+
+    /**
      * {@code holder} refused {@code replica} (M13.27x; ADR-0081 §2.3): its asks
      * are withdrawn and it is not chosen for those entries again until it
      * returns, so each copy is replaced in another pod.

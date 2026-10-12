@@ -89,6 +89,8 @@ public final class IngesterNode implements AutoCloseable {
     private final FastDisk fastDisk;
     /** The watch joining every term this pod learns of (M13.27n). */
     private volatile FastPeer fastPeer;
+    /** The ticks waking the write's drain every replica timeout: M13.27y. */
+    private volatile ExposedDrain.Ticks replicaTicks;
     /** This pod's departure at a graceful stop (M13.27p); none before start ends. */
     private volatile java.util.function.Supplier<FastDeparture.Result> fastDeparture;
     private volatile io.github.huyz0.os.biningester.sequencer.TermJoiner.Transport departing;
@@ -245,9 +247,12 @@ public final class IngesterNode implements AutoCloseable {
             FastDisk commitDisk = fastDisk;
             // ⚠️ M13.27w: either answer can complete a batch's quorum, so each
             // wakes the background drain that sends the EXPOSEDs owed.
+            // ⚠️ M13.27y: an exchange unanswered within the replica timeout
+            // makes its holder unavailable, so the transport gives up there.
             io.github.huyz0.os.biningester.sequencer.TermJoiner.Transport exposing =
                     zones.learning(new io.github.huyz0.os.biningester.http.HttpFastTransport(
-                            FastDeparture.EXCHANGE_TIMEOUT, crossAz, clientTls), assembly.store(),
+                            io.github.huyz0.os.biningester.sequencer.FastLeaderTerm.REPLICA_TIMEOUT,
+                            crossAz, clientTls), assembly.store(),
                             config.prefix());
             // ⚠️ M13.27x: the REPLICAs first, since their acks can expose a batch.
             ExposedDrain exposed = new ExposedDrain(() -> {
@@ -255,6 +260,8 @@ public final class IngesterNode implements AutoCloseable {
                 FastLeaderFrames.sendExposed(assembly.heldTerm(), commitDisk, self, exposing);
             });
             // ⚠️ M13.27v: a writer's CONFIRM, counted by the same desk.
+            ExposedDrain.Ticks ticks = exposed.tickEvery(
+                    io.github.huyz0.os.biningester.sequencer.FastLeaderTerm.REPLICA_TIMEOUT);
             FastLeaderFrames.registerWrite(fastFrames::handle, assembly::heldTerm, commitDisk, self,
                     exposed);
             IngesterNode node = new IngesterNode(assembly,
@@ -275,6 +282,7 @@ public final class IngesterNode implements AutoCloseable {
                             FastDeparture.EXCHANGE_TIMEOUT, crossAz, clientTls), assembly.store(),
                             config.prefix());
             node.departing = departing;
+            node.replicaTicks = ticks;
             FastDisk disk = fastDisk;
             node.fastDeparture = () -> FastDeparture.depart(config,
                     FastPeer.leaseReader(config, assembly.store()), disk, departing,
@@ -381,6 +389,11 @@ public final class IngesterNode implements AutoCloseable {
                     if (!peer.watching()) {
                         journal.add(FastPeer.WATCH_STOPPED);
                     }
+                }
+                // ⚠️ M13.27y: a stopping pod re-sends no REPLICA.
+                ExposedDrain.Ticks replicas = replicaTicks;
+                if (replicas != null) {
+                    replicas.close();
                 }
                 gate.failReadiness();
             }

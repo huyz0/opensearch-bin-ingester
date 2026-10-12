@@ -93,6 +93,11 @@ public final class CommitDesk {
         return write.replicas(available);
     }
 
+    /** The REPLICAs still waiting on {@code holder}, to re-send (M13.27y). */
+    public List<FastWriteLeader.ReplicaSend> resends(Holder holder) {
+        return write.resends(holder);
+    }
+
     /** A holder's REPLICA_ACK: its copies count (M13.27x). */
     public void replicaAck(Holder holder, FastWriteFrame.ReplicaAck ack) {
         write.replicaAck(holder, ack);
