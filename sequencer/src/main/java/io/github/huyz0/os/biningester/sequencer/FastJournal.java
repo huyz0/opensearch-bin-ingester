@@ -49,9 +49,14 @@ import java.util.function.Predicate;
  * the retry a success. The owner recovers a new journal from the file, which
  * rewrites it before anything is appended.
  *
- * <p>⚠️ NOT THREAD-SAFE BY ITSELF: the leader's sequencer and a holder's
- * replica endpoint each serialise their journal under their own lock, which
- * is where the order of append, sync and answer is decided.
+ * <p>⚠️ ONE LOCK PER JOURNAL, ITS OWN (M13.27t; M13.27e's review round 3,
+ * P13): a pod keeps one journal, and its write leader, replica endpoint, HELD
+ * report, departure and releases all reach it, so every call that reads or
+ * changes what it holds takes this monitor; the capacity checks read a
+ * volatile count without it. The order of append, sync and answer is still the caller's:
+ * a check then an append is two calls, and another caller can fill the
+ * journal between them -- {@link #append} refuses past the cap whatever was
+ * checked.
  */
 public final class FastJournal {
 
@@ -69,7 +74,13 @@ public final class FastJournal {
      */
     private final Map<RunKey, List<Held>> held = new HashMap<>();
     private long nextOrder;
-    private long heldBytes;
+    /**
+     * ⚠️ VOLATILE, READ WITHOUT THE MONITOR (M13.27t): the capacity checks
+     * are advisory -- {@link #append} re-checks under it -- and the write
+     * leader asks them under its state monitor, which must never wait out
+     * another caller's fsync.
+     */
+    private volatile long heldBytes;
     private IOException failed;
 
     private FastJournal(JournalFile file, long capBytes) {
@@ -193,7 +204,7 @@ public final class FastJournal {
     }
 
     /** Appends {@code entry}, or refuses it -- false -- if held bytes would pass the cap. */
-    public boolean append(FastJournalRecord.Entry entry) throws IOException {
+    public synchronized boolean append(FastJournalRecord.Entry entry) throws IOException {
         requireUsable();
         byte[] bytes = entry.encode();
         if (heldBytes + bytes.length > capBytes) {
@@ -205,7 +216,7 @@ public final class FastJournal {
     }
 
     /** Makes everything appended durable, then compacts if released bytes pass half. */
-    public void sync() throws IOException {
+    public synchronized void sync() throws IOException {
         io(file::force);
         long size = file.size();
         if (size - heldBytes > size / 2) {
@@ -221,7 +232,7 @@ public final class FastJournal {
      * released entries back as held, which is safe -- they were committed --
      * and costs one HELD report (ADR-0081 §5.7).
      */
-    public void release(RunKey key, long below) throws IOException {
+    public synchronized void release(RunKey key, long below) throws IOException {
         FastJournalRecord.Release release = new FastJournalRecord.Release(key, below);
         io(() -> file.append(release.encode()));
         apply(release);
@@ -234,14 +245,15 @@ public final class FastJournal {
      * entry boundary, so a straddle is not a shape the protocol produces.
      * Durable at the next {@link #sync}, as a release is.
      */
-    public void drop(RunKey key, long epoch, long assignedAfter, long from) throws IOException {
+    public synchronized void drop(RunKey key, long epoch, long assignedAfter, long from)
+            throws IOException {
         FastJournalRecord.Drop drop = new FastJournalRecord.Drop(key, epoch, assignedAfter, from);
         io(() -> file.append(drop.encode()));
         apply(drop);
     }
 
     /** The entries held, in the order they were appended. */
-    public List<FastJournalRecord.Entry> held() {
+    public synchronized List<FastJournalRecord.Entry> held() {
         return inOrder().stream().map(Held::entry).toList();
     }
 
@@ -251,7 +263,7 @@ public final class FastJournal {
     }
 
     /** The journal file's length. */
-    public long fileBytes() {
+    public synchronized long fileBytes() {
         return file.size();
     }
 }
