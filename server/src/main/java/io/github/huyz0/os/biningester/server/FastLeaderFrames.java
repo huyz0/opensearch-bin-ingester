@@ -104,6 +104,26 @@ final class FastLeaderFrames {
         }
     }
 
+    /**
+     * Sends the REPLICAs the leading term's desk owes and counts their acks
+     * (M13.27x); nothing on a pod leading no term or holding no fast journal.
+     * ⚠️ A ROSTER READ THAT FAILS SENDS NOTHING: the copies stay owed for the
+     * next drain.
+     */
+    static void sendReplicas(Sequencer held, FastDisk disk, Roster.Incarnation self,
+            TermJoiner.Transport transport) {
+        Optional<FastLeaderTerm> term =
+                LocalSequencer.underneath(held).flatMap(LocalSequencer::fastTerm);
+        if (term.isEmpty() || disk.journal().isEmpty()) {
+            return;
+        }
+        try {
+            term.get().sendReplicas(term.get().commitDesk(disk.journal().get(), self), transport);
+        } catch (IOException rosterUnread) {
+            // owed still: the next COMMIT or CONFIRM answer drains again
+        }
+    }
+
     static FastFrame.Body answer(Sequencer held, FastFrame.Header header, FastFrame.Body body)
             throws IOException {
         Optional<FastLeaderTerm> term =

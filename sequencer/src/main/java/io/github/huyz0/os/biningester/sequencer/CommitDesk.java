@@ -88,6 +88,26 @@ public final class CommitDesk {
         write.confirm(writer, confirm);
     }
 
+    /** The REPLICAs to send now to {@code available} holders (M13.27x). */
+    public List<FastWriteLeader.ReplicaSend> replicas(List<Holder> available) {
+        return write.replicas(available);
+    }
+
+    /** A holder's REPLICA_ACK: its copies count (M13.27x). */
+    public void replicaAck(Holder holder, FastWriteFrame.ReplicaAck ack) {
+        write.replicaAck(holder, ack);
+    }
+
+    /** A holder refused a REPLICA: its copies are replaced elsewhere (M13.27x). */
+    public void declined(Holder holder, FastWriteFrame.Replica replica) {
+        write.declined(holder, replica);
+    }
+
+    /** A pod answered without refusing: it may be chosen again (M13.27x). */
+    public void returned(String podUid) {
+        write.returned(podUid);
+    }
+
     /**
      * The EXPOSED answers now owed, a retried exposed batch's among them: what
      * the EXPOSED sender (M13.27m) drains.

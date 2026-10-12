@@ -131,7 +131,11 @@ CONFIRM it accepts with an empty HELD_STATUS -- the acknowledgement DEPART
 phase 2 already uses -- and one it refuses with REFUSED as it refuses a
 COMMIT; the batch's EXPOSED is never that answer, but sent once the quorum
 frontier passes it. A CONFIRM about an entry the leader does not hold counts
-nowhere and is acknowledged the same way.
+nowhere and is acknowledged the same way. ⚠️ Stated by M13.27x: a holder's
+REPLICA_ACK is the answer to the REPLICA, sent once its group is fsynced
+(ADR-0081 §2.4), so the leader registers no route for it; it counts only an
+ack whose header names this term and the incarnation it addressed, a REFUSED
+declines the copy, and no answer leaves it asked.
 
 A catch-up or `/seg` response served from a journal is not a frame but an HTTP
 body; it carries the epoch it was served under in a `Binstore-Fast-Epoch`

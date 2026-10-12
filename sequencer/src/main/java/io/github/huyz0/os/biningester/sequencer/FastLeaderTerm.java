@@ -329,6 +329,68 @@ public final class FastLeaderTerm {
     }
 
     /**
+     * Sends each batch's missing copies as REPLICAs to this term's ROSTERED
+     * pods, the leader excepted, and counts each holder's REPLICA_ACK --
+     * the REPLICA's answer, sent once its group is fsynced (M13.27x; ADR-0081
+     * §2.3-2.4): how many were acked.
+     *
+     * <p>⚠️ AN ANSWER COUNTS ONLY FROM THE INCARNATION ADDRESSED, IN THIS TERM
+     * (ADR-0082 §2): a reused name or address never makes a copy in one zone
+     * count for another.
+     *
+     * <p>⚠️ A REFUSAL DECLINES THE COPY, replaced in another pod; an ack marks
+     * the pod returned, chosen again for what it declined (M13.27e's review
+     * round 2, P11). An unreachable holder stays asked: the re-send after
+     * the replica timeout is M13.27y's.
+     *
+     * @throws IOException the roster could not be read; nothing was sent
+     */
+    public int sendReplicas(CommitDesk desk, TermJoiner.Transport transport) throws IOException {
+        Objects.requireNonNull(desk, "desk");
+        Objects.requireNonNull(transport, "transport");
+        Roster own = ownRoster();
+        String self = opened.started().own().leader().podUid();
+        List<QuorumFrontier.Holder> available = own.members().stream()
+                .filter(m -> m.state() == Roster.State.ROSTERED)
+                .filter(m -> !m.incarnation().podUid().equals(self))
+                .map(m -> new QuorumFrontier.Holder(m.incarnation().podUid(),
+                        m.incarnation().az()))
+                .toList();
+        int acked = 0;
+        for (FastWriteLeader.ReplicaSend send : desk.replicas(available)) {
+            String uid = send.holder().podUid();
+            Optional<Roster.Member> holder = own.member(uid);
+            if (holder.isEmpty()) {
+                continue;
+            }
+            FastFrame.Frame answer;
+            try {
+                answer = FastFrame.decode(transport.exchange(holder.get().incarnation().endpoint(),
+                        FastFrame.encode(epoch(), self, uid, send.replica())));
+            } catch (IOException unanswered) {
+                continue;
+            }
+            if (answer.header().epoch() != epoch() || !answer.header().senderUid().equals(uid)) {
+                continue;
+            }
+            switch (answer.body()) {
+                case FastWriteFrame.ReplicaAck ack -> {
+                    desk.replicaAck(send.holder(), ack);
+                    desk.returned(uid);
+                    acked++;
+                }
+                case FastFrame.Refused refused when refused.reason()
+                        != FastFrame.Reason.LOWER_EPOCH -> desk.declined(send.holder(),
+                                send.replica());
+                default -> {
+                    // a deposed term's answer, or no answer at all: still asked
+                }
+            }
+        }
+        return acked;
+    }
+
+    /**
      * This term's desk, over {@code journal}, built on the first call
      * (M13.27s).
      *

@@ -344,6 +344,25 @@ public final class FastWriteLeader {
     }
 
     /**
+     * {@code holder} refused {@code replica} (M13.27x; ADR-0081 §2.3): its asks
+     * are withdrawn and it is not chosen for those entries again until it
+     * returns, so each copy is replaced in another pod.
+     */
+    public synchronized void declined(Holder holder, FastWriteFrame.Replica replica) {
+        for (FastJournalRecord.Entry e : replica.entries()) {
+            frontier.withdraw(id(e), holder.podUid());
+        }
+    }
+
+    /**
+     * {@code podUid} answered without refusing (M13.27x; M13.27e's review
+     * round 2, P11): it may be chosen again for every copy it declined.
+     */
+    public synchronized void returned(String podUid) {
+        frontier.returned(podUid);
+    }
+
+    /**
      * The REPLICAs to send now: each answered, unexposed batch to the holders
      * it lacks -- ONE BATCH PER REPLICA PER HOLDER (ADR-0082 section 2; M13.27c
      * review round 1, P2), since its REPLICA_ACK names one assignedAfter.

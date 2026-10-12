@@ -249,8 +249,11 @@ public final class IngesterNode implements AutoCloseable {
                     zones.learning(new io.github.huyz0.os.biningester.http.HttpFastTransport(
                             FastDeparture.EXCHANGE_TIMEOUT, crossAz, clientTls), assembly.store(),
                             config.prefix());
-            ExposedDrain exposed = new ExposedDrain(() -> FastLeaderFrames.sendExposed(
-                    assembly.heldTerm(), commitDisk, self, exposing));
+            // ⚠️ M13.27x: the REPLICAs first, since their acks can expose a batch.
+            ExposedDrain exposed = new ExposedDrain(() -> {
+                FastLeaderFrames.sendReplicas(assembly.heldTerm(), commitDisk, self, exposing);
+                FastLeaderFrames.sendExposed(assembly.heldTerm(), commitDisk, self, exposing);
+            });
             // ⚠️ M13.27v: a writer's CONFIRM, counted by the same desk.
             FastLeaderFrames.registerWrite(fastFrames::handle, assembly::heldTerm, commitDisk, self,
                     exposed);
