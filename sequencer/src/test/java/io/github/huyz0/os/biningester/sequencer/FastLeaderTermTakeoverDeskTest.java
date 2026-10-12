@@ -28,7 +28,7 @@ import org.junit.jupiter.api.Test;
 class FastLeaderTermTakeoverDeskTest {
 
     /** Term 3 over term 2, which recorded a wal_quorum and so stays open when {@code open}. */
-    private static FastLeaderTerm term3(MemoryBinStore store, boolean open) throws Exception {
+    static FastLeaderTerm term3(MemoryBinStore store, boolean open) throws Exception {
         FastTermStartTest.put(store, FastTermStartTest.roster(1, -1, "x", false, 0, 0, false));
         Roster.Incarnation y = FastTermStartTest.incarnation("y");
         FastTermStartTest.put(store, new Roster(2, 1, y,

@@ -9,6 +9,8 @@ import io.github.huyz0.os.biningester.security.Principal;
 import io.github.huyz0.os.biningester.sequencer.Sequencer;
 import java.io.IOException;
 import java.time.Clock;
+import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -38,6 +40,7 @@ import java.util.concurrent.CompletionException;
 public final class DefaultIngest implements Ingest {
 
     private final IngestConfig config;
+    private final Clock clock;
     private final SegmentPublisher publisher;
     /** Each index's share of this pod's store requests (M11.2, ADR-0077). */
     private final IndexCostLedger costLedger;
@@ -137,6 +140,7 @@ public final class DefaultIngest implements Ingest {
             throws IOException {
         this.costLedger = Objects.requireNonNull(costLedger, "costLedger");
         this.config = Objects.requireNonNull(config, "config");
+        this.clock = Objects.requireNonNull(clock, "clock");
         this.publisher = new SegmentPublisher(Objects.requireNonNull(store, "store"),
                 Objects.requireNonNull(prefix, "prefix"),
                 Objects.requireNonNull(podShortId, "podShortId"), costLedger);
@@ -305,6 +309,24 @@ public final class DefaultIngest implements Ingest {
      */
     public long flushSpacingMillis() {
         return flushPath.flushSpacingMillis();
+    }
+
+    /**
+     * Uploads a takeover's recovered runs as one segment (M13.33p; ADR-0081
+     * §5 step 6): its key, which the recovery entry commits.
+     *
+     * <p>⚠️ THIS PATH'S OWN PUBLISHER: a segment's key is the pod's id and the
+     * publisher's sequence, written with a plain PUT, so a second publisher of
+     * this pod could take a flush's key and overwrite its segment.
+     *
+     * @throws IOException the upload failed, or there was nothing to upload
+     */
+    public String publishRecovery(Map<RunKey, List<SegmentRecord>> runs) throws IOException {
+        Accumulator recovered = new Accumulator(config, clock);
+        runs.forEach((key, records) -> records.forEach(r -> recovered.add(key, r)));
+        return publisher.publish(recovered)
+                .orElseThrow(() -> new IOException("a recovery uploads at least one record"))
+                .key();
     }
 
     /** Each index's apportioned share of this pod's store requests (ADR-0077). */

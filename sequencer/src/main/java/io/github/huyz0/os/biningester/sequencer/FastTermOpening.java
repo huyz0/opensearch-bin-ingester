@@ -41,12 +41,24 @@ public final class FastTermOpening {
      *     carries it (ADR-0081 §5 step 7)
      * @param stillOpen the earlier terms still open, newest first: their
      *     decisions can supersede a group a pod reports
+     * @param leaseWaitServed whether the lease fence's part of the wait has
+     *     passed ({@link FastLeaseFence#successorMayAssign})
      */
     public record Opened(FastTermStart.Started started, long closedThrough,
-            List<Roster> stillOpen) {
+            List<Roster> stillOpen, java.util.function.BooleanSupplier leaseWaitServed) {
         public Opened {
             Objects.requireNonNull(started, "started");
             stillOpen = List.copyOf(stillOpen);
+            Objects.requireNonNull(leaseWaitServed, "leaseWaitServed");
+        }
+
+        /**
+         * Whether this term's takeover may decide at {@code wallNow} (M13.33p;
+         * ADR-0081 §5 step 5): past the roster's {@code notBefore} AND, unless
+         * handed over, past the lease's monotonic wait.
+         */
+        public boolean mayDecide(long wallNow) {
+            return started.mayAssign(wallNow, leaseWaitServed.getAsBoolean());
         }
     }
 
@@ -109,7 +121,7 @@ public final class FastTermOpening {
             System.getLogger(FastTermOpening.class.getName()).log(System.Logger.Level.WARNING,
                     "term " + epoch + " closed no earlier term; the next start retries", notNow);
         }
-        return Optional.of(opened(started, closed));
+        return Optional.of(opened(started, closed, fence::successorMayAssign));
     }
 
     /**
@@ -117,7 +129,8 @@ public final class FastTermOpening {
      * stopped at the first closed term, and the closer closed the oldest
      * {@code closed} of the unclosed ones.
      */
-    private static Opened opened(FastTermStart.Started started, int closed) {
+    private static Opened opened(FastTermStart.Started started, int closed,
+            java.util.function.BooleanSupplier leaseWaitServed) {
         List<Roster> unclosed = started.unclosed();
         int open = unclosed.size() - closed;
         long closedThrough;
@@ -128,7 +141,7 @@ public final class FastTermOpening {
         } else {
             closedThrough = Math.max(0, unclosed.get(unclosed.size() - 1).predecessor());
         }
-        return new Opened(started, closedThrough, unclosed.subList(0, open));
+        return new Opened(started, closedThrough, unclosed.subList(0, open), leaseWaitServed);
     }
 
     private static void giveBack(Closeable term, Exception failed) {

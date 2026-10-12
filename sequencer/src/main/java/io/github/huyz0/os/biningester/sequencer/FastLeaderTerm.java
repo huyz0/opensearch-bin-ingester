@@ -53,6 +53,8 @@ public final class FastLeaderTerm {
     static final java.time.Duration ANSWER_WAIT = java.time.Duration.ofSeconds(10);
 
     private final FastTermOpening.Opened opened;
+    private final java.util.concurrent.atomic.AtomicBoolean takeoverClaimed =
+            new java.util.concurrent.atomic.AtomicBoolean();
     private final JoinDesk joins;
     private final ToLongFunction<RunKey> committedNext;
     private final BinStore store;
@@ -91,6 +93,17 @@ public final class FastLeaderTerm {
         this.departures = new RosterDepartures(store, prefix, epoch());
         this.mono = Objects.requireNonNull(mono, "mono");
         this.refreshNanos = refresh.toNanos();
+    }
+
+    /**
+     * The opened term, once, when it has unclosed terms to take over
+     * (M13.33p): the one caller that gets it runs the takeover.
+     */
+    public Optional<FastTermOpening.Opened> claimTakeover() {
+        if (opened.stillOpen().isEmpty() || !takeoverClaimed.compareAndSet(false, true)) {
+            return Optional.empty();
+        }
+        return Optional.of(opened);
     }
 
     public long epoch() {
