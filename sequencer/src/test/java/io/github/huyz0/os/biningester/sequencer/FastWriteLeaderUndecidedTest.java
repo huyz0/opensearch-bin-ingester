@@ -39,7 +39,7 @@ class FastWriteLeaderUndecidedTest {
         l.leader().undecided(List.of(S1));
         l.leader().commit(B, commit(1, S1), roster(), ALL);
 
-        l.leader().decided(S1);
+        l.leader().decided(S1, 100);
 
         assertThat(l.leader().commit(B, commit(1, S1), roster(), ALL))
                 .isInstanceOf(FastWriteLeader.Pending.class);
@@ -61,12 +61,63 @@ class FastWriteLeaderUndecidedTest {
         FastWriteLeaderTest.Leader l = FastWriteLeaderTest.leader(1 << 20, 1_000);
         l.leader().undecided(List.of(S1, S2));
 
-        l.leader().decided(S1);
+        l.leader().decided(S1, 100);
 
         assertThat(l.leader().commit(B, commit(2, S2), roster(), ALL))
                 .isInstanceOf(FastWriteLeader.Wait.class);
         assertThat(l.leader().commit(B, commit(1, S1), roster(), ALL))
                 .isInstanceOf(FastWriteLeader.Pending.class);
+    }
+
+    @Test
+    void takingOVERHoldsEveryStreamUntilEveryMemberIsHeard() throws Exception {
+        FastWriteLeaderTest.Leader l = FastWriteLeaderTest.leader(1 << 20, 1_000);
+        l.leader().takingOver();
+
+        assertThat(l.leader().commit(B, commit(1, S1), roster(), ALL))
+                .isInstanceOf(FastWriteLeader.Wait.class);
+        l.leader().everyMemberHeard();
+        assertThat(l.leader().commit(B, commit(1, S1), roster(), ALL))
+                .isInstanceOf(FastWriteLeader.Pending.class);
+    }
+
+    @Test
+    void aSTREAMDecidedWhileTakingOverIsAssignedAndNoOther() throws Exception {
+        FastWriteLeaderTest.Leader l = FastWriteLeaderTest.leader(1 << 20, 1_000);
+        l.leader().takingOver();
+        l.leader().undecided(List.of(S1));
+
+        l.leader().decided(S1, 100);
+
+        assertThat(l.leader().commit(B, commit(2, S2), roster(), ALL))
+                .isInstanceOf(FastWriteLeader.Wait.class);
+        assertThat(l.leader().commit(B, commit(1, S1), roster(), ALL))
+                .isInstanceOf(FastWriteLeader.Pending.class);
+    }
+
+    @Test
+    void aNEWTakeoverHoldsAStreamTheLastOneReleased() throws Exception {
+        FastWriteLeaderTest.Leader l = FastWriteLeaderTest.leader(1 << 20, 1_000);
+        l.leader().takingOver();
+        l.leader().decided(S1, 100);
+
+        l.leader().takingOver();
+
+        assertThat(l.leader().commit(B, commit(1, S1), roster(), ALL))
+                .isInstanceOf(FastWriteLeader.Wait.class);
+    }
+
+    @Test
+    void decidedRESUMESTheCursorWhereTheRecoveryLeftTheChain() throws Exception {
+        FastWriteLeaderTest.Leader l = FastWriteLeaderTest.leader(1 << 20, 1_000);
+        l.leader().undecided(List.of(S1));
+
+        l.leader().decided(S1, 130);
+
+        assertThat(l.cursor().cursor(S1)).isEqualTo(130);
+        l.leader().commit(B, commit(1, S1), roster(), ALL);
+        assertThat(l.journal().held()).singleElement()
+                .satisfies(e -> assertThat(e.firstOffset()).isEqualTo(130));
     }
 
     @Test

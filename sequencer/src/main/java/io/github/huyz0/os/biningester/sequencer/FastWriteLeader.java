@@ -46,7 +46,7 @@ import java.util.function.LongSupplier;
  * unexposed, discarded, committed -- is assigned anew, a duplicate removed by
  * {@code _id} as the default path's retries are.
  */
-public final class FastWriteLeader {
+public final class FastWriteLeader implements TakeoverRun.Hold {
 
     /** How a COMMIT ended for now. */
     public sealed interface Outcome permits Pending, Answered, Wait {
@@ -116,6 +116,9 @@ public final class FastWriteLeader {
     private final List<Batch> batches = new ArrayList<>();
     /** Streams a takeover has not decided yet: assigned nothing (M13.33l). */
     private final Set<RunKey> undecided = new HashSet<>();
+    /** Taking over, not every member heard: only {@link #released} streams assign (M13.33k). */
+    private boolean holdingAll;
+    private final Set<RunKey> released = new HashSet<>();
     private final Map<FastJournalRecord.IdempotencyKey, Batch> exposedByKey = new HashMap<>();
     private final Map<RunKey, Long> committedNext = new HashMap<>();
 
@@ -192,7 +195,8 @@ public final class FastWriteLeader {
                     // ⚠️ NOTHING ON A STREAM BEFORE ITS DECISION IS DURABLE
                     // (M13.33l; ADR-0081 §5 invariant d): an offset assigned
                     // now could be one the decision frees.
-                    if (undecided.contains(run.stream())) {
+                    if (undecided.contains(run.stream())
+                            || holdingAll && !released.contains(run.stream())) {
                         return new Wait("stream " + run.stream()
                                 + " awaits its takeover decision");
                     }
@@ -345,19 +349,46 @@ public final class FastWriteLeader {
     }
 
     /**
+     * A takeover has begun (M13.33k): every stream is held until it is
+     * {@link #decided} or {@link #everyMemberHeard} -- a member not yet heard
+     * may hold entries of a stream no one else named. The caller calls it
+     * before the term serves.
+     */
+    public synchronized void takingOver() {
+        holdingAll = true;
+        released.clear();
+    }
+
+    /**
      * Holds {@code streams} until each is {@link #decided} (M13.33l): a
      * takeover's streams with collected entries.
      */
+    @Override
     public synchronized void undecided(java.util.Collection<RunKey> streams) {
         undecided.addAll(streams);
     }
 
+    /** Every member answered or is gone: only the {@link #undecided} streams stay held. */
+    @Override
+    public synchronized void everyMemberHeard() {
+        holdingAll = false;
+    }
+
     /**
      * {@code stream}'s chain entry and decision are durable: it is assigned
-     * again, from the chain's next offset its recovery moved (M13.33l).
+     * again from {@code resumeAt}, the chain's next offset its recovery moved
+     * (M13.33l). ⚠️ THE CURSOR MOVES BEFORE THE STREAM IS RELEASED (its review
+     * round 1, P1), under this desk's lock: a COMMIT never sees it released at
+     * the pre-recovery cursor. The chain's next offset IS {@code resumeAt} --
+     * the recovery committed or voided up to it -- so it opens there.
      */
-    public synchronized void decided(RunKey stream) {
+    @Override
+    public synchronized void decided(RunKey stream, long resumeAt) {
+        open(stream, resumeAt);
         undecided.remove(stream);
+        if (holdingAll) {
+            released.add(stream);
+        }
     }
 
     /** A holder's REPLICA_ACK, sent once its group is fsynced. */
