@@ -421,6 +421,35 @@ public final class ChainMemory {
         fromFloor = true;
     }
 
+    /**
+     * The same, and the voids of the recovery entries read below the replay
+     * (M13.25j): prepended under the same lock, so no snapshot holds a
+     * backfilled delta without its voids.
+     *
+     * <p>⚠️ **ONLY WHAT IS OLDER THAN THE FIRST HELD VOID**, as for deltas, so
+     * a void the replay already recorded is not taken twice; and bounded as
+     * {@link #recordVoids} is.
+     */
+    public synchronized void backfill(List<ChainGc.DeltaAt> older, List<SequencedVoid> olderVoids) {
+        Objects.requireNonNull(olderVoids, "olderVoids");
+        backfill(older);
+        SequencedVoid first = voids.peekFirst();
+        List<SequencedVoid> taken = new ArrayList<>();
+        for (SequencedVoid held : olderVoids) {
+            if (first == null || held.epoch() < first.epoch()
+                    || (held.epoch() == first.epoch() && held.sequence() < first.sequence())) {
+                taken.add(held);
+            }
+        }
+        for (int i = taken.size() - 1; i >= 0; i--) {
+            voids.addFirst(taken.get(i));
+        }
+        while (voids.size() > maxDeltas) {
+            voids.removeFirst();
+            voidsComplete = false;
+        }
+    }
+
     /** What chain GC may judge: deltas forgotten here whose objects are still there. */
     public synchronized List<ChainGc.DeltaAt> awaitingChainGc() {
         return List.copyOf(awaitingChainGc);

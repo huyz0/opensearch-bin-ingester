@@ -81,7 +81,9 @@ public final class ChainBackfill {
         ChainMemory.Snapshot at = chain.snapshot();
         return Thread.ofVirtual().name("chain-backfill").start(() -> {
             try {
-                chain.backfill(below(store, prefix, at.firstEpoch(), at.firstSequence(), serving));
+                Below below = belowWithVoids(store, prefix, at.firstEpoch(), at.firstSequence(),
+                        serving);
+                chain.backfill(below.deltas(), below.voids());
             } catch (BackfillStopped stopped) {
                 LOG.log(System.Logger.Level.DEBUG,
                         "chain backfill abandoned after this term was deposed");
@@ -91,6 +93,14 @@ public final class ChainBackfill {
                         + "before the term: " + failed);
             }
         });
+    }
+
+    /** What the walk below a boundary read: its deltas, and its recoveries' voids (M13.25j). */
+    public record Below(List<ChainGc.DeltaAt> deltas, List<ChainMemory.SequencedVoid> voids) {
+        public Below {
+            deltas = List.copyOf(deltas);
+            voids = List.copyOf(voids);
+        }
     }
 
     /**
@@ -112,6 +122,16 @@ public final class ChainBackfill {
      */
     public static List<ChainGc.DeltaAt> below(BinStore store, String prefix, long epoch,
             long sequence, BooleanSupplier serving) throws IOException {
+        return belowWithVoids(store, prefix, epoch, sequence, serving).deltas();
+    }
+
+    /**
+     * The same walk, keeping each recovery entry's voids with its slot
+     * (M13.25j; M13.25h's review, P2): dropped, a catch-up served from the
+     * hours before the term met a void as an unexplained jump.
+     */
+    public static Below belowWithVoids(BinStore store, String prefix, long epoch, long sequence,
+            BooleanSupplier serving) throws IOException {
         Objects.requireNonNull(store, "store");
         Objects.requireNonNull(prefix, "prefix");
         Objects.requireNonNull(serving, "serving");
@@ -142,11 +162,12 @@ public final class ChainBackfill {
         keys.sort(Comparator.<long[]>comparingLong(k -> k[0]).thenComparingLong(k -> k[1]));
 
         List<ChainGc.DeltaAt> found = new ArrayList<>();
+        List<ChainMemory.SequencedVoid> voids = new ArrayList<>();
         for (long[] key : keys) {
             requireServing(serving);
-            read(store, prefix, key[0], key[1], serving).ifPresent(found::add);
+            read(store, prefix, key[0], key[1], serving, voids).ifPresent(found::add);
         }
-        return found;
+        return new Below(found, voids);
     }
 
     /**
@@ -159,7 +180,8 @@ public final class ChainBackfill {
      * only what it already holds.
      */
     private static Optional<ChainGc.DeltaAt> read(BinStore store, String prefix, long epoch,
-            long sequence, BooleanSupplier serving) throws IOException {
+            long sequence, BooleanSupplier serving, List<ChainMemory.SequencedVoid> voids)
+            throws IOException {
         requireServing(serving);
         byte[] bytes;
         try (InputStream in = store.get(new LogKeys(prefix, epoch).keyFor(sequence))) {
@@ -170,7 +192,11 @@ public final class ChainBackfill {
         // empty means a continue, a seal, or a recovery that only voids.
         Optional<CommitDelta> delta = switch (ChainEntry.decode(bytes)) {
             case CommitDelta d -> Optional.of(d);
-            case io.github.huyz0.os.biningester.format.Recovery recovery -> recovery.delta();
+            case io.github.huyz0.os.biningester.format.Recovery recovery -> {
+                recovery.voids().forEach(v ->
+                        voids.add(new ChainMemory.SequencedVoid(epoch, sequence, v)));
+                yield recovery.delta();
+            }
             case io.github.huyz0.os.biningester.format.Seal ignored -> Optional.empty();
             case io.github.huyz0.os.biningester.format.Continue ignored -> Optional.empty();
         };
