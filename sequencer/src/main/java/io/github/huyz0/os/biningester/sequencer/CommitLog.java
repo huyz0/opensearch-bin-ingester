@@ -288,10 +288,32 @@ public final class CommitLog {
         nextSequence = Math.max(nextSequence, entry.sequence() + 1);
     }
 
-    /** A replay's voids into the chain memory, each with its slot (M13.25h). */
+    /**
+     * A replay's voids into the chain memory, each slot's together (M13.25h).
+     *
+     * <p>⚠️ **ONE CALL PER SLOT, NOT PER VOID** (M13.25k; M13.25j's review,
+     * P1): the chain reads a second call for a slot as a replay of the first,
+     * so a recovery's every void after its first was dropped -- with the voids
+     * still reported complete. ⚠️ RELIES ON {@code Result.voids()} HOLDING EACH
+     * SLOT's VOIDS CONTIGUOUSLY, in walk order: the walk applies each entry
+     * once, oldest chain first and ascending within each.
+     */
     private void recordVoids(ChainReplay.Result replayed) {
+        List<io.github.huyz0.os.biningester.format.Recovery.VoidRange> slot = new ArrayList<>();
+        ChainMemory.SequencedVoid first = null;
         for (ChainMemory.SequencedVoid held : replayed.voids()) {
-            chain.recordVoids(held.epoch(), held.sequence(), List.of(held.range()));
+            if (first != null && (held.epoch() != first.epoch()
+                    || held.sequence() != first.sequence())) {
+                chain.recordVoids(first.epoch(), first.sequence(), slot);
+                slot = new ArrayList<>();
+            }
+            if (slot.isEmpty()) {
+                first = held;
+            }
+            slot.add(held.range());
+        }
+        if (first != null) {
+            chain.recordVoids(first.epoch(), first.sequence(), slot);
         }
     }
 

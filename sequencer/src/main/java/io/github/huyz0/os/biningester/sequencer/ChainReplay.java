@@ -100,6 +100,7 @@ final class ChainReplay {
             deltas = List.copyOf(deltas);
             // ⚠️ A RECOVERY's VOIDS, WITH THEIR SLOT (M13.25h): dropped, a
             // replay handed catch-up nothing to deliver for a committed hole.
+            // In walk order, each slot's contiguous: CommitLog groups by it.
             voids = List.copyOf(voids);
         }
 
