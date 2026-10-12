@@ -530,6 +530,43 @@ public final class CommitLog {
         }
     }
 
+    /** A takeover's recovery at the next slot (M13.33g): ITS OFFSETS ARE ASSIGNED, never moved. */
+    public io.github.huyz0.os.biningester.format.Recovery appendRecovery(
+            io.github.huyz0.os.biningester.format.Recovery recovery) throws IOException {
+        if (sealedAt != null) {
+            throw fenced(sealedAt);
+        }
+        if (recovery.sequence() != nextSequence) {
+            throw new IllegalArgumentException("not the next slot: " + recovery.sequence());
+        }
+        byte[] bytes = recovery.encode();
+        String key = keyFor(nextSequence);
+        for (int attempt = 1; ; attempt++) {
+            try {
+                if (store.putIfAbsent(key, new Body(bytes.length,
+                        () -> new ByteArrayInputStream(bytes))).isPresent()) {
+                    break;
+                }
+            } catch (IOException lostResponse) {
+                if (store.stat(key).isEmpty()) {
+                    if (attempt < 3) {
+                        continue;
+                    }
+                    throw lostResponse;
+                }
+            }
+            ChainEntry held = readEntry(key);
+            if (held instanceof Seal seal) {
+                throw fenced(seal);
+            } else if (!held.equals(recovery)) {
+                throw new IllegalStateException("slot " + nextSequence + " holds another entry");
+            }
+            break;
+        }
+        apply(recovery);
+        return recovery;
+    }
+
     /**
      * Opens this chain with a CONTINUE at slot 0, naming the chain it follows.
      *
