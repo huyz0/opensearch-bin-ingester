@@ -54,6 +54,17 @@ final class FastHolderFrames {
                     }
                     return fences.get().answer(header, fence);
                 });
+        // ⚠️ M13.28b: a RELEASE, from the leader of a term this pod joined; a
+        // diskless pod holds nothing to release.
+        Optional<io.github.huyz0.os.biningester.sequencer.ReleaseAnswer> releases =
+                disk.journal().map(journal ->
+                        new io.github.huyz0.os.biningester.sequencer.ReleaseAnswer(journal,
+                                disk.joined()));
+        handle.accept(io.github.huyz0.os.biningester.format.FastTakeoverFrame.KIND_RELEASE,
+                (header, body) -> releases.isEmpty()
+                        ? new FastFrame.HeldStatusReport(FastFrame.HeldStatus.NONE)
+                        : releases.get().answer(header,
+                                (io.github.huyz0.os.biningester.format.FastTakeoverFrame.Release) body));
         handle.accept(FastWriteFrame.KIND_EXPOSED, (header, body) -> {
             Optional<String> leader = disk.joined().leaderOf(header.epoch());
             if (leader.isEmpty() || !leader.get().equals(header.senderUid())) {
