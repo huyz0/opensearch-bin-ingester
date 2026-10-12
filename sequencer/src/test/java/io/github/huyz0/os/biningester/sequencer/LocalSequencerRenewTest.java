@@ -17,6 +17,7 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Semaphore;
@@ -201,6 +202,54 @@ class LocalSequencerRenewTest {
                 .as("two ticks, two lease writes -- a tick is ONE renew")
                 .isEqualTo(2L);
         seq.close();
+    }
+
+    @Test
+    void aFENCEDLeaderRecoversNothingAndUploadsNothing() throws Exception {
+        // ⚠️ ZERO UPLOADS ON THE REFUSING ATTEMPT (M13.33o review round 1, T1):
+        // the chain itself refuses a recovery past a successor's seal, but
+        // only after its segments are uploaded.
+        MemoryBinStore store = new MemoryBinStore();
+        TestClock clock = new TestClock();
+        ManualTicker ticker = new ManualTicker();
+        LocalSequencer seq = LocalSequencer.start(
+                store, PREFIX, manager(store, "pod1", clock), 8, ticker).orElseThrow();
+        clock.millis += TTL.toMillis() + 1;
+        LocalSequencer successor = LocalSequencer.start(
+                store, PREFIX, manager(store, "pod2", clock), 8, new ManualTicker()).orElseThrow();
+        ticker.tick();
+        RunKey stream = new RunKey(UUID.fromString("00000000-0000-0000-0000-0000000000aa"), 0);
+        StreamDecision.Decided decided = new StreamDecision.Decided(List.of(
+                new io.github.huyz0.os.biningester.format.FastJournalRecord.Entry(1, stream, 0, 1,
+                        0, new io.github.huyz0.os.biningester.format.FastJournalRecord
+                                .IdempotencyKey("w", new UUID(9, 9), 0),
+                        List.of(new io.github.huyz0.os.biningester.format.SegmentRecord("d",
+                                io.github.huyz0.os.biningester.format.OpType.INDEX,
+                                java.util.OptionalLong.empty(), new byte[] {1})))),
+                List.of(), 1);
+
+        long giveUpAt = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
+        Throwable refusal = null;
+        while (System.nanoTime() < giveUpAt) {
+            java.util.concurrent.atomic.AtomicInteger uploads =
+                    new java.util.concurrent.atomic.AtomicInteger();
+            try {
+                seq.recover(List.of(decided), runs -> {
+                    uploads.incrementAndGet();
+                    return "seg-r";
+                });
+            } catch (Throwable failed) {
+                if (uploads.get() == 0) {
+                    refusal = failed;
+                    break;
+                }
+            }
+            Thread.sleep(2);
+        }
+
+        assertThat(refusal).as("a fenced leader refuses before it uploads").isNotNull();
+        assertThat(refusal).isInstanceOf(FencedException.class);
+        successor.close();
     }
 
     @Test

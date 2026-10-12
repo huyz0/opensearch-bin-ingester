@@ -240,8 +240,7 @@ public final class CommitLog {
      * <p>⚠️ EXHAUSTIVE BY COMPILATION (M4.5). {@link ChainEntry} is sealed, so
      * a fourth shape cannot be added without every switch like this one failing
      * to compile — which is the point of the sealed interface rather than a
-     * kind byte and a default branch that silently ignores what it does not
-     * know.
+     * kind byte and a default branch that silently ignores the unknown.
      *
      * <p>⚠️ A {@code SEAL} and a {@code CONTINUE} carry no runs, so they move
      * no offsets — but they DO consume a sequence number, deliberately, and
@@ -559,7 +558,8 @@ public final class CommitLog {
             if (held instanceof Seal seal) {
                 throw fenced(seal);
             } else if (!held.equals(recovery)) {
-                throw new IllegalStateException("slot " + nextSequence + " holds another entry");
+                apply(held);
+                throw new SlotTakenException(held.sequence());
             }
             break;
         }

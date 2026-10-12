@@ -81,6 +81,45 @@ class AmbiguousCommitRetryTest {
     }
 
     @Test
+    void aRECOVERYAfterAnAmbiguousAppendTakesTheSlotAfterTheOneThatLanded() throws Exception {
+        // ⚠️ M13.33o review round 2, T3: a takeover's recovery entry is built
+        // at the chain's next slot, which a landed append whose answer was
+        // lost already holds.
+        MemoryBinStore backing = new MemoryBinStore();
+        AtomicBoolean armed = new AtomicBoolean();
+        BinStore store =
+                ambiguousOnFirstDeltaAppend(backing, AmbiguousPutStore.Mode.LANDED, armed);
+        LocalSequencer sequencer = leaderOver(store);
+        try {
+            armed.set(true);
+            assertThatThrownBy(() -> sequencer.commitAll(List.of(
+                    new CommitRequest("poda", "i1", 0, "seg/0", counts(3)))))
+                    .isInstanceOf(AmbiguousAppendException.class);
+            io.github.huyz0.os.biningester.format.RunKey other =
+                    new io.github.huyz0.os.biningester.format.RunKey(new java.util.UUID(7, 7), 0);
+
+            io.github.huyz0.os.biningester.format.Recovery written = sequencer.recover(
+                    List.of(new StreamDecision.Decided(List.of(
+                            new io.github.huyz0.os.biningester.format.FastJournalRecord.Entry(1,
+                                    other, 0, 1, 0, new io.github.huyz0.os.biningester.format
+                                            .FastJournalRecord.IdempotencyKey("w",
+                                                    new java.util.UUID(9, 9), 0),
+                                    List.of(new io.github.huyz0.os.biningester.format
+                                            .SegmentRecord("d", io.github.huyz0.os.biningester
+                                                    .format.OpType.INDEX,
+                                                    java.util.OptionalLong.empty(),
+                                                    new byte[] {1})))),
+                            List.of(), 1)), runs -> "seg-r");
+
+            assertThat(deltasCarrying(backing, "seg/0")).as("the landed append kept").isEqualTo(1);
+            assertThat(sequencer.committedNext(other)).isEqualTo(1);
+            assertThat(written.sequence()).as("past the landed delta's slot").isGreaterThan(1);
+        } finally {
+            sequencer.close();
+        }
+    }
+
+    @Test
     void aRetryAfterAnAmbiguousAppendGetsTheOffsetsThatALREADYApply() throws Exception {
         MemoryBinStore backing = new MemoryBinStore();
         AtomicBoolean armed = new AtomicBoolean();

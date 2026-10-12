@@ -141,16 +141,19 @@ class RecoveryWriterTest {
     }
 
     @Test
-    void aSLOTTakenByAnotherEntryIsRefusedNotRetriedElsewhere() throws Exception {
+    void aSLOTTakenByACommitOfTheStreamsOffsetsIsRefused() throws Exception {
+        // ⚠️ ANOTHER STREAM'S COMMIT IN THE SLOT IS PASSED (M13.33o review
+        // round 2, T3; RecoveryWriterEdgesTest); one that committed an offset
+        // the entry voids is refused, wherever the entry would go next.
         MemoryBinStore store = new MemoryBinStore();
         CommitLog mine = opened(store);
         CommitLog theirs = new CommitLog(store, "p", 1);
         theirs.recover();
-        theirs.commit("seg/x", Map.of(T, 1));
+        theirs.commit("seg/x", Map.of(S, 1));
 
         assertThatThrownBy(() -> new RecoveryWriter(mine, new Uploads()).write(List.of(
                 decided(List.of(), new Recovery.VoidRange(S, 0, 10)))))
-                .as("its offsets were assigned for this slot's state")
+                .as("a committed offset is never voided")
                 .isInstanceOf(IllegalStateException.class);
     }
 

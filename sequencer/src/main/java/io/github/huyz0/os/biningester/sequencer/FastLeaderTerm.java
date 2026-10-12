@@ -467,12 +467,19 @@ public final class FastLeaderTerm {
     public synchronized CommitDesk commitDesk(FastJournal journal, Roster.Incarnation self) {
         if (desk == null) {
             Roster started = opened.started().own();
-            desk = new CommitDesk(new FastWriteLeader(epoch(), self,
+            FastWriteLeader leader = new FastWriteLeader(epoch(), self,
                     new FastCursor(STREAM_BOUND),
                     new TermRecordWriter(store, prefix, started, mono,
                             java.time.Duration.ofNanos(refreshNanos)),
                     new QuorumFrontier(self.podUid(), self.az()), journal,
-                    this::nextDecision), committedNext, ANSWER_WAIT);
+                    this::nextDecision);
+            // ⚠️ HELD FROM ITS BIRTH WHILE TERMS ARE UNCLOSED (M13.33o): the
+            // desk is built by the first frame that needs it, so a hold put
+            // on later could come after a COMMIT it should have held.
+            if (!opened.stillOpen().isEmpty()) {
+                leader.takingOver();
+            }
+            desk = new CommitDesk(leader, committedNext, ANSWER_WAIT);
         }
         return desk;
     }

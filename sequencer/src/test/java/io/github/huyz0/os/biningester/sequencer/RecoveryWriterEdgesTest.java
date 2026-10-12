@@ -141,6 +141,39 @@ class RecoveryWriterEdgesTest {
                 .isInstanceOf(IllegalStateException.class);
     }
 
+    /** A store whose first conditional PUT finds a commit of {@code counts} landed first. */
+    private static BinStore takenOnce(MemoryBinStore inner, Map<RunKey, Integer> counts) {
+        return new ForwardingBinStore(inner) {
+            boolean taken;
+
+            @Override
+            public Optional<Version> putIfAbsent(String key, Body body) throws IOException {
+                if (!taken) {
+                    taken = true;
+                    CommitLog theirs = new CommitLog(inner, "p", 1);
+                    theirs.recover();
+                    theirs.commit("seg/x", counts);
+                }
+                return inner.putIfAbsent(key, body);
+            }
+        };
+    }
+
+    @Test
+    void aSLOTTakenByAnotherStreamsCommitIsFoldedInAndPassed() throws Exception {
+        MemoryBinStore inner = new MemoryBinStore();
+        opened(inner);
+        CommitLog log = new CommitLog(takenOnce(inner, Map.of(T, 1)), "p", 1);
+        log.recover();
+
+        Recovery written = new RecoveryWriter(log, new RecoveryWriterTest.Uploads())
+                .write(List.of(decided(List.of(at(S, 0)))));
+
+        assertThat(written.sequence()).as("the slot after the landed commit").isEqualTo(2);
+        assertThat(log.nextOffset(T)).as("the landed commit folded in").isEqualTo(1);
+        assertThat(log.nextOffset(S)).isEqualTo(1);
+    }
+
     @Test
     void theENTRYsRunsAndVoidsAreSortedByRunKey() throws Exception {
         CommitLog log = opened(new MemoryBinStore());

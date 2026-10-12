@@ -243,6 +243,31 @@ public final class LocalSequencer implements Sequencer {
         return log.nextOffset(key);
     }
 
+    /**
+     * Appends a takeover's recovery entry (M13.33o; ADR-0081 §5 step 6): its
+     * decided streams uploaded, then ONE chain entry.
+     *
+     * <p>⚠️ UNDER THE COMMIT LOCK, uploads included: {@link CommitLog} is
+     * single-writer, and the entry's slot and the streams' next offsets are
+     * read when it is built. A default-path commit waits out the uploads --
+     * a takeover's, once per term.
+     *
+     * @throws IOException this term is fenced or closed, or a store step failed
+     */
+    public synchronized io.github.huyz0.os.biningester.format.Recovery recover(
+            List<StreamDecision.Decided> decided, RecoveryWriter.SegmentUpload upload)
+            throws IOException {
+        if (fenced) {
+            throw new FencedException("this sequencer lost its lease at epoch " + log.epoch()
+                    + " and has been fenced; it must not recover");
+        }
+        if (closed) {
+            throw new IOException("this sequencer released its lease at epoch "
+                    + log.epoch() + " and must not recover");
+        }
+        return new RecoveryWriter(log, upload).write(decided);
+    }
+
     /** This term's fast-mode side, once its start opened it (M13.27j). */
     public Optional<FastLeaderTerm> fastTerm() {
         return Optional.ofNullable(fastTerm);

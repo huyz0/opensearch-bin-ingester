@@ -113,6 +113,11 @@ public final class CommitDesk {
         write.returned(podUid);
     }
 
+    /** The desk's leader, as a takeover holds it (M13.33o). */
+    public TakeoverRun.Hold hold() {
+        return write;
+    }
+
     /**
      * The EXPOSED answers now owed, a retried exposed batch's among them: what
      * the EXPOSED sender (M13.27m) drains.

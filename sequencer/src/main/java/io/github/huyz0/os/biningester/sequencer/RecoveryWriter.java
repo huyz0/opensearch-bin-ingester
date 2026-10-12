@@ -41,6 +41,9 @@ public final class RecoveryWriter {
     private record Run(RunKey stream, long first, List<SegmentRecord> records) {
     }
 
+    /** How many taken slots a recovery entry moves past before it gives up. */
+    static final int MAX_TAKEN = 3;
+
     private final CommitLog log;
     private final SegmentUpload upload;
 
@@ -89,7 +92,26 @@ public final class RecoveryWriter {
         }
         voids.sort(Comparator.comparing(Recovery.VoidRange::key)
                 .thenComparingLong(Recovery.VoidRange::fromOffset));
-        return log.appendRecovery(new Recovery(log.nextSequence(), segments, voids));
+        for (int taken = 0; ; taken++) {
+            try {
+                return log.appendRecovery(new Recovery(log.nextSequence(), segments, voids));
+            } catch (SlotTakenException slot) {
+                // ⚠️ A LANDED APPEND WHOSE ANSWER WAS LOST (M13.33o review
+                // round 2, T3) is folded in, and the entry moves past it --
+                // unless it committed an offset the entry would commit or void.
+                if (taken + 1 >= MAX_TAKEN) {
+                    throw slot;
+                }
+                for (List<Run> stream : byStream) {
+                    for (Run run : stream) {
+                        requireFresh(run.stream(), run.first());
+                    }
+                }
+                for (Recovery.VoidRange v : voids) {
+                    requireFresh(v.key(), v.fromOffset());
+                }
+            }
+        }
     }
 
     /** One stream's commits, contiguous ones merged into one run. */
