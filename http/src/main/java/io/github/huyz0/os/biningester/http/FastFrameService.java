@@ -37,8 +37,18 @@ public final class FastFrameService implements HttpService {
      */
     public static final long MAX_FRAME_BYTES = 64L << 20;
 
+    /**
+     * ⚠️ AT MOST EIGHT FRAMES HELD AT ONCE (M13.27z; M13.27h's review round 1,
+     * P2): each is buffered whole until answered, so fifty concurrent 64 MiB
+     * posts held ~3.2 GiB on the leader; eight hold at most 512 MiB. Past it
+     * a sender is answered 503 and retries -- backpressure, never a queue.
+     * Measured with the rest of the fast path by M13.37.
+     */
+    public static final int MAX_CONCURRENT_FRAMES = 8;
+
     private final FastFrameRouter router;
     private final long maxFrameBytes;
+    private final java.util.concurrent.Semaphore frames;
 
     public FastFrameService(FastFrameRouter router) {
         this(router, MAX_FRAME_BYTES);
@@ -57,8 +67,13 @@ public final class FastFrameService implements HttpService {
     }
 
     FastFrameService(FastFrameRouter router, long maxFrameBytes) {
+        this(router, maxFrameBytes, MAX_CONCURRENT_FRAMES);
+    }
+
+    FastFrameService(FastFrameRouter router, long maxFrameBytes, int concurrentFrames) {
         this.router = Objects.requireNonNull(router, "router");
         this.maxFrameBytes = maxFrameBytes;
+        this.frames = new java.util.concurrent.Semaphore(concurrentFrames);
     }
 
     @Override
@@ -67,6 +82,19 @@ public final class FastFrameService implements HttpService {
     }
 
     private void answer(ServerRequest request, ServerResponse response) {
+        if (!frames.tryAcquire()) {
+            response.status(Status.SERVICE_UNAVAILABLE_503)
+                    .send("this pod holds " + MAX_CONCURRENT_FRAMES + " frames already: retry");
+            return;
+        }
+        try {
+            answerHeld(request, response);
+        } finally {
+            frames.release();
+        }
+    }
+
+    private void answerHeld(ServerRequest request, ServerResponse response) {
         byte[] frame;
         try (var in = new BoundedStream(request.content().inputStream(), maxFrameBytes)) {
             frame = in.readAllBytes();

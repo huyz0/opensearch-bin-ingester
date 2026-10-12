@@ -105,6 +105,26 @@ public record ServerConfig(String podId, String az, String trustDomain, String p
         Objects.requireNonNull(membership, "membership");
         Objects.requireNonNull(costTopKInterval, "costTopKInterval");
         Objects.requireNonNull(quotas, "quotas");
+        // ⚠️ A FAST POD's BATCHES FIT A FRAME, AND THE LEADER's HALF HOLDS ANY
+        // FRAME'S BATCH (M13.27z): a segment past half a frame -- room for the
+        // framing -- could never be sent, and a COMMIT the leader's half of
+        // the cap could never hold would wait for ever (M13.27u review round
+        // 1, P1). Four frames leave the half twice one, for the journal's own
+        // per-entry bytes.
+        if (fastJournal.isPresent()) {
+            long frame = io.github.huyz0.os.biningester.http.FastFrameService.MAX_FRAME_BYTES;
+            if (fastJournal.get().capBytes() < 4 * frame) {
+                throw new IllegalArgumentException(ServerProperties.FAST_JOURNAL_CAP
+                        + " is at least four peer frames, " + 4 * frame + " bytes, not "
+                        + fastJournal.get().capBytes());
+            }
+            if (ingest.maxSegmentBytes() > frame / 2) {
+                throw new IllegalArgumentException(ServerProperties.MAX_SEGMENT_BYTES
+                        + " is at most half a peer frame, " + frame / 2
+                        + " bytes, on a pod with a fast journal: not "
+                        + ingest.maxSegmentBytes());
+            }
+        }
         if (costTopKInterval.isNegative()) {
             throw new IllegalArgumentException("costTopKInterval is never negative: "
                     + costTopKInterval);

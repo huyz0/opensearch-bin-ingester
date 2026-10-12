@@ -53,10 +53,12 @@ class ServerPropertiesFastJournalTest {
     void aCAPIsReadInBytes() {
         Map<String, String> settings = minimal();
         settings.put(ServerProperties.FAST_JOURNAL_DIR, "/var/fast");
-        settings.put(ServerProperties.FAST_JOURNAL_CAP, "1048576");
+        settings.put(ServerProperties.FAST_JOURNAL_CAP, "268435456");
 
+        // ⚠️ 256 MiB, intentionally: M13.27z refuses a cap below four peer
+        // frames, so the 1 MiB this case read before is no longer a cap.
         assertThat(ServerProperties.parse(settings).fastJournal().orElseThrow().capBytes())
-                .isEqualTo(1L << 20);
+                .isEqualTo(256L << 20);
     }
 
     @Test
