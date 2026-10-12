@@ -114,6 +114,8 @@ public final class FastWriteLeader {
     private final LongSupplier nextDecision;
     private final ReentrantLock io = new ReentrantLock();
     private final List<Batch> batches = new ArrayList<>();
+    /** Streams a takeover has not decided yet: assigned nothing (M13.33l). */
+    private final Set<RunKey> undecided = new HashSet<>();
     private final Map<FastJournalRecord.IdempotencyKey, Batch> exposedByKey = new HashMap<>();
     private final Map<RunKey, Long> committedNext = new HashMap<>();
 
@@ -186,6 +188,13 @@ public final class FastWriteLeader {
                     if (run.records().size() > cursor.bound()) {
                         throw new IllegalArgumentException("a run of " + run.records().size()
                                 + " records exceeds B = " + cursor.bound() + ": the writer splits it");
+                    }
+                    // ⚠️ NOTHING ON A STREAM BEFORE ITS DECISION IS DURABLE
+                    // (M13.33l; ADR-0081 §5 invariant d): an offset assigned
+                    // now could be one the decision frees.
+                    if (undecided.contains(run.stream())) {
+                        return new Wait("stream " + run.stream()
+                                + " awaits its takeover decision");
                     }
                     OptionalInt q = termRecord.assignable(run.stream().indexId());
                     if (q.isEmpty()) {
@@ -333,6 +342,22 @@ public final class FastWriteLeader {
             }
         }
         return false;
+    }
+
+    /**
+     * Holds {@code streams} until each is {@link #decided} (M13.33l): a
+     * takeover's streams with collected entries.
+     */
+    public synchronized void undecided(java.util.Collection<RunKey> streams) {
+        undecided.addAll(streams);
+    }
+
+    /**
+     * {@code stream}'s chain entry and decision are durable: it is assigned
+     * again, from the chain's next offset its recovery moved (M13.33l).
+     */
+    public synchronized void decided(RunKey stream) {
+        undecided.remove(stream);
     }
 
     /** A holder's REPLICA_ACK, sent once its group is fsynced. */
