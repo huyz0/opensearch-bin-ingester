@@ -218,6 +218,28 @@ public final class IndexCatalog {
         return undecodable;
     }
 
+    /**
+     * Every fast index's {@code wal_quorum}, by stream id (M13.27l; ADR-0081
+     * §4): what the leader's term record is fed from. An index whose UUID does
+     * not decode is left out, as from {@link #namesById()}: no write of it
+     * reaches a stream.
+     */
+    public Map<java.util.UUID, Integer> walQuorums() {
+        Map<java.util.UUID, Integer> quorums = new java.util.HashMap<>();
+        for (IndexRegistration registration : byName.values()) {
+            if (!registration.wal()) {
+                continue;
+            }
+            try {
+                quorums.put(io.github.huyz0.os.biningester.format.RunKey.ofIndexUuid(
+                        registration.indexUuid(), 0).indexId(), registration.walQuorum());
+            } catch (IllegalArgumentException undecodable) {
+                // skipped: see namesById
+            }
+        }
+        return quorums;
+    }
+
     /** How many concrete indices this catalog has been told about. */
     public int size() {
         return byName.size();

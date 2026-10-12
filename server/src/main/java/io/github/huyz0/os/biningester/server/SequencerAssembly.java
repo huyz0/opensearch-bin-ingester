@@ -89,10 +89,11 @@ final class SequencerAssembly {
     static FleetSequencer create(ServerConfig config, BinStore store,
             SequencerTransport transport, Clock clock, MonotonicClock mono,
             LeaseChallenge challenge, RetentionAssembly.LeaseManagerFactory leaseManagerFactory,
-            Assembly.BackfillStarter backfillStarter, IngesterMetrics metrics)
+            Assembly.BackfillStarter backfillStarter, IngesterMetrics metrics,
+            java.util.function.Supplier<Map<java.util.UUID, Integer>> walQuorums)
             throws java.io.IOException {
         return create(config, store, transport, clock, mono, challenge, leaseManagerFactory,
-                backfillStarter, metrics, InboxDrain::inBackground);
+                backfillStarter, metrics, InboxDrain::inBackground, walQuorums);
     }
 
     /** {@link #retryDeferredDrains(Runnable, Duration)} every renew interval of {@code config}. */
@@ -152,21 +153,33 @@ final class SequencerAssembly {
             LeaseChallenge challenge, RetentionAssembly.LeaseManagerFactory leaseManagerFactory,
             Assembly.BackfillStarter backfillStarter, IngesterMetrics metrics,
             DrainStarter drainStarter) throws java.io.IOException {
+        return create(config, store, transport, clock, mono, challenge, leaseManagerFactory,
+                backfillStarter, metrics, drainStarter, Map::of);
+    }
+
+    /**
+     * The same, with every fast index's {@code wal_quorum} the term record
+     * starts with, read from this pod's catalog at each term start (M13.27l).
+     */
+    static FleetSequencer create(ServerConfig config, BinStore store,
+            SequencerTransport transport, Clock clock, MonotonicClock mono,
+            LeaseChallenge challenge, RetentionAssembly.LeaseManagerFactory leaseManagerFactory,
+            Assembly.BackfillStarter backfillStarter, IngesterMetrics metrics,
+            DrainStarter drainStarter,
+            java.util.function.Supplier<Map<java.util.UUID, Integer>> walQuorums)
+            throws java.io.IOException {
         LeaseConfig leases = leaseConfig(config);
         // ⚠️ THE SEQUENCER'S LEASE ONLY reports to the fence; the GC lease's
         // holder exposes nothing.
         FastLeaseFence fence = new FastLeaseFence(config.leaseTtl(), clock, mono);
         LeaseManager manager = leaseManagerFactory.create(store, leases, clock, challenge, fence);
-        // ⚠️ AN EMPTY TERM RECORD, UNTIL A FAST COMMIT CAN BE ASSIGNED (M13.27d
-        // review round 1, P1): a term recording a wal_quorum stays open until
-        // M13.33's takeover decides it, and every later term with it -- the
-        // walk growing with history M13.27g removed, for a term in which no
-        // fast offset can be assigned before M13.27m. M13.27l records the
-        // catalog's values.
+        // ⚠️ THE CATALOG'S VALUES START THE TERM RECORD (M13.27l): a term
+        // recording a wal_quorum stays open until a takeover decides it
+        // (M13.27d review round 1, P1), which M13.33r's takeover now does.
         FastTermOpening opening = new FastTermOpening(new FastTermStart(store, config.prefix()),
                 new EmptyTermCloser(store, config.prefix())::close, fence,
                 new Roster.Incarnation(config.podId(), config.podUid(), config.az(),
-                        config.endpoint()), Map::of);
+                        config.endpoint()), walQuorums);
         return new FleetSequencer(store, leases, transport, () -> {
             Optional<LocalSequencer> won =
                     LocalSequencer.start(store, config.prefix(), manager, SEAL_REDRIVE_BUDGET);

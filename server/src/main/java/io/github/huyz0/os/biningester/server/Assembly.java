@@ -236,7 +236,7 @@ public final class Assembly implements AutoCloseable {
                 kept.minRetention());
 
         this.sequencer = SequencerAssembly.create(config, store, transport, clock, mono,
-                challenge, leaseManagerFactory, backfillStarter, metrics);
+                challenge, leaseManagerFactory, backfillStarter, metrics, catalog::walQuorums);
         // ⚠️ NOT ON `toClose`: `DefaultIngest.close()` closes it, and a second unguarded close
         // would close a transport THIS CLASS DOES NOT OWN (MEASURED: the writer releases the lease).
         // ⚠️ A FAILURE HERE RELEASES THE TERM just taken; see WritePathAssembly.

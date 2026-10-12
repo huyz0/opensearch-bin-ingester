@@ -267,7 +267,10 @@ public final class IngesterNode implements AutoCloseable {
                             SequencerAssembly.MIN_UPLOAD_INTERVAL,
                             nanos -> java.util.concurrent.TimeUnit.NANOSECONDS.sleep(nanos));
             // ⚠️ M13.27x: the REPLICAs first, since their acks can expose a batch.
+            // ⚠️ M13.27l: the catalog's fast indices, into the term record.
             ExposedDrain exposed = new ExposedDrain(() -> {
+                FastLeaderFrames.recordCatalog(assembly.heldTerm(),
+                        assembly.catalog().walQuorums());
                 FastTakeover.start(assembly.heldTerm(), commitDisk, self, exposing, podGone,
                         recoveryUpload, assembly.store(), config.prefix(), clock,
                         run -> Thread.ofVirtual().name("fast-takeover").start(run));

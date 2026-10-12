@@ -62,6 +62,8 @@ public final class FastLeaderTerm {
     private final RosterDepartures departures;
     private final MonotonicClock mono;
     private final long refreshNanos;
+    /** This term's record, fed from the catalog and read by its desk (M13.27l). */
+    private final TermRecordWriter termRecord;
     /** This term's roster as last read, and when; null before the first read. */
     private Roster cached;
     /**
@@ -93,6 +95,31 @@ public final class FastLeaderTerm {
         this.departures = new RosterDepartures(store, prefix, epoch());
         this.mono = Objects.requireNonNull(mono, "mono");
         this.refreshNanos = refresh.toNanos();
+        this.termRecord = new TermRecordWriter(store, prefix, opened.started().own(), mono,
+                refresh);
+    }
+
+    /**
+     * The catalog's fast indices and their {@code wal_quorum} (M13.27l;
+     * ADR-0081 §4): each a value this term's record must hold before a batch
+     * of its index is assigned under it. A value already recorded wants
+     * nothing.
+     */
+    public void catalogSays(Map<java.util.UUID, Integer> fast) {
+        fast.forEach(termRecord::want);
+    }
+
+    /**
+     * Writes what the catalog changed into this term's record, at most one
+     * roster write per {@code min_upload_interval} (cost.md rule 6), then
+     * re-reads the roster it wrote.
+     */
+    public TermRecordWriter.Flush flushTermRecord() throws IOException {
+        TermRecordWriter.Flush flushed = termRecord.flush();
+        if (flushed instanceof TermRecordWriter.Written) {
+            rosterWritten();
+        }
+        return flushed;
     }
 
     /**
@@ -479,11 +506,8 @@ public final class FastLeaderTerm {
      */
     public synchronized CommitDesk commitDesk(FastJournal journal, Roster.Incarnation self) {
         if (desk == null) {
-            Roster started = opened.started().own();
             FastWriteLeader leader = new FastWriteLeader(epoch(), self,
-                    new FastCursor(STREAM_BOUND),
-                    new TermRecordWriter(store, prefix, started, mono,
-                            java.time.Duration.ofNanos(refreshNanos)),
+                    new FastCursor(STREAM_BOUND), termRecord,
                     new QuorumFrontier(self.podUid(), self.az()), journal,
                     this::nextDecision);
             // ⚠️ HELD FROM ITS BIRTH WHILE TERMS ARE UNCLOSED (M13.33o): the

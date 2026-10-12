@@ -4,7 +4,9 @@ package io.github.huyz0.os.biningester.ingest;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.huyz0.os.biningester.format.IndexRegistration;
+import io.github.huyz0.os.biningester.format.RunKey;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -20,6 +22,19 @@ import org.junit.jupiter.api.Test;
 class IndexCatalogFastSettingsTest {
 
     private static final String UUID = "nVzgup36TLqWp7VBBREj1w";
+
+    @Test
+    void walQUORUMSNameEveryFastIndexByItsStreamIdAndNoOther() {
+        // ⚠️ M13.27l: what the leader's term record is fed from (ADR-0081 §4).
+        IndexCatalog catalog = new IndexCatalog();
+        catalog.register(new IndexRegistration(UUID, "orders", List.of(), 3, 3, 1, 1)
+                .withFastSettings(250, true, 2));
+        catalog.register(new IndexRegistration("Qk1rUnfdRyCrk1L0DLaXEg", "logs", List.of(),
+                1, 1, 1, 1));
+
+        assertThat(catalog.walQuorums())
+                .isEqualTo(Map.of(RunKey.ofIndexUuid(UUID, 0).indexId(), 2));
+    }
 
     @Test
     void aLIVESettingsChangeReplacesTheModeTheCatalogAnswers() {

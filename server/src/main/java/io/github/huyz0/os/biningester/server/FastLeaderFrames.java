@@ -44,6 +44,28 @@ final class FastLeaderFrames {
                 term.get().commitDesk(disk.journal().get(), self));
     }
 
+    /**
+     * The catalog's fast indices recorded in the term this pod leads, if any
+     * (M13.27l; ADR-0081 §4): wanted, then flushed at most once per
+     * {@code min_upload_interval}; a failed write is retried next call.
+     */
+    static void recordCatalog(Sequencer held, java.util.Map<java.util.UUID, Integer> fast) {
+        Optional<FastLeaderTerm> term =
+                LocalSequencer.underneath(held).flatMap(LocalSequencer::fastTerm);
+        if (term.isEmpty()) {
+            return;
+        }
+        term.get().catalogSays(fast);
+        try {
+            term.get().flushTermRecord();
+        } catch (IOException failed) {
+            // ⚠️ THE CHANGES STAY PENDING, their batches waiting; the next
+            // tick writes them.
+            System.getLogger(FastLeaderFrames.class.getName()).log(
+                    System.Logger.Level.WARNING, "the term record was not written", failed);
+        }
+    }
+
     /** A CONFIRM (M13.27v), counted by the same desk its COMMIT was assigned by. */
     static FastFrame.Body answerConfirm(Sequencer held, FastDisk disk, Roster.Incarnation self,
             FastFrame.Header header, FastWriteFrame.Confirm confirm) throws IOException {
