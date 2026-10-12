@@ -237,13 +237,8 @@ public final class Assembly implements AutoCloseable {
 
         this.sequencer = SequencerAssembly.create(config, store, transport, clock, mono,
                 challenge, leaseManagerFactory, backfillStarter, metrics);
-        // ⚠️ NOT PUSHED ONTO `toClose`, AND THAT IS NOT AN OMISSION.
-        // `DefaultIngest.close()` closes the sequencer it was given and says so
-        // in its own javadoc, and `FleetSequencer.close()` has no idempotence
-        // guard -- so closing it here too would run `leadership.close()` and
-        // `closeTransport()` twice, the second on a transport THIS CLASS DOES
-        // NOT OWN. MEASURED by review: with the duplicate push removed the
-        // lease is still released, because the writer releases it.
+        // ⚠️ NOT ON `toClose`: `DefaultIngest.close()` closes it, and a second unguarded close
+        // would close a transport THIS CLASS DOES NOT OWN (MEASURED: the writer releases the lease).
         // ⚠️ A FAILURE HERE RELEASES THE TERM just taken; see WritePathAssembly.
         WritePathAssembly.WritePath writePath = WritePathAssembly.create(config, store,
                 this.sequencer, this.hub, clock, catalog, peerView, this.peerView, crossAz,
@@ -415,6 +410,11 @@ public final class Assembly implements AutoCloseable {
 
     public Ingest ingest() {
         return routed;
+    }
+
+    /** A takeover's segments, through this pod's own publisher (M13.33r). */
+    io.github.huyz0.os.biningester.sequencer.RecoveryWriter.SegmentUpload recoveryUpload() {
+        return ingest::publishRecovery;
     }
 
     /**

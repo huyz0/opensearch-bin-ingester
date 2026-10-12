@@ -254,8 +254,23 @@ public final class IngesterNode implements AutoCloseable {
                             io.github.huyz0.os.biningester.sequencer.FastLeaderTerm.REPLICA_TIMEOUT,
                             crossAz, clientTls), assembly.store(),
                             config.prefix());
+            // ⚠️ M13.33r: a term's takeover, started once by the first tick
+            // after the term opens -- its desk holds every stream meanwhile.
+            io.github.huyz0.os.biningester.sequencer.PodGone podGone =
+                    config.membership().isPresent()
+                            ? new io.github.huyz0.os.biningester.http.KubernetesPodLookup(
+                                    config.membership().get().apiBase(),
+                                    config.membership().get().namespace(), token, trust)
+                            : io.github.huyz0.os.biningester.sequencer.PodGone.NEVER;
+            io.github.huyz0.os.biningester.sequencer.RecoveryWriter.SegmentUpload recoveryUpload =
+                    FastTakeover.paced(assembly.recoveryUpload(), mono,
+                            SequencerAssembly.MIN_UPLOAD_INTERVAL,
+                            nanos -> java.util.concurrent.TimeUnit.NANOSECONDS.sleep(nanos));
             // ⚠️ M13.27x: the REPLICAs first, since their acks can expose a batch.
             ExposedDrain exposed = new ExposedDrain(() -> {
+                FastTakeover.start(assembly.heldTerm(), commitDisk, self, exposing, podGone,
+                        recoveryUpload, assembly.store(), config.prefix(), clock,
+                        run -> Thread.ofVirtual().name("fast-takeover").start(run));
                 FastLeaderFrames.sendReplicas(assembly.heldTerm(), commitDisk, self, exposing);
                 FastLeaderFrames.sendExposed(assembly.heldTerm(), commitDisk, self, exposing);
             });
