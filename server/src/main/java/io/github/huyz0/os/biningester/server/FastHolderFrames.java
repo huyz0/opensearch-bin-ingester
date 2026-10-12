@@ -30,6 +30,18 @@ final class FastHolderFrames {
     }
 
     static void register(BiConsumer<Integer, FastFrameRouter.Handler> handle, FastDisk disk) {
+        register(handle, disk, epoch -> false, "");
+    }
+
+    /**
+     * The same, on a pod that may lead a term (M13.84): an EXPOSED it sent
+     * itself, as the leader of {@code leads}' term, reaches its own inbox.
+     *
+     * @param leads whether this pod leads the term of an epoch
+     * @param selfUid this pod's UID, the sender of its own EXPOSEDs
+     */
+    static void register(BiConsumer<Integer, FastFrameRouter.Handler> handle, FastDisk disk,
+            java.util.function.LongPredicate leads, String selfUid) {
         Optional<ReplicaHolder> holder = disk.journal().map(
                 journal -> new ReplicaHolder(journal, disk.joined(), disk.gate(),
                         disk.fence()::highest));
@@ -66,8 +78,15 @@ final class FastHolderFrames {
                         : releases.get().answer(header,
                                 (io.github.huyz0.os.biningester.format.FastTakeoverFrame.Release) body));
         handle.accept(FastWriteFrame.KIND_EXPOSED, (header, body) -> {
+            // ⚠️ THE LEADER IS A WRITER OF ITS OWN TERM (M13.84; ADR-0081 §2)
+            // and joins no term of its own: its EXPOSEDs to itself are
+            // admitted for the term it leads, from its own UID only.
+            // ⚠️ NEVER EPOCH 0 (its review round 1, P1): a pod leading no
+            // serving term reports its own term as 0.
+            boolean own = !selfUid.isEmpty() && header.senderUid().equals(selfUid)
+                    && header.epoch() > 0 && leads.test(header.epoch());
             Optional<String> leader = disk.joined().leaderOf(header.epoch());
-            if (leader.isEmpty() || !leader.get().equals(header.senderUid())) {
+            if (!own && (leader.isEmpty() || !leader.get().equals(header.senderUid()))) {
                 return new FastFrame.Refused(FastFrame.Reason.NOT_ROSTERED, Optional.empty(),
                         header.senderUid() + " is not the leader of a term this pod joined");
             }

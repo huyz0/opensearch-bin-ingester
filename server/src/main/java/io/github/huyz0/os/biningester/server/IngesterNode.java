@@ -290,7 +290,8 @@ public final class IngesterNode implements AutoCloseable {
                             assembly::heldTerm, java.util.UUID.randomUUID(),
                             peerCommitTimeout(config)));
             // ⚠️ M13.28a: every pod holds copies, whichever term it leads.
-            FastHolderFrames.register(fastFrames::handle, commitDisk);
+            FastHolderFrames.register(fastFrames::handle, commitDisk,
+                    epoch -> FastPeer.ownTerm(assembly.heldTerm()) == epoch, config.podUid());
             FastLeaderFrames.registerWrite(fastFrames::handle, assembly::heldTerm, commitDisk, self,
                     exposed);
             IngesterNode node = new IngesterNode(assembly,

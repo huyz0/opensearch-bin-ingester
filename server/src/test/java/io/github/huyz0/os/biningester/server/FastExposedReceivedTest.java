@@ -32,6 +32,69 @@ class FastExposedReceivedTest {
         return handlers.get(FastWriteFrame.KIND_EXPOSED);
     }
 
+    /** On pod1, which leads term 3 and no other. */
+    private static FastFrameRouter.Handler leadingThree(FastDisk disk) {
+        Map<Integer, FastFrameRouter.Handler> handlers = new HashMap<>();
+        FastHolderFrames.register(handlers::put, disk, epoch -> epoch == 3, "uid-pod1");
+        return handlers.get(FastWriteFrame.KIND_EXPOSED);
+    }
+
+    @Test
+    void anEXPOSEDTheLeaderSentItselfReachesItsInbox() throws Exception {
+        // ⚠️ M13.84: the leader writes through its own term, joined by no one.
+        try (FastDisk disk = FastDisk.open(new MemoryBinStore(), "lease", Optional.empty(),
+                new FastDiskTest.Files())) {
+            FastFrame.Body answer = leadingThree(disk).answer(from("uid-pod1"),
+                    new FastWriteFrame.Exposed(4, RUNS));
+
+            assertThat(answer)
+                    .isEqualTo(new FastFrame.HeldStatusReport(FastFrame.HeldStatus.NONE));
+            assertThat(disk.exposed().await(3, 4, RUNS, Duration.ZERO)).isTrue();
+        }
+    }
+
+    @Test
+    void anEXPOSEDFromAnotherPodForTheTermThisPodLeadsIsRefused() throws Exception {
+        // ⚠️ its review round 1, T1: only this pod's own word is admitted.
+        try (FastDisk disk = FastDisk.open(new MemoryBinStore(), "lease", Optional.empty(),
+                new FastDiskTest.Files())) {
+            FastFrame.Body answer = leadingThree(disk).answer(from("uid-pod2"),
+                    new FastWriteFrame.Exposed(4, RUNS));
+
+            assertThat(answer).isInstanceOf(FastFrame.Refused.class);
+            assertThat(disk.exposed().await(3, 4, RUNS, Duration.ZERO)).isFalse();
+        }
+    }
+
+    @Test
+    void aPODLeadingNoTermAdmitsNoEXPOSEDOfItsOwn() throws Exception {
+        // ⚠️ its review round 1, P1: such a pod reports its own term as 0.
+        try (FastDisk disk = FastDisk.open(new MemoryBinStore(), "lease", Optional.empty(),
+                new FastDiskTest.Files())) {
+            Map<Integer, FastFrameRouter.Handler> handlers = new HashMap<>();
+            FastHolderFrames.register(handlers::put, disk, epoch -> epoch == 0, "uid-pod1");
+
+            FastFrame.Body answer = handlers.get(FastWriteFrame.KIND_EXPOSED).answer(
+                    new FastFrame.Header(FastWriteFrame.KIND_EXPOSED, 0, "uid-pod1", "uid-pod1"),
+                    new FastWriteFrame.Exposed(4, RUNS));
+
+            assertThat(answer).isInstanceOf(FastFrame.Refused.class);
+        }
+    }
+
+    @Test
+    void anEXPOSEDInThisPodsNameForATermItDoesNotLeadIsRefused() throws Exception {
+        try (FastDisk disk = FastDisk.open(new MemoryBinStore(), "lease", Optional.empty(),
+                new FastDiskTest.Files())) {
+            FastFrame.Body answer = leadingThree(disk).answer(
+                    new FastFrame.Header(FastWriteFrame.KIND_EXPOSED, 2, "uid-pod1", "uid-pod1"),
+                    new FastWriteFrame.Exposed(4, RUNS));
+
+            assertThat(answer).isInstanceOf(FastFrame.Refused.class);
+            assertThat(disk.exposed().await(2, 4, RUNS, Duration.ZERO)).isFalse();
+        }
+    }
+
     private static FastFrame.Header from(String sender) {
         return new FastFrame.Header(FastWriteFrame.KIND_EXPOSED, 3, sender, "uid-pod1");
     }
