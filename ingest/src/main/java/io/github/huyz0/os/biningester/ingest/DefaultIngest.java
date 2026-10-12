@@ -9,9 +9,12 @@ import io.github.huyz0.os.biningester.security.Principal;
 import io.github.huyz0.os.biningester.sequencer.Sequencer;
 import java.io.IOException;
 import java.time.Clock;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.function.Predicate;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 
@@ -86,6 +89,12 @@ public final class DefaultIngest implements Ingest {
 
     /** The active buffer, its waiters and the flush loop (M13.1a). */
     private final FlushPath flushPath;
+    /** Which indices are fast, and the path they take (M13.29b); none until routed. */
+    private record FastRoute(Predicate<String> fastIndex, FastPath path) {
+    }
+
+    /** One field, so a re-route never pairs a new predicate with the old path. */
+    private volatile FastRoute fastRoute = new FastRoute(index -> false, FastPath.NONE);
 
     /** How many pushes could not be delivered; see {@link PushQueue#undeliverable()}. */
     public long undeliverablePushes() {
@@ -220,6 +229,27 @@ public final class DefaultIngest implements Ingest {
         // ⚠️ Nothing above buffers anything. A refusal that had already added to
         // the accumulator would leak the refused records into the next flush.
         RunKey stream = new RunKey(streams.streamIdOf(index), partition);
+        FastRoute route = fastRoute;
+        if (route.fastIndex().test(index)) {
+            // ⚠️ M13.29b: a fast index's records go to its term's leader and
+            // are answered once EXPOSED; NOT_FAST sends the SAME records the
+            // default way. A failure refuses the append before `buffered`, so
+            // its caller releases what it holds.
+            List<SegmentRecord> held = new ArrayList<>();
+            records.forEachRecord(held::add);
+            // ⚠️ REFUSED AS THE DEFAULT PATH REFUSES IT (its review round 1,
+            // P1): a fast batch of nothing is a COMMIT of no runs.
+            if (held.isEmpty()) {
+                throw new IllegalArgumentException(
+                        "an append of no records has nothing to make durable");
+            }
+            Optional<AppendResult> fast = route.path().append(stream, held);
+            if (fast.isPresent()) {
+                buffered.run();
+                return fast.get();
+            }
+            records = sink -> held.forEach(sink);
+        }
         Pending mine = flushPath.buffer(stream, lane, records);
 
         buffered.run();
@@ -309,6 +339,16 @@ public final class DefaultIngest implements Ingest {
      */
     public long flushSpacingMillis() {
         return flushPath.flushSpacingMillis();
+    }
+
+    /**
+     * Routes the appends of every index {@code fast} names through
+     * {@code path} (M13.29b; ADR-0081 §2): set once by the composition root,
+     * which knows the catalog's modes and the fast terms.
+     */
+    public void routeFast(Predicate<String> fast, FastPath path) {
+        this.fastRoute = new FastRoute(Objects.requireNonNull(fast, "fast"),
+                Objects.requireNonNull(path, "path"));
     }
 
     /**
