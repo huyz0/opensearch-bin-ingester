@@ -268,6 +268,27 @@ public final class LocalSequencer implements Sequencer {
         return new RecoveryWriter(log, upload).write(decided);
     }
 
+    /**
+     * Commits a fast upload's segment (M13.31a; ADR-0081 §7): its runs at the
+     * offsets the fast leader assigned, which must be each stream's
+     * committed next offset -- the delta takes them, never new ones.
+     *
+     * @throws IllegalStateException a run whose first offset is not its
+     *     stream's next: nothing is committed
+     */
+    public synchronized CommitDelta commitAt(CommitRequest request,
+            Map<io.github.huyz0.os.biningester.format.RunKey, Long> firsts) throws IOException {
+        for (io.github.huyz0.os.biningester.format.RunKey stream
+                : request.recordCounts().keySet()) {
+            Long first = firsts.get(stream);
+            if (first == null || first != log.nextOffset(stream)) {
+                throw new IllegalStateException("a fast run of " + stream + " at " + first
+                        + ", not the chain's next " + log.nextOffset(stream));
+            }
+        }
+        return commitAll(List.of(request));
+    }
+
     /** This term's fast-mode side, once its start opened it (M13.27j). */
     public Optional<FastLeaderTerm> fastTerm() {
         return Optional.ofNullable(fastTerm);
@@ -485,6 +506,10 @@ public final class LocalSequencer implements Sequencer {
         if (landed.isEmpty()) {
             return;
         }
+        // ⚠️ AND THE LOG ITSELF (M13.31a review round 2, P5): a retry answered
+        // from the window appends nothing, so the landed delta must move the
+        // offsets here -- a fast upload checks them before it commits.
+        log.fold(landed.get());
         for (SegmentCommit segment : landed.get().segments()) {
             SegmentCommit.Attribution attribution = segment.attribution();
             if (attribution != null) {

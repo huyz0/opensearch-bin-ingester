@@ -276,6 +276,9 @@ public final class IngesterNode implements AutoCloseable {
                         run -> Thread.ofVirtual().name("fast-takeover").start(run));
                 FastLeaderFrames.sendReplicas(assembly.heldTerm(), commitDisk, self, exposing);
                 FastLeaderFrames.sendExposed(assembly.heldTerm(), commitDisk, self, exposing);
+                // ⚠️ M13.31a: what is exposed, uploaded at its assigned offsets.
+                FastLeaderFrames.upload(assembly.heldTerm(), commitDisk, self, recoveryUpload,
+                        exposing);
             });
             // ⚠️ M13.27v: a writer's CONFIRM, counted by the same desk.
             ExposedDrain.Ticks ticks = exposed.tickEvery(

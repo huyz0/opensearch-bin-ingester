@@ -127,6 +127,68 @@ final class FastLeaderFrames {
     }
 
     /**
+     * Uploads what the leading term has exposed and the chain has not
+     * committed (M13.31a; ADR-0081 §7), at the offsets assigned; nothing on a
+     * pod leading no serving term or holding no fast journal. ⚠️ A FAILED
+     * UPLOAD LEAVES THE ENTRIES HELD AND EXPOSED: the next one retries them.
+     */
+    static void upload(Sequencer held, FastDisk disk, Roster.Incarnation self,
+            io.github.huyz0.os.biningester.sequencer.RecoveryWriter.SegmentUpload upload,
+            TermJoiner.Transport transport) {
+        Optional<LocalSequencer> local = LocalSequencer.underneath(held)
+                .filter(LocalSequencer::serving);
+        Optional<FastLeaderTerm> term = local.flatMap(LocalSequencer::fastTerm);
+        if (term.isEmpty() || disk.journal().isEmpty()) {
+            return;
+        }
+        FastLeaderTerm fast = term.get();
+        io.github.huyz0.os.biningester.sequencer.FastUploader.Chain chain =
+                new io.github.huyz0.os.biningester.sequencer.FastUploader.Chain() {
+                    @Override
+                    public long next(io.github.huyz0.os.biningester.format.RunKey stream) {
+                        return local.get().committedNext(stream);
+                    }
+
+                    @Override
+                    public java.util.Map<io.github.huyz0.os.biningester.format.RunKey, Long>
+                            commitAt(String segmentKey,
+                                    java.util.Map<io.github.huyz0.os.biningester.format.RunKey,
+                                            Long> firsts,
+                                    java.util.Map<io.github.huyz0.os.biningester.format.RunKey,
+                                            Integer> counts) throws IOException {
+                        io.github.huyz0.os.biningester.format.CommitDelta delta = local.get()
+                                .commitAt(new io.github.huyz0.os.biningester.sequencer
+                                        .CommitRequest(self.podId(), "fast" + fast.epoch(),
+                                                fast.uploadSeq(firsts), segmentKey, counts),
+                                        firsts);
+                        fast.uploadCommitted(firsts);
+                        return committedNext(delta);
+                    }
+                };
+        try {
+            fast.upload(fast.commitDesk(disk.journal().get(), self), disk.journal().get(), chain,
+                    upload, transport);
+        } catch (IOException | RuntimeException failed) {
+            System.getLogger(FastLeaderFrames.class.getName()).log(
+                    System.Logger.Level.WARNING, "the fast upload failed; the next retries",
+                    failed);
+        }
+    }
+
+    /** Each stream's committed next offset after {@code delta}: what it actually holds. */
+    static java.util.Map<io.github.huyz0.os.biningester.format.RunKey, Long> committedNext(
+            io.github.huyz0.os.biningester.format.CommitDelta delta) {
+        java.util.Map<io.github.huyz0.os.biningester.format.RunKey, Long> next =
+                new java.util.HashMap<>();
+        for (io.github.huyz0.os.biningester.format.SegmentCommit segment : delta.segments()) {
+            for (io.github.huyz0.os.biningester.format.RunCommit run : segment.runs()) {
+                next.merge(run.key(), run.firstOffset() + run.recordCount(), Math::max);
+            }
+        }
+        return next;
+    }
+
+    /**
      * Sends the REPLICAs the leading term's desk owes and counts their acks
      * (M13.27x); nothing on a pod leading no term or holding no fast journal.
      * ⚠️ A ROSTER READ THAT FAILS SENDS NOTHING: the copies stay owed for the

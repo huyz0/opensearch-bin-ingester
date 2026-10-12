@@ -138,6 +138,11 @@ public final class FastWriteLeader implements TakeoverRun.Hold {
         this.nextDecision = Objects.requireNonNull(nextDecision, "nextDecision");
     }
 
+    /** {@code stream}'s quorum frontier: every offset below it exposable (M13.31a). */
+    public synchronized long frontier(RunKey stream) {
+        return frontier.frontier(stream);
+    }
+
     /** Starts {@code stream} at its committed next offset, in the cursor and the frontier. */
     public synchronized void open(RunKey stream, long committedNext) {
         cursor.open(stream, committedNext);

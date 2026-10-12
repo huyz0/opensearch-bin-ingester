@@ -134,6 +134,25 @@ class FastWriteServedTest {
     }
 
     @Test
+    void aFASTWriteIsUploadedToTheChainAtItsOffsetsAndReleased() throws Exception {
+        // ⚠️ M13.31a: one segment and one delta at the offsets assigned.
+        node = startOnAFreePort();
+        node.assembly().catalog().register(new IndexRegistration(FAST_UUID, "orders",
+                List.of(), 1, 1, 1, 1).withFastSettings(250, true, 1));
+        java.util.UUID index = RunKey.ofIndexUuid(FAST_UUID, 0).indexId();
+        await().atMost(Duration.ofSeconds(20)).until(() -> recorded(index));
+        node.assembly().ingest().append(PRODUCER, "orders", 0, docs(3)::forEach);
+        var chain = io.github.huyz0.os.biningester.sequencer.LocalSequencer
+                .underneath(node.assembly().heldTerm()).orElseThrow();
+
+        await().atMost(Duration.ofSeconds(20)).until(
+                () -> chain.committedNext(new RunKey(index, 0)) == 3);
+
+        assertThat(node.fastDisk().journal().orElseThrow().held())
+                .as("the leader's copy released once the chain holds it").isEmpty();
+    }
+
+    @Test
     void aDEFAULTIndexsAppendNeverReachesTheFastJournal() throws Exception {
         node = startOnAFreePort();
         node.assembly().catalog().register(new IndexRegistration(DEFAULT_UUID, "logs",

@@ -120,6 +120,32 @@ class AmbiguousCommitRetryTest {
     }
 
     @Test
+    void aFASTUploadRetriedAfterItsDeltaLandedMovesTheChainOn() throws Exception {
+        // ⚠️ M13.31a review round 2, P5: answered from the window, the landed
+        // delta still moves the offsets, or the stream never uploads again.
+        MemoryBinStore backing = new MemoryBinStore();
+        AtomicBoolean armed = new AtomicBoolean();
+        BinStore store =
+                ambiguousOnFirstDeltaAppend(backing, AmbiguousPutStore.Mode.LANDED, armed);
+        LocalSequencer sequencer = leaderOver(store);
+        try {
+            armed.set(true);
+            CommitRequest upload = new CommitRequest("poda", "fast1", 0, "seg/f", counts(3));
+            io.github.huyz0.os.biningester.format.RunKey stream =
+                    counts(3).keySet().iterator().next();
+            assertThatThrownBy(() -> sequencer.commitAt(upload, java.util.Map.of(stream, 0L)))
+                    .isInstanceOf(AmbiguousAppendException.class);
+
+            sequencer.commitAt(upload, java.util.Map.of(stream, 0L));
+
+            assertThat(sequencer.committedNext(stream)).isEqualTo(3);
+            assertThat(deltasCarrying(backing, "seg/f")).as("committed once").isEqualTo(1);
+        } finally {
+            sequencer.close();
+        }
+    }
+
+    @Test
     void aRetryAfterAnAmbiguousAppendGetsTheOffsetsThatALREADYApply() throws Exception {
         MemoryBinStore backing = new MemoryBinStore();
         AtomicBoolean armed = new AtomicBoolean();
@@ -307,15 +333,13 @@ class AmbiguousCommitRetryTest {
             assertThat(meter.counts().stats() - statsAfterRetry)
                     .as("the reconciliation is SPENT -- the next commit stats nothing")
                     .isZero();
-            // ⚠️ ONE GET, AND IT IS NOT A RECONCILIATION. The ambiguous append
-            // never applied, so the log still believes its slot is free; the
-            // next real commit loses that slot to its own landed bytes, reads
-            // them once to fold their offsets in, and moves on. That is the
-            // ordinary lost-race path and it happens ONCE, not per commit --
-            // which is the whole difference from a mark that is never cleared.
+            // ⚠️ NO GET AT ALL (M13.31a review round 2, P5): the reconciliation
+            // folds the landed delta into the log, so the next real commit
+            // takes the slot after it -- before, it lost that slot to its own
+            // landed bytes and read them once more to fold them in.
             assertThat(meter.counts().gets() - getsAfterRetry)
-                    .as("and reads the slot it lost exactly once, never the reconciled one again")
-                    .isEqualTo(1);
+                    .as("and never reads the reconciled slot again")
+                    .isZero();
         } finally {
             sequencer.close();
         }

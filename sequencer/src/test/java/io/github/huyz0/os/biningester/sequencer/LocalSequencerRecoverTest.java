@@ -7,6 +7,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.github.huyz0.os.biningester.binstore.BinStore;
 import io.github.huyz0.os.biningester.binstore.backend.MemoryBinStore;
 import io.github.huyz0.os.biningester.format.ChainEntry;
+import io.github.huyz0.os.biningester.format.CommitDelta;
 import io.github.huyz0.os.biningester.format.FastJournalRecord;
 import io.github.huyz0.os.biningester.format.OpType;
 import io.github.huyz0.os.biningester.format.Recovery;
@@ -92,6 +93,31 @@ class LocalSequencerRecoverTest {
                 .keyFor(written.sequence()))) {
             assertThat(ChainEntry.decode(in.readAllBytes())).isEqualTo(written);
         }
+    }
+
+    @Test
+    void aFASTUploadIsCommittedAtTheOffsetsItWasAssigned() throws Exception {
+        // ⚠️ M13.31a: its offsets were the chain's next when assigned.
+        MemoryBinStore store = new MemoryBinStore();
+        LocalSequencer term = start(store);
+
+        CommitDelta delta = term.commitAt(new CommitRequest("poda", "fast1", 0, "seg-f",
+                java.util.Map.of(S, 3)), java.util.Map.of(S, 0L));
+
+        assertThat(delta.segments()).singleElement().satisfies(seg -> assertThat(seg.runs())
+                .singleElement().satisfies(r -> assertThat(r.firstOffset()).isZero()));
+        assertThat(term.committedNext(S)).isEqualTo(3);
+    }
+
+    @Test
+    void aFASTUploadAtOffsetsTheChainDidNotReachIsRefused() throws Exception {
+        MemoryBinStore store = new MemoryBinStore();
+        LocalSequencer term = start(store);
+
+        assertThatThrownBy(() -> term.commitAt(new CommitRequest("poda", "fast1", 0, "seg-f",
+                java.util.Map.of(S, 3)), java.util.Map.of(S, 5L)))
+                .isInstanceOf(IllegalStateException.class);
+        assertThat(term.committedNext(S)).as("nothing committed").isZero();
     }
 
     @Test

@@ -113,6 +113,11 @@ public final class CommitDesk {
         write.returned(podUid);
     }
 
+    /** The desk's leader itself, for this term's upload (M13.31a). */
+    FastWriteLeader leader() {
+        return write;
+    }
+
     /** The desk's leader, as a takeover holds it (M13.33o). */
     public TakeoverRun.Hold hold() {
         return write;

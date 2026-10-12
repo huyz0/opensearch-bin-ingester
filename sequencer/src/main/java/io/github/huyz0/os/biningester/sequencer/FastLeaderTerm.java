@@ -64,6 +64,12 @@ public final class FastLeaderTerm {
     private final long refreshNanos;
     /** This term's record, fed from the catalog and read by its desk (M13.27l). */
     private final TermRecordWriter termRecord;
+    /** When this term last uploaded, paced at {@code min_upload_interval} (M13.31a). */
+    private long lastUploadNanos;
+    private boolean uploaded;
+    private long uploadSeq;
+    /** The first offsets of the upload whose delta is not known committed; null when none. */
+    private Map<RunKey, Long> pendingUpload;
     /** This term's roster as last read, and when; null before the first read. */
     private Roster cached;
     /**
@@ -135,6 +141,57 @@ public final class FastLeaderTerm {
 
     public long epoch() {
         return opened.started().own().epoch();
+    }
+
+    /**
+     * Uploads what this term's desk has exposed and the chain has not
+     * committed (M13.31a; ADR-0081 §7): one segment and one delta at the
+     * offsets assigned, then every holder of the term told to release.
+     *
+     * <p>⚠️ AT MOST ONE UPLOAD PER {@code min_upload_interval}, however often
+     * it is asked: four segment PUTs and four deltas a second, the rate
+     * scaling with time and leaders, never records (NFR-1, NFR-4).
+     *
+     * @param chain this term's chain, committing at the offsets assigned
+     * @return each stream uploaded and its committed next offset; empty when
+     *     none was due or nothing was exposed
+     */
+    public Optional<Map<RunKey, Long>> upload(CommitDesk desk, FastJournal journal,
+            FastUploader.Chain chain, RecoveryWriter.SegmentUpload upload,
+            TermJoiner.Transport transport) throws IOException {
+        synchronized (this) {
+            long now = mono.nanos();
+            if (uploaded && now - lastUploadNanos < refreshNanos) {
+                return Optional.empty();
+            }
+            uploaded = true;
+            lastUploadNanos = now;
+        }
+        Roster own = ownRoster();
+        ReleaseSender release = new ReleaseSender(own.leader().podUid(), epoch(), transport);
+        return new FastUploader(epoch(), journal, desk.leader(), chain, upload,
+                below -> release.send(List.of(own), below)).upload();
+    }
+
+    /**
+     * The sequence of the upload delta at {@code firsts}, for its idempotency
+     * key (M13.31a review round 1, P1): ⚠️ THE SAME UNTIL ONE IS COMMITTED, so
+     * a retry of a delta that landed with its answer lost is folded into it
+     * rather than committing its records twice.
+     */
+    public synchronized long uploadSeq(Map<RunKey, Long> firsts) {
+        if (!firsts.equals(pendingUpload)) {
+            pendingUpload = Map.copyOf(firsts);
+            uploadSeq++;
+        }
+        return uploadSeq;
+    }
+
+    /** The upload delta at {@code firsts} is committed: the next takes a new sequence. */
+    public synchronized void uploadCommitted(Map<RunKey, Long> firsts) {
+        if (firsts.equals(pendingUpload)) {
+            pendingUpload = null;
+        }
     }
 
     /**
