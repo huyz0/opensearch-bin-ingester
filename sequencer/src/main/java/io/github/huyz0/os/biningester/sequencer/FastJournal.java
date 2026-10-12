@@ -203,6 +203,23 @@ public final class FastJournal {
         return heldBytes + bytes <= capBytes / 2;
     }
 
+    /**
+     * Whether an entry of {@code key} at {@code firstOffset}, of {@code epoch}
+     * and {@code assignedAfter}, is held (M13.28a): a re-sent REPLICA is not
+     * journaled twice.
+     */
+    public synchronized boolean holds(long epoch, RunKey key, long assignedAfter,
+            long firstOffset) {
+        for (Held h : held.getOrDefault(key, List.of())) {
+            FastJournalRecord.Entry e = h.entry();
+            if (e.epoch() == epoch && e.assignedAfter() == assignedAfter
+                    && e.firstOffset() == firstOffset) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** Appends {@code entry}, or refuses it -- false -- if held bytes would pass the cap. */
     public synchronized boolean append(FastJournalRecord.Entry entry) throws IOException {
         requireUsable();

@@ -28,7 +28,8 @@ public final class Departure {
     private final TermJoiner.Transport transport;
     private final EpochFence fence;
     private final FastJournal journal;
-    private volatile boolean departing;
+    /** The pod's gate, a REPLICA's append under the same lock (M13.28a; M13.26h review, P10). */
+    private final HolderGate gate;
     /**
      * The term and leader a phase-1 DEPART -- the ask for an upload -- was
      * answered by; a new leader is asked again (M13.26f review round 2, P5).
@@ -38,15 +39,22 @@ public final class Departure {
 
     public Departure(Roster.Incarnation self, TermJoiner.Transport transport, EpochFence fence,
             FastJournal journal) {
+        this(self, transport, fence, journal, new HolderGate());
+    }
+
+    /** The same, under the pod's {@code gate}, which its replica endpoint appends under. */
+    public Departure(Roster.Incarnation self, TermJoiner.Transport transport, EpochFence fence,
+            FastJournal journal, HolderGate gate) {
         this.self = Objects.requireNonNull(self, "self");
         this.transport = Objects.requireNonNull(transport, "transport");
         this.fence = Objects.requireNonNull(fence, "fence");
         this.journal = Objects.requireNonNull(journal, "journal");
+        this.gate = Objects.requireNonNull(gate, "gate");
     }
 
     /** Whether this pod still accepts entries: false from the first report on. */
     public boolean accepting() {
-        return !departing;
+        return gate.accepting();
     }
 
     /**
@@ -58,7 +66,7 @@ public final class Departure {
      */
     public synchronized boolean report(long epoch, String leaderUid, String leaderEndpoint)
             throws IOException {
-        departing = true;
+        gate.depart();
         FastFrame.Held held = HeldReports.of(journal.held());
         // ⚠️ PHASE 1 UNTIL ONE IS ANSWERED (M13.26f review round 1, P2): it is
         // the ask for an upload, and a retry after it failed must ask again.
@@ -82,8 +90,9 @@ public final class Departure {
      *     every {@code DEPARTED} write landed -- the pod has not departed
      */
     public void leave(long epoch, String leaderUid, String leaderEndpoint) throws IOException {
-        departing = true;
-        if (!journal.held().isEmpty()) {
+        // ⚠️ THE FLAG AND THE EMPTY CHECK ARE ONE STEP (M13.26h's review, P10):
+        // no REPLICA is journaled and acked between them.
+        if (!gate.departIfEmpty(journal)) {
             throw new IOException("the journal still holds " + journal.held().size()
                     + " entries: report until nothing is pending, then leave");
         }

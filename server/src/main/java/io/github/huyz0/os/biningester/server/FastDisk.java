@@ -41,6 +41,14 @@ final class FastDisk implements Closeable {
 
     private final EpochFence fence;
     private final Optional<FastJournal> journal;
+    /**
+     * The terms this pod joined, and its holder gate (M13.28a): one each per
+     * pod, shared by the watch's joins, the replica endpoint and the departure.
+     */
+    private final io.github.huyz0.os.biningester.sequencer.JoinedTerms joined =
+            new io.github.huyz0.os.biningester.sequencer.JoinedTerms();
+    private final io.github.huyz0.os.biningester.sequencer.HolderGate gate =
+            new io.github.huyz0.os.biningester.sequencer.HolderGate();
     /** The files this disk opened, closed with it. */
     private final List<JournalFile> files;
 
@@ -87,6 +95,14 @@ final class FastDisk implements Closeable {
 
     Optional<FastJournal> journal() {
         return journal;
+    }
+
+    io.github.huyz0.os.biningester.sequencer.JoinedTerms joined() {
+        return joined;
+    }
+
+    io.github.huyz0.os.biningester.sequencer.HolderGate gate() {
+        return gate;
     }
 
     @Override

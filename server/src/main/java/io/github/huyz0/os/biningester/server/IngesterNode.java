@@ -262,6 +262,8 @@ public final class IngesterNode implements AutoCloseable {
             // ⚠️ M13.27v: a writer's CONFIRM, counted by the same desk.
             ExposedDrain.Ticks ticks = exposed.tickEvery(
                     io.github.huyz0.os.biningester.sequencer.FastLeaderTerm.REPLICA_TIMEOUT);
+            // ⚠️ M13.28a: every pod holds copies, whichever term it leads.
+            FastHolderFrames.register(fastFrames::handle, commitDisk);
             FastLeaderFrames.registerWrite(fastFrames::handle, assembly::heldTerm, commitDisk, self,
                     exposed);
             IngesterNode node = new IngesterNode(assembly,

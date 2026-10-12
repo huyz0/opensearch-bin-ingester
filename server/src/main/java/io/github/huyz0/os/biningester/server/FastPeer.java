@@ -10,7 +10,6 @@ import io.github.huyz0.os.biningester.http.HttpFastTransport;
 import io.github.huyz0.os.biningester.sequencer.EpochFence;
 import io.github.huyz0.os.biningester.sequencer.FastFrameRouter;
 import io.github.huyz0.os.biningester.sequencer.HeldReports;
-import io.github.huyz0.os.biningester.sequencer.JoinedTerms;
 import io.github.huyz0.os.biningester.sequencer.LeaderWatch;
 import io.github.huyz0.os.biningester.sequencer.TermJoiner;
 import java.io.InputStream;
@@ -162,7 +161,7 @@ final class FastPeer implements AutoCloseable {
             TermJoiner.Transport transport) {
         Roster.Incarnation self = new Roster.Incarnation(config.podId(), config.podUid(),
                 config.az(), config.endpoint());
-        return new TermJoiner(self, transport, disk.fence(), new JoinedTerms(),
+        return new TermJoiner(self, transport, disk.fence(), disk.joined(),
                 () -> held(disk));
     }
 

@@ -70,7 +70,7 @@ final class FastDeparture {
         } catch (IOException cannot) {
             return Result.STOPPED_UNDEPARTED;
         }
-        Departure departure = new Departure(self, transport, disk.fence(), journal);
+        Departure departure = new Departure(self, transport, disk.fence(), journal, disk.gate());
         long deadline = mono.nanos() + grace.toNanos();
         boolean askedOnce = false;
         while (mono.nanos() < deadline) {
