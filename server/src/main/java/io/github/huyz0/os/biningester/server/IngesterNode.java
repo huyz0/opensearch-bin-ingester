@@ -243,15 +243,17 @@ public final class IngesterNode implements AutoCloseable {
                     new io.github.huyz0.os.biningester.format.Roster.Incarnation(config.podId(),
                     config.podUid(), config.az(), config.endpoint());
             FastDisk commitDisk = fastDisk;
-            fastFrames.handle(io.github.huyz0.os.biningester.format.FastWriteFrame.KIND_COMMIT,
-                    (header, body) -> FastLeaderFrames.answerCommit(assembly.heldTerm(),
-                            commitDisk, self, header,
-                            (io.github.huyz0.os.biningester.format.FastWriteFrame.Commit) body));
+            // ⚠️ M13.27w: either answer can complete a batch's quorum, so each
+            // wakes the background drain that sends the EXPOSEDs owed.
+            io.github.huyz0.os.biningester.sequencer.TermJoiner.Transport exposing =
+                    zones.learning(new io.github.huyz0.os.biningester.http.HttpFastTransport(
+                            FastDeparture.EXCHANGE_TIMEOUT, crossAz, clientTls), assembly.store(),
+                            config.prefix());
+            ExposedDrain exposed = new ExposedDrain(() -> FastLeaderFrames.sendExposed(
+                    assembly.heldTerm(), commitDisk, self, exposing));
             // ⚠️ M13.27v: a writer's CONFIRM, counted by the same desk.
-            fastFrames.handle(io.github.huyz0.os.biningester.format.FastWriteFrame.KIND_CONFIRM,
-                    (header, body) -> FastLeaderFrames.answerConfirm(assembly.heldTerm(),
-                            commitDisk, self, header,
-                            (io.github.huyz0.os.biningester.format.FastWriteFrame.Confirm) body));
+            FastLeaderFrames.registerWrite(fastFrames::handle, assembly::heldTerm, commitDisk, self,
+                    exposed);
             IngesterNode node = new IngesterNode(assembly,
                     FrontDoor.start(assembly, clock, journal::add, crossAz,
                             Optional.of(fastFrames), peerTls), transport, clock,

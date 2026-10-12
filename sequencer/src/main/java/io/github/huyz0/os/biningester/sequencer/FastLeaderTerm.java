@@ -23,7 +23,8 @@ import java.util.stream.Collectors;
  * An elected term's fast-mode side at its leader (M13.27j, M13.27k): what the
  * term start learned, the JOINs it answers, and a departing pod's DEPART and
  * HELD; the COMMITs it assigns (M13.27s) and the CONFIRMs that count their
- * writers' copies (M13.27v), the rest of the write following (M13.27m).
+ * writers' copies (M13.27v), and the EXPOSEDs it sends (M13.27w), the rest
+ * of the write following (M13.27m).
  *
  * <p>⚠️ A JOIN IS ANSWERED ONLY ONCE THE ROSTER LISTS THE POD (ADR-0081 §1):
  * the incarnations that can hold a term's copies are exactly its members, so
@@ -290,6 +291,41 @@ public final class FastLeaderTerm {
         }
         return new Writer(new QuorumFrontier.Holder(header.senderUid(), incarnation.az()),
                 own, null);
+    }
+
+    /**
+     * Sends each writer the EXPOSED {@code desk} owes it (M13.27w; ADR-0081
+     * §2.5), addressed to its incarnation at the endpoint this term's roster
+     * lists: how many were delivered.
+     *
+     * <p>⚠️ A FAILED SEND IS DROPPED, NEVER OWED AGAIN, and a writer the
+     * roster no longer lists is not sent to: the writer, unanswered, retries
+     * its COMMIT, and the desk exposes a retried exposed batch again (M13.27s
+     * review round 1, P1) -- so a lost EXPOSED costs one retry, never a queue
+     * that grows while a writer is unreachable.
+     *
+     * @throws IOException the roster could not be read; nothing was drained
+     */
+    public int sendExposed(CommitDesk desk, TermJoiner.Transport transport) throws IOException {
+        Objects.requireNonNull(desk, "desk");
+        Objects.requireNonNull(transport, "transport");
+        Roster own = ownRoster();
+        String self = opened.started().own().leader().podUid();
+        int sent = 0;
+        for (FastWriteLeader.Exposure owed : desk.exposures()) {
+            Optional<Roster.Member> writer = own.member(owed.writerUid());
+            if (writer.isEmpty()) {
+                continue;
+            }
+            try {
+                transport.exchange(writer.get().incarnation().endpoint(),
+                        FastFrame.encode(epoch(), self, owed.writerUid(), owed.exposed()));
+                sent++;
+            } catch (IOException unreachable) {
+                // dropped: the writer's retry is exposed again
+            }
+        }
+        return sent;
     }
 
     /**
