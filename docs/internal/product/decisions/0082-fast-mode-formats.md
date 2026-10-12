@@ -81,9 +81,9 @@ Kinds:
 | 6 | `REPLICA_ACK` | holder → leader | `assignedAfter` u32; per run: RunKey, firstOffset (with the header's epoch, the batch's full identity) -- one per batch |
 | 7 | `PUBLISH` | leader → interested pod | the exposed entries the pod is interested in, of one or more batches (§4) -- a frame per exposure step per pod, never per stream |
 | 8 | `INTEREST` | pod → leader | RunKeys added and removed |
-| 9 | `FENCE` | successor → member | the unclosed terms' epochs; `closedThrough` i64, the highest closed epoch, every entry at or below which the member drops |
+| 9 | `FENCE` | successor → member | u32 count of the unclosed terms' epochs, each i64, strictly ascending above `closedThrough`; `closedThrough` i64, the highest closed epoch, every entry at or below which the member drops |
 | 10 | `COLLECTED` | member → successor | page number u32, `last` u8, entry count u32, then that many entries it holds of those terms (§4); the successor treats a member as answered only on the page marked `last` with every earlier page received (M13.22e review round 3, P3) |
-| 11 | `RELEASE` | leader → holder | per stream: RunKey, release below offset |
+| 11 | `RELEASE` | leader → holder | u32 count of streams, each once: RunKey, release below offset i64 |
 | 12 | `JOIN` | pod → leader | incarnation: podId, podUid, az, endpoint; the HELD body of what its journal still holds |
 | 13 | `DEPART` | pod → leader | incarnation; `phase` u8 (1 upload and report, with the HELD body; 2 mark departed); phase 1 is answered by HELD_STATUS, phase 2 by an empty HELD_STATUS once every `DEPARTED` write has landed |
 | 14 | `REFUSED` | any answer | reason u8 (lower epoch, not rostered, not fast, backpressure, departing, discarded); for `discarded`, the batch's idempotency key; text |
@@ -135,7 +135,16 @@ nowhere and is acknowledged the same way. ⚠️ Stated by M13.27x: a holder's
 REPLICA_ACK is the answer to the REPLICA, sent once its group is fsynced
 (ADR-0081 §2.4), so the leader registers no route for it; it counts only an
 ack whose header names this term and the incarnation it addressed, a REFUSED
-declines the copy, and no answer leaves it asked.
+declines the copy, and no answer leaves it asked. ⚠️ Stated by M13.33a: FENCE is a
+u32 count of the unclosed terms' epochs, each i64, strictly ascending and
+each above `closedThrough`, then `closedThrough` i64; COLLECTED is the page
+number u32, `last` u8 and a u32 count of entries, each its byte length u32
+then the whole journal record of §4 (as a REPLICA carries one) -- a member
+holding nothing answers one empty page marked last; RELEASE is a u32 count
+of streams, each a RunKey then its release-below offset i64, no stream
+twice. A FENCE naming no term, epochs out of order or at or below
+`closedThrough`, a flag other than 0 or 1, an entry that is not one whole
+journal entry and a stream named twice are refused.
 
 A catch-up or `/seg` response served from a journal is not a frame but an HTTP
 body; it carries the epoch it was served under in a `Binstore-Fast-Epoch`

@@ -276,7 +276,8 @@ public final class FastWriteFrame {
         return SegmentReader.decodeRecords(bytes, count);
     }
 
-    private static FastJournalRecord.Entry entry(byte[] bytes) throws IOException {
+    /** One whole journal entry, as a REPLICA or a COLLECTED carries it. */
+    static FastJournalRecord.Entry entry(byte[] bytes) throws IOException {
         FastJournalRecord.Recovered read = FastJournalRecord.decodeAll(bytes);
         if (read.unreadable() || read.validLength() != bytes.length
                 || read.records().size() != 1

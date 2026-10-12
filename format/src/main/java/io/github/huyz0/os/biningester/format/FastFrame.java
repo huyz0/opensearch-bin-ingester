@@ -85,7 +85,8 @@ public final class FastFrame {
     public sealed interface Body permits Join, Joined, Refused, Depart, HeldReport,
             HeldStatusReport, FastWriteFrame.Commit, FastWriteFrame.Assigned,
             FastWriteFrame.Confirm, FastWriteFrame.Exposed, FastWriteFrame.Replica,
-            FastWriteFrame.ReplicaAck {
+            FastWriteFrame.ReplicaAck, FastTakeoverFrame.Fence, FastTakeoverFrame.Collected,
+            FastTakeoverFrame.Release {
         int kind();
     }
 
@@ -343,6 +344,9 @@ public final class FastFrame {
             case FastWriteFrame.Exposed b -> FastWriteFrame.encode(out, b);
             case FastWriteFrame.Replica b -> FastWriteFrame.encode(out, b);
             case FastWriteFrame.ReplicaAck b -> FastWriteFrame.encode(out, b);
+            case FastTakeoverFrame.Fence b -> FastTakeoverFrame.encode(out, b);
+            case FastTakeoverFrame.Collected b -> FastTakeoverFrame.encode(out, b);
+            case FastTakeoverFrame.Release b -> FastTakeoverFrame.encode(out, b);
             case Refused refused -> {
                 out.write(refused.reason().code);
                 refused.discarded().ifPresent(k -> {
@@ -381,6 +385,8 @@ public final class FastFrame {
                         FastWriteFrame.KIND_CONFIRM, FastWriteFrame.KIND_EXPOSED,
                         FastWriteFrame.KIND_REPLICA, FastWriteFrame.KIND_REPLICA_ACK ->
                         FastWriteFrame.decode(header.kind(), c);
+                case FastTakeoverFrame.KIND_FENCE, FastTakeoverFrame.KIND_COLLECTED,
+                        FastTakeoverFrame.KIND_RELEASE -> FastTakeoverFrame.decode(header.kind(), c);
                 case KIND_REFUSED -> {
                     Reason reason = reason(c);
                     Optional<FastJournalRecord.IdempotencyKey> key = Optional.empty();
