@@ -148,6 +148,27 @@ class FastWriteFollowerServedTest {
     }
 
     @Test
+    void anINDEXRegisteredOnlyOnTheFollowerIsForwardedToTheLeader() throws Exception {
+        // ⚠️ M13.83b: the plugin registers an index only with its own node's
+        // ingester; the follower tells the leader, which records it.
+        leader = startOnAFreePort("pod1", "az-a");
+        follower = startOnAFreePort("pod2", "az-b");
+        follower.assembly().catalog().register(new IndexRegistration(UUID_B64, "orders",
+                List.of(), 1, 1, 1, 1).withFastSettings(250, true, 2));
+        UUID index = RunKey.ofIndexUuid(UUID_B64, 0).indexId();
+
+        await().atMost(Duration.ofSeconds(30)).until(() -> {
+            Roster r = latestRoster();
+            return r.member("uid-pod2").isPresent() && r.termRecord().stream()
+                    .anyMatch(t -> t.walQuorum().containsKey(index));
+        });
+
+        assertThat(leader.assembly().catalog().resolve("orders")).isPresent();
+        assertThat(follower.assembly().ingest().append(PRODUCER, "orders", 0,
+                docs(1)::forEach)).isEqualTo(new AppendResult(1, 0, 0));
+    }
+
+    @Test
     void aTHIRDZonesCopyArrivesAsAReplicaFromTheLeader() throws Exception {
         leader = startOnAFreePort("pod1", "az-a");
         follower = startOnAFreePort("pod2", "az-b");

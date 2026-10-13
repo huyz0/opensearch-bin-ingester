@@ -219,6 +219,14 @@ public final class IndexCatalog {
     }
 
     /**
+     * Every {@code wal=true} registration this catalog holds (M13.83b): what a
+     * writer forwards to its leader, the plugin having given it only here.
+     */
+    public java.util.List<IndexRegistration> fastRegistrations() {
+        return byName.values().stream().filter(IndexRegistration::wal).toList();
+    }
+
+    /**
      * Every fast index's {@code wal_quorum}, by stream id (M13.27l; ADR-0081
      * §4): what the leader's term record is fed from. An index whose UUID does
      * not decode is left out, as from {@link #namesById()}: no write of it

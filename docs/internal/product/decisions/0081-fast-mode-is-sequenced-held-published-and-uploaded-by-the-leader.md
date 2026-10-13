@@ -353,6 +353,14 @@ old leader follows the successor's first fast assignment or first void.
   its value is recorded, an index's batches WAIT (acked once that one write
   lands, criterion 8). So every entry of term `T` was assigned under some
   `q ≥ q_min(T, I)`, the smallest value recorded for its index in `T`.
+  ⚠️ Stated by M13.83: the record is fed from the leader's catalog, which
+  fills two ways -- the registrations its own node's plugin pushes it, and
+  the REGISTERs (ADR-0082 §2) every writer sends of each `wal=true`
+  registration in its own catalog, to the leader of the newest term it
+  joined, again on every change and leader change. The plugin registers an
+  index only with the ingester its node talks to (ADR-0015 §2), so without
+  the forward a leader never records an index only other pods were told of,
+  and its batches wait.
 - **The per-stream bound `B`.** L never lets a stream's cursor run more than `B`
   offsets past the stream's committed next offset as L knows it from the chain.
   A batch that would pass it waits -- backpressure, never a refusal (cost.md rule
