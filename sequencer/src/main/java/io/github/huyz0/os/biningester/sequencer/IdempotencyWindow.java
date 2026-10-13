@@ -431,6 +431,63 @@ final class IdempotencyWindow {
         return new SegmentCommit(request.segmentKey(), runs, attribution);
     }
 
+    /**
+     * {@code request}'s segment as the deltas that committed it (M13.34c;
+     * ADR-0082 §7): one per delta carrying any of its runs, in chain order,
+     * each holding only this segment's runs there -- what a commit answer
+     * lists. Every run it asks for must be tracked and committed.
+     */
+    List<CommitDelta> answerByDelta(CommitRequest request) throws IOException {
+        Map<io.github.huyz0.os.biningester.format.RunKey, At> tracked =
+                runsOf(request).orElseThrow(() -> new IOException("pod " + request.podId()
+                        + "'s flushSeq " + request.flushSeq() + " of segment "
+                        + request.segmentKey() + " is not tracked"));
+        java.util.Set<io.github.huyz0.os.biningester.format.RunKey> missing =
+                new java.util.TreeSet<>(request.recordCounts().keySet());
+        missing.removeAll(tracked.keySet());
+        if (!missing.isEmpty()) {
+            throw new IncompleteReplayException(request, missing);
+        }
+        java.util.TreeMap<At, List<io.github.huyz0.os.biningester.format.RunCommit>> byDelta =
+                new java.util.TreeMap<>(java.util.Comparator.comparingLong(At::epoch)
+                        .thenComparingLong(At::sequence));
+        SegmentCommit.Attribution attribution = null;
+        Map<At, CommitDelta> read = new HashMap<>();
+        for (var run : new java.util.TreeSet<>(request.recordCounts().keySet())) {
+            At at = tracked.get(run);
+            CommitDelta pointed = read.get(at);
+            if (pointed == null) {
+                pointed = DeltaReader.at(store, prefix, at.epoch(), at.sequence())
+                        .orElseThrow(() -> new IOException("a commit of pod " + request.podId()
+                                + " points at sequence " + at.sequence() + " of epoch "
+                                + at.epoch() + ", which holds no delta"));
+                read.put(at, pointed);
+            }
+            for (SegmentCommit segment : pointed.segments()) {
+                if (answers(segment, request)) {
+                    attribution = segment.attribution();
+                    for (var committed : segment.runs()) {
+                        if (committed.key().equals(run)) {
+                            byDelta.computeIfAbsent(at, k -> new ArrayList<>()).add(committed);
+                        }
+                    }
+                }
+            }
+            if (!byDelta.containsKey(at) || byDelta.get(at).stream()
+                    .noneMatch(c -> c.key().equals(run))) {
+                throw new IOException("the delta at sequence " + at.sequence()
+                        + " does not carry run " + run + " of pod " + request.podId()
+                        + "'s flushSeq " + request.flushSeq());
+            }
+        }
+        List<CommitDelta> deltas = new ArrayList<>();
+        for (var e : byDelta.entrySet()) {
+            deltas.add(new CommitDelta(e.getKey().sequence(), List.of(new SegmentCommit(
+                    request.segmentKey(), e.getValue(), attribution))));
+        }
+        return deltas;
+    }
+
     /** The sequence of the delta answering an all-replay batch. */
     long sequenceOf(List<CommitRequest> replays) {
         long sequence = -1;

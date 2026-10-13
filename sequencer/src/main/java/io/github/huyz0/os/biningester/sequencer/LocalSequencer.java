@@ -212,9 +212,7 @@ public final class LocalSequencer implements Sequencer {
     }
     Object drainLock() { return drainLock; }
     /**
-     * The epoch this instance sequences at.
-     *
-     * <p>⚠️ IT IS ALSO {@link Sequencer#epoch()} SINCE M5.15d, which the push
+     * The epoch this instance sequences at. ⚠️ IT IS ALSO {@link Sequencer#epoch()} SINCE M5.15d, which the push
      * channel reads to carry the sequencer epoch beside a consumer's own
      * session epoch (SPEC criterion 12). This method predates that and needed
      * no change: it is the lease epoch this instance won, and it never moves
@@ -229,6 +227,12 @@ public final class LocalSequencer implements Sequencer {
     /** This term's chain in memory (M8.3, M7.25): ⚠️ what retention reads (ADR-0052 § 3). */
     public ChainMemory chain() {
         return log.chain();
+    }
+
+    @Override
+    public io.github.huyz0.os.biningester.format.CommitAnswer commitAnswering(
+            CommitRequest request) throws IOException {
+        return RedirectingCommit.answer(this, request); // ⚠️ M13.34c, ADR-0082 §7
     }
 
     /** A stream's committed next offset, ⚠️ an ambiguous append reconciled first (M13.34j). */
@@ -502,7 +506,7 @@ public final class LocalSequencer implements Sequencer {
      * learns only from a commit that RETURNED. Both are seeded from the same
      * delta this reconciliation already read.
      */
-    private void reconcileAmbiguousAppend() throws IOException {
+    void reconcileAmbiguousAppend() throws IOException {
         AmbiguousAppendException pending = ambiguousAppend;
         if (pending == null) {
             return;
@@ -534,7 +538,7 @@ public final class LocalSequencer implements Sequencer {
     }
 
     /** Commits {@code requests} for real, and records what that applied. */
-    private CommitDelta applyFresh(List<CommitRequest> requests) throws IOException {
+    CommitDelta applyFresh(List<CommitRequest> requests) throws IOException {
         CommitDelta delta;
         try {
             delta = log.commitAll(requests);

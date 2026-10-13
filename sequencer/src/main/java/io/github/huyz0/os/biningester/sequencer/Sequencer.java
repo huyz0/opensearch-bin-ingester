@@ -267,6 +267,18 @@ public interface Sequencer extends AutoCloseable {
     CommitDelta commitAll(List<CommitRequest> requests) throws IOException;
 
     /**
+     * {@code request} committed, answered as ADR-0082 §7's commit answer
+     * (M13.34c): what a writer that sends the {@code Accept} gets. ⚠️ THIS
+     * DEFAULT KNOWS NO FAST MODE: the request committed whole, its one delta
+     * the answer; a fast term's leader ({@code LocalSequencer}) redirects.
+     */
+    default io.github.huyz0.os.biningester.format.CommitAnswer commitAnswering(
+            CommitRequest request) throws IOException {
+        return new io.github.huyz0.os.biningester.format.CommitAnswer(
+                List.of(commit(request)), List.of());
+    }
+
+    /**
      * The chain epoch this sequencer's commits are landing under, or
      * {@link #EPOCH_UNKNOWN} for an implementation that models no chain
      * (M5.15d).
