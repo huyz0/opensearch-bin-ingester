@@ -86,7 +86,7 @@ Kinds:
 | 11 | `RELEASE` | leader → holder | u32 count of streams, each once: RunKey, release below offset i64 |
 | 12 | `JOIN` | pod → leader | incarnation: podId, podUid, az, endpoint; the HELD body of what its journal still holds |
 | 13 | `DEPART` | pod → leader | incarnation; `phase` u8 (1 upload and report, with the HELD body; 2 mark departed); phase 1 is answered by HELD_STATUS, phase 2 by an empty HELD_STATUS once every `DEPARTED` write has landed |
-| 14 | `REFUSED` | any answer | reason u8 (lower epoch, not rostered, not fast, backpressure, departing, discarded); for `discarded`, the batch's idempotency key; text |
+| 14 | `REFUSED` | any answer; and, for `discarded` only, leader → writer, pushed once the decision is durable and answered by an empty HELD_STATUS (ADR-0081 §2.3; M13.34t) | reason u8 (lower epoch, not rostered, not fast, backpressure, departing, discarded); for `discarded`, the batch's idempotency key; text |
 | 15 | `JOINED` | leader → pod | `closedThrough` i64; then a HELD_STATUS body for the streams JOIN reported |
 | 16 | `HELD` | holder → leader | per stream held: RunKey, and per `(epoch, assignedAfter)` held: lowest and highest offset; sent at DEPART phase 1, in JOIN, when its journal passes half its cap, and after every RELEASE while a departing pod has an entry pending |
 | 17 | `HELD_STATUS` | leader → holder | per reported stream: RunKey, release below offset (the committed next offset), and per reported `(epoch, assignedAfter)` a `supersededFrom` i64 (the lowest resume offset of a decision superseding the group, `Long.MAX_VALUE` if none: offsets at or above it are superseded) and, for the part below it, a `status` u8 (1 committed, 2 superseded, 3 closed term, 4 pending) |

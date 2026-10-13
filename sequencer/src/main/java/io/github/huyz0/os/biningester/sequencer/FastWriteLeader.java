@@ -82,6 +82,10 @@ public final class FastWriteLeader implements TakeoverRun.Hold, SwitchPause.Lead
     public record Exposure(String writerUid, FastWriteFrame.Exposed exposed) {
     }
 
+    /** A DISCARDED to send (M13.34t): the batch's key, to its writer. */
+    public record Discard(String writerUid, FastJournalRecord.IdempotencyKey key) {
+    }
+
     /** A REPLICA to send to a holder. */
     public record ReplicaSend(Holder holder, FastWriteFrame.Replica replica) {
     }
@@ -136,6 +140,9 @@ public final class FastWriteLeader implements TakeoverRun.Hold, SwitchPause.Lead
     /** Told each exposure step's entries, for publication (M13.30d); null while none. */
     private java.util.function.Consumer<List<FastJournalRecord.Entry>> published;
     private final Map<FastJournalRecord.IdempotencyKey, Batch> exposedByKey = new HashMap<>();
+    /** Discarded batches' writers, each batch once, not yet told (M13.34t). */
+    private final Map<FastJournalRecord.IdempotencyKey, String> owedDiscards =
+            new java.util.LinkedHashMap<>();
     private final Map<RunKey, Long> committedNext = new HashMap<>();
     /** Streams paused for a switch to the default path: assigned and exposed nothing (M13.34q). */
     private final Set<RunKey> paused = new HashSet<>();
@@ -646,6 +653,7 @@ public final class FastWriteLeader implements TakeoverRun.Hold, SwitchPause.Lead
                         if (e.key().equals(stream) && e.firstOffset() >= from) {
                             b.dropped.add(e);
                             discarded.add(b.key);
+                            owedDiscards.putIfAbsent(b.key, b.writer.podUid());
                         }
                     }
                 }
@@ -666,6 +674,19 @@ public final class FastWriteLeader implements TakeoverRun.Hold, SwitchPause.Lead
         committed(stream, chainNext);
         paused.remove(stream);
         frontier.release(stream);
+    }
+
+    /** The DISCARDEDs owed since the last call, each batch's once (M13.34t). */
+    public synchronized List<Discard> discards() {
+        List<Discard> out = new ArrayList<>();
+        owedDiscards.forEach((key, writer) -> out.add(new Discard(writer, key)));
+        owedDiscards.clear();
+        return out;
+    }
+
+    /** Whether nothing is owed a writer: no batch held, no DISCARDED untold (M13.34t). */
+    public synchronized boolean idle() {
+        return batches.isEmpty() && owedDiscards.isEmpty();
     }
 
     /** How many batches this leader still holds: committed ones are dropped. */

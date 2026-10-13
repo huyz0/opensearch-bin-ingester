@@ -504,13 +504,13 @@ public final class FastLeaderTerm {
         Objects.requireNonNull(transport, "transport");
         // ⚠️ M13.87: owed only for a batch held, so an idle tick reads no roster;
         // ⚠️ M13.32a: and ONLY WHILE THE LEASE LETS IT EXPOSE (ADR-0081 §3).
-        if (desk.leader().heldBatches() == 0 || !mayExpose()) {
+        if (desk.leader().idle() || !mayExpose()) {
             return 0;
         }
         Roster own = ownRoster();
         String self = opened.started().own().leader().podUid();
         int sent = 0;
-        for (FastWriteLeader.Exposure owed : desk.exposures()) {
+        for (CommitDesk.Owed owed : desk.owed()) { // ⚠️ M13.34t: a DISCARDED too
             Optional<Roster.Member> writer = own.member(owed.writerUid());
             if (!mayExpose()) { // ⚠️ M13.32a review round 1, P2: before EACH send
                 break;
@@ -520,7 +520,7 @@ public final class FastLeaderTerm {
             }
             try {
                 transport.exchange(writer.get().incarnation().endpoint(),
-                        FastFrame.encode(epoch(), self, owed.writerUid(), owed.exposed()));
+                        FastFrame.encode(epoch(), self, owed.writerUid(), owed.frame()));
                 sent++;
             } catch (IOException unreachable) {
                 // dropped: the writer's retry is exposed again

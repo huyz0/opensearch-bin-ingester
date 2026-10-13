@@ -139,14 +139,15 @@ public final class FastWriter {
             }
         }
         try {
-            if (inbox.await(epoch, assigned.assignedAfter(), all, exposedWait)) {
+            // ⚠️ M13.34t: a DISCARDED of the batch's key ends the wait at once.
+            if (inbox.await(epoch, commit.key(), assigned.assignedAfter(), all, exposedWait)) {
                 return new Written(assigned);
             }
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
             throw new IOException("interrupted waiting for an EXPOSED", interrupted);
         }
-        return new Retry("not exposed within " + exposedWait);
+        return new Retry("discarded, or not exposed within " + exposedWait);
     }
 
     /**

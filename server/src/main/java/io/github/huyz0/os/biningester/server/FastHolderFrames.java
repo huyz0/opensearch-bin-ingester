@@ -10,8 +10,9 @@ import java.util.function.BiConsumer;
 
 /**
  * A node's handler of the frames a holder or a writer answers -- REPLICA
- * (M13.28a), and EXPOSED (M13.29a), delivered to the writes waiting in the
- * pod's inbox only from the leader of a term it joined. A REPLICA: its
+ * (M13.28a), and EXPOSED (M13.29a) and a pushed DISCARDED (M13.34t),
+ * delivered to the writes waiting in the pod's inbox only from the leader of
+ * a term it joined. A REPLICA: its
  * fast journal holds the copy, under the pod's joined terms and holder gate.
  * ⚠️ A POD WITHOUT A FAST JOURNAL HOLDS NO COPY, so refuses {@code NOT_FAST}
  * and the leader places the copy elsewhere.
@@ -102,7 +103,7 @@ final class FastHolderFrames {
                     }
                     return answer;
                 });
-        handle.accept(FastWriteFrame.KIND_EXPOSED, (header, body) -> {
+        java.util.function.Predicate<FastFrame.Header> fromLeader = header -> {
             // ⚠️ THE LEADER IS A WRITER OF ITS OWN TERM (M13.84; ADR-0081 §2)
             // and joins no term of its own: its EXPOSEDs to itself are
             // admitted for the term it leads, from its own UID only.
@@ -111,12 +112,33 @@ final class FastHolderFrames {
             boolean own = !selfUid.isEmpty() && header.senderUid().equals(selfUid)
                     && header.epoch() > 0 && leads.test(header.epoch());
             Optional<String> leader = disk.joined().leaderOf(header.epoch());
-            if (!own && (leader.isEmpty() || !leader.get().equals(header.senderUid()))) {
-                return new FastFrame.Refused(FastFrame.Reason.NOT_ROSTERED, Optional.empty(),
-                        header.senderUid() + " is not the leader of a term this pod joined");
+            return own || leader.isPresent() && leader.get().equals(header.senderUid());
+        };
+        handle.accept(FastWriteFrame.KIND_EXPOSED, (header, body) -> {
+            if (!fromLeader.test(header)) {
+                return notLeader(header);
             }
             disk.exposed().deliver(header.epoch(), (FastWriteFrame.Exposed) body);
             return new FastFrame.HeldStatusReport(FastFrame.HeldStatus.NONE);
         });
+        // ⚠️ M13.34t (ADR-0081 §2.3): a DISCARDED pushed by the leader, admitted
+        // exactly as an EXPOSED is, ends its batch's wait at once.
+        handle.accept(FastFrame.KIND_REFUSED, (header, body) -> {
+            if (!fromLeader.test(header)) {
+                return notLeader(header);
+            }
+            FastFrame.Refused refused = (FastFrame.Refused) body;
+            if (refused.discarded().isEmpty()) {
+                return new FastFrame.Refused(FastFrame.Reason.NOT_FAST, Optional.empty(),
+                        "only a DISCARDED is pushed, never a " + refused.reason());
+            }
+            disk.exposed().discarded(header.epoch(), refused.discarded().get());
+            return new FastFrame.HeldStatusReport(FastFrame.HeldStatus.NONE);
+        });
+    }
+
+    private static FastFrame.Refused notLeader(FastFrame.Header header) {
+        return new FastFrame.Refused(FastFrame.Reason.NOT_ROSTERED, Optional.empty(),
+                header.senderUid() + " is not the leader of a term this pod joined");
     }
 }

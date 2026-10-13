@@ -201,6 +201,24 @@ public final class CommitDesk {
         return owedNow;
     }
 
+    /** A frame owed a writer: an EXPOSED or a DISCARDED (M13.34t). */
+    public record Owed(String writerUid, FastFrame.Body frame) {
+    }
+
+    /**
+     * Every frame now owed a writer: the {@link #exposures} and, for each
+     * batch a switch discarded once its decision was durable, REFUSED with
+     * reason {@code discarded} naming the batch's key (ADR-0081 §2.3, §8).
+     */
+    public List<Owed> owed() {
+        List<Owed> out = new ArrayList<>();
+        exposures().forEach(e -> out.add(new Owed(e.writerUid(), e.exposed())));
+        write.discards().forEach(d -> out.add(new Owed(d.writerUid(), new FastFrame.Refused(
+                FastFrame.Reason.DISCARDED, Optional.of(d.key()),
+                "discarded by a switch to the default path"))));
+        return out;
+    }
+
     private synchronized void exposeAgain(FastWriteLeader.Exposure exposure) {
         reExposed.add(exposure);
     }
