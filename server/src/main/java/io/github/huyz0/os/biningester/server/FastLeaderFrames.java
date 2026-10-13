@@ -55,7 +55,7 @@ final class FastLeaderFrames {
      * @return how it ended; empty when this pod leads no term
      */
     static Optional<FastLeaderTerm.Left> leave(Sequencer held,
-            io.github.huyz0.os.biningester.sequencer.FastUploader.Last last) {
+            io.github.huyz0.os.biningester.sequencer.FastUploader.Last last, FastDisk disk) {
         Optional<FastLeaderTerm> term =
                 LocalSequencer.underneath(held).flatMap(LocalSequencer::fastTerm);
         if (term.isEmpty()) {
@@ -63,7 +63,9 @@ final class FastLeaderFrames {
         }
         try {
             // ⚠️ M13.35c: what it exposed, uploaded and committed before it leaves.
-            return Optional.of(term.get().leave(last));
+            // ⚠️ M13.35d: its journal says which earlier terms it holds entries of.
+            return Optional.of(term.get().leave(last,
+                    disk == null ? Optional.empty() : disk.journal()));
         } catch (IOException failed) {
             return Optional.of(FastLeaderTerm.Left.STAYED);
         }

@@ -625,52 +625,31 @@ public final class FastLeaderTerm {
     public enum Left { DEPARTED_AND_CLOSED, DEPARTED, STAYED, DEPOSED }
 
     /**
-     * This leader's shutdown (ADR-0081 §9; M13.35a): it FIRST stops assigning
-     * and exposing, then marks itself departed in its roster -- and closes it
-     * in the same write only if no earlier term was open when it started, a
-     * takeover it may not have finished being its successor's -- so its
-     * successor is handed over with no fence and no collection.
-     *
-     * <p>⚠️ NEVER WITH AN EXPOSED ENTRY UNCOMMITTED: the leader then stays
-     * undeparted, its stop counted as a crash would be. Uploading those
-     * first, and departing earlier rosters listing it, is M13.35b's.
+     * This leader's shutdown (ADR-0081 §9; M13.35a, M13.35c, M13.35d), as
+     * {@link LeaderLeave} runs it, for a leader holding no journal.
      *
      * @throws IOException the store failed; the leader stops undeparted
      */
     public Left leave() throws IOException {
-        return leave(() -> { });
+        return leave(() -> { }, Optional.empty());
     }
 
     /**
-     * The same, uploading and committing what it exposed FIRST through
-     * {@code last} (ADR-0081 §9; M13.35c) -- staying undeparted only if some
-     * is still uncommitted after it, or it failed.
+     * The same, its last upload through {@code last}, judging which earlier
+     * terms it holds an entry of from {@code journal}, its fast journal if
+     * it has one.
      */
-    public Left leave(FastUploader.Last last) throws IOException {
+    public Left leave(FastUploader.Last last, Optional<FastJournal> journal)
+            throws IOException {
         CommitDesk built;
         synchronized (this) {
             leaving = true;
             built = desk;
         }
-        if (built != null && built.leader().stop()) {
-            try {
-                last.upload();
-            } catch (IOException failed) {
-                return Left.STAYED;
-            }
-            if (built.leader().stop()) {
-                return Left.STAYED;
-            }
-        }
-        boolean close = opened.stillOpen().isEmpty();
-        RosterDepartures.Outcome outcome =
-                departures.leave(opened.started().own().leader().podUid(), close);
+        Left left = LeaderLeave.leave(built == null ? null : built.leader(), journal, last,
+                opened, departures);
         rosterWritten();
-        return switch (outcome) {
-            case RosterDepartures.Departed departed ->
-                    close ? Left.DEPARTED_AND_CLOSED : Left.DEPARTED;
-            case RosterDepartures.Deposed deposed -> Left.DEPOSED;
-        };
+        return left;
     }
 
     /**

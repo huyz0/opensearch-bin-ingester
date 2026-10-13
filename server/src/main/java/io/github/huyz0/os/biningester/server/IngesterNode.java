@@ -518,7 +518,8 @@ public final class IngesterNode implements AutoCloseable {
                 }
                 // ⚠️ M13.35a: a leader departs its own term, the lease still held.
                 io.github.huyz0.os.biningester.sequencer.FastUploader.Last last = lastUpload;
-                FastLeaderFrames.leave(assembly.heldTerm(), last != null ? last : () -> { })
+                FastLeaderFrames.leave(assembly.heldTerm(), last != null ? last : () -> { },
+                        fastDisk)
                         .ifPresent(left -> journal.add(FastLeaderFrames.LEFT + left));
             }
 

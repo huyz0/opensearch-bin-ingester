@@ -13,6 +13,7 @@ import io.github.huyz0.os.biningester.binstore.backend.MemoryJournalFile;
 import io.github.huyz0.os.biningester.format.RunKey;
 import java.io.IOException;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
@@ -45,7 +46,8 @@ class FastLeaderTermLeaveUploadTest {
         MemoryBinStore store = new MemoryBinStore();
         Exposed e = exposed(store);
 
-        FastLeaderTerm.Left left = e.term().leave(() -> e.desk().leader().committed(S1, 2));
+        FastLeaderTerm.Left left = e.term().leave(() -> e.desk().leader().committed(S1, 2),
+                Optional.of(e.journal()));
 
         assertThat(left).isEqualTo(FastLeaderTerm.Left.DEPARTED_AND_CLOSED);
         assertThat(read(store, 3).leaderDeparted()).isTrue();
@@ -58,7 +60,7 @@ class FastLeaderTermLeaveUploadTest {
 
         FastLeaderTerm.Left left = e.term().leave(() -> {
             throw new IOException("the store is down");
-        });
+        }, Optional.of(e.journal()));
 
         assertThat(left).isEqualTo(FastLeaderTerm.Left.STAYED);
         assertThat(read(store, 3).leaderDeparted()).isFalse();
@@ -68,10 +70,11 @@ class FastLeaderTermLeaveUploadTest {
     void aLEADERWithNothingExposedMakesNoLastUpload() throws Exception {
         MemoryBinStore store = new MemoryBinStore();
         FastLeaderTerm term = FastLeaderTermCommitTest.term3(store);
-        term.commitDesk(FastJournal.recover(new MemoryJournalFile(), 1 << 20), SELF);
+        FastJournal journal = FastJournal.recover(new MemoryJournalFile(), 1 << 20);
+        term.commitDesk(journal, SELF);
         AtomicInteger uploads = new AtomicInteger();
 
-        assertThat(term.leave(uploads::incrementAndGet))
+        assertThat(term.leave(uploads::incrementAndGet, Optional.of(journal)))
                 .isEqualTo(FastLeaderTerm.Left.DEPARTED_AND_CLOSED);
         assertThat(uploads).hasValue(0);
     }
