@@ -111,7 +111,7 @@ public final class Assembly implements AutoCloseable {
     public static Assembly open(ServerConfig config, SequencerTransport transport, Clock clock,
             LeaseChallenge challenge) throws IOException {
         return open(config, transport, clock, SequencerAssembly.following(clock), challenge,
-                null, null, null);
+                null, null, null, store -> store);
     }
 
     /**
@@ -120,11 +120,11 @@ public final class Assembly implements AutoCloseable {
      */
     public static Assembly open(ServerConfig config, SequencerTransport transport, Clock clock,
             MonotonicClock mono, LeaseChallenge challenge, EndpointSliceView peerView,
-            CrossAzBytes crossAz, DurableSegmentSignalSender.PeerPost signalPost)
-            throws IOException {
+            CrossAzBytes crossAz, DurableSegmentSignalSender.PeerPost signalPost,
+            java.util.function.UnaryOperator<BinStore> wrap) throws IOException {
         Objects.requireNonNull(config, "config");
         Objects.requireNonNull(challenge, "challenge");
-        BinStore store = StoreFactory.open(config.store());
+        BinStore store = wrap.apply(StoreFactory.open(config.store()));
         try {
             return new Assembly(config, store, true, transport, clock, mono, challenge,
                     ChainBackfill::inBackground, peerView, crossAz, signalPost, LeaseManager::new,

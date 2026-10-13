@@ -176,6 +176,22 @@ public final class IngesterNode implements AutoCloseable {
             Supplier<Optional<String>> token,
             java.util.List<java.security.cert.X509Certificate> trust,
             Optional<PeerTls> peerTls) throws IOException {
+        return start(config, clock, mono, token, trust, peerTls, store -> store);
+    }
+
+    /**
+     * The same over {@code wrap} of the store the config names (M13.86): a
+     * fleet test's seam, to see every request a node makes -- the fast term's
+     * included, which go to the store under the node's own counter.
+     */
+    static IngesterNode start(ServerConfig config, Clock clock,
+            io.github.huyz0.os.biningester.sequencer.MonotonicClock mono,
+            Supplier<Optional<String>> token,
+            java.util.List<java.security.cert.X509Certificate> trust,
+            Optional<PeerTls> peerTls,
+            java.util.function.UnaryOperator<io.github.huyz0.os.biningester.binstore.BinStore> wrap)
+            throws IOException {
+        Objects.requireNonNull(wrap, "wrap");
         Objects.requireNonNull(peerTls, "peerTls");
         Objects.requireNonNull(mono, "mono");
         Objects.requireNonNull(config, "config");
@@ -207,7 +223,8 @@ public final class IngesterNode implements AutoCloseable {
         EndpointSliceView view = config.membership().isPresent() ? new EndpointSliceView() : null;
         Assembly assembly = Assembly.open(config, transport, clock, mono,
                 view == null ? LeaseChallenge.NEVER : view, view, crossAz,
-                io.github.huyz0.os.biningester.http.DurableSegmentSignalSender.httpPost(clientTls));
+                io.github.huyz0.os.biningester.http.DurableSegmentSignalSender.httpPost(clientTls),
+                wrap);
         java.util.List<String> journal = new java.util.concurrent.CopyOnWriteArrayList<>();
         assembly.journal(journal::add);
         FastDisk fastDisk = null;
