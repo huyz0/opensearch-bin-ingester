@@ -257,6 +257,22 @@ public final class FrontDoor implements AutoCloseable {
         }
     }
 
+    /**
+     * The catch-up route (M13.32c, M13.32h): the chain's replay, past it the
+     * leader's journal, and the fast term this pod leads in each answer's
+     * epoch header.
+     */
+    private static CatchUpService catchUp(Assembly assembly,
+            java.util.Optional<FastRoutes> fastEntries) {
+        if (fastEntries.isEmpty()) {
+            return new CatchUpService(assembly::respondCatchUp);
+        }
+        FastRoutes fast = fastEntries.get();
+        return new CatchUpService((CatchUpService.StreamingResponder) (request, sink) ->
+                FastCatchUp.respond(request, sink, assembly::respondCatchUp, fast.catchUp(),
+                        fast.exposable()), () -> FastPeer.ownTerm(assembly.heldTerm()));
+    }
+
     private static WebServer build(ServerConfig config, Assembly assembly, Clock clock,
             DrainGate gate, io.github.huyz0.os.biningester.binstore.CrossAzBytes crossAz,
             LaneAdmission admission, io.github.huyz0.os.biningester.ingest.IndexQuotas quotas,
@@ -285,6 +301,8 @@ public final class FrontDoor implements AutoCloseable {
         // ⚠️ M13.27h: the fast frames' peer route, behind the node's own fence.
         fastFrames.ifPresent(router -> peerRoutes.register(
                 new io.github.huyz0.os.biningester.http.FastFrameService(router, binding)));
+        // ⚠️ M13.32h: the catch-up a follower forwards, its fast epoch stated.
+        peerRoutes.register(catchUp(assembly, fastEntries).onPeerPath());
         // ⚠️ M13.30o: an exposed fast entry by its key, for a forwarded /seg.
         fastEntries.ifPresent(fast -> peerRoutes.register(
                 new io.github.huyz0.os.biningester.http.FastEntryService(fast.entries(),
@@ -309,13 +327,7 @@ public final class FrontDoor implements AutoCloseable {
                 .register(new SubscriptionService(assembly.hub(), assembly.catalog(),
                         assembly.watermarks(), clock, assembly.floors(), gate, crossAz))
                 // ⚠️ M13.32c: and past the chain, from the leader's journal.
-                .register(fastEntries.isPresent()
-                        ? new CatchUpService((CatchUpService.StreamingResponder)
-                                (request, sink) -> FastCatchUp.respond(request, sink,
-                                        assembly::respondCatchUp,
-                                        fastEntries.get().catchUp(),
-                                        fastEntries.get().exposable()))
-                        : new CatchUpService(assembly::respondCatchUp))
+                .register(catchUp(assembly, fastEntries))
                 // ⚠️ M10.1, ADR-0073: the payload half of `proxy`. Read through
                 // the SAME proxy and node-wide cache the subscription path and
                 // the prefetcher fill -- so on the AZ's ring owner a fetch after

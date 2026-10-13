@@ -25,6 +25,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.OptionalLong;
 import java.util.Set;
+import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -148,5 +149,30 @@ class FastPublishWiringTest {
                 java.net.http.HttpResponse.BodyHandlers.ofString());
 
         assertThat(answer.statusCode()).isEqualTo(400);
+    }
+
+    @Test
+    void aLEADINGNodeAnswersACatchUpOnItsPeerListenerStatingItsFastTerm() throws Exception {
+        // ⚠️ M13.32h: where a follower forwards one (M13.32i).
+        node = startOnAFreePort();
+        long epoch = LocalSequencer.underneath(node.assembly().heldTerm()).orElseThrow().epoch();
+        RunKey stream = RunKey.ofIndexUuid(FAST_UUID, 0);
+        UUID request = new UUID(4, 4);
+
+        var answer = java.net.http.HttpClient.newHttpClient().send(
+                java.net.http.HttpRequest.newBuilder(java.net.URI.create("http://localhost:"
+                        + node.peerPort() + "/ctl/catch-up/" + stream.indexId() + "/"
+                        + stream.partitionId())).POST(java.net.http.HttpRequest.BodyPublishers
+                                .ofByteArray(new io.github.huyz0.os.biningester.format
+                                        .CatchUpRequestFrame(request, List.of(
+                                                new io.github.huyz0.os.biningester.format
+                                                        .CatchUpRequestFrame.Stream(stream, 0)))
+                                        .encode())).build(),
+                java.net.http.HttpResponse.BodyHandlers.ofByteArray());
+
+        assertThat(answer.statusCode()).isEqualTo(200);
+        assertThat(answer.headers().firstValue(
+                io.github.huyz0.os.biningester.http.FastEntryService.EPOCH_HEADER))
+                .hasValue(Long.toString(epoch));
     }
 }

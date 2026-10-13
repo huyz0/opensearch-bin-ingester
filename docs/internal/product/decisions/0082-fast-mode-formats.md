@@ -1,6 +1,6 @@
 # 0082. Fast mode's formats
 
-Status: accepted (2026-10-13, M13.32c: a catch-up served from the journal carries no `Binstore-Fast-Epoch` header -- only the leader answers one and none is forwarded, the header being for a forwarding pod's fence check, which `/ctl/fast-entry` keeps)
+Status: accepted (2026-10-13, M13.32c and M13.32h: a catch-up's answer carries the leading fast term's epoch in `Binstore-Fast-Epoch` in its header, set before its body streams -- M13.32c's "never forwarded" was wrong: a plugin's catch-up reaches its own node's ingester, which forwards one it cannot serve (M13.32i))
 Date: 2026-10-01
 Requirements: FR-17, NFR-12, NFR-14
 Research: docs/research/30-design-space/12-fast-mode-wal-and-quorum.md

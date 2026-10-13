@@ -18,6 +18,12 @@ public final class CatchUpService implements HttpService {
 
     /** POST replay control on the existing per-stream subscription URL. */
     public static final String PATH = HttpSubscriptionTransport.SUBSCRIBE_PREFIX + "{indexUuid}/{partition}";
+    /**
+     * The same route on the peer listener (M13.32h; ADR-0084): a forwarded
+     * catch-up is pod-to-pod, so it has its own path -- the consumer's stays
+     * on the producer port only.
+     */
+    public static final String PEER_PATH = "/ctl/catch-up/{indexUuid}/{partition}";
     static final long MAX_REQUEST_BYTES = 4L << 20;
     static final long MAX_RESPONSE_BYTES = 8L << 20;
 
@@ -37,8 +43,12 @@ public final class CatchUpService implements HttpService {
     }
 
     private final StreamingResponder responder;
+    /** The fast term this pod leads, 0 for none: each answer's epoch header (M13.32h). */
+    private final java.util.function.LongSupplier fastEpoch;
+    private String path = PATH;
 
     public CatchUpService(Responder responder) {
+        this.fastEpoch = () -> 0L;
         Objects.requireNonNull(responder, "responder");
         this.responder = (request, sink) -> {
             for (byte[] frame : Objects.requireNonNull(responder.respond(request),
@@ -49,12 +59,30 @@ public final class CatchUpService implements HttpService {
     }
 
     public CatchUpService(StreamingResponder responder) {
+        this(responder, () -> 0L);
+    }
+
+    /**
+     * The same, each answer carrying {@code fastEpoch} -- the fast term this pod
+     * leads -- in its {@value FastEntryService#EPOCH_HEADER} header when it leads
+     * one (ADR-0082 §2; M13.32h): what a pod forwarding the catch-up checks
+     * against its own fence before it relays journal events.
+     */
+    public CatchUpService(StreamingResponder responder,
+            java.util.function.LongSupplier fastEpoch) {
         this.responder = Objects.requireNonNull(responder, "responder");
+        this.fastEpoch = Objects.requireNonNull(fastEpoch, "fastEpoch");
+    }
+
+    /** The same route at {@link #PEER_PATH}, for the peer listener (M13.32h). */
+    public CatchUpService onPeerPath() {
+        this.path = PEER_PATH;
+        return this;
     }
 
     @Override
     public void routing(HttpRules rules) {
-        rules.post(PATH, this::catchUp);
+        rules.post(path, this::catchUp);
     }
 
     void catchUp(ServerRequest request, ServerResponse response) {
@@ -75,6 +103,12 @@ public final class CatchUpService implements HttpService {
             return;
         }
 
+        // ⚠️ READ BEFORE THE RESPONSE IS STARTED: a header cannot follow it.
+        long epoch = fastEpoch.getAsLong();
+        if (epoch > 0) {
+            response.header(io.helidon.http.HeaderNames.create(FastEntryService.EPOCH_HEADER),
+                    Long.toString(epoch));
+        }
         OutputStream[] output = new OutputStream[1];
         try {
             responder.respond(frame, responseFrame -> {

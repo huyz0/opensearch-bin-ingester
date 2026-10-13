@@ -1,6 +1,6 @@
 # 0084. Peer routes are served on their own listener, with mutual TLS
 
-Status: accepted (amends ADR-0010's "In transit" row for `peer.tls = off`)
+Status: accepted (amends ADR-0010's "In transit" row for `peer.tls = off`) (2026-10-13, M13.30o and M13.32h: two more pod-to-pod routes on the peer listener only -- `/ctl/fast-entry`, an exposed fast entry by key, and `/ctl/catch-up/{indexUuid}/{partition}`, a catch-up a follower forwards to the leader; the consumer's `/sub/...` catch-up stays on the producer port)
 Date: 2026-10-07
 Requirements: FR-17, NFR-9
 Research: docs/research/50-open-questions.md#Q10 (ADR-0010)
