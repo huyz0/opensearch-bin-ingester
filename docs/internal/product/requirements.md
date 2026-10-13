@@ -31,14 +31,14 @@ IDs are stable and cited by specs, tasks, and ADRs. Status is `agreed`,
 | NFR-3 | LIST on hot paths | zero, and a hard runtime ceiling of ~1/s sustained — ⚠️ except the four declared recovery paths (chain-end recovery, chain replay, takeover backfill, inbox drain), each bounded by its trigger instead (ADR-0075) | agreed (amended by ADR-0075) |
 | NFR-16 | Governor refusals in steady state | zero | agreed |
 | NFR-4 | Read request rate | scales with segments, AZs, nodes — never with shards, partitions or indices | agreed |
-| NFR-5 | Cross-AZ bytes | < 0.1% of ingested bytes over the data path; fast-mode control frames (JOIN, JOINED, DEPART, HELD, HELD_STATUS) apart, ≤ 1 KiB per pod per term while its journal holds nothing (M13.65, ADR-0081 §12) | agreed |
+| NFR-5 | Cross-AZ bytes | < 0.1% of ingested bytes over the data path, for `wal=false` indices; a fast record crosses AZs `max(q − 1, [W ∉ AZ(L)])` times for its quorum, plus once per interested pod in another AZ; fast-mode control frames (JOIN, JOINED, DEPART, HELD, HELD_STATUS) apart, ≤ 1 KiB per pod per term while its journal holds nothing (M13.65) | agreed (amended by ADR-0081 §12) |
 | NFR-6 | Service memory | bounded and independent of request size | agreed |
 | NFR-7 | End-to-end latency | p99 < 3× the configured flush window | agreed |
-| NFR-8 | RPO for acked writes, `ack_mode=durable` | 0 | agreed |
-| NFR-14 | RPO for acked writes, `ack_mode=wal` | 0 while ≥1 quorum member survives the upload window (~250 ms–1 s). ⚠️ **A weaker guarantee, opt-in per index/record** | agreed (ADR-0013) |
+| NFR-8 | RPO for acked writes, `ack_mode=durable` | 0, for `wal=false` indices | agreed (conditional by ADR-0013, ADR-0081 §12) |
+| NFR-14 | RPO for acked writes, `ack_mode=wal` | 0 while ≥1 quorum member survives the upload window (~250 ms–1 s): an acked fast record is lost only if every holder of its entry -- all `q`, in `q` distinct AZs -- is gone before the upload commits it, and then as a counted gap. ⚠️ **A weaker guarantee, opt-in per index/record** | agreed (ADR-0013, made precise by ADR-0081 §12) |
 | NFR-15 | Fast-mode ack-and-visible latency | p99 < 10 ms | agreed (ADR-0013) |
-| NFR-9 | RTO for offset visibility after sequencer loss | < 5 s | agreed |
-| NFR-10 | Survive the loss of one AZ | no data loss; ⅓ capacity loss | agreed |
+| NFR-9 | RTO for offset visibility after sequencer loss | < 5 s, for every index except one with a term-record value in an unclosed earlier term, whose default-path commits wait for a takeover's decisions (ADR-0081 §5, §10) | agreed (amended by ADR-0081 §12) |
+| NFR-10 | Survive the loss of one AZ | no data loss; ⅓ capacity loss -- for `wal=false` indices, or `wal_quorum ≥ 2`; at `q = 2` only if no second holder of an entry is lost within the upload the first loss triggers (NFR-14's window); a `q = 3` index on three AZs does not ack while one AZ is lost | agreed (amended by ADR-0081 §12) |
 | NFR-11 | Offset stability across sequencer failover | absolute | agreed |
 | NFR-12 | Object key length | ≤ 1024 bytes for every input, including pathological | agreed |
 | NFR-13 | Consumer outage tolerance | = retention (default 6 h) | agreed |

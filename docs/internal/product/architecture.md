@@ -56,6 +56,41 @@ discovered ([ADR-0012](decisions/0012-peer-mesh-without-gossip.md)).
 ⚠️ **Peer fetch is intra-AZ only** — a cross-AZ peer fetch costs 419× the
 object-store GET it would replace.
 
+⚠️ **Peer routes have their own listener** ([ADR-0084](decisions/0084-peer-routes-are-served-on-their-own-listener-with-mutual-tls.md)):
+`/ctl/commit`, `/ctl/drain`, `/ctl/durable-segment` and `/ctl/fast` are served
+on `peer.port` only, under mutual TLS whose certificate names the pod and its
+incarnation. The operator's side is [fast-mode.md](../../operator/fast-mode.md).
+
+## Fast mode
+
+An opt-in `wal=true` index is acked before its segment is uploaded
+([ADR-0081](decisions/0081-fast-mode-is-sequenced-held-published-and-uploaded-by-the-leader.md),
+formats in [ADR-0082](decisions/0082-fast-mode-formats.md)). In each term the
+lease holder is also the fast **leader**:
+
+```
+writer ──COMMIT──▶ leader (assigns offsets, journals) ──REPLICA──▶ holders (journal)
+   ▲                  │  once `wal_quorum` zones hold a copy
+   └──────EXPOSED─────┘  ──▶ ack to the producer
+                      │  every min_upload_interval, or as it leaves
+                      ▼
+          one segment + one delta at the offsets assigned ──▶ object store
+```
+
+- **The roster** (`ctl/fast/0/<epoch>.roster`, and `LATEST`) names a term's
+  members, its term record (each fast index's `wal_quorum`) and its
+  decisions. Every pod joins every term, fast index or not.
+- **A takeover** fences the unclosed earlier terms, collects what their members
+  hold, decides each stream -- committing what a quorum may have exposed,
+  voiding a counted gap only after quorum loss -- and holds those streams,
+  fast and default path alike, until decided (§5).
+- **A departure** marks a pod `DEPARTED` once nothing it holds is pending; a
+  leader uploads what it exposed first, then closes its roster, so its
+  successor takes over without a fence (§9).
+- ⚠️ **Disks only for fast indices**: the journal and the epoch file live on
+  an `emptyDir`; a fleet with no `wal=true` index is diskless, and pays only
+  a few roster writes per term.
+
 ## No consensus layer
 
 There is no master node, no Raft, no KRaft, no external quorum — see
