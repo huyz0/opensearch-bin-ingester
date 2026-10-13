@@ -236,6 +236,40 @@ public final class FastJournal {
         return java.util.Optional.empty();
     }
 
+    /**
+     * The held entries of {@code key} in term {@code epoch} covering offsets
+     * from {@code from}, contiguously, each wholly below {@code frontier}
+     * (ADR-0081 §6; M13.32b): what a catch-up past the committed chain may
+     * serve. ⚠️ It stops at the first hole and at the first entry not
+     * wholly exposed -- never an unexposed entry, never one past a gap -- and
+     * starts only at an entry's first offset. Of two entries at one offset (a
+     * switch's discard), the later assignment. ⚠️ Asked of the term's LEADER,
+     * which holds every entry it assigned: a holder missing a newer one would
+     * read a superseded entry whose offsets were assigned again.
+     */
+    public synchronized List<FastJournalRecord.Entry> exposedFrom(RunKey key, long epoch,
+            long from, long frontier) {
+        java.util.TreeMap<Long, FastJournalRecord.Entry> byOffset = new java.util.TreeMap<>();
+        for (Held h : held.getOrDefault(key, List.of())) {
+            FastJournalRecord.Entry e = h.entry();
+            if (e.epoch() == epoch) {
+                byOffset.merge(e.firstOffset(), e,
+                        (a, b) -> a.assignedAfter() >= b.assignedAfter() ? a : b);
+            }
+        }
+        List<FastJournalRecord.Entry> run = new ArrayList<>();
+        long next = from;
+        for (FastJournalRecord.Entry e = byOffset.get(next); e != null; e = byOffset.get(next)) {
+            long end = e.firstOffset() + e.records().size();
+            if (end > frontier) {
+                break;
+            }
+            run.add(e);
+            next = end;
+        }
+        return run;
+    }
+
     /** Appends {@code entry}, or refuses it -- false -- if held bytes would pass the cap. */
     public synchronized boolean append(FastJournalRecord.Entry entry) throws IOException {
         requireUsable();
