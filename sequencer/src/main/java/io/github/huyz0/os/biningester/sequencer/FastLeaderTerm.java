@@ -485,25 +485,27 @@ public final class FastLeaderTerm {
                 own, null);
     }
 
+    /** Whether the lease lets this leader expose now, before each exposing send (M13.32a). */
+    public boolean mayExpose() {
+        return opened.mayExpose().getAsBoolean();
+    }
+
     /**
-     * Sends each writer the EXPOSED {@code desk} owes it (M13.27w; ADR-0081
-     * §2.5), addressed to its incarnation at the endpoint this term's roster
-     * lists: how many were delivered.
+     * Sends each writer the EXPOSED {@code desk} owes it (M13.27w; ADR-0081 §2.5), at its
+     * incarnation's endpoint in this term's roster: how many were delivered.
      *
-     * <p>⚠️ A FAILED SEND IS DROPPED, NEVER OWED AGAIN, and a writer the
-     * roster no longer lists is not sent to: the writer, unanswered, retries
-     * its COMMIT, and the desk exposes a retried exposed batch again (M13.27s
-     * review round 1, P1) -- so a lost EXPOSED costs one retry, never a queue
-     * that grows while a writer is unreachable.
+     * <p>⚠️ A FAILED SEND IS DROPPED, NEVER OWED AGAIN, as is one to a writer the roster no
+     * longer lists or past the lease (M13.32a): the writer retries its COMMIT and the desk
+     * exposes a retried batch again (M13.27s review round 1, P1) -- one retry, never a queue.
      *
      * @throws IOException the roster could not be read; nothing was drained
      */
     public int sendExposed(CommitDesk desk, TermJoiner.Transport transport) throws IOException {
         Objects.requireNonNull(desk, "desk");
         Objects.requireNonNull(transport, "transport");
-        // ⚠️ M13.87: an EXPOSED is owed only for a batch held; an idle tick
-        // reads no roster, or a fleet with no fast index pays a GET a second.
-        if (desk.leader().heldBatches() == 0) {
+        // ⚠️ M13.87: owed only for a batch held, so an idle tick reads no roster;
+        // ⚠️ M13.32a: and ONLY WHILE THE LEASE LETS IT EXPOSE (ADR-0081 §3).
+        if (desk.leader().heldBatches() == 0 || !mayExpose()) {
             return 0;
         }
         Roster own = ownRoster();
@@ -511,6 +513,9 @@ public final class FastLeaderTerm {
         int sent = 0;
         for (FastWriteLeader.Exposure owed : desk.exposures()) {
             Optional<Roster.Member> writer = own.member(owed.writerUid());
+            if (!mayExpose()) { // ⚠️ its review round 1, P2: before EACH send
+                break;
+            }
             if (writer.isEmpty()) {
                 continue;
             }

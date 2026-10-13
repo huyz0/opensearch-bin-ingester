@@ -43,13 +43,18 @@ public final class FastTermOpening {
      *     decisions can supersede a group a pod reports
      * @param leaseWaitServed whether the lease fence's part of the wait has
      *     passed ({@link FastLeaseFence#successorMayAssign})
+     * @param mayExpose whether the lease lets this leader expose now
+     *     ({@link FastLeaseFence#mayExpose}), checked before each exposing
+     *     send (M13.32a)
      */
     public record Opened(FastTermStart.Started started, long closedThrough,
-            List<Roster> stillOpen, java.util.function.BooleanSupplier leaseWaitServed) {
+            List<Roster> stillOpen, java.util.function.BooleanSupplier leaseWaitServed,
+            java.util.function.BooleanSupplier mayExpose) {
         public Opened {
             Objects.requireNonNull(started, "started");
             stillOpen = List.copyOf(stillOpen);
             Objects.requireNonNull(leaseWaitServed, "leaseWaitServed");
+            Objects.requireNonNull(mayExpose, "mayExpose");
         }
 
         /**
@@ -121,7 +126,8 @@ public final class FastTermOpening {
             System.getLogger(FastTermOpening.class.getName()).log(System.Logger.Level.WARNING,
                     "term " + epoch + " closed no earlier term; the next start retries", notNow);
         }
-        return Optional.of(opened(started, closed, fence::successorMayAssign));
+        return Optional.of(opened(started, closed, fence::successorMayAssign,
+                fence::mayExpose));
     }
 
     /**
@@ -130,7 +136,8 @@ public final class FastTermOpening {
      * {@code closed} of the unclosed ones.
      */
     private static Opened opened(FastTermStart.Started started, int closed,
-            java.util.function.BooleanSupplier leaseWaitServed) {
+            java.util.function.BooleanSupplier leaseWaitServed,
+            java.util.function.BooleanSupplier mayExpose) {
         List<Roster> unclosed = started.unclosed();
         int open = unclosed.size() - closed;
         long closedThrough;
@@ -141,7 +148,8 @@ public final class FastTermOpening {
         } else {
             closedThrough = Math.max(0, unclosed.get(unclosed.size() - 1).predecessor());
         }
-        return new Opened(started, closedThrough, unclosed.subList(0, open), leaseWaitServed);
+        return new Opened(started, closedThrough, unclosed.subList(0, open), leaseWaitServed,
+                mayExpose);
     }
 
     private static void giveBack(Closeable term, Exception failed) {

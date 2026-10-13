@@ -26,13 +26,17 @@ class FastLeaderTermCommitTest {
     static final Roster.Incarnation POD = FastTermStartTest.incarnation("a");
 
     static FastLeaderTerm term3(MemoryBinStore store) throws Exception {
+        return term3(store, HoldingFence.of(Duration.ofSeconds(10),
+                new SimulatedClock(1_000_000L), new Mono()));
+    }
+
+    /** The same over {@code fence}: whether it may expose is the fence's (M13.32a). */
+    static FastLeaderTerm term3(MemoryBinStore store, FastLeaseFence fence) throws Exception {
         FastTermStartTest.put(store, FastTermStartTest.roster(1, -1, "x", false, 0, 0, false));
         FastTermStartTest.put(store, FastTermStartTest.roster(2, 1, "y", false, 0, 0, false));
         FastTermStartTest.latest(store, 2);
         FastTermOpening.Opened opened = new FastTermOpening(new FastTermStart(store, "p"),
-                new EmptyTermCloser(store, "p")::close,
-                new FastLeaseFence(Duration.ofSeconds(10), new SimulatedClock(1_000_000L),
-                        new Mono()), FastTermStartTest.SELF, Map::of)
+                new EmptyTermCloser(store, "p")::close, fence, FastTermStartTest.SELF, Map::of)
                 .open(3, () -> { }).orElseThrow();
         return new FastLeaderTerm(opened,
                 new JoinDesk(new RosterJoins(store, "p", 3, new Mono(), Duration.ofMillis(250)),

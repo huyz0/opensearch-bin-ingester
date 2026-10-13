@@ -63,8 +63,20 @@ class FastPublishServedTest {
             CommitDesk desk) {
     }
 
+    /** {@code fence}, holding its lease: the term may expose (M13.32a). */
+    private static FastLeaseFence holding(FastLeaseFence fence) {
+        fence.won(new io.github.huyz0.os.biningester.format.Lease(1, "self", "uid-self",
+                "self:1", WALL.millis() + 10_000), fence.acquiring(null));
+        return fence;
+    }
+
     /** A serving fast term led by SELF, with B joined to it. */
     private static Leading leading(MemoryBinStore store) throws Exception {
+        return leading(store, true);
+    }
+
+    /** The same, its lease letting it expose only when {@code exposing} (M13.32a). */
+    private static Leading leading(MemoryBinStore store, boolean exposing) throws Exception {
         LeaseConfig leases = new LeaseConfig("p", "self", "", Duration.ofSeconds(10),
                 Duration.ofSeconds(3));
         LocalSequencer term = LocalSequencer.start(store, "p",
@@ -72,9 +84,11 @@ class FastPublishServedTest {
         FastDisk disk = FastDisk.open(store, leases.leaseKey(),
                 Optional.of(new FastJournalConfig("/var/fast", 1L << 20)),
                 new FastDiskTest.Files());
+        FastLeaseFence fence = exposing
+                ? holding(new FastLeaseFence(Duration.ofSeconds(10), WALL, MONO))
+                : new FastLeaseFence(Duration.ofSeconds(10), WALL, MONO);
         FastTermOpening.Opened opened = new FastTermOpening(new FastTermStart(store, "p"),
-                new EmptyTermCloser(store, "p")::close,
-                new FastLeaseFence(Duration.ofSeconds(10), WALL, MONO), SELF, Map::of)
+                new EmptyTermCloser(store, "p")::close, fence, SELF, Map::of)
                 .open(term.epoch(), term::close).orElseThrow();
         FastLeaderTerm fast = new FastLeaderTerm(opened,
                 new JoinDesk(new RosterJoins(store, "p", term.epoch(), MONO,
@@ -278,6 +292,23 @@ class FastPublishServedTest {
             assertThat(reader.read(reader.find(S).orElseThrow()))
                     .extracting(SegmentRecord::id).containsExactly("d1");
             assertThat(otherTerm).isEmpty();
+        } finally {
+            l.disk().close();
+            l.term().close();
+        }
+    }
+
+    @Test
+    void anENTRYIsNotServedByItsKeyWhileTheLeaseForbidsExposing() throws Exception {
+        // ⚠️ M13.32a: /ctl/fast-entry is an exposing send (ADR-0081 §3).
+        Leading l = leading(new MemoryBinStore(), false);
+        try {
+            exposeOne(l, 1);
+            FastJournalRecord.Entry held = l.disk().journal().orElseThrow().held().get(0);
+
+            assertThat(FastLeaderFrames.exposedEntry(l.term(), l.disk(), SELF, "p",
+                    io.github.huyz0.os.biningester.format.FastKey.of("p", held.epoch(),
+                            held.assignedAfter(), S, held.firstOffset()), 1L)).isEmpty();
         } finally {
             l.disk().close();
             l.term().close();

@@ -136,6 +136,58 @@ class FastLeaderTermExposedTest {
         assertThat(transport.endpoints).isEmpty();
     }
 
+    @Test
+    void noEXPOSEDIsSentWhileTheLeaseForbidsItAndOneIsOwedStillOnceItAllows()
+            throws Exception {
+        // ⚠️ M13.32a, ADR-0081 §3: checked before each exposing send, never only
+        // at assignment -- a leader past its lease's validity exposes nothing.
+        FastLeaseFenceHolderTest.Mono mono = new FastLeaseFenceHolderTest.Mono();
+        SimulatedClock wall = new SimulatedClock(1_000_000L);
+        FastLeaseFence fence = HoldingFence.of(java.time.Duration.ofSeconds(10), wall, mono);
+        FastLeaderTerm term = FastLeaderTermCommitTest.term3(new MemoryBinStore(), fence);
+        join(term);
+        FastWriteLeaderTest.Leader l = FastWriteLeaderTest.leader(1 << 20, 1_000);
+        CommitDesk desk = FastLeaderTermCommitTest.recorded(l);
+        term.answerCommit(header(), commit(W.podId(), 1, S1), desk);
+        mono.advance(java.time.Duration.ofSeconds(9));
+        Recording transport = new Recording();
+
+        assertThat(term.mayExpose()).as("9 s into a 10 s lease: the margin").isFalse();
+        assertThat(term.sendExposed(desk, transport)).isZero();
+        assertThat(transport.endpoints).isEmpty();
+
+        fence.won(new io.github.huyz0.os.biningester.format.Lease(1, "self", "uid-self",
+                "self:1", wall.millis() + 10_000), mono.nanos());
+
+        assertThat(term.sendExposed(desk, transport)).as("renewed: owed, not lost")
+                .isEqualTo(1);
+    }
+
+    @Test
+    void aLEASELapsingDuringOneSendSendsTheNextNothing() throws Exception {
+        // ⚠️ M13.32a review round 2, P2: checked before EACH send, so a slow
+        // exchange that outlasts the lease's margin exposes nothing after it.
+        FastLeaseFence fence = HoldingFence.of(java.time.Duration.ofSeconds(10),
+                new SimulatedClock(1_000_000L), new FastLeaseFenceHolderTest.Mono());
+        FastLeaderTerm term = FastLeaderTermCommitTest.term3(new MemoryBinStore(), fence);
+        join(term);
+        FastWriteLeaderTest.Leader l = FastWriteLeaderTest.leader(1 << 20, 1_000);
+        CommitDesk desk = FastLeaderTermCommitTest.recorded(l);
+        term.answerCommit(header(), commit(W.podId(), 1, S1), desk);
+        term.answerCommit(header(), commit(W.podId(), 2, S1), desk);
+        List<String> sends = new ArrayList<>();
+
+        int sent = term.sendExposed(desk, (endpoint, frame) -> {
+            sends.add(endpoint);
+            fence.stopExposing();
+            return FastFrame.encode(3, W.podUid(), "uid-self",
+                    new FastFrame.HeldStatusReport(FastFrame.HeldStatus.NONE));
+        });
+
+        assertThat(sent).isEqualTo(1);
+        assertThat(sends).as("the second, past the lease, never sent").hasSize(1);
+    }
+
     private static void join(FastLeaderTerm term) throws Exception {
         assertThat(term.answerJoin(new FastFrame.Header(FastFrame.KIND_JOIN, 3, W.podUid(),
                 "uid-self"), new FastFrame.Join(W, FastFrame.Held.NONE)))

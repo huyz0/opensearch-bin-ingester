@@ -351,8 +351,9 @@ final class FastLeaderFrames {
                         .filter(k -> k.prefix().equals(prefix));
         Optional<FastLeaderTerm> term = LocalSequencer.underneath(held)
                 .filter(LocalSequencer::serving).flatMap(LocalSequencer::fastTerm);
+        // ⚠️ M13.32a: an exposing send, so only while the lease lets it expose.
         if (parsed.isEmpty() || term.isEmpty() || disk.journal().isEmpty()
-                || parsed.get().epoch() != term.get().epoch()) {
+                || parsed.get().epoch() != term.get().epoch() || !term.get().mayExpose()) {
             return Optional.empty();
         }
         var k = parsed.get();

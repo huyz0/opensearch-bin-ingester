@@ -39,7 +39,7 @@ class FastLeaderTermTakeoverDeskTest {
         FastTermStartTest.latest(store, 2);
         FastTermOpening.Opened opened = new FastTermOpening(new FastTermStart(store, "p"),
                 new EmptyTermCloser(store, "p")::close,
-                new FastLeaseFence(Duration.ofSeconds(10), new SimulatedClock(1_000_000L),
+                HoldingFence.of(Duration.ofSeconds(10), new SimulatedClock(1_000_000L),
                         new Mono()), FastTermStartTest.SELF, Map::of)
                 .open(3, () -> { }).orElseThrow();
         assertThat(opened.stillOpen()).hasSize(open ? 1 : 0);
