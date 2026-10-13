@@ -334,7 +334,11 @@ public final class ConsumerClient implements AutoCloseable {
             commit.report().handler().accept(commit.report().gap());
         }
         if (commit.decode()) {
-            out.addAll(decoded);
+            for (ConsumerRecord r : decoded) {
+                if (r.offset() >= commit.keepFrom()) {
+                    out.add(r);
+                }
+            }
             // ⚠️ COUNTED ON THE COMMIT, NOT THE DECODE: a commit the catch-up
             // race undoes decodes the delivery again later (M13.25e).
             if (delivery.voided()) {

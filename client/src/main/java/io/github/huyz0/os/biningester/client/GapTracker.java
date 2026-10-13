@@ -57,9 +57,12 @@ final class GapTracker {
     /**
      * What {@link #commit} decided: whether to hand the decoded records on,
      * the gap to report once the lock is released, and whether the commit was
-     * undone because a race made it one the check did not foresee.
+     * undone because a race made it one the check did not foresee; and the
+     * lowest offset to hand on, the decoded records below it being duplicates
+     * (ADR-0085: a delivery overlapping the expected offset is trimmed).
      */
-    record Commit(boolean decode, GapReport report, boolean undone, long covered) {
+    record Commit(boolean decode, GapReport report, boolean undone, long covered,
+            long keepFrom) {
     }
 
     /**
@@ -67,9 +70,9 @@ final class GapTracker {
      * be told. ⚠️ RETURNED, NOT LEFT IN A FIELD (M13.17, M12.17 review P1): a
      * field the caller had to clear could be read stale by the next commit.
      */
-    private record Reported(boolean decode, GapReport report) {
-        static final Reported DECODE = new Reported(true, null);
-        static final Reported SKIP = new Reported(false, null);
+    private record Reported(boolean decode, GapReport report, long keepFrom) {
+        static final Reported DECODE = new Reported(true, null, Long.MIN_VALUE);
+        static final Reported SKIP = new Reported(false, null, Long.MIN_VALUE);
     }
 
     /**
@@ -124,6 +127,10 @@ final class GapTracker {
         if (replay || expected < 0 || delivery.firstOffset() == expected) {
             return true;
         }
+        if (delivery.firstOffset() < expected
+                && delivery.firstOffset() + delivery.recordCount() > expected) {
+            return true; // ADR-0085: decoded, then trimmed at the commit
+        }
         return delivery.firstOffset() > expected && gapHandler == null;
     }
 
@@ -142,17 +149,20 @@ final class GapTracker {
                 // leave its retry reading as a duplicate -- the drop above.
                 // ⚠️ REACHED ONLY BY A RACE (M11.13, H8; M10.23 review R4): the
                 // catch-up lane committed up to this delivery between
-                // `wouldDecode` and `reportAnyGap`, which then took its one
+                // `wouldDecode` and `reportAnyGap`, which then took a
                 // committing branch the check did not foresee --
-                // `firstOffset == expected`. So the commit is undone to
-                // `firstOffset` -- not to a value sampled before it, which the
-                // racing commit may have moved (review R1) -- and the delivery
-                // stays at the head, NOT CONSUMED: the next poll decodes it in
-                // order. Throwing would pause the shard for a state that is not
-                // unrecoverable (research 02 §6; review R2).
+                // `firstOffset == expected`, or since ADR-0085 an overlap. So
+                // the commit is undone to `before`, read under this lock --
+                // not to a value sampled before it, which the racing commit
+                // may have moved (review R1), and not to `firstOffset`, which
+                // after an overlap is BELOW what the race committed (M13.30h
+                // review round 1, P1) -- and the delivery stays at the head,
+                // NOT CONSUMED: the next poll decodes it, trimmed. Throwing
+                // would pause the shard for a state that is not unrecoverable
+                // (research 02 §6; review R2).
                 // ⚠️ AND UNDER THE LOCK THE COMMIT TOOK (M12.17, M11.13 R4).
-                expectedNextOffset = delivery.firstOffset();
-                return new Commit(false, null, true, 0);
+                expectedNextOffset = before;
+                return new Commit(false, null, true, 0, Long.MIN_VALUE);
             }
             // ⚠️ WHAT THIS COMMIT NEWLY COVERS, not the delivery's width: a
             // replay re-delivers offsets the live lane already committed
@@ -160,7 +170,7 @@ final class GapTracker {
             long from = before < 0 ? delivery.firstOffset()
                     : Math.max(before, delivery.firstOffset());
             long covered = decode ? Math.max(0, expectedNextOffset - from) : 0;
-            return new Commit(decode, report, false, covered);
+            return new Commit(decode, report, false, covered, reported.keepFrom());
         }
     }
 
@@ -204,7 +214,11 @@ final class GapTracker {
             return Reported.SKIP;
         }
         if (delivery.firstOffset() < expected) {
-            throw new IllegalStateException("delivery overlaps the next expected offset");
+            // ⚠️ ADR-0085: a committed fast run over the entries pushed before
+            // it. Its records below the expected offset are the duplicates
+            // handed on already; a throw here would pause the shard.
+            expectedNextOffset = end;
+            return new Reported(true, null, expected);
         }
         if (delivery.firstOffset() == expected) {
             expectedNextOffset = end;
@@ -246,7 +260,7 @@ final class GapTracker {
         // Keep the delivery that exposed the gap queued until replay reaches
         // this offset; decoding it now could make it impossible to suppress an
         // overlap if replay includes the same records.
-        return new Reported(false, new GapReport(handler, gap));
+        return new Reported(false, new GapReport(handler, gap), Long.MIN_VALUE);
     }
 
     void onGap(Consumer<DeliveryGapException> handler) {
