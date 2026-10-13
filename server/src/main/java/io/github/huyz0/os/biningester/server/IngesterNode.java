@@ -93,6 +93,8 @@ public final class IngesterNode implements AutoCloseable {
     private volatile ExposedDrain.Ticks replicaTicks;
     /** This pod's departure at a graceful stop (M13.27p); none before start ends. */
     private volatile java.util.function.Supplier<FastDeparture.Result> fastDeparture;
+    /** A leader's last upload as it leaves (M13.35c); null on a pod with none to make. */
+    private volatile io.github.huyz0.os.biningester.sequencer.FastUploader.Last lastUpload;
     private volatile io.github.huyz0.os.biningester.sequencer.TermJoiner.Transport departing;
     private volatile ShutdownSequence.Report lastShutdown;
     private volatile EndpointSliceWatch watch;
@@ -347,6 +349,9 @@ public final class IngesterNode implements AutoCloseable {
             node.departing = departing;
             node.replicaTicks = ticks;
             FastDisk disk = fastDisk;
+            node.lastUpload = () -> FastLeaderFrames.upload(assembly.heldTerm(), commitDisk,
+                    self, assembly.defaultIngest()::publishFast, exposing,
+                    assembly.defaultIngest()::delivered, false);
             node.fastDeparture = () -> FastDeparture.depart(config,
                     FastPeer.leaseReader(config, assembly.store()), disk, departing,
                     FastPeer.leading(assembly), FastDeparture.GRACE, mono, Thread::sleep);
@@ -512,7 +517,8 @@ public final class IngesterNode implements AutoCloseable {
                     }
                 }
                 // ⚠️ M13.35a: a leader departs its own term, the lease still held.
-                FastLeaderFrames.leave(assembly.heldTerm())
+                io.github.huyz0.os.biningester.sequencer.FastUploader.Last last = lastUpload;
+                FastLeaderFrames.leave(assembly.heldTerm(), last != null ? last : () -> { })
                         .ifPresent(left -> journal.add(FastLeaderFrames.LEFT + left));
             }
 

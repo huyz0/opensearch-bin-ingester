@@ -70,6 +70,8 @@ public final class FastLeaderTerm {
     private long uploadSeq;
     /** The first offsets of the upload whose delta is not known committed; null when none. */
     private Map<RunKey, Long> pendingUpload;
+    private final java.util.concurrent.locks.ReentrantLock uploading =
+            new java.util.concurrent.locks.ReentrantLock();
     /** This term's roster as last read, and when; null before the first read. */
     private Roster cached;
     /**
@@ -161,6 +163,13 @@ public final class FastLeaderTerm {
     public Optional<Map<RunKey, Long>> upload(CommitDesk desk, FastJournal journal,
             FastUploader.Chain chain, RecoveryWriter.SegmentUpload upload,
             TermJoiner.Transport transport) throws IOException {
+        return upload(desk, journal, chain, upload, transport, true);
+    }
+
+    /** The same, unpaced for a leader's last (M13.35c); ⚠️ one at a time. */
+    public Optional<Map<RunKey, Long>> upload(CommitDesk desk, FastJournal journal,
+            FastUploader.Chain chain, RecoveryWriter.SegmentUpload upload,
+            TermJoiner.Transport transport, boolean paced) throws IOException {
         boolean idle = desk.leader().heldBatches() == 0;
         synchronized (this) {
             // ⚠️ NOTHING HELD, NOTHING TO UPLOAD (M13.87), unless an upload's
@@ -169,16 +178,21 @@ public final class FastLeaderTerm {
                 return Optional.empty();
             }
             long now = mono.nanos();
-            if (uploaded && now - lastUploadNanos < refreshNanos) {
+            if (paced && uploaded && now - lastUploadNanos < refreshNanos) {
                 return Optional.empty();
             }
             uploaded = true;
             lastUploadNanos = now;
         }
-        Roster own = ownRoster();
-        ReleaseSender release = new ReleaseSender(own.leader().podUid(), epoch(), transport);
-        return new FastUploader(epoch(), journal, desk.leader(), chain, upload,
-                below -> release.send(List.of(own), below)).upload();
+        uploading.lock();
+        try {
+            Roster own = ownRoster();
+            ReleaseSender release = new ReleaseSender(own.leader().podUid(), epoch(), transport);
+            return new FastUploader(epoch(), journal, desk.leader(), chain, upload,
+                    below -> release.send(List.of(own), below)).upload();
+        } finally {
+            uploading.unlock();
+        }
     }
 
     /**
@@ -624,13 +638,29 @@ public final class FastLeaderTerm {
      * @throws IOException the store failed; the leader stops undeparted
      */
     public Left leave() throws IOException {
+        return leave(() -> { });
+    }
+
+    /**
+     * The same, uploading and committing what it exposed FIRST through
+     * {@code last} (ADR-0081 §9; M13.35c) -- staying undeparted only if some
+     * is still uncommitted after it, or it failed.
+     */
+    public Left leave(FastUploader.Last last) throws IOException {
         CommitDesk built;
         synchronized (this) {
             leaving = true;
             built = desk;
         }
         if (built != null && built.leader().stop()) {
-            return Left.STAYED;
+            try {
+                last.upload();
+            } catch (IOException failed) {
+                return Left.STAYED;
+            }
+            if (built.leader().stop()) {
+                return Left.STAYED;
+            }
         }
         boolean close = opened.stillOpen().isEmpty();
         RosterDepartures.Outcome outcome =

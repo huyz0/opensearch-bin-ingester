@@ -53,6 +53,12 @@ public final class FastUploader {
                 Map<RunKey, Integer> counts) throws IOException;
     }
 
+    /** A leader's last upload as it leaves, unpaced (M13.35c; ADR-0081 §9). */
+    @FunctionalInterface
+    public interface Last {
+        void upload() throws IOException;
+    }
+
     /** Tells every holder of this term to release below each stream's committed offset. */
     @FunctionalInterface
     public interface Release {

@@ -54,14 +54,16 @@ final class FastLeaderFrames {
      *
      * @return how it ended; empty when this pod leads no term
      */
-    static Optional<FastLeaderTerm.Left> leave(Sequencer held) {
+    static Optional<FastLeaderTerm.Left> leave(Sequencer held,
+            io.github.huyz0.os.biningester.sequencer.FastUploader.Last last) {
         Optional<FastLeaderTerm> term =
                 LocalSequencer.underneath(held).flatMap(LocalSequencer::fastTerm);
         if (term.isEmpty()) {
             return Optional.empty();
         }
         try {
-            return Optional.of(term.get().leave());
+            // ⚠️ M13.35c: what it exposed, uploaded and committed before it leaves.
+            return Optional.of(term.get().leave(last));
         } catch (IOException failed) {
             return Optional.of(FastLeaderTerm.Left.STAYED);
         }
@@ -203,6 +205,13 @@ final class FastLeaderFrames {
     static void upload(Sequencer held, FastDisk disk, Roster.Incarnation self,
             io.github.huyz0.os.biningester.sequencer.RecoveryWriter.SegmentUpload upload,
             TermJoiner.Transport transport, Delivered delivered) {
+        upload(held, disk, self, upload, transport, delivered, true);
+    }
+
+    /** The same, unpaced when not {@code paced}: a leader's last as it leaves (M13.35c). */
+    static void upload(Sequencer held, FastDisk disk, Roster.Incarnation self,
+            io.github.huyz0.os.biningester.sequencer.RecoveryWriter.SegmentUpload upload,
+            TermJoiner.Transport transport, Delivered delivered, boolean paced) {
         Optional<LocalSequencer> local = LocalSequencer.underneath(held)
                 .filter(LocalSequencer::serving);
         Optional<FastLeaderTerm> term = local.flatMap(LocalSequencer::fastTerm);
@@ -246,7 +255,7 @@ final class FastLeaderFrames {
                 };
         try {
             fast.upload(fast.commitDesk(disk.journal().get(), self), disk.journal().get(), chain,
-                    upload, transport);
+                    upload, transport, paced);
         } catch (IOException | RuntimeException failed) {
             System.getLogger(FastLeaderFrames.class.getName()).log(
                     System.Logger.Level.WARNING, "the fast upload failed; the next retries",
