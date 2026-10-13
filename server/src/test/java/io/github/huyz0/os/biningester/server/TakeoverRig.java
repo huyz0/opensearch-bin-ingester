@@ -170,6 +170,13 @@ final class TakeoverRig implements AutoCloseable {
         return takeOver(uid -> false);
     }
 
+    /** Runs the takeover with a real {@code upload}, its recoveries handed to {@code recovered}. */
+    boolean takeOver(io.github.huyz0.os.biningester.sequencer.RecoveryWriter.SegmentUpload upload,
+            FastTakeover.Recovered recovered) {
+        return FastTakeover.start(term, disk, SELF, members(uid -> false), incarnation -> false,
+                upload, recovered, store, "p", WALL, Runnable::run);
+    }
+
     Roster roster(long epoch) throws Exception {
         try (InputStream in = store.get(Roster.key("p", epoch))) {
             return Roster.decode(in.readAllBytes());
