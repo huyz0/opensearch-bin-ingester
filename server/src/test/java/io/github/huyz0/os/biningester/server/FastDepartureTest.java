@@ -124,6 +124,39 @@ class FastDepartureTest {
     }
 
     @Test
+    void aRELEASETakenDuringItsReportWakesTheNextAtOnce() throws Exception {
+        // ⚠️ M13.31g: counted BEFORE the report, so a RELEASE the leader's
+        // upload sends while it is answered is not missed.
+        MemoryBinStore store = leaseHeldBy("uid-l");
+        Time time = new Time();
+        List<String> waits = new ArrayList<>();
+        try (FastDisk disk = journaledDisk(store)) {
+            Leader leader = new Leader();
+            leader.pending = true;
+            // ⚠️ the leader's upload releases the copy while the report is answered.
+            io.github.huyz0.os.biningester.sequencer.TermJoiner.Transport releasing =
+                    (endpoint, frame) -> {
+                        byte[] answer = leader.exchange(endpoint, frame);
+                        if (leader.pending) {
+                            disk.releases().released();
+                            leader.pending = false;
+                        }
+                        return answer;
+                    };
+
+            FastDeparture.Result result = FastDeparture.depart(config(), () -> read(store),
+                    disk, releasing, false, GRACE, time.nanos::get, (seen, max) -> {
+                        waits.add(seen + "<" + disk.releases().count());
+                        time.nanos.addAndGet(max.toNanos());
+                    });
+
+            assertThat(result).isEqualTo(FastDeparture.Result.DEPARTED);
+        }
+
+        assertThat(waits).as("the wait it began was already over").containsExactly("0<1");
+    }
+
+    @Test
     void aDISKLESSFollowerLeavesWithNothingToReport() throws Exception {
         MemoryBinStore store = leaseHeldBy("uid-l");
         Leader leader = new Leader();

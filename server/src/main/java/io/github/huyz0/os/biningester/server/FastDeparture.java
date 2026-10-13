@@ -26,8 +26,9 @@ import java.time.Duration;
  * <p>⚠️ A LEADER DEPARTS NOTHING HERE: it leaves its own term through
  * {@link FastLeaderFrames#leave} (M13.35a); uploading first is M13.35b's.
  *
- * <p>⚠️ RE-ASKED ON A PAUSE, NOT ON A RELEASE: ADR-0081 §9 re-sends HELD after
- * each RELEASE, which M13.31 brings; until then the pause stands in for it.
+ * <p>⚠️ RE-ASKED ON A RELEASE (ADR-0081 §9; M13.31g): after each report
+ * the pod waits for the next RELEASE it takes, at most {@link #PAUSE} -- a
+ * RELEASE lost, or a leader unreachable, is asked again on the pause.
  */
 final class FastDeparture {
 
@@ -62,9 +63,23 @@ final class FastDeparture {
     private FastDeparture() {
     }
 
+    /** How a departure waits between reports: for a RELEASE after the {@code seen}-th. */
+    @FunctionalInterface
+    interface ReleaseWait {
+        void await(long seen, Duration max) throws InterruptedException;
+    }
+
     static Result depart(ServerConfig config, LeaderWatch.LeaseReader lease, FastDisk disk,
             TermJoiner.Transport transport, boolean leading, Duration grace,
             MonotonicClock mono, LeaderWatch.Sleeper sleeper) {
+        return depart(config, lease, disk, transport, leading, grace, mono,
+                (seen, max) -> sleeper.sleep(max));
+    }
+
+    /** The same, waking on the RELEASE {@code waiting} waits for (M13.31g). */
+    static Result depart(ServerConfig config, LeaderWatch.LeaseReader lease, FastDisk disk,
+            TermJoiner.Transport transport, boolean leading, Duration grace,
+            MonotonicClock mono, ReleaseWait waiting) {
         if (leading) {
             return Result.NOT_A_FOLLOWER;
         }
@@ -87,6 +102,9 @@ final class FastDeparture {
         long deadline = mono.nanos() + grace.toNanos();
         boolean askedOnce = false;
         while (mono.nanos() < deadline) {
+            // ⚠️ COUNTED BEFORE THE REPORT: a RELEASE taken while it is
+            // answered still wakes the next one.
+            long seen = disk.releases().count();
             // ⚠️ NO ASK THAT CANNOT FINISH INSIDE THE GRACE (M13.35e): the pod
             // only waits then, so a copy pending holds it the whole grace.
             if (deadline - mono.nanos() >= EXCHANGE_TIMEOUT.multipliedBy(2).toNanos()) {
@@ -117,7 +135,7 @@ final class FastDeparture {
                 }
             }
             try {
-                sleeper.sleep(PAUSE);
+                waiting.await(seen, PAUSE);
             } catch (InterruptedException stopping) {
                 // ⚠️ THE FLAG IS NOT SET AGAIN (its review round 1, P2): the
                 // shutdown sequence carries on with it clear, so the lease

@@ -93,9 +93,14 @@ final class FastHolderFrames {
                         release.streams().forEach(at ->
                                 releasedCopies.accept(at.stream(), at.below()));
                     }
-                    return releases.isEmpty()
+                    FastFrame.Body answer = releases.isEmpty()
                             ? new FastFrame.HeldStatusReport(FastFrame.HeldStatus.NONE)
                             : releases.get().answer(header, release);
+                    // ⚠️ M13.31g: a taken RELEASE wakes a departure's HELD.
+                    if (!(answer instanceof FastFrame.Refused)) {
+                        disk.releases().released();
+                    }
+                    return answer;
                 });
         handle.accept(FastWriteFrame.KIND_EXPOSED, (header, body) -> {
             // ⚠️ THE LEADER IS A WRITER OF ITS OWN TERM (M13.84; ADR-0081 §2)

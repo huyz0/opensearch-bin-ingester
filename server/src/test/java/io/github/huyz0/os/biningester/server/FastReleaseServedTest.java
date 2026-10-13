@@ -64,6 +64,25 @@ class FastReleaseServedTest {
     }
 
     @Test
+    void aTAKENReleaseIsCountedForTheDepartureAndARefusedOneIsNot() throws Exception {
+        // ⚠️ M13.31g: what wakes a departing pod's next HELD.
+        MemoryBinStore store = FastDepartureTest.leaseHeldBy("uid-l");
+        try (FastDisk disk = FastDepartureTest.journaledDisk(store)) {
+            long term = FastDepartureTest.read(store).epoch();
+            FastFrameRouter.Handler release = registered(disk);
+            release.answer(new FastFrame.Header(FastTakeoverFrame.KIND_RELEASE, term,
+                    "uid-l", "uid-pod1"), releaseAll());
+            assertThat(disk.releases().count()).as("a term never joined: refused").isZero();
+            disk.joined().joined(term, 0, "uid-l");
+
+            release.answer(new FastFrame.Header(FastTakeoverFrame.KIND_RELEASE, term,
+                    "uid-l", "uid-pod1"), releaseAll());
+
+            assertThat(disk.releases().count()).isEqualTo(1);
+        }
+    }
+
+    @Test
     void aJOURNALEDPodReleasesForItsJoinedTermsLeader() throws Exception {
         MemoryBinStore store = FastDepartureTest.leaseHeldBy("uid-l");
         try (FastDisk disk = FastDepartureTest.journaledDisk(store)) {

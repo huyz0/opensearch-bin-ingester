@@ -409,7 +409,9 @@ public final class IngesterNode implements AutoCloseable {
                     assembly.defaultIngest()::delivered, false);
             node.fastDeparture = () -> FastDeparture.depart(config,
                     FastPeer.leaseReader(config, assembly.store()), disk, departing,
-                    FastPeer.leading(assembly), FastDeparture.GRACE, mono, Thread::sleep);
+                    FastPeer.leading(assembly), FastDeparture.GRACE, mono,
+                    (FastDeparture.ReleaseWait) (seen, max) ->
+                            disk.releases().awaitAfter(seen, max)); // M13.31g
             return node;
         } catch (RuntimeException | IOException failed) {
             // ⚠️ A `RuntimeException` IS THE ONLY THING `FrontDoor.start` CAN

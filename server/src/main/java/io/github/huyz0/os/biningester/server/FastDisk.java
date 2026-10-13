@@ -52,6 +52,8 @@ final class FastDisk implements Closeable {
     /** The EXPOSEDs this pod's writes wait for (M13.29a). */
     private final io.github.huyz0.os.biningester.sequencer.ExposedInbox exposed =
             new io.github.huyz0.os.biningester.sequencer.ExposedInbox();
+    /** The RELEASEs this pod took, waking its departure (M13.31g). */
+    private final FastReleases releases = new FastReleases();
     /** The files this disk opened, closed with it. */
     private final List<JournalFile> files;
 
@@ -102,6 +104,10 @@ final class FastDisk implements Closeable {
 
     io.github.huyz0.os.biningester.sequencer.JoinedTerms joined() {
         return joined;
+    }
+
+    FastReleases releases() {
+        return releases;
     }
 
     io.github.huyz0.os.biningester.sequencer.HolderGate gate() {
