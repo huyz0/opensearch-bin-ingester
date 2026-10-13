@@ -161,7 +161,13 @@ public final class FastLeaderTerm {
     public Optional<Map<RunKey, Long>> upload(CommitDesk desk, FastJournal journal,
             FastUploader.Chain chain, RecoveryWriter.SegmentUpload upload,
             TermJoiner.Transport transport) throws IOException {
+        boolean idle = desk.leader().heldBatches() == 0;
         synchronized (this) {
+            // ⚠️ NOTHING HELD, NOTHING TO UPLOAD (M13.87), unless an upload's
+            // commit is not yet known: no roster read on an idle tick.
+            if (idle && pendingUpload == null) {
+                return Optional.empty();
+            }
             long now = mono.nanos();
             if (uploaded && now - lastUploadNanos < refreshNanos) {
                 return Optional.empty();
@@ -461,6 +467,11 @@ public final class FastLeaderTerm {
     public int sendExposed(CommitDesk desk, TermJoiner.Transport transport) throws IOException {
         Objects.requireNonNull(desk, "desk");
         Objects.requireNonNull(transport, "transport");
+        // ⚠️ M13.87: an EXPOSED is owed only for a batch held; an idle tick
+        // reads no roster, or a fleet with no fast index pays a GET a second.
+        if (desk.leader().heldBatches() == 0) {
+            return 0;
+        }
         Roster own = ownRoster();
         String self = opened.started().own().leader().podUid();
         int sent = 0;
@@ -500,6 +511,10 @@ public final class FastLeaderTerm {
     public int sendReplicas(CommitDesk desk, TermJoiner.Transport transport) throws IOException {
         Objects.requireNonNull(desk, "desk");
         Objects.requireNonNull(transport, "transport");
+        // ⚠️ M13.87: every REPLICA and re-send is of a held batch.
+        if (desk.leader().heldBatches() == 0) {
+            return 0;
+        }
         Roster own = ownRoster();
         String self = opened.started().own().leader().podUid();
         List<QuorumFrontier.Holder> ready = own.members().stream()
