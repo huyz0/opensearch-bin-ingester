@@ -346,6 +346,9 @@ public final class IngesterNode implements AutoCloseable {
             // ⚠️ M13.28a: every pod holds copies, whichever term it leads.
             FastHolderFrames.register(fastFrames::handle, commitDisk,
                     epoch -> FastPeer.ownTerm(assembly.heldTerm()) == epoch, config.podUid());
+            // ⚠️ M13.30i: a joined term's leader's PUBLISH, to this pod's hub.
+            FastPublishHandler.register(fastFrames::handle, commitDisk.joined(),
+                    assembly.defaultIngest()::deliverPushed);
             FastLeaderFrames.registerWrite(fastFrames::handle, assembly::heldTerm, commitDisk, self,
                     exposed);
             IngesterNode node = new IngesterNode(assembly,
