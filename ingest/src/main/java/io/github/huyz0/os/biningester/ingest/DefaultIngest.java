@@ -91,13 +91,8 @@ public final class DefaultIngest implements Ingest {
     /** The active buffer, its waiters and the flush loop (M13.1a). */
     private final FlushPath flushPath;
     private final DurableSegmentListener durableSegmentListener;
-    /**
-     * The fast segment published and awaiting its delta (M13.30a): ⚠️ ONE,
-     * never a queue of them (its review round 1, P1) -- the leader uploads one
-     * at a time, and a retry's segment replaces the one it retries, so no
-     * segment is held past its upload.
-     */
-    private SegmentPublisher.Published awaitingDelta;
+    /** The fast upload's and the recovery's segments, until committed (M13.33w). */
+    private final UploadDeliveries uploads;
     /** Which indices are fast, and the path they take (M13.29b); none until routed. */
     private record FastRoute(Predicate<String> fastIndex, FastPath path) {
     }
@@ -185,6 +180,8 @@ public final class DefaultIngest implements Ingest {
         this.pushQueue = new PushQueue(hub, serving, config.maxQueuedPushBytes());
         this.batchFlusher = new BatchFlusher(publisher, this.sequencer, podShortId,
                 durableSegmentListener, pushQueue);
+        this.uploads = new UploadDeliveries(config, clock, publisher, durableSegmentListener,
+                pushQueue);
     }
 
     @Override
@@ -373,11 +370,15 @@ public final class DefaultIngest implements Ingest {
      * @throws IOException the upload failed, or there was nothing to upload
      */
     public String publishRecovery(Map<RunKey, List<SegmentRecord>> runs) throws IOException {
-        Accumulator recovered = new Accumulator(config, clock);
-        runs.forEach((key, records) -> records.forEach(r -> recovered.add(key, r)));
-        return publisher.publish(recovered)
-                .orElseThrow(() -> new IOException("a recovery uploads at least one record"))
-                .key();
+        return uploads.publishRecovery(runs);
+    }
+
+    /**
+     * A takeover's recovery entry committed (M13.33w): each segment it names
+     * that {@link #publishRecovery} uploaded, delivered as a flush's is.
+     */
+    public void recovered(io.github.huyz0.os.biningester.format.Recovery recovery, long epoch) {
+        uploads.recovered(Objects.requireNonNull(recovery, "recovery"), epoch);
     }
 
     /**
@@ -386,14 +387,7 @@ public final class DefaultIngest implements Ingest {
      * key, which the upload's delta commits.
      */
     public String publishFast(Map<RunKey, List<SegmentRecord>> runs) throws IOException {
-        Accumulator fast = new Accumulator(config, clock);
-        runs.forEach((key, records) -> records.forEach(r -> fast.add(key, r)));
-        SegmentPublisher.Published published = publisher.publish(fast)
-                .orElseThrow(() -> new IOException("a fast upload carries at least one record"));
-        synchronized (this) {
-            awaitingDelta = published;
-        }
-        return published.key();
+        return uploads.publishFast(runs);
     }
 
     /** A PUBLISHed fast entry, delivered before its upload: {@link PushedEntries}. */
@@ -416,16 +410,7 @@ public final class DefaultIngest implements Ingest {
      */
     public void delivered(String segmentKey,
             io.github.huyz0.os.biningester.format.CommitDelta delta, long epoch) {
-        SegmentPublisher.Published published;
-        synchronized (this) {
-            published = awaitingDelta;
-            if (published == null || !published.key().equals(segmentKey)) {
-                return;
-            }
-            awaitingDelta = null;
-        }
-        durableSegmentListener.onDurable(segmentKey);
-        pushQueue.offer(delta, segmentKey, published.segment(), epoch);
+        uploads.delivered(segmentKey, delta, epoch);
     }
 
     /** Each index's apportioned share of this pod's store requests (ADR-0077). */

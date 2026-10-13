@@ -64,6 +64,8 @@ final class TakeoverRig implements AutoCloseable {
     final AtomicInteger uploads = new AtomicInteger();
     /** Each RELEASE's target, with S's committed next offset when it arrived. */
     final List<String> released = new CopyOnWriteArrayList<>();
+    /** Each recovery handed on to be pushed live, as "segment:first+count@epoch" (M13.33w). */
+    final List<String> recovered = new CopyOnWriteArrayList<>();
     final LocalSequencer term;
     final FastDisk disk;
     private final Map<String, List<FastJournalRecord.Entry>> held;
@@ -158,7 +160,10 @@ final class TakeoverRig implements AutoCloseable {
                 runs -> {
                     uploads.incrementAndGet();
                     return "seg-r" + uploads.get();
-                }, store, "p", WALL, Runnable::run);
+                }, (recovery, epoch) -> recovery.segments().forEach(s -> s.runs().forEach(
+                        run -> recovered.add(s.segmentKey() + ":" + run.firstOffset() + "+"
+                                + run.recordCount() + "@" + epoch))),
+                store, "p", WALL, Runnable::run);
     }
 
     boolean takeOver() {

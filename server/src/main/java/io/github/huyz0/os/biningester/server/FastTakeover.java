@@ -54,6 +54,15 @@ final class FastTakeover {
     /** Between collection rounds, and between asking whether the wait has passed. */
     static final Duration RETRY = Duration.ofMillis(250);
 
+    /**
+     * A recovery entry committed, under its term's epoch, handed on to be
+     * pushed live (M13.33w): {@code DefaultIngest.recovered}.
+     */
+    @FunctionalInterface
+    interface Recovered {
+        void recovered(Recovery recovery, long epoch);
+    }
+
     /** One takeover, run to its end. */
     @FunctionalInterface
     interface Run {
@@ -72,6 +81,15 @@ final class FastTakeover {
     static boolean start(Sequencer held, FastDisk disk, Roster.Incarnation self,
             TermJoiner.Transport transport, PodGone podGone, RecoveryWriter.SegmentUpload upload,
             BinStore store, String prefix, Clock wall, java.util.concurrent.Executor launch) {
+        return start(held, disk, self, transport, podGone, upload, (recovery, epoch) -> { },
+                store, prefix, wall, launch);
+    }
+
+    /** The same, each recovery entry committed handed to {@code recovered} (M13.33w). */
+    static boolean start(Sequencer held, FastDisk disk, Roster.Incarnation self,
+            TermJoiner.Transport transport, PodGone podGone, RecoveryWriter.SegmentUpload upload,
+            Recovered recovered, BinStore store, String prefix, Clock wall,
+            java.util.concurrent.Executor launch) {
         Optional<LocalSequencer> term = LocalSequencer.underneath(held);
         Optional<FastLeaderTerm> fast = term.flatMap(LocalSequencer::fastTerm);
         if (fast.isEmpty()) {
@@ -94,7 +112,7 @@ final class FastTakeover {
         // hold every stream for the rest of its lease.
         try {
             launch(claimed.get(), fast.get(), chain, disk.journal().get(), self, transport,
-                    podGone, upload, store, prefix, wall, launch);
+                    podGone, upload, recovered, store, prefix, wall, launch);
         } catch (RuntimeException | Error failed) {
             giveBack(chain::close);
             throw failed;
@@ -105,7 +123,8 @@ final class FastTakeover {
     private static void launch(FastTermOpening.Opened opened, FastLeaderTerm fastTerm,
             LocalSequencer chain, FastJournal journal, Roster.Incarnation self,
             TermJoiner.Transport transport, PodGone podGone, RecoveryWriter.SegmentUpload upload,
-            BinStore store, String prefix, Clock wall, java.util.concurrent.Executor launch) {
+            Recovered recovered, BinStore store, String prefix, Clock wall,
+            java.util.concurrent.Executor launch) {
         Optional<FastLeaderTerm> fast = Optional.of(fastTerm);
         CommitDesk desk = fastTerm.commitDesk(journal, self);
         long epoch = fastTerm.epoch();
@@ -131,6 +150,8 @@ final class FastTakeover {
             public Recovery recover(List<StreamDecision.Decided> batch) throws IOException {
                 Recovery recovery = chain.recover(batch, upload);
                 FastMetrics.voided(recovery); // ⚠️ M13.36
+                // ⚠️ M13.33w: pushed live, as a fast upload's commit is.
+                recovered.recovered(recovery, chain.epoch());
                 return recovery;
             }
 
