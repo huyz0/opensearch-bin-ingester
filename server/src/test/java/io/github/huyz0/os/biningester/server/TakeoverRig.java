@@ -122,11 +122,17 @@ final class TakeoverRig implements AutoCloseable {
                 new FastDiskTest.Files());
     }
 
-    /** Each member answers FENCE with what it holds; a RELEASE is recorded and left unanswered. */
-    private TermJoiner.Transport members() {
+    /**
+     * Each member answers FENCE with what it holds, but a {@code gone} one,
+     * which answers nothing; a RELEASE is recorded and left unanswered.
+     */
+    private TermJoiner.Transport members(Predicate<String> gone) {
         return (endpoint, frame) -> {
             FastFrame.Frame asked = FastFrame.decode(frame);
             String member = asked.header().targetUid();
+            if (gone.test(member)) {
+                throw new IOException(member + " is gone");
+            }
             if (asked.body() instanceof FastTakeoverFrame.Release) {
                 released.add(member + "@" + term.committedNext(S));
                 throw new IOException("RELEASE left unanswered");
@@ -145,9 +151,9 @@ final class TakeoverRig implements AutoCloseable {
         };
     }
 
-    /** Runs the takeover on the caller's thread, with {@code gone} the pods deleted. */
+    /** Runs the takeover on the caller's thread, {@code gone} the pods deleted and silent. */
     boolean takeOver(Predicate<String> gone) {
-        return FastTakeover.start(term, disk, SELF, members(),
+        return FastTakeover.start(term, disk, SELF, members(gone),
                 incarnation -> gone.test(incarnation.podUid()),
                 runs -> {
                     uploads.incrementAndGet();
