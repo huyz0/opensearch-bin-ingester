@@ -171,6 +171,17 @@ under its old name re-registers. A pod whose build
 cannot read kind 18 answers it as an unreadable frame; the writer treats
 that, as any unanswered REGISTER, as not forwarded and sends it again.
 
+⚠️ Stated by M13.30c, which landed PUBLISH and INTEREST before anything sends
+them (`FastPublishFrame`, goldens `fast-publish-v1.bin` and
+`fast-interest-v1.bin` from an encoder independent of the Java codec,
+`golden_publish.py`): PUBLISH (7) is laid out as REPLICA's body is -- u32
+entry count, each entry its journal encoding (§4) behind a u32 length --
+and carries at least one entry; INTEREST (8) is a u32 count and the run keys
+added, then a u32 count and the run keys removed, changing at least one
+stream and naming none twice. Both are DATA frames, outside ADR-0081 §12's
+control list: a PUBLISH carries records, and an INTEREST is sent per
+subscriber change and per leader change.
+
 A catch-up or `/seg` response served from a journal is not a frame but an HTTP
 body; it carries the epoch it was served under in a `Binstore-Fast-Epoch`
 response header, which a forwarding pod checks against its epoch fence.

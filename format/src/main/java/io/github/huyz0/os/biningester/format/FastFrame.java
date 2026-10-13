@@ -93,7 +93,8 @@ public final class FastFrame {
             HeldStatusReport, FastWriteFrame.Commit, FastWriteFrame.Assigned,
             FastWriteFrame.Confirm, FastWriteFrame.Exposed, FastWriteFrame.Replica,
             FastWriteFrame.ReplicaAck, FastTakeoverFrame.Fence, FastTakeoverFrame.Collected,
-            FastTakeoverFrame.Release, Register {
+            FastTakeoverFrame.Release, Register, FastPublishFrame.Publish,
+            FastPublishFrame.Interest {
         int kind();
     }
 
@@ -373,6 +374,8 @@ public final class FastFrame {
             case FastTakeoverFrame.Fence b -> FastTakeoverFrame.encode(out, b);
             case FastTakeoverFrame.Collected b -> FastTakeoverFrame.encode(out, b);
             case FastTakeoverFrame.Release b -> FastTakeoverFrame.encode(out, b);
+            case FastPublishFrame.Publish b -> FastPublishFrame.encode(out, b);
+            case FastPublishFrame.Interest b -> FastPublishFrame.encode(out, b);
             case Register register -> {
                 byte[] registration = register.registration().encode();
                 u32(out, registration.length);
@@ -418,6 +421,8 @@ public final class FastFrame {
                         FastWriteFrame.decode(header.kind(), c);
                 case FastTakeoverFrame.KIND_FENCE, FastTakeoverFrame.KIND_COLLECTED,
                         FastTakeoverFrame.KIND_RELEASE -> FastTakeoverFrame.decode(header.kind(), c);
+                case FastPublishFrame.KIND_PUBLISH, FastPublishFrame.KIND_INTEREST ->
+                        FastPublishFrame.decode(header.kind(), c);
                 case KIND_REGISTER -> {
                     long length = count(c, 1);
                     if (length > MAX_REGISTER_BYTES) {
