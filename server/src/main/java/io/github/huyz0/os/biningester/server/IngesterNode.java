@@ -312,7 +312,8 @@ public final class IngesterNode implements AutoCloseable {
                 FastLeaderFrames.recordCatalog(assembly.heldTerm(),
                         assembly.catalog().walQuorums());
                 FastTakeover.start(assembly.heldTerm(), commitDisk, self, exposing, podGone,
-                        recoveryUpload, assembly.defaultIngest()::recovered, assembly.store(),
+                        recoveryUpload, assembly.defaultIngest()::recovered,
+                        FastPeer.streamsOf(assembly.catalog()), assembly.store(),
                         config.prefix(), clock,
                         run -> Thread.ofVirtual().name("fast-takeover").start(run));
                 FastLeaderFrames.observe(assembly.heldTerm(), commitDisk, self, mono); // M13.36

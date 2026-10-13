@@ -33,6 +33,18 @@ class FastQuorumLossVoidTest {
     }
 
     @Test
+    void aSTREAMWithNoSurvivingEntryIsVoidedToItsBoundAfterQuorumLoss() throws Exception {
+        // ⚠️ M13.33aa: S's exposed entries may all be gone with x, leaving no
+        // entry to name it; resumed at 5, their offsets would be assigned again.
+        try (TakeoverRig rig = new TakeoverRig(1, 5, Map.of())) {
+            assertThat(rig.takeOver(uid -> uid.equals("uid-x"))).isTrue();
+
+            assertThat(rig.term.committedNext(S)).as("[5, 5 + B) voided")
+                    .isEqualTo(5 + FastLeaderTerm.STREAM_BOUND);
+        }
+    }
+
+    @Test
     void aMEMBERGoneWhileTheLeaderAnswersVoidsNothing() throws Exception {
         try (TakeoverRig rig = new TakeoverRig(1, 5, Map.of("uid-x", List.of(entry(1, 5))))) {
             assertThat(rig.takeOver(uid -> uid.equals("uid-m"))).isTrue();

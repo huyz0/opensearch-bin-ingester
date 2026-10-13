@@ -90,6 +90,19 @@ final class FastTakeover {
             TermJoiner.Transport transport, PodGone podGone, RecoveryWriter.SegmentUpload upload,
             Recovered recovered, BinStore store, String prefix, Clock wall,
             java.util.concurrent.Executor launch) {
+        return start(held, disk, self, transport, podGone, upload, recovered,
+                index -> java.util.Set.of(), store, prefix, wall, launch);
+    }
+
+    /**
+     * The same, {@code streamsOf} naming every stream of an index (M13.33aa):
+     * a lost index's streams are each decided, entries or none.
+     */
+    static boolean start(Sequencer held, FastDisk disk, Roster.Incarnation self,
+            TermJoiner.Transport transport, PodGone podGone, RecoveryWriter.SegmentUpload upload,
+            Recovered recovered, java.util.function.Function<java.util.UUID,
+                    java.util.Set<RunKey>> streamsOf, BinStore store, String prefix, Clock wall,
+            java.util.concurrent.Executor launch) {
         Optional<LocalSequencer> term = LocalSequencer.underneath(held);
         Optional<FastLeaderTerm> fast = term.flatMap(LocalSequencer::fastTerm);
         if (fast.isEmpty()) {
@@ -112,7 +125,7 @@ final class FastTakeover {
         // hold every stream for the rest of its lease.
         try {
             launch(claimed.get(), fast.get(), chain, disk.journal().get(), self, transport,
-                    podGone, upload, recovered, store, prefix, wall, launch);
+                    podGone, upload, recovered, streamsOf, store, prefix, wall, launch);
         } catch (RuntimeException | Error failed) {
             giveBack(chain::close);
             throw failed;
@@ -123,7 +136,8 @@ final class FastTakeover {
     private static void launch(FastTermOpening.Opened opened, FastLeaderTerm fastTerm,
             LocalSequencer chain, FastJournal journal, Roster.Incarnation self,
             TermJoiner.Transport transport, PodGone podGone, RecoveryWriter.SegmentUpload upload,
-            Recovered recovered, BinStore store, String prefix, Clock wall,
+            Recovered recovered, java.util.function.Function<java.util.UUID,
+                    java.util.Set<RunKey>> streamsOf, BinStore store, String prefix, Clock wall,
             java.util.concurrent.Executor launch) {
         Optional<FastLeaderTerm> fast = Optional.of(fastTerm);
         CommitDesk desk = fastTerm.commitDesk(journal, self);
@@ -144,6 +158,11 @@ final class FastTakeover {
             @Override
             public long chainNext(RunKey stream) {
                 return chain.committedNext(stream);
+            }
+
+            @Override
+            public java.util.Set<RunKey> streamsOf(java.util.UUID index) {
+                return streamsOf.apply(index);
             }
 
             @Override

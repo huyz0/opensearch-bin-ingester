@@ -86,6 +86,7 @@ class TakeoverRunTest {
         final Deque<TakeoverCollection.Collected> collections = new ArrayDeque<>();
         final List<List<RunKey>> recovered = new ArrayList<>();
         final Map<RunKey, Long> chainNext = new TreeMap<>();
+        final Map<UUID, Set<RunKey>> streams = new TreeMap<>();
         RosterDecisions.Outcome decisions = new RosterDecisions.Recorded(List.of());
         Map<RunKey, Long> released;
         int mayDecideAfter;
@@ -105,6 +106,11 @@ class TakeoverRunTest {
         @Override
         public long chainNext(RunKey stream) {
             return chainNext.getOrDefault(stream, 0L);
+        }
+
+        @Override
+        public Set<RunKey> streamsOf(UUID index) {
+            return streams.getOrDefault(index, Set.of());
         }
 
         @Override
@@ -330,6 +336,53 @@ class TakeoverRunTest {
 
         assertThat(f.calls).as("q 1 and term 7's leader gone: I lost quorum")
                 .contains("decisions {" + S1 + "=10}", "decided " + S1 + "@10");
+    }
+
+    @Test
+    void aLOSTIndexsStreamWithNoEntryIsHeldThenVoidedToC0PlusB() throws Exception {
+        // ⚠️ M13.33aa (ADR-0081 §5 step 5): S2's exposed entries may all be
+        // gone, leaving no entry to name it; resumed at c0 they would be reused.
+        Fake f = new Fake();
+        f.streams.put(I, Set.of(S1, S2));
+        f.chainNext.put(S2, 3L);
+        f.collections.add(collected(Map.of("uid-m", List.of(at(7, S1, 0, 1))),
+                Set.of("uid-l"), Set.of("uid-n")));
+        f.collections.add(collected(Map.of("uid-m", List.of(at(7, S1, 0, 1))),
+                Set.of("uid-l"), Set.of()));
+
+        f.run().run(List.of(term7(1)), 6, List.of());
+
+        assertThat(f.calls).as("held while n is unanswered, then voided with S1")
+                .startsWith("collect", "undecided [" + S1 + ", " + S2 + "]")
+                .contains("decisions {" + S1 + "=10, " + S2 + "=13}", "decided " + S2 + "@13");
+        assertThat(f.recovered).containsExactly(List.of(S1, S2));
+    }
+
+    @Test
+    void anINDEXRecordedOnlyInAnOlderUnclosedTermHasItsStreamsDecided() throws Exception {
+        // ⚠️ its review round 1, T2: term 8 recorded nothing of I; term 7 did.
+        Fake f = new Fake();
+        f.streams.put(I, Set.of(S2));
+        f.collections.add(collected(Map.of(), Set.of("uid-l"), Set.of()));
+        Roster eight = new Roster(8, 7, M, List.of(new Roster.Member(M, Roster.State.ROSTERED)),
+                List.of(), List.of(), 0, 0, false);
+
+        f.run().run(List.of(eight, term7(1)), 6, List.of());
+
+        assertThat(f.calls).contains("decisions {" + S2 + "=10}");
+    }
+
+    @Test
+    void anINDEXThatDidNotLoseQuorumNamesOnlyItsStreamsWithEntries() throws Exception {
+        Fake f = new Fake();
+        f.streams.put(I, Set.of(S1, S2));
+        f.collections.add(collected(Map.of("uid-m", List.of(at(7, S1, 0, 1))),
+                Set.of("uid-n"), Set.of()));
+
+        f.run().run(List.of(term7(1)), 6, List.of());
+
+        assertThat(f.calls).as("l answers: nothing lost, S2 has nothing to commit")
+                .contains("undecided [" + S1 + "]", "decisions {" + S1 + "=1}");
     }
 
     @Test

@@ -124,6 +124,33 @@ final class FastPeer implements AutoCloseable {
     }
 
     /**
+     * Every stream of a fast index, by its stream id: its partitions, from the
+     * catalog's registration (M13.33aa); none for an index it does not hold.
+     */
+    static java.util.function.Function<java.util.UUID,
+            java.util.Set<io.github.huyz0.os.biningester.format.RunKey>> streamsOf(
+                    io.github.huyz0.os.biningester.ingest.IndexCatalog catalog) {
+        return index -> {
+            java.util.Set<io.github.huyz0.os.biningester.format.RunKey> streams =
+                    new java.util.TreeSet<>();
+            for (var registration : catalog.fastRegistrations()) {
+                try {
+                    if (io.github.huyz0.os.biningester.format.RunKey.ofIndexUuid(
+                            registration.indexUuid(), 0).indexId().equals(index)) {
+                        for (int p = 0; p < registration.numShards(); p++) {
+                            streams.add(new io.github.huyz0.os.biningester.format.RunKey(
+                                    index, p));
+                        }
+                    }
+                } catch (IllegalArgumentException undecodable) {
+                    // no write of it reaches a stream (IndexCatalog.walQuorums)
+                }
+            }
+            return streams;
+        };
+    }
+
+    /**
      * The epoch of the term {@code held} serves, or 0 where it serves none
      * (M13.82): what the fast route's fence is raised to before it answers.
      */

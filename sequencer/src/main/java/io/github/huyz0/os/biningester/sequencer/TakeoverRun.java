@@ -38,9 +38,13 @@ import java.util.function.Predicate;
  * decisions just written, so {@link Steps#rosterWritten} comes before any
  * stream resumes.
  *
- * <p>⚠️ A STREAM WITH ONLY A TERM-RECORD VALUE IS NOT YET DECIDED: M13.27l
- * fills the term record and M13.33n holds those indexes' streams; until then
- * the streams a takeover names are those with entries.
+ * <p>⚠️ EVERY STREAM OF AN INDEX THAT LOST QUORUM IS DECIDED, entries or
+ * none (ADR-0081 §5 step 5; M13.33aa): an exposed entry whose every copy is
+ * gone leaves no entry to name its stream, and resumed at {@code c0} its
+ * offset would be assigned again -- so the index's streams, from
+ * {@link Steps#streamsOf}, are held and decided, each voided to
+ * {@code c0 + B} where nothing survives. An index that did not lose quorum
+ * names its streams by their entries: one with none has nothing to commit.
  */
 public final class TakeoverRun {
 
@@ -64,6 +68,9 @@ public final class TakeoverRun {
 
         /** The chain's next offset of {@code stream}: its {@code c0}. */
         long chainNext(RunKey stream);
+
+        /** Every stream of {@code index} this pod knows of: its catalog's partitions. */
+        java.util.Set<RunKey> streamsOf(java.util.UUID index);
 
         /** {@link RecoveryWriter#write}: one chain entry. */
         Recovery recover(List<StreamDecision.Decided> batch) throws IOException;
@@ -176,6 +183,12 @@ public final class TakeoverRun {
             Map<RunKey, List<FastJournalRecord.Entry>> live = new TreeMap<>();
             answered.values().forEach(held -> add(live, held));
             add(live, mine);
+            // ⚠️ M13.33aa: a lost index's every stream, entries or none.
+            for (java.util.UUID index : recorded(stillOpen)) {
+                if (QuorumLoss.lost(stillOpen, index, gone)) {
+                    steps.streamsOf(index).forEach(s -> live.putIfAbsent(s, new ArrayList<>()));
+                }
+            }
             live.keySet().removeAll(resumed.keySet());
             hold.undecided(live.keySet());
             while (!mayDecide.getAsBoolean()) {
@@ -261,6 +274,15 @@ public final class TakeoverRun {
             }
         }
         return bytes;
+    }
+
+    /** Every index a term of {@code stillOpen} recorded a {@code wal_quorum} for. */
+    private static Set<java.util.UUID> recorded(List<Roster> stillOpen) {
+        Set<java.util.UUID> indices = new HashSet<>();
+        for (Roster term : stillOpen) {
+            term.termRecord().forEach(r -> indices.addAll(r.walQuorum().keySet()));
+        }
+        return indices;
     }
 
     private static void add(Map<RunKey, List<FastJournalRecord.Entry>> live,

@@ -163,6 +163,7 @@ final class TakeoverRig implements AutoCloseable {
                 }, (recovery, epoch) -> recovery.segments().forEach(s -> s.runs().forEach(
                         run -> recovered.add(s.segmentKey() + ":" + run.firstOffset() + "+"
                                 + run.recordCount() + "@" + epoch))),
+                index -> index.equals(INDEX) ? java.util.Set.of(S) : java.util.Set.of(),
                 store, "p", WALL, Runnable::run);
     }
 
