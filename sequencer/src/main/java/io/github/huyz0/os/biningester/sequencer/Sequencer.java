@@ -94,7 +94,12 @@ import java.util.List;
  * <li><b>The pointed delta does not carry the triple.</b> Reached two ways: the
  * pod's single pointer has moved PAST the replay (an older retry — answering
  * it would mean the unbounded walk the pointer exists to avoid), or the triple
- * is resent under a DIFFERENT {@code segmentKey}. Both are permanent for that
+ * is resent under a DIFFERENT {@code segmentKey}. ⚠️ Since M13.34b the first
+ * needs a retry older than {@code IdempotencyWindow.RETAINED_FLUSHES} of its
+ * incarnation's flushes, in this process: within them each segment keeps the
+ * delta of every run, so a segment is NOT found in one delta only -- a
+ * switch's paused run lands in a later one (ADR-0081 §8) -- and a retry is
+ * answered from all of them, or refused while a run is uncommitted. Both are permanent for that
  * {@code flushSeq}, because answering with offsets belonging to other records
  * is worse than failing. Pinned by
  * {@code DedupAcrossTakeoverTest.aReplayFromBELOWThePointerIsREFUSED_NotAppliedTwice},

@@ -119,7 +119,12 @@ class SequencerDedupTest {
         try {
             CommitRequest zero = new CommitRequest("poda", "i1", 0, "seg/0", counts(3));
             sequencer.commitAll(List.of(zero));
-            sequencer.commitAll(List.of(new CommitRequest("poda", "i1", 1, "seg/1", counts(4))));
+            // ⚠️ PAST THE RETAINED FLUSHES (M13.34b): within them, a segment's
+            // own deltas answer it; beyond them only the one pointer is left.
+            for (int seq = 1; seq <= IdempotencyWindow.RETAINED_FLUSHES; seq++) {
+                sequencer.commitAll(List.of(new CommitRequest("poda", "i1", seq, "seg/" + seq,
+                        counts(4))));
+            }
 
             // flushSeq 0 <= lastApplied 1, so this IS a replay -- but the
             // pointer names the delta that applied 1, which carries seg/1 only.
@@ -343,7 +348,11 @@ class SequencerDedupTest {
         try {
             CommitRequest zero = new CommitRequest("podx", "i1", 0, "seg/0", counts(3));
             sequencer.commitAll(List.of(zero));
-            sequencer.commitAll(List.of(new CommitRequest("podx", "i1", 1, "seg/1", counts(4))));
+            // ⚠️ past the retained flushes (M13.34b), as above.
+            for (int seq = 1; seq <= IdempotencyWindow.RETAINED_FLUSHES; seq++) {
+                sequencer.commitAll(List.of(new CommitRequest("podx", "i1", seq, "seg/" + seq,
+                        counts(4))));
+            }
             // The pointer now names the delta that applied 1, so replaying 0 is
             // a replay the chain cannot answer.
             CommitRequest fresh = new CommitRequest("podb", "i9", 0, "seg/b", counts(5));

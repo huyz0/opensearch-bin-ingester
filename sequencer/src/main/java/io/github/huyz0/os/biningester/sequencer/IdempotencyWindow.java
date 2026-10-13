@@ -65,8 +65,42 @@ import java.util.Optional;
  * {@code Checkpoint.pods} plus the uncheckpointed tail, and the reconciliation
  * now writes the ambiguous flush into that map as well -- so the fact survives
  * a later checkpoint bounding past its delta.
+ *
+ * <p>⚠️ PER SEGMENT, ACROSS DELTAS (M13.34b; ADR-0081 §8): a switch's
+ * paused run is committed in a later delta than the rest of its segment, so
+ * each recent segment's runs are kept with the delta carrying each -- the
+ * last {@link #RETAINED_FLUSHES} flushes of an incarnation -- and a retry is
+ * answered from every delta carrying one of its runs, and only once every run
+ * it asks for is committed: else {@link IncompleteReplayException}, never the
+ * first delta's runs alone. A flush older than that falls back to the one
+ * pointer above. ⚠️ PROCESS-LOCAL: seeding these from the chain, so a retry
+ * crossing a takeover finds a split segment's runs, is M13.34h's.
  */
 final class IdempotencyWindow {
+
+    /** How many of an incarnation's latest flushes keep their segments' runs (M13.34b). */
+    static final int RETAINED_FLUSHES = 64;
+
+    /** A delta: the chain it lives in and its slot. */
+    record At(long epoch, long sequence) {
+    }
+
+    /** A retry asking for a run its segment has not committed yet (M13.34b). */
+    static final class IncompleteReplayException extends IOException {
+        private final java.util.Set<io.github.huyz0.os.biningester.format.RunKey> missing;
+
+        IncompleteReplayException(CommitRequest request,
+                java.util.Set<io.github.huyz0.os.biningester.format.RunKey> missing) {
+            super("pod " + request.podId() + " replayed flushSeq " + request.flushSeq()
+                    + " of segment " + request.segmentKey() + ", whose runs " + missing
+                    + " are not committed yet");
+            this.missing = java.util.Set.copyOf(missing);
+        }
+
+        java.util.Set<io.github.huyz0.os.biningester.format.RunKey> missing() {
+            return missing;
+        }
+    }
 
     /**
      * The highest {@code flushSeq} applied for one incarnation, and WHERE.
@@ -79,6 +113,9 @@ final class IdempotencyWindow {
     }
 
     private final Map<String, Applied> byIncarnation = new HashMap<>();
+    /** Per incarnation, per recent flushSeq, per segment key: each run's delta (M13.34b). */
+    private final Map<String, java.util.TreeMap<Long, Map<String,
+            Map<io.github.huyz0.os.biningester.format.RunKey, At>>>> runsByFlush = new HashMap<>();
 
     private final BinStore store;
     private final String prefix;
@@ -182,11 +219,52 @@ final class IdempotencyWindow {
         return new Split(fresh, replays);
     }
 
-    /** Records that {@code request} is now durable at {@code (epoch, sequence)}. */
+    /** Records that {@code request} -- every run of it -- is now durable at {@code (epoch, sequence)}. */
     void applied(CommitRequest request, long epoch, long sequence) {
         Objects.requireNonNull(request, "request");
-        applied(new SegmentCommit.Attribution(
-                request.podId(), request.incarnationId(), request.flushSeq()), epoch, sequence);
+        SegmentCommit.Attribution attribution = new SegmentCommit.Attribution(
+                request.podId(), request.incarnationId(), request.flushSeq());
+        applied(attribution, epoch, sequence);
+        runsCommitted(attribution, request.segmentKey(), request.recordCounts().keySet(),
+                epoch, sequence);
+    }
+
+    /**
+     * Records that {@code segment}'s runs -- possibly only some of its flush's
+     * -- are durable in the delta at {@code (epoch, sequence)} (M13.34b).
+     */
+    void applied(SegmentCommit segment, long epoch, long sequence) {
+        Objects.requireNonNull(segment, "segment");
+        if (segment.attribution() == null) {
+            return;
+        }
+        applied(segment.attribution(), epoch, sequence);
+        runsCommitted(segment.attribution(), segment.segmentKey(),
+                segment.runs().stream().map(io.github.huyz0.os.biningester.format.RunCommit::key)
+                        .toList(), epoch, sequence);
+    }
+
+    private void runsCommitted(SegmentCommit.Attribution a, String segmentKey,
+            java.util.Collection<io.github.huyz0.os.biningester.format.RunKey> runs, long epoch,
+            long sequence) {
+        var flushes = runsByFlush.computeIfAbsent(key(a.podId(), a.incarnationId()),
+                k -> new java.util.TreeMap<>());
+        var bySegment = flushes.computeIfAbsent(a.flushSeq(), k -> new HashMap<>())
+                .computeIfAbsent(segmentKey, k -> new HashMap<>());
+        runs.forEach(run -> bySegment.putIfAbsent(run, new At(epoch, sequence)));
+        // ⚠️ BOUNDED: only the incarnation's latest flushes keep their runs.
+        flushes.headMap(flushes.lastKey() - RETAINED_FLUSHES + 1).clear();
+    }
+
+    /** Each run of {@code request}'s segment committed so far, and its delta; empty if untracked. */
+    Optional<Map<io.github.huyz0.os.biningester.format.RunKey, At>> runsOf(
+            CommitRequest request) {
+        var flushes = runsByFlush.get(key(request.podId(), request.incarnationId()));
+        if (flushes == null || !flushes.containsKey(request.flushSeq())) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(flushes.get(request.flushSeq()).get(request.segmentKey()))
+                .map(Map::copyOf);
     }
 
     /**
@@ -258,6 +336,12 @@ final class IdempotencyWindow {
         Map<String, CommitDelta> read = new HashMap<>();
         List<SegmentCommit> answered = new ArrayList<>(replays.size());
         for (CommitRequest request : replays) {
+            Optional<Map<io.github.huyz0.os.biningester.format.RunKey, At>> tracked =
+                    runsOf(request);
+            if (tracked.isPresent()) {
+                answered.add(acrossDeltas(request, tracked.get(), read));
+                continue;
+            }
             Applied at = replayOf(request).orElseThrow();
             // ⚠️ KEYED ON THE PAIR, not the sequence alone: a successor
             // inherits pointers into the PREDECESSOR's chain, where the same
@@ -299,11 +383,62 @@ final class IdempotencyWindow {
         return answered;
     }
 
+    /**
+     * {@code request}'s segment, its runs gathered from every delta carrying one
+     * (M13.34b) -- each delta read once -- or refused while a run it asks for is
+     * not committed.
+     */
+    private SegmentCommit acrossDeltas(CommitRequest request,
+            Map<io.github.huyz0.os.biningester.format.RunKey, At> tracked,
+            Map<String, CommitDelta> read) throws IOException {
+        java.util.Set<io.github.huyz0.os.biningester.format.RunKey> missing =
+                new java.util.TreeSet<>(request.recordCounts().keySet());
+        missing.removeAll(tracked.keySet());
+        if (!missing.isEmpty()) {
+            throw new IncompleteReplayException(request, missing);
+        }
+        List<io.github.huyz0.os.biningester.format.RunCommit> runs = new ArrayList<>();
+        SegmentCommit.Attribution attribution = null;
+        for (var run : new java.util.TreeSet<>(request.recordCounts().keySet())) {
+            At at = tracked.get(run);
+            String slot = at.epoch() + "/" + at.sequence();
+            CommitDelta pointed = read.get(slot);
+            if (pointed == null) {
+                pointed = DeltaReader.at(store, prefix, at.epoch(), at.sequence())
+                        .orElseThrow(() -> new IOException("a replay by pod " + request.podId()
+                                + " points at sequence " + at.sequence() + " of epoch "
+                                + at.epoch() + ", which holds no delta"));
+                read.put(slot, pointed);
+            }
+            io.github.huyz0.os.biningester.format.RunCommit found = null;
+            for (SegmentCommit segment : pointed.segments()) {
+                if (answers(segment, request)) {
+                    attribution = segment.attribution();
+                    for (var committed : segment.runs()) {
+                        if (committed.key().equals(run)) {
+                            found = committed;
+                        }
+                    }
+                }
+            }
+            if (found == null) {
+                throw new IOException("the delta at sequence " + at.sequence()
+                        + " does not carry run " + run + " of pod " + request.podId()
+                        + "'s flushSeq " + request.flushSeq());
+            }
+            runs.add(found);
+        }
+        return new SegmentCommit(request.segmentKey(), runs, attribution);
+    }
+
     /** The sequence of the delta answering an all-replay batch. */
     long sequenceOf(List<CommitRequest> replays) {
         long sequence = -1;
         for (CommitRequest request : replays) {
             sequence = Math.max(sequence, replayOf(request).orElseThrow().sequence());
+            for (At at : runsOf(request).orElse(Map.of()).values()) {
+                sequence = Math.max(sequence, at.sequence());
+            }
         }
         return sequence;
     }

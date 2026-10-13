@@ -520,10 +520,7 @@ public final class LocalSequencer implements Sequencer {
         // offsets here -- a fast upload checks them before it commits.
         log.fold(landed.get());
         for (SegmentCommit segment : landed.get().segments()) {
-            SegmentCommit.Attribution attribution = segment.attribution();
-            if (attribution != null) {
-                window.applied(attribution, pending.epoch(), landed.get().sequence());
-            }
+            window.applied(segment, pending.epoch(), landed.get().sequence());
         }
         // ⚠️ AND THE CHECKPOINT, WHICH IS WHAT A SUCCESSOR INHERITS (M5.25).
         // Seeding only the in-memory window left this pod answering the retry
