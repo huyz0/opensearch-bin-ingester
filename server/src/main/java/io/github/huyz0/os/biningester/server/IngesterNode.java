@@ -390,7 +390,9 @@ public final class IngesterNode implements AutoCloseable {
                                                             commitDisk, self, config.prefix(),
                                                             session, key, from, clock.millis()),
                                             () -> FastLeaderFrames.mayExpose(
-                                                    assembly.heldTerm())))),
+                                                    assembly.heldTerm()),
+                                            CatchUpForward.of(config, assembly, commitDisk,
+                                                    crossAz, clientTls)))),
                     transport, clock,
                     journal, crossAz, fastDisk);
             if (watch != null) {

@@ -147,6 +147,56 @@ public final class HttpFastTransport implements TermJoiner.Transport {
         }
     }
 
+    /**
+     * A catch-up this pod cannot serve, forwarded to the chain's leader at its
+     * peer path (ADR-0081 §3, §6; M13.32i): each frame of its answer relayed
+     * to {@code sink}, counted as a consumer's read against the leader's zone.
+     *
+     * <p>⚠️ THE ANSWER's FAST EPOCH CHECKED FIRST, before any frame is relayed:
+     * a header {@code admitted} refuses -- a deposed leader's journal, below this
+     * pod's fence -- is a failure, and so is any answer but {@code 200}, and so
+     * is a {@code 200} with no header (M13.32h review R3): a serving leader
+     * always states its term, and a pod serving none answers {@code 503}, so a
+     * headerless {@code 200} is only a pod that began serving mid-request.
+     */
+    public void forwardCatchUp(String endpoint,
+            io.github.huyz0.os.biningester.format.CatchUpRequestFrame request,
+            CatchUpService.FrameSink sink, java.util.function.LongPredicate admitted)
+            throws IOException {
+        Objects.requireNonNull(endpoint, "endpoint");
+        io.github.huyz0.os.biningester.format.RunKey key = request.streams().getFirst().key();
+        String path = CatchUpService.PEER_PATH
+                .replace("{indexUuid}", key.indexId().toString())
+                .replace("{partition}", Integer.toString(key.partitionId()));
+        try (HttpClientResponse response = clientFor(endpoint).post(path)
+                .submit(request.encode())) {
+            if (response.status().code() != Status.OK_200.code()) {
+                throw new IOException("forwarded catch-up to " + endpoint + " answered "
+                        + response.status().code() + ": " + message(response));
+            }
+            java.util.Optional<String> epoch = response.headers().first(
+                    io.helidon.http.HeaderNames.create(FastEntryService.EPOCH_HEADER));
+            if (epoch.isEmpty()) {
+                throw new IOException("forwarded catch-up to " + endpoint
+                        + " answered stating no term");
+            }
+            if (!admitted.test(Long.parseLong(epoch.get()))) {
+                throw new IOException("forwarded catch-up to " + endpoint + " answered from "
+                        + "fast term " + epoch.get() + ", below this pod's fence");
+            }
+            var in = response.inputStream();
+            byte[] frame;
+            while ((frame = io.github.huyz0.os.biningester.client.StreamFraming.readFrame(in))
+                    != null) {
+                crossAz.sentTo(CrossAzBytes.Transport.CONSUMER_POLL, endpoint,
+                        frame.length + 4L);
+                sink.write(frame);
+            }
+        } catch (RuntimeException unreachable) {
+            throw new IOException("forwarded catch-up to " + endpoint + " failed", unreachable);
+        }
+    }
+
     private static String message(HttpClientResponse response) {
         try (var in = new BoundedStream(response.inputStream(), MAX_MESSAGE_BYTES)) {
             String text = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);

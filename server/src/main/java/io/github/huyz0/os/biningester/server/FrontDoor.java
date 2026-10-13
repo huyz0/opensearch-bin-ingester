@@ -144,12 +144,14 @@ public final class FrontDoor implements AutoCloseable {
      */
     public record FastRoutes(io.github.huyz0.os.biningester.http.FastEntryService.Lookup entries,
             io.github.huyz0.os.biningester.http.SegmentFetchService.FastCopies reads,
-            FastCatchUp.Journal catchUp, java.util.function.BooleanSupplier exposable) {
+            FastCatchUp.Journal catchUp, java.util.function.BooleanSupplier exposable,
+            CatchUpForward.Forward forward) {
         public FastRoutes {
             Objects.requireNonNull(entries, "entries");
             Objects.requireNonNull(reads, "reads");
             Objects.requireNonNull(catchUp, "catchUp");
             Objects.requireNonNull(exposable, "exposable");
+            Objects.requireNonNull(forward, "forward");
         }
     }
 
@@ -263,14 +265,22 @@ public final class FrontDoor implements AutoCloseable {
      * epoch header.
      */
     private static CatchUpService catchUp(Assembly assembly,
-            java.util.Optional<FastRoutes> fastEntries) {
+            java.util.Optional<FastRoutes> fastEntries, boolean mayForward) {
         if (fastEntries.isEmpty()) {
             return new CatchUpService(assembly::respondCatchUp);
         }
         FastRoutes fast = fastEntries.get();
-        return new CatchUpService((CatchUpService.StreamingResponder) (request, sink) ->
-                FastCatchUp.respond(request, sink, assembly::respondCatchUp, fast.catchUp(),
-                        fast.exposable()), () -> FastPeer.ownTerm(assembly.heldTerm()));
+        return new CatchUpService((CatchUpService.StreamingResponder) (request, sink) -> {
+            // ⚠️ M13.32i: a pod serving no term forwards it to the leader
+            // -- when there is another; never from the peer path, where a stale
+            // view on each side would bounce one request between two pods.
+            if (mayForward && FastPeer.ownTerm(assembly.heldTerm()) == 0
+                    && fast.forward().forwarded(request, sink)) {
+                return;
+            }
+            FastCatchUp.respond(request, sink, assembly::respondCatchUp, fast.catchUp(),
+                    fast.exposable());
+        }, () -> FastPeer.ownTerm(assembly.heldTerm()));
     }
 
     private static WebServer build(ServerConfig config, Assembly assembly, Clock clock,
@@ -302,7 +312,7 @@ public final class FrontDoor implements AutoCloseable {
         fastFrames.ifPresent(router -> peerRoutes.register(
                 new io.github.huyz0.os.biningester.http.FastFrameService(router, binding)));
         // ⚠️ M13.32h: the catch-up a follower forwards, its fast epoch stated.
-        peerRoutes.register(catchUp(assembly, fastEntries).onPeerPath());
+        peerRoutes.register(catchUp(assembly, fastEntries, false).onPeerPath());
         // ⚠️ M13.30o: an exposed fast entry by its key, for a forwarded /seg.
         fastEntries.ifPresent(fast -> peerRoutes.register(
                 new io.github.huyz0.os.biningester.http.FastEntryService(fast.entries(),
@@ -327,7 +337,7 @@ public final class FrontDoor implements AutoCloseable {
                 .register(new SubscriptionService(assembly.hub(), assembly.catalog(),
                         assembly.watermarks(), clock, assembly.floors(), gate, crossAz))
                 // ⚠️ M13.32c: and past the chain, from the leader's journal.
-                .register(catchUp(assembly, fastEntries))
+                .register(catchUp(assembly, fastEntries, true))
                 // ⚠️ M10.1, ADR-0073: the payload half of `proxy`. Read through
                 // the SAME proxy and node-wide cache the subscription path and
                 // the prefetcher fill -- so on the AZ's ring owner a fetch after
