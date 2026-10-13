@@ -226,20 +226,18 @@ public final class LocalSequencer implements Sequencer {
         return log.epoch();
     }
 
-    /**
-     * The chain this term has written, in memory (M8.3, M7.25).
-     *
-     * <p>⚠️ **THE ONLY PRODUCER OF THE {@code List<CommitDelta>} A RETENTION
-     * PASS TAKES.** Reaching for {@code recover()} instead would cost one LIST
-     * per 1,000 deltas plus one GET per delta, on every pass, for ever —
-     * ADR-0052 § 3 is why this exists before any GC loop does.
-     */
+    /** This term's chain in memory (M8.3, M7.25): ⚠️ what retention reads (ADR-0052 § 3). */
     public ChainMemory chain() {
         return log.chain();
     }
 
-    /** A stream's committed next offset in this term's chain (M13.27j). */
+    /** A stream's committed next offset, ⚠️ an ambiguous append reconciled first (M13.34j). */
     public synchronized long committedNext(io.github.huyz0.os.biningester.format.RunKey key) {
+        try {
+            reconcileAmbiguousAppend();
+        } catch (IOException unread) {
+            throw new java.io.UncheckedIOException(unread);
+        }
         return log.nextOffset(key);
     }
 

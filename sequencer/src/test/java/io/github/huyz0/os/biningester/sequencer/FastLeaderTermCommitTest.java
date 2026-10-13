@@ -4,6 +4,7 @@ package io.github.huyz0.os.biningester.sequencer;
 import static io.github.huyz0.os.biningester.sequencer.FastWriteLeaderTest.S1;
 import static io.github.huyz0.os.biningester.sequencer.FastWriteLeaderTest.commit;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.huyz0.os.biningester.binstore.backend.MemoryBinStore;
 import io.github.huyz0.os.biningester.binstore.backend.MemoryJournalFile;
@@ -71,6 +72,32 @@ class FastLeaderTermCommitTest {
         assertThat(answer).isEqualTo(new FastWriteFrame.Assigned(3,
                 List.of(new FastWriteFrame.AssignedRun(S1, 100, 1, false))));
         assertThat(l.journal().held()).hasSize(1);
+    }
+
+    @Test
+    void aSTREAMWhoseChainReadFailedOpensOnTheRetry() throws Exception {
+        // ⚠️ M13.34j review round 1, R1/T1: committedNext reconciles and may
+        // throw; a stream marked open before it opened refused every retry.
+        FastLeaderTerm term = term3(new MemoryBinStore());
+        join(term);
+        FastWriteLeaderTest.Leader l = FastWriteLeaderTest.leader(1 << 20, 1_000);
+        RunKey unopened = new RunKey(FastWriteLeaderTest.Q1, 1);
+        int[] reads = {0};
+        CommitDesk desk = new CommitDesk(l.leader(), stream -> {
+            if (reads[0]++ == 0) {
+                throw new java.io.UncheckedIOException(new java.io.IOException("slot unread"));
+            }
+            return 5L;
+        }, Duration.ofSeconds(10));
+
+        assertThatThrownBy(() -> term.answerCommit(header(3, POD),
+                commit(POD.podId(), 1, unopened), desk)).hasRootCauseMessage("slot unread");
+        FastFrame.Body answer = term.answerCommit(header(3, POD),
+                commit(POD.podId(), 1, unopened), desk);
+
+        assertThat(answer).as("opened at the chain's offset, read on the retry")
+                .isEqualTo(new FastWriteFrame.Assigned(3,
+                        List.of(new FastWriteFrame.AssignedRun(unopened, 5, 1, false))));
     }
 
     @Test

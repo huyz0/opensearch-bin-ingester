@@ -207,8 +207,11 @@ public final class CommitDesk {
 
     private synchronized void open(FastWriteFrame.Commit commit) {
         for (FastWriteFrame.CommitRun run : commit.runs()) {
-            if (opened.add(run.stream())) {
+            // ⚠️ MARKED OPEN ONLY ONCE OPENED (M13.34j review round 1, R1): the
+            // chain's read can fail, and a stream marked first would never open.
+            if (!opened.contains(run.stream())) {
                 write.open(run.stream(), committedNext.applyAsLong(run.stream()));
+                opened.add(run.stream());
             }
         }
     }
