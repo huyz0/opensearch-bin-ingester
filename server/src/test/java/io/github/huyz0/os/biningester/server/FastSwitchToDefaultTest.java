@@ -90,8 +90,21 @@ class FastSwitchToDefaultTest {
     }
 
     private AppendResult append(String id) throws Exception {
-        return node.assembly().ingest().append(PRODUCER, "orders", 0, List.of(new SegmentRecord(
-                id, OpType.INDEX, OptionalLong.empty(), new byte[] {1}))::forEach);
+        return append(0, id);
+    }
+
+    private AppendResult append(int partition, String id) throws Exception {
+        return node.assembly().ingest().append(PRODUCER, "orders", partition,
+                List.of(new SegmentRecord(id, OpType.INDEX, OptionalLong.empty(),
+                        new byte[] {1}))::forEach);
+    }
+
+    /** The delta that committed {@code stream}'s run at {@code first}, and its segment. */
+    private io.github.huyz0.os.biningester.format.CommitDelta deltaOf(RunKey stream, long first) {
+        return chain().chain().snapshot().deltas().stream()
+                .filter(d -> d.segments().stream().anyMatch(sg -> sg.runs().stream()
+                        .anyMatch(run -> run.key().equals(stream) && run.firstOffset() == first)))
+                .findFirst().orElseThrow();
     }
 
     @Test
@@ -119,5 +132,54 @@ class FastSwitchToDefaultTest {
         assertThat(defaulted.firstOffset()).as("after the fast tail, never over it")
                 .isEqualTo(tail.lastOffset() + 1);
         assertThat(chain().committedNext(S)).isEqualTo(defaulted.lastOffset() + 1);
+    }
+
+    @Test
+    void aRUNTheSwitchHoldsWaitsAloneTheRequestsOtherStreamCommittedFirst()
+            throws Exception {
+        // ⚠️ M13.34s (ADR-0081 §8: "No other stream's acks wait"): partition 0
+        // holds a fast tail, partition 1 none; written in one flush, 1 is
+        // committed in an earlier delta than 0's, of the same segment.
+        node = startOnAFreePort();
+        RunKey other = RunKey.ofIndexUuid(UUID_B64, 1);
+        node.assembly().catalog().register(new IndexRegistration(UUID_B64, "orders",
+                List.of(), 2, 2, 1, 1).withFastSettings(60_000, true, 1));
+        await().atMost(Duration.ofSeconds(30)).until(() ->
+                chain().fastTerm().map(t -> t.fastHere(S)).orElse(false));
+        AppendResult first = append("f1");
+        await().atMost(Duration.ofSeconds(30)).until(() ->
+                chain().committedNext(S) > first.lastOffset());
+        AppendResult tail = append("f2");
+        node.assembly().catalog().register(new IndexRegistration(UUID_B64, "orders",
+                List.of(), 2, 2, 1, 1));
+        await().atMost(Duration.ofSeconds(30)).until(() ->
+                !chain().fastTerm().orElseThrow().fastHere(S));
+
+        var held = java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+            try {
+                return append(0, "d0");
+            } catch (Exception failed) {
+                throw new java.util.concurrent.CompletionException(failed);
+            }
+        });
+        var free = java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+            try {
+                return append(1, "d1");
+            } catch (Exception failed) {
+                throw new java.util.concurrent.CompletionException(failed);
+            }
+        });
+        AppendResult zero = held.get(30, java.util.concurrent.TimeUnit.SECONDS);
+        AppendResult one = free.get(30, java.util.concurrent.TimeUnit.SECONDS);
+
+        assertThat(zero.firstOffset()).isEqualTo(tail.lastOffset() + 1);
+        var heldDelta = deltaOf(S, zero.firstOffset());
+        var freeDelta = deltaOf(other, one.firstOffset());
+        assertThat(freeDelta.segments().get(0).segmentKey()).as("the premise: one flush")
+                .isEqualTo(heldDelta.segments().stream().filter(sg -> sg.runs().stream()
+                        .anyMatch(run -> run.key().equals(S))).findFirst().orElseThrow()
+                        .segmentKey());
+        assertThat(freeDelta.sequence()).as("the free stream committed first")
+                .isLessThan(heldDelta.sequence());
     }
 }

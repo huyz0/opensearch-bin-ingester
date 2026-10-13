@@ -123,7 +123,7 @@ public final class FastLeaderTerm {
     /** A default-path run of {@code stream} with a fast tail pauses it: §8's switch (M13.34r). */
     public void switchPause(RunKey stream) {
         CommitDesk d = desk;
-        if (d != null) {
+        if (d != null && !gate.fast(stream)) { // ⚠️ never a stream still fast (M13.34s)
             d.leader().pauseForSwitch(stream).ifPresent(frontier -> {
                 switches.paused(stream, frontier, nextDecision());
                 d.askUpload();

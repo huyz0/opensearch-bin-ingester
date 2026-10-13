@@ -32,14 +32,18 @@ final class RedirectingCommit {
 
     /**
      * Whether {@code request} must be answered here rather than batched
-     * (M13.34k): a run of a stream fast at the leader, or a retry the window
-     * answers per delta.
+     * (M13.34k): a run of a stream fast at the leader, a run a switch holds
+     * (M13.34s: its stream paused here first), or a retry the window answers
+     * per delta.
      */
     static boolean alone(LocalSequencer sequencer, CommitRequest request) {
         Optional<FastLeaderTerm> fast = sequencer.fastTerm();
-        if (fast.isPresent() && request.recordCounts().keySet().stream()
-                .anyMatch(fast.get()::fastHere)) {
-            return true;
+        if (fast.isPresent()) {
+            request.recordCounts().keySet().forEach(fast.get()::switchPause);
+            if (request.recordCounts().keySet().stream().anyMatch(
+                    s -> fast.get().fastHere(s) || fast.get().holdsDefault(s))) {
+                return true;
+            }
         }
         synchronized (sequencer) {
             return sequencer.window.runsOf(request).isPresent();
@@ -85,6 +89,25 @@ final class RedirectingCommit {
                     sequencer.applyFresh(List.of(now));
                 }
                 return new CommitAnswer(sequencer.window.answerByDelta(committing), redirected);
+            }
+        }
+        // ⚠️ NO OTHER STREAM's ACKS WAIT (ADR-0081 §8; M13.34s): a run a switch
+        // holds waits alone -- the request's others committed now, the held
+        // ones after the switch, in a later delta of the same segment, answered
+        // with both by the window's per-run answer below.
+        if (fast.isPresent()) {
+            kept.keySet().forEach(fast.get()::switchPause);
+            Map<RunKey, Integer> held = new TreeMap<>(kept);
+            held.keySet().removeIf(s -> !fast.get().holdsDefault(s));
+            if (!held.isEmpty() && held.size() < kept.size()) {
+                Map<RunKey, Integer> now = new TreeMap<>(kept);
+                now.keySet().removeAll(held.keySet());
+                sequencer.commitAll(List.of(new CommitRequest(request.podId(),
+                        request.incarnationId(), request.flushSeq(), request.segmentKey(), now)));
+                DefaultHold.await(fast.get(), List.of(new CommitRequest(request.podId(),
+                        request.incarnationId(), request.flushSeq(), request.segmentKey(),
+                        held)));
+                return answer(sequencer, request);
             }
         }
         CommitDelta delta = sequencer.commitAll(List.of(committing));
