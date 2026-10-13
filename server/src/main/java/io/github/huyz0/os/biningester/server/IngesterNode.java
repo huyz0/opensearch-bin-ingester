@@ -72,10 +72,16 @@ public final class IngesterNode implements AutoCloseable {
      * finishes in one slice. The bound is for a flush that is slow, and it
      * keeps the whole sequence inside §7's 30 s budget: 2 s for subscribers,
      * 1 s of readiness propagation, these 20 s, and a follower's departure's
-     * 4 s grace plus one 1 s exchange (M13.27p, {@link FastDeparture#GRACE}),
-     * leaving 2 s for the flush and the release.
+     * {@link FastDeparture#STEP_BOUND} (M13.27p, M13.35e), leaving
+     * {@link #FLUSH_AND_RELEASE} for the flush and the release.
      */
     static final Duration IN_FLIGHT_BOUND = Duration.ofSeconds(20);
+
+    /** §7's budget for the whole shutdown sequence. */
+    static final Duration SHUTDOWN_BUDGET = Duration.ofSeconds(30);
+
+    /** What the budget keeps for the last flush and the lease release. */
+    static final Duration FLUSH_AND_RELEASE = Duration.ofSeconds(2);
 
     static final Duration IN_FLIGHT_SLICE = Duration.ofMillis(100);
 
@@ -341,7 +347,8 @@ public final class IngesterNode implements AutoCloseable {
             node.fastPeer = FastPeer.start(config, assembly.store(), fastDisk, crossAz, zones,
                     peerCommitTimeout(config), () -> FastPeer.leading(assembly), Thread::sleep,
                     clientTls);
-            // ⚠️ M13.27p: a follower departs at a graceful stop, bounded by a TTL.
+            // ⚠️ M13.27p: a follower departs at a graceful stop, bounded by
+            // FastDeparture.STEP_BOUND (M13.35e).
             io.github.huyz0.os.biningester.sequencer.TermJoiner.Transport departing =
                     zones.learning(new io.github.huyz0.os.biningester.http.HttpFastTransport(
                             FastDeparture.EXCHANGE_TIMEOUT, crossAz, clientTls), assembly.store(),

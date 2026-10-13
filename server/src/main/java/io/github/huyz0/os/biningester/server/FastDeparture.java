@@ -37,13 +37,21 @@ final class FastDeparture {
     /**
      * How long a departing pod keeps asking (M13.27p review round 1, P1):
      * ⚠️ FITTED TO {@link ShutdownSequence}'s 30 s budget beside its other
-     * bounded steps -- with each exchange bounded by {@link #EXCHANGE_TIMEOUT},
-     * the step lasts at most this plus one exchange and one lease read.
+     * bounded steps -- the whole step is {@link #STEP_BOUND} (M13.35e).
      */
     static final Duration GRACE = Duration.ofSeconds(4);
 
     /** Each DEPART or HELD exchange's timeout, so the grace bounds the step. */
     static final Duration EXCHANGE_TIMEOUT = Duration.ofSeconds(1);
+
+    /**
+     * The step's bound (M13.35e): the lease read and each exchange are
+     * bounded whole by {@link #EXCHANGE_TIMEOUT}, and an ask -- a read and a
+     * report -- is begun only while both fit before the grace ends, a leave
+     * only while one does: so the step lasts the grace and at most one
+     * {@link #PAUSE} past it.
+     */
+    static final Duration STEP_BOUND = GRACE.plus(PAUSE);
 
     /** Journaled with the outcome, after the last flush (M13.27p review round 1, P3). */
     static final String JOURNALED = "fast departure: ";
@@ -60,6 +68,11 @@ final class FastDeparture {
         if (leading) {
             return Result.NOT_A_FOLLOWER;
         }
+        // ⚠️ BOUNDED WHOLE HERE (M13.35e): a connect and each read are the
+        // transport's own bounds, and a lease GET has none.
+        TermJoiner.Transport bounded = new WholeExchange(transport, EXCHANGE_TIMEOUT);
+        LeaderWatch.LeaseReader reading = () -> WholeExchange.within(EXCHANGE_TIMEOUT,
+                "the lease read", lease::read);
         Roster.Incarnation self = new Roster.Incarnation(config.podId(), config.podUid(),
                 config.az(), config.endpoint());
         FastJournal journal;
@@ -70,29 +83,38 @@ final class FastDeparture {
         } catch (IOException cannot) {
             return Result.STOPPED_UNDEPARTED;
         }
-        Departure departure = new Departure(self, transport, disk.fence(), journal, disk.gate());
+        Departure departure = new Departure(self, bounded, disk.fence(), journal, disk.gate());
         long deadline = mono.nanos() + grace.toNanos();
         boolean askedOnce = false;
         while (mono.nanos() < deadline) {
-            try {
-                Lease current = lease.read();
-                String leader = current.holderPodUid();
-                if (leader.isBlank() || leader.equals(config.podUid())) {
-                    // ⚠️ NO LEADER TO ASK (a legacy lease, or this pod's own
-                    // deposed term) before anything was asked: nothing to
-                    // depart; after, keep waiting for one.
-                    if (!askedOnce) {
-                        return Result.NOT_A_FOLLOWER;
+            // ⚠️ NO ASK THAT CANNOT FINISH INSIDE THE GRACE (M13.35e): the pod
+            // only waits then, so a copy pending holds it the whole grace.
+            if (deadline - mono.nanos() >= EXCHANGE_TIMEOUT.multipliedBy(2).toNanos()) {
+                try {
+                    Lease current = reading.read();
+                    String leader = current.holderPodUid();
+                    if (leader.isBlank() || leader.equals(config.podUid())) {
+                        // ⚠️ NO LEADER TO ASK (a legacy lease, or this pod's own
+                        // deposed term) before anything was asked: nothing to
+                        // depart; after, keep waiting for one.
+                        if (!askedOnce) {
+                            return Result.NOT_A_FOLLOWER;
+                        }
+                    } else {
+                        askedOnce = true;
+                        if (!departure.report(current.epoch(), leader,
+                                current.holderEndpoint())) {
+                            // ⚠️ AND NO LEAVE PAST IT (M13.35e): nothing waits on it.
+                            if (deadline - mono.nanos() < EXCHANGE_TIMEOUT.toNanos()) {
+                                return Result.STOPPED_UNDEPARTED;
+                            }
+                            departure.leave(current.epoch(), leader, current.holderEndpoint());
+                            return Result.DEPARTED;
+                        }
                     }
-                } else {
+                } catch (IOException | RuntimeException notYet) {
                     askedOnce = true;
-                    if (!departure.report(current.epoch(), leader, current.holderEndpoint())) {
-                        departure.leave(current.epoch(), leader, current.holderEndpoint());
-                        return Result.DEPARTED;
-                    }
                 }
-            } catch (IOException | RuntimeException notYet) {
-                askedOnce = true;
             }
             try {
                 sleeper.sleep(PAUSE);
