@@ -228,6 +228,21 @@ final class FastLeaderFrames {
     static void upload(Sequencer held, FastDisk disk, Roster.Incarnation self,
             io.github.huyz0.os.biningester.sequencer.RecoveryWriter.SegmentUpload upload,
             TermJoiner.Transport transport, Delivered delivered, boolean paced) {
+        upload(held, disk, self, upload, transport, delivered, paced, () -> 0L,
+                java.time.Duration.ZERO);
+    }
+
+    /**
+     * The same, a paced upload made only once its trigger fires (ADR-0081 §7;
+     * M13.31c): the tightest {@code flushTimer} since the term's last, a
+     * stream at {@code B / 2}, the journal past half its cap, or a departing
+     * pod's ask.
+     */
+    static void upload(Sequencer held, FastDisk disk, Roster.Incarnation self,
+            io.github.huyz0.os.biningester.sequencer.RecoveryWriter.SegmentUpload upload,
+            TermJoiner.Transport transport, Delivered delivered, boolean paced,
+            io.github.huyz0.os.biningester.sequencer.MonotonicClock mono,
+            java.time.Duration flushTimer) {
         Optional<LocalSequencer> local = LocalSequencer.underneath(held)
                 .filter(LocalSequencer::serving);
         Optional<FastLeaderTerm> term = local.flatMap(LocalSequencer::fastTerm);
@@ -270,8 +285,14 @@ final class FastLeaderFrames {
                     }
                 };
         try {
-            if (fast.upload(fast.commitDesk(disk.journal().get(), self), disk.journal().get(),
-                    chain, upload, transport, paced).isPresent()) {
+            io.github.huyz0.os.biningester.sequencer.CommitDesk desk =
+                    fast.commitDesk(disk.journal().get(), self);
+            if (paced && !desk.uploadDue(mono.nanos(), flushTimer)) {
+                return;
+            }
+            if (fast.upload(desk, disk.journal().get(), chain, upload, transport, paced)
+                    .isPresent()) {
+                desk.uploaded(mono.nanos());
                 FastMetrics.uploaded(paced); // ⚠️ M13.36: by cause, never by index
             }
         } catch (IOException | RuntimeException failed) {

@@ -545,6 +545,14 @@ public final class FastWriteLeader implements TakeoverRun.Hold {
         return batches.stream().anyMatch(b -> b.exposed != null);
     }
 
+    /**
+     * Whether an upload is pressed for now (ADR-0081 §7; M13.31c): a stream at
+     * {@code B / 2} uncommitted offsets, or the journal past half the leader's share.
+     */
+    public boolean uploadPressed() {
+        return cursor.anyUploadDue() || journal.pastHalfLeaderShare();
+    }
+
     /** How many batches this leader still holds: committed ones are dropped. */
     synchronized int heldBatches() {
         return batches.size();

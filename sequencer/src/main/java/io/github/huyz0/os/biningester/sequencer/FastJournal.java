@@ -274,6 +274,16 @@ public final class FastJournal {
         return inOrder().stream().map(Held::entry).toList();
     }
 
+    /**
+     * Whether what it holds is past half the LEADER's share -- a quarter of
+     * the cap, the share being half (ADR-0081 §7; M13.31c review round 1,
+     * P1): the leader's own entries never pass {@link #fitsLeaderShare}'s
+     * half, so a trigger at half the whole cap would never fire for them.
+     */
+    public boolean pastHalfLeaderShare() {
+        return heldBytes > capBytes / 4;
+    }
+
     /** The encoded bytes of the entries held. */
     public long heldBytes() {
         return heldBytes;

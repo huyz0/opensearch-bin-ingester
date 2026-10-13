@@ -49,6 +49,10 @@ public final class CommitDesk {
     private final List<FastWriteLeader.Exposure> reExposed = new ArrayList<>();
     private final Map<FastJournalRecord.IdempotencyKey,
             CompletableFuture<FastWriteFrame.Assigned>> owed = new ConcurrentHashMap<>();
+    /** When this term last uploaded, MIN_VALUE before its first (M13.31c). */
+    private long lastUpload = Long.MIN_VALUE;
+    /** An upload asked for at once, by a departing pod (M13.31c). */
+    private boolean asked;
 
     /**
      * @param committedNext a stream's committed next offset, from the chain
@@ -116,6 +120,29 @@ public final class CommitDesk {
     /** The desk's leader itself, for this term's upload (M13.31a). */
     FastWriteLeader leader() {
         return write;
+    }
+
+    /** An upload is asked for at once: a departing pod's DEPART phase 1 (ADR-0081 §7, §9). */
+    public synchronized void askUpload() {
+        asked = true;
+    }
+
+    /**
+     * Whether a paced upload is due at {@code nowNanos} (ADR-0081 §7; M13.31c):
+     * asked for, pressed (a stream at {@code B / 2}, the journal past half the
+     * leader's share), the term's first, or {@code flushTimer} -- the tightest
+     * {@code flush_timer} among fast indices -- since its last. ⚠️ Never more
+     * often than the term's own {@code min_upload_interval} pacing allows.
+     */
+    public synchronized boolean uploadDue(long nowNanos, Duration flushTimer) {
+        return asked || write.uploadPressed() || lastUpload == Long.MIN_VALUE
+                || nowNanos - lastUpload >= flushTimer.toNanos();
+    }
+
+    /** An upload was made at {@code nowNanos}: the next waits its trigger. */
+    public synchronized void uploaded(long nowNanos) {
+        lastUpload = nowNanos;
+        asked = false;
     }
 
     /** Each batch's quorum wait, told to {@code waits} from now (M13.36). */

@@ -288,8 +288,8 @@ public final class FastLeaderTerm {
      * in every earlier open roster listing it, answered by an empty
      * HELD_STATUS once every write landed (ADR-0081 §9).
      *
-     * <p>⚠️ PHASE 1 ALSO ASKS FOR AN UPLOAD, which M13.31 brings; until then a
-     * pending group stays pending, and the pod waits or stops undeparted.
+     * <p>⚠️ PHASE 1 ALSO ASKS FOR AN UPLOAD, at once (M13.31c), so a pending
+     * group is committed and the pod need not stop undeparted.
      *
      * @throws IOException the store failed; the pod retries
      */
@@ -300,6 +300,7 @@ public final class FastLeaderTerm {
             return notThisTerm(header);
         }
         if (depart.phase() == 1) {
+            Optional.ofNullable(desk).ifPresent(CommitDesk::askUpload);
             return answerHeld(depart.held());
         }
         // ⚠️ ONLY A POD DEPARTS ITSELF (M13.27k review round 1, P2): marked

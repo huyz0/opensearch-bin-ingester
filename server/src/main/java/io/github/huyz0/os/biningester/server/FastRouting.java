@@ -37,6 +37,19 @@ final class FastRouting {
         return index -> catalog.resolve(index).map(IndexRegistration::wal).orElse(false);
     }
 
+    /** With no fast index, the deadline ADR-0013 gives {@code flush_timer} by default. */
+    static final java.time.Duration DEFAULT_FLUSH_TIMER = java.time.Duration.ofSeconds(5);
+
+    /**
+     * The tightest {@code flush_timer} among the catalog's fast indices: the
+     * upload's deadline (ADR-0081 §7; M13.31c).
+     */
+    static java.time.Duration tightestFlushTimer(IndexCatalog catalog) {
+        return catalog.fastRegistrations().stream()
+                .map(r -> java.time.Duration.ofMillis(r.flushTimerMillis()))
+                .min(java.time.Duration::compareTo).orElse(DEFAULT_FLUSH_TIMER);
+    }
+
     /**
      * The term to write through: the one {@code held} serves, led by this
      * pod, else the newest {@code joined} names.

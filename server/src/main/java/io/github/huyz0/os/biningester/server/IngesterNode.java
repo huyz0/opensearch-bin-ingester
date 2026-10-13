@@ -312,9 +312,11 @@ public final class IngesterNode implements AutoCloseable {
                 FastLeaderFrames.sendReplicas(assembly.heldTerm(), commitDisk, self, exposing);
                 FastLeaderFrames.sendExposed(assembly.heldTerm(), commitDisk, self, exposing);
                 // ⚠️ M13.31a: what is exposed, uploaded at its assigned offsets.
+                // ⚠️ M13.31c: only once its trigger fires.
                 FastLeaderFrames.upload(assembly.heldTerm(), commitDisk, self,
                         assembly.defaultIngest()::publishFast, exposing,
-                        assembly.defaultIngest()::delivered);
+                        assembly.defaultIngest()::delivered, true, mono,
+                        FastRouting.tightestFlushTimer(assembly.catalog()));
                 // ⚠️ M13.83b: last, so a slow leader never delays an exposure.
                 forwarder.forward(assembly.catalog(), commitDisk.joined()::latest,
                         FastPeer.leading(assembly));

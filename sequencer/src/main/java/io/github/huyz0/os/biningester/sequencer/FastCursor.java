@@ -133,6 +133,16 @@ public final class FastCursor {
         return s[1] - s[0] >= bound / 2;
     }
 
+    /** Whether any stream is at {@code B / 2} uncommitted offsets (M13.31c). */
+    public synchronized boolean anyUploadDue() {
+        for (long[] s : streams.values()) {
+            if (s[1] - s[0] >= bound / 2) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private long[] state(RunKey stream) {
         long[] s = streams.get(Objects.requireNonNull(stream, "stream"));
         if (s == null) {
