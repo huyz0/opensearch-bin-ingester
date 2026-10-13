@@ -67,7 +67,23 @@ public final class RosterDecisions {
      *     changing; the takeover records again
      */
     public Outcome record(Map<RunKey, Long> resumeAt) throws IOException {
+        return record(resumeAt, 0);
+    }
+
+    /**
+     * As {@link #record(Map)}, a decision already written found only among
+     * those numbered {@code since} or later (M13.34p): a live leader's switch
+     * decides a stream at a resume offset an EARLIER decision may share -- a
+     * takeover's, numbered before the entries the switch discards -- and that
+     * one supersedes none of them (ADR-0081 §5 invariant b, §8), so it must
+     * not stand in for the switch's. {@code since} is the next decision number
+     * the caller read when it decided.
+     */
+    public Outcome record(Map<RunKey, Long> resumeAt, int since) throws IOException {
         Objects.requireNonNull(resumeAt, "resumeAt");
+        if (since < 0) {
+            throw new IllegalArgumentException("a decision number is never negative: " + since);
+        }
         String key = Roster.key(prefix, epoch);
         for (int attempt = 0; attempt < FastTermStart.MAX_ATTEMPTS; attempt++) {
             Optional<ObjectStat> stat = store.stat(key);
@@ -85,8 +101,8 @@ public final class RosterDecisions {
             int next = decisions.isEmpty() ? 0 : decisions.get(decisions.size() - 1).seq() + 1;
             List<Roster.Decision> added = new ArrayList<>();
             for (Map.Entry<RunKey, Long> e : new TreeMap<>(resumeAt).entrySet()) {
-                boolean written = r.decisions().stream().anyMatch(d ->
-                        d.stream().equals(e.getKey()) && d.resumeAt() == e.getValue());
+                boolean written = r.decisions().stream().anyMatch(d -> d.seq() >= since
+                        && d.stream().equals(e.getKey()) && d.resumeAt() == e.getValue());
                 if (!written) {
                     added.add(new Roster.Decision(next++, e.getKey(), e.getValue()));
                 }
