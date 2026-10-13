@@ -36,6 +36,7 @@ final class DefaultHold {
      * @throws IOException interrupted while waiting: nothing committed
      */
     static void await(FastLeaderTerm fast, List<CommitRequest> requests) throws IOException {
+        refuseFast(fast, requests); // ⚠️ at once: never waited on (review round 1, P4)
         for (long polls = WAIT.toMillis() / POLL.toMillis(); polls > 0 && held(fast, requests);
                 polls--) {
             try {
@@ -48,13 +49,42 @@ final class DefaultHold {
         }
     }
 
-    private static boolean held(FastLeaderTerm fast, List<CommitRequest> requests) {
-        try {
-            refuseHeld(fast, requests);
-            return false;
-        } catch (IOException refused) {
-            return true;
+    /**
+     * ⚠️ A RUN OF A STREAM THE LEADER HAS IN FAST MODE IS REFUSED WHOLE, at
+     * once (ADR-0082 §7; ADR-0081 §8; M13.34c): its offsets are the fast
+     * cursor's, and a writer that asked for no redirecting answer -- every
+     * writer, until M13.34e -- gets the refusal, never a commit over them.
+     *
+     * @throws CommitRefusedException such a run: nothing committed, and DEFINITE --
+     *     a forward answers it rather than deferring it to the inbox (P1)
+     */
+    static void refuseFast(FastLeaderTerm fast, List<CommitRequest> requests)
+            throws CommitRefusedException {
+        if (fast == null) {
+            return;
         }
+        for (CommitRequest request : requests) {
+            for (RunKey stream : request.recordCounts().keySet()) {
+                if (fast.fastHere(stream)) {
+                    throw new CommitRefusedException("stream " + stream + " is fast at the leader: a"
+                            + " default-path commit of it is refused whole, nothing committed");
+                }
+            }
+        }
+    }
+
+    private static boolean held(FastLeaderTerm fast, List<CommitRequest> requests) {
+        if (fast == null) {
+            return false;
+        }
+        for (CommitRequest request : requests) {
+            for (RunKey stream : request.recordCounts().keySet()) {
+                if (fast.holdsDefault(stream)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /**
@@ -66,6 +96,7 @@ final class DefaultHold {
         if (fast == null) {
             return;
         }
+        refuseFast(fast, requests);
         for (CommitRequest request : requests) {
             for (RunKey stream : request.recordCounts().keySet()) {
                 if (fast.holdsDefault(stream)) {

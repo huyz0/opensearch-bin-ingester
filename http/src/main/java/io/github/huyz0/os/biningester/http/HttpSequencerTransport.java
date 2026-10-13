@@ -73,6 +73,13 @@ public final class HttpSequencerTransport implements SequencerTransport {
      */
     public static final Status NOT_THE_LEASEHOLDER = Status.CONFLICT_409;
 
+    /**
+     * 422 for a commit the leaseholder refused before writing anything and
+     * will refuse again unchanged (M13.34g): a default-path run of a fast
+     * stream. Definite, so never deferred to the inbox.
+     */
+    public static final Status COMMIT_REFUSED = Status.UNPROCESSABLE_CONTENT_422;
+
     private final Map<String, WebClient> clients = new ConcurrentHashMap<>();
     private final Duration timeout;
     private final CrossAzBytes crossAz;
@@ -197,6 +204,10 @@ public final class HttpSequencerTransport implements SequencerTransport {
             // test whose peer is this repo's own `CommitService`.
             if (response.status().code() == NOT_THE_LEASEHOLDER.code()) {
                 throw new NotTheLeaseholderException(endpoint + " does not hold the lease");
+            }
+            if (response.status().code() == COMMIT_REFUSED.code()) {
+                throw new io.github.huyz0.os.biningester.sequencer.CommitRefusedException(
+                        "commit to " + endpoint + " was REFUSED: " + read(response));
             }
             if (response.status().code() == Status.BAD_REQUEST_400.code()
                     || response.status().code() == Status.REQUEST_ENTITY_TOO_LARGE_413.code()) {

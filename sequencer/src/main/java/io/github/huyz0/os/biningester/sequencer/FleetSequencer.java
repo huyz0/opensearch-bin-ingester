@@ -207,8 +207,12 @@ public final class FleetSequencer implements Sequencer {
             // reports "refused, and the lease has not moved" as a plain
             // IOException over the refusal. Nothing was applied, so it is
             // answered, not deferred.
+            // ⚠️ AND SO IS A COMMIT THE LEADER REFUSED (M13.34g review round 1,
+            // P1): deferred, its intent would be refused by every drain.
             boolean refused = forwardFailed.getCause()
-                    instanceof SequencerTransport.NotTheLeaseholderException;
+                    instanceof SequencerTransport.NotTheLeaseholderException
+                    || forwardFailed instanceof CommitRefusedException
+                    || forwardFailed.getCause() instanceof CommitRefusedException;
             if (requests.size() == 1 && !refused) {
                 throw defer(requests, forwardFailed, fence);
             }

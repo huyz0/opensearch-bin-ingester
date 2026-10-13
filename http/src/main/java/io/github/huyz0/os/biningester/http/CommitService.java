@@ -209,6 +209,10 @@ public final class CommitService implements HttpService {
             // refused -- a chain of two hops, which ADR-0012 permits and which
             // must not be reported as this node's own refusal any differently.
             response.status(HttpSequencerTransport.NOT_THE_LEASEHOLDER).send(moved.getMessage());
+        } catch (io.github.huyz0.os.biningester.sequencer.CommitRefusedException definite) {
+            // ⚠️ DEFINITE, NOT 500 (M13.34g review round 1, P1): nothing was
+            // applied, and the caller answers it rather than deferring it.
+            response.status(HttpSequencerTransport.COMMIT_REFUSED).send(definite.getMessage());
         } catch (IOException failed) {
             // ⚠️ 500, AND THE CALLER MUST READ IT AS AMBIGUOUS. The commit may
             // have reached the store and only the answer been lost, so the

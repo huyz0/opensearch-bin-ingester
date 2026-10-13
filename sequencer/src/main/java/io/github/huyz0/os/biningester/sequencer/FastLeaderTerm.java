@@ -64,9 +64,8 @@ public final class FastLeaderTerm {
     private final long refreshNanos;
     /** This term's record, fed from the catalog and read by its desk (M13.27l). */
     private final TermRecordWriter termRecord;
-    /** The indices with a term-record value in a term this one walked (M13.33n). */
-    private final java.util.Set<java.util.UUID> walkedIndices =
-            java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /** What a default-path run may not do here (M13.33n, M13.34c). */
+    private final DefaultPathGate gate;
     /** When this term last uploaded, paced at {@code min_upload_interval} (M13.31a). */
     private long lastUploadNanos;
     private boolean uploaded;
@@ -110,27 +109,22 @@ public final class FastLeaderTerm {
         this.refreshNanos = refresh.toNanos();
         this.termRecord = new TermRecordWriter(store, prefix, opened.started().own(), mono,
                 refresh);
-        for (Roster walked : opened.stillOpen()) {
-            walked.termRecord().forEach(r -> walkedIndices.addAll(r.walQuorum().keySet()));
-        }
+        this.gate = new DefaultPathGate(opened);
     }
 
     /** No takeover will run, its leader holding no journal: nothing is held (M13.33n). */
     public void noTakeover() {
-        walkedIndices.clear();
+        gate.noTakeover();
     }
 
-    /**
-     * Whether a default-path run of {@code stream} waits for this term's takeover
-     * (§5 step 3's tail; M13.33n): its index recorded in a walked term and its stream
-     * undecided -- held too before any desk is built, as no takeover ran.
-     */
+    /** Whether a default-path run of {@code stream} waits for the takeover (M13.33n). */
     public boolean holdsDefault(RunKey stream) {
-        if (!walkedIndices.contains(stream.indexId())) {
-            return false;
-        }
-        CommitDesk built = desk;
-        return built == null || built.leader().awaitsDecision(stream);
+        return gate.holds(stream, desk);
+    }
+
+    /** Whether a default-path run of {@code stream} is refused: its index fast here (M13.34c). */
+    public boolean fastHere(RunKey stream) {
+        return gate.fast(stream);
     }
 
     /**
@@ -141,6 +135,7 @@ public final class FastLeaderTerm {
      */
     public void catalogSays(Map<java.util.UUID, Integer> fast) {
         fast.forEach(termRecord::want);
+        gate.catalogIs(fast.keySet());
     }
 
     /**
