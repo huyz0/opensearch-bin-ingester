@@ -126,15 +126,23 @@ final class FastLeaderFrames {
         }
     }
 
+    /** A committed fast segment, delivered to subscribers: {@code DefaultIngest.delivered}. */
+    @FunctionalInterface
+    interface Delivered {
+        void delivered(String segmentKey, io.github.huyz0.os.biningester.format.CommitDelta delta,
+                long epoch);
+    }
+
     /**
      * Uploads what the leading term has exposed and the chain has not
      * committed (M13.31a; ADR-0081 §7), at the offsets assigned; nothing on a
      * pod leading no serving term or holding no fast journal. ⚠️ A FAILED
      * UPLOAD LEAVES THE ENTRIES HELD AND EXPOSED: the next one retries them.
+     * Once committed, the segment is delivered as a flush's is (M13.30a).
      */
     static void upload(Sequencer held, FastDisk disk, Roster.Incarnation self,
             io.github.huyz0.os.biningester.sequencer.RecoveryWriter.SegmentUpload upload,
-            TermJoiner.Transport transport) {
+            TermJoiner.Transport transport, Delivered delivered) {
         Optional<LocalSequencer> local = LocalSequencer.underneath(held)
                 .filter(LocalSequencer::serving);
         Optional<FastLeaderTerm> term = local.flatMap(LocalSequencer::fastTerm);
@@ -162,6 +170,17 @@ final class FastLeaderFrames {
                                                 fast.uploadSeq(firsts), segmentKey, counts),
                                         firsts);
                         fast.uploadCommitted(firsts);
+                        // ⚠️ M13.30a: pushed and signalled as a flush's is -- and
+                        // a delivery that throws never undoes the commit's
+                        // bookkeeping (its review round 1, P3).
+                        try {
+                            delivered.delivered(segmentKey, delta, local.get().epoch());
+                        } catch (RuntimeException undelivered) {
+                            System.getLogger(FastLeaderFrames.class.getName()).log(
+                                    System.Logger.Level.WARNING,
+                                    "a fast segment was committed but not delivered",
+                                    undelivered);
+                        }
                         return committedNext(delta);
                     }
                 };

@@ -148,8 +148,35 @@ class FastWriteServedTest {
         await().atMost(Duration.ofSeconds(20)).until(
                 () -> chain.committedNext(new RunKey(index, 0)) == 3);
 
-        assertThat(node.fastDisk().journal().orElseThrow().held())
-                .as("the leader's copy released once the chain holds it").isEmpty();
+        // ⚠️ AWAITED (M13.30a): the release follows the commit, and the
+        // segment's delivery now runs between them.
+        await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
+                assertThat(node.fastDisk().journal().orElseThrow().held())
+                        .as("the leader's copy released once the chain holds it").isEmpty());
+    }
+
+    @Test
+    void aFASTWriteReachesThisPodsSubscribersOnceUploaded() throws Exception {
+        // ⚠️ M13.30a: delivered as a flush's segment is, at its offsets.
+        node = startOnAFreePort();
+        node.assembly().catalog().register(new IndexRegistration(FAST_UUID, "orders",
+                List.of(), 1, 1, 1, 1).withFastSettings(250, true, 1));
+        java.util.UUID index = RunKey.ofIndexUuid(FAST_UUID, 0).indexId();
+        await().atMost(Duration.ofSeconds(20)).until(() -> recorded(index));
+        List<io.github.huyz0.os.biningester.ingest.SubscriptionHub.Push> pushed =
+                new java.util.concurrent.CopyOnWriteArrayList<>();
+        try (var subscription = node.assembly().hub().subscribe(new RunKey(index, 0),
+                io.github.huyz0.os.biningester.ingest.SubscriptionHub.assembling(pushed::add))) {
+            node.assembly().ingest().append(PRODUCER, "orders", 0, docs(2)::forEach);
+
+            await().atMost(Duration.ofSeconds(20)).until(() -> !pushed.isEmpty());
+
+            assertThat(subscription).isNotNull();
+            assertThat(pushed).singleElement().satisfies(p -> {
+                assertThat(p.firstOffset()).isZero();
+                assertThat(p.recordCount()).isEqualTo(2);
+            });
+        }
     }
 
     @Test

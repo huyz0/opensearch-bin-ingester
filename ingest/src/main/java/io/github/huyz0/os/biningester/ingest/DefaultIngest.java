@@ -89,6 +89,14 @@ public final class DefaultIngest implements Ingest {
 
     /** The active buffer, its waiters and the flush loop (M13.1a). */
     private final FlushPath flushPath;
+    private final DurableSegmentListener durableSegmentListener;
+    /**
+     * The fast segment published and awaiting its delta (M13.30a): ⚠️ ONE,
+     * never a queue of them (its review round 1, P1) -- the leader uploads one
+     * at a time, and a retry's segment replaces the one it retries, so no
+     * segment is held past its upload.
+     */
+    private SegmentPublisher.Published awaitingDelta;
     /** Which indices are fast, and the path they take (M13.29b); none until routed. */
     private record FastRoute(Predicate<String> fastIndex, FastPath path) {
     }
@@ -162,7 +170,8 @@ public final class DefaultIngest implements Ingest {
                 Objects.requireNonNull(sequencer, "sequencer"));
         this.hub = Objects.requireNonNull(hub, "hub");
         this.streams = Objects.requireNonNull(streams, "streams");
-        Objects.requireNonNull(durableSegmentListener, "durableSegmentListener");
+        this.durableSegmentListener =
+                Objects.requireNonNull(durableSegmentListener, "durableSegmentListener");
 
         // ⚠️ NO RECOVERY HERE ANY MORE, and the startup-latency note that used
         // to sit here moved WITH the responsibility to `LocalSequencer.start`.
@@ -367,6 +376,43 @@ public final class DefaultIngest implements Ingest {
         return publisher.publish(recovered)
                 .orElseThrow(() -> new IOException("a recovery uploads at least one record"))
                 .key();
+    }
+
+    /**
+     * Uploads a fast upload's runs as one segment, as {@link #publishRecovery}
+     * does, and keeps it until {@link #delivered} names it (M13.30a): its
+     * key, which the upload's delta commits.
+     */
+    public String publishFast(Map<RunKey, List<SegmentRecord>> runs) throws IOException {
+        Accumulator fast = new Accumulator(config, clock);
+        runs.forEach((key, records) -> records.forEach(r -> fast.add(key, r)));
+        SegmentPublisher.Published published = publisher.publish(fast)
+                .orElseThrow(() -> new IOException("a fast upload carries at least one record"));
+        synchronized (this) {
+            awaitingDelta = published;
+        }
+        return published.key();
+    }
+
+    /**
+     * A fast upload's segment, published by {@link #publishFast}, is
+     * committed by {@code delta} (M13.30a; ADR-0081 §6): delivered as a
+     * flush's is -- signalled durable to this pod's peers and pushed to its
+     * subscribers at the offsets committed, under the sequencer's
+     * {@code epoch}. A segment this path did not publish is not delivered.
+     */
+    public void delivered(String segmentKey,
+            io.github.huyz0.os.biningester.format.CommitDelta delta, long epoch) {
+        SegmentPublisher.Published published;
+        synchronized (this) {
+            published = awaitingDelta;
+            if (published == null || !published.key().equals(segmentKey)) {
+                return;
+            }
+            awaitingDelta = null;
+        }
+        durableSegmentListener.onDurable(segmentKey);
+        pushQueue.offer(delta, segmentKey, published.segment(), epoch);
     }
 
     /** Each index's apportioned share of this pod's store requests (ADR-0077). */
