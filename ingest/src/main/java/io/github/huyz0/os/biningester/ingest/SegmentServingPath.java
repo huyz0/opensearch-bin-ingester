@@ -85,6 +85,30 @@ final class SegmentServingPath {
         }
     }
 
+    /**
+     * A takeover's lost range, pushed to each of the stream's subscribers as a
+     * push with no segment and no bytes (M13.33x; ADR-0081 §5): opened and
+     * completed with nothing written, and recorded delivered, so a session
+     * resumes past it. A subscriber that throws falls behind, as for a segment.
+     */
+    void publishVoid(io.github.huyz0.os.biningester.format.RunKey key, long fromOffset,
+            int count, long sequencerEpoch, long chainSequence) {
+        List<Push> pushes = List.of(new Push(key, "", count, fromOffset, FetchMode.INLINE,
+                EMPTY, null, sequencerEpoch, chainSequence));
+        for (Subscriber subscriber : hub.subscribersFor(key)) {
+            try {
+                SegmentSink sink = subscriber.open(pushes);
+                if (sink == null) {
+                    continue;
+                }
+                subscriber.complete(pushes, sink);
+                hub.delivered(subscriber, pushes);
+            } catch (IOException | RuntimeException slowOrDeadSubscriber) {
+                continue;
+            }
+        }
+    }
+
     void publishSegment(SegmentCommit committed, byte[] heldBytes,
             SegmentServing serving, long sequencerEpoch, long chainSequence) {
         // ⚠️ LINKED, so delivery order follows first-subscription order rather

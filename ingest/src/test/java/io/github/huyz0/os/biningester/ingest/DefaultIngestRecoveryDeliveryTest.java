@@ -82,6 +82,34 @@ class DefaultIngestRecoveryDeliveryTest {
     }
 
     @Test
+    void aRECOVERYsVoidsArePushedBehindItsSegmentsUnderItsSequence() throws Exception {
+        // ⚠️ M13.33x: a lost range, which a consumer skips rather than waits on.
+        MemoryBinStore store = new MemoryBinStore();
+        SubscriptionHub hub = new SubscriptionHub();
+        List<SubscriptionHub.Push> pushed = new CopyOnWriteArrayList<>();
+        try (var sub = hub.subscribe(S, SubscriptionHub.assembling(pushed::add));
+                DefaultIngest ingest = ingest(store, hub, new CopyOnWriteArrayList<>())) {
+            String key = ingest.publishRecovery(Map.of(S, List.of(record("a"), record("b"))));
+
+            ingest.recovered(new Recovery(7, List.of(new SegmentCommit(key,
+                    List.of(new RunCommit(S, 2, 40)))),
+                    List.of(new Recovery.VoidRange(S, 42, 45))), 3);
+
+            long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10);
+            while (pushed.stream().noneMatch(SubscriptionHub.Push::voided)) {
+                assertThat(System.nanoTime()).as("the void pushed").isLessThan(deadline);
+                Thread.onSpinWait();
+            }
+            assertThat(pushed).extracting(SubscriptionHub.Push::voided,
+                    SubscriptionHub.Push::firstOffset, SubscriptionHub.Push::recordCount,
+                    SubscriptionHub.Push::sequencerEpoch, SubscriptionHub.Push::chainSequence)
+                    .as("the segment, then its void").containsExactly(
+                            org.assertj.core.groups.Tuple.tuple(false, 40L, 2, 3L, 7L),
+                            org.assertj.core.groups.Tuple.tuple(true, 42L, 3, 3L, 7L));
+        }
+    }
+
+    @Test
     void aSEGMENTNoEntryNamedIsNeverDelivered() throws Exception {
         // a recovery whose entry never landed: its segment dropped by the next one's.
         MemoryBinStore store = new MemoryBinStore();

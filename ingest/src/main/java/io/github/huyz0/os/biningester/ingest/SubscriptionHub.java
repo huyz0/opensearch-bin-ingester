@@ -142,6 +142,15 @@ public final class SubscriptionHub {
                 throw new IllegalArgumentException(
                         "a `direct` push without a grant tells a consumer to fetch and not how");
             }
+            if (segmentKey.isEmpty() && (via != FetchMode.INLINE || segment.length > 0
+                    || chainSequence == CHAIN_SEQUENCE_UNKNOWN)) {
+                throw new IllegalArgumentException("a void is inline, bytes-less and chained");
+            }
+        }
+
+        /** A takeover's lost range, named by no segment (M13.33x; ADR-0081 §5). */
+        public boolean voided() {
+            return segmentKey.isEmpty();
         }
 
         public long lastOffset() {
@@ -220,6 +229,12 @@ public final class SubscriptionHub {
 
     public Set<RunKey> subscribedStreams() {
         return Set.copyOf(subscribers.keySet());
+    }
+
+    /** A recovery's lost range, pushed to each subscriber with no bytes (M13.33x). */
+    public void publishVoid(RunKey key, long fromOffset, int count, long sequencerEpoch,
+            long chainSequence) {
+        servingPath.publishVoid(key, fromOffset, count, sequencerEpoch, chainSequence);
     }
 
     /**

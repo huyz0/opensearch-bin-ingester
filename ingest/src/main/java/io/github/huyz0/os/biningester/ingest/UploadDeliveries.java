@@ -108,5 +108,9 @@ final class UploadDeliveries {
                         committed.segmentKey(), kept.segment(), epoch);
             }
         }
+        // ⚠️ M13.33x: its lost ranges, behind its segments on the one pusher.
+        if (!recovery.voids().isEmpty()) {
+            pushQueue.offerVoids(recovery.voids(), recovery.sequence(), epoch);
+        }
     }
 }

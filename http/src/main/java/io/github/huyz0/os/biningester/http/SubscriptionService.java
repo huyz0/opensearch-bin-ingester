@@ -636,14 +636,14 @@ public final class SubscriptionService implements HttpService {
 
     /** What one push looks like on the wire (ADR-0043, ADR-0044). */
     static SubscriptionEvent eventFor(SubscriptionHub.Push push, String session) {
-        byte[] inline = push.via() == FetchMode.INLINE && push.segment() != null
-                ? push.segment()
-                : new byte[0];
-        // ⚠️ `EPOCH_UNKNOWN` IS -1 AND THE EVENT REFUSES A NEGATIVE EPOCH, so a
-        // publisher that models no chain becomes 0 here -- which M4.4b reserves
-        // for "no lease", and is the honest reading of "this push carries no
-        // term" on a wire that cannot express absence.
+        byte[] inline = push.via() == FetchMode.INLINE ? push.segment() : new byte[0];
+        // ⚠️ `EPOCH_UNKNOWN` IS -1 AND THE EVENT REFUSES A NEGATIVE EPOCH: no
+        // chain becomes 0, which M4.4b reserves for "no lease" (no term).
         long epoch = Math.max(0, push.sequencerEpoch());
+        if (push.voided()) { // ⚠️ M13.33x: v5, a takeover's lost range
+            return SubscriptionEvent.voidRange(session, epoch, 1L, push.key(),
+                    push.firstOffset(), push.recordCount(), push.chainSequence());
+        }
         return new SubscriptionEvent(session, epoch, 1L, push.key(),
                 push.segmentKey(), push.firstOffset(), push.recordCount(), push.via(), inline,
                 push.grant(), SubscriptionEvent.RANGE_ABSENT, SubscriptionEvent.RANGE_ABSENT,

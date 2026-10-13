@@ -2,6 +2,7 @@
 package io.github.huyz0.os.biningester.ingest;
 
 import io.github.huyz0.os.biningester.format.CommitDelta;
+import io.github.huyz0.os.biningester.format.Recovery;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -60,7 +61,13 @@ final class PushQueue {
      * {@code maxQueuedPushBytes}.
      */
     private record PendingPush(CommitDelta delta, String segmentKey, byte[] segment, int bytes,
-            long sequencerEpoch) {
+            long sequencerEpoch, List<Recovery.VoidRange> voids, long chainSequence) {
+
+        PendingPush(CommitDelta delta, String segmentKey, byte[] segment, int bytes,
+                long sequencerEpoch) {
+            this(delta, segmentKey, segment, bytes, sequencerEpoch, null,
+                    SubscriptionHub.CHAIN_SEQUENCE_UNKNOWN);
+        }
     }
 
     /** Ends {@link #pushLoop} without interrupting a delivery in flight. */
@@ -119,6 +126,16 @@ final class PushQueue {
             queuedPushBytes.addAndGet(bytes);
             pushes.add(new PendingPush(delta, segmentKey, segment, bytes, sequencerEpoch));
         }
+    }
+
+    /**
+     * Queues a recovery's lost ranges behind its segments (M13.33x), under the
+     * entry's chain sequence. ⚠️ NEVER DROPPED: they carry no bytes, and a
+     * consumer not told of one waits on a gap no record will ever fill.
+     */
+    void offerVoids(List<Recovery.VoidRange> voids, long chainSequence, long sequencerEpoch) {
+        pushes.add(new PendingPush(null, "(voids)", new byte[0], 0, sequencerEpoch,
+                List.copyOf(voids), chainSequence));
     }
 
     /** How many pushes were dropped because a subscriber could not keep up. */
@@ -193,6 +210,10 @@ final class PushQueue {
                 return;
             }
             try {
+                if (next.voids() != null) {
+                    publishVoids(next);
+                    continue;
+                }
                 hub.publish(next.delta(), next.segmentKey(), next.segment(), serving,
                         next.sequencerEpoch());
             } catch (RuntimeException e) {
@@ -226,6 +247,18 @@ final class PushQueue {
                 continue;
             } finally {
                 queuedPushBytes.addAndGet(-next.bytes());
+            }
+        }
+    }
+
+    /** Each range, cut to an event's count, which is an {@code int}. */
+    private void publishVoids(PendingPush next) {
+        for (Recovery.VoidRange v : next.voids()) {
+            for (long from = v.fromOffset(); from < v.toOffsetExclusive(); ) {
+                int count = (int) Math.min(Integer.MAX_VALUE, v.toOffsetExclusive() - from);
+                hub.publishVoid(v.key(), from, count, next.sequencerEpoch(),
+                        next.chainSequence());
+                from += count;
             }
         }
     }
