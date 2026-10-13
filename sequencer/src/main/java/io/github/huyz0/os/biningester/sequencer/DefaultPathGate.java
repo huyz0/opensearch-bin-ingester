@@ -26,13 +26,13 @@ import java.util.concurrent.ConcurrentHashMap;
  *       forward answers it and never defers it.
  * </ul>
  *
- * <p>⚠️ STATED LIMITS, M13.34c's and M13.34d's to close: the catalog is
- * learnt once per drain tick, so a commit between a catalog's flip to fast
- * and the next tick is admitted; an inbox intent deferred EARLIER (the leader
- * unreachable, the writer's registration stale) for a stream now fast is
- * refused by every drain, and stalls that pod's inbox until the redirecting
- * answer exists; and a switch to {@code wal=false} admits default commits as
- * soon as the catalog says so, though a fast tail is uncommitted.
+ * <p>⚠️ STATED LIMITS: the catalog is learnt once per drain tick, so a
+ * commit between a catalog's flip to fast and the next tick is admitted; and
+ * an inbox intent deferred EARLIER (the leader unreachable, the writer's
+ * registration stale) for a stream now fast is refused by every drain, and
+ * stalls that pod's inbox -- M13.34m's to close. A switch to {@code wal=false}
+ * with a fast tail uncommitted no longer admits a default commit over it: the
+ * run pauses the stream and waits (M13.34r, {@code SwitchPause}).
  */
 final class DefaultPathGate {
 

@@ -574,6 +574,18 @@ final class FastLeaderFrames {
         try {
             io.github.huyz0.os.biningester.sequencer.CommitDesk desk =
                     fast.commitDesk(disk.journal().get(), self);
+            // ⚠️ M13.34r: switched streams' decisions and discards first, so the
+            // upload this asks for takes their exposed tails -- ⚠️ A FAILURE THERE
+            // NEVER STOPS THE UPLOAD (its review round 1, P2): every stream's.
+            try {
+                if (fast.switchTick(desk, chain::next)) {
+                    return;
+                }
+            } catch (IOException | RuntimeException switchFailed) {
+                System.getLogger(FastLeaderFrames.class.getName()).log(
+                        System.Logger.Level.WARNING, "a switch tick failed; the next retries",
+                        switchFailed);
+            }
             if (paced && !desk.uploadDue(mono.nanos(), flushTimer)) {
                 return;
             }
@@ -581,6 +593,7 @@ final class FastLeaderFrames {
                     .isPresent()) {
                 desk.uploaded(mono.nanos());
                 FastMetrics.uploaded(paced); // ⚠️ M13.36: by cause, never by index
+                fast.switchTick(desk, chain::next); // a switched stream's tail now in the chain
             }
         } catch (IOException | RuntimeException failed) {
             System.getLogger(FastLeaderFrames.class.getName()).log(

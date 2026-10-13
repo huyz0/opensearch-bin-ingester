@@ -66,6 +66,8 @@ public final class FastLeaderTerm {
     private final TermRecordWriter termRecord;
     /** What a default-path run may not do here (M13.33n, M13.34c). */
     private final DefaultPathGate gate;
+    /** Its streams switching to the default path (M13.34r). */
+    private final SwitchPause switches;
     /** Its uploads' pacing and numbering (M13.31a), split out at this file's ceiling. */
     private final TermUploads uploads;
     /** This term's roster as last read, and when; null before the first read. */
@@ -105,6 +107,7 @@ public final class FastLeaderTerm {
         this.termRecord = new TermRecordWriter(store, prefix, opened.started().own(), mono,
                 refresh);
         this.gate = new DefaultPathGate(opened);
+        this.switches = new SwitchPause(this.mono, refreshNanos);
     }
 
     /** No takeover will run, its leader holding no journal: nothing is held (M13.33n). */
@@ -112,9 +115,27 @@ public final class FastLeaderTerm {
         gate.noTakeover();
     }
 
-    /** Whether a default-path run of {@code stream} waits for the takeover (M13.33n). */
+    /** Whether a default-path run of {@code stream} waits: a takeover's, a switch's. */
     public boolean holdsDefault(RunKey stream) {
-        return gate.holds(stream, desk);
+        return gate.holds(stream, desk) || switches.holds(stream);
+    }
+
+    /** A default-path run of {@code stream} with a fast tail pauses it: §8's switch (M13.34r). */
+    public void switchPause(RunKey stream) {
+        CommitDesk d = desk;
+        if (d != null) {
+            d.leader().pauseForSwitch(stream).ifPresent(frontier -> {
+                switches.paused(stream, frontier, nextDecision());
+                d.askUpload();
+            });
+        }
+    }
+
+    /** One drain tick of the switches over {@code desk}: {@link SwitchPause#tick}. */
+    public boolean switchTick(CommitDesk desk, ToLongFunction<RunKey> chainNext)
+            throws IOException {
+        return switches.tick(desk.leader(), new RosterDecisions(store, prefix, epoch()),
+                this::rosterWritten, chainNext, gate::fast);
     }
 
     /** Whether a default-path run of {@code stream} is refused: its index fast here (M13.34c). */

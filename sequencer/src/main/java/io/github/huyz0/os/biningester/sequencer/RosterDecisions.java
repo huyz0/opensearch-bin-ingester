@@ -80,10 +80,22 @@ public final class RosterDecisions {
      * the caller read when it decided.
      */
     public Outcome record(Map<RunKey, Long> resumeAt, int since) throws IOException {
-        Objects.requireNonNull(resumeAt, "resumeAt");
         if (since < 0) {
             throw new IllegalArgumentException("a decision number is never negative: " + since);
         }
+        return record(resumeAt, stream -> since);
+    }
+
+    /**
+     * As {@link #record(Map, int)}, each stream with its own {@code since}
+     * (M13.34r review round 1, P1) -- in one write: a stream paused later
+     * must not be matched by an older decision of its own that the earliest
+     * stream's number would admit.
+     */
+    public Outcome record(Map<RunKey, Long> resumeAt,
+            java.util.function.ToIntFunction<RunKey> since) throws IOException {
+        Objects.requireNonNull(resumeAt, "resumeAt");
+        Objects.requireNonNull(since, "since");
         String key = Roster.key(prefix, epoch);
         for (int attempt = 0; attempt < FastTermStart.MAX_ATTEMPTS; attempt++) {
             Optional<ObjectStat> stat = store.stat(key);
@@ -101,7 +113,7 @@ public final class RosterDecisions {
             int next = decisions.isEmpty() ? 0 : decisions.get(decisions.size() - 1).seq() + 1;
             List<Roster.Decision> added = new ArrayList<>();
             for (Map.Entry<RunKey, Long> e : new TreeMap<>(resumeAt).entrySet()) {
-                boolean written = r.decisions().stream().anyMatch(d -> d.seq() >= since
+                boolean written = r.decisions().stream().anyMatch(d -> d.seq() >= since.applyAsInt(e.getKey())
                         && d.stream().equals(e.getKey()) && d.resumeAt() == e.getValue());
                 if (!written) {
                     added.add(new Roster.Decision(next++, e.getKey(), e.getValue()));

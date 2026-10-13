@@ -46,7 +46,7 @@ import java.util.function.LongSupplier;
  * unexposed, discarded, committed -- is assigned anew, a duplicate removed by
  * {@code _id} as the default path's retries are.
  */
-public final class FastWriteLeader implements TakeoverRun.Hold {
+public final class FastWriteLeader implements TakeoverRun.Hold, SwitchPause.Leader {
 
     /** How a COMMIT ended for now. */
     public sealed interface Outcome permits Pending, Answered, Wait {
@@ -613,6 +613,7 @@ public final class FastWriteLeader implements TakeoverRun.Hold {
      *
      * @return the discarded batches' keys: their writers were never acked
      */
+    @Override
     public Set<FastJournalRecord.IdempotencyKey> discardFrom(RunKey stream, long from)
             throws IOException {
         io.lock();
@@ -660,6 +661,7 @@ public final class FastWriteLeader implements TakeoverRun.Hold {
      * {@code chainNext} (M13.34q): never assigned below it again, and assigned
      * and exposed as before.
      */
+    @Override
     public synchronized void unpause(RunKey stream, long chainNext) {
         committed(stream, chainNext);
         paused.remove(stream);

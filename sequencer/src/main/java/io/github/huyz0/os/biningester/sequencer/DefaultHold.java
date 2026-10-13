@@ -37,6 +37,12 @@ final class DefaultHold {
      */
     static void await(FastLeaderTerm fast, List<CommitRequest> requests) throws IOException {
         refuseFast(fast, requests); // ⚠️ at once: never waited on (review round 1, P4)
+        // ⚠️ M13.34r: a stream with a fast tail paused for its switch, and waited for.
+        if (fast != null) {
+            for (CommitRequest request : requests) {
+                request.recordCounts().keySet().forEach(fast::switchPause);
+            }
+        }
         for (long polls = WAIT.toMillis() / POLL.toMillis(); polls > 0 && held(fast, requests);
                 polls--) {
             try {
