@@ -275,9 +275,23 @@ final class FastLeaderFrames {
      */
     static int publish(Sequencer held, FastDisk disk, Roster.Incarnation self,
             TermJoiner.Transport transport, FastPublishHandler.Pushed own) {
+        return publish(held, disk, self, transport, own, PUBLISH_BYTES);
+    }
+
+    /**
+     * The same, each PUBLISH carrying at most {@code runBytes} of entries.
+     *
+     * <p>⚠️ AN EXPOSING SEND, CHECKED AGAINST THE LEASE AT THE SEND (ADR-0081
+     * §3; M13.32f): up front, owed still while it forbids -- it may lapse after
+     * the exposure that owed them -- and again before each own delivery and
+     * each run sent, those past it dropped and read from the chain once
+     * uploaded.
+     */
+    static int publish(Sequencer held, FastDisk disk, Roster.Incarnation self,
+            TermJoiner.Transport transport, FastPublishHandler.Pushed own, long runBytes) {
         Optional<FastLeaderTerm> term = LocalSequencer.underneath(held)
                 .filter(LocalSequencer::serving).flatMap(LocalSequencer::fastTerm);
-        if (term.isEmpty() || disk.journal().isEmpty()) {
+        if (term.isEmpty() || disk.journal().isEmpty() || !term.get().mayExpose()) {
             return 0;
         }
         var desk = term.get().commitDesk(disk.journal().get(), self).publications();
@@ -287,6 +301,9 @@ final class FastLeaderFrames {
             Roster.Incarnation pod = owed.getKey();
             if (pod.equals(self)) {
                 for (FastJournalRecord.Entry e : owed.getValue()) {
+                    if (!term.get().mayExpose()) {
+                        return sent;
+                    }
                     try {
                         own.deliver(e);
                     } catch (IOException | RuntimeException undelivered) {
@@ -305,7 +322,10 @@ final class FastLeaderFrames {
                 continue;
             }
             for (List<FastJournalRecord.Entry> entries : chunks(owed.getValue(),
-                    PUBLISH_BYTES, e -> sizes.computeIfAbsent(e, x -> x.encode().length + 4L))) {
+                    runBytes, e -> sizes.computeIfAbsent(e, x -> x.encode().length + 4L))) {
+                if (!term.get().mayExpose()) {
+                    return sent;
+                }
                 try {
                     transport.exchange(pod.endpoint(), FastFrame.encode(term.get().epoch(),
                             self.podUid(), pod.podUid(), new FastPublishFrame.Publish(entries)));

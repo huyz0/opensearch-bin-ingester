@@ -60,7 +60,7 @@ class FastPublishServedTest {
             new Roster.Incarnation("b", "uid-b", "az-b", "b:1");
 
     private record Leading(LocalSequencer term, FastLeaderTerm fast, FastDisk disk,
-            CommitDesk desk) {
+            CommitDesk desk, FastLeaseFence fence) {
     }
 
     /** {@code fence}, holding its lease: the term may expose (M13.32a). */
@@ -103,7 +103,7 @@ class FastPublishServedTest {
                 B.podUid(), SELF.podUid()), new FastFrame.Join(B, FastFrame.Held.NONE)))
                 .isInstanceOf(FastFrame.Joined.class);
         return new Leading(term, fast, disk, fast.commitDesk(disk.journal().orElseThrow(),
-                SELF));
+                SELF), fence);
     }
 
     private static FastFrame.Header interestFrom(long epoch, String sender) {
@@ -292,6 +292,79 @@ class FastPublishServedTest {
             assertThat(reader.read(reader.find(S).orElseThrow()))
                     .extracting(SegmentRecord::id).containsExactly("d1");
             assertThat(otherTerm).isEmpty();
+        } finally {
+            l.disk().close();
+            l.term().close();
+        }
+    }
+
+    @Test
+    void noPUBLISHOrOwnPushGoesOutWhileTheLeaseForbidsAndBothAreOwedStill() throws Exception {
+        // ⚠️ M13.32f: checked at the send, not only at the exposure that owed it.
+        Leading l = leading(new MemoryBinStore(), false);
+        try {
+            l.desk().publications().interest(B, List.of(S), List.of());
+            FastLeaderFrames.interestOwn(l.term(), l.disk(), SELF, java.util.Set.of(S));
+            exposeOne(l, 1);
+            List<String> delivered = new ArrayList<>();
+
+            FastLeaderFrames.publish(l.term(), l.disk(), SELF, (endpoint, frame) -> {
+                delivered.add(endpoint);
+                return new byte[0];
+            }, e -> delivered.add("own"));
+
+            assertThat(delivered).isEmpty();
+            assertThat(l.desk().publications().take()).as("owed still")
+                    .containsKeys(B, SELF);
+        } finally {
+            l.disk().close();
+            l.term().close();
+        }
+    }
+
+    @Test
+    void aLEASELapsingDuringAPodsFirstRunSendsItsSecondNothing() throws Exception {
+        // ⚠️ M13.32f: before EACH run -- one slow exchange can outlast the margin.
+        Leading l = leading(new MemoryBinStore());
+        try {
+            l.desk().publications().interest(B, List.of(S), List.of());
+            exposeOne(l, 1);
+            exposeOne(l, 2);
+            List<String> frames = new ArrayList<>();
+
+            int published = FastLeaderFrames.publish(l.term(), l.disk(), SELF,
+                    (endpoint, frame) -> {
+                        frames.add(endpoint);
+                        l.fence().stopExposing();
+                        return new byte[0];
+                    }, e -> { }, 1);
+
+            assertThat(published).isEqualTo(1);
+            assertThat(frames).as("two runs owed; the second, past the lease, not sent")
+                    .hasSize(1);
+        } finally {
+            l.disk().close();
+            l.term().close();
+        }
+    }
+
+    @Test
+    void aLEASELapsingDuringTheFirstOwnDeliveryStopsTheSecond() throws Exception {
+        // ⚠️ M13.32f: before EACH own delivery too.
+        Leading l = leading(new MemoryBinStore());
+        try {
+            FastLeaderFrames.interestOwn(l.term(), l.disk(), SELF, java.util.Set.of(S));
+            exposeOne(l, 1);
+            exposeOne(l, 2);
+            List<Long> own = new ArrayList<>();
+
+            FastLeaderFrames.publish(l.term(), l.disk(), SELF, (endpoint, frame) -> new byte[0],
+                    e -> {
+                        own.add(e.firstOffset());
+                        l.fence().stopExposing();
+                    });
+
+            assertThat(own).hasSize(1);
         } finally {
             l.disk().close();
             l.term().close();

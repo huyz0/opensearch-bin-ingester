@@ -513,7 +513,7 @@ public final class FastLeaderTerm {
         int sent = 0;
         for (FastWriteLeader.Exposure owed : desk.exposures()) {
             Optional<Roster.Member> writer = own.member(owed.writerUid());
-            if (!mayExpose()) { // ⚠️ its review round 1, P2: before EACH send
+            if (!mayExpose()) { // ⚠️ M13.32a review round 1, P2: before EACH send
                 break;
             }
             if (writer.isEmpty()) {
