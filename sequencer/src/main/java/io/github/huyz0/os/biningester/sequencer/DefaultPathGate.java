@@ -29,8 +29,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>⚠️ STATED LIMITS: the catalog is learnt once per drain tick, so a
  * commit between a catalog's flip to fast and the next tick is admitted; and
  * an inbox intent deferred EARLIER (the leader unreachable, the writer's
- * registration stale) for a stream now fast is refused by every drain, and
- * stalls that pod's inbox -- M13.34m's to close. A switch to {@code wal=false}
+ * registration stale) for a stream now fast has those runs written through
+ * the leader's own fast path by the drain ({@link #redirect}; M13.34m). A switch to {@code wal=false}
  * with a fast tail uncommitted no longer admits a default commit over it: the
  * run pauses the stream and waits (M13.34r, {@code SwitchPause}).
  */
@@ -40,6 +40,8 @@ final class DefaultPathGate {
     private final Set<UUID> walked = ConcurrentHashMap.newKeySet();
     /** The catalog's fast indices, as last told; the term's starting ones first. */
     private volatile Set<UUID> catalogFast;
+    /** Where the inbox drain writes an intent's fast runs (M13.34m); none until told. */
+    volatile InboxDrain.FastRedirect redirect = InboxDrain.FastRedirect.NONE;
 
     DefaultPathGate(FastTermOpening.Opened opened) {
         Objects.requireNonNull(opened, "opened");

@@ -3,12 +3,17 @@ package io.github.huyz0.os.biningester.sequencer;
 
 import io.github.huyz0.os.biningester.binstore.BinStore;
 import io.github.huyz0.os.biningester.binstore.GovernorScope;
+import io.github.huyz0.os.biningester.format.RunKey;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
+import java.util.TreeMap;
+import java.util.TreeSet;
 import java.util.function.LongConsumer;
 
 /**
@@ -31,12 +36,49 @@ import java.util.function.LongConsumer;
  * cost scales with pods rather than with the number of intents accumulated
  * during a partition (M9.12); the inbox's one GET per intent remains bounded
  * recovery work.
+ *
+ * <p>⚠️ **AN INTENT's RUNS OF A STREAM THE LEADER HOLDS FAST ARE WRITTEN FAST**
+ * (M13.34m; ADR-0081 §8): deferred while its writer's registration was stale,
+ * the producer answered 202, a default commit of them is refused -- and was,
+ * by every drain, stalling that pod. They are written through the leader's
+ * own fast path FIRST ({@link FastRedirect}), then the rest committed under
+ * the intent's triple, so a failed write leaves the intent unapplied. Each
+ * such intent costs its own commit, its pod's plain intents around it still
+ * batched; an intent applied is deleted even if a later one of its pod fails.
+ * ⚠️ AT LEAST ONCE, NEVER LOST: an intent whose fast write landed stays if
+ * a later step fails -- a second fast run, its rest's commit -- or if the
+ * drain dies before its delete, and every later drain writes those records
+ * again while that lasts. One the window has applied is never written again.
  */
 public final class InboxDrain {
 
     private static final System.Logger LOG = System.getLogger(InboxDrain.class.getName());
 
+    /** An intent's runs of streams the leader holds fast, written through its fast path. */
+    @FunctionalInterface
+    public interface FastRedirect {
+
+        /** None set: the intent stays, as before M13.34m. */
+        FastRedirect NONE = (intent, runs) -> {
+            throw new IOException("no fast path to write " + runs + " of an intent through");
+        };
+
+        /**
+         * Writes {@code runs}' records, read from {@code intent}'s segment, fast.
+         *
+         * @throws IOException not all were written: the intent stays
+         */
+        void write(CommitRequest intent, Set<RunKey> runs) throws IOException;
+    }
+
     private InboxDrain() {
+    }
+
+    /** {@code term}'s drains write fast runs through {@code redirect} (M13.34m). */
+    public static void redirect(Sequencer term, FastRedirect redirect) {
+        Objects.requireNonNull(redirect, "redirect");
+        LocalSequencer.underneath(term).flatMap(LocalSequencer::fastTerm)
+                .ifPresent(fast -> fast.gate.redirect = redirect);
     }
 
     /**
@@ -111,6 +153,8 @@ public final class InboxDrain {
         List<String> applied = new ArrayList<>();
         IOException first = null;
         int stalled = 0;
+        Optional<FastLeaderTerm> fast = LocalSequencer.underneath(term)
+                .flatMap(LocalSequencer::fastTerm);
         for (List<Inbox.Pending> batch : byPod.values()) {
             Inbox.Pending firstIntent = batch.getFirst();
             try {
@@ -122,10 +166,7 @@ public final class InboxDrain {
                 List<CommitRequest> unapplied = LocalSequencer.underneath(term).isPresent()
                         ? LocalSequencer.underneath(term).get().unapplied(requests)
                         : requests;
-                if (!unapplied.isEmpty()) {
-                    term.commitAll(unapplied);
-                }
-                applied.addAll(batch.stream().map(Inbox.Pending::key).toList());
+                applyInOrder(term, fast, batch, unapplied, applied);
             } catch (FencedException fenced) {
                 deleteApplied(store, applied);
                 throw fenced;
@@ -151,6 +192,55 @@ public final class InboxDrain {
                     first);
         }
         return applied.size();
+    }
+
+    /**
+     * {@code unapplied} committed in {@code batch}'s order, an intent with a
+     * fast run split around its fast write (M13.34m); each intent's key added
+     * to {@code applied} once it is, an already applied one's with its neighbours.
+     */
+    private static void applyInOrder(Sequencer term, Optional<FastLeaderTerm> fast,
+            List<Inbox.Pending> batch, List<CommitRequest> unapplied, List<String> applied)
+            throws IOException {
+        Set<CommitRequest> pending = new java.util.HashSet<>(unapplied);
+        List<CommitRequest> plain = new ArrayList<>();
+        List<String> plainKeys = new ArrayList<>();
+        for (Inbox.Pending intent : batch) {
+            CommitRequest request = intent.request();
+            Set<RunKey> runs = new TreeSet<>();
+            if (pending.contains(request) && fast.isPresent()) {
+                request.recordCounts().keySet().stream().filter(fast.get()::fastHere)
+                        .forEach(runs::add);
+            }
+            if (runs.isEmpty()) {
+                if (pending.contains(request)) {
+                    plain.add(request);
+                }
+                plainKeys.add(intent.key());
+                continue;
+            }
+            commitPlain(term, plain, plainKeys, applied);
+            fast.get().gate.redirect.write(request, runs);
+            Map<RunKey, Integer> rest = new TreeMap<>(request.recordCounts());
+            rest.keySet().removeAll(runs);
+            if (!rest.isEmpty()) {
+                term.commitAll(List.of(new CommitRequest(request.podId(),
+                        request.incarnationId(), request.flushSeq(), request.segmentKey(), rest)));
+            }
+            applied.add(intent.key());
+        }
+        commitPlain(term, plain, plainKeys, applied);
+    }
+
+    /** The plain intents so far, in one commit, then counted applied. */
+    private static void commitPlain(Sequencer term, List<CommitRequest> plain,
+            List<String> keys, List<String> applied) throws IOException {
+        if (!plain.isEmpty()) {
+            term.commitAll(List.copyOf(plain));
+        }
+        applied.addAll(keys);
+        plain.clear();
+        keys.clear();
     }
 
     private static void deleteApplied(BinStore store, List<String> applied) throws IOException {

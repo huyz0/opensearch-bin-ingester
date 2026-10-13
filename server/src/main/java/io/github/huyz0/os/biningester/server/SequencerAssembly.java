@@ -93,7 +93,22 @@ final class SequencerAssembly {
             java.util.function.Supplier<Map<java.util.UUID, Integer>> walQuorums)
             throws java.io.IOException {
         return create(config, store, transport, clock, mono, challenge, leaseManagerFactory,
-                backfillStarter, metrics, InboxDrain::inBackground, walQuorums);
+                backfillStarter, metrics, walQuorums, InboxDrain.FastRedirect.NONE);
+    }
+
+    /**
+     * The same, each term's inbox drains writing an intent's runs of a stream
+     * it holds fast through {@code redirect} (M13.34m), told before the
+     * takeover's own drain.
+     */
+    static FleetSequencer create(ServerConfig config, BinStore store,
+            SequencerTransport transport, Clock clock, MonotonicClock mono,
+            LeaseChallenge challenge, RetentionAssembly.LeaseManagerFactory leaseManagerFactory,
+            Assembly.BackfillStarter backfillStarter, IngesterMetrics metrics,
+            java.util.function.Supplier<Map<java.util.UUID, Integer>> walQuorums,
+            InboxDrain.FastRedirect redirect) throws java.io.IOException {
+        return create(config, store, transport, clock, mono, challenge, leaseManagerFactory,
+                backfillStarter, metrics, InboxDrain::inBackground, walQuorums, redirect);
     }
 
     /** {@link #retryDeferredDrains(Runnable, Duration)} every renew interval of {@code config}. */
@@ -157,6 +172,18 @@ final class SequencerAssembly {
                 backfillStarter, metrics, drainStarter, Map::of);
     }
 
+    /** The same with every fast index's {@code wal_quorum}, and no fast redirect. */
+    static FleetSequencer create(ServerConfig config, BinStore store,
+            SequencerTransport transport, Clock clock, MonotonicClock mono,
+            LeaseChallenge challenge, RetentionAssembly.LeaseManagerFactory leaseManagerFactory,
+            Assembly.BackfillStarter backfillStarter, IngesterMetrics metrics,
+            DrainStarter drainStarter,
+            java.util.function.Supplier<Map<java.util.UUID, Integer>> walQuorums)
+            throws java.io.IOException {
+        return create(config, store, transport, clock, mono, challenge, leaseManagerFactory,
+                backfillStarter, metrics, drainStarter, walQuorums, InboxDrain.FastRedirect.NONE);
+    }
+
     /**
      * The same, with every fast index's {@code wal_quorum} the term record
      * starts with, read from this pod's catalog at each term start (M13.27l).
@@ -166,8 +193,8 @@ final class SequencerAssembly {
             LeaseChallenge challenge, RetentionAssembly.LeaseManagerFactory leaseManagerFactory,
             Assembly.BackfillStarter backfillStarter, IngesterMetrics metrics,
             DrainStarter drainStarter,
-            java.util.function.Supplier<Map<java.util.UUID, Integer>> walQuorums)
-            throws java.io.IOException {
+            java.util.function.Supplier<Map<java.util.UUID, Integer>> walQuorums,
+            InboxDrain.FastRedirect redirect) throws java.io.IOException {
         LeaseConfig leases = leaseConfig(config);
         // ⚠️ THE SEQUENCER'S LEASE ONLY reports to the fence; the GC lease's
         // holder exposes nothing.
@@ -199,7 +226,7 @@ final class SequencerAssembly {
             // forwarded to it answered 409 until the process ended.
             try {
                 return Optional.of(started(config, store, mono, metrics, backfillStarter,
-                        drainStarter, term, opened.get()));
+                        drainStarter, redirect, term, opened.get()));
             } catch (RuntimeException | Error failed) {
                 try {
                     term.close();
@@ -214,7 +241,8 @@ final class SequencerAssembly {
     /** The term's start after its fast term opened: attached, backfilling, draining, batched. */
     private static BatchingSequencer started(ServerConfig config, BinStore store,
             MonotonicClock mono, IngesterMetrics metrics, Assembly.BackfillStarter backfillStarter,
-            DrainStarter drainStarter, LocalSequencer term, FastTermOpening.Opened opened) {
+            DrainStarter drainStarter, InboxDrain.FastRedirect redirect, LocalSequencer term,
+            FastTermOpening.Opened opened) {
         // ⚠️ M13.27j: the term's JOINs, answered once its roster lists them.
         term.attach(new FastLeaderTerm(opened, new JoinDesk(
                 new RosterJoins(store, config.prefix(), term.epoch(), mono,
@@ -233,6 +261,9 @@ final class SequencerAssembly {
         }
         // ⚠️ M8.14a: the intents of pods that died deferring
         // have nobody else to ask for a drain.
+        // ⚠️ M13.34m: an intent's runs of a stream now fast, written fast -- told
+        // BEFORE that drain, which a pod that died deferring has no other of.
+        InboxDrain.redirect(term, redirect);
         drainStarter.start(store, config.prefix(), term, metrics::failedIntentBatch);
         return new BatchingSequencer(term, COMMIT_WINDOW);
     }

@@ -7,6 +7,7 @@ import io.github.huyz0.os.biningester.binstore.IndexCostLedger;
 import io.github.huyz0.os.biningester.binstore.PutPurposeCounts;
 import io.github.huyz0.os.biningester.binstore.StoreCounts;
 import io.github.huyz0.os.biningester.ingest.DefaultIngest;
+import io.github.huyz0.os.biningester.ingest.FastDrainRedirect;
 import io.github.huyz0.os.biningester.ingest.IndexCatalog;
 import io.github.huyz0.os.biningester.ingest.Ingest;
 import io.github.huyz0.os.biningester.ingest.RoutedIngest;
@@ -234,9 +235,9 @@ public final class Assembly implements AutoCloseable {
         RetentionConfig kept = config.retention();
         this.watermarks = new WatermarkTable(clock, kept.reportTimeout(), kept.copyExpiry(),
                 kept.minRetention());
-
         this.sequencer = SequencerAssembly.create(config, store, transport, clock, mono,
-                challenge, leaseManagerFactory, backfillStarter, metrics, catalog::walQuorums);
+                challenge, leaseManagerFactory, backfillStarter, metrics, catalog::walQuorums,
+                FastDrainRedirect.of(store, this::defaultIngest)); // ⚠️ M13.34m
         // ⚠️ NOT ON `toClose`: `DefaultIngest.close()` closes it, and a second unguarded close
         // would close a transport THIS CLASS DOES NOT OWN (MEASURED: the writer releases the lease).
         // ⚠️ A FAILURE HERE RELEASES THE TERM just taken; see WritePathAssembly.
@@ -432,7 +433,6 @@ public final class Assembly implements AutoCloseable {
 
     static final String FLUSHED = "flushed";
     static final String GRAPH_CLOSED = "graph closed, lease released";
-
     private volatile java.util.function.Consumer<String> journal = event -> { };
 
     /**

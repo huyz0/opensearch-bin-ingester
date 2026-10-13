@@ -64,8 +64,8 @@ public final class FastLeaderTerm {
     private final long refreshNanos;
     /** This term's record, fed from the catalog and read by its desk (M13.27l). */
     private final TermRecordWriter termRecord;
-    /** What a default-path run may not do here (M13.33n, M13.34c). */
-    private final DefaultPathGate gate;
+    /** What a default-path run may not do here (M13.33n, M13.34c); InboxDrain's too. */
+    final DefaultPathGate gate;
     /** Its streams switching to the default path (M13.34r). */
     private final SwitchPause switches;
     /** Its uploads' pacing and numbering (M13.31a), split out at this file's ceiling. */

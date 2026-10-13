@@ -359,6 +359,11 @@ public final class DefaultIngest implements Ingest {
                 Objects.requireNonNull(path, "path"));
     }
 
+    /** The fast path {@link #routeFast} set, or none yet: an inbox drain's too (M13.34m). */
+    public FastPath fastPath() {
+        return fastRoute.path();
+    }
+
     /**
      * Uploads a takeover's recovered runs as one segment (M13.33p; ADR-0081
      * §5 step 6): its key, which the recovery entry commits.
