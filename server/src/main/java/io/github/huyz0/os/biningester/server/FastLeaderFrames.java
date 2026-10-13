@@ -337,6 +337,24 @@ final class FastLeaderFrames {
     }
 
     /**
+     * The pushed copies this pod holds, dropped below each stream's committed
+     * next offset in the chain the term it leads holds (M13.30l): a leader
+     * sends no RELEASE to itself. Read from memory; nothing when it leads no
+     * serving term.
+     */
+    static void releaseOwnCopies(Sequencer held,
+            io.github.huyz0.os.biningester.ingest.PushedCopies copies) {
+        LocalSequencer.underneath(held).filter(LocalSequencer::serving).ifPresent(chain ->
+                releaseOwnCopies(copies, chain::committedNext));
+    }
+
+    /** {@code copies} dropped below each stream's {@code committedNext}. */
+    static void releaseOwnCopies(io.github.huyz0.os.biningester.ingest.PushedCopies copies,
+            ToLongFunction<io.github.huyz0.os.biningester.format.RunKey> committedNext) {
+        copies.streams().forEach(s -> copies.release(s, committedNext.applyAsLong(s)));
+    }
+
+    /**
      * {@code entries}, in order, cut into runs of at most {@code bound} bytes
      * by {@code size} (M13.30c review, P2): one exposure step can hold many
      * batches, each at most the _bulk chunk. An entry over the bound alone is

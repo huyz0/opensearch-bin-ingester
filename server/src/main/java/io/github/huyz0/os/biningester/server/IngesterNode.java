@@ -328,6 +328,10 @@ public final class IngesterNode implements AutoCloseable {
                 // after the upload, so an unanswering pod never delays it.
                 FastLeaderFrames.publish(assembly.heldTerm(), commitDisk, self, exposing,
                         assembly.defaultIngest()::deliverPushed);
+                // ⚠️ M13.30l: the leader sends itself no RELEASE, so its own copies
+                // are dropped once its chain passes them.
+                FastLeaderFrames.releaseOwnCopies(assembly.heldTerm(),
+                        assembly.defaultIngest().pushedCopies());
                 // ⚠️ M13.83b: last, so a slow leader never delays an exposure.
                 forwarder.forward(assembly.catalog(), commitDisk.joined()::latest,
                         FastPeer.leading(assembly));
@@ -351,7 +355,8 @@ public final class IngesterNode implements AutoCloseable {
             FastMetrics.bindJournal(commitDisk);
             // ⚠️ M13.28a: every pod holds copies, whichever term it leads.
             FastHolderFrames.register(fastFrames::handle, commitDisk,
-                    epoch -> FastPeer.ownTerm(assembly.heldTerm()) == epoch, config.podUid());
+                    epoch -> FastPeer.ownTerm(assembly.heldTerm()) == epoch, config.podUid(),
+                    assembly.defaultIngest().pushedCopies()::release); // M13.30l
             // ⚠️ M13.30i: a joined term's leader's PUBLISH, to this pod's hub.
             FastPublishHandler.register(fastFrames::handle, commitDisk.joined(),
                     assembly.defaultIngest()::deliverPushed);

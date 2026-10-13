@@ -75,6 +75,26 @@ class DefaultIngestPushedTest {
     }
 
     @Test
+    void aPUSHEDEntrysCopyIsKeptUnderItsFastKey() throws Exception {
+        // ⚠️ M13.30l: for a subscriber in another zone, pushed the key alone.
+        MemoryBinStore store = new MemoryBinStore();
+        try (DefaultIngest ingest = new DefaultIngest(
+                IngestTestSupport.pinnedIntervalConfig(IngestTestSupport.NEVER, 8L << 20),
+                store, IngestTestSupport.PREFIX, "pod1",
+                IngestTestSupport.sequencer(store, "pod1"), new SubscriptionHub(),
+                Clock.systemUTC(), index -> IngestTestSupport.LOGS, key -> { },
+                new IndexCostLedger())) {
+            ingest.deliverPushed(entry(40, "a", "b"));
+
+            byte[] copy = ingest.pushedCopies()
+                    .copy(FastKey.of(IngestTestSupport.PREFIX, 7, 3, S, 40)).orElseThrow();
+            SegmentReader reader = SegmentReader.open(copy);
+            assertThat(reader.read(reader.find(S).orElseThrow()))
+                    .extracting(SegmentRecord::id).containsExactly("a", "b");
+        }
+    }
+
+    @Test
     void aPUSHEDEntrysServingNeverPresigns() throws Exception {
         MemoryBinStore store = new MemoryBinStore();
         try (DefaultIngest ingest = new DefaultIngest(

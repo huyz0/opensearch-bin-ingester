@@ -25,6 +25,8 @@ final class PushedEntries {
     private final Clock clock;
     private final SubscriptionHub hub;
     private final SegmentServing serving;
+    /** Each delivered entry's copy, for a proxied read by its key (M13.30l). */
+    private final PushedCopies copies = new PushedCopies(PushedCopies.DEFAULT_MAX_BYTES);
 
     PushedEntries(String prefix, Clock clock, SubscriptionHub hub, SegmentServing serving) {
         this.prefix = Objects.requireNonNull(prefix, "prefix");
@@ -37,9 +39,18 @@ final class PushedEntries {
         long now = clock.millis();
         SegmentWriter writer = new SegmentWriter();
         entry.records().forEach(r -> writer.add(entry.key(), r, now));
-        hub.publishPushed(FastKey.of(prefix, entry.epoch(), entry.assignedAfter(), entry.key(),
-                entry.firstOffset()), entry.key(), entry.firstOffset(), entry.records().size(),
-                writer.toByteArray(now), serving);
+        String key = FastKey.of(prefix, entry.epoch(), entry.assignedAfter(), entry.key(),
+                entry.firstOffset());
+        byte[] bytes = writer.toByteArray(now);
+        // ⚠️ KEPT BEFORE IT IS PUSHED (M13.30l): a subscriber in another zone
+        // is pushed the key alone and reads it back at once.
+        copies.put(key, entry.key(), entry.firstOffset(), entry.records().size(), bytes);
+        hub.publishPushed(key, entry.key(), entry.firstOffset(), entry.records().size(), bytes,
+                serving);
+    }
+
+    PushedCopies copies() {
+        return copies;
     }
 
     /** {@code serving} as a backend that cannot presign: never {@code direct}. */

@@ -402,6 +402,11 @@ public final class DefaultIngest implements Ingest {
         pushed.deliver(entry);
     }
 
+    /** The pushed entries' copies, for {@code /seg} and their release (M13.30l). */
+    public PushedCopies pushedCopies() {
+        return pushed.copies();
+    }
+
     /**
      * A fast upload's segment, published by {@link #publishFast}, is
      * committed by {@code delta} (M13.30a; ADR-0081 §6): delivered as a

@@ -41,6 +41,29 @@ class FastReleaseServedTest {
     }
 
     @Test
+    void aRELEASEFromTheJoinedTermsLeaderDropsItsPushedCopiesOnADisklessPodToo()
+            throws Exception {
+        // ⚠️ M13.30l: copies are kept whether or not the pod journals.
+        try (FastDisk disk = FastDisk.open(new MemoryBinStore(), "lease", Optional.empty(),
+                new FastDiskTest.Files())) {
+            disk.joined().joined(3, 0, "uid-l");
+            List<String> dropped = new java.util.ArrayList<>();
+            Map<Integer, FastFrameRouter.Handler> handlers = new HashMap<>();
+            FastHolderFrames.register(handlers::put, disk, epoch -> false, "uid-pod1",
+                    (stream, below) -> dropped.add(stream + "<" + below));
+            FastFrameRouter.Handler release = handlers.get(FastTakeoverFrame.KIND_RELEASE);
+
+            release.answer(new FastFrame.Header(FastTakeoverFrame.KIND_RELEASE, 3, "uid-x",
+                    "uid-pod1"), releaseAll());
+            release.answer(new FastFrame.Header(FastTakeoverFrame.KIND_RELEASE, 3, "uid-l",
+                    "uid-pod1"), releaseAll());
+
+            assertThat(dropped).as("the leader's only")
+                    .containsExactly(FastDepartureTest.STREAM + "<1000");
+        }
+    }
+
+    @Test
     void aJOURNALEDPodReleasesForItsJoinedTermsLeader() throws Exception {
         MemoryBinStore store = FastDepartureTest.leaseHeldBy("uid-l");
         try (FastDisk disk = FastDepartureTest.journaledDisk(store)) {

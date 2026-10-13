@@ -28,6 +28,43 @@ public final class FastKey {
     private FastKey() {
     }
 
+    /** A fast key's fields, as {@link #of} wrote them. */
+    public record Parsed(String prefix, long epoch, long assignedAfter, RunKey key,
+            long firstOffset) {
+    }
+
+    /**
+     * {@code key}'s fields if it is a canonical fast key (M13.30l): the key
+     * {@link #of} writes from them, and nothing else -- empty for any other
+     * string, a data segment's key included.
+     */
+    public static java.util.Optional<Parsed> parse(String key) {
+        if (key == null) {
+            return java.util.Optional.empty();
+        }
+        String[] parts = key.split("/", -1);
+        int n = parts.length;
+        if (n < 7 || !"fast".equals(parts[n - 6]) || parts[n - 5].length() != 16
+                || parts[n - 4].length() != 8 || parts[n - 1].length() != 16) {
+            return java.util.Optional.empty();
+        }
+        try {
+            String prefix = String.join("/", java.util.Arrays.copyOfRange(parts, 0, n - 6));
+            long epoch = Long.parseUnsignedLong(parts[n - 5], 16);
+            long assignedAfter = Long.parseLong(parts[n - 4], 16);
+            RunKey run = RunKey.ofIndexUuid(parts[n - 3], Integer.parseInt(parts[n - 2]));
+            long firstOffset = Long.parseUnsignedLong(parts[n - 1], 16);
+            // ⚠️ CANONICAL ONLY: a key that does not round-trip names no
+            // entry this pod could hold under it.
+            return key.equals(of(prefix, epoch, assignedAfter, run, firstOffset))
+                    ? java.util.Optional.of(new Parsed(prefix, epoch, assignedAfter, run,
+                            firstOffset))
+                    : java.util.Optional.empty();
+        } catch (IllegalArgumentException notAFastKey) {
+            return java.util.Optional.empty();
+        }
+    }
+
     /** The key of the entry of {@code key} at {@code firstOffset}, assigned in term {@code epoch}. */
     public static String of(String prefix, long epoch, long assignedAfter, RunKey key,
             long firstOffset) {

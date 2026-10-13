@@ -24,6 +24,19 @@ class FastKeyTest {
     }
 
     @Test
+    void aFASTKeyParsesToItsFieldsAndNothingElseDoes() {
+        // ⚠️ M13.30l: what /seg serves by; a prefix may itself hold "/fast/".
+        String key = FastKey.of("bins/fast/a", 7, 0xFFFF_FFFEL, ORDERS_12, 40);
+
+        assertThat(FastKey.parse(key)).hasValue(new FastKey.Parsed("bins/fast/a", 7,
+                0xFFFF_FFFEL, ORDERS_12, 40));
+        assertThat(FastKey.parse(key.replace("/fffffffe/", "/FFFFFFFE/")))
+                .as("hex that parses, but not as it is written").isEmpty();
+        assertThat(FastKey.parse("bins/cluster-a/data/2026/10/13/08/x.bseg")).isEmpty();
+        assertThat(FastKey.parse(null)).isEmpty();
+    }
+
+    @Test
     void aKEYOverTheBoundOrAnAssignedAfterOverAU32IsNone() {
         assertThatThrownBy(() -> FastKey.of("p".repeat(1_000), 7, 0, ORDERS_12, 0))
                 .isInstanceOf(IllegalArgumentException.class);

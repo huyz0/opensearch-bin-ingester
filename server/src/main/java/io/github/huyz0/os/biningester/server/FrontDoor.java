@@ -281,7 +281,8 @@ public final class FrontDoor implements AutoCloseable {
                 // per-pod NFR-5 counter. ⚠️ AND ITS ABSENT-KEY `stat` THROUGH
                 // THE NODE's STORE (M10.26), so it is counted like the GETs.
                 .register(SegmentFetchService.over(
-                        config.prefix(), assembly.segmentProxy(), assembly.nodeStore(), crossAz));
+                        config.prefix(), assembly.segmentProxy(), assembly.nodeStore(), crossAz,
+                        assembly.defaultIngest().pushedCopies()::copy)); // M13.30l
         // ⚠️ M11.4, ADR-0077: each index's share of THIS pod's requests, from the
         // ledger its stores charge. No request of its own. ⚠️ ONLY WHERE TURNED ON
         // (M12.6, M11 review F7): it names indices on the producer port, which is

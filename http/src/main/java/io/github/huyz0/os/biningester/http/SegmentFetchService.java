@@ -4,6 +4,7 @@ package io.github.huyz0.os.biningester.http;
 import io.github.huyz0.os.biningester.binstore.BinStore;
 import io.github.huyz0.os.biningester.binstore.CrossAzBytes;
 import io.github.huyz0.os.biningester.client.SegmentFetchRoute;
+import io.github.huyz0.os.biningester.format.FastKey;
 import io.github.huyz0.os.biningester.format.SegmentKey;
 import io.github.huyz0.os.biningester.ingest.SegmentProxy;
 import io.github.huyz0.os.biningester.ingest.SegmentSink;
@@ -76,8 +77,15 @@ public final class SegmentFetchService implements HttpService {
         boolean exists(String key) throws IOException;
     }
 
+    /** A pushed fast entry's copy by its fast key, or empty (M13.30l). */
+    @FunctionalInterface
+    public interface FastCopies {
+        java.util.Optional<byte[]> copy(String fastKey);
+    }
+
     private final String prefix;
     private final Streamer streamer;
+    private final FastCopies copies;
     private final Presence presence;
     private final CrossAzBytes crossAz;
 
@@ -95,6 +103,12 @@ public final class SegmentFetchService implements HttpService {
 
     SegmentFetchService(String prefix, Streamer streamer, Presence presence,
             CrossAzBytes crossAz) {
+        this(prefix, streamer, presence, crossAz, key -> java.util.Optional.empty());
+    }
+
+    SegmentFetchService(String prefix, Streamer streamer, Presence presence,
+            CrossAzBytes crossAz, FastCopies copies) {
+        this.copies = Objects.requireNonNull(copies, "copies");
         this.prefix = Objects.requireNonNull(prefix, "prefix");
         this.streamer = Objects.requireNonNull(streamer, "streamer");
         this.presence = Objects.requireNonNull(presence, "presence");
@@ -111,9 +125,17 @@ public final class SegmentFetchService implements HttpService {
             CrossAzBytes crossAz) {
         Objects.requireNonNull(proxy, "proxy");
         Objects.requireNonNull(store, "store");
+        return over(prefix, proxy, store, crossAz, key -> java.util.Optional.empty());
+    }
+
+    /** The same, a fast key served from {@code copies} (ADR-0082 §6; M13.30l). */
+    public static SegmentFetchService over(String prefix, SegmentProxy proxy, BinStore store,
+            CrossAzBytes crossAz, FastCopies copies) {
+        Objects.requireNonNull(proxy, "proxy");
+        Objects.requireNonNull(store, "store");
         return new SegmentFetchService(prefix,
                 (key, sink) -> proxy.streamTo(key, List.of(sink)),
-                key -> store.stat(key).isPresent(), crossAz);
+                key -> store.stat(key).isPresent(), crossAz, copies);
     }
 
     @Override
@@ -135,6 +157,10 @@ public final class SegmentFetchService implements HttpService {
 
     private void fetch(ServerRequest request, ServerResponse response) {
         String key = request.query().first(SegmentFetchRoute.KEY_PARAM).orElse(null);
+        if (FastKey.parse(key).filter(k -> k.prefix().equals(prefix)).isPresent()) {
+            fetchFast(key, request, response);
+            return;
+        }
         if (!servable(key)) {
             response.status(Status.BAD_REQUEST_400)
                     .send("not a data segment of this deployment");
@@ -167,6 +193,28 @@ public final class SegmentFetchService implements HttpService {
                     .send(new byte[0]);
             return;
         }
+        relay.finish();
+    }
+
+    /**
+     * A fast key (ADR-0082 §6; M13.30l): served from the copy pushed to this
+     * pod, or {@code 404} -- released, evicted, or never pushed here -- and
+     * never remembered absent, since a PUBLISH may still bring it. ⚠️ The
+     * store is never asked: the key names no object.
+     */
+    private void fetchFast(String key, ServerRequest request, ServerResponse response) {
+        java.util.Optional<byte[]> copy = copies.copy(key);
+        if (copy.isEmpty()) {
+            response.status(Status.NOT_FOUND_404).send("no such fast entry");
+            return;
+        }
+        Relay relay = new Relay(response);
+        try {
+            relay.write(copy.get(), 0, copy.get().length);
+        } catch (IOException failed) {
+            throw new UncheckedIOException("the response failed mid-entry", failed);
+        }
+        relay.count(request.query().first(SegmentFetchRoute.AZ_PARAM).orElse(null));
         relay.finish();
     }
 

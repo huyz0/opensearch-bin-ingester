@@ -42,6 +42,18 @@ final class FastHolderFrames {
      */
     static void register(BiConsumer<Integer, FastFrameRouter.Handler> handle, FastDisk disk,
             java.util.function.LongPredicate leads, String selfUid) {
+        register(handle, disk, leads, selfUid, (stream, below) -> { });
+    }
+
+    /**
+     * The same, a RELEASE from a joined term's leader also dropping the
+     * pushed copies it passes (M13.30l) -- on a diskless pod too.
+     *
+     * @param releasedCopies told each stream's release-below offset
+     */
+    static void register(BiConsumer<Integer, FastFrameRouter.Handler> handle, FastDisk disk,
+            java.util.function.LongPredicate leads, String selfUid,
+            BiConsumer<io.github.huyz0.os.biningester.format.RunKey, Long> releasedCopies) {
         Optional<ReplicaHolder> holder = disk.journal().map(
                 journal -> new ReplicaHolder(journal, disk.joined(), disk.gate(),
                         disk.fence()::highest));
@@ -73,10 +85,18 @@ final class FastHolderFrames {
                         new io.github.huyz0.os.biningester.sequencer.ReleaseAnswer(journal,
                                 disk.joined()));
         handle.accept(io.github.huyz0.os.biningester.format.FastTakeoverFrame.KIND_RELEASE,
-                (header, body) -> releases.isEmpty()
-                        ? new FastFrame.HeldStatusReport(FastFrame.HeldStatus.NONE)
-                        : releases.get().answer(header,
-                                (io.github.huyz0.os.biningester.format.FastTakeoverFrame.Release) body));
+                (header, body) -> {
+                    var release = (io.github.huyz0.os.biningester.format.FastTakeoverFrame.Release) body;
+                    // ⚠️ M13.30l: only the joined term's leader releases a copy.
+                    if (disk.joined().leaderOf(header.epoch())
+                            .filter(header.senderUid()::equals).isPresent()) {
+                        release.streams().forEach(at ->
+                                releasedCopies.accept(at.stream(), at.below()));
+                    }
+                    return releases.isEmpty()
+                            ? new FastFrame.HeldStatusReport(FastFrame.HeldStatus.NONE)
+                            : releases.get().answer(header, release);
+                });
         handle.accept(FastWriteFrame.KIND_EXPOSED, (header, body) -> {
             // ⚠️ THE LEADER IS A WRITER OF ITS OWN TERM (M13.84; ADR-0081 §2)
             // and joins no term of its own: its EXPOSEDs to itself are
