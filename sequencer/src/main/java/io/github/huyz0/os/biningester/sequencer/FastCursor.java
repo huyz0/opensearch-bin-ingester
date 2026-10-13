@@ -96,6 +96,15 @@ public final class FastCursor {
         return count >= 1 && count <= bound && s[1] - s[0] + count <= bound;
     }
 
+    /**
+     * Whether {@code stream} is open with offsets assigned past its committed
+     * next offset: a fast tail a switch must pause (M13.34q).
+     */
+    public synchronized boolean hasTail(RunKey stream) {
+        long[] s = streams.get(Objects.requireNonNull(stream, "stream"));
+        return s != null && s[1] > s[0];
+    }
+
     /** The chain committed {@code stream} up to {@code committedNext}: the bound moves up. */
     public synchronized void committed(RunKey stream, long committedNext) {
         long[] s = state(stream);

@@ -283,6 +283,22 @@ public final class QuorumFrontier {
     }
 
     /**
+     * Holds {@code stream}'s frontier where it is, for a switch (M13.34q;
+     * ADR-0081 §8, round 3 R3-1): nothing more exposed on it, the frontier
+     * returned read in the same step.
+     */
+    public synchronized long hold(RunKey stream) {
+        Stream s = stream(stream);
+        s.held = true;
+        return s.frontier;
+    }
+
+    /** {@code stream} exposed again: the switch that held it is over (M13.34q). */
+    public synchronized void release(RunKey stream) {
+        stream(stream).held = false;
+    }
+
+    /**
      * A decision superseded {@code stream}'s entries at or above {@code from};
      * a stream held by a loss is exposed again.
      */

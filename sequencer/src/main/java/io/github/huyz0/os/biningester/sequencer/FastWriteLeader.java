@@ -96,6 +96,13 @@ public final class FastWriteLeader implements TakeoverRun.Hold {
         FastWriteFrame.Exposed exposed;
         /** When it was assigned, for its quorum wait (M13.36); MIN_VALUE when unobserved. */
         long assignedNanos = Long.MIN_VALUE;
+        /**
+         * Its entries a switch discarded (M13.34q): ⚠️ THE BATCH IS NEVER
+         * EXPOSED -- its writer is never acked for them. The frontier forgot
+         * them, so none is asked of a holder; its other streams' runs still
+         * are, and count, or those streams wedge.
+         */
+        final Set<FastJournalRecord.Entry> dropped = new HashSet<>();
 
         Batch(Holder writer, FastJournalRecord.IdempotencyKey key, long assignedAfter,
                 List<FastJournalRecord.Entry> entries, FastWriteFrame.Assigned assigned) {
@@ -130,6 +137,8 @@ public final class FastWriteLeader implements TakeoverRun.Hold {
     private java.util.function.Consumer<List<FastJournalRecord.Entry>> published;
     private final Map<FastJournalRecord.IdempotencyKey, Batch> exposedByKey = new HashMap<>();
     private final Map<RunKey, Long> committedNext = new HashMap<>();
+    /** Streams paused for a switch to the default path: assigned and exposed nothing (M13.34q). */
+    private final Set<RunKey> paused = new HashSet<>();
 
     /**
      * @param nextDecision the {@code seq} this roster's next decision will
@@ -220,6 +229,10 @@ public final class FastWriteLeader implements TakeoverRun.Hold {
                     if (awaitsDecision(run.stream())) {
                         return new Wait("stream " + run.stream()
                                 + " awaits its takeover decision");
+                    }
+                    if (paused.contains(run.stream())) {
+                        return new Wait("stream " + run.stream()
+                                + " is paused for a switch to the default path");
                     }
                     OptionalInt q = termRecord.assignable(run.stream().indexId());
                     if (q.isEmpty()) {
@@ -312,6 +325,13 @@ public final class FastWriteLeader implements TakeoverRun.Hold {
                 for (Batch b : owed) {
                     for (int i = 0; i < b.entries.size(); i++) {
                         FastJournalRecord.Entry e = b.entries.get(i);
+                        // ⚠️ NOT A DISCARDED ONE (M13.34q review round 1, P1): a
+                        // switch dropped it before this batch was answered, and
+                        // counted it would stand as a phantom the frontier asks
+                        // copies of -- or, its offsets retaken, "assigned twice".
+                        if (b.dropped.contains(e)) {
+                            continue;
+                        }
                         frontier.assigned(id(e), e.records().size(), e.walQuorum());
                         // THE WRITER'S REQUIRED COPY IS ASKED (M13.27c review
                         // round 1, P1): it covers the writer's zone, so no
@@ -521,7 +541,7 @@ public final class FastWriteLeader implements TakeoverRun.Hold {
         List<Exposure> out = new ArrayList<>();
         List<FastJournalRecord.Entry> step = new ArrayList<>();
         for (Batch b : batches) {
-            if (!b.answered || b.exposed != null) {
+            if (!b.answered || b.exposed != null || !b.dropped.isEmpty()) {
                 continue;
             }
             boolean all = b.entries.stream()
@@ -569,6 +589,81 @@ public final class FastWriteLeader implements TakeoverRun.Hold {
      */
     public boolean uploadPressed() {
         return cursor.anyUploadDue() || journal.pastHalfLeaderShare();
+    }
+
+    /**
+     * Pauses {@code stream} for a switch to the default path (M13.34q; ADR-0081
+     * §8): nothing more assigned or exposed on it, its quorum frontier read in
+     * the same step (round 3, R3-1: a CONFIRM arriving now must not expose an
+     * entry the decision discards). Empty when it holds no fast tail.
+     */
+    public synchronized java.util.OptionalLong pauseForSwitch(RunKey stream) {
+        if (!paused.contains(stream) && !cursor.hasTail(stream)) {
+            return java.util.OptionalLong.empty();
+        }
+        paused.add(stream);
+        return java.util.OptionalLong.of(frontier.hold(stream));
+    }
+
+    /**
+     * {@code stream}'s entries at or above {@code from}, its frontier when
+     * paused, discarded once the decision superseding them is durable
+     * (M13.34q): dropped from the journal, the cursor resumed at {@code from},
+     * the frontier's discarded, and each batch holding one never exposed.
+     *
+     * @return the discarded batches' keys: their writers were never acked
+     */
+    public Set<FastJournalRecord.IdempotencyKey> discardFrom(RunKey stream, long from)
+            throws IOException {
+        io.lock();
+        try {
+            Set<Long> groups = new java.util.TreeSet<>();
+            synchronized (this) {
+                // ⚠️ CHECKED BEFORE ANY DROP IS WRITTEN (its review round 1, P2).
+                if (from < frontier.frontier(stream)) {
+                    throw new IllegalArgumentException("an exposed entry below the frontier "
+                            + frontier.frontier(stream) + " is never discarded: " + from);
+                }
+                for (Batch b : batches) {
+                    for (FastJournalRecord.Entry e : b.entries) {
+                        if (e.key().equals(stream) && e.firstOffset() >= from) {
+                            groups.add(e.assignedAfter());
+                        }
+                    }
+                }
+            }
+            for (long assignedAfter : groups) {
+                journal.drop(stream, epoch, assignedAfter, from);
+            }
+            Set<FastJournalRecord.IdempotencyKey> discarded = new HashSet<>();
+            synchronized (this) {
+                frontier.discard(stream, from);
+                frontier.hold(stream);
+                cursor.resume(stream, from);
+                for (Batch b : batches) {
+                    for (FastJournalRecord.Entry e : b.entries) {
+                        if (e.key().equals(stream) && e.firstOffset() >= from) {
+                            b.dropped.add(e);
+                            discarded.add(b.key);
+                        }
+                    }
+                }
+            }
+            return discarded;
+        } finally {
+            io.unlock();
+        }
+    }
+
+    /**
+     * {@code stream}'s switch is over, the chain committed it up to
+     * {@code chainNext} (M13.34q): never assigned below it again, and assigned
+     * and exposed as before.
+     */
+    public synchronized void unpause(RunKey stream, long chainNext) {
+        committed(stream, chainNext);
+        paused.remove(stream);
+        frontier.release(stream);
     }
 
     /** How many batches this leader still holds: committed ones are dropped. */
