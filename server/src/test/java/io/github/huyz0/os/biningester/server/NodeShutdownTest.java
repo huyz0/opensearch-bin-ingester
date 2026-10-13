@@ -199,10 +199,15 @@ class NodeShutdownTest {
         node.close();
 
         // ⚠️ M13.27n: the fast leader watch stops first -- only a ready pod joins.
+        // ⚠️ M13.35a: the leader leaves its term after the flush, before the
+        // lease is released.
         assertThat(node.shutdownJournal()).containsExactly(FastPeer.WATCH_STOPPED,
                 DrainGate.READINESS_FAILED,
                 DrainGate.POLLS_RELEASED, DrainGate.BULK_REFUSED, FrontDoor.LISTENER_STOPPED,
-                Assembly.FLUSHED, Assembly.GRAPH_CLOSED);
+                Assembly.FLUSHED,
+                FastLeaderFrames.LEFT + io.github.huyz0.os.biningester.sequencer.FastLeaderTerm
+                        .Left.DEPARTED_AND_CLOSED,
+                Assembly.GRAPH_CLOSED);
         assertThat(node.gate().ready()).isFalse();
     }
 

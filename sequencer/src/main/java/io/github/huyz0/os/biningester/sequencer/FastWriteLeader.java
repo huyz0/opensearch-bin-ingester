@@ -119,6 +119,8 @@ public final class FastWriteLeader implements TakeoverRun.Hold {
     /** Taking over, not every member heard: only {@link #released} streams assign (M13.33k). */
     private boolean holdingAll;
     private final Set<RunKey> released = new HashSet<>();
+    /** Shutting down: nothing more assigned or exposed (M13.35a). */
+    private boolean stopping;
     private final Map<FastJournalRecord.IdempotencyKey, Batch> exposedByKey = new HashMap<>();
     private final Map<RunKey, Long> committedNext = new HashMap<>();
 
@@ -182,6 +184,9 @@ public final class FastWriteLeader implements TakeoverRun.Hold {
                 Batch retried = exposedByKey.get(commit.key());
                 if (retried != null) {
                     return new Answered(retried.assigned, retried.exposed);
+                }
+                if (stopping) {
+                    return new Wait("this leader is stopping");
                 }
                 Set<RunKey> seen = new HashSet<>();
                 List<Integer> quorums = new ArrayList<>();
@@ -474,6 +479,9 @@ public final class FastWriteLeader implements TakeoverRun.Hold {
 
     /** The EXPOSED answers now owed: each batch whose every run the frontier passed. */
     public synchronized List<Exposure> expose() {
+        if (stopping) {
+            return List.of();
+        }
         frontier.expose();
         List<Exposure> out = new ArrayList<>();
         for (Batch b : batches) {
@@ -491,6 +499,19 @@ public final class FastWriteLeader implements TakeoverRun.Hold {
             }
         }
         return out;
+    }
+
+    /**
+     * Stops assigning and exposing, FIRST at a shutdown (ADR-0081 §9; M13.35a):
+     * a CONFIRM arriving after must not be answered as complete.
+     *
+     * @return whether an entry this leader exposed is not yet committed -- it
+     *     then stays undeparted, its stop counted as a crash would be; an
+     *     entry never exposed was never acked, and its writer retries
+     */
+    public synchronized boolean stop() {
+        stopping = true;
+        return batches.stream().anyMatch(b -> b.exposed != null);
     }
 
     /** How many batches this leader still holds: committed ones are dropped. */

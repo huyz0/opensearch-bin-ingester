@@ -83,6 +83,8 @@ public final class FastLeaderTerm {
             new java.util.concurrent.ConcurrentHashMap<>();
     /** The desk this term's COMMITs reach; null until the first. */
     private CommitDesk desk;
+    /** Shutting down: a desk built after is stopped from its birth (M13.35a). */
+    private boolean leaving;
     private long cachedAt;
 
     /**
@@ -582,9 +584,48 @@ public final class FastLeaderTerm {
             if (!opened.stillOpen().isEmpty()) {
                 leader.takingOver();
             }
+            if (leaving) {
+                leader.stop();
+            }
             desk = new CommitDesk(leader, committedNext, ANSWER_WAIT);
         }
         return desk;
+    }
+
+    /** How a leader's {@link #leave} ended. */
+    public enum Left { DEPARTED_AND_CLOSED, DEPARTED, STAYED, DEPOSED }
+
+    /**
+     * This leader's shutdown (ADR-0081 §9; M13.35a): it FIRST stops assigning
+     * and exposing, then marks itself departed in its roster -- and closes it
+     * in the same write only if no earlier term was open when it started, a
+     * takeover it may not have finished being its successor's -- so its
+     * successor is handed over with no fence and no collection.
+     *
+     * <p>⚠️ NEVER WITH AN EXPOSED ENTRY UNCOMMITTED: the leader then stays
+     * undeparted, its stop counted as a crash would be. Uploading those
+     * first, and departing earlier rosters listing it, is M13.35b's.
+     *
+     * @throws IOException the store failed; the leader stops undeparted
+     */
+    public Left leave() throws IOException {
+        CommitDesk built;
+        synchronized (this) {
+            leaving = true;
+            built = desk;
+        }
+        if (built != null && built.leader().stop()) {
+            return Left.STAYED;
+        }
+        boolean close = opened.stillOpen().isEmpty();
+        RosterDepartures.Outcome outcome =
+                departures.leave(opened.started().own().leader().podUid(), close);
+        rosterWritten();
+        return switch (outcome) {
+            case RosterDepartures.Departed departed ->
+                    close ? Left.DEPARTED_AND_CLOSED : Left.DEPARTED;
+            case RosterDepartures.Deposed deposed -> Left.DEPOSED;
+        };
     }
 
     /**

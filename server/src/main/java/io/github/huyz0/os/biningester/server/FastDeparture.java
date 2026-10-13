@@ -23,8 +23,8 @@ import java.time.Duration;
  * pod then stops undeparted -- counted as a crash would be, never as a
  * departure that dropped an uncommitted copy.
  *
- * <p>⚠️ A LEADER DEPARTS NOTHING HERE: its shutdown -- stop exposing, upload,
- * mark itself departed -- is M13.35's.
+ * <p>⚠️ A LEADER DEPARTS NOTHING HERE: it leaves its own term through
+ * {@link FastLeaderFrames#leave} (M13.35a); uploading first is M13.35b's.
  *
  * <p>⚠️ RE-ASKED ON A PAUSE, NOT ON A RELEASE: ADR-0081 §9 re-sends HELD after
  * each RELEASE, which M13.31 brings; until then the pause stands in for it.

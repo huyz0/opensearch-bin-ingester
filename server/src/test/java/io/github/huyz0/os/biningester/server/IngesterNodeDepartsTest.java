@@ -4,6 +4,8 @@ package io.github.huyz0.os.biningester.server;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
+import io.github.huyz0.os.biningester.binstore.BinStore;
+import io.github.huyz0.os.biningester.binstore.backend.LocalFsBinStore;
 import io.github.huyz0.os.biningester.format.Roster;
 import java.io.InputStream;
 import java.net.ServerSocket;
@@ -95,5 +97,29 @@ class IngesterNodeDepartsTest {
         follower = null;
 
         assertThat(member("uid-pod2").orElseThrow().state()).isEqualTo(Roster.State.DEPARTED);
+    }
+
+    @Test
+    void aLEADERThatStopsGracefullyDepartsAndClosesItsRosterBeforeItsLeaseIsReleased()
+            throws Exception {
+        // ⚠️ M13.35a (ADR-0081 §9): so its successor is handed over with no
+        // fence, no collection and no lease wait.
+        leader = start("pod1");
+        await().atMost(Duration.ofSeconds(20)).until(() -> member("uid-pod1").isPresent());
+        long epoch;
+        try (InputStream in = leader.assembly().store().get(
+                Roster.latestKey("bins/cluster-a"))) {
+            epoch = Roster.decodeLatest(in.readAllBytes());
+        }
+
+        leader.close();
+        leader = null;
+
+        try (BinStore store = LocalFsBinStore.at(dir.resolve("store").toString());
+                InputStream in = store.get(Roster.key("bins/cluster-a", epoch))) {
+            Roster own = Roster.decode(in.readAllBytes());
+            assertThat(own.leaderDeparted()).isTrue();
+            assertThat(own.closed()).as("no earlier term was open").isTrue();
+        }
     }
 }

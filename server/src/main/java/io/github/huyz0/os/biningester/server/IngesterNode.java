@@ -494,6 +494,9 @@ public final class IngesterNode implements AutoCloseable {
                         journal.add(FastDeparture.JOURNALED + result);
                     }
                 }
+                // ⚠️ M13.35a: a leader departs its own term, the lease still held.
+                FastLeaderFrames.leave(assembly.heldTerm())
+                        .ifPresent(left -> journal.add(FastLeaderFrames.LEFT + left));
             }
 
             @Override

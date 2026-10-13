@@ -44,6 +44,29 @@ final class FastLeaderFrames {
                 term.get().commitDesk(disk.journal().get(), self));
     }
 
+    /** Journaled with a leader's leave at a graceful stop (M13.35a). */
+    static final String LEFT = "fast leave: ";
+
+    /**
+     * This pod's leave of the term it leads, if any, at a graceful stop
+     * (M13.35a; ADR-0081 §9): before its lease is released, so its successor
+     * finds it departed. A failed write leaves it undeparted, as a crash.
+     *
+     * @return how it ended; empty when this pod leads no term
+     */
+    static Optional<FastLeaderTerm.Left> leave(Sequencer held) {
+        Optional<FastLeaderTerm> term =
+                LocalSequencer.underneath(held).flatMap(LocalSequencer::fastTerm);
+        if (term.isEmpty()) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(term.get().leave());
+        } catch (IOException failed) {
+            return Optional.of(FastLeaderTerm.Left.STAYED);
+        }
+    }
+
     /**
      * The catalog's fast indices recorded in the term this pod leads, if any
      * (M13.27l; ADR-0081 §4): wanted, then flushed at most once per

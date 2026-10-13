@@ -72,7 +72,7 @@ public final class RosterDepartures {
         }
         List<Long> written = new ArrayList<>();
         for (long term : terms) {
-            Optional<Long> newer = mark(term, podUid, written);
+            Optional<Long> newer = mark(term, podUid, false, written);
             if (newer.isPresent()) {
                 return new Deposed(newer.get());
             }
@@ -80,7 +80,21 @@ public final class RosterDepartures {
         return new Departed(written);
     }
 
-    private Optional<Long> mark(long term, String podUid, List<Long> written)
+    /**
+     * The leader's own departure at a shutdown (ADR-0081 §9; M13.35a): marked
+     * departed in this term's roster and, when {@code close}, the roster
+     * closed in the same write.
+     *
+     * @throws IOException the store failed, or the roster kept changing
+     */
+    public Outcome leave(String leaderUid, boolean close) throws IOException {
+        Objects.requireNonNull(leaderUid, "leaderUid");
+        List<Long> written = new ArrayList<>();
+        Optional<Long> newer = mark(epoch, leaderUid, close, written);
+        return newer.isPresent() ? new Deposed(newer.get()) : new Departed(written);
+    }
+
+    private Optional<Long> mark(long term, String podUid, boolean close, List<Long> written)
             throws IOException {
         String key = Roster.key(prefix, term);
         for (int attempt = 0; attempt < FastTermStart.MAX_ATTEMPTS; attempt++) {
@@ -96,7 +110,8 @@ public final class RosterDepartures {
                 return Optional.of(r.fencedBy());
             }
             Optional<Roster.Member> member = r.member(podUid);
-            if (member.isEmpty() || member.get().state() == Roster.State.DEPARTED) {
+            if (member.isEmpty() || member.get().state() == Roster.State.DEPARTED
+                    && (!close || r.closed())) {
                 return Optional.empty();
             }
             List<Roster.Member> members = new ArrayList<>();
@@ -105,7 +120,8 @@ public final class RosterDepartures {
                         ? new Roster.Member(m.incarnation(), Roster.State.DEPARTED) : m);
             }
             Roster departed = new Roster(r.epoch(), r.predecessor(), r.leader(), members,
-                    r.termRecord(), r.decisions(), r.notBefore(), r.fencedBy(), r.closed());
+                    r.termRecord(), r.decisions(), r.notBefore(), r.fencedBy(),
+                    r.closed() || close);
             if (store.putIfMatch(key, Body.ofBytes(departed.encode()), stat.get().version())
                     .isPresent()) {
                 written.add(term);
