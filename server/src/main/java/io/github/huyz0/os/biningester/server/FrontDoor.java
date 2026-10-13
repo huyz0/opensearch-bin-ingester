@@ -138,16 +138,28 @@ public final class FrontDoor implements AutoCloseable {
     }
 
     /**
+     * A node's fast-key routes (M13.30o, M13.30p): the exposed entries its
+     * peer listener serves from the leading term's journal, and the fast keys
+     * {@code /seg} serves -- from its pushed copies, else forwarded.
+     */
+    public record FastRoutes(io.github.huyz0.os.biningester.http.FastEntryService.Lookup entries,
+            io.github.huyz0.os.biningester.http.SegmentFetchService.FastCopies reads) {
+        public FastRoutes {
+            Objects.requireNonNull(entries, "entries");
+            Objects.requireNonNull(reads, "reads");
+        }
+    }
+
+    /**
      * The same, the peer listener also serving an exposed fast entry by its
-     * key from the leading term's journal with {@code fastEntries} (M13.30o).
+     * key from the leading term's journal, and {@code /seg} a fast key, with
+     * {@code fastEntries} (M13.30o, M13.30p).
      */
     public static FrontDoor start(Assembly assembly, Clock clock,
             java.util.function.Consumer<String> journal,
             io.github.huyz0.os.biningester.binstore.CrossAzBytes crossAz,
             java.util.Optional<io.github.huyz0.os.biningester.sequencer.FastFrameRouter> fastFrames,
-            java.util.Optional<PeerTls> peerTls,
-            java.util.Optional<io.github.huyz0.os.biningester.http.FastEntryService.Lookup>
-                    fastEntries) {
+            java.util.Optional<PeerTls> peerTls, java.util.Optional<FastRoutes> fastEntries) {
         Objects.requireNonNull(peerTls, "peerTls");
         Objects.requireNonNull(fastEntries, "fastEntries");
         if ((assembly.config().peer().mode() == PeerConfig.Mode.MUTUAL) != peerTls.isPresent()) {
@@ -246,9 +258,7 @@ public final class FrontDoor implements AutoCloseable {
             DrainGate gate, io.github.huyz0.os.biningester.binstore.CrossAzBytes crossAz,
             LaneAdmission admission, io.github.huyz0.os.biningester.ingest.IndexQuotas quotas,
             java.util.Optional<io.github.huyz0.os.biningester.sequencer.FastFrameRouter> fastFrames,
-            java.util.Optional<PeerTls> peerTls,
-            java.util.Optional<io.github.huyz0.os.biningester.http.FastEntryService.Lookup>
-                    fastEntries) {
+            java.util.Optional<PeerTls> peerTls, java.util.Optional<FastRoutes> fastEntries) {
         // ⚠️ THE POD-TO-POD ROUTES, AND ONLY THEY, ON THE PEER LISTENER
         // (ADR-0084): /ctl/commit and /ctl/drain, /ctl/durable-segment,
         // /ctl/fast, and /ctl/fast-entry (M13.30o). The producer port answers them 404 and keeps the
@@ -273,8 +283,9 @@ public final class FrontDoor implements AutoCloseable {
         fastFrames.ifPresent(router -> peerRoutes.register(
                 new io.github.huyz0.os.biningester.http.FastFrameService(router, binding)));
         // ⚠️ M13.30o: an exposed fast entry by its key, for a forwarded /seg.
-        fastEntries.ifPresent(lookup -> peerRoutes.register(
-                new io.github.huyz0.os.biningester.http.FastEntryService(lookup, binding)));
+        fastEntries.ifPresent(fast -> peerRoutes.register(
+                new io.github.huyz0.os.biningester.http.FastEntryService(fast.entries(),
+                        binding, crossAz)));
         HttpRouting.Builder routes = HttpRouting.builder()
                 // ⚠️ HELIDON'S OWN SHUTDOWN HOOK IS OFF. Left on, a `SIGTERM`
                 // runs it alongside `Main`'s, and it stops the listener while
@@ -303,7 +314,10 @@ public final class FrontDoor implements AutoCloseable {
                 // THE NODE's STORE (M10.26), so it is counted like the GETs.
                 .register(SegmentFetchService.over(
                         config.prefix(), assembly.segmentProxy(), assembly.nodeStore(), crossAz,
-                        assembly.defaultIngest().pushedCopies()::copy)); // M13.30l
+                        fastEntries.map(FastRoutes::reads)
+                                .orElse(assembly.defaultIngest().pushedCopies()::copy)));
+        // ⚠️ M13.30l: a fast key from this pod's pushed copies, and from
+        // M13.30p its term's leader's journal when it holds none.
         // ⚠️ M11.4, ADR-0077: each index's share of THIS pod's requests, from the
         // ledger its stores charge. No request of its own. ⚠️ ONLY WHERE TURNED ON
         // (M12.6, M11 review F7): it names indices on the producer port, which is

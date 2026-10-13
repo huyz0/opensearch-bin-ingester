@@ -74,6 +74,20 @@ public final class JoinedTerms {
                 : Optional.of(new Leader(epoch, uid, endpoint));
     }
 
+    /**
+     * The leader of joined, unclosed term {@code epoch} and its endpoint
+     * (M13.30p): where a fast key of that term is read before its upload.
+     */
+    public synchronized Optional<Leader> leader(long epoch) {
+        if (!mayHold(epoch)) {
+            return Optional.empty();
+        }
+        String uid = joined.get(epoch);
+        String endpoint = endpoints.getOrDefault(epoch, "");
+        return uid.isEmpty() || endpoint.isEmpty() ? Optional.empty()
+                : Optional.of(new Leader(epoch, uid, endpoint));
+    }
+
     /** Whether this pod may journal, or send, an entry of {@code epoch}. */
     public synchronized boolean mayHold(long epoch) {
         return epoch > closedThrough && joined.containsKey(epoch);

@@ -106,6 +106,47 @@ public final class HttpFastTransport implements TermJoiner.Transport {
         }
     }
 
+    /**
+     * A leader's exposed entry by fast key (M13.30p): {@code /ctl/fast-entry}
+     * on its peer listener, this pod named {@code selfUid} as its certificate
+     * binds it -- empty for a {@code 404}, a failure for any other answer
+     * than {@code 200} or one with no {@value FastEntryService#EPOCH_HEADER}.
+     */
+    public java.util.Optional<FastEntryService.Served> fetchEntry(String endpoint,
+            String fastKey, String selfUid) throws IOException {
+        Objects.requireNonNull(endpoint, "endpoint");
+        var request = clientFor(endpoint).get(FastEntryService.PATH)
+                .queryParam(FastEntryService.KEY_PARAM, fastKey)
+                .queryParam(FastEntryService.POD_PARAM, selfUid);
+        // ⚠️ THIS POD's ZONE, for the leader to count its bytes against.
+        if (crossAz.tracking() && crossAz.localAz() != null && !crossAz.localAz().isBlank()) {
+            request.queryParam(FastEntryService.AZ_PARAM, crossAz.localAz());
+        }
+        try (HttpClientResponse response = request.request()) {
+            int status = response.status().code();
+            if (status == Status.NOT_FOUND_404.code()) {
+                return java.util.Optional.empty();
+            }
+            if (status != Status.OK_200.code()) {
+                throw new IOException("fast entry from " + endpoint + " answered " + status
+                        + ": " + message(response));
+            }
+            long epoch = Long.parseLong(response.headers().first(
+                    io.helidon.http.HeaderNames.create(FastEntryService.EPOCH_HEADER))
+                    .orElseThrow(() -> new IOException("fast entry from " + endpoint
+                            + " named no epoch")));
+            try (var in = new BoundedStream(response.inputStream(), maxAnswerBytes)) {
+                return java.util.Optional.of(new FastEntryService.Served(epoch,
+                        in.readAllBytes()));
+            } catch (BodyTooLargeException tooLarge) {
+                throw new IOException("fast entry from " + endpoint + " passed "
+                        + maxAnswerBytes + " bytes", tooLarge);
+            }
+        } catch (RuntimeException unreachable) {
+            throw new IOException("fast entry from " + endpoint + " was not read", unreachable);
+        }
+    }
+
     private static String message(HttpClientResponse response) {
         try (var in = new BoundedStream(response.inputStream(), MAX_MESSAGE_BYTES)) {
             String text = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);

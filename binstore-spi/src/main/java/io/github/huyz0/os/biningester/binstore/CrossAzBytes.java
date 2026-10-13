@@ -209,6 +209,11 @@ public final class CrossAzBytes {
         return localAz.trim();
     }
 
+    /** Whether this counts anything: false for {@link #untracked()} (M13.30p). */
+    public boolean tracking() {
+        return tracking;
+    }
+
     /** This pod's zone label. */
     public String localAz() {
         requireTracking();

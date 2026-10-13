@@ -362,12 +362,23 @@ public final class IngesterNode implements AutoCloseable {
                     assembly.defaultIngest()::deliverPushed);
             FastLeaderFrames.registerWrite(fastFrames::handle, assembly::heldTerm, commitDisk, self,
                     exposed);
+            // ⚠️ M13.30o: the leading term's exposed entries, by fast key.
+            io.github.huyz0.os.biningester.http.FastEntryService.Lookup entries = key ->
+                    FastLeaderFrames.exposedEntry(assembly.heldTerm(), commitDisk, self,
+                            config.prefix(), key, clock.millis());
+            // ⚠️ M13.30p: /seg's fast key, from a pushed copy, else its leader's.
+            FastEntryForwarder entryForwarder = new FastEntryForwarder(config.prefix(),
+                    config.podUid(), commitDisk.joined(), commitDisk.fence()::highest, entries,
+                    new io.github.huyz0.os.biningester.http.HttpFastTransport(
+                            io.github.huyz0.os.biningester.sequencer.FastLeaderTerm
+                                    .REPLICA_TIMEOUT, crossAz, clientTls)::fetchEntry);
+            var copies = assembly.defaultIngest().pushedCopies();
             IngesterNode node = new IngesterNode(assembly,
                     FrontDoor.start(assembly, clock, journal::add, crossAz,
-                            Optional.of(fastFrames), peerTls, Optional.of(key ->
-                                    FastLeaderFrames.exposedEntry(assembly.heldTerm(),
-                                            commitDisk, self, config.prefix(), key,
-                                            clock.millis()))), transport, clock,
+                            Optional.of(fastFrames), peerTls, Optional.of(
+                                    new FrontDoor.FastRoutes(entries, key -> copies.copy(key)
+                                            .or(() -> entryForwarder.read(key))))),
+                    transport, clock,
                     journal, crossAz, fastDisk);
             if (watch != null) {
                 node.watch = watch.start();

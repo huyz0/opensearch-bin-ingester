@@ -30,6 +30,8 @@ public final class FastEntryService implements HttpService {
     public static final String PATH = "/ctl/fast-entry";
     public static final String KEY_PARAM = "key";
     public static final String POD_PARAM = "pod";
+    /** The asking pod's zone, its bytes counted against (M13.30p review round 1, P1). */
+    public static final String AZ_PARAM = "az";
     public static final String EPOCH_HEADER = "Binstore-Fast-Epoch";
 
     /** An entry served: its bytes and the epoch they were served under. */
@@ -47,10 +49,22 @@ public final class FastEntryService implements HttpService {
 
     private final Lookup lookup;
     private final PeerBinding binding;
+    private final io.github.huyz0.os.biningester.binstore.CrossAzBytes crossAz;
 
     public FastEntryService(Lookup lookup, PeerBinding binding) {
+        this(lookup, binding, io.github.huyz0.os.biningester.binstore.CrossAzBytes.untracked());
+    }
+
+    /**
+     * The same, each entry served COUNTED WHERE IT IS SENT, as {@code /seg}'s
+     * are (M9.2): as fast data against the asking pod's {@value #AZ_PARAM}
+     * -- NFR-5's ratio sees a forwarded read (M13.30p review round 1, P1).
+     */
+    public FastEntryService(Lookup lookup, PeerBinding binding,
+            io.github.huyz0.os.biningester.binstore.CrossAzBytes crossAz) {
         this.lookup = Objects.requireNonNull(lookup, "lookup");
         this.binding = Objects.requireNonNull(binding, "binding");
+        this.crossAz = Objects.requireNonNull(crossAz, "crossAz");
     }
 
     @Override
@@ -59,8 +73,11 @@ public final class FastEntryService implements HttpService {
     }
 
     private void serve(ServerRequest request, ServerResponse response) {
-        Optional<String> key = Optional.ofNullable(request.query().first(KEY_PARAM).orElse(null));
-        Optional<String> pod = Optional.ofNullable(request.query().first(POD_PARAM).orElse(null));
+        // ⚠️ BLANK IS UNNAMED (M13.30p): an empty pod names no certificate's.
+        Optional<String> key = Optional.ofNullable(request.query().first(KEY_PARAM).orElse(null))
+                .filter(s -> !s.isBlank());
+        Optional<String> pod = Optional.ofNullable(request.query().first(POD_PARAM).orElse(null))
+                .filter(s -> !s.isBlank());
         if (key.isEmpty() || pod.isEmpty()) {
             response.status(Status.BAD_REQUEST_400).send("a key and the asking pod");
             return;
@@ -86,5 +103,7 @@ public final class FastEntryService implements HttpService {
         response.header(HeaderNames.create(EPOCH_HEADER), Long.toString(served.get().epoch()))
                 .header(HeaderNames.CONTENT_TYPE, "application/octet-stream")
                 .send(served.get().bytes());
+        crossAz.sent(io.github.huyz0.os.biningester.binstore.CrossAzBytes.Transport.FAST_DATA,
+                request.query().first(AZ_PARAM).orElse(null), served.get().bytes().length);
     }
 }
