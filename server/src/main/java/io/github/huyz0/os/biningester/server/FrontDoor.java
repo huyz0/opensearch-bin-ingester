@@ -143,10 +143,13 @@ public final class FrontDoor implements AutoCloseable {
      * {@code /seg} serves -- from its pushed copies, else forwarded.
      */
     public record FastRoutes(io.github.huyz0.os.biningester.http.FastEntryService.Lookup entries,
-            io.github.huyz0.os.biningester.http.SegmentFetchService.FastCopies reads) {
+            io.github.huyz0.os.biningester.http.SegmentFetchService.FastCopies reads,
+            FastCatchUp.Journal catchUp, java.util.function.BooleanSupplier exposable) {
         public FastRoutes {
             Objects.requireNonNull(entries, "entries");
             Objects.requireNonNull(reads, "reads");
+            Objects.requireNonNull(catchUp, "catchUp");
+            Objects.requireNonNull(exposable, "exposable");
         }
     }
 
@@ -305,7 +308,14 @@ public final class FrontDoor implements AutoCloseable {
                                 new RefusalMetrics(assembly.refusedIndices())))
                 .register(new SubscriptionService(assembly.hub(), assembly.catalog(),
                         assembly.watermarks(), clock, assembly.floors(), gate, crossAz))
-                .register(new CatchUpService(assembly::respondCatchUp))
+                // ⚠️ M13.32c: and past the chain, from the leader's journal.
+                .register(fastEntries.isPresent()
+                        ? new CatchUpService((CatchUpService.StreamingResponder)
+                                (request, sink) -> FastCatchUp.respond(request, sink,
+                                        assembly::respondCatchUp,
+                                        fastEntries.get().catchUp(),
+                                        fastEntries.get().exposable()))
+                        : new CatchUpService(assembly::respondCatchUp))
                 // ⚠️ M10.1, ADR-0073: the payload half of `proxy`. Read through
                 // the SAME proxy and node-wide cache the subscription path and
                 // the prefetcher fill -- so on the AZ's ring owner a fetch after

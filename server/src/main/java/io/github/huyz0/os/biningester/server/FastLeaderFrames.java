@@ -390,6 +390,53 @@ final class FastLeaderFrames {
                 k.epoch(), writer.toByteArray(nowMillis)));
     }
 
+    /** Whether this pod leads a serving fast term whose lease lets it expose now (M13.32c). */
+    static boolean mayExpose(Sequencer held) {
+        return LocalSequencer.underneath(held).filter(LocalSequencer::serving)
+                .flatMap(LocalSequencer::fastTerm).map(FastLeaderTerm::mayExpose).orElse(false);
+    }
+
+    /**
+     * The leading term's exposed journal entries of {@code key} from
+     * {@code from}, as catch-up events (ADR-0081 §6; M13.32c): each inline
+     * under its fast key, with no sequencer epoch or chain sequence -- a
+     * pre-chain event moves no tier-2 cursor -- and empty when this pod leads
+     * no fast term or has not opened the stream. Read from memory.
+     */
+    static List<io.github.huyz0.os.biningester.format.SubscriptionEvent> exposedFrom(
+            Sequencer held, FastDisk disk, Roster.Incarnation self, String prefix,
+            String session, io.github.huyz0.os.biningester.format.RunKey key, long from,
+            long nowMillis) throws IOException {
+        Optional<FastLeaderTerm> term = LocalSequencer.underneath(held)
+                .filter(LocalSequencer::serving).flatMap(LocalSequencer::fastTerm);
+        if (term.isEmpty() || disk.journal().isEmpty()) {
+            return List.of();
+        }
+        long frontier;
+        try {
+            frontier = term.get().commitDesk(disk.journal().get(), self).frontier(key);
+        } catch (IllegalStateException notOpen) {
+            return List.of();
+        }
+        List<io.github.huyz0.os.biningester.format.SubscriptionEvent> events = new ArrayList<>();
+        for (FastJournalRecord.Entry e : disk.journal().get().exposedFrom(key,
+                term.get().epoch(), from, frontier)) {
+            io.github.huyz0.os.biningester.format.SegmentWriter writer =
+                    new io.github.huyz0.os.biningester.format.SegmentWriter();
+            e.records().forEach(r -> writer.add(key, r, nowMillis));
+            events.add(new io.github.huyz0.os.biningester.format.SubscriptionEvent(session, 0, 1,
+                    key, io.github.huyz0.os.biningester.format.FastKey.of(prefix, e.epoch(),
+                            e.assignedAfter(), key, e.firstOffset()), e.firstOffset(),
+                    e.records().size(), io.github.huyz0.os.biningester.format.FetchMode.INLINE,
+                    writer.toByteArray(nowMillis), null,
+                    io.github.huyz0.os.biningester.format.SubscriptionEvent.RANGE_ABSENT,
+                    io.github.huyz0.os.biningester.format.SubscriptionEvent.RANGE_ABSENT,
+                    io.github.huyz0.os.biningester.format.SubscriptionEvent
+                            .CHAIN_SEQUENCE_ABSENT));
+        }
+        return events;
+    }
+
     /**
      * The pushed copies this pod holds, dropped below each stream's committed
      * next offset in the chain the term it leads holds (M13.30l): a leader

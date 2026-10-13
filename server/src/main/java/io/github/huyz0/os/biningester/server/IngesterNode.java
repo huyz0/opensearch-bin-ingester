@@ -384,7 +384,13 @@ public final class IngesterNode implements AutoCloseable {
                     FrontDoor.start(assembly, clock, journal::add, crossAz,
                             Optional.of(fastFrames), peerTls, Optional.of(
                                     new FrontDoor.FastRoutes(entries, key -> copies.copy(key)
-                                            .or(() -> entryForwarder.read(key))))),
+                                            .or(() -> entryForwarder.read(key)),
+                                            (session, key, from) -> FastLeaderFrames
+                                                    .exposedFrom(assembly.heldTerm(),
+                                                            commitDisk, self, config.prefix(),
+                                                            session, key, from, clock.millis()),
+                                            () -> FastLeaderFrames.mayExpose(
+                                                    assembly.heldTerm())))),
                     transport, clock,
                     journal, crossAz, fastDisk);
             if (watch != null) {

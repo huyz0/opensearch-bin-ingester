@@ -372,6 +372,54 @@ class FastPublishServedTest {
     }
 
     @Test
+    void theJOURNALsExposedEntriesAreCatchUpEventsUnderTheirFastKeys() throws Exception {
+        // ⚠️ M13.32c: past the committed chain, from the leader's journal.
+        Leading l = leading(new MemoryBinStore());
+        try {
+            exposeOne(l, 1);
+            exposeOne(l, 2);
+            List<FastJournalRecord.Entry> held = l.disk().journal().orElseThrow().held();
+
+            var events = FastLeaderFrames.exposedFrom(l.term(), l.disk(), SELF, "p", "s", S,
+                    0, 1L);
+
+            assertThat(events).extracting(
+                    io.github.huyz0.os.biningester.format.SubscriptionEvent::firstOffset)
+                    .containsExactly(0L, 1L);
+            var first = events.get(0);
+            assertThat(first.segmentKey()).isEqualTo(io.github.huyz0.os.biningester.format
+                    .FastKey.of("p", held.get(0).epoch(), held.get(0).assignedAfter(), S, 0));
+            assertThat(first.via())
+                    .isEqualTo(io.github.huyz0.os.biningester.format.FetchMode.INLINE);
+            assertThat(first.chainSequence()).as("moves no tier-2 cursor").isEqualTo(
+                    io.github.huyz0.os.biningester.format.SubscriptionEvent.CHAIN_SEQUENCE_ABSENT);
+            var reader = io.github.huyz0.os.biningester.format.SegmentReader.open(first.inline());
+            assertThat(reader.read(reader.find(S).orElseThrow()))
+                    .extracting(SegmentRecord::id).containsExactly("d1");
+            assertThat(FastLeaderFrames.exposedFrom(l.term(), l.disk(), SELF, "p", "s",
+                    new RunKey(new UUID(5, 5), 0), 0, 1L)).as("a stream never opened").isEmpty();
+            // ⚠️ its review round 1, T3: from where asked, and never past the frontier.
+            l.fast().answerCommit(new FastFrame.Header(FastWriteFrame.KIND_COMMIT,
+                    l.term().epoch(), SELF.podUid(), SELF.podUid()),
+                    new FastWriteFrame.Commit(new FastJournalRecord.IdempotencyKey("self",
+                            new UUID(9, 9), 3), List.of(new FastWriteFrame.CommitRun(S,
+                            List.of(new SegmentRecord("d3", OpType.INDEX,
+                                    OptionalLong.empty(), new byte[] {1}))))), l.desk());
+            assertThat(FastLeaderFrames.exposedFrom(l.term(), l.disk(), SELF, "p", "s", S,
+                    1, 1L)).as("from 1; offset 2 not exposed")
+                    .extracting(io.github.huyz0.os.biningester.format.SubscriptionEvent::firstOffset)
+                    .containsExactly(1L);
+            // ⚠️ its review round 1, T2: the serving fast term's lease.
+            assertThat(FastLeaderFrames.mayExpose(l.term())).isTrue();
+            l.fence().stopExposing();
+            assertThat(FastLeaderFrames.mayExpose(l.term())).isFalse();
+        } finally {
+            l.disk().close();
+            l.term().close();
+        }
+    }
+
+    @Test
     void anENTRYIsNotServedByItsKeyWhileTheLeaseForbidsExposing() throws Exception {
         // ⚠️ M13.32a: /ctl/fast-entry is an exposing send (ADR-0081 §3).
         Leading l = leading(new MemoryBinStore(), false);
