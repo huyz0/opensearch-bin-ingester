@@ -341,8 +341,8 @@ public final class CommitLog {
         java.util.Map<String, io.github.huyz0.os.biningester.format.Checkpoint.PodState> merged =
                 new java.util.HashMap<>(recoveredPods);
         inherited.pods().forEach((pod, state) -> merged.merge(pod, state,
-                (prior, now) -> now.lastAppliedFlushSeq() >= prior.lastAppliedFlushSeq()
-                        ? now : prior));
+                (prior, now) -> (now.lastAppliedFlushSeq() >= prior.lastAppliedFlushSeq()
+                        ? now : prior).withSplitsOf(prior).withSplitsOf(now))); // ADR-0086
         recoveredPods = Map.copyOf(merged);
     }
 

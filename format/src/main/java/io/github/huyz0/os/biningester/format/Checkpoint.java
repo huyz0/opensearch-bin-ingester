@@ -62,7 +62,7 @@ public record Checkpoint(long sequence,
      * slot that looked addressable would answer a replay from the wrong object.
      */
     public record PodState(String incarnationId, long lastAppliedFlushSeq,
-            long epoch, long sequence) {
+            long epoch, long sequence, List<SplitFlush> splits) {
         public PodState {
             if (lastAppliedFlushSeq < 0) {
                 throw new IllegalArgumentException(
@@ -81,6 +81,23 @@ public record Checkpoint(long sequence,
                 throw new IllegalArgumentException(
                         "an incarnation and a pointer travel together");
             }
+            splits = List.copyOf(Objects.requireNonNull(splits, "splits"));
+            if (!splits.isEmpty() && incarnationId == null) {
+                throw new IllegalArgumentException("a split flush belongs to an incarnation");
+            }
+            java.util.Set<String> seen = new java.util.HashSet<>();
+            for (SplitFlush f : splits) {
+                if (!seen.add(f.flushSeq() + "\0" + f.segmentKey())) {
+                    throw new IllegalArgumentException("a split flush is listed twice: "
+                            + f.flushSeq() + " " + f.segmentKey());
+                }
+            }
+        }
+
+        /** A slot with no split flush, as every slot was before ADR-0086. */
+        public PodState(String incarnationId, long lastAppliedFlushSeq, long epoch,
+                long sequence) {
+            this(incarnationId, lastAppliedFlushSeq, epoch, sequence, List.of());
         }
 
         /** A v0 slot: a watermark with no incarnation and no pointer. */
@@ -90,6 +107,67 @@ public record Checkpoint(long sequence,
 
         public boolean hasPointer() {
             return incarnationId != null;
+        }
+
+        /**
+         * This slot carrying {@code other}'s split flushes too, each flush once
+         * (ADR-0086): a merge keeping the higher watermark must not drop the
+         * lower slot's splits, which name older flushes still retried.
+         */
+        public PodState withSplitsOf(PodState other) {
+            if (other.splits().isEmpty() || incarnationId == null) {
+                return this;
+            }
+            Map<String, SplitFlush> all = new LinkedHashMap<>();
+            for (SplitFlush f : splits) {
+                all.putIfAbsent(f.flushSeq() + "\0" + f.segmentKey(), f);
+            }
+            for (SplitFlush f : other.splits()) {
+                all.putIfAbsent(f.flushSeq() + "\0" + f.segmentKey(), f);
+            }
+            return all.size() == splits.size() ? this : new PodState(incarnationId,
+                    lastAppliedFlushSeq, epoch, sequence, List.copyOf(all.values()));
+        }
+    }
+
+    /** Where a delta lives: its chain's epoch and its slot. */
+    public record DeltaAt(long epoch, long sequence) {
+        public DeltaAt {
+            if (epoch < 0 || sequence < 0) {
+                throw new IllegalArgumentException("a delta address is never negative: "
+                        + epoch + "/" + sequence);
+            }
+        }
+    }
+
+    /**
+     * One flush's segment committed across more than one delta (ADR-0086;
+     * ADR-0081 §8): the deltas carrying its runs, in chain order, so a retry
+     * crossing this checkpoint is answered from all of them.
+     */
+    public record SplitFlush(long flushSeq, String segmentKey, List<DeltaAt> deltas) {
+        public SplitFlush {
+            Objects.requireNonNull(segmentKey, "segmentKey");
+            deltas = List.copyOf(Objects.requireNonNull(deltas, "deltas"));
+            if (flushSeq < 0) {
+                throw new IllegalArgumentException("flushSeq is never negative: " + flushSeq);
+            }
+            if (segmentKey.isBlank()) {
+                throw new IllegalArgumentException("a split flush names its segment");
+            }
+            // ⚠️ AT LEAST TWO, ASCENDING: one delta is no split, and its one
+            // pointer already answers it.
+            if (deltas.size() < 2) {
+                throw new IllegalArgumentException("a split flush spans two deltas or more");
+            }
+            for (int i = 1; i < deltas.size(); i++) {
+                DeltaAt a = deltas.get(i - 1);
+                DeltaAt b = deltas.get(i);
+                if (a.epoch() > b.epoch()
+                        || a.epoch() == b.epoch() && a.sequence() >= b.sequence()) {
+                    throw new IllegalArgumentException("a split flush's deltas ascend");
+                }
+            }
         }
     }
 
@@ -119,6 +197,14 @@ public record Checkpoint(long sequence,
      * through a rolling deploy.
      */
     public static final int VERSION_WATERMARKED = 2;
+
+    /**
+     * A checkpoint whose pointed pod slots carry their SPLIT FLUSHES (ADR-0086).
+     * ⚠️ A SUPERSET OF {@link #VERSION_WATERMARKED}: its streams carry the
+     * per-stream watermark flag and its pods the v1 slot. ⚠️ CHOSEN BY
+     * CONTENT, as v2 is: a checkpoint with no split flush encodes as before.
+     */
+    public static final int VERSION_SPLIT = 3;
 
     /**
      * Where a stream stands: the next offset to assign, the oldest still kept,
@@ -227,7 +313,8 @@ public record Checkpoint(long sequence,
         // pods carry no incarnation encodes byte-for-byte as it did before
         // ADR-0036, which is what keeps `checkpoint-v0.bin` and every written
         // checkpoint readable.
-        boolean watermarked = streams.values().stream()
+        boolean split = pods.values().stream().anyMatch(p -> !p.splits().isEmpty());
+        boolean watermarked = split || streams.values().stream()
                 .anyMatch(o -> o.consumerWatermark().isPresent());
         // ⚠️ V2 IMPLIES THE V1 POD LAYOUT, so a watermarked checkpoint writes
         // the per-slot attribution flag even when no pod carries a pointer --
@@ -236,7 +323,7 @@ public record Checkpoint(long sequence,
         boolean attributed = watermarked
                 || pods.values().stream().anyMatch(PodState::hasPointer);
         head.putInt(MAGIC);
-        head.putInt(watermarked ? VERSION_WATERMARKED
+        head.putInt(split ? VERSION_SPLIT : watermarked ? VERSION_WATERMARKED
                 : attributed ? VERSION_ATTRIBUTED : VERSION);
         out.writeBytes(head.array());
         SegmentWriter.putUvarint(out, sequence);
@@ -287,10 +374,32 @@ public record Checkpoint(long sequence,
                     out.writeBytes(inc);
                     SegmentWriter.putUvarint(out, s.epoch());
                     SegmentWriter.putUvarint(out, s.sequence());
+                    if (split) {
+                        putSplits(out, s.splits());
+                    }
                 }
             }
         }
         return out.toByteArray();
+    }
+
+    /** A pointed slot's split flushes, sorted (ADR-0086). */
+    private static void putSplits(ByteArrayOutputStream out, List<SplitFlush> splits) {
+        List<SplitFlush> sorted = new ArrayList<>(splits);
+        sorted.sort(java.util.Comparator.comparingLong(SplitFlush::flushSeq)
+                .thenComparing(SplitFlush::segmentKey));
+        SegmentWriter.putUvarint(out, sorted.size());
+        for (SplitFlush f : sorted) {
+            SegmentWriter.putUvarint(out, f.flushSeq());
+            byte[] key = f.segmentKey().getBytes(StandardCharsets.UTF_8);
+            SegmentWriter.putUvarint(out, key.length);
+            out.writeBytes(key);
+            SegmentWriter.putUvarint(out, f.deltas().size());
+            for (DeltaAt at : f.deltas()) {
+                SegmentWriter.putUvarint(out, at.epoch());
+                SegmentWriter.putUvarint(out, at.sequence());
+            }
+        }
     }
 
     public static Checkpoint decode(byte[] bytes) throws IOException {
@@ -303,7 +412,7 @@ public record Checkpoint(long sequence,
         }
         int version = b.getInt(4);
         if (version != VERSION && version != VERSION_ATTRIBUTED
-                && version != VERSION_WATERMARKED) {
+                && version != VERSION_WATERMARKED && version != VERSION_SPLIT) {
             throw new IOException("unsupported checkpoint version: " + version);
         }
         Cursor c = new Cursor(bytes, 8, "checkpoint");
@@ -390,7 +499,7 @@ public record Checkpoint(long sequence,
             // `CommitDelta` refuses the identical shape for segment keys.
             long oldest = c.uvarint();
             java.util.OptionalLong mark = java.util.OptionalLong.empty();
-            if (version == VERSION_WATERMARKED && presenceFlag(c, "stream watermark")) {
+            if (version >= VERSION_WATERMARKED && presenceFlag(c, "stream watermark")) {
                 mark = java.util.OptionalLong.of(c.uvarint());
             }
             if (streams.put(key, new StreamOffsets(next, oldest, mark)) != null) {
@@ -424,7 +533,10 @@ public record Checkpoint(long sequence,
                             + "-byte incarnationId but only " + c.remaining() + " bytes remain");
                 }
                 String inc = new String(c.bytes((int) incLen), StandardCharsets.UTF_8);
-                state = new PodState(inc, watermark, c.uvarint(), c.uvarint());
+                long epoch = c.uvarint();
+                long seq = c.uvarint();
+                state = new PodState(inc, watermark, epoch, seq,
+                        version == VERSION_SPLIT ? splits(c) : List.of());
             }
             if (pods.put(pod, state) != null) {
                 throw new IOException("a checkpoint repeats pod " + pod);
@@ -434,5 +546,35 @@ public record Checkpoint(long sequence,
             throw new IOException("checkpoint has bytes after its last field");
         }
         return new Checkpoint(sequence, streams, pods);
+    }
+
+    /** A pointed slot's split flushes (ADR-0086), every count bounded by the bytes left. */
+    private static List<SplitFlush> splits(Cursor c) throws IOException {
+        long count = c.uvarint();
+        if (count < 0 || count > c.remaining()) {
+            throw new IOException("a checkpoint claims " + count + " split flushes but only "
+                    + c.remaining() + " bytes remain");
+        }
+        List<SplitFlush> out = new ArrayList<>();
+        for (long i = 0; i < count; i++) {
+            long flushSeq = c.uvarint();
+            long keyLen = c.uvarint();
+            if (keyLen < 0 || keyLen > c.remaining()) {
+                throw new IOException("a checkpoint claims a " + keyLen
+                        + "-byte split segment key but only " + c.remaining() + " bytes remain");
+            }
+            String key = new String(c.bytes((int) keyLen), StandardCharsets.UTF_8);
+            long deltaCount = c.uvarint();
+            if (deltaCount < 0 || deltaCount > c.remaining() / 2) {
+                throw new IOException("a checkpoint claims " + deltaCount
+                        + " deltas of a split flush but only " + c.remaining() + " bytes remain");
+            }
+            List<DeltaAt> deltas = new ArrayList<>();
+            for (long d = 0; d < deltaCount; d++) {
+                deltas.add(new DeltaAt(c.uvarint(), c.uvarint()));
+            }
+            out.add(new SplitFlush(flushSeq, key, deltas));
+        }
+        return out;
     }
 }

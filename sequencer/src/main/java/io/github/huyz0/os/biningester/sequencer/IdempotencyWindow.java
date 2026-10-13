@@ -116,6 +116,11 @@ final class IdempotencyWindow {
     /** Per incarnation, per recent flushSeq, per segment key: each run's delta (M13.34b). */
     private final Map<String, java.util.TreeMap<Long, Map<String,
             Map<io.github.huyz0.os.biningester.format.RunKey, At>>>> runsByFlush = new HashMap<>();
+    /**
+     * A checkpoint's split flushes (ADR-0086), by slot, then flushSeq and segment
+     * key: the deltas to read once a retry asks, into {@link #runsByFlush}.
+     */
+    private final Map<String, Map<String, List<At>>> splitsBySlot = new HashMap<>();
 
     private final BinStore store;
     private final String prefix;
@@ -177,6 +182,43 @@ final class IdempotencyWindow {
                 (prior, seeded) ->
                         seeded.lastAppliedFlushSeq() > prior.lastAppliedFlushSeq()
                                 ? seeded : prior));
+        // ⚠️ AND ITS SPLIT FLUSHES (ADR-0086): a retry of one is answered from
+        // every delta its segment's runs lie in, though the replay read none.
+        fromChain.forEach((slot, state) -> state.splits().forEach(f -> splitsBySlot
+                .computeIfAbsent(slot, k -> new HashMap<>())
+                .put(f.flushSeq() + "\0" + f.segmentKey(), f.deltas().stream()
+                        .map(at -> new At(at.epoch(), at.sequence())).toList())));
+    }
+
+    /**
+     * {@code request}'s split flush, if a checkpoint seeded one and nothing
+     * tracks it yet, read into {@link #runsByFlush} (ADR-0086): one GET per
+     * delta it lists, once -- then answered as a split this process committed.
+     */
+    void resolveSplit(CommitRequest request) throws IOException {
+        Map<String, List<At>> splits = splitsBySlot.get(key(request.podId(),
+                request.incarnationId()));
+        String flush = request.flushSeq() + "\0" + request.segmentKey();
+        List<At> deltas = splits == null ? null : splits.get(flush);
+        if (deltas == null) {
+            return;
+        }
+        for (At at : deltas) {
+            CommitDelta held = DeltaReader.at(store, prefix, at.epoch(), at.sequence())
+                    .orElseThrow(() -> new IOException("a split flush of pod "
+                            + request.podId() + " points at sequence " + at.sequence()
+                            + " of epoch " + at.epoch() + ", which holds no delta"));
+            for (SegmentCommit segment : held.segments()) {
+                if (answers(segment, request)) {
+                    runsCommitted(segment.attribution(), segment.segmentKey(),
+                            segment.runs().stream()
+                                    .map(io.github.huyz0.os.biningester.format.RunCommit::key)
+                                    .toList(), at.epoch(), at.sequence());
+                }
+            }
+        }
+        // ⚠️ FORGOTTEN ONLY ONCE READ: a GET that failed leaves it for the retry.
+        splits.remove(flush);
     }
 
     /**
@@ -355,6 +397,7 @@ final class IdempotencyWindow {
         Map<String, CommitDelta> read = new HashMap<>();
         List<SegmentCommit> answered = new ArrayList<>(replays.size());
         for (CommitRequest request : replays) {
+            resolveSplit(request);
             Optional<Map<io.github.huyz0.os.biningester.format.RunKey, At>> tracked =
                     runsOf(request);
             if (tracked.isPresent()) {
@@ -466,6 +509,7 @@ final class IdempotencyWindow {
      * lists. Every run it asks for must be tracked and committed.
      */
     List<CommitDelta> answerByDelta(CommitRequest request) throws IOException {
+        resolveSplit(request);
         Map<io.github.huyz0.os.biningester.format.RunKey, At> tracked =
                 runsOf(request).orElseThrow(() -> new IOException("pod " + request.podId()
                         + "'s flushSeq " + request.flushSeq() + " of segment "

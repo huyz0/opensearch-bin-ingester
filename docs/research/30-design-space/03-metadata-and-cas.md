@@ -264,6 +264,13 @@ containing, per stream: `nextOffset`, `oldestRetainedOffset`, and per pod `lastA
 It deliberately does **not** contain the full `offset -> segment` index for the retention window —
 that stays in the deltas, so the checkpoint stays small (1,600 streams × ~24 B ≈ **38 KiB**).
 
+> ⚠️ **Extended by ADR-0086.** Each pod slot also carries its recent *split
+> flushes* -- a flush whose segment was committed across more than one delta by
+> a switch to the default path (ADR-0081 §8) -- with those deltas, so a retry
+> crossing a graceful handover is answered from all of them. Only split flushes
+> ride, never every run, so the size above still holds for a cluster that does
+> not switch.
+
 Recovery = newest checkpoint + replay of subsequent deltas. Bounded by *K*. Old deltas become
 deletable once a checkpoint covers them **and** the retention window has passed.
 

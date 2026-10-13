@@ -61,6 +61,7 @@ final class RedirectingCommit {
             // ⚠️ THE WINDOW FIRST (its review round 1, P1): a run already
             // committed is answered from its delta though its stream turned fast
             // since -- redirected, its records would be written twice.
+            sequencer.window.resolveSplit(request); // ⚠️ ADR-0086: a checkpoint's split
             Map<RunKey, IdempotencyWindow.At> tracked =
                     sequencer.window.runsOf(request).orElse(Map.of());
             request.recordCounts().forEach((stream, count) -> {

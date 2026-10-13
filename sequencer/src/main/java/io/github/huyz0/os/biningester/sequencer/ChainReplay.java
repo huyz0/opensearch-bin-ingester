@@ -419,8 +419,8 @@ final class ChainReplay {
                 return;
             }
             pods.merge(slot(pod, state.incarnationId()), state,
-                    (prior, now) -> now.lastAppliedFlushSeq() > prior.lastAppliedFlushSeq()
-                            ? now : prior);
+                    (prior, now) -> (now.lastAppliedFlushSeq() > prior.lastAppliedFlushSeq()
+                            ? now : prior).withSplitsOf(prior).withSplitsOf(now));
         });
         if (chainEpoch == ownEpoch) {
             // ⚠️ `nextSequence` IS DERIVED FROM THE ENTRIES READ, so skipping
@@ -654,8 +654,9 @@ final class ChainReplay {
             pods.merge(slot(a.podId(), a.incarnationId()),
                     new Checkpoint.PodState(a.incarnationId(), a.flushSeq(),
                             chainEpoch, delta.sequence()),
-                    (prior, now) -> now.lastAppliedFlushSeq() > prior.lastAppliedFlushSeq()
-                            ? now : prior);
+                    // ⚠️ ADR-0086: a checkpoint's split flushes outlive a later delta.
+                    (prior, now) -> (now.lastAppliedFlushSeq() > prior.lastAppliedFlushSeq()
+                            ? now : prior).withSplitsOf(prior).withSplitsOf(now));
         }
     }
 

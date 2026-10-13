@@ -184,10 +184,10 @@ class CheckpointWatermarkTest {
                 Map.of("poda", PodState.bare(42)));
         byte[] bytes = c.encode();
         ByteBuffer.wrap(bytes).order(ByteOrder.BIG_ENDIAN)
-                .putInt(4, Checkpoint.VERSION_WATERMARKED + 1);
+                .putInt(4, Checkpoint.VERSION_SPLIT + 1);
         assertThatThrownBy(() -> Checkpoint.decode(bytes))
                 .isInstanceOf(IOException.class)
-                .hasMessageContaining(String.valueOf(Checkpoint.VERSION_WATERMARKED + 1));
+                .hasMessageContaining(String.valueOf(Checkpoint.VERSION_SPLIT + 1));
     }
 
 }
