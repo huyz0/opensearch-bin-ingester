@@ -126,6 +126,43 @@ final class FastLeaderFrames {
         }
     }
 
+    /**
+     * A writer's forwarded REGISTER (M13.83a; ADR-0082 §2): taken into the
+     * catalog this pod's term record is fed from.
+     *
+     * <p>⚠️ ONLY FROM A POD ROSTERED IN THE FAST TERM THIS POD LEADS, AND
+     * ONLY A {@code wal=true} INDEX (its review round 1, P1): the leader's own
+     * writes are placed by this catalog, so a REGISTER from anyone else -- or
+     * for a default index -- would move them. A rostered pod is a member of
+     * this cluster, its sender bound by ADR-0084's peer certificate, and its
+     * registration is the plugin's word as a direct one is: last wins, as
+     * ADR-0015 has it -- a deleted and recreated index re-registers under its
+     * old name (round 2, P5). Refused {@code not rostered} or {@code not fast}
+     * otherwise.
+     */
+    static FastFrame.Body answerRegister(Sequencer held,
+            io.github.huyz0.os.biningester.ingest.IndexCatalog catalog,
+            FastFrame.Header header, FastFrame.Register register) throws IOException {
+        Optional<FastLeaderTerm> term = LocalSequencer.underneath(held)
+                .filter(LocalSequencer::serving).flatMap(LocalSequencer::fastTerm);
+        if (term.isEmpty()) {
+            return new FastFrame.Refused(FastFrame.Reason.NOT_ROSTERED, Optional.empty(),
+                    "this pod leads no fast term");
+        }
+        if (!term.get().rostered(header.senderUid())) {
+            return new FastFrame.Refused(FastFrame.Reason.NOT_ROSTERED, Optional.empty(),
+                    header.senderUid() + " is not rostered in term " + term.get().epoch());
+        }
+        io.github.huyz0.os.biningester.format.IndexRegistration registration =
+                register.registration();
+        if (!registration.wal()) {
+            return new FastFrame.Refused(FastFrame.Reason.NOT_FAST, Optional.empty(),
+                    "only a wal=true index is forwarded");
+        }
+        catalog.register(registration);
+        return new FastFrame.HeldStatusReport(FastFrame.HeldStatus.NONE);
+    }
+
     /** A committed fast segment, delivered to subscribers: {@code DefaultIngest.delivered}. */
     @FunctionalInterface
     interface Delivered {

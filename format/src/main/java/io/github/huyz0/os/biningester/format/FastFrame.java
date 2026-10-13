@@ -41,15 +41,22 @@ public final class FastFrame {
     public static final int KIND_HELD = 16;
     public static final int KIND_HELD_STATUS = 17;
     public static final int KIND_JOINED = 15;
+    public static final int KIND_REGISTER = 18;
+    /**
+     * A REGISTER's registration at most (M13.83a review round 1, P3): a
+     * control frame of a few hundred bytes, never a frame's 64 MiB.
+     */
+    public static final int MAX_REGISTER_BYTES = 1 << 16;
 
     /**
      * Whether {@code kind} is a control frame (M13.66, ADR-0081 §12): the
-     * per-pod, per-term JOIN, JOINED, DEPART, HELD and HELD_STATUS. Every other
-     * kind carries a write's data.
+     * per-pod, per-term JOIN, JOINED, DEPART, HELD and HELD_STATUS, and the
+     * per-index-change REGISTER (M13.83a). Every other kind carries a write's
+     * data.
      */
     public static boolean isControl(int kind) {
         return kind == KIND_JOIN || kind == KIND_JOINED || kind == KIND_DEPART
-                || kind == KIND_HELD || kind == KIND_HELD_STATUS;
+                || kind == KIND_HELD || kind == KIND_HELD_STATUS || kind == KIND_REGISTER;
     }
     /** A pod UID or any other string here: generous for a Kubernetes UID or an endpoint. */
     public static final int MAX_STRING_BYTES = 1024;
@@ -61,7 +68,7 @@ public final class FastFrame {
     /**
      * The header every fast frame carries.
      *
-     * @param kind the frame's kind, 1 to 17
+     * @param kind the frame's kind, 1 to 18
      * @param epoch the sender's fast epoch, never negative
      * @param senderUid the sending incarnation's pod UID
      * @param targetUid the incarnation this frame is addressed to
@@ -70,8 +77,8 @@ public final class FastFrame {
         public Header {
             Objects.requireNonNull(senderUid, "senderUid");
             Objects.requireNonNull(targetUid, "targetUid");
-            if (kind < 1 || kind > 17) {
-                throw new IllegalArgumentException("a fast frame's kind is 1 to 17: " + kind);
+            if (kind < 1 || kind > KIND_REGISTER) {
+                throw new IllegalArgumentException("a fast frame's kind is 1 to 18: " + kind);
             }
             if (epoch < 0) {
                 throw new IllegalArgumentException("an epoch is never negative: " + epoch);
@@ -86,7 +93,7 @@ public final class FastFrame {
             HeldStatusReport, FastWriteFrame.Commit, FastWriteFrame.Assigned,
             FastWriteFrame.Confirm, FastWriteFrame.Exposed, FastWriteFrame.Replica,
             FastWriteFrame.ReplicaAck, FastTakeoverFrame.Fence, FastTakeoverFrame.Collected,
-            FastTakeoverFrame.Release {
+            FastTakeoverFrame.Release, Register {
         int kind();
     }
 
@@ -235,6 +242,25 @@ public final class FastFrame {
         }
     }
 
+    /**
+     * REGISTER, writer to leader (ADR-0082 §2; M13.83a): a fast index's
+     * registration, which the plugin gave only the pod its node talks to.
+     */
+    public record Register(IndexRegistration registration) implements Body {
+        public Register {
+            Objects.requireNonNull(registration, "registration");
+            if (registration.encode().length > MAX_REGISTER_BYTES) {
+                throw new IllegalArgumentException("a registration is at most "
+                        + MAX_REGISTER_BYTES + " bytes");
+            }
+        }
+
+        @Override
+        public int kind() {
+            return KIND_REGISTER;
+        }
+    }
+
     /** JOINED, leader to pod: the highest closed epoch, and the reported streams' status. */
     public record Joined(long closedThrough, HeldStatus status) implements Body {
         public Joined {
@@ -347,6 +373,11 @@ public final class FastFrame {
             case FastTakeoverFrame.Fence b -> FastTakeoverFrame.encode(out, b);
             case FastTakeoverFrame.Collected b -> FastTakeoverFrame.encode(out, b);
             case FastTakeoverFrame.Release b -> FastTakeoverFrame.encode(out, b);
+            case Register register -> {
+                byte[] registration = register.registration().encode();
+                u32(out, registration.length);
+                out.writeBytes(registration);
+            }
             case Refused refused -> {
                 out.write(refused.reason().code);
                 refused.discarded().ifPresent(k -> {
@@ -387,6 +418,14 @@ public final class FastFrame {
                         FastWriteFrame.decode(header.kind(), c);
                 case FastTakeoverFrame.KIND_FENCE, FastTakeoverFrame.KIND_COLLECTED,
                         FastTakeoverFrame.KIND_RELEASE -> FastTakeoverFrame.decode(header.kind(), c);
+                case KIND_REGISTER -> {
+                    long length = count(c, 1);
+                    if (length > MAX_REGISTER_BYTES) {
+                        throw new IOException("a REGISTER claims a " + length
+                                + "-byte registration");
+                    }
+                    yield new Register(IndexRegistration.decode(c.bytes((int) length)));
+                }
                 case KIND_REFUSED -> {
                     Reason reason = reason(c);
                     Optional<FastJournalRecord.IdempotencyKey> key = Optional.empty();

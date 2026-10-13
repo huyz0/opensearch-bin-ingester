@@ -90,6 +90,7 @@ Kinds:
 | 15 | `JOINED` | leader → pod | `closedThrough` i64; then a HELD_STATUS body for the streams JOIN reported |
 | 16 | `HELD` | holder → leader | per stream held: RunKey, and per `(epoch, assignedAfter)` held: lowest and highest offset; sent at DEPART phase 1, in JOIN, when its journal passes half its cap, and after every RELEASE while a departing pod has an entry pending |
 | 17 | `HELD_STATUS` | leader → holder | per reported stream: RunKey, release below offset (the committed next offset), and per reported `(epoch, assignedAfter)` a `supersededFrom` i64 (the lowest resume offset of a decision superseding the group, `Long.MAX_VALUE` if none: offsets at or above it are superseded) and, for the part below it, a `status` u8 (1 committed, 2 superseded, 3 closed term, 4 pending) |
+| 18 | `REGISTER` | writer → leader | a fast index's registration: its byte length u32, then the `IndexRegistration` encoding of §1 -- forwarded by a writer before its first fast COMMIT and on every change, since the plugin registers an index only with the ingester its node talks to (ADR-0015 §2); answered by an empty HELD_STATUS (M13.83) |
 
 ⚠️ Stated by M13.26d, which landed the header and the JOIN, JOINED and
 REFUSED kinds with their first reader and writer (the other kinds land with
@@ -154,7 +155,21 @@ raised, what it holds of those terms does not change while it is collected,
 so a page asked again is the same page and a lost answer skips none; a
 member-side cursor would skip a page on a lost answer, and pages a member
 pushed could arrive out of order. The layout landed by M13.33a had no reader
-or writer, so no old FENCE exists.
+or writer, so no old FENCE exists. ⚠️ Stated by M13.83a: REGISTER is the
+registration's byte length u32 then its `IndexRegistration` encoding (§1),
+which carries its own magic and version, so a REGISTER of a newer
+registration is read as §1 reads one; a length past the frame's end is
+refused. A registration of more than 64 KiB is refused: it is a control frame
+(ADR-0081 §12), a few per index change, never per record. The leader takes
+it into its catalog, the catalog its term record is fed from (ADR-0081 §4),
+only while it leads a fast term, only from a pod ROSTERED in that term (the
+header's sender, which ADR-0084's peer certificate binds), and only for a
+`wal=true` index; it refuses `not rostered` or `not fast` otherwise. A
+rostered pod's REGISTER is the plugin's word as a direct registration is:
+the last one wins, as ADR-0015 has it, so an index deleted and recreated
+under its old name re-registers. A pod whose build
+cannot read kind 18 answers it as an unreadable frame; the writer treats
+that, as any unanswered REGISTER, as not forwarded and sends it again.
 
 A catch-up or `/seg` response served from a journal is not a frame but an HTTP
 body; it carries the epoch it was served under in a `Binstore-Fast-Epoch`

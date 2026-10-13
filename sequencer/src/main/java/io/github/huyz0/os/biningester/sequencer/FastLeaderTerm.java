@@ -174,6 +174,15 @@ public final class FastLeaderTerm {
     }
 
     /**
+     * Whether {@code podUid} is ROSTERED in this term, as its roster was last
+     * read (M13.83a review round 1, P1): who may tell the leader of an index.
+     */
+    public boolean rostered(String podUid) throws IOException {
+        return ownRoster().member(podUid)
+                .filter(m -> m.state() == Roster.State.ROSTERED).isPresent();
+    }
+
+    /**
      * The sequence of the upload delta at {@code firsts}, for its idempotency
      * key (M13.31a review round 1, P1): ⚠️ THE SAME UNTIL ONE IS COMMITTED, so
      * a retry of a delta that landed with its answer lost is folded into it

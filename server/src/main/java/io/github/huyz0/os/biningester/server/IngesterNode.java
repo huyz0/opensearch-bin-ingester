@@ -240,6 +240,12 @@ public final class IngesterNode implements AutoCloseable {
                 fastFrames.handle(kind, (header, body) ->
                         FastLeaderFrames.answer(assembly.heldTerm(), header, body));
             }
+            // ⚠️ M13.83a: a writer's forwarded registration, into this
+            // leader's catalog -- the one its term record is fed from.
+            fastFrames.handle(io.github.huyz0.os.biningester.format.FastFrame.KIND_REGISTER,
+                    (header, body) -> FastLeaderFrames.answerRegister(assembly.heldTerm(),
+                            assembly.catalog(), header,
+                            (io.github.huyz0.os.biningester.format.FastFrame.Register) body));
             // ⚠️ M13.27s: a COMMIT, by the term this pod leads, over its journal.
             io.github.huyz0.os.biningester.format.Roster.Incarnation self =
                     new io.github.huyz0.os.biningester.format.Roster.Incarnation(config.podId(),
