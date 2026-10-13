@@ -254,6 +254,11 @@ public final class ChainMemory {
         }
     }
 
+    /** Every delta held, with its epoch, in chain order: what seeds the window (M13.34v). */
+    synchronized List<EpochDelta> epochDeltas() {
+        return List.copyOf(deltas);
+    }
+
     /**
      * Empties the chain before a replay refills it.
      *

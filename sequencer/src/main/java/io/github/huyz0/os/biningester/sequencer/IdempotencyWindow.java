@@ -256,6 +256,25 @@ final class IdempotencyWindow {
         flushes.headMap(flushes.lastKey() - RETAINED_FLUSHES + 1).clear();
     }
 
+    /**
+     * Each attributed segment's runs in {@code replayed}, in chain order, with
+     * the delta carrying each (M13.34v): what a successor's replay read, so a
+     * retry crossing the takeover finds a split segment's runs. A flush the
+     * replay did not read -- behind a checkpoint -- keeps its one pointer.
+     */
+    void seedRuns(List<EpochDelta> replayed) {
+        for (EpochDelta held : replayed) {
+            for (SegmentCommit segment : held.delta().segments()) {
+                if (segment.attribution() != null) {
+                    runsCommitted(segment.attribution(), segment.segmentKey(),
+                            segment.runs().stream()
+                                    .map(io.github.huyz0.os.biningester.format.RunCommit::key)
+                                    .toList(), held.epoch(), held.delta().sequence());
+                }
+            }
+        }
+    }
+
     /** Each run of {@code request}'s segment committed so far, and its delta; empty if untracked. */
     Optional<Map<io.github.huyz0.os.biningester.format.RunKey, At>> runsOf(
             CommitRequest request) {
@@ -377,6 +396,15 @@ final class IdempotencyWindow {
                         + ", which the delta at sequence " + at.sequence()
                         + " does not carry; it was consumed by a commit that did not land"
                         + " and its records were never assigned offsets");
+            }
+            // ⚠️ NEVER IN PART (M13.34v): a split segment's other runs may lie
+            // in another delta this one pointer cannot name -- refused, never
+            // answered with offsets for only some of the runs asked.
+            java.util.Set<io.github.huyz0.os.biningester.format.RunKey> absent =
+                    new java.util.TreeSet<>(request.recordCounts().keySet());
+            match.runs().forEach(run -> absent.remove(run.key()));
+            if (!absent.isEmpty()) {
+                throw new IncompleteReplayException(request, absent);
             }
             answered.add(match);
         }

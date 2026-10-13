@@ -81,6 +81,9 @@ final class LocalSequencerStart {
             // documented-but-absent shape this codebase keeps producing. It is
             // true as of this line.
             sequencer.window.seed(log.recoveredPods());
+            // ⚠️ AND EACH SEGMENT's RUNS THE REPLAY READ (M13.34v): a split
+            // segment's retry is answered from both its deltas.
+            sequencer.window.seedRuns(sequencer.chain().epochDeltas());
             // ⚠️ THE WINDOW IS INHERITED, NOT RESTARTED (M4.10d). Without this
             // a successor knows nothing about what its predecessor applied, so
             // a retry that arrives across a takeover -- exactly when the store
