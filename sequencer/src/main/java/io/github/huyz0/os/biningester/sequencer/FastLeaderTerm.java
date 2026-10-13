@@ -66,14 +66,8 @@ public final class FastLeaderTerm {
     private final TermRecordWriter termRecord;
     /** What a default-path run may not do here (M13.33n, M13.34c). */
     private final DefaultPathGate gate;
-    /** When this term last uploaded, paced at {@code min_upload_interval} (M13.31a). */
-    private long lastUploadNanos;
-    private boolean uploaded;
-    private long uploadSeq;
-    /** The first offsets of the upload whose delta is not known committed; null when none. */
-    private Map<RunKey, Long> pendingUpload;
-    private final java.util.concurrent.locks.ReentrantLock uploading =
-            new java.util.concurrent.locks.ReentrantLock();
+    /** Its uploads' pacing and numbering (M13.31a), split out at this file's ceiling. */
+    private final TermUploads uploads;
     /** This term's roster as last read, and when; null before the first read. */
     private Roster cached;
     /**
@@ -107,6 +101,7 @@ public final class FastLeaderTerm {
         this.departures = new RosterDepartures(store, prefix, epoch());
         this.mono = Objects.requireNonNull(mono, "mono");
         this.refreshNanos = refresh.toNanos();
+        this.uploads = new TermUploads(this.mono, refreshNanos);
         this.termRecord = new TermRecordWriter(store, prefix, opened.started().own(), mono,
                 refresh);
         this.gate = new DefaultPathGate(opened);
@@ -188,28 +183,17 @@ public final class FastLeaderTerm {
     public Optional<Map<RunKey, Long>> upload(CommitDesk desk, FastJournal journal,
             FastUploader.Chain chain, RecoveryWriter.SegmentUpload upload,
             TermJoiner.Transport transport, boolean paced) throws IOException {
-        boolean idle = desk.leader().heldBatches() == 0;
-        synchronized (this) {
-            // ⚠️ NOTHING HELD, NOTHING TO UPLOAD (M13.87), unless an upload's
-            // commit is not yet known: no roster read on an idle tick.
-            if (idle && pendingUpload == null) {
-                return Optional.empty();
-            }
-            long now = mono.nanos();
-            if (paced && uploaded && now - lastUploadNanos < refreshNanos) {
-                return Optional.empty();
-            }
-            uploaded = true;
-            lastUploadNanos = now;
+        if (!uploads.begin(desk.leader().heldBatches() == 0, paced)) {
+            return Optional.empty();
         }
-        uploading.lock();
+        uploads.lock();
         try {
             Roster own = ownRoster();
             ReleaseSender release = new ReleaseSender(own.leader().podUid(), epoch(), transport);
             return new FastUploader(epoch(), journal, desk.leader(), chain, upload,
                     below -> release.send(List.of(own), below)).upload();
         } finally {
-            uploading.unlock();
+            uploads.unlock();
         }
     }
 
@@ -229,19 +213,13 @@ public final class FastLeaderTerm {
      * a retry of a delta that landed with its answer lost is folded into it
      * rather than committing its records twice.
      */
-    public synchronized long uploadSeq(Map<RunKey, Long> firsts) {
-        if (!firsts.equals(pendingUpload)) {
-            pendingUpload = Map.copyOf(firsts);
-            uploadSeq++;
-        }
-        return uploadSeq;
+    public long uploadSeq(Map<RunKey, Long> firsts) {
+        return uploads.seq(firsts);
     }
 
     /** The upload delta at {@code firsts} is committed: the next takes a new sequence. */
-    public synchronized void uploadCommitted(Map<RunKey, Long> firsts) {
-        if (firsts.equals(pendingUpload)) {
-            pendingUpload = null;
-        }
+    public void uploadCommitted(Map<RunKey, Long> firsts) {
+        uploads.committed(firsts);
     }
 
     /**
