@@ -296,6 +296,23 @@ public final class QuorumFrontier {
         s.held = false;
     }
 
+    /**
+     * The pods other than the leader holding a copy of an entry the chain has
+     * not committed (ADR-0081 §7; M13.31e): exposed or not, each such copy is
+     * one of its quorum until the upload releases it, so losing its pod
+     * shrinks the window in which a second loss is quorum loss.
+     */
+    public synchronized Set<String> holders() {
+        Set<String> holders = new TreeSet<>();
+        for (Stream s : streams.values()) {
+            for (Entry e : s.entries.values()) {
+                holders.addAll(e.copies.keySet());
+            }
+        }
+        holders.remove(leaderUid);
+        return holders;
+    }
+
     /** {@code podUid}, reported lost, is ready again: its later copies count. */
     public synchronized void returned(String podUid) {
         lostPods.remove(podUid);

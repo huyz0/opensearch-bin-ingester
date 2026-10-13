@@ -147,6 +147,11 @@ public final class FastWriteLeader implements TakeoverRun.Hold {
         this.nextDecision = Objects.requireNonNull(nextDecision, "nextDecision");
     }
 
+    /** The pods holding a copy of an unreleased entry, the leader aside (M13.31e). */
+    public synchronized java.util.Set<String> holders() {
+        return frontier.holders();
+    }
+
     /** {@code stream}'s quorum frontier: every offset below it exposable (M13.31a). */
     public synchronized long frontier(RunKey stream) {
         return frontier.frontier(stream);

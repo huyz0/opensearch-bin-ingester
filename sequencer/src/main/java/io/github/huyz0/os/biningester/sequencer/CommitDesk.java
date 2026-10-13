@@ -135,6 +135,20 @@ public final class CommitDesk {
         return write;
     }
 
+    /**
+     * {@code podUid} was lost -- its UID gone, or out of the EndpointSlice
+     * (ADR-0081 §7; M13.31e): an upload is asked for at once when it holds a
+     * copy of an unreleased entry, so a second loss has the least time to be
+     * quorum loss. Whether one was asked; ⚠️ nothing for a pod holding none.
+     */
+    public synchronized boolean holderLost(String podUid) {
+        if (!write.holders().contains(podUid)) {
+            return false;
+        }
+        asked = true;
+        return true;
+    }
+
     /** An upload is asked for at once: a departing pod's DEPART phase 1 (ADR-0081 §7, §9). */
     public synchronized void askUpload() {
         asked = true;
