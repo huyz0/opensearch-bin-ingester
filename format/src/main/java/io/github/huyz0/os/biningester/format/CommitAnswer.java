@@ -71,11 +71,15 @@ public record CommitAnswer(List<CommitDelta> deltas, List<RunKey> redirected) {
         }
         // ⚠️ COMMITTED OR REDIRECTED, NEVER BOTH (review round 1, P3): a
         // writer re-sending a committed run by COMMIT would write it twice.
+        // ⚠️ EVERY SEGMENT's RUNS (M13.34l): a batched delta carries other pods'
+        // segments too, and its single-segment view refuses to be read.
         for (CommitDelta delta : deltas) {
-            for (RunCommit run : delta.runs()) {
-                if (seen.contains(run.key())) {
-                    throw new IllegalArgumentException("a run both committed and redirected: "
-                            + run.key());
+            for (SegmentCommit segment : delta.segments()) {
+                for (RunCommit run : segment.runs()) {
+                    if (seen.contains(run.key())) {
+                        throw new IllegalArgumentException(
+                                "a run both committed and redirected: " + run.key());
+                    }
                 }
             }
         }

@@ -179,7 +179,7 @@ public final class DefaultIngest implements Ingest {
                 this::flushBatch);
         this.pushQueue = new PushQueue(hub, serving, config.maxQueuedPushBytes());
         this.batchFlusher = new BatchFlusher(publisher, this.sequencer, podShortId,
-                durableSegmentListener, pushQueue);
+                durableSegmentListener, pushQueue, () -> fastRoute.path());
         this.uploads = new UploadDeliveries(config, clock, publisher, durableSegmentListener,
                 pushQueue);
     }

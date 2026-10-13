@@ -18,28 +18,46 @@ final class DurableSegmentAcknowledgement {
     private DurableSegmentAcknowledgement() {
     }
 
-    static void complete(SegmentPublisher.Published published, CommitDelta delta,
+    /** A redirected run's append, re-sent through the fast path (M13.34l). */
+    @FunctionalInterface
+    interface Redirect {
+        void resend(DefaultIngest.Pending pending);
+    }
+
+    /**
+     * ⚠️ EACH STREAM ACKED FROM WHICHEVER DELTA COMMITTED IT (M13.34l; ADR-0081
+     * §8): a paused run lands in a later delta than the rest of its segment,
+     * and the answer lists both; a redirected run's appends are re-sent.
+     */
+    static void complete(SegmentPublisher.Published published,
+            io.github.huyz0.os.biningester.format.CommitAnswer answer,
             List<DefaultIngest.Pending> batch, DurableSegmentListener listener,
-            java.util.function.Consumer<Runnable> settle) {
+            java.util.function.Consumer<Runnable> settle, Redirect redirect) {
         // Pair runs with their segment: a forwarded delta can contain another pod's
         // runs for the same stream, and accepting those offsets would acknowledge
         // records this pod did not commit.
         Map<RunKey, Long> firstOffsets = new HashMap<>();
-        for (SegmentCommit segment : delta.segments()) {
-            if (!segment.segmentKey().equals(published.key())) {
-                continue;
-            }
-            for (RunCommit run : segment.runs()) {
-                firstOffsets.put(run.key(), run.firstOffset());
+        for (CommitDelta delta : answer.deltas()) {
+            for (SegmentCommit segment : delta.segments()) {
+                if (!segment.segmentKey().equals(published.key())) {
+                    continue;
+                }
+                for (RunCommit run : segment.runs()) {
+                    firstOffsets.put(run.key(), run.firstOffset());
+                }
             }
         }
         for (DefaultIngest.Pending pending : batch) {
             Long base = firstOffsets.get(pending.stream());
+            if (base == null && answer.redirected().contains(pending.stream())) {
+                redirect.resend(pending);
+                continue;
+            }
             if (base == null) {
                 IOException missing = new IOException(
                         "the commit carried no run for the stream this append wrote, "
-                        + "under segment " + published.key() + " -- the delta names "
-                        + delta.segments().size() + " segment(s)");
+                        + "under segment " + published.key() + " -- the answer names "
+                        + answer.deltas().size() + " delta(s)");
                 settle.accept(() -> pending.done().completeExceptionally(missing));
                 continue;
             }
