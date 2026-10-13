@@ -133,6 +133,17 @@ public final class InProcessTransport implements SequencerTransport {
 
     @Override
     public CommitDelta send(String endpoint, CommitRequest request) throws IOException {
+        return peerAt(endpoint, request).commit(request);
+    }
+
+    /** As {@link #send}, answered by the peer's commit answer (M13.34k). */
+    @Override
+    public io.github.huyz0.os.biningester.format.CommitAnswer sendAnswering(String endpoint,
+            CommitRequest request) throws IOException {
+        return peerAt(endpoint, request).commitAnswering(request);
+    }
+
+    private Sequencer peerAt(String endpoint, CommitRequest request) throws IOException {
         synchronized (sentTo) {
             sentTo.add(endpoint);
         }
@@ -151,7 +162,7 @@ public final class InProcessTransport implements SequencerTransport {
             throw new NotTheLeaseholderException(
                     "no sequencer at " + endpoint + " -- it does not hold the lease");
         }
-        return peer.commit(request);
+        return peer;
     }
 
     @Override

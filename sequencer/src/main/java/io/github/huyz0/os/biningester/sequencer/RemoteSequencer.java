@@ -93,15 +93,15 @@ public final class RemoteSequencer implements Sequencer {
      * the interrupt keeps one virtual thread until its own timeout, which is the
      * bound that applied before this method existed.
      */
-    private CommitDelta sendWatching(Lease lease, CommitRequest request) throws IOException {
+    private <R> R sendWatching(Lease lease, Send<R> send) throws IOException {
         if (challenge == LeaseChallenge.NEVER) {
-            return transport.send(lease.holderEndpoint(), request);
+            return send.to(lease.holderEndpoint());
         }
-        java.util.concurrent.CompletableFuture<CommitDelta> answer =
+        java.util.concurrent.CompletableFuture<R> answer =
                 new java.util.concurrent.CompletableFuture<>();
         Thread sender = Thread.ofVirtual().name("forward-" + lease.holderPodId()).start(() -> {
             try {
-                answer.complete(transport.send(lease.holderEndpoint(), request));
+                answer.complete(send.to(lease.holderEndpoint()));
             } catch (Throwable failed) {
                 answer.completeExceptionally(failed);
             }
@@ -161,13 +161,30 @@ public final class RemoteSequencer implements Sequencer {
         }
     }
 
+    /** One forward to the holder at {@code endpoint}: a commit's delta, or its answer. */
+    @FunctionalInterface
+    private interface Send<R> {
+        R to(String endpoint) throws IOException;
+    }
+
     @Override
     public CommitDelta commitAll(List<CommitRequest> requests) throws IOException {
+        CommitRequest request = requests.size() == 1 ? requests.get(0) : batched(requests);
+        return forward(endpoint -> transport.send(endpoint, request));
+    }
+
+    /** {@code request} forwarded asking for the commit answer (M13.34k), as a commit is. */
+    @Override
+    public io.github.huyz0.os.biningester.format.CommitAnswer commitAnswering(CommitRequest request)
+            throws IOException {
+        return forward(endpoint -> transport.sendAnswering(endpoint, request));
+    }
+
+    private <R> R forward(Send<R> send) throws IOException {
         Lease lease = currentLease();
         refuseSelfAddress(lease, null);
         try {
-            return sendWatching(lease, requests.size() == 1
-                    ? requests.get(0) : batched(requests));
+            return sendWatching(lease, send);
         } catch (SequencerTransport.NotTheLeaseholderException refused) {
             // ⚠️ FOLLOW THE LEASE, AND ONLY ON A REFUSAL (M5.5). A refusal says
             // plainly that nothing was applied, so resending the SAME request
@@ -200,8 +217,7 @@ public final class RemoteSequencer implements Sequencer {
                         + ") refused the commit and the lease has not moved", refused);
             }
             refuseSelfAddress(moved, refused);
-            return sendWatching(moved, requests.size() == 1
-                    ? requests.get(0) : batched(requests));
+            return sendWatching(moved, send);
         }
     }
 

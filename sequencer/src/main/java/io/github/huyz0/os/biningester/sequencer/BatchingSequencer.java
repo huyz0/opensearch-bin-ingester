@@ -132,6 +132,24 @@ public final class BatchingSequencer implements Sequencer {
     }
 
     /**
+     * ⚠️ BATCHED UNLESS THE LEADER MUST ANSWER IT ALONE (M13.34k): a request
+     * with a run of a fast stream, or a retry the idempotency window answers
+     * per delta, goes to {@code RedirectingCommit}; every other is committed
+     * through the window as any commit is, its delta the answer.
+     */
+    @Override
+    public io.github.huyz0.os.biningester.format.CommitAnswer commitAnswering(CommitRequest request)
+            throws IOException {
+        if (delegate instanceof LocalSequencer local && RedirectingCommit.alone(local, request)) {
+            return local.commitAnswering(request);
+        }
+        CommitDelta delta = commit(request);
+        return new io.github.huyz0.os.biningester.format.CommitAnswer(List.of(new CommitDelta(delta.sequence(),
+                delta.segments().stream().filter(s -> s.segmentKey().equals(request.segmentKey()))
+                        .toList())), List.of());
+    }
+
+    /**
      * ⚠️ GOES THROUGH THE WINDOW LIKE EVERYTHING ELSE, and an earlier draft made
      * it a pass-through, which was wrong twice.
      *

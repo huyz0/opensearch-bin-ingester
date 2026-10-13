@@ -190,13 +190,18 @@ public final class CommitService implements HttpService {
         }
         try {
             drainBarrier.readLock().lock();
-            CommitDelta delta;
+            byte[] answer;
             try {
-                delta = local.commit(HttpSequencerTransport.requestOf(frame));
+                // ⚠️ M13.34k: a writer that asks gets ADR-0082 §7's answer.
+                answer = request.headers().first(io.helidon.http.HeaderNames.ACCEPT)
+                        .filter(a -> a.contains(HttpSequencerTransport.ANSWER_MEDIA_TYPE))
+                        .isPresent()
+                        ? local.commitAnswering(HttpSequencerTransport.requestOf(frame)).encode()
+                        : local.commit(HttpSequencerTransport.requestOf(frame)).encode();
             } finally {
                 drainBarrier.readLock().unlock();
             }
-            response.status(Status.OK_200).send(delta.encode());
+            response.status(Status.OK_200).send(answer);
         } catch (FencedException fenced) {
             // ⚠️ A FENCED SEQUENCER IS A REFUSAL, AND IT IS THE SAME ANSWER AS
             // "not the leaseholder" BECAUSE IT MEANS THE SAME THING TO THE

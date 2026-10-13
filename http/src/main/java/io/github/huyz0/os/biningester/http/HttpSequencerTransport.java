@@ -164,8 +164,44 @@ public final class HttpSequencerTransport implements SequencerTransport {
         }
     }
 
+    /**
+     * The {@code Accept} a writer sends for ADR-0082 §7's commit answer
+     * (M13.34k): a leader that knows it answers with the frame, an older one
+     * ignores it and answers the bare delta -- told apart by their magic.
+     */
+    public static final String ANSWER_MEDIA_TYPE = "application/x-binstore-commit-answer";
+
+    /** A reply's bytes decoded: a commit's delta, or its answer. */
+    @FunctionalInterface
+    private interface Decode<R> {
+        R from(byte[] reply) throws IOException;
+    }
+
     @Override
     public CommitDelta send(String endpoint, CommitRequest request) throws IOException {
+        return exchange(endpoint, request, false, CommitDelta::decode);
+    }
+
+    /** As {@link #send}, asking for the commit answer (M13.34k). */
+    @Override
+    public io.github.huyz0.os.biningester.format.CommitAnswer sendAnswering(String endpoint,
+            CommitRequest request) throws IOException {
+        return exchange(endpoint, request, true, HttpSequencerTransport::answerOf);
+    }
+
+    /** The commit answer, or an older leader's bare delta as one. */
+    static io.github.huyz0.os.biningester.format.CommitAnswer answerOf(byte[] reply)
+            throws IOException {
+        if (reply.length >= 4 && java.nio.ByteBuffer.wrap(reply, 0, 4).getInt()
+                == io.github.huyz0.os.biningester.format.CommitAnswer.MAGIC) {
+            return io.github.huyz0.os.biningester.format.CommitAnswer.decode(reply);
+        }
+        return new io.github.huyz0.os.biningester.format.CommitAnswer(
+                java.util.List.of(CommitDelta.decode(reply)), java.util.List.of());
+    }
+
+    private <R> R exchange(String endpoint, CommitRequest request, boolean answering,
+            Decode<R> decode) throws IOException {
         Objects.requireNonNull(endpoint, "endpoint");
         Objects.requireNonNull(request, "request");
         if (closed) {
@@ -192,7 +228,11 @@ public final class HttpSequencerTransport implements SequencerTransport {
         // rarer case; a counter that only counted successes would under-report
         // exactly when a zone is misbehaving.
         crossAz.sentTo(CrossAzBytes.Transport.COMMIT_FORWARD, endpoint, body.length);
-        try (HttpClientResponse response = clientFor(endpoint).post(PATH).submit(body)) {
+        var post = clientFor(endpoint).post(PATH);
+        if (answering) {
+            post = post.header(io.helidon.http.HeaderNames.ACCEPT, ANSWER_MEDIA_TYPE);
+        }
+        try (HttpClientResponse response = post.submit(body)) {
             // ⚠️ COMPARED BY CODE, NEVER BY `Status.equals`. Helidon's
             // `Status.equals` compares the REASON PHRASE as well as the code --
             // measured: `Status.create(409, "").equals(Status.CONFLICT_409)` is
@@ -229,7 +269,7 @@ public final class HttpSequencerTransport implements SequencerTransport {
                         + response.status() + ": " + read(response)));
             }
             try {
-                return CommitDelta.decode(bounded(response, MAX_REPLY_BYTES));
+                return decode.from(bounded(response, MAX_REPLY_BYTES));
             } catch (IOException torn) {
                 // ⚠️ EXPLICIT, because `CommitDelta.decode` throws a CHECKED
                 // IOException that would propagate past the arm below carrying

@@ -57,6 +57,18 @@ public interface SequencerTransport extends AutoCloseable {
     CommitDelta send(String endpoint, CommitRequest request) throws IOException;
 
     /**
+     * As {@link #send}, asking for ADR-0082 §7's commit answer (M13.34k): the
+     * deltas that committed the request's runs and the runs redirected to the
+     * fast path. ⚠️ THIS DEFAULT ASKS FOR NONE: the bare delta, the whole
+     * answer from a leader that redirects nothing.
+     */
+    default io.github.huyz0.os.biningester.format.CommitAnswer sendAnswering(String endpoint,
+            CommitRequest request) throws IOException {
+        return new io.github.huyz0.os.biningester.format.CommitAnswer(java.util.List.of(send(endpoint, request)),
+                java.util.List.of());
+    }
+
+    /**
      * Asks the leaseholder at {@code endpoint} to drain the inbox (M8.14a,
      * ADR-0058), returning once it has applied every intent it could.
      *

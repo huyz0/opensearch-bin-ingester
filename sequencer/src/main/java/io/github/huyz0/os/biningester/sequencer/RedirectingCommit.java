@@ -30,6 +30,22 @@ final class RedirectingCommit {
     private RedirectingCommit() {
     }
 
+    /**
+     * Whether {@code request} must be answered here rather than batched
+     * (M13.34k): a run of a stream fast at the leader, or a retry the window
+     * answers per delta.
+     */
+    static boolean alone(LocalSequencer sequencer, CommitRequest request) {
+        Optional<FastLeaderTerm> fast = sequencer.fastTerm();
+        if (fast.isPresent() && request.recordCounts().keySet().stream()
+                .anyMatch(fast.get()::fastHere)) {
+            return true;
+        }
+        synchronized (sequencer) {
+            return sequencer.window.runsOf(request).isPresent();
+        }
+    }
+
     static CommitAnswer answer(LocalSequencer sequencer, CommitRequest request)
             throws IOException {
         Optional<FastLeaderTerm> fast = sequencer.fastTerm();

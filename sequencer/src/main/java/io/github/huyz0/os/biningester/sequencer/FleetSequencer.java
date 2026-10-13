@@ -136,8 +136,25 @@ public final class FleetSequencer implements Sequencer {
         this.leadership = new Leadership(election);
     }
 
+    /** One commit through whichever sequencer a route reaches: its delta, or its answer. */
+    @FunctionalInterface
+    private interface Op<R> {
+        R on(Sequencer sequencer) throws IOException;
+    }
+
     @Override
     public CommitDelta commitAll(List<CommitRequest> requests) throws IOException {
+        return route(requests, s -> s.commitAll(requests));
+    }
+
+    /** {@code request} routed as a commit is, asking for the commit answer (M13.34k). */
+    @Override
+    public io.github.huyz0.os.biningester.format.CommitAnswer commitAnswering(CommitRequest request)
+            throws IOException {
+        return route(List.of(request), s -> s.commitAnswering(request));
+    }
+
+    private <R> R route(List<CommitRequest> requests, Op<R> op) throws IOException {
         if (closed) {
             // ⚠️ REFUSED HERE, BECAUSE THE FALLBACK WOULD SUCCEED. `Leadership`
             // already refuses to ELECT after close, so `sequencer()` returns
@@ -164,7 +181,7 @@ public final class FleetSequencer implements Sequencer {
                 drainedUpTo(seen);
             }
             try {
-                return mine.commitAll(requests);
+                return op.on(mine);
             } catch (FencedException fenced) {
                 // ⚠️ OUR TERM WENT, and this is the ONLY failure that says so
                 // without ambiguity, so it is the only one that falls through
@@ -194,7 +211,7 @@ public final class FleetSequencer implements Sequencer {
             }
         }
         try {
-            return remote.commitAll(requests);
+            return op.on(remote);
         } catch (SequencerTransport.NotTheLeaseholderException refused) {
             // ⚠️ A DEFINITE "NOT APPLIED" IS NOT A PARTITION: it is answered,
             // not deferred, and the caller retries where the lease now is.

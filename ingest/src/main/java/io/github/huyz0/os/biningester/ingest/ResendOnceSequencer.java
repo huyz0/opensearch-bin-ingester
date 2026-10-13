@@ -94,6 +94,17 @@ final class ResendOnceSequencer implements Sequencer {
         }
     }
 
+    /** The same resend, around the commit answer (M13.34k). */
+    @Override
+    public io.github.huyz0.os.biningester.format.CommitAnswer commitAnswering(
+            CommitRequest request) throws IOException {
+        try {
+            return delegate.commitAnswering(request);
+        } catch (AmbiguousAppendException lost) {
+            return delegate.commitAnswering(request);
+        }
+    }
+
     /** ⚠️ Straight through, for the reason the class javadoc gives. */
     @Override
     public CommitDelta commitAll(List<CommitRequest> requests) throws IOException {
