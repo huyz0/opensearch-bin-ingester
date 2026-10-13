@@ -128,10 +128,9 @@ public final class FastLeaderTerm {
     }
 
     /**
-     * The catalog's fast indices and their {@code wal_quorum} (M13.27l;
-     * ADR-0081 §4): each a value this term's record must hold before a batch
-     * of its index is assigned under it. A value already recorded wants
-     * nothing.
+     * The catalog's fast indices and their {@code wal_quorum} (M13.27l; ADR-0081 §4): each
+     * a value this term's record must hold before a batch of its index is assigned under
+     * it. A value already recorded wants nothing.
      */
     public void catalogSays(Map<java.util.UUID, Integer> fast) {
         fast.forEach(termRecord::want);
@@ -215,12 +214,13 @@ public final class FastLeaderTerm {
     }
 
     /**
-     * Whether {@code podUid} is ROSTERED in this term, as its roster was last
-     * read (M13.83a review round 1, P1): who may tell the leader of an index.
+     * {@code podUid}'s incarnation if ROSTERED in this term as its roster was last read
+     * (M13.83a review round 1, P1; M13.30d): who may tell the leader of an index or of
+     * its interest, and where it is published to.
      */
-    public boolean rostered(String podUid) throws IOException {
-        return ownRoster().member(podUid)
-                .filter(m -> m.state() == Roster.State.ROSTERED).isPresent();
+    public Optional<Roster.Incarnation> rostered(String podUid) throws IOException {
+        return ownRoster().member(podUid).filter(m -> m.state() == Roster.State.ROSTERED)
+                .map(Roster.Member::incarnation);
     }
 
     /**

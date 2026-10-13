@@ -53,6 +53,8 @@ public final class CommitDesk {
     private long lastUpload = Long.MIN_VALUE;
     /** An upload asked for at once, by a departing pod (M13.31c). */
     private boolean asked;
+    /** This term's publication: interest, and what each exposure owes (M13.30d). */
+    private final PublishDesk publish = new PublishDesk();
 
     /**
      * @param committedNext a stream's committed next offset, from the chain
@@ -64,6 +66,12 @@ public final class CommitDesk {
         this.write = Objects.requireNonNull(write, "write");
         this.committedNext = Objects.requireNonNull(committedNext, "committedNext");
         this.waitNanos = wait.toNanos();
+        write.publishTo(publish::exposed);
+    }
+
+    /** This term's publication (ADR-0081 §6; M13.30d). */
+    public PublishDesk publications() {
+        return publish;
     }
 
     /**

@@ -126,6 +126,8 @@ public final class FastWriteLeader implements TakeoverRun.Hold {
     /** The clock and the sink each batch's quorum wait is told to (M13.36); null while none. */
     private MonotonicClock clock;
     private java.util.function.LongConsumer quorumWaits;
+    /** Told each exposure step's entries, for publication (M13.30d); null while none. */
+    private java.util.function.Consumer<List<FastJournalRecord.Entry>> published;
     private final Map<FastJournalRecord.IdempotencyKey, Batch> exposedByKey = new HashMap<>();
     private final Map<RunKey, Long> committedNext = new HashMap<>();
 
@@ -512,6 +514,7 @@ public final class FastWriteLeader implements TakeoverRun.Hold {
         }
         frontier.expose();
         List<Exposure> out = new ArrayList<>();
+        List<FastJournalRecord.Entry> step = new ArrayList<>();
         for (Batch b : batches) {
             if (!b.answered || b.exposed != null) {
                 continue;
@@ -524,12 +527,22 @@ public final class FastWriteLeader implements TakeoverRun.Hold {
                 b.exposed = new FastWriteFrame.Exposed(b.assignedAfter, runs);
                 exposedByKey.put(b.key, b);
                 out.add(new Exposure(b.writer.podUid(), b.exposed));
+                step.addAll(b.entries);
                 if (quorumWaits != null && b.assignedNanos != Long.MIN_VALUE) {
                     quorumWaits.accept(clock.nanos() - b.assignedNanos);
                 }
             }
         }
+        if (published != null && !step.isEmpty()) {
+            published.accept(step);
+        }
         return out;
+    }
+
+    /** Each exposure step's entries, told to {@code to} from now (ADR-0081 §6; M13.30d). */
+    public synchronized void publishTo(
+            java.util.function.Consumer<List<FastJournalRecord.Entry>> to) {
+        this.published = Objects.requireNonNull(to, "to");
     }
 
     /**

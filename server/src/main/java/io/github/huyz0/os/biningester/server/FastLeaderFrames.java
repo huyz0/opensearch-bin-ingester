@@ -2,6 +2,8 @@
 package io.github.huyz0.os.biningester.server;
 
 import io.github.huyz0.os.biningester.format.FastFrame;
+import io.github.huyz0.os.biningester.format.FastJournalRecord;
+import io.github.huyz0.os.biningester.format.FastPublishFrame;
 import io.github.huyz0.os.biningester.format.FastWriteFrame;
 import io.github.huyz0.os.biningester.format.Roster;
 import io.github.huyz0.os.biningester.sequencer.FastFrameRouter;
@@ -10,7 +12,12 @@ import io.github.huyz0.os.biningester.sequencer.LocalSequencer;
 import io.github.huyz0.os.biningester.sequencer.Sequencer;
 import io.github.huyz0.os.biningester.sequencer.TermJoiner;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.IdentityHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.function.ToLongFunction;
 
 /**
  * A node's handler of the frames a leader answers -- JOIN (M13.27o), DEPART
@@ -139,6 +146,10 @@ final class FastLeaderFrames {
             exposed.wake();
             return answer;
         });
+        // ⚠️ M13.30d: a rostered pod's interest, kept for publication.
+        handle.accept(FastPublishFrame.KIND_INTEREST,
+                (header, body) -> answerInterest(held.get(), disk, self, header,
+                        (FastPublishFrame.Interest) body));
         handle.accept(FastWriteFrame.KIND_CONFIRM, (header, body) -> {
             FastFrame.Body answer = answerConfirm(held.get(), disk, self, header,
                     (FastWriteFrame.Confirm) body);
@@ -190,7 +201,7 @@ final class FastLeaderFrames {
             return new FastFrame.Refused(FastFrame.Reason.NOT_ROSTERED, Optional.empty(),
                     "this pod leads no fast term");
         }
-        if (!term.get().rostered(header.senderUid())) {
+        if (term.get().rostered(header.senderUid()).isEmpty()) {
             return new FastFrame.Refused(FastFrame.Reason.NOT_ROSTERED, Optional.empty(),
                     header.senderUid() + " is not rostered in term " + term.get().epoch());
         }
@@ -202,6 +213,118 @@ final class FastLeaderFrames {
         }
         catalog.register(registration);
         return new FastFrame.HeldStatusReport(FastFrame.HeldStatus.NONE);
+    }
+
+    /**
+     * An INTEREST (ADR-0081 §6; M13.30d), kept by the term this pod leads --
+     * only from a pod ROSTERED in it (the header's sender, which ADR-0084's
+     * peer certificate binds), so a successor's FENCE reaches every pod a
+     * PUBLISH could reach. Refused {@code not rostered} otherwise, and
+     * {@code not fast} by a leader holding no fast journal, which publishes
+     * nothing.
+     */
+    static FastFrame.Body answerInterest(Sequencer held, FastDisk disk,
+            Roster.Incarnation self, FastFrame.Header header,
+            FastPublishFrame.Interest interest)
+            throws IOException {
+        Optional<FastLeaderTerm> term = LocalSequencer.underneath(held)
+                .filter(LocalSequencer::serving).flatMap(LocalSequencer::fastTerm);
+        if (term.isEmpty() || header.epoch() != term.get().epoch()) {
+            return new FastFrame.Refused(FastFrame.Reason.NOT_ROSTERED, Optional.empty(),
+                    "this pod leads no fast term " + header.epoch());
+        }
+        if (disk.journal().isEmpty()) {
+            return new FastFrame.Refused(FastFrame.Reason.NOT_FAST, Optional.empty(),
+                    "this pod holds no fast journal");
+        }
+        Optional<Roster.Incarnation> pod = term.get().rostered(header.senderUid());
+        if (pod.isEmpty()) {
+            return new FastFrame.Refused(FastFrame.Reason.NOT_ROSTERED, Optional.empty(),
+                    header.senderUid() + " is not rostered in term " + term.get().epoch());
+        }
+        term.get().commitDesk(disk.journal().get(), self).publications()
+                .interest(pod.get(), interest.added(), interest.removed());
+        return new FastFrame.HeldStatusReport(FastFrame.HeldStatus.NONE);
+    }
+
+    /** The most entry bytes one PUBLISH carries, under a peer frame's bound. */
+    static final long PUBLISH_BYTES =
+            io.github.huyz0.os.biningester.http.FastFrameService.MAX_FRAME_BYTES - 4_096;
+
+    /**
+     * Sends what the leading term's exposures owe each interested pod, in
+     * offset order per stream, chunked under a peer frame's bytes (ADR-0081
+     * §6; M13.30d): how many PUBLISH frames were sent.
+     *
+     * <p>⚠️ ONLY TO THE INCARNATION STILL ROSTERED (review round 1, P1): a
+     * pod that departed or restarted since its INTEREST is owed nothing and its
+     * interest is forgotten, so a dead endpoint is not sent to on every tick.
+     * The roster is the term's cached one, read at most once per
+     * {@code min_upload_interval}. ⚠️ BEST EFFORT: one that fails is
+     * dropped and counted, and its pod's subscribers read the entries from the
+     * chain once uploaded.
+     */
+    static int publish(Sequencer held, FastDisk disk, Roster.Incarnation self,
+            TermJoiner.Transport transport) {
+        Optional<FastLeaderTerm> term = LocalSequencer.underneath(held)
+                .filter(LocalSequencer::serving).flatMap(LocalSequencer::fastTerm);
+        if (term.isEmpty() || disk.journal().isEmpty()) {
+            return 0;
+        }
+        var desk = term.get().commitDesk(disk.journal().get(), self).publications();
+        Map<FastJournalRecord.Entry, Long> sizes = new IdentityHashMap<>();
+        int sent = 0;
+        for (var owed : desk.take().entrySet()) {
+            Roster.Incarnation pod = owed.getKey();
+            try {
+                if (!term.get().rostered(pod.podUid()).equals(Optional.of(pod))) {
+                    desk.forget(pod);
+                    continue;
+                }
+            } catch (IOException unread) {
+                FastMetrics.published(false);
+                continue;
+            }
+            for (List<FastJournalRecord.Entry> entries : chunks(owed.getValue(),
+                    PUBLISH_BYTES, e -> sizes.computeIfAbsent(e, x -> x.encode().length + 4L))) {
+                try {
+                    transport.exchange(pod.endpoint(), FastFrame.encode(term.get().epoch(),
+                            self.podUid(), pod.podUid(), new FastPublishFrame.Publish(entries)));
+                    FastMetrics.published(true);
+                    sent++;
+                } catch (IOException | RuntimeException unsent) {
+                    FastMetrics.published(false); // the chain carries them once uploaded
+                }
+            }
+        }
+        return sent;
+    }
+
+    /**
+     * {@code entries}, in order, cut into runs of at most {@code bound} bytes
+     * by {@code size} (M13.30c review, P2): one exposure step can hold many
+     * batches, each at most the _bulk chunk. An entry over the bound alone is
+     * a run of its own.
+     */
+    static List<List<FastJournalRecord.Entry>> chunks(List<FastJournalRecord.Entry> entries,
+            long bound, ToLongFunction<FastJournalRecord.Entry> size) {
+        List<List<FastJournalRecord.Entry>> runs = new ArrayList<>();
+        List<FastJournalRecord.Entry> run = new ArrayList<>();
+        long bytes = 0;
+        for (FastJournalRecord.Entry e : entries) {
+            long s = size.applyAsLong(e);
+            if (!run.isEmpty() && bytes + s > bound) {
+                runs.add(run);
+                run = new ArrayList<>();
+                bytes = 0;
+            }
+            run.add(e);
+            bytes += s;
+        }
+        if (!run.isEmpty()) {
+            runs.add(run);
+        }
+        return runs;
     }
 
     /** A committed fast segment, delivered to subscribers: {@code DefaultIngest.delivered}. */

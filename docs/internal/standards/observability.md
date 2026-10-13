@@ -89,7 +89,10 @@ cost log line, bounded to eight names per interval (M12.5).
 -- one name per upload cause, since `cause` is not on rule 1's list, as the
 refusals above are; each later trigger (M13.31b) adds its own name ·
 `biningester_fast_voided_offsets_total`, the offsets recoveries voided, which
-stream they hit said by no series at all.
+stream they hit said by no series at all. ·
+`biningester_fast_publish_sent_total` and `biningester_fast_publish_dropped_total`
+(M13.30d), a leader's PUBLISH frames sent to interested pods and dropped unsent,
+which pod said by no series.
 
 ⚠️ The dollar metric is an **estimate** from a per-provider `CostTable` and must be
 labelled so. Request counts are exact; prices are a lookup that goes stale.

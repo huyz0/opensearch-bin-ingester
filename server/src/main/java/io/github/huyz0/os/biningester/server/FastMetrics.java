@@ -36,6 +36,8 @@ final class FastMetrics {
     static final String UPLOADS_TIMER = "biningester_fast_uploads_timer_total";
     static final String UPLOADS_LEAVE = "biningester_fast_uploads_leave_total";
     static final String VOIDED = "biningester_fast_voided_offsets_total";
+    static final String PUBLISHED = "biningester_fast_publish_sent_total";
+    static final String PUBLISH_DROPPED = "biningester_fast_publish_dropped_total";
 
     /** Bounded buckets (rule 3), around NFR-15's 10 ms. */
     private static final Duration[] BUCKETS = {Duration.ofMillis(1), Duration.ofMillis(2),
@@ -60,6 +62,13 @@ final class FastMetrics {
     private static final Counter VOIDED_OFFSETS = Metrics.globalRegistry().getOrCreate(
             Counter.builder(VOIDED)
                     .description("Offsets a takeover's recovery voided, as counted gaps"));
+
+    private static final Counter PUBLISHED_FRAMES = Metrics.globalRegistry().getOrCreate(
+            Counter.builder(PUBLISHED)
+                    .description("PUBLISH frames a fast leader sent to interested pods"));
+    private static final Counter DROPPED_FRAMES = Metrics.globalRegistry().getOrCreate(
+            Counter.builder(PUBLISH_DROPPED)
+                    .description("PUBLISH frames dropped unsent, read from the chain instead"));
 
     static {
         Metrics.globalRegistry().getOrCreate(Gauge.builder(JOURNAL_BYTES, () -> {
@@ -99,6 +108,11 @@ final class FastMetrics {
         (paced ? TIMER_UPLOADS : LEAVE_UPLOADS).increment();
     }
 
+    /** A PUBLISH was sent, or dropped when not {@code sent} (M13.30d). */
+    static void published(boolean sent) {
+        (sent ? PUBLISHED_FRAMES : DROPPED_FRAMES).increment();
+    }
+
     /** {@code recovery}'s voids, counted in offsets. */
     static void voided(Recovery recovery) {
         long offsets = 0;
@@ -125,6 +139,10 @@ final class FastMetrics {
 
     static long uploads(boolean paced) {
         return (paced ? TIMER_UPLOADS : LEAVE_UPLOADS).count();
+    }
+
+    static long publishes(boolean sent) {
+        return (sent ? PUBLISHED_FRAMES : DROPPED_FRAMES).count();
     }
 
     static long voided() {

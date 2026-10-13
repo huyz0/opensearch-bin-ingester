@@ -317,6 +317,9 @@ public final class IngesterNode implements AutoCloseable {
                         assembly.defaultIngest()::publishFast, exposing,
                         assembly.defaultIngest()::delivered, true, mono,
                         FastRouting.tightestFlushTimer(assembly.catalog()));
+                // ⚠️ M13.30d: what each exposure owes the interested pods --
+                // after the upload, so an unanswering pod never delays it.
+                FastLeaderFrames.publish(assembly.heldTerm(), commitDisk, self, exposing);
                 // ⚠️ M13.83b: last, so a slow leader never delays an exposure.
                 forwarder.forward(assembly.catalog(), commitDisk.joined()::latest,
                         FastPeer.leading(assembly));
