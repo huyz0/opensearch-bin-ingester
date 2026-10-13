@@ -133,7 +133,23 @@ public final class FrontDoor implements AutoCloseable {
             io.github.huyz0.os.biningester.binstore.CrossAzBytes crossAz,
             java.util.Optional<io.github.huyz0.os.biningester.sequencer.FastFrameRouter> fastFrames,
             java.util.Optional<PeerTls> peerTls) {
+        return start(assembly, clock, journal, crossAz, fastFrames, peerTls,
+                java.util.Optional.empty());
+    }
+
+    /**
+     * The same, the peer listener also serving an exposed fast entry by its
+     * key from the leading term's journal with {@code fastEntries} (M13.30o).
+     */
+    public static FrontDoor start(Assembly assembly, Clock clock,
+            java.util.function.Consumer<String> journal,
+            io.github.huyz0.os.biningester.binstore.CrossAzBytes crossAz,
+            java.util.Optional<io.github.huyz0.os.biningester.sequencer.FastFrameRouter> fastFrames,
+            java.util.Optional<PeerTls> peerTls,
+            java.util.Optional<io.github.huyz0.os.biningester.http.FastEntryService.Lookup>
+                    fastEntries) {
         Objects.requireNonNull(peerTls, "peerTls");
+        Objects.requireNonNull(fastEntries, "fastEntries");
         if ((assembly.config().peer().mode() == PeerConfig.Mode.MUTUAL) != peerTls.isPresent()) {
             throw new IllegalArgumentException("peer.tls is " + assembly.config().peer().mode()
                     + ", and what it read must be passed exactly when it is MUTUAL");
@@ -159,7 +175,7 @@ public final class FrontDoor implements AutoCloseable {
                         .map(io.github.huyz0.os.biningester.format.IndexRegistration::aliases)
                         .orElse(java.util.List.of()));
         WebServer server = build(config, assembly, clock, gate, crossAz, admission, quotas,
-                fastFrames, peerTls);
+                fastFrames, peerTls, fastEntries);
         try {
             server.start();
         } catch (RuntimeException notBound) {
@@ -230,10 +246,12 @@ public final class FrontDoor implements AutoCloseable {
             DrainGate gate, io.github.huyz0.os.biningester.binstore.CrossAzBytes crossAz,
             LaneAdmission admission, io.github.huyz0.os.biningester.ingest.IndexQuotas quotas,
             java.util.Optional<io.github.huyz0.os.biningester.sequencer.FastFrameRouter> fastFrames,
-            java.util.Optional<PeerTls> peerTls) {
-        // ⚠️ THE FOUR POD-TO-POD ROUTES, AND ONLY THEY, ON THE PEER LISTENER
+            java.util.Optional<PeerTls> peerTls,
+            java.util.Optional<io.github.huyz0.os.biningester.http.FastEntryService.Lookup>
+                    fastEntries) {
+        // ⚠️ THE POD-TO-POD ROUTES, AND ONLY THEY, ON THE PEER LISTENER
         // (ADR-0084): /ctl/commit and /ctl/drain, /ctl/durable-segment,
-        // /ctl/fast. The producer port answers them 404 and keeps the
+        // /ctl/fast, and /ctl/fast-entry (M13.30o). The producer port answers them 404 and keeps the
         // plugin's /ctl/register and /ctl/progress.
         // ⚠️ EVERY PEER ROUTE BINDS ITS CALLER (ADR-0084 decision 8): within
         // this pod's own fleet prefix under mutual, nothing under off.
@@ -254,6 +272,9 @@ public final class FrontDoor implements AutoCloseable {
         // ⚠️ M13.27h: the fast frames' peer route, behind the node's own fence.
         fastFrames.ifPresent(router -> peerRoutes.register(
                 new io.github.huyz0.os.biningester.http.FastFrameService(router, binding)));
+        // ⚠️ M13.30o: an exposed fast entry by its key, for a forwarded /seg.
+        fastEntries.ifPresent(lookup -> peerRoutes.register(
+                new io.github.huyz0.os.biningester.http.FastEntryService(lookup, binding)));
         HttpRouting.Builder routes = HttpRouting.builder()
                 // ⚠️ HELIDON'S OWN SHUTDOWN HOOK IS OFF. Left on, a `SIGTERM`
                 // runs it alongside `Main`'s, and it stops the listener while

@@ -337,6 +337,39 @@ final class FastLeaderFrames {
     }
 
     /**
+     * The exposed entry {@code fastKey} names, from the journal of the term
+     * this pod leads, as a one-run segment created at {@code nowMillis}
+     * (ADR-0081 §6; M13.30o): empty for a key of another prefix or term, an
+     * entry not held, or one not yet below its stream's quorum frontier --
+     * ⚠️ never an unexposed entry.
+     */
+    static Optional<io.github.huyz0.os.biningester.http.FastEntryService.Served> exposedEntry(
+            Sequencer held, FastDisk disk, Roster.Incarnation self, String prefix,
+            String fastKey, long nowMillis) throws IOException {
+        Optional<io.github.huyz0.os.biningester.format.FastKey.Parsed> parsed =
+                io.github.huyz0.os.biningester.format.FastKey.parse(fastKey)
+                        .filter(k -> k.prefix().equals(prefix));
+        Optional<FastLeaderTerm> term = LocalSequencer.underneath(held)
+                .filter(LocalSequencer::serving).flatMap(LocalSequencer::fastTerm);
+        if (parsed.isEmpty() || term.isEmpty() || disk.journal().isEmpty()
+                || parsed.get().epoch() != term.get().epoch()) {
+            return Optional.empty();
+        }
+        var k = parsed.get();
+        Optional<FastJournalRecord.Entry> entry = disk.journal().get()
+                .entry(k.epoch(), k.key(), k.assignedAfter(), k.firstOffset());
+        if (entry.isEmpty() || entry.get().firstOffset() + entry.get().records().size()
+                > term.get().commitDesk(disk.journal().get(), self).frontier(k.key())) {
+            return Optional.empty();
+        }
+        io.github.huyz0.os.biningester.format.SegmentWriter writer =
+                new io.github.huyz0.os.biningester.format.SegmentWriter();
+        entry.get().records().forEach(r -> writer.add(k.key(), r, nowMillis));
+        return Optional.of(new io.github.huyz0.os.biningester.http.FastEntryService.Served(
+                k.epoch(), writer.toByteArray(nowMillis)));
+    }
+
+    /**
      * The pushed copies this pod holds, dropped below each stream's committed
      * next offset in the chain the term it leads holds (M13.30l): a leader
      * sends no RELEASE to itself. Read from memory; nothing when it leads no

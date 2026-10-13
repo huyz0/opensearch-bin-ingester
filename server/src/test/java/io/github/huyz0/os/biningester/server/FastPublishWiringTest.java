@@ -134,4 +134,19 @@ class FastPublishWiringTest {
             return keys.stream().anyMatch(k -> k.contains("/fast/"));
         });
     }
+
+    @Test
+    void aNODEServesTheFastEntryRouteOnItsPeerListener() throws Exception {
+        // ⚠️ M13.30o: registered -- a request naming no pod is the route's 400,
+        // where an unrouted path would be a 404.
+        node = startOnAFreePort();
+
+        var answer = java.net.http.HttpClient.newHttpClient().send(
+                java.net.http.HttpRequest.newBuilder(java.net.URI.create("http://localhost:"
+                        + node.peerPort() + io.github.huyz0.os.biningester.http.FastEntryService
+                                .PATH + "?key=k")).GET().build(),
+                java.net.http.HttpResponse.BodyHandlers.ofString());
+
+        assertThat(answer.statusCode()).isEqualTo(400);
+    }
 }

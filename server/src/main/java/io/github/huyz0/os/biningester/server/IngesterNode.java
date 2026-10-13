@@ -364,7 +364,10 @@ public final class IngesterNode implements AutoCloseable {
                     exposed);
             IngesterNode node = new IngesterNode(assembly,
                     FrontDoor.start(assembly, clock, journal::add, crossAz,
-                            Optional.of(fastFrames), peerTls), transport, clock,
+                            Optional.of(fastFrames), peerTls, Optional.of(key ->
+                                    FastLeaderFrames.exposedEntry(assembly.heldTerm(),
+                                            commitDisk, self, config.prefix(), key,
+                                            clock.millis()))), transport, clock,
                     journal, crossAz, fastDisk);
             if (watch != null) {
                 node.watch = watch.start();

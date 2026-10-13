@@ -220,6 +220,22 @@ public final class FastJournal {
         return false;
     }
 
+    /**
+     * The held entry of {@code key} at {@code firstOffset}, of {@code epoch}
+     * and {@code assignedAfter}, if any (M13.30o): what a fast key names.
+     */
+    public synchronized java.util.Optional<FastJournalRecord.Entry> entry(long epoch, RunKey key,
+            long assignedAfter, long firstOffset) {
+        for (Held h : held.getOrDefault(key, List.of())) {
+            FastJournalRecord.Entry e = h.entry();
+            if (e.epoch() == epoch && e.assignedAfter() == assignedAfter
+                    && e.firstOffset() == firstOffset) {
+                return java.util.Optional.of(e);
+            }
+        }
+        return java.util.Optional.empty();
+    }
+
     /** Appends {@code entry}, or refuses it -- false -- if held bytes would pass the cap. */
     public synchronized boolean append(FastJournalRecord.Entry entry) throws IOException {
         requireUsable();

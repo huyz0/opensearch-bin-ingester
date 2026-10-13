@@ -69,6 +69,11 @@ public final class CommitDesk {
         write.publishTo(publish::exposed);
     }
 
+    /** {@code stream}'s quorum frontier: what is below it is exposed (M13.30o). */
+    public long frontier(RunKey stream) {
+        return write.frontier(stream);
+    }
+
     /** This term's publication (ADR-0081 §6; M13.30d). */
     public PublishDesk publications() {
         return publish;

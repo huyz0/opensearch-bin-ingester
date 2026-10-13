@@ -250,6 +250,41 @@ class FastPublishServedTest {
     }
 
     @Test
+    void anENTRYIsServedByItsFastKeyOnlyOnceExposedAndOnlyInItsTerm() throws Exception {
+        // ⚠️ M13.30o: never an unexposed entry (ADR-0081 §6).
+        Leading l = leading(new MemoryBinStore());
+        try {
+            l.fast().answerCommit(new FastFrame.Header(FastWriteFrame.KIND_COMMIT,
+                    l.term().epoch(), SELF.podUid(), SELF.podUid()),
+                    new FastWriteFrame.Commit(new FastJournalRecord.IdempotencyKey("self",
+                            new UUID(9, 9), 1), List.of(new FastWriteFrame.CommitRun(S,
+                            List.of(new SegmentRecord("d1", OpType.INDEX, OptionalLong.empty(),
+                                    new byte[] {1}))))), l.desk());
+            FastJournalRecord.Entry held = l.disk().journal().orElseThrow().held().get(0);
+            String key = io.github.huyz0.os.biningester.format.FastKey.of("p", held.epoch(),
+                    held.assignedAfter(), S, held.firstOffset());
+            var before = FastLeaderFrames.exposedEntry(l.term(), l.disk(), SELF, "p", key, 1L);
+            l.desk().exposures();
+
+            var after = FastLeaderFrames.exposedEntry(l.term(), l.disk(), SELF, "p", key, 1L);
+            var otherTerm = FastLeaderFrames.exposedEntry(l.term(), l.disk(), SELF, "p",
+                    io.github.huyz0.os.biningester.format.FastKey.of("p", held.epoch() + 1,
+                            held.assignedAfter(), S, held.firstOffset()), 1L);
+
+            assertThat(before).as("not yet exposed").isEmpty();
+            assertThat(after.orElseThrow().epoch()).isEqualTo(l.term().epoch());
+            var reader = io.github.huyz0.os.biningester.format.SegmentReader.open(
+                    after.orElseThrow().bytes());
+            assertThat(reader.read(reader.find(S).orElseThrow()))
+                    .extracting(SegmentRecord::id).containsExactly("d1");
+            assertThat(otherTerm).isEmpty();
+        } finally {
+            l.disk().close();
+            l.term().close();
+        }
+    }
+
+    @Test
     void whatOneSTEPOwesIsCutUnderAFramesBytesInOrder() {
         // ⚠️ review round 1, T2.
         List<FastJournalRecord.Entry> entries = new ArrayList<>();
