@@ -205,8 +205,7 @@ public final class FastWriteLeader implements TakeoverRun.Hold {
                     // ⚠️ NOTHING ON A STREAM BEFORE ITS DECISION IS DURABLE
                     // (M13.33l; ADR-0081 §5 invariant d): an offset assigned
                     // now could be one the decision frees.
-                    if (undecided.contains(run.stream())
-                            || holdingAll && !released.contains(run.stream())) {
+                    if (awaitsDecision(run.stream())) {
                         return new Wait("stream " + run.stream()
                                 + " awaits its takeover decision");
                     }
@@ -376,6 +375,16 @@ public final class FastWriteLeader implements TakeoverRun.Hold {
     @Override
     public synchronized void undecided(java.util.Collection<RunKey> streams) {
         undecided.addAll(streams);
+    }
+
+    /**
+     * Whether {@code stream} waits for its takeover decision: not yet
+     * decided, or every member not yet heard and it not yet released -- what
+     * holds a fast COMMIT, and a default-path run of a walked index too
+     * (ADR-0081 §5 step 3's tail; M13.33n).
+     */
+    public synchronized boolean awaitsDecision(RunKey stream) {
+        return undecided.contains(stream) || holdingAll && !released.contains(stream);
     }
 
     /** Every member answered or is gone: only the {@link #undecided} streams stay held. */

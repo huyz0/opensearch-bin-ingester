@@ -74,7 +74,14 @@ final class FastTakeover {
             BinStore store, String prefix, Clock wall, java.util.concurrent.Executor launch) {
         Optional<LocalSequencer> term = LocalSequencer.underneath(held);
         Optional<FastLeaderTerm> fast = term.flatMap(LocalSequencer::fastTerm);
-        if (fast.isEmpty() || disk.journal().isEmpty()) {
+        if (fast.isEmpty()) {
+            return false;
+        }
+        if (disk.journal().isEmpty()) {
+            // ⚠️ NO TAKEOVER, SO NO HOLD (M13.33n review round 1, P2): a
+            // diskless leader recovers nothing, and holding a walked index's
+            // default path for its whole term would stop it for nothing.
+            fast.get().noTakeover();
             return false;
         }
         Optional<FastTermOpening.Opened> claimed = fast.get().claimTakeover();

@@ -286,7 +286,7 @@ public final class LocalSequencer implements Sequencer {
                         + ", not the chain's next " + log.nextOffset(stream));
             }
         }
-        return commitAll(List.of(request));
+        return commitUnheld(List.of(request), false);
     }
 
     /** This term's fast-mode side, once its start opened it (M13.27j). */
@@ -403,7 +403,16 @@ public final class LocalSequencer implements Sequencer {
      * and it costs nothing a HEAD node had.
      */
     @Override
-    public synchronized CommitDelta commitAll(List<CommitRequest> requests) throws IOException {
+    public CommitDelta commitAll(List<CommitRequest> requests) throws IOException {
+        DefaultHold.await(fastTerm, requests); // ⚠️ M13.33n: outside the monitor
+        return commitUnheld(requests, true);
+    }
+
+    private synchronized CommitDelta commitUnheld(List<CommitRequest> requests,
+            boolean held) throws IOException {
+        if (held) { // ⚠️ M13.33n: still held after the wait; a fast upload's is not
+            DefaultHold.refuseHeld(fastTerm, requests);
+        }
         if (fenced) {
             // ⚠️ REFUSED HERE, BEFORE THE STORE. `CommitLog` would also refuse,
             // because a successor sealed this chain -- but only after a round
