@@ -128,13 +128,48 @@ final class SegmentFetcher {
             // not fetched again.
             requireSource(delivery, "proxy", "a consumer reached over HTTP fetches it from "
                     + "its ingester (M10.2)");
-            return retried(delivery, () -> source.fetchSegment(delivery.segmentKey()));
+            return retried(delivery, () -> fetchProxied(delivery.segmentKey()));
         }
         if (delivery.via() != FetchMode.DIRECT) {
             return delivery.segment();
         }
         requireSource(delivery, "direct", "a deployment enabling `direct` builds one (M5.45g)");
         return retried(delivery, () -> source.fetch(delivery.grant()));
+    }
+
+    /**
+     * A pushed fast entry its pod no longer holds (ADR-0082 §6; M13.30n):
+     * released, evicted, or never there -- its records are read from the
+     * committed segment, so the delivery is dropped rather than retried, and
+     * the next delivery's gap is what reads them.
+     */
+    static final class FastEntryGone extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+
+        FastEntryGone(String fastKey, Throwable cause) {
+            super("fast entry " + fastKey + " is no longer held by its pod", cause);
+        }
+    }
+
+    private byte[] fetchProxied(String key) throws IOException {
+        try {
+            return source.fetchSegment(key);
+        } catch (SegmentNotFoundException gone) {
+            throw fastGone(key, gone);
+        } catch (SegmentFetchHeldException held) {
+            // ⚠️ A NODE's HOLD KEEPS THE 404 AS ITS CAUSE: still the release.
+            if (held.getCause() instanceof SegmentNotFoundException gone) {
+                throw fastGone(key, gone);
+            }
+            throw held;
+        }
+    }
+
+    private static SegmentNotFoundException fastGone(String key, SegmentNotFoundException gone) {
+        if (io.github.huyz0.os.biningester.format.FastKey.parse(key).isPresent()) {
+            throw new FastEntryGone(key, gone);
+        }
+        return gone;
     }
 
     private void requireSource(Delivery delivery, String mode, String remedy) {

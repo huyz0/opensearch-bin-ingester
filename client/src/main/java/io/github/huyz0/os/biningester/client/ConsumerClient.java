@@ -322,7 +322,14 @@ public final class ConsumerClient implements AutoCloseable {
         Deque<ConsumerRecord> decoded = null;
         if (gapTracker.wouldDecode(delivery, replay)) {
             decoded = new java.util.ArrayDeque<>();
-            decodeInto(delivery, decoded, replay ? catchUpFetcher : liveFetcher);
+            try {
+                decodeInto(delivery, decoded, replay ? catchUpFetcher : liveFetcher);
+            } catch (SegmentFetcher.FastEntryGone gone) {
+                // ⚠️ M13.30n: CONSUMED, NOTHING COMMITTED. Its offsets stay
+                // expected, so the next delivery's gap reads them from the chain.
+                fastEntriesGone.increment();
+                return true;
+            }
         }
         GapTracker.Commit commit = gapTracker.commit(delivery, replay, decoded != null);
         if (commit.undone()) {
@@ -347,6 +354,14 @@ public final class ConsumerClient implements AutoCloseable {
         }
         return commit.decode() || !gapTracker.repairPending();
     }
+
+    /** Pushed fast entries dropped because their pod no longer held them (M13.30n). */
+    public long fastEntriesGone() {
+        return fastEntriesGone.sum();
+    }
+
+    private final java.util.concurrent.atomic.LongAdder fastEntriesGone =
+            new java.util.concurrent.atomic.LongAdder();
 
     /** Installs the node-wide replay owner for delivery gaps. */
     public void onGap(java.util.function.Consumer<DeliveryGapException> handler) {

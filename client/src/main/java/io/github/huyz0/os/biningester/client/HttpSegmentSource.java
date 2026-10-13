@@ -117,6 +117,11 @@ public final class HttpSegmentSource implements SegmentSource {
         }
         try (HttpClientResponse response = request.request()) {
             int status = response.status().code();
+            if (status == 404) {
+                // ⚠️ M13.30n: told apart, since a fast key's 404 is its release.
+                throw new SegmentNotFoundException("proxied segment " + segmentKey
+                        + " answered 404");
+            }
             if (status != 200) {
                 throw new IOException("proxied segment " + segmentKey + " answered " + status);
             }

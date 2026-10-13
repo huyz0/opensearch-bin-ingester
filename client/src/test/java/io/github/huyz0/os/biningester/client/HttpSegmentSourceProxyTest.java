@@ -85,6 +85,15 @@ class HttpSegmentSourceProxyTest {
     }
 
     @Test
+    void aFOUROFOURIsTheSegmentNotFound() throws Exception {
+        // ⚠️ M13.30n: told apart, since a fast key's 404 is its release.
+        HttpSegmentSource source = new HttpSegmentSource(Duration.ofSeconds(5), start(), "az-b");
+
+        assertThatThrownBy(() -> source.fetchSegment(KEY + "-absent"))
+                .isInstanceOf(SegmentNotFoundException.class);
+    }
+
+    @Test
     void anyAnswerButTwoHundredIsRefusedEvenASuccessfulOne() throws Exception {
         // ⚠️ A 206 with bytes is a success status and still not the segment:
         // a partial body decoded as a whole one is the silent case.
