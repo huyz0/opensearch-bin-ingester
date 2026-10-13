@@ -33,10 +33,8 @@ import org.junit.jupiter.api.io.TempDir;
  * A node wires publication (M13.30d review round 1, T3): its peer listener
  * routes an INTEREST to the term it leads, and its drain publishes what a
  * fast write's exposure owes the interested pod -- here the node itself,
- * whose listener has no PUBLISH handler until M13.30e, so the frame is
- * counted sent or dropped, either of which only the drain's publish makes.
- *
- * <p>⚠️ The registry is process-wide, so every count here is a delta.
+ * which leads, so its own subscriber is handed the entry under its fast key
+ * by the drain's publish (M13.30k), which only that wiring makes.
  */
 class FastPublishWiringTest {
 
@@ -102,10 +100,6 @@ class FastPublishWiringTest {
         }
     }
 
-    private static long publishes() {
-        return FastMetrics.publishes(true) + FastMetrics.publishes(false);
-    }
-
     @Test
     void aNODETakesAnINTERESTAndPublishesAFastWritesExposure() throws Exception {
         node = startOnAFreePort();
@@ -117,14 +111,27 @@ class FastPublishWiringTest {
 
         FastFrame.Body answer = FastFrame.decode(new HttpFastTransport(Duration.ofSeconds(5),
                 CrossAzBytes.untracked()).exchange("http://localhost:" + node.peerPort(),
-                FastFrame.encode(epoch, "uid-pod1", "uid-pod1",
+                FastFrame.encode(epoch, "uid-stranger", "uid-pod1",
                         new FastPublishFrame.Interest(List.of(stream), List.of())))).body();
-        long before = publishes();
-        node.assembly().ingest().append(PRODUCER, "orders", 0, List.of(new SegmentRecord(
-                "doc", OpType.INDEX, OptionalLong.empty(), new byte[] {1}))::forEach);
+        List<String> keys = new java.util.concurrent.CopyOnWriteArrayList<>();
+        node.assembly().hub().subscribe(stream, pushes -> {
+            pushes.forEach(p -> keys.add(p.segmentKey()));
+            return (buffer, offset, length) -> { };
+        });
 
-        assertThat(answer).as("routed to the term, which took it")
-                .isEqualTo(new FastFrame.HeldStatusReport(FastFrame.HeldStatus.NONE));
-        await().atMost(Duration.ofSeconds(20)).until(() -> publishes() - before >= 1);
+        // ⚠️ M13.30k, intentional: from a pod not rostered, so it is refused
+        // by the INTEREST handler -- reached, not a 501 -- and sets no interest:
+        // only the drain's own interest (interestOwn) can make the entry owed
+        // here (M13.30k review round 1, T1: from this pod's own UID it set it).
+        assertThat(((FastFrame.Refused) answer).reason()).as("routed to the INTEREST handler")
+                .isEqualTo(FastFrame.Reason.NOT_ROSTERED);
+        // ⚠️ M13.30k, intentional: this pod leads, so what its drain publishes
+        // to its own subscriber goes to its own hub, under the entry's fast key,
+        // rather than as a PUBLISH frame to itself, which the counters counted.
+        await().atMost(Duration.ofSeconds(20)).until(() -> {
+            node.assembly().ingest().append(PRODUCER, "orders", 0, List.of(new SegmentRecord(
+                    "doc", OpType.INDEX, OptionalLong.empty(), new byte[] {1}))::forEach);
+            return keys.stream().anyMatch(k -> k.contains("/fast/"));
+        });
     }
 }

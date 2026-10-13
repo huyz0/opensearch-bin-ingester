@@ -207,6 +207,49 @@ class FastPublishServedTest {
     }
 
     @Test
+    void theLEADERsOwnSubscribersAreHandedTheirEntriesWithNoFrame() throws Exception {
+        // ⚠️ M13.30k: the leader joins no term of its own, so no INTEREST or
+        // PUBLISH of its reaches it; its own hub is fed directly.
+        Leading l = leading(new MemoryBinStore());
+        try {
+            FastLeaderFrames.interestOwn(l.term(), l.disk(), SELF, java.util.Set.of(S));
+            exposeOne(l, 1);
+            List<String> frames = new ArrayList<>();
+            List<Long> own = new ArrayList<>();
+
+            FastLeaderFrames.publish(l.term(), l.disk(), SELF, (endpoint, frame) -> {
+                frames.add(endpoint);
+                return new byte[0];
+            }, e -> own.add(e.firstOffset()));
+
+            assertThat(own).as("its own hub's").containsExactly(0L);
+            assertThat(frames).as("no frame to itself").isEmpty();
+        } finally {
+            l.disk().close();
+            l.term().close();
+        }
+    }
+
+    @Test
+    void theLEADERsOwnInterestIsExactlyWhatItsHubWantsNow() throws Exception {
+        Leading l = leading(new MemoryBinStore());
+        try {
+            FastLeaderFrames.interestOwn(l.term(), l.disk(), SELF, java.util.Set.of(S));
+            FastLeaderFrames.interestOwn(l.term(), l.disk(), SELF, java.util.Set.of());
+            exposeOne(l, 1);
+            List<Long> own = new ArrayList<>();
+
+            FastLeaderFrames.publish(l.term(), l.disk(), SELF, (endpoint, frame) -> new byte[0],
+                    e -> own.add(e.firstOffset()));
+
+            assertThat(own).as("its subscriber gone").isEmpty();
+        } finally {
+            l.disk().close();
+            l.term().close();
+        }
+    }
+
+    @Test
     void whatOneSTEPOwesIsCutUnderAFramesBytesInOrder() {
         // ⚠️ review round 1, T2.
         List<FastJournalRecord.Entry> entries = new ArrayList<>();

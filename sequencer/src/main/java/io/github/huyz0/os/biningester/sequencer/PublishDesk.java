@@ -66,6 +66,19 @@ public final class PublishDesk {
         });
     }
 
+    /**
+     * {@code pod}'s interest is exactly {@code streams} (M13.30k): the leader
+     * pod's own, read from its hub on each drain rather than sent as a frame.
+     */
+    public synchronized void interestExactly(Roster.Incarnation pod, Set<RunKey> streams) {
+        Objects.requireNonNull(pod, "pod");
+        if (streams.isEmpty()) {
+            interest.remove(pod);
+        } else {
+            interest.put(pod, new HashSet<>(streams));
+        }
+    }
+
     /** {@code pod} is no longer rostered as itself: its interest is forgotten. */
     public synchronized void forget(Roster.Incarnation pod) {
         interest.remove(pod);

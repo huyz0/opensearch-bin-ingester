@@ -311,6 +311,11 @@ public final class IngesterNode implements AutoCloseable {
                         recoveryUpload, assembly.store(), config.prefix(), clock,
                         run -> Thread.ofVirtual().name("fast-takeover").start(run));
                 FastLeaderFrames.observe(assembly.heldTerm(), commitDisk, self, mono); // M13.36
+                // ⚠️ M13.30k: this pod's own subscribers' interest, before anything
+                // is exposed in this pass (its review round 1, P2), to its own hub.
+                FastLeaderFrames.interestOwn(assembly.heldTerm(), commitDisk, self,
+                        FastInterestSender.fastStreams(assembly.hub().subscribedStreams(),
+                                assembly.catalog()));
                 FastLeaderFrames.sendReplicas(assembly.heldTerm(), commitDisk, self, exposing);
                 FastLeaderFrames.sendExposed(assembly.heldTerm(), commitDisk, self, exposing);
                 // ⚠️ M13.31a: what is exposed, uploaded at its assigned offsets.
@@ -321,7 +326,8 @@ public final class IngesterNode implements AutoCloseable {
                         FastRouting.tightestFlushTimer(assembly.catalog()));
                 // ⚠️ M13.30d: what each exposure owes the interested pods --
                 // after the upload, so an unanswering pod never delays it.
-                FastLeaderFrames.publish(assembly.heldTerm(), commitDisk, self, exposing);
+                FastLeaderFrames.publish(assembly.heldTerm(), commitDisk, self, exposing,
+                        assembly.defaultIngest()::deliverPushed);
                 // ⚠️ M13.83b: last, so a slow leader never delays an exposure.
                 forwarder.forward(assembly.catalog(), commitDisk.joined()::latest,
                         FastPeer.leading(assembly));

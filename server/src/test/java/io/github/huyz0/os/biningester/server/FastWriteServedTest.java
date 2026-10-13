@@ -169,10 +169,15 @@ class FastWriteServedTest {
                 io.github.huyz0.os.biningester.ingest.SubscriptionHub.assembling(pushed::add))) {
             node.assembly().ingest().append(PRODUCER, "orders", 0, docs(2)::forEach);
 
-            await().atMost(Duration.ofSeconds(20)).until(() -> !pushed.isEmpty());
+            // ⚠️ M13.30k, intentional: this pod leads, so its own subscriber is
+            // also pushed the entry before the upload, under its fast key; the
+            // upload's delivery is the push of the committed segment's key.
+            await().atMost(Duration.ofSeconds(20)).until(() -> pushed.stream()
+                    .anyMatch(p -> p.segmentKey().contains("/data/")));
 
             assertThat(subscription).isNotNull();
-            assertThat(pushed).singleElement().satisfies(p -> {
+            assertThat(pushed).filteredOn(p -> p.segmentKey().contains("/data/"))
+                    .singleElement().satisfies(p -> {
                 assertThat(p.firstOffset()).isZero();
                 assertThat(p.recordCount()).isEqualTo(2);
             });

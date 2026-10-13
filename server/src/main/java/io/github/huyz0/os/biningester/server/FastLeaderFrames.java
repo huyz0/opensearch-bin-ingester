@@ -266,6 +266,15 @@ final class FastLeaderFrames {
      */
     static int publish(Sequencer held, FastDisk disk, Roster.Incarnation self,
             TermJoiner.Transport transport) {
+        return publish(held, disk, self, transport, entry -> { });
+    }
+
+    /**
+     * The same, what this pod is owed itself handed to {@code own} -- its own
+     * hub -- rather than sent as a frame to itself (M13.30k).
+     */
+    static int publish(Sequencer held, FastDisk disk, Roster.Incarnation self,
+            TermJoiner.Transport transport, FastPublishHandler.Pushed own) {
         Optional<FastLeaderTerm> term = LocalSequencer.underneath(held)
                 .filter(LocalSequencer::serving).flatMap(LocalSequencer::fastTerm);
         if (term.isEmpty() || disk.journal().isEmpty()) {
@@ -276,6 +285,16 @@ final class FastLeaderFrames {
         int sent = 0;
         for (var owed : desk.take().entrySet()) {
             Roster.Incarnation pod = owed.getKey();
+            if (pod.equals(self)) {
+                for (FastJournalRecord.Entry e : owed.getValue()) {
+                    try {
+                        own.deliver(e);
+                    } catch (IOException | RuntimeException undelivered) {
+                        // read from the chain once uploaded, as a follower's
+                    }
+                }
+                continue;
+            }
             try {
                 if (!term.get().rostered(pod.podUid()).equals(Optional.of(pod))) {
                     desk.forget(pod);
@@ -298,6 +317,23 @@ final class FastLeaderFrames {
             }
         }
         return sent;
+    }
+
+    /**
+     * The leader pod's own interest (ADR-0081 §6; M13.30k): {@code wanted},
+     * its fast streams with a subscriber on its own hub, set on the term it
+     * leads on each drain -- the leader joins no term of its own, so no
+     * INTEREST of its reaches a leader. Nothing when it leads no fast term.
+     */
+    static void interestOwn(Sequencer held, FastDisk disk, Roster.Incarnation self,
+            java.util.Set<io.github.huyz0.os.biningester.format.RunKey> wanted) {
+        Optional<FastLeaderTerm> term = LocalSequencer.underneath(held)
+                .filter(LocalSequencer::serving).flatMap(LocalSequencer::fastTerm);
+        if (term.isEmpty() || disk.journal().isEmpty()) {
+            return;
+        }
+        term.get().commitDesk(disk.journal().get(), self).publications()
+                .interestExactly(self, wanted);
     }
 
     /**
