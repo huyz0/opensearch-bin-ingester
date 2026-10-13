@@ -47,6 +47,15 @@ final class FastLeaderFrames {
             return new FastFrame.Refused(FastFrame.Reason.NOT_FAST, Optional.empty(),
                     "this pod holds no fast journal");
         }
+        // ⚠️ THE LEADER's CATALOG DECIDES THE MODE (ADR-0081 §8; M13.34i): a
+        // writer whose registration still says fast is redirected, whole, and
+        // sends the batch the default way -- never assigned fast offsets.
+        for (FastWriteFrame.CommitRun run : commit.runs()) {
+            if (!term.get().fastHere(run.stream())) {
+                return new FastFrame.Refused(FastFrame.Reason.NOT_FAST, Optional.empty(),
+                        "stream " + run.stream() + " is on the default path at the leader");
+            }
+        }
         return term.get().answerCommit(header, commit,
                 term.get().commitDesk(disk.journal().get(), self));
     }

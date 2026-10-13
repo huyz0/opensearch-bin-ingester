@@ -86,8 +86,7 @@ class FastCommitServedTest {
     }
 
     @Test
-    void aLEADERWithAFastJournalHoldsARosteredWritersCOMMITUntilItsIndexIsRecorded()
-            throws Exception {
+    void aLEADERRedirectsACOMMITOfAnIndexItsCatalogDoesNotHoldAsFast() throws Exception {
         Map<String, String> settings = settings();
         settings.put(ServerProperties.FAST_JOURNAL_DIR, dir.resolve("journal").toString());
         node = IngesterNode.start(ServerProperties.parse(settings), Clock.systemUTC());
@@ -96,9 +95,11 @@ class FastCommitServedTest {
 
         FastFrame.Refused held = (FastFrame.Refused) send(commit());
 
-        // ⚠️ REACHED THE TERM: an unrouted kind gets no answer at all, and an
-        // unrostered writer NOT_ROSTERED -- this is the term's empty record.
-        assertThat(held.reason()).isEqualTo(FastFrame.Reason.BACKPRESSURE);
-        assertThat(held.text()).contains("wal_quorum not yet recorded");
+        // ⚠️ M13.34i: the leader's catalog holds no such fast index, so the
+        // writer is sent the default way -- never "no fast journal", which this
+        // leader has. (The term's own "wal_quorum not yet recorded", which this
+        // case reached before the catalog was asked, is FastLeaderTermCatalogTest's.)
+        assertThat(held.reason()).isEqualTo(FastFrame.Reason.NOT_FAST);
+        assertThat(held.text()).contains("on the default path at the leader");
     }
 }
