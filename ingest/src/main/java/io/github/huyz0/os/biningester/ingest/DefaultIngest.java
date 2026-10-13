@@ -47,6 +47,7 @@ public final class DefaultIngest implements Ingest {
     private final SegmentPublisher publisher;
     /** Each index's share of this pod's store requests (M11.2, ADR-0077). */
     private final IndexCostLedger costLedger;
+    private final PushedEntries pushed;
     /**
      * ⚠️ THE INGESTER CHOOSES THE FETCH MODE, NOT THE CONSUMER (FR-6). It is
      * built here, from the backend's own prices, because this is where the
@@ -162,6 +163,7 @@ public final class DefaultIngest implements Ingest {
                 Objects.requireNonNull(prefix, "prefix"),
                 Objects.requireNonNull(podShortId, "podShortId"), costLedger);
         this.serving = SegmentServing.forPod(config, store, costLedger);
+        this.pushed = new PushedEntries(prefix, clock, hub, serving); // M13.30j
         // ⚠️ WRAPPED HERE, ONCE, so no flush path can reach the bare seam and
         // skip the resend -- M5.69 moved the policy out of this class and the
         // wrapping is what keeps it un-bypassable. `ResendOnceSequencer` says
@@ -392,6 +394,12 @@ public final class DefaultIngest implements Ingest {
             awaitingDelta = published;
         }
         return published.key();
+    }
+
+    /** A PUBLISHed fast entry, delivered before its upload: {@link PushedEntries}. */
+    public void deliverPushed(io.github.huyz0.os.biningester.format.FastJournalRecord.Entry entry)
+            throws IOException {
+        pushed.deliver(entry);
     }
 
     /**

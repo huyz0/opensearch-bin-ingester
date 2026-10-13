@@ -222,6 +222,20 @@ public final class SubscriptionHub {
         return Set.copyOf(subscribers.keySet());
     }
 
+    /**
+     * A pushed fast entry, delivered at its offsets under its fast key before
+     * its upload (ADR-0081 §6; M13.30j): one run of {@code bytes}, held, and
+     * no chain epoch or sequence -- a pre-chain push moves no tier-2 cursor.
+     * {@code serving} must not offer {@code direct}: the key names no object.
+     */
+    public void publishPushed(String fastKey, RunKey key, long firstOffset, int recordCount,
+            byte[] bytes, SegmentServing serving) {
+        servingPath.publishSegment(new io.github.huyz0.os.biningester.format.SegmentCommit(
+                fastKey, List.of(new io.github.huyz0.os.biningester.format.RunCommit(key,
+                        recordCount, firstOffset))), Objects.requireNonNull(bytes, "bytes"),
+                serving, EPOCH_UNKNOWN, CHAIN_SEQUENCE_UNKNOWN);
+    }
+
 
 
     /**

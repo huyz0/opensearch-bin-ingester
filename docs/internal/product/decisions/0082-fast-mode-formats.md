@@ -368,6 +368,18 @@ from the leader's journal, and answers `404` once the entry is released
 (the subscriber then reads the committed segment). It is under the 1,024-byte
 limit for every input.
 
+⚠️ Stated by M13.30j (`FastKey`):
+- `<indexUuid>` is the OpenSearch index UUID as the plugin registers it: the
+  RunKey's 16 bytes in unpadded base64url, 22 characters.
+- `<partition>` is decimal.
+- A key over 1,024 bytes is refused. The "every input" above holds only for
+  a prefix of at most 942 bytes, the rest of the key taking at most 82.
+- A pushed entry is delivered under this key at its offsets, as one run in
+  a segment of its own, with no sequencer epoch or chain sequence. The
+  committed run that follows overlaps it, and the consumer trims
+  (ADR-0085).
+- The golden is `FastKeyTest`'s, computed by an independent encoder.
+
 ### 7. The default-path commit answer
 
 ADR-0081 §8 lets one default-path commit request's runs land in more than one
