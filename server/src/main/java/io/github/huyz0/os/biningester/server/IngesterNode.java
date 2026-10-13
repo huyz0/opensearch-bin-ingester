@@ -300,6 +300,8 @@ public final class IngesterNode implements AutoCloseable {
             // ⚠️ M13.83b: this pod's fast registrations, told to its leader.
             FastRegistrationForwarder forwarder =
                     new FastRegistrationForwarder(config.podUid(), exposing, mono);
+            // ⚠️ M13.30g: this pod's fast streams with a subscriber, told likewise.
+            FastInterestSender interests = new FastInterestSender(config.podUid(), exposing, mono);
             // ⚠️ M13.27x: the REPLICAs first, since their acks can expose a batch.
             // ⚠️ M13.27l: the catalog's fast indices, into the term record.
             ExposedDrain exposed = new ExposedDrain(() -> {
@@ -323,6 +325,9 @@ public final class IngesterNode implements AutoCloseable {
                 // ⚠️ M13.83b: last, so a slow leader never delays an exposure.
                 forwarder.forward(assembly.catalog(), commitDisk.joined()::latest,
                         FastPeer.leading(assembly));
+                interests.send(FastInterestSender.fastStreams(
+                        assembly.hub().subscribedStreams(), assembly.catalog()),
+                        commitDisk.joined()::latest, FastPeer.leading(assembly));
             });
             // ⚠️ M13.27v: a writer's CONFIRM, counted by the same desk.
             ExposedDrain.Ticks ticks = exposed.tickEvery(
