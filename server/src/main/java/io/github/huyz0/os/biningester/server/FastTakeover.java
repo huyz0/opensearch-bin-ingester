@@ -129,7 +129,9 @@ final class FastTakeover {
 
             @Override
             public Recovery recover(List<StreamDecision.Decided> batch) throws IOException {
-                return chain.recover(batch, upload);
+                Recovery recovery = chain.recover(batch, upload);
+                FastMetrics.voided(recovery); // ⚠️ M13.36
+                return recovery;
             }
 
             @Override

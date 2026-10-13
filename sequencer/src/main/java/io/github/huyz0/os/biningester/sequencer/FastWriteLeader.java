@@ -94,6 +94,8 @@ public final class FastWriteLeader implements TakeoverRun.Hold {
         final FastWriteFrame.Assigned assigned;
         boolean answered;
         FastWriteFrame.Exposed exposed;
+        /** When it was assigned, for its quorum wait (M13.36); MIN_VALUE when unobserved. */
+        long assignedNanos = Long.MIN_VALUE;
 
         Batch(Holder writer, FastJournalRecord.IdempotencyKey key, long assignedAfter,
                 List<FastJournalRecord.Entry> entries, FastWriteFrame.Assigned assigned) {
@@ -121,6 +123,9 @@ public final class FastWriteLeader implements TakeoverRun.Hold {
     private final Set<RunKey> released = new HashSet<>();
     /** Shutting down: nothing more assigned or exposed (M13.35a). */
     private boolean stopping;
+    /** The clock and the sink each batch's quorum wait is told to (M13.36); null while none. */
+    private MonotonicClock clock;
+    private java.util.function.LongConsumer quorumWaits;
     private final Map<FastJournalRecord.IdempotencyKey, Batch> exposedByKey = new HashMap<>();
     private final Map<RunKey, Long> committedNext = new HashMap<>();
 
@@ -241,8 +246,12 @@ public final class FastWriteLeader implements TakeoverRun.Hold {
                 for (FastJournalRecord.Entry e : entries) {
                     cursor.assign(e.key(), e.records().size());
                 }
-                batches.add(new Batch(writer, commit.key(), assignedAfter, entries,
-                        new FastWriteFrame.Assigned(assignedAfter, runs)));
+                Batch batch = new Batch(writer, commit.key(), assignedAfter, entries,
+                        new FastWriteFrame.Assigned(assignedAfter, runs));
+                if (clock != null) {
+                    batch.assignedNanos = clock.nanos();
+                }
+                batches.add(batch);
                 toAppend = entries;
             }
             // APPENDED OUTSIDE THE MONITOR (M13.27c review round 1, P3), under
@@ -486,6 +495,16 @@ public final class FastWriteLeader implements TakeoverRun.Hold {
         return sends;
     }
 
+    /**
+     * Tells {@code waits} each batch's quorum wait from now: the nanoseconds
+     * from its assignment to its exposure (M13.36; SPEC criterion 17).
+     */
+    public synchronized void observe(MonotonicClock clock,
+            java.util.function.LongConsumer waits) {
+        this.clock = Objects.requireNonNull(clock, "clock");
+        this.quorumWaits = Objects.requireNonNull(waits, "waits");
+    }
+
     /** The EXPOSED answers now owed: each batch whose every run the frontier passed. */
     public synchronized List<Exposure> expose() {
         if (stopping) {
@@ -505,6 +524,9 @@ public final class FastWriteLeader implements TakeoverRun.Hold {
                 b.exposed = new FastWriteFrame.Exposed(b.assignedAfter, runs);
                 exposedByKey.put(b.key, b);
                 out.add(new Exposure(b.writer.podUid(), b.exposed));
+                if (quorumWaits != null && b.assignedNanos != Long.MIN_VALUE) {
+                    quorumWaits.accept(clock.nanos() - b.assignedNanos);
+                }
             }
         }
         return out;

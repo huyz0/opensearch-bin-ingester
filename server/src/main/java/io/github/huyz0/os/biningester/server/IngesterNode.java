@@ -308,6 +308,7 @@ public final class IngesterNode implements AutoCloseable {
                 FastTakeover.start(assembly.heldTerm(), commitDisk, self, exposing, podGone,
                         recoveryUpload, assembly.store(), config.prefix(), clock,
                         run -> Thread.ofVirtual().name("fast-takeover").start(run));
+                FastLeaderFrames.observe(assembly.heldTerm(), commitDisk, self, mono); // M13.36
                 FastLeaderFrames.sendReplicas(assembly.heldTerm(), commitDisk, self, exposing);
                 FastLeaderFrames.sendExposed(assembly.heldTerm(), commitDisk, self, exposing);
                 // ⚠️ M13.31a: what is exposed, uploaded at its assigned offsets.
@@ -323,13 +324,15 @@ public final class IngesterNode implements AutoCloseable {
                     io.github.huyz0.os.biningester.sequencer.FastLeaderTerm.REPLICA_TIMEOUT);
             // ⚠️ M13.29e: a wal=true index's appends, through the term this
             // pod leads or the newest it joined, batched into COMMITs.
+            // ⚠️ M13.36: each answered fast append timed as an ack.
             assembly.defaultIngest().routeFast(FastRouting.fastIndices(assembly.catalog()),
-                    FastRouting.path(config, commitDisk, self,
+                    FastMetrics.timed(FastRouting.path(config, commitDisk, self,
                             zones.learning(new io.github.huyz0.os.biningester.http
                                     .HttpFastTransport(peerCommitTimeout(config), crossAz,
                                             clientTls), assembly.store(), config.prefix()),
                             assembly::heldTerm, java.util.UUID.randomUUID(),
-                            peerCommitTimeout(config)));
+                            peerCommitTimeout(config)), mono));
+            FastMetrics.bindJournal(commitDisk);
             // ⚠️ M13.28a: every pod holds copies, whichever term it leads.
             FastHolderFrames.register(fastFrames::handle, commitDisk,
                     epoch -> FastPeer.ownTerm(assembly.heldTerm()) == epoch, config.podUid());

@@ -44,6 +44,20 @@ final class FastLeaderFrames {
                 term.get().commitDesk(disk.journal().get(), self));
     }
 
+    /**
+     * The term this pod leads, if it holds a journal, tells each batch's
+     * quorum wait to {@link FastMetrics} (M13.36).
+     */
+    static void observe(Sequencer held, FastDisk disk, Roster.Incarnation self,
+            io.github.huyz0.os.biningester.sequencer.MonotonicClock mono) {
+        Optional<FastLeaderTerm> term =
+                LocalSequencer.underneath(held).flatMap(LocalSequencer::fastTerm);
+        if (term.isPresent() && disk.journal().isPresent()) {
+            term.get().commitDesk(disk.journal().get(), self)
+                    .observeQuorumWait(mono, FastMetrics::quorumWaited);
+        }
+    }
+
     /** Journaled with a leader's leave at a graceful stop (M13.35a). */
     static final String LEFT = "fast leave: ";
 
@@ -256,8 +270,10 @@ final class FastLeaderFrames {
                     }
                 };
         try {
-            fast.upload(fast.commitDesk(disk.journal().get(), self), disk.journal().get(), chain,
-                    upload, transport, paced);
+            if (fast.upload(fast.commitDesk(disk.journal().get(), self), disk.journal().get(),
+                    chain, upload, transport, paced).isPresent()) {
+                FastMetrics.uploaded(paced); // ⚠️ M13.36: by cause, never by index
+            }
         } catch (IOException | RuntimeException failed) {
             System.getLogger(FastLeaderFrames.class.getName()).log(
                     System.Logger.Level.WARNING, "the fast upload failed; the next retries",

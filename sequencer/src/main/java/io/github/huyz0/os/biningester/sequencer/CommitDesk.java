@@ -118,6 +118,11 @@ public final class CommitDesk {
         return write;
     }
 
+    /** Each batch's quorum wait, told to {@code waits} from now (M13.36). */
+    public void observeQuorumWait(MonotonicClock clock, java.util.function.LongConsumer waits) {
+        write.observe(clock, waits);
+    }
+
     /** The desk's leader, as a takeover holds it (M13.33o). */
     public TakeoverRun.Hold hold() {
         return write;

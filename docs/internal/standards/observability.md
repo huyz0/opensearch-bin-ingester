@@ -82,6 +82,15 @@ is not on rule 1's allow-list (M10.27) · `binstore_ingest_admission_refusals_to
 `429`s by cause, three names and no `index` label; which indices a quota refused is said by the top-K
 cost log line, bounded to eight names per interval (M12.5).
 
+**Fast mode** (ADR-0081; M13.36a) -- each pod-level, no label:
+`biningester_fast_ack_seconds` and `biningester_fast_quorum_wait_seconds`
+(timers, buckets 1 ms to 1 s) · `biningester_fast_journal_bytes` (a gauge) ·
+`biningester_fast_uploads_timer_total` and `biningester_fast_uploads_leave_total`
+-- one name per upload cause, since `cause` is not on rule 1's list, as the
+refusals above are; each later trigger (M13.31b) adds its own name ·
+`biningester_fast_voided_offsets_total`, the offsets recoveries voided, which
+stream they hit said by no series at all.
+
 ⚠️ The dollar metric is an **estimate** from a per-provider `CostTable` and must be
 labelled so. Request counts are exact; prices are a lookup that goes stale.
 
