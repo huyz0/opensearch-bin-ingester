@@ -135,6 +135,11 @@ public final class CommitDesk {
         return write;
     }
 
+    /** The pods holding a copy of an unreleased entry, the leader aside (M13.31f). */
+    public java.util.Set<String> holders() {
+        return write.holders();
+    }
+
     /**
      * {@code podUid} was lost -- its UID gone, or out of the EndpointSlice
      * (ADR-0081 §7; M13.31e): an upload is asked for at once when it holds a

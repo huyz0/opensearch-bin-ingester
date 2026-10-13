@@ -300,6 +300,10 @@ public final class IngesterNode implements AutoCloseable {
             // ⚠️ M13.83b: this pod's fast registrations, told to its leader.
             FastRegistrationForwarder forwarder =
                     new FastRegistrationForwarder(config.podUid(), exposing, mono);
+            // ⚠️ M13.31f: holders of unreleased entries the EndpointSlice dropped.
+            FastHolderLoss holderLoss = new FastHolderLoss();
+            io.github.huyz0.os.biningester.sequencer.FastFrameRouter.Liveness liveness =
+                    FastPeer.liveness(assembly.peerView());
             // ⚠️ M13.30g: this pod's fast streams with a subscriber, told likewise.
             FastInterestSender interests = new FastInterestSender(config.podUid(), exposing, mono);
             // ⚠️ M13.27x: the REPLICAs first, since their acks can expose a batch.
@@ -318,6 +322,9 @@ public final class IngesterNode implements AutoCloseable {
                                 assembly.catalog()));
                 FastLeaderFrames.sendReplicas(assembly.heldTerm(), commitDisk, self, exposing);
                 FastLeaderFrames.sendExposed(assembly.heldTerm(), commitDisk, self, exposing);
+                // ⚠️ M13.31f: a holder of an unreleased entry the slice dropped,
+                // asking the upload below at once.
+                holderLoss.check(assembly.heldTerm(), commitDisk, self, liveness);
                 // ⚠️ M13.31a: what is exposed, uploaded at its assigned offsets.
                 // ⚠️ M13.31c: only once its trigger fires.
                 FastLeaderFrames.upload(assembly.heldTerm(), commitDisk, self,

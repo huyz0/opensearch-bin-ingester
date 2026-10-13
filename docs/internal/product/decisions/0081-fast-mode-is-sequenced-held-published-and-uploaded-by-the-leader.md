@@ -1,6 +1,6 @@
 # 0081. Fast mode is sequenced, held, published and uploaded by the leader
 
-Status: accepted
+Status: accepted (2026-10-13, M13.31f: §7's holder loss is detected from the EndpointSlice alone -- a deleted UID leaves the slice too, and a per-holder UID lookup per drain would scale with holders times drains; a listed but unready pod counts as live)
 Date: 2026-10-01
 Requirements: FR-17, NFR-14, NFR-15, NFR-8, NFR-5, NFR-9, NFR-10, NFR-1, NFR-4
 Research: docs/research/30-design-space/12-fast-mode-wal-and-quorum.md (§5 overturned; its 2026-09-30 banner)
