@@ -552,6 +552,18 @@ final class IdempotencyWindow {
                         + "'s flushSeq " + request.flushSeq());
             }
         }
+        // ⚠️ ACROSS A TAKEOVER, ONE DELTA (M13.34ae): two chains number their
+        // deltas each from its own start, and an answer lists them by sequence
+        // alone (ADR-0082 §7) -- so the runs are answered in one delta at the
+        // newest's sequence, as a bare replay's answer is.
+        if (byDelta.keySet().stream().map(At::epoch).distinct().count() > 1) {
+            List<io.github.huyz0.os.biningester.format.RunCommit> all = new ArrayList<>();
+            byDelta.values().forEach(all::addAll);
+            all.sort(java.util.Comparator.comparing(
+                    io.github.huyz0.os.biningester.format.RunCommit::key));
+            return List.of(new CommitDelta(byDelta.lastKey().sequence(), List.of(
+                    new SegmentCommit(request.segmentKey(), all, attribution))));
+        }
         List<CommitDelta> deltas = new ArrayList<>();
         for (var e : byDelta.entrySet()) {
             deltas.add(new CommitDelta(e.getKey().sequence(), List.of(new SegmentCommit(

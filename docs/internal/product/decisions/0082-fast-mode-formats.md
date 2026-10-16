@@ -407,7 +407,12 @@ fast offsets -- M13.22d review round 3, P2):
 | redirected run count | u32 |
 | each redirected run | RunKey |
 
-A run appears in exactly one delta or among the redirected runs. Golden files:
+A run appears in exactly one delta or among the redirected runs. ⚠️ Added by
+M13.34ae: a request whose runs were committed in two chains -- its paused run
+by the successor of the leader that committed the rest -- is answered with ONE
+delta holding all its runs, at the newest one's sequence, as a bare replay's
+answer is: each chain numbers its deltas from its own start, so two deltas of
+different chains cannot be listed by sequence. Golden files:
 one delta, two deltas (a paused run), and a redirect; landing with M13.34.
 
 ⚠️ Stated by M13.34a, which landed the codec and the goldens before any
