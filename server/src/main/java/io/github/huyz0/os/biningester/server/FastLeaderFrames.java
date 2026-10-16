@@ -192,7 +192,8 @@ final class FastLeaderFrames {
      * catalog this pod's term record is fed from.
      *
      * <p>⚠️ ONLY FROM A POD ROSTERED IN THE FAST TERM THIS POD LEADS, AND
-     * ONLY A {@code wal=true} INDEX (its review round 1, P1): the leader's own
+     * ONLY A {@code wal=true} INDEX -- or a fast index's switch to the default
+     * path (M13.34ad) -- (its review round 1, P1): the leader's own
      * writes are placed by this catalog, so a REGISTER from anyone else -- or
      * for a default index -- would move them. A rostered pod is a member of
      * this cluster, its sender bound by ADR-0084's peer certificate, and its
@@ -216,9 +217,17 @@ final class FastLeaderFrames {
         }
         io.github.huyz0.os.biningester.format.IndexRegistration registration =
                 register.registration();
-        if (!registration.wal()) {
+        // ⚠️ A FAST INDEX's SWITCH TO THE DEFAULT PATH IS TAKEN (M13.34ad): of
+        // an index this catalog holds under the same UUID only, so a follower's
+        // switch reaches the leader its stale fast REGISTER reached. ⚠️ HELD
+        // DEFAULT ALREADY IS TAKEN TOO (its review round 1, P1): the leader's
+        // own plugin often switches first, and a refusal is re-sent for ever.
+        if (!registration.wal() && !catalog.resolve(registration.indexName())
+                .filter(mine -> mine.indexName().equals(registration.indexName())
+                        && mine.indexUuid().equals(registration.indexUuid()))
+                .isPresent()) {
             return new FastFrame.Refused(FastFrame.Reason.NOT_FAST, Optional.empty(),
-                    "only a wal=true index is forwarded");
+                    "only a wal=true index, or a fast index's switch, is forwarded");
         }
         catalog.register(registration);
         return new FastFrame.HeldStatusReport(FastFrame.HeldStatus.NONE);

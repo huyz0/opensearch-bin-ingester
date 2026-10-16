@@ -164,7 +164,15 @@ refused. A registration of more than 64 KiB is refused: it is a control frame
 it into its catalog, the catalog its term record is fed from (ADR-0081 §4),
 only while it leads a fast term, only from a pod ROSTERED in that term (the
 header's sender, which ADR-0084's peer certificate binds), and only for a
-`wal=true` index; it refuses `not rostered` or `not fast` otherwise. A
+`wal=true` index -- or, ⚠️ added by M13.34ad, a `wal=false` registration of an
+index its catalog holds under the same UUID, fast or already switched (taken
+either way: the leader's own plugin often switches first, and a refused switch
+would be re-sent for ever): a writer that forwarded an
+index as fast forwards its switch to the default path too, to the leader that
+took the fast one, or a stale fast REGISTER arriving after the leader's own
+switch would hold the index fast there for good (`FastModeSwitchTest` found
+it). It refuses `not rostered` or `not fast` otherwise; a `wal=false`
+registration of any other index would move the leader's own writes. A
 rostered pod's REGISTER is the plugin's word as a direct registration is:
 the last one wins, as ADR-0015 has it, so an index deleted and recreated
 under its old name re-registers. A pod whose build

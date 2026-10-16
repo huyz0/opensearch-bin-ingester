@@ -357,7 +357,9 @@ old leader follows the successor's first fast assignment or first void.
   fills two ways -- the registrations its own node's plugin pushes it, and
   the REGISTERs (ADR-0082 §2) every writer sends of each `wal=true`
   registration in its own catalog, to the leader of the newest term it
-  joined, again on every change and leader change. The plugin registers an
+  joined, again on every change and leader change -- and, ⚠️ M13.34ad, a
+  forwarded index's switch to `wal=false`, so every catalog converges on the
+  mode its pods were last told (ADR-0082 §2). The plugin registers an
   index only with the ingester its node talks to (ADR-0015 §2), so without
   the forward a leader never records an index only other pods were told of,
   and its batches wait.

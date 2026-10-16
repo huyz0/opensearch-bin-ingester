@@ -19,7 +19,8 @@ import java.util.function.Supplier;
  * A writer's fast indices, told to its leader (M13.83b; ADR-0081 §4,
  * ADR-0082 §2): the plugin registers an index only with the ingester its node
  * talks to, so every {@code wal=true} registration in this pod's catalog is
- * forwarded as a REGISTER to the leader of the newest term it joined -- the
+ * forwarded as a REGISTER to the leader of the newest term it joined, and so
+ * is a forwarded index's switch to {@code wal=false} (M13.34ad) -- the
  * leader's term record is fed from its own catalog, and a fast batch of an
  * index it never recorded waits.
  *
@@ -82,7 +83,19 @@ final class FastRegistrationForwarder {
             taken.clear();
             takenEpoch = to.epoch();
         }
-        for (IndexRegistration registration : catalog.fastRegistrations()) {
+        // ⚠️ AND EACH INDEX THIS LEADER TOOK AS FAST THAT IS NO LONGER FAST
+        // HERE (M13.34ad): its switch to the default path, or the leader keeps
+        // the fast registration this pod told it.
+        java.util.List<IndexRegistration> owed = new java.util.ArrayList<>(
+                catalog.fastRegistrations());
+        for (IndexRegistration was : taken.values()) {
+            if (was.wal()) {
+                catalog.resolve(was.indexName())
+                        .filter(now -> now.indexName().equals(was.indexName()) && !now.wal())
+                        .ifPresent(owed::add);
+            }
+        }
+        for (IndexRegistration registration : owed) {
             if (registration.equals(taken.get(registration.indexName()))) {
                 continue;
             }
