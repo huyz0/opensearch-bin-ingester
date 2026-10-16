@@ -302,4 +302,126 @@ class FastRecoveryModelTermsTest {
         assertThat(byQMin[3]).as("q_min 3").isGreaterThan(200);
         assertThat(waited).isGreaterThan(200);
     }
+
+    // ⚠️ M13.33u2: SPEC criterion 13's named cases over several terms.
+
+    private static Pod pod(String name, String az, Fate fate) {
+        return new Pod(new Roster.Incarnation(name, "uid-" + name, az, name), fate);
+    }
+
+    /** A term led by {@code leader} over {@code members}, none departed but {@code departed}. */
+    private static Term term(long epoch, Pod leader, List<Pod> members, Set<Pod> departed,
+            Integer... recorded) {
+        Map<Pod, Boolean> byMember = new java.util.LinkedHashMap<>();
+        byMember.put(leader, false);
+        members.forEach(p -> byMember.put(p, departed.contains(p)));
+        return new Term(epoch, leader, byMember, List.of(recorded));
+    }
+
+    private static Written held(long epoch, long first, int q, boolean exposed, Pod... holders) {
+        FastJournalRecord.Entry e = new FastJournalRecord.Entry(epoch, S, first, q, (int) first,
+                new FastJournalRecord.IdempotencyKey("w", new UUID(9, 9), first),
+                List.of(new SegmentRecord("d" + first, OpType.INDEX, OptionalLong.empty(),
+                        new byte[] {1})));
+        return new Written(e, Set.of(holders), exposed);
+    }
+
+    private static StreamDecision.Decided decided(Model m) {
+        StreamDecision.Outcome outcome = decide(m);
+        assertThat(outcome).isInstanceOf(StreamDecision.Decided.class);
+        StreamDecision.Decided d = (StreamDecision.Decided) outcome;
+        holds(m, d, new int[2]);
+        return d;
+    }
+
+    @Test
+    void walQuorumRAISED1To2AcrossALeaderLossVoidsTheExposedQ1Tail() {
+        // ⚠️ the 1->2 case: by q_min the index lost quorum; the exposed q = 1
+        // tail, on the leader only, is voided -- never left undecided
+        Pod l = pod("l", "az1", Fate.GONE);
+        Pod b = pod("b", "az2", Fate.ALIVE);
+        Pod c = pod("c", "az3", Fate.ALIVE);
+        Model m = new Model(List.of(l, b, c), List.of(term(10, l, List.of(b, c), Set.of(), 1, 2)),
+                0, List.of(held(10, 0, 1, true, l), held(10, 1, 1, true, l)));
+
+        StreamDecision.Decided d = decided(m);
+
+        assertThat(m.lost()).isTrue();
+        assertThat(d.voids()).containsExactly(new Recovery.VoidRange(S, 0, B));
+    }
+
+    @Test
+    void walQuorumLOWERED2To1AcrossALeaderLossCommitsTheSurvivingQ2Copies() {
+        Pod l = pod("l", "az1", Fate.GONE);
+        Pod b = pod("b", "az2", Fate.ALIVE);
+        Pod c = pod("c", "az3", Fate.ALIVE);
+        Written e0 = held(10, 0, 2, true, l, b);
+        Written e1 = held(10, 1, 2, true, l, b);
+        Model m = new Model(List.of(l, b, c), List.of(term(10, l, List.of(b, c), Set.of(), 2, 1)),
+                0, List.of(e0, e1));
+
+        StreamDecision.Decided d = decided(m);
+
+        assertThat(m.lost()).as("q_min 1: the leader's loss alone").isTrue();
+        assertThat(d.commits()).containsExactly(e0.entry(), e1.entry());
+        assertThat(d.voids()).as("only past what survives")
+                .containsExactly(new Recovery.VoidRange(S, 2, B));
+    }
+
+    @Test
+    void aQ1AndAQ2IndexOnALeaderWhoseZoneIsLOSTOnlyTheQ1IsVoided() {
+        // ⚠️ the mixed-q case: the q = 2 index never voided
+        Pod l = pod("l", "az1", Fate.GONE);
+        Pod a = pod("a", "az1", Fate.GONE);
+        Pod b = pod("b", "az2", Fate.ALIVE);
+        Pod c = pod("c", "az3", Fate.ALIVE);
+        Model q1 = new Model(List.of(l, a, b, c),
+                List.of(term(10, l, List.of(a, b, c), Set.of(), 1)), 0, List.of());
+        Model q2 = new Model(List.of(l, a, b, c),
+                List.of(term(10, l, List.of(a, b, c), Set.of(), 2)), 0, List.of());
+
+        assertThat(decided(q1).voids()).containsExactly(new Recovery.VoidRange(S, 0, B));
+        assertThat(q2.lost()).as("the leader's own zone never counts").isFalse();
+        assertThat(decided(q2).voids()).isEmpty();
+    }
+
+    @Test
+    void atQ2PodsInAZ2AndAZ3DEPARTEDGracefullyThenTheLeaderCrashingVoidsNothing() {
+        // ⚠️ at this layer the departures' copies were committed before they
+        // left (c0 past them); that the departure protocol uploads first is
+        // M13.33u4's -- here: departed pods never count toward the loss
+        Pod l = pod("l", "az1", Fate.GONE);
+        Pod b = pod("b", "az2", Fate.GONE);
+        Pod c = pod("c", "az3", Fate.GONE);
+        Pod a = pod("a", "az1", Fate.ALIVE);
+        Model m = new Model(List.of(l, b, c, a),
+                List.of(term(10, l, List.of(b, c, a), Set.of(b, c), 2)), 4, List.of());
+
+        StreamDecision.Decided d = decided(m);
+
+        assertThat(m.lost()).isFalse();
+        assertThat(d.voids()).isEmpty();
+        assertThat(d.resumeAt()).isEqualTo(4);
+    }
+
+    @Test
+    void aDEPARTUREWhileTwoTermsAreUnclosedIsCountedInNeitherOneZoneShortOfLoss() {
+        // q = 3: term 10's leader and its az3 member lost, one zone short; the
+        // pod in az2 departed, in both rosters -- counted, it would make two
+        Pod l = pod("l", "az1", Fate.GONE);
+        Pod g = pod("g", "az3", Fate.GONE);
+        Pod departed = pod("d", "az2", Fate.GONE);
+        Pod l2 = pod("l2", "az2", Fate.ALIVE);
+        Pod c = pod("c", "az3", Fate.ALIVE);
+        Written e0 = held(10, 0, 3, true, l, l2, c);
+        Model m = new Model(List.of(l, g, departed, l2, c), List.of(
+                term(10, l, List.of(g, departed, l2, c), Set.of(departed), 3),
+                term(11, l2, List.of(departed, c), Set.of(departed), 3)), 0, List.of(e0));
+
+        StreamDecision.Decided d = decided(m);
+
+        assertThat(m.lost()).isFalse();
+        assertThat(d.voids()).isEmpty();
+        assertThat(d.commits()).containsExactly(e0.entry());
+    }
 }
