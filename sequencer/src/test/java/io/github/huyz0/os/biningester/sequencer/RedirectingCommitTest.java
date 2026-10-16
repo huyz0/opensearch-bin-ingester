@@ -4,10 +4,13 @@ package io.github.huyz0.os.biningester.sequencer;
 import static io.github.huyz0.os.biningester.sequencer.DedupFixtures.A;
 import static io.github.huyz0.os.biningester.sequencer.DedupFixtures.PREFIX;
 import static io.github.huyz0.os.biningester.sequencer.DedupFixtures.RA;
+import static io.github.huyz0.os.biningester.sequencer.DedupFixtures.deltasCarrying;
 import static io.github.huyz0.os.biningester.sequencer.DedupFixtures.manager;
 import static io.github.huyz0.os.biningester.sequencer.FastTermStartTest.SELF;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.github.huyz0.os.biningester.binstore.BinStore;
 import io.github.huyz0.os.biningester.binstore.backend.MemoryBinStore;
 import io.github.huyz0.os.biningester.format.CommitAnswer;
 import io.github.huyz0.os.biningester.format.CommitDelta;
@@ -18,6 +21,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
@@ -140,6 +144,78 @@ class RedirectingCommitTest {
         } finally {
             sequencer.close();
         }
+    }
+
+    @Test
+    void anAMBIGUOUSCommitRetriedIsRedirectedAgainTheOtherRunCommittedOnce()
+            throws Exception {
+        // ⚠️ M13.34ab, its review round 1 (R1/T1): the delta LANDED but its
+        // response was lost, so the window never saw OTHER committed. Only the
+        // reconcile tells the retry so; without it OTHER is committed twice.
+        MemoryBinStore backing = new MemoryBinStore();
+        AtomicBoolean armed = new AtomicBoolean();
+        LocalSequencer sequencer = ambiguousOnce(backing, armed);
+        try {
+            FastLeaderTerm fast = term();
+            fast.catalogSays(Map.of(A, 1));
+            sequencer.attach(fast);
+            armed.set(true);
+
+            assertThatThrownBy(() -> sequencer.commitAnswering(BOTH))
+                    .isInstanceOf(AmbiguousAppendException.class);
+            armed.set(false);
+            CommitAnswer retry = sequencer.commitAnswering(BOTH);
+
+            assertThat(retry.redirected()).as("redirected both times").containsExactly(RA);
+            assertThat(retry.deltas()).singleElement().satisfies(d -> assertThat(d.segments())
+                    .singleElement().satisfies(seg -> assertThat(seg.runs())
+                            .containsExactly(new RunCommit(OTHER, 2, 0))));
+            assertThat(sequencer.committedNext(RA)).as("never from the segment").isZero();
+            assertThat(sequencer.committedNext(OTHER)).isEqualTo(2);
+            assertThat(deltasCarrying(backing, "seg/0")).as("committed once").isEqualTo(1);
+        } finally {
+            sequencer.close();
+        }
+    }
+
+    @Test
+    void anAMBIGUOUSCommitThatLandedIsAnsweredFromItsDeltaThoughItsStreamTurnedFast()
+            throws Exception {
+        // ⚠️ M13.34ab, its review round 1 (R1/T1): the reconcile must come
+        // BEFORE the redirect decision. Read after it, RA looks uncommitted and
+        // fast, is redirected, and its records are written twice.
+        MemoryBinStore backing = new MemoryBinStore();
+        AtomicBoolean armed = new AtomicBoolean();
+        LocalSequencer sequencer = ambiguousOnce(backing, armed);
+        try {
+            FastLeaderTerm fast = term();
+            fast.catalogSays(Map.of());
+            sequencer.attach(fast);
+            armed.set(true);
+            assertThatThrownBy(() -> sequencer.commitAnswering(BOTH))
+                    .isInstanceOf(AmbiguousAppendException.class);
+            armed.set(false);
+            fast.catalogSays(Map.of(A, 1));
+
+            CommitAnswer retry = sequencer.commitAnswering(BOTH);
+
+            assertThat(retry.redirected()).as("committed already, never redirected").isEmpty();
+            assertThat(retry.deltas()).singleElement().satisfies(d -> assertThat(
+                    d.segments().get(0).runs()).containsExactly(
+                            new RunCommit(RA, 3, 0), new RunCommit(OTHER, 2, 0)));
+            assertThat(deltasCarrying(backing, "seg/0")).as("committed once").isEqualTo(1);
+        } finally {
+            sequencer.close();
+        }
+    }
+
+    /** A leader whose first delta append, once armed, lands and loses its response. */
+    private static LocalSequencer ambiguousOnce(MemoryBinStore backing, AtomicBoolean armed)
+            throws Exception {
+        BinStore store = new AmbiguousPutStore(backing, AmbiguousPutStore.Mode.LANDED,
+                AmbiguousPutStore.Target.PUT_IF_ABSENT, false, key -> armed.get());
+        return LocalSequencer.start(store, PREFIX, manager(store, "poda"), 8,
+                BoundedRecoveryFixture.noRenew()).orElseThrow();
     }
 
     @Test
