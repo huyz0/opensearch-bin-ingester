@@ -4,6 +4,7 @@ package io.github.huyz0.os.biningester.server;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.huyz0.os.biningester.binstore.Body;
+import io.github.huyz0.os.biningester.binstore.CountingBinStore;
 import io.github.huyz0.os.biningester.binstore.backend.MemoryBinStore;
 import io.github.huyz0.os.biningester.format.FastFrame;
 import io.github.huyz0.os.biningester.format.FastJournalRecord;
@@ -64,7 +65,10 @@ final class TakeoverRig implements AutoCloseable {
     static final Roster.Incarnation X = new Roster.Incarnation("x", "uid-x", "az-x", "x:1");
     static final Roster.Incarnation M = new Roster.Incarnation("m", "uid-m", "az-m", "m:1");
 
-    final MemoryBinStore store = new MemoryBinStore();
+    /** Counted, so a test can count the takeover's chain appends (M13.33u6). */
+    final CountingBinStore store = new CountingBinStore(new MemoryBinStore());
+    /** INDEX's streams, partitions {@code 0} to {@code partitions - 1} (M13.33u6). */
+    volatile int partitions = 1;
     final AtomicInteger uploads = new AtomicInteger();
     /** Each RELEASE's target, with S's committed next offset when it arrived. */
     final List<String> released = new CopyOnWriteArrayList<>();
@@ -197,9 +201,17 @@ final class TakeoverRig implements AutoCloseable {
                             run -> recovered.add(s.segmentKey() + ":" + run.firstOffset() + "+"
                                     + run.recordCount() + "@" + epoch)));
                 },
-                index -> index.equals(INDEX) ? java.util.Set.of(S)
+                index -> index.equals(INDEX) ? streamsOfIndex()
                         : index.equals(INDEX2) ? java.util.Set.of(S2) : java.util.Set.of(),
                 store, "p", WALL, Runnable::run);
+    }
+
+    private java.util.Set<RunKey> streamsOfIndex() {
+        java.util.Set<RunKey> streams = new java.util.TreeSet<>();
+        for (int p = 0; p < partitions; p++) {
+            streams.add(new RunKey(INDEX, p));
+        }
+        return streams;
     }
 
     boolean takeOver() {
