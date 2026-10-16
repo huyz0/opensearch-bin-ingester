@@ -51,6 +51,35 @@ class FastTakeoverManyStreamsTest {
         }
     }
 
+    /** Every PUT the takeover issued, whatever its key: the roster, the decisions and the chain. */
+    private static long takeoverPuts(int streams) throws Exception {
+        List<FastJournalRecord.Entry> held = new ArrayList<>();
+        for (int p = 0; p < streams; p++) {
+            held.add(entry(new RunKey(INDEX, p), 1, 1, 0));
+        }
+        try (TakeoverRig rig = new TakeoverRig(1, 0, Map.of("uid-m", held))) {
+            rig.partitions = streams;
+            long before = rig.store.counts().puts();
+
+            assertThat(rig.takeOver(uid -> uid.equals("uid-x"))).isTrue();
+
+            return rig.store.counts().puts() - before;
+        }
+    }
+
+    @Test
+    void aTakeoverOverAThousandStreamsIssuesNoMorePUTsThanOverOneStream() throws Exception {
+        // ⚠️ M13.33u6's criterion 17 clause: decisions, roster and chain writes
+        // are one per committed batch, the batch count independent of the
+        // stream count -- so the whole takeover's PUTs do not grow with it.
+        long one = takeoverPuts(1);
+        long thousand = takeoverPuts(1000);
+
+        assertThat(one).as("one batch: the decisions write, the roster close and the chain entry")
+                .isPositive();
+        assertThat(thousand).as("1,000 streams, the same PUTs").isEqualTo(one);
+    }
+
     @Test
     void aTakeoverOverMANYStreamsAppendsAsManyChainEntriesAsOverOne() throws Exception {
         List<Recovery.VoidRange> oneVoids = new ArrayList<>();
