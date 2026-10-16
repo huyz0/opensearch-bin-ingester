@@ -9,6 +9,7 @@ import io.github.huyz0.os.biningester.format.FastFrame;
 import io.github.huyz0.os.biningester.format.FastJournalRecord;
 import io.github.huyz0.os.biningester.format.FastTakeoverFrame;
 import io.github.huyz0.os.biningester.format.OpType;
+import io.github.huyz0.os.biningester.format.Recovery;
 import io.github.huyz0.os.biningester.format.Roster;
 import io.github.huyz0.os.biningester.format.RunKey;
 import io.github.huyz0.os.biningester.format.SegmentRecord;
@@ -53,6 +54,9 @@ final class TakeoverRig implements AutoCloseable {
 
     static final UUID INDEX = new UUID(1, 1);
     static final RunKey S = new RunKey(INDEX, 0);
+    /** A second index, recorded only by {@link #TakeoverRig(int, long, Map, Map)}. */
+    static final UUID INDEX2 = new UUID(2, 2);
+    static final RunKey S2 = new RunKey(INDEX2, 0);
     static final Clock WALL = Clock.fixed(Instant.ofEpochMilli(1_000_000L), ZoneOffset.UTC);
     static final MonotonicClock MONO = () -> 0L;
     static final Roster.Incarnation SELF =
@@ -66,13 +70,22 @@ final class TakeoverRig implements AutoCloseable {
     final List<String> released = new CopyOnWriteArrayList<>();
     /** Each recovery handed on to be pushed live, as "segment:first+count@epoch" (M13.33w). */
     final List<String> recovered = new CopyOnWriteArrayList<>();
+    /** Each void of a recovery committed, in order (M13.33u3). */
+    final List<Recovery.VoidRange> voids = new CopyOnWriteArrayList<>();
+    /** Each member a FENCE was sent to, silent or not, in order. */
+    final List<String> fenced = new CopyOnWriteArrayList<>();
     final LocalSequencer term;
     final FastDisk disk;
     private final Map<String, List<FastJournalRecord.Entry>> held;
 
     /** One record of S at {@code offset}, assigned in term {@code epoch}. */
     static FastJournalRecord.Entry entry(long epoch, long offset) {
-        return new FastJournalRecord.Entry(epoch, S, offset, 1, 0,
+        return entry(S, 1, epoch, offset);
+    }
+
+    /** One record of {@code key} at {@code offset}, assigned at {@code q} in term {@code epoch}. */
+    static FastJournalRecord.Entry entry(RunKey key, int q, long epoch, long offset) {
+        return new FastJournalRecord.Entry(epoch, key, offset, q, 0,
                 new FastJournalRecord.IdempotencyKey("w", new UUID(9, epoch), offset),
                 List.of(new SegmentRecord("d" + epoch + "-" + offset, OpType.INDEX,
                         OptionalLong.empty(), new byte[] {1})));
@@ -86,6 +99,12 @@ final class TakeoverRig implements AutoCloseable {
      */
     TakeoverRig(int unclosed, long chainNext, Map<String, List<FastJournalRecord.Entry>> held)
             throws Exception {
+        this(unclosed, chainNext, held, Map.of(INDEX, 1));
+    }
+
+    /** The same, each earlier term recording {@code quorums} instead (M13.33u3). */
+    TakeoverRig(int unclosed, long chainNext, Map<String, List<FastJournalRecord.Entry>> held,
+            Map<UUID, Integer> quorums) throws Exception {
         this.held = held;
         LeaseConfig leases = new LeaseConfig("p", "self", "", Duration.ofSeconds(10),
                 Duration.ofSeconds(3));
@@ -105,7 +124,7 @@ final class TakeoverRig implements AutoCloseable {
             Roster r = new Roster(e, e == 1 ? -1 : e - 1, X,
                     List.of(new Roster.Member(X, Roster.State.ROSTERED),
                             new Roster.Member(M, Roster.State.ROSTERED)),
-                    List.of(new Roster.TermRecord(0, new TreeMap<>(Map.of(INDEX, 1)))),
+                    List.of(new Roster.TermRecord(0, new TreeMap<>(quorums))),
                     List.of(), 0, 0, false);
             store.put(Roster.key("p", e), Body.ofBytes(r.encode()));
         }
@@ -132,6 +151,9 @@ final class TakeoverRig implements AutoCloseable {
         return (endpoint, frame) -> {
             FastFrame.Frame asked = FastFrame.decode(frame);
             String member = asked.header().targetUid();
+            if (asked.body() instanceof FastTakeoverFrame.Fence) {
+                fenced.add(member);
+            }
             if (gone.test(member)) {
                 throw new IOException(member + " is gone");
             }
@@ -155,15 +177,28 @@ final class TakeoverRig implements AutoCloseable {
 
     /** Runs the takeover on the caller's thread, {@code gone} the pods deleted and silent. */
     boolean takeOver(Predicate<String> gone) {
-        return FastTakeover.start(term, disk, SELF, members(gone),
-                incarnation -> gone.test(incarnation.podUid()),
+        return takeOver(gone, gone);
+    }
+
+    /**
+     * The same, {@code silent} the pods that answer nothing and {@code deleted}
+     * those whose UID is gone: silent and not deleted is out of the
+     * EndpointSlice, partitioned, or not yet ready (M13.33u3).
+     */
+    boolean takeOver(Predicate<String> silent, Predicate<String> deleted) {
+        return FastTakeover.start(term, disk, SELF, members(silent),
+                incarnation -> deleted.test(incarnation.podUid()),
                 runs -> {
                     uploads.incrementAndGet();
                     return "seg-r" + uploads.get();
-                }, (recovery, epoch) -> recovery.segments().forEach(s -> s.runs().forEach(
-                        run -> recovered.add(s.segmentKey() + ":" + run.firstOffset() + "+"
-                                + run.recordCount() + "@" + epoch))),
-                index -> index.equals(INDEX) ? java.util.Set.of(S) : java.util.Set.of(),
+                }, (recovery, epoch) -> {
+                    voids.addAll(recovery.voids());
+                    recovery.segments().forEach(s -> s.runs().forEach(
+                            run -> recovered.add(s.segmentKey() + ":" + run.firstOffset() + "+"
+                                    + run.recordCount() + "@" + epoch)));
+                },
+                index -> index.equals(INDEX) ? java.util.Set.of(S)
+                        : index.equals(INDEX2) ? java.util.Set.of(S2) : java.util.Set.of(),
                 store, "p", WALL, Runnable::run);
     }
 
