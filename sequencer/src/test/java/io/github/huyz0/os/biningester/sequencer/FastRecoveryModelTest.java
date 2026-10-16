@@ -48,7 +48,8 @@ import org.junit.jupiter.api.Test;
  * <p>⚠️ THE DECISION LAYER, one term and one stream: the takeover's walk over
  * several unclosed terms, recorded {@code wal_quorum} changes, the named
  * cases needing a live fleet, and the commit-protocol simulation are the
- * rest of M13.33u.
+ * rest of M13.33u. The named cases this layer can state are here (M13.33u1),
+ * each asserted by the same oracle.
  */
 class FastRecoveryModelTest {
 
@@ -296,5 +297,160 @@ class FastRecoveryModelTest {
             assertThat(d.voids()).as("the exposed entry's every copy gone: voided")
                     .containsExactly(new Recovery.VoidRange(S, 0, B));
         });
+    }
+
+    // ⚠️ M13.33u1: SPEC criterion 13's named cases this layer can state.
+
+    private static Pod pod(String name, String az, Fate fate) {
+        return new Pod(new Roster.Incarnation(name, "uid-" + name, az, name), false, fate);
+    }
+
+    private static FastJournalRecord.Entry entry(long first, int size, int seq) {
+        List<SegmentRecord> records = new ArrayList<>();
+        for (int i = 0; i < size; i++) {
+            records.add(new SegmentRecord("d" + (first + i), OpType.INDEX, OptionalLong.empty(),
+                    new byte[] {1}));
+        }
+        return new FastJournalRecord.Entry(1, S, first, 2, seq,
+                new FastJournalRecord.IdempotencyKey("w", new UUID(9, 9), seq), records);
+    }
+
+    private static Written held(FastJournalRecord.Entry e, boolean exposed, Pod... holders) {
+        Set<String> uids = new HashSet<>();
+        for (Pod h : holders) {
+            uids.add(h.uid());
+        }
+        return new Written(e, uids, exposed);
+    }
+
+    private static StreamDecision.Decided decided(Model m) {
+        StreamDecision.Outcome outcome = decide(m);
+        assertThat(outcome).isInstanceOf(StreamDecision.Decided.class);
+        StreamDecision.Decided d = (StreamDecision.Decided) outcome;
+        holds(m, d);
+        return d;
+    }
+
+    @Test
+    void atQ2TheLeaderLostAndTheOnlyHolderPARTITIONEDWaitsThenHealedCommits() {
+        // the only surviving holder partitioned (its UID surviving), then healed;
+        // unready but reachable is the healed half at this layer -- it answers
+        Pod l = pod("l", "az1", Fate.GONE);
+        Pod a = pod("a", "az1", Fate.ALIVE);
+        Pod c = pod("c", "az3", Fate.ALIVE);
+        FastJournalRecord.Entry e = entry(0, 2, 0);
+        Pod partitioned = pod("r", "az2", Fate.UNREACHABLE);
+        Model cut = new Model(List.of(l, a, partitioned, c), l, 2, 0,
+                List.of(held(e, true, l, partitioned)));
+        Pod healed = pod("r", "az2", Fate.ALIVE);
+        Model whole = new Model(List.of(l, a, healed, c), l, 2, 0,
+                List.of(held(e, true, l, healed)));
+
+        assertThat(decide(cut)).as("its copy may be the only one: no early decision")
+                .isInstanceOf(StreamDecision.Wait.class);
+        StreamDecision.Decided d = decided(whole);
+
+        assertThat(d.commits()).containsExactly(e);
+        assertThat(d.voids()).isEmpty();
+    }
+
+    @Test
+    void entry102AnsweredBefore101AndTheLeaderLostWith101OnNoPodCommitsNothingAboveIt() {
+        Pod l = pod("l", "az1", Fate.GONE);
+        Pod r = pod("r", "az2", Fate.ALIVE);
+        Pod c = pod("c", "az3", Fate.ALIVE);
+        FastJournalRecord.Entry e101 = entry(101, 1, 0);
+        FastJournalRecord.Entry e102 = entry(102, 1, 1);
+        Model m = new Model(List.of(l, r, c), l, 2, 101,
+                List.of(held(e101, false, l), held(e102, false, l, r)));
+
+        StreamDecision.Decided d = decided(m);
+
+        assertThat(m.lost()).as("az2 and az3 keep their pods: no quorum loss").isFalse();
+        assertThat(d.commits()).as("never 102 above an unrecovered 101").isEmpty();
+        assertThat(d.voids()).isEmpty();
+        assertThat(d.resumeAt()).isEqualTo(101);
+    }
+
+    @Test
+    void aQ1StreamFilledToItsBOUNDAtTheLeadersLossIsVoidedToTheBoundNotPastIt() {
+        Pod l = pod("l", "az1", Fate.GONE);
+        Pod c = pod("c", "az2", Fate.ALIVE);
+        List<Written> written = new ArrayList<>();
+        for (int i = 0; i < B; i++) {
+            written.add(held(entry(2 + i, 1, i), i < 3, l));
+        }
+        Model m = new Model(List.of(l, c), l, 1, 2, written);
+
+        StreamDecision.Decided d = decided(m);
+
+        assertThat(d.voids()).containsExactly(new Recovery.VoidRange(S, 2, 2 + B));
+        assertThat(d.resumeAt()).as("offset c0 + B is the next assignable").isEqualTo(2 + B);
+    }
+
+    @Test
+    void aQ3IndexOnThreeZonesWithTheLeadersZoneLOSTVoidsNothingAndCommitsTheExposed() {
+        // ⚠️ az2 loses a pod too: counting the leader's own zone would make two
+        Pod l = pod("l", "az1", Fate.GONE);
+        Pod a = pod("a", "az1", Fate.GONE);
+        Pod r = pod("r", "az2", Fate.ALIVE);
+        Pod gone = pod("g", "az2", Fate.GONE);
+        Pod c = pod("c", "az3", Fate.ALIVE);
+        FastJournalRecord.Entry e0 = entry(0, 2, 0);
+        FastJournalRecord.Entry e1 = entry(2, 1, 1);
+        Model m = new Model(List.of(l, a, r, gone, c), l, 3, 0,
+                List.of(held(e0, true, l, r, c), held(e1, true, l, r, c)));
+
+        StreamDecision.Decided d = decided(m);
+
+        assertThat(m.lost()).as("one zone short of q - 1 others").isFalse();
+        assertThat(d.commits()).containsExactly(e0, e1);
+        assertThat(d.voids()).isEmpty();
+    }
+
+    @Test
+    void anIDLEFullyReleasedQ1IndexLosingItsLeaderMayBeVoidedWithinTheBoundOnly() {
+        Pod l = pod("l", "az1", Fate.GONE);
+        Pod c = pod("c", "az2", Fate.ALIVE);
+        Model m = new Model(List.of(l, c), l, 1, 5, List.of());
+
+        StreamDecision.Decided d = decided(m);
+
+        assertThat(d.commits()).isEmpty();
+        assertThat(d.voids()).as("from c0, never below it")
+                .containsExactly(new Recovery.VoidRange(S, 5, 5 + B));
+    }
+
+    @Test
+    void atQ2TheLeaderAndAnAZ2PodWhoseCopiesWereALLReleasedLostIsQuorumLossByTheRoster() {
+        Pod l = pod("l", "az1", Fate.GONE);
+        Pod a = pod("a", "az1", Fate.ALIVE);
+        Pod released = pod("r", "az2", Fate.GONE);
+        Pod b = pod("b", "az2", Fate.ALIVE);
+        Pod c = pod("c", "az3", Fate.ALIVE);
+        Model m = new Model(List.of(l, a, released, b, c), l, 2, 3, List.of());
+
+        StreamDecision.Decided d = decided(m);
+
+        assertThat(m.lost()).as("a rostered pod, holding nothing, counts").isTrue();
+        assertThat(d.voids()).containsExactly(new Recovery.VoidRange(S, 3, 3 + B));
+    }
+
+    @Test
+    void aQ1IndexLosingItsLeadersZoneVoidsTheAckedTailAndNothingBelowACommittedStream() {
+        Pod l = pod("l", "az1", Fate.GONE);
+        Pod a = pod("a", "az1", Fate.GONE);
+        Pod c = pod("c", "az2", Fate.ALIVE);
+        FastJournalRecord.Entry e0 = entry(0, 2, 0);
+        Model tail = new Model(List.of(l, a, c), l, 1, 0, List.of(held(e0, true, l)));
+        Model committed = new Model(List.of(l, a, c), l, 1, 4, List.of());
+
+        StreamDecision.Decided withTail = decided(tail);
+        StreamDecision.Decided fully = decided(committed);
+
+        assertThat(withTail.voids()).as("the acked tail's every copy gone")
+                .containsExactly(new Recovery.VoidRange(S, 0, B));
+        assertThat(fully.voids()).as("no committed offset voided")
+                .containsExactly(new Recovery.VoidRange(S, 4, 4 + B));
     }
 }
